@@ -1,0 +1,66 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 20% 97%;
+    --foreground: 222 47% 11%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+
+    /* Metronic blue — primary action color, used on buttons and active states */
+    --primary: 204 70% 53%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 210 16% 93%;
+    --secondary-foreground: 222 47% 11%;
+
+    --muted: 210 16% 93%;
+    --muted-foreground: 215 16% 47%;
+
+    --accent: 28 80% 52%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 354 70% 54%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 214 22% 85%;
+    --input: 214 22% 85%;
+    --ring: 204 70% 53%;
+
+    --radius: 0.5rem;
+
+    /* Legacy Metronic sidebar — dark slate with off-white text */
+    --sidebar: 215 19% 22%;
+    --sidebar-foreground: 210 16% 80%;
+    --sidebar-accent: 215 25% 29%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: 'rlig' 1, 'calt' 1;
+  }
+
+  /* Legacy-style data table: dense rows, subtle borders */
+  .data-table {
+    @apply w-full text-sm;
+  }
+  .data-table th {
+    @apply bg-muted text-muted-foreground text-left font-semibold px-3 py-2 border-b border-border;
+  }
+  .data-table td {
+    @apply px-3 py-2 border-b border-border;
+  }
+  .data-table tr:hover td {
+    @apply bg-muted/40;
+  }
+}
