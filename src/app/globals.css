@@ -72,18 +72,24 @@
      Sticky cells need explicit background; otherwise non-sticky content
      scrolls visibly behind them. Shadow on the inside edge hints "more
      content exists beyond this edge" — common web table affordance. */
+  /* IMPORTANT: explicit opaque backgrounds. Shadcn/Tailwind's --card and
+     --muted CSS vars are raw HSL tuples meant to be consumed via
+     `hsl(var(--card) / <alpha-value>)` in the tailwind config. Using them bare
+     in `background: hsl(var(--card))` in some browser/tailwind combos ends up
+     rendering transparent, which was letting scrolled columns bleed through the
+     sticky column. Explicit colour values sidestep the whole alpha pipeline. */
   .data-table .stick-col {
     position: sticky;
-    background: hsl(var(--card));
-    z-index: 1;
+    background-color: #ffffff;
+    z-index: 2;
   }
   .data-table .stick-col-head {
     position: sticky;
-    background: hsl(var(--muted));
-    z-index: 2;
+    background-color: #eef0f3;          /* same shade as our bg-muted */
+    z-index: 3;
   }
   .data-table tr:hover .stick-col {
-    background: hsl(var(--muted) / 0.7);
+    background-color: #f5f6f8;          /* matches tr:hover > td */
   }
   .data-table .stick-left  { left: 0; }
   .data-table .stick-right { right: 0; }
