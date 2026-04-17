@@ -3,10 +3,10 @@
 import { useMemo, useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import {
   Home, Briefcase, UserCircle2, Users, Building2,
-  BarChart3, Bell, Settings, Coins, Webhook,
+  BarChart3, Settings, Coins, ShoppingBag, Wallet, User, MapPin,
   ChevronRight, ChevronDown, type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -44,17 +44,49 @@ type NavGroup  = { section: string; items: NavItem[] };
 
 const ADMIN_ALL = ['admin']; // shortcut
 
+/*
+ * Parent menu structure mirrors legacy tbl_menu (Apr 2026 snapshot) — 12
+ * top-level parents in the order / case from the DB. Children are the
+ * filtered, active rows under each parent, flattened where legacy had a
+ * 3-level nest (e.g. Tracking → Call Center → … collapses to Tracking → …).
+ *
+ * Unmigrated features route to /coming-soon?title=…&legacyPath=… rather than
+ * each having its own .tsx stub. Swap a WIP href to the real route when the
+ * feature lands; no file churn needed. See `wip()` helper below.
+ */
+const wip = (title: string, legacyPath?: string) => {
+  const q = new URLSearchParams({ title });
+  if (legacyPath) q.set('legacyPath', legacyPath);
+  return `/coming-soon?${q.toString()}`;
+};
+
 const NAV: NavGroup[] = [
   {
     section: 'MAIN',
     items: [
-      { label: 'Dashboard', icon: Home, href: '/dashboard' }, // everyone
+      { label: 'Home', icon: Home, href: '/dashboard' },
       {
         label: 'Jobs', icon: Briefcase, group: ADMIN_ALL,
         children: [
-          { href: '/jobs',         label: 'Manage Jobs' },
-          { href: '/jobs/upload',  label: 'Upload Jobs' },
-          { href: '/auto-assign',  label: 'Auto Assignment' },
+          { href: '/jobs',                                         label: 'Manage Jobs' },
+          { href: wip('App Job', 'androidAppJob'),                 label: 'App Job' },
+          { href: '/jobs/upload',                                  label: 'Upload Jobs' },
+          { href: wip('Change Job Owner', 'changeJobOwner'),       label: 'Change Job Owner' },
+          { href: wip('Call Later', 'callLater'),                  label: 'Call Later' },
+          { href: '/auto-assign',                                  label: 'Auto Assignment' },
+        ],
+      },
+      {
+        label: 'My Orders', icon: ShoppingBag,
+        children: [
+          { href: wip('Unconfirmed',                  'dashboardChecking?enumDesc=UnConfirmed'),              label: 'Unconfirmed' },
+          { href: wip('Pending to Scheduling',        'dashboardChecking?enumDesc=PendingForScheduling'),     label: 'Pending to Scheduling' },
+          { href: wip('Pending to Start',             'dashboardChecking?enumDesc=NotStarted'),               label: 'Pending to Start' },
+          { href: wip('Pending to APP Acknowledge',   'dashboardChecking?enumDesc=PendingForAcknowledgement'),label: 'Pending to APP Acknowledge' },
+          { href: wip('Pending to Close on App',      'dashboardChecking?enumDesc=NotCompleted'),             label: 'Pending to Close on App' },
+          { href: wip('Audit & Complete',             'dashboardChecking?enumDesc=PendingForCheckout'),       label: 'Audit & Complete' },
+          { href: wip('Pending for Feedback',         'dashboardChecking?enumDesc=PendingFeedback'),          label: 'Pending for Feedback' },
+          { href: wip('Orders in Follow-up',          'dashboardChecking?enumDesc=PendingForApproval'),       label: 'Orders in Follow-up' },
         ],
       },
     ],
@@ -62,22 +94,34 @@ const NAV: NavGroup[] = [
   {
     section: 'MANAGE',
     items: [
-      // Easyfixers — supply-side roles only.
       {
-        label: 'Easyfixers', icon: UserCircle2,
-        allow: ['Admin', 'Executive Supply', 'Admin Supply', 'Project Manager', 'Zonal Field Team', 'Solution expert', 'Technology team'],
+        label: 'Customers', icon: Users, group: ADMIN_ALL,
         children: [
-          { href: '/easyfixers',       label: 'Manage Easyfixers' },
-          { href: '/easyfixers/zones', label: 'Easyfixer Zones' },
+          { href: wip('Manage Customers', 'customer'), label: 'Manage Customers' },
         ],
       },
       {
-        label: 'Clients', icon: Building2, group: ADMIN_ALL,
+        label: 'Clients', icon: Building2,
+        allow: ['Admin', 'Business Development', 'Project Manager', 'Technology team'],
         children: [
-          { href: '/clients', label: 'Manage Clients',
-            allow: ['Admin', 'Business Development', 'Project Manager', 'Technology team'] },
-          { href: '/users',   label: 'Users',
-            allow: ['Admin', 'Technology team'] },
+          { href: wip('Manage Clients', 'client'), label: 'Manage Clients' },
+        ],
+      },
+      {
+        label: 'EasyFixers', icon: UserCircle2,
+        allow: ['Admin', 'Executive Supply', 'Admin Supply', 'Project Manager', 'Zonal Field Team', 'Solution expert', 'Technology team'],
+        children: [
+          { href: '/easyfixers',                                 label: 'Manage EasyFixers' },
+          { href: '/easyfixers/zones',                           label: 'Easyfixer Zones' },
+          { href: wip('Easyfixer Search', 'checkBalance'),       label: 'Search' },
+          { href: wip('Registered EasyFixer', 'efer-registration'), label: 'Registered EasyFixer' },
+          { href: wip('Servicemen Payout', 'servicemenPayout'),  label: 'Servicemen Payout' },
+        ],
+      },
+      {
+        label: 'User', icon: User, allow: ['Admin', 'Technology team'],
+        children: [
+          { href: wip('Manage User', 'user'), label: 'Manage User' },
         ],
       },
     ],
@@ -85,18 +129,41 @@ const NAV: NavGroup[] = [
   {
     section: 'OPS',
     items: [
-      // Finance — Finance role or Admin.
       {
         label: 'Finance', icon: Coins, allow: ['Admin', 'Finance', 'Technology team'],
         children: [
-          { href: '/finance',  label: 'Overview' },
-          { href: '/invoices', label: 'Invoices' },
+          { href: wip('Easyfixer Debit',     'easyfixerDebit'),     label: 'Easyfixer Debit' },
+          { href: wip('Easyfixer Credit',    'easyfixerCredit'),    label: 'Easyfixer Credit' },
+          { href: wip('Client Invoice',      'clientInvoice'),      label: 'Client Invoice' },
+          { href: wip('NDM Collection',      'ndmCollection'),      label: 'NDM Collection' },
+          { href: wip('Collection Approval', 'updateRecharge'),     label: 'Collection Approval' },
         ],
       },
-      { label: 'Reports',       icon: BarChart3, href: '/reports',       group: ADMIN_ALL },
-      { label: 'Notifications', icon: Bell,      href: '/notifications' }, // everyone who logs in
-      { label: 'Webhooks',      icon: Webhook,   href: '/webhooks',
-        allow: ['Admin', 'Technology team'] },
+      {
+        label: 'Easyfixer Advance', icon: Wallet,
+        allow: ['Admin', 'Finance', 'Technology team'],
+        children: [
+          { href: wip('Audit Advance', 'easyfixerAdvance'), label: 'Audit Advance' },
+        ],
+      },
+      {
+        label: 'Report', icon: BarChart3, group: ADMIN_ALL,
+        children: [
+          { href: wip('Complete Jobs Report', 'completedJobsReport'),    label: 'Complete Jobs Report' },
+          { href: wip('EFR Report',           'manageEfrReport'),        label: 'EFR Report' },
+          { href: wip('Escalation Report',    'manageEscalationReport'), label: 'Escalation Report' },
+          { href: wip('Finance Report',       'manageFinanceReport'),    label: 'Finance Report' },
+        ],
+      },
+      {
+        label: 'Tracking', icon: MapPin, group: ADMIN_ALL,
+        children: [
+          { href: wip('PM Weekly Performance',     'userLoggingHours'), label: 'PM Weekly Performance' },
+          { href: wip('Tx Open Orders',            'jobTracking'),      label: 'Tx Open Orders' },
+          { href: wip('Monthly Client Performance','clientTracking'),   label: 'Monthly Client Performance' },
+          { href: wip('Available Tx in City',      'cityAnalysis'),     label: 'Available Tx in City' },
+        ],
+      },
     ],
   },
   {
@@ -106,16 +173,34 @@ const NAV: NavGroup[] = [
         label: 'Settings', icon: Settings,
         allow: ['Admin', 'Technology team'],
         children: [
-          { href: '/settings', label: 'Masters' },
-          { href: '/legacy',   label: 'Legacy Integration' },
+          { href: wip('Manage Cities',           'city'),                     label: 'Manage Cities' },
+          { href: wip('Manage Vertical',         'vertical'),                 label: 'Manage Vertical' },
+          { href: wip('Manage Service Category', 'servicecategory'),          label: 'Manage Service Category' },
+          { href: wip('Manage Service Type',     'servicetype'),              label: 'Manage Service Type' },
+          { href: wip('Manage Services',         'clientratecard'),           label: 'Manage Services' },
+          { href: wip('Manage Role',             'usertype'),                 label: 'Manage Role' },
+          { href: wip('Manage Document Type',    'documentType'),             label: 'Manage Document Type' },
+          { href: wip('Manage Skill Level',      'skill'),                    label: 'Manage Skill Level' },
+          { href: wip('Manage Tools',            'tool'),                     label: 'Manage Tools' },
+          { href: '/settings/deep-skills',                                    label: 'Manage Deep Skills' },
+          { href: wip('Admin Action',            'generateClientInvoice'),    label: 'Admin Action' },
         ],
       },
     ],
   },
 ];
 
-function isRouteActive(pathname: string, href: string) {
-  return pathname === href || pathname.startsWith(href + '/');
+function isRouteActive(pathname: string, currentSearch: string, href: string) {
+  // hrefs carrying a query (our WIP /coming-soon?title=… routes) must match
+  // BOTH the pathname AND the `title` param, otherwise every WIP sidebar entry
+  // would light up simultaneously whenever any coming-soon page is open.
+  const [hrefPath, hrefQuery] = href.split('?');
+  const onPath = pathname === hrefPath || pathname.startsWith(hrefPath + '/');
+  if (!hrefQuery) return onPath;
+  if (!onPath) return false;
+  const hrefParams = new URLSearchParams(hrefQuery);
+  const currentParams = new URLSearchParams(currentSearch);
+  return hrefParams.get('title') === currentParams.get('title');
 }
 
 type RoleHint = { role_name: string; group: string } | undefined;
@@ -135,6 +220,8 @@ function allowedFor(role: RoleHint, rule: { allow?: string[]; group?: string[] }
 
 export function Sidebar() {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const currentSearch = searchParams.toString();
   // Reads from shared AuthProvider — no extra /auth/me call.
   const { me } = useMe();
 
@@ -160,11 +247,11 @@ export function Sidebar() {
     const set = new Set<string>();
     for (const group of visible) {
       for (const item of group.items) {
-        if (item.children?.some((c) => isRouteActive(pathname, c.href))) set.add(item.label);
+        if (item.children?.some((c) => isRouteActive(pathname, currentSearch, c.href))) set.add(item.label);
       }
     }
     return set;
-  }, [pathname, visible]);
+  }, [pathname, currentSearch, visible]);
 
   const [expanded, setExpanded] = useState<Set<string>>(autoOpen);
   function toggle(label: string) {
@@ -212,7 +299,7 @@ export function Sidebar() {
                    */
                   const activeChildHref =
                     item.children
-                      .filter((c) => isRouteActive(pathname, c.href))
+                      .filter((c) => isRouteActive(pathname, currentSearch, c.href))
                       .sort((a, b) => b.href.length - a.href.length)[0]?.href ?? null;
                   const anyChildActive = activeChildHref !== null;
                   const Chev = open ? ChevronDown : ChevronRight;
@@ -259,7 +346,7 @@ export function Sidebar() {
                   );
                 }
 
-                const active = isRouteActive(pathname, item.href!);
+                const active = isRouteActive(pathname, currentSearch, item.href!);
                 return (
                   <li key={item.href}>
                     <Link
