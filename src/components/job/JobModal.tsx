@@ -151,6 +151,7 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
   const s = Number(job.job_status);
   const [busy, setBusy] = useState<BusyKey>(null);
   const [assignOpen, setAssignOpen] = useState(false);
+  const [autoAssignOpen, setAutoAssignOpen] = useState(false);
   const [ownerOpen, setOwnerOpen] = useState(false);
 
   async function doStatus(key: BusyKey, status: number, reasonId?: number, comment?: string) {
@@ -162,7 +163,13 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
   return (
     <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
       <Button size="sm" variant="outline" onClick={onEdit}>Edit</Button>
-      {canAssign(s)         && <Button size="sm" onClick={() => setAssignOpen(true)}>{job.fk_easyfixter_id ? 'Reassign' : 'Assign'}</Button>}
+      {canAssign(s) && <Button size="sm" onClick={() => setAssignOpen(true)}>{job.fk_easyfixter_id ? 'Reassign' : 'Assign'}</Button>}
+      {/* Auto-assign only useful when no tech is currently assigned. Previously
+          lived on a standalone /auto-assign page; merged in here so the whole
+          assignment workflow (manual or AI) sits next to the job data. */}
+      {canAssign(s) && !job.fk_easyfixter_id && (
+        <Button size="sm" variant="outline" onClick={() => setAutoAssignOpen(true)}>Auto-assign</Button>
+      )}
       {canChangeOwner(s)    && <Button size="sm" variant="outline" onClick={() => setOwnerOpen(true)}>Change Owner</Button>}
       {canStart(s)          && <LoadBtn size="sm" variant="outline" loading={busy === 'start'}      onClick={() => doStatus('start', ST.IN_PROGRESS)}>Start</LoadBtn>}
       {canComplete(s)       && <LoadBtn size="sm" variant="outline" loading={busy === 'complete'}   onClick={() => doStatus('complete', ST.COMPLETED)}>Complete</LoadBtn>}
@@ -176,6 +183,10 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
           await api.patch(`/admin/jobs/${jobId}/assign`, { easyfixerId: efrId });
           setAssignOpen(false); onChanged();
         }}
+      />
+      <AutoAssignDialog
+        open={autoAssignOpen} onClose={() => setAutoAssignOpen(false)}
+        jobId={jobId} onAssigned={() => { setAutoAssignOpen(false); onChanged(); }}
       />
       <ChangeOwnerDialog
         open={ownerOpen} onClose={() => setOwnerOpen(false)}
@@ -454,6 +465,128 @@ function AssignDialog({ open, onClose, currentTech, onSubmit }: {
             <Button variant="outline" onClick={onClose}>Close</Button>
             <LoadBtn onClick={submit} loading={loading} disabled={!valid}>{currentTech ? 'Reassign' : 'Assign'}</LoadBtn>
           </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/*
+ * Auto-assign dialog — fetches ranked candidates from the 3-layer engine
+ * (SQL eligibility → availability → weighted score), shows the top N, and
+ * commits the top candidate on confirm. Replaces the standalone /auto-assign
+ * page: the workflow lives inside the job context where it belongs.
+ */
+type AutoCandidate = {
+  efr_id: number; efr_name: string; efr_no: string;
+  distance_km: number; active_jobs: number; avg_rating: number;
+  completion_ratio: number; score: number;
+};
+type CandidatesResp = {
+  l1Count: number; rejectedCount: number;
+  candidates: AutoCandidate[];
+};
+
+function AutoAssignDialog({ open, onClose, jobId, onAssigned }: {
+  open: boolean; onClose: () => void; jobId: number; onAssigned: () => void;
+}) {
+  const [data, setData] = useState<CandidatesResp | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [committing, setCommitting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) { setData(null); setErr(null); return; }
+    (async () => {
+      setLoading(true); setErr(null);
+      try { setData(await api.get<CandidatesResp>(`/admin/auto-assign/${jobId}/candidates`, { limit: 5 })); }
+      catch (e) { setErr(e instanceof ApiError ? e.message : 'Failed to fetch candidates'); }
+      finally { setLoading(false); }
+    })();
+  }, [open, jobId]);
+
+  async function commit() {
+    setCommitting(true); setErr(null);
+    try {
+      await api.post(`/admin/auto-assign/${jobId}`);
+      onAssigned();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'Assignment failed');
+    } finally { setCommitting(false); }
+  }
+
+  const top = data?.candidates?.[0];
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent hideClose className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Auto-assign Technician</DialogTitle>
+          <DialogDescription>
+            3-layer pipeline: SQL eligibility → availability → weighted score (distance + workload + rating + completion).
+          </DialogDescription>
+        </DialogHeader>
+
+        {loading && <div className="text-sm text-muted-foreground py-6 text-center">Scoring candidates…</div>}
+        {err && <div className="text-sm text-destructive">{err}</div>}
+
+        {data && !loading && data.candidates.length === 0 && (
+          <div className="text-sm text-muted-foreground py-6 text-center">
+            No eligible technicians. L1 eligible: {data.l1Count}, L2 rejected: {data.rejectedCount}.
+            Consider manual Assign instead.
+          </div>
+        )}
+
+        {data && !loading && data.candidates.length > 0 && (
+          <div className="space-y-3">
+            <div className="rounded-lg border p-3 bg-emerald-50/50">
+              <div className="flex items-center justify-between mb-1">
+                <div className="text-xs uppercase tracking-wider text-emerald-700 font-semibold">Recommended</div>
+                <div className="text-xs text-muted-foreground">Match score: {top!.score}</div>
+              </div>
+              <div className="font-medium">{top!.efr_name} · {top!.efr_no}</div>
+              <div className="mt-1 grid grid-cols-4 gap-2 text-xs text-muted-foreground">
+                <span>{top!.distance_km.toFixed(1)} km away</span>
+                <span>{top!.active_jobs} active jobs</span>
+                <span>★ {Number(top!.avg_rating).toFixed(1)}</span>
+                <span>{(top!.completion_ratio * 100).toFixed(0)}% completion</span>
+              </div>
+            </div>
+
+            {data.candidates.length > 1 && (
+              <details className="text-sm">
+                <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+                  See {data.candidates.length - 1} other candidate{data.candidates.length > 2 ? 's' : ''}
+                </summary>
+                <table className="data-table mt-2">
+                  <thead><tr><th>#</th><th>Name</th><th>Distance</th><th>Load</th><th>Rating</th><th>Score</th></tr></thead>
+                  <tbody>
+                    {data.candidates.slice(1).map((c, i) => (
+                      <tr key={c.efr_id}>
+                        <td className="text-xs text-muted-foreground">{i + 2}</td>
+                        <td>{c.efr_name}</td>
+                        <td className="text-xs">{c.distance_km.toFixed(1)} km</td>
+                        <td className="text-xs">{c.active_jobs}</td>
+                        <td className="text-xs">{Number(c.avg_rating).toFixed(1)}</td>
+                        <td className="font-medium">{c.score}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </details>
+            )}
+
+            <div className="text-xs text-muted-foreground">
+              L1 eligible: {data.l1Count} · L2 rejected: {data.rejectedCount}
+            </div>
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2 pt-2 border-t">
+          <Button variant="outline" onClick={onClose}>Close</Button>
+          {data && data.candidates.length > 0 && (
+            <LoadBtn onClick={commit} loading={committing}>Confirm & Assign top candidate</LoadBtn>
+          )}
         </div>
       </DialogContent>
     </Dialog>

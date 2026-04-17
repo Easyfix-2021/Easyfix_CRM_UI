@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import {
   Brain, Building, Hash, Tag, Package, UserCog, FileText,
-  Sparkles, Wrench, ShieldCheck, type LucideIcon,
+  Sparkles, Wrench, ShieldCheck, Zap, type LucideIcon,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 
@@ -21,6 +21,9 @@ const wip = (title: string, legacyPath: string) =>
 type Tile = { href: string; icon: LucideIcon; title: string; blurb: string; shipped?: boolean };
 
 const AREAS: Tile[] = [
+  { href: '/settings/auto-allocation', icon: Zap, title: 'Manage Auto Allocations',
+    blurb: 'Toggle instant vs batch auto-assignment per client, failure email, and L3 scoring weights.',
+    shipped: true },
   { href: '/settings/deep-skills', icon: Brain, title: 'Manage Deep Skills',
     blurb: 'Service Category → Service Type → Deep Skill → Option catalogue used for technician skill mapping.',
     shipped: true },
