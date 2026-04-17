@@ -19,13 +19,52 @@ type Reason = { id: number; reason: string };
 type Bank = { id: number; bank_name: string };
 type DocumentType = { document_type_id: number; document_name: string };
 
-const cache = new Map<string, unknown>();
+/*
+ * Three-tier cache:
+ *   1. in-memory Map     — zero-cost read for the rest of the session
+ *   2. sessionStorage    — survives soft/hard browser reload; cleared on tab close
+ *   3. in-flight Promise — de-dupes concurrent first-fetches (the real fix for
+ *      the saturation bug: two modals mounting in parallel used to each fire
+ *      all 10 lookup requests simultaneously, so 20 requests hit the backend
+ *      in the same millisecond)
+ *
+ * A 30-minute TTL on sessionStorage entries keeps long-lived tabs from
+ * permanently caching a stale dropdown.
+ */
+const MEM_CACHE = new Map<string, unknown>();
+const INFLIGHT = new Map<string, Promise<unknown>>();
+const SS_PREFIX = 'efx-lookup:';
+const SS_TTL_MS = 30 * 60 * 1000;
+
+function readSession<T>(key: string): T | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.sessionStorage.getItem(SS_PREFIX + key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { t: number; d: T };
+    if (Date.now() - parsed.t > SS_TTL_MS) return null;
+    return parsed.d;
+  } catch { return null; }
+}
+function writeSession<T>(key: string, data: T) {
+  if (typeof window === 'undefined') return;
+  try { window.sessionStorage.setItem(SS_PREFIX + key, JSON.stringify({ t: Date.now(), d: data })); }
+  catch { /* quota — ignore */ }
+}
 
 async function fetchOnce<T>(key: string, loader: () => Promise<T>): Promise<T> {
-  if (cache.has(key)) return cache.get(key) as T;
-  const data = await loader();
-  cache.set(key, data);
-  return data;
+  if (MEM_CACHE.has(key)) return MEM_CACHE.get(key) as T;
+  const fromSession = readSession<T>(key);
+  if (fromSession != null) { MEM_CACHE.set(key, fromSession); return fromSession; }
+  if (INFLIGHT.has(key)) return INFLIGHT.get(key) as Promise<T>;
+  const promise = loader().then((data) => {
+    MEM_CACHE.set(key, data);
+    writeSession(key, data);
+    INFLIGHT.delete(key);
+    return data;
+  }).catch((err) => { INFLIGHT.delete(key); throw err; });
+  INFLIGHT.set(key, promise);
+  return promise;
 }
 
 export function useLookup() {
@@ -73,4 +112,14 @@ export function useLookup() {
   };
 }
 
-export function clearLookupCache() { cache.clear(); }
+export function clearLookupCache() {
+  MEM_CACHE.clear();
+  if (typeof window !== 'undefined') {
+    const keys: string[] = [];
+    for (let i = 0; i < window.sessionStorage.length; i++) {
+      const k = window.sessionStorage.key(i);
+      if (k && k.startsWith(SS_PREFIX)) keys.push(k);
+    }
+    keys.forEach((k) => window.sessionStorage.removeItem(k));
+  }
+}

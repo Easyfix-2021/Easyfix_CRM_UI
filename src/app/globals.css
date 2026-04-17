@@ -63,4 +63,41 @@
   .data-table tr:hover td {
     @apply bg-muted/40;
   }
+
+  /* Native datetime-local + date inputs: make the calendar-picker icon obey
+     the input's theming. By default Chrome/Safari render it at the far right
+     with no padding breathing room, so it jams against the border when the
+     input has short width. We nudge it in, size it consistently, and use
+     color-scheme so the whole control follows light/dark theming. */
+  /* Native datetime/date/time inputs — instead of sizing and positioning the
+     tiny calendar-picker icon, stretch it into a transparent overlay covering
+     the entire input. Effect: a click anywhere on the input opens the native
+     picker; the visible icon glyph is hidden (no more misalignment arguments).
+     The picker auto-closes when the user clicks outside — native OS behaviour,
+     no JS needed. `color-scheme: light` still forces the picker to render in
+     light mode so the dates are readable regardless of the user's OS theme. */
+  input[type='datetime-local'],
+  input[type='date'],
+  input[type='time'] {
+    position: relative;
+    color-scheme: light;
+    cursor: pointer;
+  }
+  input[type='datetime-local']::-webkit-calendar-picker-indicator,
+  input[type='date']::-webkit-calendar-picker-indicator,
+  input[type='time']::-webkit-calendar-picker-indicator {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    height: auto;
+    padding: 0;
+    margin: 0;
+    background: transparent;
+    color: transparent;
+    opacity: 0;
+    cursor: pointer;
+  }
 }

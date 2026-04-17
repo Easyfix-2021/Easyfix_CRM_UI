@@ -42,7 +42,7 @@ export default function AutoAssignPage() {
   }
 
   return (
-    <div className="max-w-5xl mx-auto space-y-5">
+    <div className="space-y-3">
       <div>
         <h1 className="text-2xl font-semibold">Auto-assignment</h1>
         <p className="text-sm text-muted-foreground">3-layer pipeline: SQL eligibility → availability → weighted scoring</p>

@@ -1,11 +1,34 @@
 'use client';
 import { useRef, useState } from 'react';
-import { Upload } from 'lucide-react';
+import { Upload, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { api, ApiError } from '@/lib/api';
 import { statusColorClass } from '@/lib/utils';
+
+/*
+ * Fetches the template from the backend so the column layout stays in lockstep
+ * with the parser (`utils/excel-parser.js`). We pass the JWT via the same api
+ * helper path to avoid an auth bypass in the download route.
+ */
+const TEMPLATE_URL = (process.env.NEXT_PUBLIC_API_URL || '/api') + '/admin/jobs/upload-template';
+
+async function downloadTemplate() {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('crm_auth_token') : null;
+  const res = await fetch(TEMPLATE_URL, {
+    credentials: 'include',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) { alert(`Template download failed: HTTP ${res.status}`); return; }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'easyfix-jobs-upload-template.xlsx';
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
 
 type Report = {
   summary: { totalRows: number; createdCount: number; failedCount: number; skipCount: number; dryRun: boolean };
@@ -35,7 +58,10 @@ export default function JobUploadPage() {
   }
 
   return (
-    <div className="max-w-4xl mx-auto space-y-5">
+    // No max-width: the Card below fills the whole available width between
+    // sidebar and the right edge so the "white panel" visually meets the page
+    // chrome with just the main-padding gap, not an internal centered island.
+    <div className="space-y-3">
       <h1 className="text-2xl font-semibold">Bulk Job Upload</h1>
       <Card>
         <CardHeader><CardTitle>Upload Excel</CardTitle></CardHeader>
@@ -56,6 +82,9 @@ export default function JobUploadPage() {
             <div className="flex gap-2">
               <Button type="submit" disabled={loading}>
                 <Upload className="h-4 w-4 mr-1" /> {loading ? 'Processing…' : (dryRun ? 'Validate' : 'Upload & Create')}
+              </Button>
+              <Button type="button" variant="outline" onClick={downloadTemplate}>
+                <Download className="h-4 w-4 mr-1" /> Download template
               </Button>
             </div>
             {error && <div className="text-sm text-destructive">{error}</div>}

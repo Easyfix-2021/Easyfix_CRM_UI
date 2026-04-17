@@ -1,14 +1,17 @@
 'use client';
 import { useEffect, useState } from 'react';
-import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Plus, Search, Filter, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { Card, CardContent } from '@/components/ui/card';
+import { SearchSelect } from '@/components/ui/search-select';
 import { api } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
 import { formatDate } from '@/lib/utils';
+import { EasyfixerModal, type EasyfixerModalMode } from '@/components/easyfixer/EasyfixerModal';
+import { useSort, SortHeader } from '@/lib/use-sort';
 
 type Ef = {
   efr_id: number; efr_name: string; efr_first_name: string | null; efr_last_name: string | null;
@@ -26,19 +29,46 @@ const PAGE_SIZE = 50;
 
 export default function EasyfixersPage() {
   const lk = useLookup();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [data, setData] = useState<Resp | null>(null);
+  // `q` is a UI-only filter — searching runs in memory over the currently
+  // loaded page instead of firing a backend call per keystroke. Filter
+  // dropdowns (city / category / verified / status) still trigger a refetch.
   const [q, setQ] = useState('');
   const [filters, setFilters] = useState({ cityId: '', serviceCategory: '', isVerified: '', status: '' });
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
 
+  // Modal state — also driven by URL params so /easyfixers?new=1 and
+  // /easyfixers?view=8799 still work as deep-links (legacy /easyfixers/new and
+  // /easyfixers/[id] redirect into these).
+  const [modal, setModal] = useState<{ open: boolean; mode: EasyfixerModalMode; id?: number }>({ open: false, mode: 'create' });
+
+  useEffect(() => {
+    if (searchParams.get('new') === '1') {
+      setModal({ open: true, mode: 'create' });
+    } else {
+      const v = searchParams.get('view');
+      if (v && /^\d+$/.test(v)) setModal({ open: true, mode: 'view', id: Number(v) });
+    }
+  }, [searchParams]);
+
+  function closeModal() {
+    setModal((m) => ({ ...m, open: false }));
+    // Strip the query param from the URL so refresh/back-nav doesn't pop it back.
+    if (searchParams.get('new') || searchParams.get('view')) router.replace('/easyfixers');
+  }
+  function openCreate() { setModal({ open: true, mode: 'create' }); }
+  function openView(id: number) { setModal({ open: true, mode: 'view', id }); }
+
   async function load(reset = false) {
     setLoading(true);
     const off = reset ? 0 : offset;
     try {
       const r = await api.get<Resp>('/admin/easyfixers', {
-        q: q || undefined, limit: PAGE_SIZE, offset: off,
+        limit: PAGE_SIZE, offset: off,
         cityId: filters.cityId || undefined,
         serviceCategory: filters.serviceCategory || undefined,
         isVerified: filters.isVerified === '' ? undefined : filters.isVerified,
@@ -50,6 +80,21 @@ export default function EasyfixersPage() {
   }
   useEffect(() => { load(false); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [offset]);
   useEffect(() => { load(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  // Filter-dropdown changes refetch (backend-driven). The search box is UI-only.
+  useEffect(() => { setOffset(0); load(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ },
+    [filters.cityId, filters.serviceCategory, filters.isVerified, filters.status]);
+
+  // Client-side filter: match q across visible text columns.
+  const filteredItems = (data?.items ?? []).filter((e) => {
+    if (!q) return true;
+    const needle = q.toLowerCase();
+    const haystacks = [
+      e.efr_id, e.efr_name, e.efr_no, e.efr_email,
+      e.city_name, e.efr_service_category, e.efr_service_type,
+    ];
+    return haystacks.some((h) => h != null && String(h).toLowerCase().includes(needle));
+  });
+  const { sorted, sortKey, sortDir, toggle } = useSort<Ef>(filteredItems);
 
   return (
     <div className="space-y-5">
@@ -58,14 +103,12 @@ export default function EasyfixersPage() {
           <h1 className="text-2xl font-semibold">Easyfixers</h1>
           <p className="text-sm text-muted-foreground">{data?.total.toLocaleString() ?? '…'} technicians</p>
         </div>
-        <Button asChild>
-          <Link href="/easyfixers/new"><Plus className="h-4 w-4 mr-1" /> New Easyfixer</Link>
-        </Button>
+        <Button onClick={openCreate}><Plus className="h-4 w-4 mr-1" /> Add New Easyfixer</Button>
       </div>
 
       <Card>
-        <CardContent className="p-4 space-y-3">
-          <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); load(true); }}>
+        <CardContent className="p-3 space-y-3">
+          <div className="flex gap-2">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input placeholder="Search name, mobile, email…" value={q} onChange={(e) => setQ(e.target.value)} className="pl-9" />
@@ -73,23 +116,24 @@ export default function EasyfixersPage() {
             <Button type="button" variant="outline" onClick={() => setShowFilters((s) => !s)}>
               <Filter className="h-4 w-4 mr-1" /> Filters
             </Button>
-            <Button type="submit">Search</Button>
-          </form>
+          </div>
           {showFilters && (
             <div className="grid grid-cols-1 md:grid-cols-4 gap-3 pt-2 border-t">
-              <Select placeholder="Any city" value={filters.cityId} onChange={(e) => setFilters({ ...filters, cityId: e.target.value })} options={lk.toOpts.cities} />
-              <Select placeholder="Any service category" value={filters.serviceCategory} onChange={(e) => setFilters({ ...filters, serviceCategory: e.target.value })}>
-                {lk.serviceCategories.map((c) => <option key={c.service_catg_id} value={c.service_catg_name}>{c.service_catg_name}</option>)}
-              </Select>
+              <SearchSelect placeholder="Any city" value={filters.cityId} onChange={(v) => setFilters({ ...filters, cityId: v })} options={lk.toOpts.cities.map((o) => ({ value: o.value, label: String(o.label) }))} />
+              <SearchSelect
+                placeholder="Any service category"
+                value={filters.serviceCategory}
+                onChange={(v) => setFilters({ ...filters, serviceCategory: v })}
+                options={lk.serviceCategories.map((c) => ({ value: c.service_catg_name, label: c.service_catg_name }))}
+              />
               <Select placeholder="Any verified status" value={filters.isVerified} onChange={(e) => setFilters({ ...filters, isVerified: e.target.value })} options={[
                 { value: 'true', label: 'Verified' }, { value: 'false', label: 'Not verified' },
               ]} />
               <Select placeholder="Any active status" value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })} options={[
                 { value: '1', label: 'Active' }, { value: '0', label: 'Inactive' },
               ]} />
-              <div className="md:col-span-4 flex justify-end gap-2">
-                <Button type="button" variant="outline" onClick={() => { setFilters({ cityId: '', serviceCategory: '', isVerified: '', status: '' }); load(true); }}>Clear</Button>
-                <Button type="button" onClick={() => load(true)}>Apply</Button>
+              <div className="md:col-span-4 flex justify-end">
+                <Button type="button" variant="outline" onClick={() => setFilters({ cityId: '', serviceCategory: '', isVerified: '', status: '' })}>Clear filters</Button>
               </div>
             </div>
           )}
@@ -101,23 +145,23 @@ export default function EasyfixersPage() {
           <table className="data-table">
             <thead>
               <tr>
-                <th>ID</th>
-                <th>Name</th>
-                <th>Mobile</th>
-                <th>Email</th>
-                <th>City</th>
-                <th>Category</th>
-                <th>Service Type</th>
-                <th>Profile %</th>
-                <th>Verified</th>
-                <th>Status</th>
-                <th>Joined</th>
+                <SortHeader<Ef> colKey="efr_id"                 sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>ID</SortHeader>
+                <SortHeader<Ef> colKey="efr_name"               sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Name</SortHeader>
+                <SortHeader<Ef> colKey="efr_no"                 sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Mobile</SortHeader>
+                <SortHeader<Ef> colKey="efr_email"              sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Email</SortHeader>
+                <SortHeader<Ef> colKey="city_name"              sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>City</SortHeader>
+                <SortHeader<Ef> colKey="efr_service_category"   sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Category</SortHeader>
+                <SortHeader<Ef> colKey="efr_service_type"       sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Service Type</SortHeader>
+                <SortHeader<Ef> colKey="efr_profile_perc"       sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Profile %</SortHeader>
+                <SortHeader<Ef> colKey="is_technician_verified" sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Verified</SortHeader>
+                <SortHeader<Ef> colKey="efr_status"             sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Status</SortHeader>
+                <SortHeader<Ef> colKey="insert_date"            sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Joined</SortHeader>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               {loading && <tr><td colSpan={12} className="text-center py-8 text-muted-foreground">Loading…</td></tr>}
-              {!loading && (data?.items ?? []).map((e) => (
+              {!loading && sorted.map((e) => (
                 <tr key={e.efr_id}>
                   <td className="text-xs text-muted-foreground">{e.efr_id}</td>
                   <td className="font-medium whitespace-nowrap">{e.efr_name}</td>
@@ -134,13 +178,27 @@ export default function EasyfixersPage() {
                     <span className="inline-flex items-center rounded-full bg-slate-100 text-slate-600 px-2 py-0.5 text-xs font-medium">Inactive</span>
                   )}</td>
                   <td className="text-xs whitespace-nowrap text-muted-foreground">{formatDate(e.insert_date)}</td>
-                  <td><Link className="text-primary text-xs hover:underline" href={`/easyfixers/${e.efr_id}`}>View</Link></td>
+                  <td>
+                    <button
+                      type="button"
+                      onClick={() => openView(e.efr_id)}
+                      className="text-primary text-xs hover:underline"
+                    >View</button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </CardContent>
       </Card>
+
+      <EasyfixerModal
+        open={modal.open}
+        mode={modal.mode}
+        easyfixerId={modal.id}
+        onClose={closeModal}
+        onSaved={() => load(true)}
+      />
 
       {data && data.total > PAGE_SIZE && (
         <div className="flex items-center justify-end gap-2 text-sm">

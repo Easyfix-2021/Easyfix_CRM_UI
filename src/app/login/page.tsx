@@ -73,12 +73,15 @@ export default function LoginPage() {
     <div className="min-h-screen grid place-items-center bg-gradient-to-br from-slate-100 to-slate-200 p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
-          {/* Logo is cyan on transparent. The dark-slate pill gives it contrast on the
-              otherwise-white card, mirroring how it sits on the app's dark sidebar. */}
+          {/* Logo is cyan on transparent. The dark-slate pill gives it contrast on
+              the otherwise-white card, mirroring how it sits on the app's dark
+              sidebar. PNG was cropped to its content box (no transparent padding),
+              so h-10 renders the logo at its actual visible size. */}
           <div className="mx-auto mb-3 inline-flex items-center justify-center rounded-lg bg-slate-900 px-4 py-2">
             <Image
               src="/logo-full.png" alt="EasyFix"
-              width={180} height={60} priority
+              width={139} height={34} priority
+              unoptimized
               className="h-10 w-auto"
             />
           </div>

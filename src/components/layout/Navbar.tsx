@@ -4,18 +4,19 @@ import { useRouter } from 'next/navigation';
 import { Bell, LogOut, Menu } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { api } from '@/lib/api';
-
-type Me = { user: { user_id: number; user_name: string; official_email: string }; role?: { role_name: string } };
+import { useMe } from '@/lib/auth-context';
 
 export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
   const router = useRouter();
-  const [me, setMe] = useState<Me | null>(null);
+  // Shared auth state — AuthProvider in (authed)/layout fetches /auth/me once
+  // and both Navbar + Sidebar consume from context. Saves one duplicate HTTP
+  // request + DB lookup per page load.
+  const { me } = useMe();
   const [unread, setUnread] = useState<number>(0);
 
   useEffect(() => {
-    api.get<Me>('/auth/me').then(setMe).catch(() => router.push('/login'));
     api.get<{ unread: number }>('/admin/notifications/inbox/count').then((d) => setUnread(d.unread)).catch(() => {});
-  }, [router]);
+  }, []);
 
   async function logout() {
     try { await api.post('/auth/logout'); } catch { /* ignore */ }

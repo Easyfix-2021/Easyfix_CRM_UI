@@ -13,8 +13,9 @@ type JobRow = {
 
 type ListResp = { items: JobRow[]; total: number };
 
-function StatCard({ icon: Icon, label, value, tint }: {
-  icon: React.ComponentType<{ className?: string }>; label: string; value: number | string; tint: string;
+function StatCard({ icon: Icon, label, value, tint, loading }: {
+  icon: React.ComponentType<{ className?: string }>; label: string;
+  value: number | string; tint: string; loading?: boolean;
 }) {
   return (
     <Card>
@@ -22,8 +23,12 @@ function StatCard({ icon: Icon, label, value, tint }: {
         <div className={`h-12 w-12 rounded-lg grid place-items-center ${tint}`}>
           <Icon className="h-6 w-6" />
         </div>
-        <div>
-          <div className="text-2xl font-semibold tabular-nums">{value}</div>
+        <div className="min-w-0">
+          {loading ? (
+            <div className="h-7 w-16 rounded bg-muted animate-pulse mb-1" aria-label={`${label} loading`} />
+          ) : (
+            <div className="text-2xl font-semibold tabular-nums">{value}</div>
+          )}
           <div className="text-xs text-muted-foreground">{label}</div>
         </div>
       </CardContent>
@@ -34,27 +39,36 @@ function StatCard({ icon: Icon, label, value, tint }: {
 export default function DashboardPage() {
   const [stats, setStats] = useState({ booked: 0, scheduled: 0, inProgress: 0, completed: 0, cancelled: 0, total: 0 });
   const [recent, setRecent] = useState<JobRow[]>([]);
+  const [loadingStats, setLoadingStats] = useState(true);
+  const [loadingRecent, setLoadingRecent] = useState(true);
 
   useEffect(() => {
+    // One request for all status bucket counts (server computes via GROUP BY),
+    // plus one for recent jobs — fires in parallel. Previously this page made
+    // SEVEN requests on mount (six individual count calls plus recent), which
+    // each used two DB connections server-side. The pool saturation warning
+    // observed in prod logs was directly caused by that burst.
     (async () => {
       try {
-        const counts = await Promise.all([
-          api.get<ListResp>('/admin/jobs', { status: 0, limit: 1 }).then((r) => r.total).catch(() => 0),
-          api.get<ListResp>('/admin/jobs', { status: 1, limit: 1 }).then((r) => r.total).catch(() => 0),
-          api.get<ListResp>('/admin/jobs', { status: 2, limit: 1 }).then((r) => r.total).catch(() => 0),
-          api.get<ListResp>('/admin/jobs', { status: 3, limit: 1 }).then((r) => r.total).catch(() => 0),
-          api.get<ListResp>('/admin/jobs', { status: 6, limit: 1 }).then((r) => r.total).catch(() => 0),
-          api.get<ListResp>('/admin/jobs', { limit: 1 }).then((r) => r.total).catch(() => 0),
-        ]);
+        const r = await api.get<{ total: number; byStatus: Record<string, number> }>('/admin/jobs/counts');
+        const b = r.byStatus || {};
         setStats({
-          booked: counts[0], scheduled: counts[1], inProgress: counts[2],
-          completed: counts[3], cancelled: counts[4], total: counts[5],
+          booked:     b['0'] ?? 0,
+          scheduled:  b['1'] ?? 0,
+          inProgress: b['2'] ?? 0,
+          // completed_alt (5) is counted with completed (3) on the dashboard
+          // since they're both terminal "done" states.
+          completed:  (b['3'] ?? 0) + (b['5'] ?? 0),
+          cancelled:  b['6'] ?? 0,
+          total:      r.total,
         });
-      } catch { /* ignore */ }
+      } finally { setLoadingStats(false); }
+    })();
+    (async () => {
       try {
-        const recent = await api.get<ListResp>('/admin/jobs', { limit: 8 });
-        setRecent(recent.items);
-      } catch { /* ignore */ }
+        const r = await api.get<ListResp>('/admin/jobs', { limit: 8 });
+        setRecent(r.items);
+      } finally { setLoadingRecent(false); }
     })();
   }, []);
 
@@ -66,12 +80,12 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-        <StatCard icon={Briefcase}   label="Total Jobs"  value={stats.total.toLocaleString()}     tint="bg-slate-100 text-slate-700" />
-        <StatCard icon={AlertCircle} label="Booked"      value={stats.booked.toLocaleString()}    tint="bg-gray-100 text-gray-700" />
-        <StatCard icon={Clock}       label="Scheduled"   value={stats.scheduled.toLocaleString()} tint="bg-blue-100 text-blue-700" />
-        <StatCard icon={UserCircle2} label="In Progress" value={stats.inProgress.toLocaleString()} tint="bg-amber-100 text-amber-700" />
-        <StatCard icon={CheckCircle2} label="Completed"  value={stats.completed.toLocaleString()} tint="bg-emerald-100 text-emerald-700" />
-        <StatCard icon={XCircle}     label="Cancelled"   value={stats.cancelled.toLocaleString()} tint="bg-red-100 text-red-700" />
+        <StatCard icon={Briefcase}   label="Total Jobs"  value={stats.total.toLocaleString()}     tint="bg-slate-100 text-slate-700"   loading={loadingStats} />
+        <StatCard icon={AlertCircle} label="Booked"      value={stats.booked.toLocaleString()}    tint="bg-gray-100 text-gray-700"     loading={loadingStats} />
+        <StatCard icon={Clock}       label="Scheduled"   value={stats.scheduled.toLocaleString()} tint="bg-blue-100 text-blue-700"     loading={loadingStats} />
+        <StatCard icon={UserCircle2} label="In Progress" value={stats.inProgress.toLocaleString()} tint="bg-amber-100 text-amber-700"  loading={loadingStats} />
+        <StatCard icon={CheckCircle2} label="Completed"  value={stats.completed.toLocaleString()} tint="bg-emerald-100 text-emerald-700" loading={loadingStats} />
+        <StatCard icon={XCircle}     label="Cancelled"   value={stats.cancelled.toLocaleString()} tint="bg-red-100 text-red-700"       loading={loadingStats} />
       </div>
 
       <Card>
@@ -90,10 +104,17 @@ export default function DashboardPage() {
               </tr>
             </thead>
             <tbody>
-              {recent.length === 0 && (
+              {loadingRecent && Array.from({ length: 5 }).map((_, i) => (
+                <tr key={`sk-${i}`}>
+                  {Array.from({ length: 7 }).map((_, c) => (
+                    <td key={c}><div className="h-3 w-24 rounded bg-muted animate-pulse" /></td>
+                  ))}
+                </tr>
+              ))}
+              {!loadingRecent && recent.length === 0 && (
                 <tr><td colSpan={7} className="text-center text-muted-foreground py-8">No jobs yet</td></tr>
               )}
-              {recent.map((j) => (
+              {!loadingRecent && recent.map((j) => (
                 <tr key={j.job_id}>
                   <td className="font-medium">#{j.job_id}</td>
                   <td>{j.client_name ?? '—'}</td>
