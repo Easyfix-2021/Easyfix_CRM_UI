@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { api, ApiError } from '@/lib/api';
+import { formatEasyfixerName } from '@/lib/utils';
 
 type Candidate = {
   efr_id: number; efr_name: string; efr_no: string; distance_km: number;
@@ -36,7 +37,7 @@ export default function AutoAssignPage() {
     setAssigning(true); setAssignResult(null);
     try {
       const r = await api.post<{ chosen: Candidate; job: { job_id: number; fk_easyfixter_id: number } }>(`/admin/auto-assign/${Number(jobId)}`);
-      setAssignResult(`Assigned to ${r.chosen.efr_name} (Easyfixer ID ${r.chosen.efr_id}) — match score ${r.chosen.score}`);
+      setAssignResult(`Assigned to ${formatEasyfixerName(r.chosen.efr_name)} (Easyfixer ID ${r.chosen.efr_id}) — match score ${r.chosen.score}`);
     } catch (err) { setError(err instanceof ApiError ? err.message : 'assign failed'); }
     finally { setAssigning(false); }
   }
@@ -89,7 +90,7 @@ export default function AutoAssignPage() {
                   <tr key={c.efr_id} className={i === 0 ? 'bg-emerald-50' : ''}>
                     <td className="font-semibold">{i + 1}</td>
                     <td>{c.efr_id}</td>
-                    <td>{c.efr_name}</td>
+                    <td>{formatEasyfixerName(c.efr_name)}</td>
                     <td>{c.efr_no}</td>
                     <td>{c.distance_km.toFixed(1)} km</td>
                     <td>{c.active_jobs}</td>

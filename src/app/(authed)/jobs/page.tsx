@@ -11,7 +11,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { SearchSelect } from '@/components/ui/search-select';
 import { api } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
-import { formatDate, statusColorClass, statusLabel } from '@/lib/utils';
+import { formatDate, formatEasyfixerName, statusColorClass, statusLabel } from '@/lib/utils';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { useSort, SortHeader } from '@/lib/use-sort';
 
@@ -203,7 +203,7 @@ export default function JobsPage() {
               <table className="data-table">
                 <thead>
                   <tr>
-                    <SortHeader<JobRow> colKey="job_id"             sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Job #</SortHeader>
+                    <SortHeader<JobRow> colKey="job_id"             sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="stick-col-head stick-left">Job #</SortHeader>
                     <SortHeader<JobRow> colKey="job_reference_id"   sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Job Ref</SortHeader>
                     <SortHeader<JobRow> colKey="client_ref_id"      sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Client Ref</SortHeader>
                     <SortHeader<JobRow> colKey="client_name"        sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Client</SortHeader>
@@ -220,14 +220,14 @@ export default function JobsPage() {
                     <SortHeader<JobRow> colKey="checkin_date_time"  sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Check-in</SortHeader>
                     <SortHeader<JobRow> colKey="checkout_date_time" sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Check-out</SortHeader>
                     <SortHeader<JobRow> colKey="job_status"         sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Status</SortHeader>
-                    <th></th>
+                    <th className="stick-col-head stick-right text-right">Action</th>
                   </tr>
                 </thead>
                 <tbody>
                   {loading && <tr><td colSpan={18} className="text-center py-8 text-muted-foreground">Loading…</td></tr>}
                   {!loading && sorted.map((j) => (
                 <tr key={j.job_id}>
-                  <td className="font-medium whitespace-nowrap">#{j.job_id}</td>
+                  <td className="font-medium whitespace-nowrap stick-col stick-left">#{j.job_id}</td>
                   <td className="text-xs">{j.job_reference_id ?? '—'}</td>
                   <td className="text-xs">{j.client_ref_id ?? '—'}</td>
                   <td className="whitespace-nowrap">{j.client_name ?? '—'}</td>
@@ -236,7 +236,7 @@ export default function JobsPage() {
                   <td>{j.city_name ?? '—'}</td>
                   <td className="text-xs">{j.job_type}</td>
                   <td className="text-xs text-muted-foreground">{j.source_type ?? '—'}</td>
-                  <td className="whitespace-nowrap">{j.easyfixer_name ?? <span className="text-muted-foreground">unassigned</span>}</td>
+                  <td className="whitespace-nowrap">{j.easyfixer_name ? formatEasyfixerName(j.easyfixer_name) : <span className="text-muted-foreground">unassigned</span>}</td>
                   <td className="text-xs text-muted-foreground whitespace-nowrap">{j.owner_name ?? '—'}</td>
                   <td className="text-xs whitespace-nowrap">{formatDate(j.created_date_time)}</td>
                   <td className="text-xs whitespace-nowrap">{formatDate(j.requested_date_time)}</td>
@@ -244,11 +244,11 @@ export default function JobsPage() {
                   <td className="text-xs whitespace-nowrap">{j.checkin_date_time ? formatDate(j.checkin_date_time) : '—'}</td>
                   <td className="text-xs whitespace-nowrap">{j.checkout_date_time ? formatDate(j.checkout_date_time) : '—'}</td>
                   <td><span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${statusColorClass(j.job_status)}`}>{statusLabel(j.job_status)}</span></td>
-                  <td>
+                  <td className="stick-col stick-right text-right">
                     <button
                       type="button"
                       onClick={() => openView(j.job_id)}
-                      className="text-primary text-xs hover:underline"
+                      className="text-primary text-xs hover:underline whitespace-nowrap"
                     >View</button>
                   </td>
                 </tr>

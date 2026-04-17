@@ -10,7 +10,7 @@ import { SearchSelect } from '@/components/ui/search-select';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { api, ApiError } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
-import { formatDate, statusColorClass, statusLabel } from '@/lib/utils';
+import { formatDate, formatEasyfixerName, statusColorClass, statusLabel } from '@/lib/utils';
 
 /*
  * Unified Job modal — create | view | edit in one component.
@@ -82,8 +82,9 @@ export function JobModal({
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
       {/* Fixed-height modal so different tabs (Summary / Services / Schedule)
-          don't cause the whole dialog to jump in size as the user switches. */}
-      <DialogContent className="max-w-5xl w-[min(95vw,1100px)] h-[85vh] overflow-hidden p-0 flex flex-col">
+          don't cause the whole dialog to jump in size as the user switches.
+          hideClose drops the top-right X since we have a footer Close button. */}
+      <DialogContent hideClose className="max-w-5xl w-[min(95vw,1100px)] h-[85vh] overflow-hidden p-0 flex flex-col">
         <DialogHeader className="px-6 pt-6 pb-3 border-b">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
@@ -256,7 +257,7 @@ function ViewBody({ job }: { job: Job }) {
             ['Last update', formatDate(job.last_update_time as string)],
           ]}/>
           <DlCard title="Assignment" rows={[
-            ['Technician',   job.easyfixer_name],
+            ['Technician',   job.easyfixer_name ? formatEasyfixerName(String(job.easyfixer_name)) : null],
             ['Tech mobile',  job.easyfixer_mobile],
             ['Helper req',   job.helper_req ? 'Yes' : 'No'],
             ['Time slot',    job.time_slot],
@@ -411,6 +412,7 @@ function AssignDialog({ open, onClose, currentTech, onSubmit }: {
   open: boolean; onClose: () => void; currentTech: number | null;
   onSubmit: (efrId: number) => Promise<void>;
 }) {
+  const lk = useLookup();
   const [efrId, setEfrId] = useState('');
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -428,21 +430,30 @@ function AssignDialog({ open, onClose, currentTech, onSubmit }: {
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent>
+      <DialogContent hideClose>
         <DialogHeader><DialogTitle>{currentTech ? 'Reassign Technician' : 'Assign Technician'}</DialogTitle></DialogHeader>
         <div className="space-y-3">
-          <Label>Easyfixer ID</Label>
-          <Input
-            type="number" min={1} step={1}
+          <Label>Easyfixer</Label>
+          {/*
+            * Searchable dropdown over the full active-easyfixer list. Label is
+            * "Name · Mobile · City" so any of those strings matches while the
+            * user types. Underlying value is the numeric efr_id (what
+            * /api/admin/jobs/:id/assign expects).
+            */}
+          <SearchSelect
             value={efrId}
-            onChange={(e) => setEfrId(e.target.value.replace(/[^0-9]/g, ''))}
-            placeholder="Pick ID from the Easyfixers page"
+            onChange={(v) => setEfrId(v)}
+            options={lk.toOpts.easyfixers.map((o) => ({ value: o.value, label: String(o.label) }))}
+            placeholder="— Select easyfixer —"
           />
           <p className="text-xs text-muted-foreground">
             Tip: to auto-pick the best-matched technician by distance, workload, rating and completion, use the Auto-assignment page.
           </p>
           {err && <div className="text-sm text-destructive">{err}</div>}
-          <LoadBtn onClick={submit} loading={loading} disabled={!valid}>{currentTech ? 'Reassign' : 'Assign'}</LoadBtn>
+          <div className="flex justify-end gap-2 pt-2 border-t">
+            <Button variant="outline" onClick={onClose}>Close</Button>
+            <LoadBtn onClick={submit} loading={loading} disabled={!valid}>{currentTech ? 'Reassign' : 'Assign'}</LoadBtn>
+          </div>
         </div>
       </DialogContent>
     </Dialog>
@@ -453,6 +464,7 @@ function ChangeOwnerDialog({ open, onClose, onSubmit }: {
   open: boolean; onClose: () => void;
   onSubmit: (newOwnerId: number, reason: string) => Promise<void>;
 }) {
+  const lk = useLookup();
   const [newOwnerId, setNewOwnerId] = useState('');
   const [reason, setReason] = useState('');
   const [loading, setLoading] = useState(false);
@@ -471,16 +483,19 @@ function ChangeOwnerDialog({ open, onClose, onSubmit }: {
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent>
+      <DialogContent hideClose>
         <DialogHeader><DialogTitle>Change Job Owner</DialogTitle></DialogHeader>
         <div className="space-y-3">
           <div>
-            <Label>New Owner (staff ID)</Label>
-            <Input
-              type="number" min={1} step={1}
+            <Label>New Staff Owner</Label>
+            {/* Searchable dropdown over admin-group users (Name · Role label).
+                Ensures the user picks a real staff ID instead of typing a wrong
+                number — previously a typo'd ID silently 404'd on the backend. */}
+            <SearchSelect
               value={newOwnerId}
-              onChange={(e) => setNewOwnerId(e.target.value.replace(/[^0-9]/g, ''))}
-              placeholder="Pick ID from the Users page"
+              onChange={(v) => setNewOwnerId(v)}
+              options={lk.toOpts.adminUsers.map((o) => ({ value: o.value, label: String(o.label) }))}
+              placeholder="— Select staff —"
             />
           </div>
           <div>
@@ -488,7 +503,10 @@ function ChangeOwnerDialog({ open, onClose, onSubmit }: {
             <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why is the owner changing?" />
           </div>
           {err && <div className="text-sm text-destructive">{err}</div>}
-          <LoadBtn onClick={submit} loading={loading} disabled={!valid}>Update</LoadBtn>
+          <div className="flex justify-end gap-2 pt-2 border-t">
+            <Button variant="outline" onClick={onClose}>Close</Button>
+            <LoadBtn onClick={submit} loading={loading} disabled={!valid}>Update</LoadBtn>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

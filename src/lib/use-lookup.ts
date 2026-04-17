@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { api } from './api';
 import type { SelectOption } from '@/components/ui/select';
+import { formatEasyfixerName } from './utils';
 
 /*
  * Cached dropdown data from /api/shared/lookup/*.
@@ -15,6 +16,7 @@ type ServiceCategory = { service_catg_id: number; service_catg_name: string };
 type ServiceType = { service_type_id: number; service_type_name: string; service_catg_id: number };
 type ClientLite = { client_id: number; client_name: string };
 type UserLite = { user_id: number; user_name: string; role_name?: string };
+type EasyfixerLite = { efr_id: number; efr_name: string; efr_no: string; city_name: string | null; is_technician_verified: boolean };
 type Reason = { id: number; reason: string };
 type Bank = { id: number; bank_name: string };
 type DocumentType = { document_type_id: number; document_name: string };
@@ -74,6 +76,7 @@ export function useLookup() {
   const [serviceTypes, setServiceTypes] = useState<ServiceType[]>([]);
   const [clients, setClients] = useState<ClientLite[]>([]);
   const [adminUsers, setAdminUsers] = useState<UserLite[]>([]);
+  const [easyfixers, setEasyfixers] = useState<EasyfixerLite[]>([]);
   const [banks, setBanks] = useState<Bank[]>([]);
   const [cancelReasons, setCancelReasons] = useState<Reason[]>([]);
   const [rescheduleReasons, setRescheduleReasons] = useState<Reason[]>([]);
@@ -87,6 +90,7 @@ export function useLookup() {
       try { setServiceTypes(await fetchOnce('svcType', () => api.get<ServiceType[]>('/shared/lookup/service-types'))); } catch {}
       try { setClients(await fetchOnce('clients', () => api.get<ClientLite[]>('/shared/lookup/clients', { limit: 500 }))); } catch {}
       try { setAdminUsers(await fetchOnce('admUsers', () => api.get<UserLite[]>('/shared/lookup/users', { roleGroup: 'admin', limit: 500 }))); } catch {}
+      try { setEasyfixers(await fetchOnce('efrs', () => api.get<EasyfixerLite[]>('/shared/lookup/easyfixers'))); } catch {}
       try { setBanks(await fetchOnce('banks', () => api.get<Bank[]>('/shared/lookup/banks'))); } catch {}
       try { setCancelReasons(await fetchOnce('cancelR', () => api.get<Reason[]>('/shared/lookup/cancel-reasons'))); } catch {}
       try { setRescheduleReasons(await fetchOnce('reschR', () => api.get<Reason[]>('/shared/lookup/reschedule-reasons'))); } catch {}
@@ -95,7 +99,7 @@ export function useLookup() {
   }, []);
 
   return {
-    cities, states, serviceCategories, serviceTypes, clients, adminUsers, banks,
+    cities, states, serviceCategories, serviceTypes, clients, adminUsers, easyfixers, banks,
     cancelReasons, rescheduleReasons, documentTypes,
     toOpts: {
       cities: cities.map<SelectOption>((c) => ({ value: c.city_id, label: c.city_name })),
@@ -104,6 +108,14 @@ export function useLookup() {
       serviceTypes: serviceTypes.map<SelectOption>((t) => ({ value: t.service_type_id, label: t.service_type_name })),
       clients: clients.map<SelectOption>((c) => ({ value: c.client_id, label: c.client_name })),
       adminUsers: adminUsers.map<SelectOption>((u) => ({ value: u.user_id, label: `${u.user_name} · ${u.role_name ?? ''}` })),
+      // Easyfixer label embeds mobile + city so the SearchSelect typeahead
+      // matches on any of them: "Pune", "9810…", or the technician's name.
+      // formatEasyfixerName expands the legacy "(T)" prefix → "Trainee · …"
+      // so operators can see training status at a glance.
+      easyfixers: easyfixers.map<SelectOption>((e) => ({
+        value: e.efr_id,
+        label: `${formatEasyfixerName(e.efr_name)} · ${e.efr_no}${e.city_name ? ` · ${e.city_name}` : ''}`,
+      })),
       banks: banks.map<SelectOption>((b) => ({ value: b.id, label: b.bank_name })),
       cancelReasons: cancelReasons.map<SelectOption>((r) => ({ value: r.id, label: r.reason })),
       rescheduleReasons: rescheduleReasons.map<SelectOption>((r) => ({ value: r.id, label: r.reason })),

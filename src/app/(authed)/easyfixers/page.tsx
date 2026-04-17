@@ -9,7 +9,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { SearchSelect } from '@/components/ui/search-select';
 import { api } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
-import { formatDate } from '@/lib/utils';
+import { formatDate, formatEasyfixerName } from '@/lib/utils';
 import { EasyfixerModal, type EasyfixerModalMode } from '@/components/easyfixer/EasyfixerModal';
 import { useSort, SortHeader } from '@/lib/use-sort';
 
@@ -145,7 +145,7 @@ export default function EasyfixersPage() {
           <table className="data-table">
             <thead>
               <tr>
-                <SortHeader<Ef> colKey="efr_id"                 sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>ID</SortHeader>
+                <SortHeader<Ef> colKey="efr_id"                 sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="stick-col-head stick-left">ID</SortHeader>
                 <SortHeader<Ef> colKey="efr_name"               sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Name</SortHeader>
                 <SortHeader<Ef> colKey="efr_no"                 sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Mobile</SortHeader>
                 <SortHeader<Ef> colKey="efr_email"              sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Email</SortHeader>
@@ -156,15 +156,15 @@ export default function EasyfixersPage() {
                 <SortHeader<Ef> colKey="is_technician_verified" sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Verified</SortHeader>
                 <SortHeader<Ef> colKey="efr_status"             sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Status</SortHeader>
                 <SortHeader<Ef> colKey="insert_date"            sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Joined</SortHeader>
-                <th></th>
+                <th className="stick-col-head stick-right text-right">Action</th>
               </tr>
             </thead>
             <tbody>
               {loading && <tr><td colSpan={12} className="text-center py-8 text-muted-foreground">Loading…</td></tr>}
               {!loading && sorted.map((e) => (
                 <tr key={e.efr_id}>
-                  <td className="text-xs text-muted-foreground">{e.efr_id}</td>
-                  <td className="font-medium whitespace-nowrap">{e.efr_name}</td>
+                  <td className="text-xs text-muted-foreground stick-col stick-left">{e.efr_id}</td>
+                  <td className="font-medium whitespace-nowrap">{formatEasyfixerName(e.efr_name)}</td>
                   <td>{e.efr_no}</td>
                   <td className="text-xs">{e.efr_email ?? '—'}</td>
                   <td>{e.city_name ?? '—'}</td>
@@ -178,11 +178,11 @@ export default function EasyfixersPage() {
                     <span className="inline-flex items-center rounded-full bg-slate-100 text-slate-600 px-2 py-0.5 text-xs font-medium">Inactive</span>
                   )}</td>
                   <td className="text-xs whitespace-nowrap text-muted-foreground">{formatDate(e.insert_date)}</td>
-                  <td>
+                  <td className="stick-col stick-right text-right">
                     <button
                       type="button"
                       onClick={() => openView(e.efr_id)}
-                      className="text-primary text-xs hover:underline"
+                      className="text-primary text-xs hover:underline whitespace-nowrap"
                     >View</button>
                   </td>
                 </tr>

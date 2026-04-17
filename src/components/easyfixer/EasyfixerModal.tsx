@@ -10,7 +10,7 @@ import { SearchSelect } from '@/components/ui/search-select';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { api, ApiError } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
-import { formatDate } from '@/lib/utils';
+import { formatDate, formatEasyfixerName } from '@/lib/utils';
 
 /*
  * One component, three modes — `create` | `edit` | `view`. The field set is
@@ -132,8 +132,8 @@ export function EasyfixerModal({
   }
 
   const title = mode === 'create' ? 'Add New Easyfixer'
-             : mode === 'edit'   ? `Edit · ${record?.efr_name ?? ''}`
-             : record?.efr_name ?? 'Easyfixer';
+             : mode === 'edit'   ? `Edit · ${formatEasyfixerName(record?.efr_name ?? '')}`
+             : formatEasyfixerName(record?.efr_name ?? '') || 'Easyfixer';
   const subtitle = mode === 'view' && record
     ? `Easyfixer #${record.efr_id} · ${String(record.efr_no ?? '')} · ${String(record.city_name ?? '—')}`
     : undefined;
@@ -142,7 +142,7 @@ export function EasyfixerModal({
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-5xl w-[min(95vw,1100px)] h-[85vh] overflow-hidden p-0 flex flex-col">
+      <DialogContent hideClose className="max-w-5xl w-[min(95vw,1100px)] h-[85vh] overflow-hidden p-0 flex flex-col">
         <DialogHeader className="px-6 pt-6 pb-3 border-b">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
@@ -333,7 +333,7 @@ function ViewBody({ record }: { record: EfRecord }) {
   // so muscle memory carries across.
   const sections: { title: string; rows: [string, unknown][] }[] = [
     { title: 'Basic', rows: [
-      ['Easyfixer ID', record.efr_id], ['Full name', record.efr_name],
+      ['Easyfixer ID', record.efr_id], ['Full name', formatEasyfixerName(String(record.efr_name ?? ''))],
       ['First name', record.efr_first_name], ['Last name', record.efr_last_name],
       ['Mobile', record.efr_no], ['Alt mobile', record.efr_alt_no],
       ['Email', record.efr_email], ['Type', record.efr_type],

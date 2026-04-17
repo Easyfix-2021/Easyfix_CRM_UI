@@ -64,6 +64,38 @@
     @apply bg-muted/40;
   }
 
+  /* Sticky column utilities for dense admin tables (Jobs / Easyfixers).
+     When the table scrolls horizontally, pin the first column (record ID)
+     and the last column (action buttons) so operators never lose context —
+     they can see *which* row they're looking at and *act* on it without
+     scrolling back and forth across 15+ columns.
+     Sticky cells need explicit background; otherwise non-sticky content
+     scrolls visibly behind them. Shadow on the inside edge hints "more
+     content exists beyond this edge" — common web table affordance. */
+  .data-table .stick-col {
+    position: sticky;
+    background: hsl(var(--card));
+    z-index: 1;
+  }
+  .data-table .stick-col-head {
+    position: sticky;
+    background: hsl(var(--muted));
+    z-index: 2;
+  }
+  .data-table tr:hover .stick-col {
+    background: hsl(var(--muted) / 0.7);
+  }
+  .data-table .stick-left  { left: 0; }
+  .data-table .stick-right { right: 0; }
+  .data-table .stick-left.stick-col,
+  .data-table .stick-left.stick-col-head {
+    box-shadow: 2px 0 4px -2px rgba(0, 0, 0, 0.08);
+  }
+  .data-table .stick-right.stick-col,
+  .data-table .stick-right.stick-col-head {
+    box-shadow: -2px 0 4px -2px rgba(0, 0, 0, 0.08);
+  }
+
   /* Native datetime-local + date inputs: make the calendar-picker icon obey
      the input's theming. By default Chrome/Safari render it at the far right
      with no padding breathing room, so it jams against the border when the

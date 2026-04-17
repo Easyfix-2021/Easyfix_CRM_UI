@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { Briefcase, Clock, CheckCircle2, XCircle, UserCircle2, AlertCircle } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { api } from '@/lib/api';
-import { statusColorClass, statusLabel } from '@/lib/utils';
+import { formatEasyfixerName, statusColorClass, statusLabel } from '@/lib/utils';
 
 type JobRow = {
   job_id: number; job_status: number; job_type: string; customer_name: string;
@@ -120,7 +120,7 @@ export default function DashboardPage() {
                   <td>{j.client_name ?? '—'}</td>
                   <td>{j.customer_name ?? '—'}</td>
                   <td>{j.city_name ?? '—'}</td>
-                  <td>{j.easyfixer_name ?? <span className="text-muted-foreground">unassigned</span>}</td>
+                  <td>{j.easyfixer_name ? formatEasyfixerName(j.easyfixer_name) : <span className="text-muted-foreground">unassigned</span>}</td>
                   <td>
                     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${statusColorClass(j.job_status)}`}>
                       {statusLabel(j.job_status)}

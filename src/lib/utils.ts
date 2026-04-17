@@ -23,6 +23,23 @@ export function statusLabel(code: number): string {
   return map[code] ?? `Status ${code}`;
 }
 
+/*
+ * Expands legacy `(T)` prefix in tbl_easyfixer.efr_name → "Trainee …".
+ * Legacy CRM used this naming convention to mark technicians in training
+ * (all T-prefixed rows have is_technician_verified=NULL and incomplete
+ * profile percentages). Applying this at render time keeps the underlying
+ * value untouched (no DB writes) while giving operators a readable label.
+ *
+ * Matches both "(T) Name" and " (T) Name" (leading whitespace is common in
+ * real data). Case-insensitive. Non-matching names pass through unchanged.
+ */
+export function formatEasyfixerName(name: string | null | undefined): string {
+  if (!name) return '';
+  const match = name.match(/^\s*\(T\)\s*(.+)$/i);
+  if (!match) return name;
+  return `Trainee · ${match[1].trim()}`;
+}
+
 export function statusColorClass(code: number): string {
   const map: Record<number, string> = {
     0: 'bg-status-booked/10 text-status-booked',
