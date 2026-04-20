@@ -38,6 +38,8 @@ type MenuRow = {
   url: string | null;    // 'javascript:;' for parent-only, otherwise a legacy url
   icons: string | null;
   sequence: number | null;
+  menu_status: number;   // 1 = active, 0 = hidden. Backend already filters,
+                         // but we re-assert client-side for safety.
 };
 
 type TreeNode = MenuRow & { children: TreeNode[] };
@@ -123,7 +125,20 @@ export function Sidebar() {
 
   const [menus, setMenus] = useState<MenuRow[] | null>(null);
   useEffect(() => {
-    api.get<MenuRow[]>('/shared/lookup/menus').then(setMenus).catch(() => setMenus([]));
+    /*
+     * Defence in depth: backend `lookup.service.js::menus()` already
+     * filters `WHERE menu_status = 1`, so this `.filter` is normally
+     * a no-op. We keep it because:
+     *   (a) if a future refactor accidentally drops the WHERE clause,
+     *       the sidebar still hides inactive menus instead of leaking
+     *       half-built routes to operators;
+     *   (b) it documents the intended contract at the call site.
+     * Mirrors the legacy CRM behaviour where menus toggled off in
+     * `tbl_menu.menu_status` immediately disappear from the sidebar.
+     */
+    api.get<MenuRow[]>('/shared/lookup/menus')
+      .then((rows) => setMenus((rows ?? []).filter((r) => Number(r.menu_status) === 1)))
+      .catch(() => setMenus([]));
   }, []);
 
   // Tree + per-role filter.
@@ -152,9 +167,19 @@ export function Sidebar() {
   }, [tree, pathname, currentSearch]);
 
   const [openParent, setOpenParent] = useState<string | null>(autoOpenLabel);
-  // Keep `openParent` in sync with the auto-open derived from the route —
-  // so navigating via a direct URL opens the right parent.
-  useEffect(() => { if (autoOpenLabel) setOpenParent(autoOpenLabel); }, [autoOpenLabel]);
+  /*
+   * Keep `openParent` in sync with the route. We sync to `autoOpenLabel`
+   * unconditionally — INCLUDING null — so that navigating to a top-level
+   * leaf (Home, anything without a matching child) collapses whichever
+   * submenu was previously expanded. Earlier we guarded `if (autoOpenLabel)`
+   * which left stale expansions visible after Home clicks.
+   *
+   * Manual expansion on a non-matching route still works because this
+   * effect only fires when `autoOpenLabel` changes, not when `openParent`
+   * changes — so clicking a parent button mid-route doesn't immediately
+   * snap closed.
+   */
+  useEffect(() => { setOpenParent(autoOpenLabel); }, [autoOpenLabel]);
 
   function togglе(label: string) {
     setOpenParent((prev) => (prev === label ? null : label));
