@@ -546,7 +546,32 @@ function ServicesBasket({
     };
   });
 
+  /*
+   * Progressive disclosure — always keep exactly ONE trailing empty row so
+   * ops never have to click "Add Service". The moment they pick a service or
+   * touch the quantity on the ghost row, a fresh ghost row auto-appends.
+   *
+   * Guardrails:
+   *   - Fires only when services catalog is loaded (so we don't append before
+   *     the user can actually pick anything).
+   *   - A row counts as "touched" if `client_service_id` is set. Quantity
+   *     alone (which defaults to '1') doesn't count, otherwise the very first
+   *     render would promote-and-append in an infinite loop.
+   */
+  useEffect(() => {
+    if (services === null) return;              // catalog still loading
+    if (rows.length === 0) {
+      setRows([{ tempId: Date.now() + Math.random(), client_service_id: '', quantity: '1' }]);
+      return;
+    }
+    const last = rows[rows.length - 1];
+    if (last.client_service_id) {
+      setRows((prev) => [...prev, { tempId: Date.now() + Math.random(), client_service_id: '', quantity: '1' }]);
+    }
+  }, [rows, services, setRows]);
+
   // Totals — recomputed every render from `rows`. Cheap since rows are small.
+  // Ghost row (empty client_service_id) contributes 0 to the total, naturally.
   const lineAmounts = rows.map((r) => {
     const meta = (services ?? []).find((s) => String(s.client_service_id) === r.client_service_id);
     const rate = toRate(meta?.total_amount);
@@ -572,11 +597,9 @@ function ServicesBasket({
 
   return (
     <div className="space-y-3">
-      {rows.length === 0 && (
-        <div className="text-sm text-muted-foreground">No services added yet. Click <em>Add Service</em> below to start.</div>
-      )}
-
       {rows.map((row, idx) => {
+        const isGhost = !row.client_service_id;
+        const isLast = idx === rows.length - 1;
         const meta = (services ?? []).find((s) => String(s.client_service_id) === row.client_service_id);
         const rate = toRate(meta?.total_amount);
         const qty = Number(row.quantity) || 0;
@@ -621,26 +644,30 @@ function ServicesBasket({
               </div>
             </div>
             <div className="col-span-2 md:col-span-1 flex">
-              <Button
-                type="button" variant="outline" size="sm" className="w-full"
-                onClick={() => setRows((prev) => prev.filter((_, i) => i !== idx))}
-                title="Remove service"
-              >
-                ✕
-              </Button>
+              {/*
+                * Hide the remove button on the trailing ghost row — there's
+                * nothing meaningful to remove, and clicking it would trigger
+                * the auto-append to recreate it. Reserving the column slot
+                * (invisible div) keeps the grid alignment stable across rows.
+                */}
+              {isGhost && isLast ? (
+                <div className="w-full" aria-hidden="true" />
+              ) : (
+                <Button
+                  type="button" variant="outline" size="sm" className="w-full"
+                  onClick={() => setRows((prev) => prev.filter((_, i) => i !== idx))}
+                  title="Remove service"
+                >
+                  ✕
+                </Button>
+              )}
             </div>
           </div>
         );
       })}
 
-      <div className="flex items-center justify-between pt-2 border-t">
-        <Button
-          type="button" variant="outline" size="sm"
-          onClick={() => setRows((prev) => [...prev, { tempId: Date.now() + Math.random(), client_service_id: '', quantity: '1' }])}
-          disabled={services === null}
-        >
-          + Add Service
-        </Button>
+      {/* Footer — total only. No "Add Service" button; rows self-propagate. */}
+      <div className="flex items-center justify-end pt-2 border-t">
         <div className="text-sm tabular-nums">
           <span className="text-muted-foreground mr-2">Total:</span>
           <strong>₹{grandTotal.toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })}</strong>

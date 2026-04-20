@@ -7,11 +7,10 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { Card, CardContent } from '@/components/ui/card';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { SearchSelect } from '@/components/ui/search-select';
 import { api } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
-import { formatDate, formatEasyfixerName, statusColorClass, statusLabel } from '@/lib/utils';
+import { cn, formatDate, formatEasyfixerName, statusColorClass, statusLabel } from '@/lib/utils';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { useSort, SortHeader } from '@/lib/use-sort';
 
@@ -29,23 +28,69 @@ type JobRow = {
 };
 type Resp = { items: JobRow[]; total: number; limit: number; offset: number };
 
-const TABS: { value: string; label: string; status?: number }[] = [
-  { value: 'all',         label: 'All' },
-  { value: 'booked',      label: 'Booked',      status: 0 },
-  { value: 'scheduled',   label: 'Scheduled',   status: 1 },
-  { value: 'inprogress',  label: 'In Progress', status: 2 },
-  { value: 'completed',   label: 'Completed',   status: 3 },
-  { value: 'cancelled',   label: 'Cancelled',   status: 6 },
-  { value: 'enquiry',     label: 'Enquiry',     status: 7 },
-  { value: 'calllater',   label: 'Call Later',  status: 9 },
-  { value: 'revisit',     label: 'Revisit',     status: 10 },
+/*
+ * Tabs mirror the DASHBOARD order-lifecycle cards using the canonical
+ * job_status mapping (DB truth documented in services/job.service.js).
+ *
+ * Each tab carries its own filter payload — a single `status`, a CSV
+ * `statuses` (for multi-code buckets like Pending-to-Close = 2 OR 20), and
+ * optionally `assigned` (true/false) to split the BOOKED bucket by
+ * fk_easyfixter_id IS NULL. The backend validator + `list()` service accept
+ * all three; unused ones are simply omitted from the request.
+ */
+type TabDef = {
+  value: string;
+  label: string;
+  status?: number;             // single job_status code
+  statuses?: number[];         // multi-code bucket (wins over `status`)
+  assigned?: boolean;          // split by fk_easyfixter_id presence
+};
+const TABS: TabDef[] = [
+  { value: 'all',                 label: 'All' },
+  { value: 'onhold',              label: 'Orders in Followup',      status: 21 },
+  { value: 'unconfirmed',         label: 'Unconfirmed Orders',      status: 9 },
+  { value: 'pending-scheduling',  label: 'Pending for Scheduling',  status: 0, assigned: false },
+  { value: 'pending-app-ack',     label: 'Pending App Ack',         status: 0, assigned: true },
+  { value: 'pending-start',       label: 'Pending to Start',        status: 1 },
+  { value: 'pending-close',       label: 'Pending to Close',        statuses: [2, 20] },
+  { value: 'audit-complete',      label: 'Audit & Complete',        statuses: [3, 5] },
+  { value: 'pending-feedback',    label: 'Pending for Feedback',    status: 10 },
+  { value: 'estimate-pending',    label: 'Estimate Pending',        status: 15 },
+  { value: 'cancelled',           label: 'Cancelled',               status: 6 },
 ];
 
 const PAGE_SIZE = 50;
 
+/*
+ * Counts response shape from /admin/jobs/counts — drives the per-tab badges.
+ * `byStatus` is a status-code → count map; `bookedUnassigned` / `bookedAssigned`
+ * are precomputed splits of status=0 by fk_easyfixter_id presence.
+ */
+type CountsResp = {
+  total: number;
+  byStatus: Record<string, number>;
+  bookedUnassigned: number;
+  bookedAssigned: number;
+};
+
+// Resolve the count for a tab from the counts response, honouring its filter
+// payload (statuses > status, plus assigned split on BOOKED).
+function countFor(tab: TabDef, counts: CountsResp | null): number | null {
+  if (!counts) return null;
+  if (tab.value === 'all') return counts.total;
+  if (tab.status === 0 && tab.assigned === false) return counts.bookedUnassigned;
+  if (tab.status === 0 && tab.assigned === true)  return counts.bookedAssigned;
+  if (tab.statuses) return tab.statuses.reduce((s, code) => s + (counts.byStatus[String(code)] ?? 0), 0);
+  if (tab.status !== undefined) return counts.byStatus[String(tab.status)] ?? 0;
+  return 0;
+}
+
 export default function JobsPage() {
   const lk = useLookup();
   const [tab, setTab] = useState('all');
+  // Counts are fetched once on mount + re-fetched after any save from the
+  // modal (so badges stay fresh). Null = still loading; populated = ready.
+  const [counts, setCounts] = useState<CountsResp | null>(null);
   // `q` is UI-only — filters the currently-loaded page in memory rather than
   // firing a backend request per keystroke. Searching feels instant. Fetches
   // still happen on tab switch, filter changes, and pagination.
@@ -76,7 +121,7 @@ export default function JobsPage() {
   }
 
   async function load(reset = false, force = false) {
-    const status = TABS.find((t) => t.value === tab)?.status;
+    const tabDef = TABS.find((t) => t.value === tab);
     const off = reset ? 0 : offset;
     const key = `${tab}|${off}|${filterKey()}`;
 
@@ -91,8 +136,20 @@ export default function JobsPage() {
 
     setLoading(true);
     try {
+      /*
+       * Pass the tab's filter payload to the backend:
+       *   - `statuses` (CSV) wins when set (multi-status tabs: Pending to Close,
+       *     Audit & Complete).
+       *   - `status` for single-code tabs.
+       *   - `assigned` splits the BOOKED bucket for the two Pending-for-
+       *     Scheduling / Pending-App-Ack tabs.
+       * `undefined` values are stripped by `api.get` — no empty query params.
+       */
       const r = await api.get<Resp>('/admin/jobs', {
-        status, limit: PAGE_SIZE, offset: off,
+        status:    tabDef?.statuses ? undefined : tabDef?.status,
+        statuses:  tabDef?.statuses ? tabDef.statuses.join(',') : undefined,
+        assigned:  tabDef?.assigned === undefined ? undefined : String(tabDef.assigned),
+        limit: PAGE_SIZE, offset: off,
         clientId: filters.clientId || undefined,
         cityId: filters.cityId || undefined,
         ownerId: filters.ownerId || undefined,
@@ -108,6 +165,17 @@ export default function JobsPage() {
 
   useEffect(() => { setOffset(0); load(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [tab]);
   useEffect(() => { load(false); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [offset]);
+
+  /*
+   * Counts fetch — runs once on mount and again after a save from the modal.
+   * Same endpoint the dashboard uses, so it's already warm in the pool.
+   * Null-safe: if the request fails, badges simply don't render, no toast.
+   */
+  async function refreshCounts() {
+    try { setCounts(await api.get<CountsResp>('/admin/jobs/counts')); }
+    catch { /* swallow — the tab bar is still functional without badges */ }
+  }
+  useEffect(() => { refreshCounts(); }, []);
   // Filter changes refetch (backend-driven); the search box doesn't — see below.
   useEffect(() => { setOffset(0); load(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ },
     [filters.clientId, filters.cityId, filters.ownerId, filters.easyfixerId, filters.startDate, filters.endDate]);
@@ -124,6 +192,21 @@ export default function JobsPage() {
       const v = searchParams.get('view');
       if (v && /^\d+$/.test(v)) setModal({ open: true, mode: 'view', id: Number(v) });
     }
+  }, [searchParams]);
+
+  /*
+   * Deep-link tab support: the dashboard's data-flow cards link to
+   * /jobs?tab=<value>. If the value matches a known tab, switch to it;
+   * otherwise silently ignore (don't throw the user off the page for a
+   * stray/stale URL).
+   */
+  useEffect(() => {
+    const t = searchParams.get('tab');
+    if (t && TABS.some((x) => x.value === t) && t !== tab) {
+      setTab(t);
+      setOffset(0);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
   function closeModal() {
@@ -163,11 +246,50 @@ export default function JobsPage() {
         </div>
       </div>
 
-      <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className="flex-wrap h-auto">
-          {TABS.map((t) => <TabsTrigger key={t.value} value={t.value}>{t.label}</TabsTrigger>)}
-        </TabsList>
-      </Tabs>
+      {/*
+        * Pill-bar tab layout with inline count badges + horizontal scroll.
+        * Replaces the previous `<Tabs flex-wrap>` which broke into two rows
+        * at 10+ tabs. Single-row keeps the visual rhythm tight; the right
+        * edge fades to signal "more to scroll" when overflow happens.
+        * `scrollbar-none` hides the bar itself (webkit + firefox); `snap-x`
+        * gives ops a gentle detent when they scroll by trackpad.
+        */}
+      <div className="relative">
+        <div className="overflow-x-auto snap-x -mx-1 px-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="flex items-center gap-1.5 min-w-max py-1">
+            {TABS.map((t) => {
+              const active = t.value === tab;
+              const n = countFor(t, counts);
+              return (
+                <button
+                  key={t.value}
+                  type="button"
+                  onClick={() => setTab(t.value)}
+                  className={cn(
+                    'shrink-0 snap-start inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors whitespace-nowrap',
+                    active
+                      ? 'bg-primary text-primary-foreground border-primary shadow-sm'
+                      : 'bg-background hover:bg-muted/60 border-input text-foreground/80 hover:text-foreground'
+                  )}
+                >
+                  <span>{t.label}</span>
+                  {n !== null && (
+                    <span className={cn(
+                      'inline-flex items-center justify-center rounded-full text-[11px] font-medium tabular-nums px-1.5 min-w-[1.4rem] h-[1.25rem]',
+                      active ? 'bg-white/25' : 'bg-muted text-muted-foreground'
+                    )}>
+                      {n.toLocaleString('en-IN')}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        {/* Right-edge gradient fade — subtle cue that there's more content when
+            the bar overflows. Pointer-events off so it doesn't block clicks. */}
+        <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-background to-transparent" aria-hidden="true" />
+      </div>
 
       <Card>
         <CardContent className="p-3 space-y-3">
@@ -263,7 +385,7 @@ export default function JobsPage() {
         mode={modal.mode}
         jobId={modal.id}
         onClose={closeModal}
-        onSaved={() => { cacheRef.current.clear(); load(false, true); }}
+        onSaved={() => { cacheRef.current.clear(); load(false, true); refreshCounts(); }}
       />
 
       {data && data.total > PAGE_SIZE && (

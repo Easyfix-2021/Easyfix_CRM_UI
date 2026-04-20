@@ -15,10 +15,37 @@ export function formatDate(d: string | Date | null | undefined): string {
   });
 }
 
+/*
+ * Canonical job_status labels — sourced from the DB truth documented in
+ * EasyFix_Backend/services/job.service.js (updated 2026-04-20):
+ *   0  Booked (→ further split by tech_null in the dashboard)
+ *   1  Scheduled (accepted on app, pending start)
+ *   2, 20  Checked in (in progress)
+ *   3, 5  Closed
+ *   6  Cancelled
+ *   7  Enquiry
+ *   9  Unconfirmed
+ *   10 Closed from App (estimate approved/rejected)
+ *   15 Estimate Pending Approval
+ *   21 Fulfilment On Hold
+ *
+ * Unknown codes render as "Status N" to surface schema drift loudly instead
+ * of swallowing it silently.
+ */
 export function statusLabel(code: number): string {
   const map: Record<number, string> = {
-    0: 'Booked', 1: 'Scheduled', 2: 'In Progress', 3: 'Completed',
-    5: 'Completed', 6: 'Cancelled', 7: 'Enquiry', 9: 'Call Later', 10: 'Revisit',
+    0:  'Booked',
+    1:  'Scheduled',
+    2:  'In Progress',
+    3:  'Completed',
+    5:  'Completed',
+    6:  'Cancelled',
+    7:  'Enquiry',
+    9:  'Unconfirmed',
+    10: 'Closed from App',
+    15: 'Estimate Pending',
+    20: 'In Progress',
+    21: 'On Hold',
   };
   return map[code] ?? `Status ${code}`;
 }
@@ -42,13 +69,18 @@ export function formatEasyfixerName(name: string | null | undefined): string {
 
 export function statusColorClass(code: number): string {
   const map: Record<number, string> = {
-    0: 'bg-status-booked/10 text-status-booked',
-    1: 'bg-status-scheduled/10 text-status-scheduled',
-    2: 'bg-status-inprogress/10 text-status-inprogress',
-    3: 'bg-status-completed/10 text-status-completed',
-    5: 'bg-status-completed/10 text-status-completed',
-    6: 'bg-status-cancelled/10 text-status-cancelled',
+    0:  'bg-status-booked/10 text-status-booked',
+    1:  'bg-status-scheduled/10 text-status-scheduled',
+    2:  'bg-status-inprogress/10 text-status-inprogress',
+    3:  'bg-status-completed/10 text-status-completed',
+    5:  'bg-status-completed/10 text-status-completed',
+    6:  'bg-status-cancelled/10 text-status-cancelled',
+    7:  'bg-slate-100 text-slate-700',
+    9:  'bg-rose-100 text-rose-700',     // Unconfirmed — attention colour
     10: 'bg-status-revisit/10 text-status-revisit',
+    15: 'bg-purple-100 text-purple-700', // Estimate pending
+    20: 'bg-status-inprogress/10 text-status-inprogress', // same visual as 2
+    21: 'bg-amber-100 text-amber-700',   // On hold — warm warning
   };
   return map[code] ?? 'bg-muted text-muted-foreground';
 }
