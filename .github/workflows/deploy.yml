@@ -1,0 +1,167 @@
+# Easyfix_CRM_UI — auto-deploy to AWS EC2
+#
+# Triggers
+#   push → QA          → deploy to QA EC2
+#   push → Production  → deploy to Production EC2
+#   manual workflow_dispatch (with branch picker)
+#
+# Pipeline per push:
+#   1. Checkout the pushed commit
+#   2. Set up Node 20 + cache npm
+#   3. npm ci + typecheck + build  (catch errors BEFORE we touch the server)
+#   4. SSH to the right EC2, git pull, npm ci, npm run build, pm2 reload
+#
+# Secrets required (Settings → Secrets and variables → Actions):
+#   QA_HOST, QA_USER, QA_SSH_KEY
+#   PROD_HOST, PROD_USER, PROD_SSH_KEY
+#   MAIL_USERNAME, MAIL_PASSWORD       (Gmail SMTP for failure notifications)
+#
+# See docs/AWS_DEPLOYMENT_GUIDE.md and docs/GITHUB_SECRETS.md for the full setup.
+
+name: Deploy to AWS EC2
+
+on:
+  push:
+    branches: [QA, Production]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Which environment to deploy'
+        required: true
+        type: choice
+        options: [qa, production]
+
+# Cancel any in-flight deploy for the same branch — only the latest commit ships
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit -p tsconfig.json
+
+      - name: Build
+        # Build with placeholder env so the bundle compiles; the EC2 deploy step
+        # rebuilds on the server with the real .env.local. This step exists to
+        # fail fast on type / build errors before we touch a server.
+        run: npm run build
+
+  deploy:
+    name: Deploy to ${{ (github.event.inputs.target || (github.ref_name == 'Production' && 'production') || 'qa') }}
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Picks QA secrets when ref is `QA`; Production secrets when ref is `Production`.
+    # workflow_dispatch routes via the input dropdown.
+    env:
+      ENV_NAME: ${{ (github.event.inputs.target || (github.ref_name == 'Production' && 'production') || 'qa') }}
+    steps:
+      - name: Resolve target host & key
+        id: target
+        run: |
+          if [[ "${ENV_NAME}" == "production" ]]; then
+            echo "host=${{ secrets.PROD_HOST }}"     >> "$GITHUB_OUTPUT"
+            echo "user=${{ secrets.PROD_USER }}"     >> "$GITHUB_OUTPUT"
+            echo "branch=Production"                  >> "$GITHUB_OUTPUT"
+          else
+            echo "host=${{ secrets.QA_HOST }}"       >> "$GITHUB_OUTPUT"
+            echo "user=${{ secrets.QA_USER }}"       >> "$GITHUB_OUTPUT"
+            echo "branch=QA"                          >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          if [[ "${ENV_NAME}" == "production" ]]; then
+            echo "${{ secrets.PROD_SSH_KEY }}" > ~/.ssh/deploy_key
+          else
+            echo "${{ secrets.QA_SSH_KEY }}" > ~/.ssh/deploy_key
+          fi
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ steps.target.outputs.host }}" >> ~/.ssh/known_hosts
+
+      - name: Deploy via SSH
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+              ${{ steps.target.outputs.user }}@${{ steps.target.outputs.host }} \
+              bash -se <<'REMOTE'
+          set -euo pipefail
+
+          cd ~/Easyfix_CRM_UI
+
+          echo "▶ Fetching latest from origin/${{ steps.target.outputs.branch }}"
+          git fetch --all --prune
+          git checkout ${{ steps.target.outputs.branch }}
+          git reset --hard origin/${{ steps.target.outputs.branch }}
+
+          echo "▶ Installing dependencies"
+          npm ci
+
+          echo "▶ Building"
+          npm run build
+
+          echo "▶ Reloading PM2 (zero-downtime)"
+          pm2 reload easyfix-crm-ui --update-env
+
+          echo "✓ Deployed $(git rev-parse --short HEAD) at $(date -u +%FT%TZ)"
+          REMOTE
+
+      - name: Verify health (via raw IP — public DNS still routes to legacy CRM)
+        # We hit the EC2 EIP directly on the Next.js port (5180) so the smoke
+        # test doesn't depend on `qa.crm.easyfix.in` / `crm.easyfix.in` —
+        # those still point at the legacy app during the coexistence window.
+        # Once cutover is done and DNS moves to the new EIP, this can switch
+        # to https://<domain> via Nginx + Let's Encrypt.
+        run: |
+          URL="http://${{ steps.target.outputs.host }}:5180/"
+          for i in 1 2 3 4 5; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$URL" || echo 000)
+            if [[ "$code" =~ ^[23] ]]; then
+              echo "✓ $URL returned $code"
+              exit 0
+            fi
+            echo "Attempt $i: got $code, retrying in 5s…"
+            sleep 5
+          done
+          echo "✗ $URL never returned 2xx/3xx"
+          exit 1
+
+      - name: Notify by email on failure
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "[Deploy FAILED] Easyfix_CRM_UI → ${{ env.ENV_NAME }} (${{ github.sha }})"
+          to: harshit@channelplay.in
+          from: ${{ secrets.MAIL_USERNAME }}
+          # plain-text body — keeps SMTP setup simple, avoids HTML rendering quirks
+          body: |
+            CRM-UI deploy to ${{ env.ENV_NAME }} FAILED.
+
+            Branch: ${{ github.ref_name }}
+            Commit: ${{ github.sha }}
+            Triggered by: ${{ github.actor }}
+            Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Open the Run URL above for the full job logs.
