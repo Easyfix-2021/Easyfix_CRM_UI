@@ -295,6 +295,29 @@ function ViewBody({ job }: { job: Job }) {
 
 // ─── Create/Edit form (condensed — essential fields, detail form lives on /jobs/new for now) ─
 
+/*
+ * Client-rate-card service shape — returned by
+ * GET /shared/lookup/client-services?clientId=X. `client_service_id` is the FK
+ * the backend expects as `service_id` in the job create payload's services[].
+ */
+type ClientService = {
+  client_service_id: number;
+  client_id: number;
+  service_type_id: number;
+  service_catg_id: number;
+  rate_card_id: number | null;
+  charge_type: string | null;
+  total_amount: number | string | null;  // DECIMAL from MySQL comes as string
+  service_status: number;
+  service_type_name: string | null;
+  service_catg_name: string | null;
+  crc_ratecard_name: string | null;
+};
+
+// A row in the form's local service basket. `tempId` is a render key — not
+// sent to backend (the real key is `client_service_id` once selected).
+type ServiceRow = { tempId: number; client_service_id: string; quantity: string };
+
 function JobForm({ mode, initial, onCancel, onSaved }: {
   mode: 'create' | 'edit';
   initial: Job | null;
@@ -308,7 +331,31 @@ function JobForm({ mode, initial, onCancel, onSaved }: {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // ─── Services basket (create flow only) ───────────────────────────────
+  // `clientServices` is the catalog for the currently-picked client (null = not
+  // loaded yet, [] = loaded but empty). `serviceRows` is what the user has
+  // picked so far — editable grid, live amount computed from total_amount × qty.
+  const [clientServices, setClientServices] = useState<ClientService[] | null>(null);
+  const [loadingServices, setLoadingServices] = useState(false);
+  const [serviceRows, setServiceRows] = useState<ServiceRow[]>([]);
+
   useEffect(() => { setF(toFormShape(initial)); }, [initial]);
+
+  // Fetch rate-carded services whenever the picked client changes. Reset the
+  // basket too — selections from the old client aren't valid against the new
+  // client's rate card (different client_service_id namespace).
+  useEffect(() => {
+    if (isEdit) return; // edit flow doesn't re-pick services today
+    const clientId = Number(f.fk_client_id);
+    if (!clientId) { setClientServices(null); setServiceRows([]); return; }
+    let cancelled = false;
+    setLoadingServices(true);
+    api.get<ClientService[]>('/shared/lookup/client-services', { clientId })
+      .then((rows) => { if (!cancelled) { setClientServices(rows); setServiceRows([]); } })
+      .catch(() => { if (!cancelled) { setClientServices([]); setServiceRows([]); } })
+      .finally(() => { if (!cancelled) setLoadingServices(false); });
+    return () => { cancelled = true; };
+  }, [f.fk_client_id, isEdit]);
 
   function set<K extends keyof typeof f>(k: K, v: (typeof f)[K]) { setF((s) => ({ ...s, [k]: v })); }
 
@@ -327,6 +374,25 @@ function JobForm({ mode, initial, onCancel, onSaved }: {
         const saved = await api.patch<Job>(`/admin/jobs/${initial.job_id}`, patch);
         onSaved(saved);
       } else {
+        // Map service basket rows → backend contract (service_id = client_service_id,
+        // plus the denormalised service_type_id + service_category_id so
+        // tbl_job_services can be fully populated in a single INSERT). Rows
+        // without a selected client_service_id are silently dropped — partially-
+        // filled add-rows shouldn't create junk entries.
+        const servicesPayload = serviceRows
+          .filter((r) => r.client_service_id && Number(r.quantity) > 0)
+          .map((r) => {
+            const meta = (clientServices ?? []).find(
+              (cs) => String(cs.client_service_id) === r.client_service_id
+            );
+            return {
+              service_id: Number(r.client_service_id),
+              quantity: Number(r.quantity) || 1,
+              service_type_id: meta?.service_type_id,
+              service_category_id: meta?.service_catg_id,
+            };
+          });
+
         const payload = {
           fk_client_id: Number(f.fk_client_id),
           job_type: f.job_type,
@@ -347,6 +413,7 @@ function JobForm({ mode, initial, onCancel, onSaved }: {
             pin_code: f.pin_code,
             gps_location: f.gps_location || undefined,
           },
+          services: servicesPayload.length > 0 ? servicesPayload : undefined,
         };
         const saved = await api.post<Job>('/admin/jobs', payload);
         onSaved(saved);
@@ -419,6 +486,16 @@ function JobForm({ mode, initial, onCancel, onSaved }: {
               <Field label="GPS"><Input value={f.gps_location} onChange={(e) => set('gps_location', e.target.value)} placeholder="28.6139,77.2090" /></Field>
             </div>
           </Section>
+
+          <Section title="Services">
+            <ServicesBasket
+              clientPicked={!!f.fk_client_id}
+              services={clientServices}
+              loading={loadingServices}
+              rows={serviceRows}
+              setRows={setServiceRows}
+            />
+          </Section>
         </>
       )}
 
@@ -429,6 +506,162 @@ function JobForm({ mode, initial, onCancel, onSaved }: {
       </div>
     </form>
   );
+}
+
+// ─── Services basket (Add Job) ───────────────────────────────────────────────
+/*
+ * Multi-row service picker for the Create Job flow.
+ *
+ * Each row: service dropdown (scoped to the client's rate-carded services)
+ *         + quantity input + live computed amount (rate × qty) + remove button.
+ *
+ * A live subtotal + grand total sits at the bottom so ops can sanity-check
+ * the invoice amount before submitting. Amount is NEVER sent to the backend
+ * (the backend re-computes from the rate card at invoicing time) — it's
+ * purely a pre-submission UX check against the currently-mapped rate card.
+ *
+ * Empty states:
+ *   - No client picked yet → tell the user to pick a client first.
+ *   - Client picked but no rate-carded services → explain where to map them.
+ *   - Loading → skeleton-ish muted text.
+ */
+function ServicesBasket({
+  clientPicked, services, loading, rows, setRows,
+}: {
+  clientPicked: boolean;
+  services: ClientService[] | null;
+  loading: boolean;
+  rows: ServiceRow[];
+  setRows: React.Dispatch<React.SetStateAction<ServiceRow[]>>;
+}) {
+  // SearchSelect options — label packs type + category + rate so ops can
+  // disambiguate when the same service type appears on multiple rate cards.
+  const options = (services ?? []).map((s) => {
+    const rate = toRate(s.total_amount);
+    const rateStr = rate === null ? 'no rate' : `₹${rate.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+    const catType = [s.service_catg_name, s.service_type_name].filter(Boolean).join(' › ') || 'Service';
+    return {
+      value: String(s.client_service_id),
+      label: `${catType} · ${rateStr}${s.crc_ratecard_name ? ` · ${s.crc_ratecard_name}` : ''}`,
+    };
+  });
+
+  // Totals — recomputed every render from `rows`. Cheap since rows are small.
+  const lineAmounts = rows.map((r) => {
+    const meta = (services ?? []).find((s) => String(s.client_service_id) === r.client_service_id);
+    const rate = toRate(meta?.total_amount);
+    const qty = Number(r.quantity) || 0;
+    return rate !== null ? rate * qty : null;
+  });
+  const grandTotal = lineAmounts.reduce<number>((acc, n) => acc + (n ?? 0), 0);
+  const anyMissingRate = lineAmounts.some((n) => n === null) && rows.some((r) => !!r.client_service_id);
+
+  if (!clientPicked) {
+    return <div className="text-sm text-muted-foreground">Pick a client first — the service list is scoped to that client&apos;s rate card.</div>;
+  }
+  if (loading) {
+    return <div className="text-sm text-muted-foreground">Loading rate-carded services…</div>;
+  }
+  if (services !== null && services.length === 0) {
+    return (
+      <div className="text-sm text-amber-900 rounded border border-amber-200 bg-amber-50 px-3 py-2">
+        This client has no active rate-carded services. Map them under <em>Settings → Manage Services</em> (or ask the BD owner) before picking services here.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {rows.length === 0 && (
+        <div className="text-sm text-muted-foreground">No services added yet. Click <em>Add Service</em> below to start.</div>
+      )}
+
+      {rows.map((row, idx) => {
+        const meta = (services ?? []).find((s) => String(s.client_service_id) === row.client_service_id);
+        const rate = toRate(meta?.total_amount);
+        const qty = Number(row.quantity) || 0;
+        const lineAmount = rate !== null ? rate * qty : null;
+        // Keep already-picked ids out of other rows' dropdowns so ops can't
+        // accidentally add the same service twice (backend would accept it,
+        // but it's almost always a bug — for "2 units of X" you bump quantity).
+        const pickedElsewhere = new Set(
+          rows.filter((_, i) => i !== idx).map((r) => r.client_service_id).filter(Boolean)
+        );
+        const filteredOptions = options.filter((o) => !pickedElsewhere.has(o.value) || o.value === row.client_service_id);
+        return (
+          <div key={row.tempId} className="grid grid-cols-12 gap-2 items-end">
+            <div className="col-span-12 md:col-span-6">
+              <Label className="text-xs">Service</Label>
+              <SearchSelect
+                value={row.client_service_id}
+                onChange={(v) => setRows((prev) => prev.map((r, i) => i === idx ? { ...r, client_service_id: v } : r))}
+                placeholder="— Select service —"
+                options={filteredOptions}
+              />
+            </div>
+            <div className="col-span-4 md:col-span-2">
+              <Label className="text-xs">Qty</Label>
+              <Input
+                type="number" min={1} step={1}
+                value={row.quantity}
+                onChange={(e) => setRows((prev) => prev.map((r, i) => i === idx ? { ...r, quantity: e.target.value.replace(/\D/g, '') } : r))}
+              />
+            </div>
+            <div className="col-span-6 md:col-span-3">
+              <Label className="text-xs">Amount</Label>
+              <div className="h-9 rounded-md border border-input bg-muted/40 px-3 py-1.5 text-sm tabular-nums">
+                {lineAmount === null
+                  ? <span className="text-muted-foreground">—</span>
+                  : <>₹{lineAmount.toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })}</>}
+                {rate !== null && qty > 0 && (
+                  <span className="text-[10px] text-muted-foreground ml-1.5">
+                    ({qty} × ₹{rate.toLocaleString('en-IN', { maximumFractionDigits: 2 })})
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="col-span-2 md:col-span-1 flex">
+              <Button
+                type="button" variant="outline" size="sm" className="w-full"
+                onClick={() => setRows((prev) => prev.filter((_, i) => i !== idx))}
+                title="Remove service"
+              >
+                ✕
+              </Button>
+            </div>
+          </div>
+        );
+      })}
+
+      <div className="flex items-center justify-between pt-2 border-t">
+        <Button
+          type="button" variant="outline" size="sm"
+          onClick={() => setRows((prev) => [...prev, { tempId: Date.now() + Math.random(), client_service_id: '', quantity: '1' }])}
+          disabled={services === null}
+        >
+          + Add Service
+        </Button>
+        <div className="text-sm tabular-nums">
+          <span className="text-muted-foreground mr-2">Total:</span>
+          <strong>₹{grandTotal.toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })}</strong>
+          {anyMissingRate && (
+            <span className="text-[10px] text-amber-700 ml-2">(some services have no rate — total excludes them)</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/*
+ * MySQL DECIMAL arrives as a string from mysql2 (to avoid float precision loss
+ * on large values). Normalise to Number for arithmetic; null-safe for rows
+ * where the client doesn't have a configured rate.
+ */
+function toRate(v: unknown): number | null {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
 }
 
 // ─── Dialog helpers (Assign + Change Owner) ──────────────────────────────────
