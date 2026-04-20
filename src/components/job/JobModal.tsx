@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { Sparkles, Search } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -163,12 +164,23 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
   return (
     <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
       <Button size="sm" variant="outline" onClick={onEdit}>Edit</Button>
-      {canAssign(s) && <Button size="sm" onClick={() => setAssignOpen(true)}>{job.fk_easyfixter_id ? 'Reassign' : 'Assign'}</Button>}
-      {/* Auto-assign only useful when no tech is currently assigned. Previously
-          lived on a standalone /auto-assign page; merged in here so the whole
-          assignment workflow (manual or AI) sits next to the job data. */}
-      {canAssign(s) && !job.fk_easyfixter_id && (
-        <Button size="sm" variant="outline" onClick={() => setAutoAssignOpen(true)}>Auto-assign</Button>
+      {/* Primary action is now the engine-ranked picker (top-10 in real time) for
+          BOTH initial assign and reassign — ops see who the engine recommends
+          before choosing. Explicit "Auto-" prefix + Sparkles icon makes the
+          engine action visually distinct from the generic Edit / Change Owner
+          buttons next to it. Manual searchable picker stays available beside as
+          a fallback for the "I need this specific person" cases. */}
+      {canAssign(s) && (
+        <Button size="sm" onClick={() => setAutoAssignOpen(true)}>
+          <Sparkles className="h-3.5 w-3.5 mr-1" />
+          {job.fk_easyfixter_id ? 'Auto-reassign' : 'Auto-assign'}
+        </Button>
+      )}
+      {canAssign(s) && (
+        <Button size="sm" variant="outline" onClick={() => setAssignOpen(true)}>
+          <Search className="h-3.5 w-3.5 mr-1" />
+          Manual pick
+        </Button>
       )}
       {canChangeOwner(s)    && <Button size="sm" variant="outline" onClick={() => setOwnerOpen(true)}>Change Owner</Button>}
       {canStart(s)          && <LoadBtn size="sm" variant="outline" loading={busy === 'start'}      onClick={() => doStatus('start', ST.IN_PROGRESS)}>Start</LoadBtn>}
@@ -186,7 +198,9 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
       />
       <AutoAssignDialog
         open={autoAssignOpen} onClose={() => setAutoAssignOpen(false)}
-        jobId={jobId} onAssigned={() => { setAutoAssignOpen(false); onChanged(); }}
+        jobId={jobId}
+        currentTech={job.fk_easyfixter_id as number | null}
+        onAssigned={() => { setAutoAssignOpen(false); onChanged(); }}
       />
       <ChangeOwnerDialog
         open={ownerOpen} onClose={() => setOwnerOpen(false)}
@@ -472,68 +486,88 @@ function AssignDialog({ open, onClose, currentTech, onSubmit }: {
 }
 
 /*
- * Auto-assign dialog — fetches ranked candidates from the 3-layer engine
- * (SQL eligibility → availability → weighted score), shows the top N, and
- * commits the top candidate on confirm. Replaces the standalone /auto-assign
- * page: the workflow lives inside the job context where it belongs.
+ * Engine-ranked picker — fetches the top-10 technicians from the 3-layer
+ * pipeline (zone eligibility → availability → weighted score) in REAL TIME
+ * each time the dialog opens, so reassigns reflect the latest workload /
+ * rating / completion stats. Used for both initial assign and reassign:
+ * the title + button copy adapts via `currentTech`.
+ *
+ * Each row has its own "Pick" button — ops can take the recommendation OR
+ * any other ranked technician, with one click. The fallback "Manual pick"
+ * button on the parent toolbar still opens the searchable full-list picker
+ * for the rare cases when ops want someone outside the engine's view.
  */
 type AutoCandidate = {
   efr_id: number; efr_name: string; efr_no: string;
-  distance_km: number; active_jobs: number; avg_rating: number;
+  active_jobs: number; avg_rating: number;
   completion_ratio: number; score: number;
 };
 type CandidatesResp = {
   l1Count: number; rejectedCount: number;
   candidates: AutoCandidate[];
+  notes?: string[];
 };
 
-function AutoAssignDialog({ open, onClose, jobId, onAssigned }: {
-  open: boolean; onClose: () => void; jobId: number; onAssigned: () => void;
+function AutoAssignDialog({ open, onClose, jobId, currentTech, onAssigned }: {
+  open: boolean; onClose: () => void; jobId: number;
+  currentTech: number | null; onAssigned: () => void;
 }) {
   const [data, setData] = useState<CandidatesResp | null>(null);
   const [loading, setLoading] = useState(false);
-  const [committing, setCommitting] = useState(false);
+  // `picking` tracks per-row in-flight assigns so each row's button can show its
+  // own spinner without disabling the entire dialog. `null` = nothing in flight.
+  const [picking, setPicking] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!open) { setData(null); setErr(null); return; }
+    if (!open) { setData(null); setErr(null); setPicking(null); return; }
     (async () => {
       setLoading(true); setErr(null);
-      try { setData(await api.get<CandidatesResp>(`/admin/auto-assign/${jobId}/candidates`, { limit: 5 })); }
-      catch (e) { setErr(e instanceof ApiError ? e.message : 'Failed to fetch candidates'); }
+      try { setData(await api.get<CandidatesResp>(`/admin/auto-assign/${jobId}/candidates`, { limit: 10 })); }
+      catch (e) { setErr(e instanceof ApiError ? e.message : 'Failed to fetch technicians'); }
       finally { setLoading(false); }
     })();
   }, [open, jobId]);
 
-  async function commit() {
-    setCommitting(true); setErr(null);
+  async function pick(efrId: number) {
+    setPicking(efrId); setErr(null);
     try {
-      await api.post(`/admin/auto-assign/${jobId}`);
+      // Use the same manual-assign endpoint that the dropdown picker uses —
+      // it handles status bump, scheduling_history, webhook + FCM identically
+      // whether the choice was engine-ranked or hand-picked.
+      await api.patch(`/admin/jobs/${jobId}/assign`, { easyfixerId: efrId });
       onAssigned();
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : 'Assignment failed');
-    } finally { setCommitting(false); }
+    } finally { setPicking(null); }
   }
 
+  const isReassign = !!currentTech;
   const top = data?.candidates?.[0];
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent hideClose className="max-w-2xl">
+      <DialogContent hideClose className="max-w-3xl">
         <DialogHeader>
-          <DialogTitle>Auto-assign Technician</DialogTitle>
+          <DialogTitle>{isReassign ? 'Reassign — Suggested Technicians' : 'Auto-assign — Suggested Technicians'}</DialogTitle>
           <DialogDescription>
-            3-layer pipeline: SQL eligibility → availability → weighted score (distance + workload + rating + completion).
+            Top 10 technicians ranked by the engine in real time: zone eligibility → availability → composite score
+            (workload + rating + completion). Pick any row, or use <em>Manual pick</em> from the toolbar to
+            search the full list.
           </DialogDescription>
         </DialogHeader>
 
-        {loading && <div className="text-sm text-muted-foreground py-6 text-center">Scoring candidates…</div>}
+        {loading && <div className="text-sm text-muted-foreground py-6 text-center">Scoring technicians…</div>}
         {err && <div className="text-sm text-destructive">{err}</div>}
 
         {data && !loading && data.candidates.length === 0 && (
-          <div className="text-sm text-muted-foreground py-6 text-center">
-            No eligible technicians. L1 eligible: {data.l1Count}, L2 rejected: {data.rejectedCount}.
-            Consider manual Assign instead.
+          <div className="text-sm text-muted-foreground py-6 text-center space-y-2">
+            <div>
+              No eligible technicians (L1 eligible: <strong>{data.l1Count ?? 0}</strong>, L2 rejected:{' '}
+              <strong>{data.rejectedCount ?? 0}</strong>).
+            </div>
+            {data.notes?.length ? <div className="text-xs">{data.notes.join(' · ')}</div> : null}
+            <div>Use <em>Manual pick</em> from the toolbar to assign anyone outside the engine&apos;s view.</div>
           </div>
         )}
 
@@ -542,33 +576,51 @@ function AutoAssignDialog({ open, onClose, jobId, onAssigned }: {
             <div className="rounded-lg border p-3 bg-emerald-50/50">
               <div className="flex items-center justify-between mb-1">
                 <div className="text-xs uppercase tracking-wider text-emerald-700 font-semibold">Recommended</div>
-                <div className="text-xs text-muted-foreground">Match score: {top!.score}</div>
+                <div className="flex items-center gap-3">
+                  <div className="text-xs text-muted-foreground">Match score: {top!.score}</div>
+                  <LoadBtn size="sm" onClick={() => pick(top!.efr_id)} loading={picking === top!.efr_id} disabled={picking !== null}>
+                    {isReassign ? 'Reassign to this tech' : 'Assign to this tech'}
+                  </LoadBtn>
+                </div>
               </div>
               <div className="font-medium">{top!.efr_name} · {top!.efr_no}</div>
-              <div className="mt-1 grid grid-cols-4 gap-2 text-xs text-muted-foreground">
-                <span>{top!.distance_km.toFixed(1)} km away</span>
+              <div className="mt-1 grid grid-cols-3 gap-2 text-xs text-muted-foreground">
                 <span>{top!.active_jobs} active jobs</span>
-                <span>★ {Number(top!.avg_rating).toFixed(1)}</span>
+                <span>★ {Number(top!.avg_rating).toFixed(1)} avg rating</span>
                 <span>{(top!.completion_ratio * 100).toFixed(0)}% completion</span>
               </div>
             </div>
 
             {data.candidates.length > 1 && (
-              <details className="text-sm">
-                <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
-                  See {data.candidates.length - 1} other candidate{data.candidates.length > 2 ? 's' : ''}
+              <details className="text-sm" open>
+                <summary className="cursor-pointer text-muted-foreground hover:text-foreground select-none">
+                  Other technicians ({data.candidates.length - 1})
                 </summary>
                 <table className="data-table mt-2">
-                  <thead><tr><th>#</th><th>Name</th><th>Distance</th><th>Load</th><th>Rating</th><th>Score</th></tr></thead>
+                  <thead>
+                    <tr>
+                      <th>#</th><th>Name</th><th>Mobile</th>
+                      <th>Active</th><th>Rating</th><th>Completion</th><th>Score</th><th></th>
+                    </tr>
+                  </thead>
                   <tbody>
                     {data.candidates.slice(1).map((c, i) => (
                       <tr key={c.efr_id}>
                         <td className="text-xs text-muted-foreground">{i + 2}</td>
                         <td>{c.efr_name}</td>
-                        <td className="text-xs">{c.distance_km.toFixed(1)} km</td>
+                        <td className="text-xs text-muted-foreground">{c.efr_no}</td>
                         <td className="text-xs">{c.active_jobs}</td>
                         <td className="text-xs">{Number(c.avg_rating).toFixed(1)}</td>
+                        <td className="text-xs">{(c.completion_ratio * 100).toFixed(0)}%</td>
                         <td className="font-medium">{c.score}</td>
+                        <td>
+                          <LoadBtn size="sm" variant="outline"
+                            onClick={() => pick(c.efr_id)}
+                            loading={picking === c.efr_id}
+                            disabled={picking !== null}>
+                            Pick
+                          </LoadBtn>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -584,9 +636,6 @@ function AutoAssignDialog({ open, onClose, jobId, onAssigned }: {
 
         <div className="flex justify-end gap-2 pt-2 border-t">
           <Button variant="outline" onClick={onClose}>Close</Button>
-          {data && data.candidates.length > 0 && (
-            <LoadBtn onClick={commit} loading={committing}>Confirm & Assign top candidate</LoadBtn>
-          )}
         </div>
       </DialogContent>
     </Dialog>
