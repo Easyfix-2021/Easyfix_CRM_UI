@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Sparkles, Search } from 'lucide-react';
+import { Sparkles, Search, CalendarCheck } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -34,8 +34,21 @@ const canStart          = (s: number) => [ST.SCHEDULED, ST.REVISIT].includes(s a
 const canComplete       = (s: number) => s === ST.IN_PROGRESS;
 const canCancel         = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.IN_PROGRESS, ST.ENQUIRY, ST.CALL_LATER, ST.REVISIT].includes(s as never);
 const canMarkIncomplete = (s: number) => [ST.COMPLETED, ST.COMPLETED_ALT].includes(s as never);
+// NOTE: Confirm & Schedule for Unconfirmed orders (status 9 → 0) is handled
+// via JobModal's dedicated `'confirm'` mode, launched from the row-level
+// CalendarCheck icon — no predicate needed here.
 
-export type JobModalMode = 'create' | 'edit' | 'view';
+/*
+ * Modes:
+ *   create  — blank form, POST /admin/jobs
+ *   edit    — prefilled form, PATCH /admin/jobs/:id (scalar fields only)
+ *   view    — read-only + ActionBar (Edit / Assign / Start / Complete / etc.)
+ *   confirm — prefilled edit form WITH services basket and a "Confirm &
+ *             Schedule" footer that saves then promotes status 9 → 0. This is
+ *             the replacement for the legacy `addEditJob?loc=home → Book Call`
+ *             modal used on the Unconfirmed Orders queue.
+ */
+export type JobModalMode = 'create' | 'edit' | 'view' | 'confirm';
 
 type Job = Record<string, unknown> & {
   job_id: number; job_status: number;
@@ -76,8 +89,9 @@ export function JobModal({
     catch { /* swallow — outer error state is set by action handlers */ }
   }
 
-  const title = mode === 'create' ? 'Create New Job'
-             : mode === 'edit'   ? `Edit Job #${jobId}`
+  const title = mode === 'create'  ? 'Create New Job'
+             : mode === 'edit'    ? `Edit Job #${jobId}`
+             : mode === 'confirm' ? `Confirm & Schedule · Job #${jobId}`
              : job ? `Job #${job.job_id}` : 'Job';
 
   return (
@@ -93,7 +107,7 @@ export function JobModal({
               {mode === 'view' && job && (
                 <DialogDescription className="mt-1 flex items-center gap-2">
                   <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${statusColorClass(Number(job.job_status))}`}>
-                    {statusLabel(Number(job.job_status))}
+                    {statusLabel(Number(job.job_status), { assigned: job.fk_easyfixter_id != null })}
                   </span>
                   <span className="text-xs">{String(job.job_type ?? '')}</span>
                 </DialogDescription>
@@ -144,7 +158,7 @@ export function JobModal({
 
 // ─── Action bar (status-driven buttons with per-button loaders) ──────────────
 
-type BusyKey = 'start' | 'complete' | 'cancel' | 'incomplete' | 'assign' | 'owner' | null;
+type BusyKey = 'start' | 'complete' | 'cancel' | 'incomplete' | 'assign' | 'owner' | 'confirm' | null;
 
 function ActionBar({ job, jobId, onChanged, onEdit }: {
   job: Job; jobId: number; onChanged: () => void; onEdit: () => void;
@@ -164,6 +178,11 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
   return (
     <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
       <Button size="sm" variant="outline" onClick={onEdit}>Edit</Button>
+      {/* Confirm & Schedule for Unconfirmed orders is exposed as a dedicated
+          modal mode launched from the list row (purple CalendarCheck icon),
+          not a button in this action bar. That matches the legacy flow where
+          ops click the calendar icon on the row and land directly in the
+          addEditJob form. */}
       {/* Primary action is now the engine-ranked picker (top-10 in real time) for
           BOTH initial assign and reassign — ops see who the engine recommends
           before choosing. Explicit "Auto-" prefix + Sparkles icon makes the
@@ -319,13 +338,18 @@ type ClientService = {
 type ServiceRow = { tempId: number; client_service_id: string; quantity: string };
 
 function JobForm({ mode, initial, onCancel, onSaved }: {
-  mode: 'create' | 'edit';
+  mode: 'create' | 'edit' | 'confirm';
   initial: Job | null;
   onCancel: () => void;
   onSaved: (saved: Job) => void;
 }) {
   const lk = useLookup();
-  const isEdit = mode === 'edit';
+  const isEdit    = mode === 'edit';
+  const isConfirm = mode === 'confirm';
+  // "Edit-shaped" modes share the compact layout (no client re-pick, no
+  // customer/address rewrite) but confirm mode ALSO shows the services basket
+  // so ops can add rate-carded products before promoting the job.
+  const isEditShape = isEdit || isConfirm;
 
   const [f, setF] = useState(() => toFormShape(initial));
   const [submitting, setSubmitting] = useState(false);
@@ -344,26 +368,65 @@ function JobForm({ mode, initial, onCancel, onSaved }: {
   // Fetch rate-carded services whenever the picked client changes. Reset the
   // basket too — selections from the old client aren't valid against the new
   // client's rate card (different client_service_id namespace).
+  // Create + Confirm both need the catalog. Plain Edit still skips it (we
+  // don't expose services editing there today; Confirm is the purpose-built
+  // mode for ops to add services to Unconfirmed orders).
   useEffect(() => {
-    if (isEdit) return; // edit flow doesn't re-pick services today
-    const clientId = Number(f.fk_client_id);
+    if (isEdit && !isConfirm) return;
+    // Confirm mode uses the job's existing client (fk_client_id on the record);
+    // create uses the form field. Either way we need a clientId to fetch.
+    const clientId = Number(f.fk_client_id) || Number(initial?.fk_client_id);
     if (!clientId) { setClientServices(null); setServiceRows([]); return; }
     let cancelled = false;
     setLoadingServices(true);
     api.get<ClientService[]>('/shared/lookup/client-services', { clientId })
-      .then((rows) => { if (!cancelled) { setClientServices(rows); setServiceRows([]); } })
+      .then((rows) => {
+        if (cancelled) return;
+        setClientServices(rows);
+        // Prefill basket from the job's existing services when confirming —
+        // ops see what's already there and can add/remove before promoting.
+        if (isConfirm && Array.isArray(initial?.services)) {
+          const existing = (initial!.services as Array<Record<string, unknown>>).map((s, i) => ({
+            tempId: Date.now() + i,
+            client_service_id: String(s.service_id ?? ''),
+            quantity: String(s.quantity ?? 1),
+          })).filter((r) => r.client_service_id);
+          setServiceRows(existing);
+        } else {
+          setServiceRows([]);
+        }
+      })
       .catch(() => { if (!cancelled) { setClientServices([]); setServiceRows([]); } })
       .finally(() => { if (!cancelled) setLoadingServices(false); });
     return () => { cancelled = true; };
-  }, [f.fk_client_id, isEdit]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [f.fk_client_id, isEdit, isConfirm, initial?.job_id]);
 
   function set<K extends keyof typeof f>(k: K, v: (typeof f)[K]) { setF((s) => ({ ...s, [k]: v })); }
+
+  // Build the services[] payload for the PATCH body — shared between confirm
+  // and future edit flows. Silently drops partially-filled rows.
+  function buildServicesPayload() {
+    return serviceRows
+      .filter((r) => r.client_service_id && Number(r.quantity) > 0)
+      .map((r) => {
+        const meta = (clientServices ?? []).find(
+          (cs) => String(cs.client_service_id) === r.client_service_id
+        );
+        return {
+          service_id: Number(r.client_service_id),
+          quantity: Number(r.quantity) || 1,
+          service_type_id: meta?.service_type_id,
+          service_category_id: meta?.service_catg_id,
+        };
+      });
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null); setSubmitting(true);
     try {
-      if (isEdit && initial) {
+      if (isEditShape && initial) {
         const patch: Record<string, unknown> = {};
         if (f.job_type)             patch.job_type = f.job_type;
         if (f.source_type)          patch.source_type = f.source_type;
@@ -371,27 +434,44 @@ function JobForm({ mode, initial, onCancel, onSaved }: {
         if (f.time_slot)            patch.time_slot = f.time_slot;
         if (f.job_desc !== undefined) patch.job_desc = f.job_desc;
         if (f.client_ref_id !== undefined) patch.client_ref_id = f.client_ref_id;
+        // Confirm flow always sends services (even empty array == "no services"),
+        // since ops may have removed rows they'd previously picked. Plain edit
+        // skips services to preserve historical rows untouched.
+        if (isConfirm) {
+          patch.services = buildServicesPayload();
+          patch.customer = {
+            customer_name:  f.customer_name,
+            customer_email: f.customer_email,
+          };
+          patch.address = {
+            address:      f.address,
+            building:     f.building,
+            landmark:     f.landmark,
+            city_id:      Number(f.city_id) || undefined,
+            pin_code:     f.pin_code,
+            gps_location: f.gps_location,
+          };
+          // Products-section fields from legacy addEditJob. We reuse `remarks`
+          // for Special Comments and `efr_special_notes` for the
+          // "Anything Handyman should keep in mind?" prompt (both are already
+          // in MUTABLE_COLUMNS). `fk_service_type_id` / `fk_service_catg_id`
+          // carry the active filter selection.
+          if (f.remarks !== undefined) patch.remarks = f.remarks;
+          if (f.efr_special_notes !== undefined) patch.efr_special_notes = f.efr_special_notes;
+          if (typeof f.helper_req === 'boolean') patch.helper_req = f.helper_req;
+          if (f.fk_service_catg_id) patch.fk_service_catg_id = Number(f.fk_service_catg_id);
+          if (f.fk_service_type_id) patch.fk_service_type_id = Number(f.fk_service_type_id);
+        }
         const saved = await api.patch<Job>(`/admin/jobs/${initial.job_id}`, patch);
+        // Confirm flow → immediately promote status 9 (Unconfirmed) → 0 (BOOKED).
+        // This mirrors legacy `Book Call` which did save+promote atomically.
+        if (isConfirm) {
+          await api.patch(`/admin/jobs/${initial.job_id}/status`, { status: 0 });
+        }
         onSaved(saved);
       } else {
-        // Map service basket rows → backend contract (service_id = client_service_id,
-        // plus the denormalised service_type_id + service_category_id so
-        // tbl_job_services can be fully populated in a single INSERT). Rows
-        // without a selected client_service_id are silently dropped — partially-
-        // filled add-rows shouldn't create junk entries.
-        const servicesPayload = serviceRows
-          .filter((r) => r.client_service_id && Number(r.quantity) > 0)
-          .map((r) => {
-            const meta = (clientServices ?? []).find(
-              (cs) => String(cs.client_service_id) === r.client_service_id
-            );
-            return {
-              service_id: Number(r.client_service_id),
-              quantity: Number(r.quantity) || 1,
-              service_type_id: meta?.service_type_id,
-              service_category_id: meta?.service_catg_id,
-            };
-          });
+        // Create flow — full payload including customer + address + services.
+        const servicesPayload = buildServicesPayload();
 
         const payload = {
           fk_client_id: Number(f.fk_client_id),
@@ -425,9 +505,272 @@ function JobForm({ mode, initial, onCancel, onSaved }: {
     } finally { setSubmitting(false); }
   }
 
+  /*
+   * Confirm-mode UX: top summary strip + 3 numbered sections replicating the
+   * legacy `addEditJob?loc=home` modal structure. Rendered as a separate
+   * branch from the edit/create flow so each layout stays readable.
+   */
+  if (isConfirm && initial) {
+    return (
+      <form onSubmit={submit} className="space-y-4">
+        {/*
+          * Job Summary strip — legacy parity. Four fields: Special Comments,
+          * Job Description, Product Quantity, Job Type. Mobile is a prominent
+          * click-to-call link so the ops agent can dial while reading details
+          * off the same strip. Kept visually minimal (2-column grid) so it
+          * doesn't dominate the modal.
+          */}
+        <div className="rounded-lg border bg-sky-50/60 px-4 py-3 text-sm">
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <div className="text-xs font-semibold text-sky-900 uppercase tracking-wide">Job Summary</div>
+            <a href={`tel:${initial.customer_mob_no}`} className="text-sky-800 hover:underline font-semibold">
+              ☎ {String(initial.customer_mob_no ?? '—')}
+            </a>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1">
+            <div><span className="text-xs text-muted-foreground mr-2">Special Comments:</span>{String(initial.remarks ?? '—')}</div>
+            <div><span className="text-xs text-muted-foreground mr-2">Job Description:</span>{String(initial.job_desc ?? '—')}</div>
+            <div><span className="text-xs text-muted-foreground mr-2">Product Quantity:</span>{Array.isArray(initial.services) ? initial.services.length : 0}</div>
+            <div><span className="text-xs text-muted-foreground mr-2">Job Type:</span><strong>{String(initial.job_type ?? '—')}</strong></div>
+          </div>
+        </div>
+
+        {/* ── 1 · Client Details ─────────────────────────────────────────── */}
+        <NumberedSection num={1} title="Client Details">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <Field label="Client">
+              <Input value={String(initial.client_name ?? '')} readOnly disabled />
+            </Field>
+            <Field label="Client Reference ID *">
+              <Input required value={f.client_ref_id} onChange={(e) => set('client_ref_id', e.target.value)} placeholder="Ticket or order ID" />
+            </Field>
+            <Field label="Client SPOC Phone">
+              <Input value={String(initial.client_spoc ?? '')} readOnly disabled />
+            </Field>
+            <Field label="Client SPOC Name">
+              <Input value={String(initial.client_spoc_name ?? '')} readOnly disabled />
+            </Field>
+            <Field label="Client SPOC Email">
+              <Input value={String(initial.client_spoc_email ?? '')} readOnly disabled />
+            </Field>
+          </div>
+        </NumberedSection>
+
+        {/* ── 2 · Customer Details ───────────────────────────────────────── */}
+        <NumberedSection num={2} title="Customer Details">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <Field label="Customer Name *">
+              <Input required value={f.customer_name} onChange={(e) => set('customer_name', e.target.value)} />
+            </Field>
+            <Field label="Mobile Number">
+              <Input value={f.customer_mob_no} readOnly disabled />
+            </Field>
+            <Field label="Customer Email">
+              <Input type="email" value={f.customer_email} onChange={(e) => set('customer_email', e.target.value)} />
+            </Field>
+            {/*
+              * Layout: Booking Time Slot on LEFT, Requested Date/Time on
+              * RIGHT — same row (legacy parity). Wrapped in a nested 2-col
+              * grid that spans all 3 columns of the outer grid. Changing the
+              * time auto-updates the slot; clicking a slot chip nudges the
+              * picker hour to the slot's start. "After Hours" doesn't nudge.
+              */}
+            <div className="md:col-span-3 grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label>Booking Time Slot *</Label>
+                <div className="flex flex-wrap gap-2">
+                  {SLOTS.map((s) => (
+                    <button
+                      key={s.value}
+                      type="button"
+                      onClick={() => {
+                        set('time_slot', s.value);
+                        if (s.fromH >= 0 && f.requested_date_time) {
+                          const [date] = f.requested_date_time.split('T');
+                          const startHH = String(s.fromH).padStart(2, '0');
+                          set('requested_date_time', `${date}T${startHH}:00`);
+                        }
+                      }}
+                      className={`px-3 py-1.5 rounded-full border text-xs transition-colors ${
+                        f.time_slot === s.value
+                          ? 'bg-sky-700 text-white border-sky-700'
+                          : 'bg-white hover:bg-muted/60'
+                      }`}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Requested Date/Time *</Label>
+                <Input
+                  required type="datetime-local"
+                  value={f.requested_date_time}
+                  onChange={(e) => {
+                    set('requested_date_time', e.target.value);
+                    const slot = inferSlotFromTime(e.target.value);
+                    if (slot) set('time_slot', slot);
+                  }}
+                />
+              </div>
+            </div>
+            <Field label="Complete Address *" full>
+              <Input required value={f.address} onChange={(e) => set('address', e.target.value)} placeholder="House/flat, street, area" />
+            </Field>
+            <Field label="Landmark">
+              <Input value={f.landmark} onChange={(e) => set('landmark', e.target.value)} />
+            </Field>
+            <Field label="Pincode *">
+              <Input required pattern="[0-9]{6}" value={f.pin_code} onChange={(e) => set('pin_code', e.target.value.replace(/\D/g, ''))} />
+            </Field>
+            <Field label="City *">
+              <SearchSelect required value={f.city_id} onChange={(v) => set('city_id', v)} placeholder="— Select city —" options={lk.toOpts.cities.map((o) => ({ value: o.value, label: String(o.label) }))} />
+            </Field>
+            <Field label="GPS Coordinates">
+              <Input value={f.gps_location} onChange={(e) => set('gps_location', e.target.value)} placeholder="28.6139,77.2090" />
+            </Field>
+          </div>
+        </NumberedSection>
+
+        {/*
+          * ── 3 · Select Products ─────────────────────────────────────────
+          * Legacy addEditJob field set, in order:
+          *   Service Category / Service Type / Job Type filters
+          *   Rate-card product basket (ServicesBasket component)
+          *   Job Image upload
+          *   Helper Required / Material Required toggles
+          *   Special Comments (remarks) — required
+          *   Anything Handyman should keep in mind (efr_special_notes)
+          *   Collected By dropdown
+          * Category/Type are informational filters that scope the rate-card
+          * options shown below (full list stays available — we don't hide
+          * rows, just highlight).
+          */}
+        <NumberedSection num={3} title="Select Products">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+            <Field label="Service Category *">
+              <SearchSelect
+                required
+                value={f.fk_service_catg_id}
+                onChange={(v) => set('fk_service_catg_id', v)}
+                placeholder="— Select category —"
+                options={lk.toOpts.serviceCategories.map((o) => ({ value: o.value, label: String(o.label) }))}
+              />
+            </Field>
+            <Field label="Service Type *">
+              <SearchSelect
+                required
+                value={f.fk_service_type_id}
+                onChange={(v) => set('fk_service_type_id', v)}
+                placeholder="— Select service type —"
+                options={lk.toOpts.serviceTypes.map((o) => ({ value: o.value, label: String(o.label) }))}
+              />
+            </Field>
+            <Field label="Job Type *">
+              <Select
+                value={f.job_type}
+                onChange={(e) => set('job_type', e.target.value)}
+                options={[
+                  { value: 'Installation',   label: 'Installation' },
+                  { value: 'Repair',         label: 'Repair' },
+                  { value: 'Uninstallation', label: 'Uninstallation' },
+                  { value: 'Maintenance',    label: 'Maintenance' },
+                  { value: 'Demo',           label: 'Demo' },
+                  { value: 'Inspection',     label: 'Inspection' },
+                ]}
+              />
+            </Field>
+          </div>
+
+          <div className="mb-4">
+            <Label className="mb-2 block">Products from client rate card</Label>
+            <ServicesBasket
+              clientPicked
+              services={clientServices}
+              loading={loadingServices}
+              rows={serviceRows}
+              setRows={setServiceRows}
+            />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 border-t">
+            <Field label="Job Image">
+              <Input type="file" accept="image/*,.pdf" onChange={() => { /* wired when upload endpoint is ready */ }} />
+            </Field>
+            <Field label="Helper Required">
+              <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-sky-600"
+                  checked={Boolean(f.helper_req)}
+                  onChange={(e) => set('helper_req', e.target.checked)}
+                />
+                <span>{f.helper_req ? 'Yes' : 'No'}</span>
+              </label>
+            </Field>
+            <Field label="Material Required">
+              <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-sky-600"
+                  checked={Boolean(f.material_req)}
+                  onChange={(e) => set('material_req', e.target.checked)}
+                />
+                <span>{f.material_req ? 'Yes' : 'No'}</span>
+              </label>
+            </Field>
+            <Field label="Special Comments *" full>
+              <textarea
+                required
+                rows={2}
+                value={f.remarks}
+                onChange={(e) => set('remarks', e.target.value)}
+                className="flex w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+                placeholder="Any special notes visible to ops"
+              />
+            </Field>
+            <Field label="Anything Handyman should keep in mind? *" full>
+              <textarea
+                required
+                rows={2}
+                value={f.efr_special_notes}
+                onChange={(e) => set('efr_special_notes', e.target.value)}
+                className="flex w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+                placeholder="Notes for the technician"
+              />
+            </Field>
+            <Field label="Collected By *">
+              <Select
+                value={f.collected_by}
+                onChange={(e) => set('collected_by', e.target.value)}
+                options={[
+                  { value: 'Easyfix', label: 'Easyfix' },
+                  { value: 'Client',  label: 'Client' },
+                ]}
+              />
+            </Field>
+          </div>
+        </NumberedSection>
+
+        {error && <div className="text-sm text-destructive">{error}</div>}
+        <div className="flex justify-end gap-2 pt-2">
+          <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
+          <LoadBtn
+            type="submit"
+            loading={submitting}
+            className="bg-purple-600 hover:bg-purple-700 text-white"
+          >
+            Confirm &amp; Schedule (Book Call)
+          </LoadBtn>
+        </div>
+      </form>
+    );
+  }
+
   return (
     <form onSubmit={submit} className="space-y-5">
-      {!isEdit && (
+      {!isEditShape && (
         <Section title="Client & Schedule">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Field label="Client *"><SearchSelect required value={f.fk_client_id} onChange={(v) => set('fk_client_id', v)} placeholder="— Select client —" options={lk.toOpts.clients.map((o) => ({ value: o.value, label: String(o.label) }))} /></Field>
@@ -446,7 +789,7 @@ function JobForm({ mode, initial, onCancel, onSaved }: {
         </Section>
       )}
 
-      <Section title={isEdit ? 'Schedule & Type' : 'Schedule'}>
+      <Section title={isEditShape ? 'Schedule & Type' : 'Schedule'}>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <Field label="Requested Date/Time *"><Input required type="datetime-local" min={nowLocalIso()} value={f.requested_date_time} onChange={(e) => set('requested_date_time', e.target.value)} /></Field>
           <Field label="Time Slot"><Select value={f.time_slot} onChange={(e) => set('time_slot', e.target.value)} options={[
@@ -456,7 +799,7 @@ function JobForm({ mode, initial, onCancel, onSaved }: {
             { value: 'Anytime', label: 'Anytime' },
           ]} /></Field>
           <Field label="Client Ref ID"><Input value={f.client_ref_id} onChange={(e) => set('client_ref_id', e.target.value)} /></Field>
-          {isEdit && (
+          {isEditShape && (
             <Field label="Job Type"><Select value={f.job_type} onChange={(e) => set('job_type', e.target.value)} options={[
               { value: 'Installation', label: 'Installation' }, { value: 'Repair', label: 'Repair' },
               { value: 'Uninstallation', label: 'Uninstallation' }, { value: 'Maintenance', label: 'Maintenance' },
@@ -467,7 +810,7 @@ function JobForm({ mode, initial, onCancel, onSaved }: {
         </div>
       </Section>
 
-      {!isEdit && (
+      {!isEditShape && (
         <>
           <Section title="Customer">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -502,7 +845,13 @@ function JobForm({ mode, initial, onCancel, onSaved }: {
       {error && <div className="text-sm text-destructive">{error}</div>}
       <div className="flex justify-end gap-2 pt-2">
         <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
-        <LoadBtn type="submit" loading={submitting}>{isEdit ? 'Save changes' : 'Create Job'}</LoadBtn>
+        <LoadBtn
+          type="submit"
+          loading={submitting}
+          className={isConfirm ? 'bg-purple-600 hover:bg-purple-700 text-white' : undefined}
+        >
+          {isConfirm ? 'Confirm & Schedule (Book Call)' : isEdit ? 'Save changes' : 'Create Job'}
+        </LoadBtn>
       </div>
     </form>
   );
@@ -988,15 +1337,90 @@ function toFormShape(j: Job | null) {
     job_desc: pick('job_desc'),
     client_ref_id: pick('client_ref_id'),
     customer_name: pick('customer_name'), customer_mob_no: pick('customer_mob_no'), customer_email: pick('customer_email'),
-    address: pick('address'), building: pick('building'),
+    address: pick('address'), building: pick('building'), landmark: pick('landmark'),
     city_id: pick('city_id'), pin_code: pick('pin_code'), gps_location: pick('gps_location'),
+    // Section-3 / Products metadata — matches legacy addEditJob fields.
+    remarks: pick('remarks'),
+    efr_special_notes: pick('efr_special_notes'),
+    helper_req: Boolean(j?.helper_req),
+    material_req: Boolean(j?.material_req),
+    collected_by: pick('collected_by') || 'Easyfix',
+    fk_service_catg_id: pick('fk_service_catg_id'),
+    fk_service_type_id: pick('fk_service_type_id'),
   };
+}
+
+/*
+ * Working-hour slot bands (matching legacy EasyFix_CRM Booking Time Slot UI):
+ *   9 AM – 12 PM  →  in-window
+ *   12 PM – 3 PM  →  in-window
+ *   3 PM – 7 PM   →  in-window
+ *   After Hours   →  escape hatch for out-of-band times (early mornings,
+ *                    late evenings) — ops picks this manually when the
+ *                    customer can only accept a visit outside 9–19.
+ *
+ * The time picker enforces no date limit but the chosen slot is auto-inferred
+ * from the hour field; out-of-band hours fall into "After Hours".
+ */
+export const SLOTS = [
+  { value: '9 AM – 12 PM', label: '9 AM – 12 PM', fromH: 9,  toH: 12 },
+  { value: '12 PM – 3 PM', label: '12 PM – 3 PM', fromH: 12, toH: 15 },
+  { value: '3 PM – 7 PM',  label: '3 PM – 7 PM',  fromH: 15, toH: 19 },
+  { value: 'After Hours',  label: 'After Hours',  fromH: -1, toH: -1 },
+] as const;
+
+export function inferSlotFromTime(dtLocal: string): string | null {
+  if (!dtLocal) return null;
+  const m = dtLocal.match(/T(\d{2}):/);
+  if (!m) return null;
+  const h = Number(m[1]);
+  if (h >= 9 && h < 12)  return '9 AM – 12 PM';
+  if (h >= 12 && h < 15) return '12 PM – 3 PM';
+  if (h >= 15 && h < 19) return '3 PM – 7 PM';
+  return 'After Hours';
+}
+
+/*
+ * Return {min, max} strings for an <input type="datetime-local"> so the
+ * picker physically can't land outside working hours on any given day.
+ * `min` is today 09:00 (no back-dated bookings) unless the job is already
+ * dated further in the future — in that case use the stored date.
+ */
+export function slotBoundsForPicker(currentIso: string): { min: string; max: string } {
+  const now = new Date();
+  const baseDate = currentIso ? currentIso.slice(0, 10) : `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+  const minDate = now > new Date(`${baseDate}T09:00`) ? now : new Date(`${baseDate}T09:00`);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const fmt = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  // `max` stays 30 days out at 18:59 as a soft ceiling. The inner day-picker
+  // still accepts whichever date the user clicks; the real slot enforcement is
+  // in inferSlotFromTime which blocks out-of-range hours at submit time.
+  const max = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+  max.setHours(18, 59, 0, 0);
+  return { min: fmt(minDate), max: fmt(max) };
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="rounded-lg border bg-card">
       <div className="px-5 py-3 border-b bg-muted/30"><h3 className="text-sm font-semibold">{title}</h3></div>
+      <div className="p-5">{children}</div>
+    </section>
+  );
+}
+
+/*
+ * Numbered section — matches the legacy addEditJob modal's "1 Client Details,
+ * 2 Customer Details, 3 Select Products" layout. The leading badge gives ops
+ * a familiar visual anchor when confirming unconfirmed orders.
+ */
+function NumberedSection({ num, title, children }: { num: number; title: string; children: React.ReactNode }) {
+  return (
+    <section className="rounded-lg border bg-card">
+      <div className="flex items-center gap-3 px-5 py-3 border-b bg-sky-700 text-white rounded-t-lg">
+        <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-white text-sky-800 text-sm font-semibold">{num}</span>
+        <h3 className="text-sm font-semibold">{title}</h3>
+      </div>
       <div className="p-5">{children}</div>
     </section>
   );

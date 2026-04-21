@@ -17,8 +17,11 @@ export function formatDate(d: string | Date | null | undefined): string {
 
 /*
  * Canonical job_status labels — sourced from the DB truth documented in
- * EasyFix_Backend/services/job.service.js (updated 2026-04-20):
- *   0  Booked (→ further split by tech_null in the dashboard)
+ * EasyFix_Backend/services/job.service.js (updated 2026-04-20) and matching
+ * the legacy `HomeAction.getJobUIStatus()` classifier 1:1.
+ *
+ * Base codes:
+ *   0  Booked (sub-split below by fk_easyfixter_id)
  *   1  Scheduled (accepted on app, pending start)
  *   2, 20  Checked in (in progress)
  *   3, 5  Closed
@@ -29,10 +32,24 @@ export function formatDate(d: string | Date | null | undefined): string {
  *   15 Estimate Pending Approval
  *   21 Fulfilment On Hold
  *
+ * Lifecycle sub-state (matches legacy's `getJobUIStatus`):
+ *   status = 0 + fk_easyfixter_id IS NULL     → "Pending Scheduling"
+ *   status = 0 + fk_easyfixter_id IS NOT NULL → "Pending App Ack"
+ *
+ * Callers pass `{ assigned: boolean }` when they know the tech-presence at
+ * render time (jobs list, job modal). Callers that only have the code pass
+ * nothing and get the base "Booked" label.
+ *
  * Unknown codes render as "Status N" to surface schema drift loudly instead
  * of swallowing it silently.
  */
-export function statusLabel(code: number): string {
+export function statusLabel(code: number, opts?: { assigned?: boolean | null }): string {
+  // BOOKED sub-state: legacy disambiguates by tech presence. Only applies when
+  // caller tells us whether the job has a tech — otherwise we fall through
+  // to the base "Booked" label.
+  if (code === 0 && opts && opts.assigned !== undefined && opts.assigned !== null) {
+    return opts.assigned ? 'Pending App Ack' : 'Pending Scheduling';
+  }
   const map: Record<number, string> = {
     0:  'Booked',
     1:  'Scheduled',

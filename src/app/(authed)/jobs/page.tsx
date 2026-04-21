@@ -2,7 +2,11 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Plus, Upload, Search, Filter, ChevronLeft, ChevronRight } from 'lucide-react';
+import {
+  Plus, Upload, Search, Filter, ChevronLeft, ChevronRight,
+  // Row-level quick-action icons (mirror the legacy Manage Jobs action column)
+  Eye, CalendarClock, PlayCircle, CheckCircle2, CalendarCheck,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
@@ -11,8 +15,10 @@ import { SearchSelect } from '@/components/ui/search-select';
 import { api } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
 import { cn, formatDate, formatEasyfixerName, statusColorClass, statusLabel } from '@/lib/utils';
+import { TABS, type TabDef, type CountsResp, countFor } from '@/lib/job-tabs';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { useSort, SortHeader } from '@/lib/use-sort';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 type JobRow = {
   job_id: number; job_reference_id: string | null; client_ref_id: string | null;
@@ -28,62 +34,11 @@ type JobRow = {
 };
 type Resp = { items: JobRow[]; total: number; limit: number; offset: number };
 
-/*
- * Tabs mirror the DASHBOARD order-lifecycle cards using the canonical
- * job_status mapping (DB truth documented in services/job.service.js).
- *
- * Each tab carries its own filter payload — a single `status`, a CSV
- * `statuses` (for multi-code buckets like Pending-to-Close = 2 OR 20), and
- * optionally `assigned` (true/false) to split the BOOKED bucket by
- * fk_easyfixter_id IS NULL. The backend validator + `list()` service accept
- * all three; unused ones are simply omitted from the request.
- */
-type TabDef = {
-  value: string;
-  label: string;
-  status?: number;             // single job_status code
-  statuses?: number[];         // multi-code bucket (wins over `status`)
-  assigned?: boolean;          // split by fk_easyfixter_id presence
-};
-const TABS: TabDef[] = [
-  { value: 'all',                 label: 'All' },
-  { value: 'onhold',              label: 'Orders in Followup',      status: 21 },
-  { value: 'unconfirmed',         label: 'Unconfirmed Orders',      status: 9 },
-  { value: 'pending-scheduling',  label: 'Pending for Scheduling',  status: 0, assigned: false },
-  { value: 'pending-app-ack',     label: 'Pending App Ack',         status: 0, assigned: true },
-  { value: 'pending-start',       label: 'Pending to Start',        status: 1 },
-  { value: 'pending-close',       label: 'Pending to Close',        statuses: [2, 20] },
-  { value: 'audit-complete',      label: 'Audit & Complete',        statuses: [3, 5] },
-  { value: 'pending-feedback',    label: 'Pending for Feedback',    status: 10 },
-  { value: 'estimate-pending',    label: 'Estimate Pending',        status: 15 },
-  { value: 'cancelled',           label: 'Cancelled',               status: 6 },
-];
+// TABS / TabDef / CountsResp / countFor now live in lib/job-tabs.ts and are
+// shared with /my-orders. Any change to the lifecycle mapping lands in both
+// places automatically.
 
 const PAGE_SIZE = 50;
-
-/*
- * Counts response shape from /admin/jobs/counts — drives the per-tab badges.
- * `byStatus` is a status-code → count map; `bookedUnassigned` / `bookedAssigned`
- * are precomputed splits of status=0 by fk_easyfixter_id presence.
- */
-type CountsResp = {
-  total: number;
-  byStatus: Record<string, number>;
-  bookedUnassigned: number;
-  bookedAssigned: number;
-};
-
-// Resolve the count for a tab from the counts response, honouring its filter
-// payload (statuses > status, plus assigned split on BOOKED).
-function countFor(tab: TabDef, counts: CountsResp | null): number | null {
-  if (!counts) return null;
-  if (tab.value === 'all') return counts.total;
-  if (tab.status === 0 && tab.assigned === false) return counts.bookedUnassigned;
-  if (tab.status === 0 && tab.assigned === true)  return counts.bookedAssigned;
-  if (tab.statuses) return tab.statuses.reduce((s, code) => s + (counts.byStatus[String(code)] ?? 0), 0);
-  if (tab.status !== undefined) return counts.byStatus[String(tab.status)] ?? 0;
-  return 0;
-}
 
 export default function JobsPage() {
   const lk = useLookup();
@@ -195,10 +150,10 @@ export default function JobsPage() {
   }, [searchParams]);
 
   /*
-   * Deep-link tab support: the dashboard's data-flow cards link to
-   * /jobs?tab=<value>. If the value matches a known tab, switch to it;
-   * otherwise silently ignore (don't throw the user off the page for a
-   * stray/stale URL).
+   * Deep-link tab support: /jobs?tab=<value> preselects that tab on mount.
+   * Invalid / stale values silently ignored (don't kick users off for a
+   * stray URL). My-Orders lives on /my-orders now — `scope=mine` on /jobs
+   * no longer does anything.
    */
   useEffect(() => {
     const t = searchParams.get('tab');
@@ -215,6 +170,40 @@ export default function JobsPage() {
   }
   function openCreate() { setModal({ open: true, mode: 'create' }); }
   function openView(id: number) { setModal({ open: true, mode: 'view', id }); }
+  function openConfirm(id: number) { setModal({ open: true, mode: 'confirm', id }); }
+
+  /*
+   * Quick status transition from the row action column — lets ops advance
+   * a job through the flow (Check-In, Check-Out) without opening the modal.
+   * Mirrors the legacy Manage Jobs page's inline icon actions.
+   *
+   * Schedule (status 0 → assign tech) is NOT handled here — it needs
+   * operator choice, so clicking the calendar icon on a row opens the
+   * modal and the operator uses the Auto-assign / Manual pick buttons
+   * inside. That keeps the tech-selection flow in one place.
+   */
+  const [rowBusy, setRowBusy] = useState<number | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const confirmAction = useConfirm();
+  async function quickStatusChange(jobId: number, toStatus: number, verb: string) {
+    const ok = await confirmAction({
+      title: `${verb} job #${jobId}?`,
+      description: `The job's status will be updated.`,
+      confirmLabel: verb,
+    });
+    if (!ok) return;
+    setRowBusy(jobId);
+    try {
+      await api.patch(`/admin/jobs/${jobId}/status`, { status: toStatus });
+      cacheRef.current.clear();
+      await load(false, true);
+      refreshCounts();
+    } catch (e) {
+      setErrorMsg(`${verb} failed: ${e instanceof Error ? e.message : 'Unknown error'}`);
+    } finally {
+      setRowBusy(null);
+    }
+  }
 
   // Apply UI-only search filter before sorting. Matches against any visible
   // text column (job #, refs, client, customer name, mobile, city, tech, owner).
@@ -233,6 +222,12 @@ export default function JobsPage() {
 
   return (
     <div className="space-y-5">
+      {errorMsg && (
+        <div className="flex items-start justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          <span>{errorMsg}</span>
+          <button type="button" onClick={() => setErrorMsg(null)} className="text-xs hover:underline">Dismiss</button>
+        </div>
+      )}
       <div className="flex items-end justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Jobs</h1>
@@ -365,13 +360,72 @@ export default function JobsPage() {
                   <td className="text-xs whitespace-nowrap">{j.scheduled_date_time ? formatDate(j.scheduled_date_time) : '—'}</td>
                   <td className="text-xs whitespace-nowrap">{j.checkin_date_time ? formatDate(j.checkin_date_time) : '—'}</td>
                   <td className="text-xs whitespace-nowrap">{j.checkout_date_time ? formatDate(j.checkout_date_time) : '—'}</td>
-                  <td><span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${statusColorClass(j.job_status)}`}>{statusLabel(j.job_status)}</span></td>
-                  <td className="stick-col stick-right text-right">
-                    <button
-                      type="button"
-                      onClick={() => openView(j.job_id)}
-                      className="text-primary text-xs hover:underline whitespace-nowrap"
-                    >View</button>
+                  <td><span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${statusColorClass(j.job_status)}`}>{statusLabel(j.job_status, { assigned: j.fk_easyfixter_id != null })}</span></td>
+                  <td className="stick-col stick-right text-right whitespace-nowrap">
+                    {/*
+                      * Status-driven row actions — mirrors legacy jobList.vm:
+                      *   status 0     → View + Schedule (opens modal for auto/manual pick)
+                      *   status 1     → View + Check-In (direct status 1→2)
+                      *   status 2, 20 → View + Check-Out (direct status 2→3)
+                      *   others       → View only
+                      * The quickStatusChange() handler confirms + PATCHes /status
+                      * + refreshes both list + counts so badges stay coherent.
+                      */}
+                    <div className="inline-flex items-center gap-1 justify-end">
+                      <button
+                        type="button"
+                        onClick={() => openView(j.job_id)}
+                        className="inline-flex items-center gap-1 text-primary text-xs hover:underline"
+                        title="View details"
+                      >
+                        <Eye className="h-3.5 w-3.5" />
+                      </button>
+                      {/* Unconfirmed (status=9) → opens JobModal which exposes
+                          the "Confirm & Schedule" action that moves the job
+                          to BOOKED, mirroring legacy `addEditJob → Book Call`. */}
+                      {j.job_status === 9 && (
+                        <button
+                          type="button"
+                          onClick={() => openConfirm(j.job_id)}
+                          className="inline-flex items-center gap-1 text-purple-700 text-xs hover:underline"
+                          title="Confirm — fill details, pick services, and move to Scheduled"
+                        >
+                          <CalendarCheck className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                      {j.job_status === 0 && (
+                        <button
+                          type="button"
+                          onClick={() => openView(j.job_id)}
+                          className="inline-flex items-center gap-1 text-sky-700 text-xs hover:underline"
+                          title="Schedule — opens modal to assign a technician"
+                        >
+                          <CalendarClock className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                      {j.job_status === 1 && (
+                        <button
+                          type="button"
+                          disabled={rowBusy === j.job_id}
+                          onClick={() => quickStatusChange(j.job_id, 2, 'Check in')}
+                          className="inline-flex items-center gap-1 text-amber-700 text-xs hover:underline disabled:opacity-50"
+                          title="Check-In — technician on-site, move to In Progress"
+                        >
+                          <PlayCircle className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                      {(j.job_status === 2 || j.job_status === 20) && (
+                        <button
+                          type="button"
+                          disabled={rowBusy === j.job_id}
+                          onClick={() => quickStatusChange(j.job_id, 3, 'Check out & complete')}
+                          className="inline-flex items-center gap-1 text-emerald-700 text-xs hover:underline disabled:opacity-50"
+                          title="Check-Out — close the job"
+                        >
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}

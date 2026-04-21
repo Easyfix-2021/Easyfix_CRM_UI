@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Navbar } from '@/components/layout/Navbar';
 import { AuthProvider } from '@/lib/auth-context';
+import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog';
 
 /*
  * Client-side auth gate.
@@ -47,17 +48,19 @@ export default function AuthedLayout({ children }: { children: React.ReactNode }
 
   return (
     <AuthProvider>
-      <div className="flex h-screen bg-background">
-        <Sidebar />
-        <div className="flex-1 flex flex-col min-w-0">
-          <Navbar />
-          {/* Horizontal 16px (px-4) gives content breathing room from the sidebar
-              border without looking sparse; vertical 12px (py-3) keeps the page
-              density tight. Previous p-2 (8px) was flush against the sidebar and
-              felt cramped; p-5 (20px) gave too much whitespace. */}
-          <main className="flex-1 overflow-y-auto px-4 py-3">{children}</main>
+      <ConfirmDialogProvider>
+        <div className="flex h-screen bg-background">
+          <Sidebar />
+          <div className="flex-1 flex flex-col min-w-0">
+            <Navbar />
+            {/* Horizontal 16px (px-4) gives content breathing room from the sidebar
+                border without looking sparse; vertical 12px (py-3) keeps the page
+                density tight. Previous p-2 (8px) was flush against the sidebar and
+                felt cramped; p-5 (20px) gave too much whitespace. */}
+            <main className="flex-1 overflow-y-auto px-4 py-3">{children}</main>
+          </div>
         </div>
-      </div>
+      </ConfirmDialogProvider>
     </AuthProvider>
   );
 }

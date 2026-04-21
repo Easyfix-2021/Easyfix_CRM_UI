@@ -44,8 +44,31 @@ type MenuRow = {
 
 type TreeNode = MenuRow & { children: TreeNode[] };
 
-// Legacy URL → Next.js route mapping. Anything not listed routes to
-// /coming-soon?title=<menu_name>&legacyPath=<url>.
+/*
+ * Legacy URL → Next.js route mapping. Anything not listed routes to
+ * /coming-soon?title=<menu_name>&legacyPath=<url>.
+ *
+ * My Orders sub-menus — legacy `dashboardChecking?enumDesc=<value>` URLs.
+ * The canonical enumDesc values come from `HomeAction.getJobUIStatus()` in
+ * the legacy CRM; each maps to a tab slug in /jobs (and the tab carries the
+ * correct status/statuses/assigned filter payload):
+ *
+ *   UnConfirmed               → /jobs?tab=unconfirmed          (status 9)
+ *   PendingForScheduling      → /jobs?tab=pending-scheduling   (status 0, unassigned)
+ *   PendingForAcknowledgement → /jobs?tab=pending-app-ack      (status 0, assigned)
+ *   NotStarted                → /jobs?tab=pending-start        (status 1)
+ *   NotCompleted              → /jobs?tab=pending-close        (statuses 2 OR 20)
+ *   PendingFeedback           → /jobs?tab=pending-feedback     (status 3)
+ *   PendingForApproval        → /jobs?tab=estimate-pending     (statuses 15 OR 21)
+ *   PendingForCheckout        → /jobs?tab=audit-complete       (status 10)
+ *
+ * Two legacy concepts currently fold onto existing buckets in our status
+ * model: (a) "Audit & Complete" has no distinct legacy enumDesc — it's a
+ * dashboard-only card that maps to closed-jobs (status 3+5); (b) "Orders in
+ * Followup" maps to `PendingForCheckout` in legacy, which is our status 10
+ * — same row as Pending for Feedback in our schema today. If a distinct
+ * followup flag lands later, split these URL_MAP entries.
+ */
 const URL_MAP: Record<string, string> = {
   'home':                  '/dashboard',
   'job':                   '/jobs',
@@ -53,6 +76,19 @@ const URL_MAP: Record<string, string> = {
   'easyfixer':             '/easyfixers',
   'deepSkillTable':        '/settings/deep-skills',
   'manageAutoAllocations': '/settings/auto-allocation',
+  // My Orders sub-menus (legacy CRM): each tbl_menu row's `url` is the full
+  // `dashboardChecking?enumDesc=<value>` string, so these keys match verbatim.
+  // Targets point at the distinct /my-orders route — that page scopes the
+  // list automatically (role-aware: admin sees all, others see own) without
+  // leaking a scope pill into /jobs.
+  'dashboardChecking?enumDesc=UnConfirmed':               '/my-orders?tab=unconfirmed',
+  'dashboardChecking?enumDesc=PendingForScheduling':      '/my-orders?tab=pending-scheduling',
+  'dashboardChecking?enumDesc=PendingForAcknowledgement': '/my-orders?tab=pending-app-ack',
+  'dashboardChecking?enumDesc=NotStarted':                '/my-orders?tab=pending-start',
+  'dashboardChecking?enumDesc=NotCompleted':              '/my-orders?tab=pending-close',
+  'dashboardChecking?enumDesc=PendingFeedback':           '/my-orders?tab=pending-feedback',
+  'dashboardChecking?enumDesc=PendingForApproval':        '/my-orders?tab=estimate-pending',
+  'dashboardChecking?enumDesc=PendingForCheckout':        '/my-orders?tab=audit-complete',
 };
 
 // Top-level parent → lucide icon + role rules. Keyed by menu_name so DB
@@ -98,6 +134,22 @@ function buildTree(rows: MenuRow[]): TreeNode[] {
   return roots;
 }
 
+/*
+ * A sidebar link is "active" when the browser's URL matches the link's href:
+ *   (a) path matches (current pathname === href pathname OR is a descendant),
+ *   (b) every query param present in the href matches the current URL.
+ *
+ * We only compare the href's params (not the full set) because the current URL
+ * may carry extra runtime params (e.g. `?view=385` on the jobs modal) that
+ * shouldn't break the sidebar highlight.
+ *
+ * Previously we only matched on `title` — fine for /coming-soon links (which
+ * use title to disambiguate) but broken for /jobs?tab=X links where every
+ * My Orders sub-item would read as equally active. Generalising to "match
+ * every href param" fixes both: coming-soon links still work (their `title`
+ * param is checked along with any others), and tab deep-links differentiate
+ * themselves correctly.
+ */
 function isRouteActive(pathname: string, currentSearch: string, href: string) {
   const [hrefPath, hrefQuery] = href.split('?');
   const onPath = pathname === hrefPath || pathname.startsWith(hrefPath + '/');
@@ -105,7 +157,10 @@ function isRouteActive(pathname: string, currentSearch: string, href: string) {
   if (!onPath) return false;
   const hrefParams = new URLSearchParams(hrefQuery);
   const currentParams = new URLSearchParams(currentSearch);
-  return hrefParams.get('title') === currentParams.get('title');
+  for (const [k, v] of hrefParams.entries()) {
+    if (currentParams.get(k) !== v) return false;
+  }
+  return true;
 }
 
 type RoleHint = { role_name: string; group: string } | undefined;

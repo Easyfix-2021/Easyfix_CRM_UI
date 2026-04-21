@@ -80,15 +80,21 @@ type Stats = {
  * selects the matching tab (which carries its own status/statuses/assigned
  * filter payload).
  */
+/*
+ * Card order mirrors the My Orders sidebar sequence (user's canonical order
+ * per 2026-04-20). Sidebar + dashboard staying in step means ops can read
+ * left-to-right and click any card to land on the matching sidebar sub-item.
+ * All hrefs point to /my-orders (user-scoped flow), not /jobs.
+ */
 const FLOW: FlowCard[] = [
-  { title: 'Orders in Followup',      sub: 'Fulfilment on hold',        icon: PhoneCall,     tint: 'from-fuchsia-500 to-fuchsia-600',  statKey: 'followup',          href: '/jobs?tab=onhold' },
-  { title: 'Unconfirmed Orders',      sub: 'Booked from web / API',     icon: ShoppingCart,  tint: 'from-red-500 to-red-600',          statKey: 'unconfirmed',       href: '/jobs?tab=unconfirmed' },
-  { title: 'Pending for Scheduling',  sub: 'Confirmed, no tech yet',    icon: CalendarClock, tint: 'from-orange-500 to-orange-600',    statKey: 'pendingScheduling', href: '/jobs?tab=pending-scheduling' },
-  { title: 'Pending App Ack',         sub: 'Assigned, awaiting tech',   icon: BellRing,      tint: 'from-amber-500 to-amber-600',      statKey: 'pendingAppAck',     href: '/jobs?tab=pending-app-ack' },
-  { title: 'Pending to Start',        sub: 'Accepted, pre check-in',    icon: Play,          tint: 'from-sky-500 to-sky-600',          statKey: 'pendingToStart',    href: '/jobs?tab=pending-start' },
-  { title: 'Pending to Close',        sub: 'Technician on-site',        icon: CheckCircle2,  tint: 'from-blue-500 to-blue-600',        statKey: 'pendingToClose',    href: '/jobs?tab=pending-close' },
-  { title: 'Audit & Complete',        sub: 'Closed — QA review',        icon: ShieldCheck,   tint: 'from-emerald-500 to-emerald-600',  statKey: 'auditComplete',     href: '/jobs?tab=audit-complete' },
-  { title: 'Pending for Feedback',    sub: 'Closed from app',           icon: MessageSquare, tint: 'from-teal-500 to-teal-600',        statKey: 'pendingFeedback',   href: '/jobs?tab=pending-feedback' },
+  { title: 'Unconfirmed Orders',      sub: 'Booked from web / API',     icon: ShoppingCart,  tint: 'from-red-500 to-red-600',          statKey: 'unconfirmed',       href: '/my-orders?tab=unconfirmed' },
+  { title: 'Pending for Scheduling',  sub: 'Confirmed, no tech yet',    icon: CalendarClock, tint: 'from-orange-500 to-orange-600',    statKey: 'pendingScheduling', href: '/my-orders?tab=pending-scheduling' },
+  { title: 'Pending to Start',        sub: 'Accepted, pre check-in',    icon: Play,          tint: 'from-sky-500 to-sky-600',          statKey: 'pendingToStart',    href: '/my-orders?tab=pending-start' },
+  { title: 'Pending App Ack',         sub: 'Assigned, awaiting tech',   icon: BellRing,      tint: 'from-amber-500 to-amber-600',      statKey: 'pendingAppAck',     href: '/my-orders?tab=pending-app-ack' },
+  { title: 'Pending to Close',        sub: 'Technician on-site',        icon: CheckCircle2,  tint: 'from-blue-500 to-blue-600',        statKey: 'pendingToClose',    href: '/my-orders?tab=pending-close' },
+  { title: 'Audit & Complete',        sub: 'Closed — QA review',        icon: ShieldCheck,   tint: 'from-emerald-500 to-emerald-600',  statKey: 'auditComplete',     href: '/my-orders?tab=audit-complete' },
+  { title: 'Pending for Feedback',    sub: 'Closed from app',           icon: MessageSquare, tint: 'from-teal-500 to-teal-600',        statKey: 'pendingFeedback',   href: '/my-orders?tab=pending-feedback' },
+  { title: 'Orders in Followup',      sub: 'Fulfilment on hold',        icon: PhoneCall,     tint: 'from-fuchsia-500 to-fuchsia-600',  statKey: 'followup',          href: '/my-orders?tab=onhold' },
 ];
 
 /*
@@ -234,7 +240,10 @@ export default function DashboardPage() {
                   <td>{j.easyfixer_name ? formatEasyfixerName(j.easyfixer_name) : <span className="text-muted-foreground">unassigned</span>}</td>
                   <td>
                     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${statusColorClass(j.job_status)}`}>
-                      {statusLabel(j.job_status)}
+                      {/* Use easyfixer_name presence as a proxy for tech assignment — the
+                          dashboard row doesn't carry fk_easyfixter_id directly, but the name
+                          comes from a LEFT JOIN on that FK, so null ⇔ no tech. */}
+                      {statusLabel(j.job_status, { assigned: !!j.easyfixer_name })}
                     </span>
                   </td>
                   <td className="text-muted-foreground text-xs">{new Date(j.created_date_time).toLocaleDateString('en-IN')}</td>
