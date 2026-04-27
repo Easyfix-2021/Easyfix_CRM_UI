@@ -74,6 +74,13 @@ const URL_MAP: Record<string, string> = {
   'job':                   '/jobs',
   'uploadJobByExcel':      '/jobs/upload',
   'easyfixer':             '/easyfixers',
+  // Zone-mapping page — used by the L1 eligibility filter (auto-assign rejects
+  // techs whose efr_zone_city_id doesn't cover the customer pincode). Two keys
+  // are accepted because the legacy CRM seeded this row with url='easyfixerZones'
+  // while the new convention prefers `manage*` (mirrors `manageAutoAllocations`).
+  // Either tbl_menu.url value resolves to the same route.
+  'manageZones':           '/easyfixers/zones',
+  'easyfixerZones':        '/easyfixers/zones',
   'deepSkillTable':        '/settings/deep-skills',
   'manageAutoAllocations': '/settings/auto-allocation',
   // My Orders sub-menus (legacy CRM): each tbl_menu row's `url` is the full

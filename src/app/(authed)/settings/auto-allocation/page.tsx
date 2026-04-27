@@ -226,7 +226,23 @@ export default function AutoAllocationPage() {
    *
    * Mirrors backend WEIGHT_BUCKETS + COMPLETION_SUB_WEIGHTS.
    */
-  const WEIGHT_CATEGORIES: Record<'workload' | 'rating' | 'completion', {
+  /*
+   * Performance Score model
+   * ───────────────────────
+   * Earlier this UI exposed three top-level dimensions (Workload / Rating /
+   * Completion). The DB has a richer taxonomy: `tbl_autoallocation_setting`
+   * already stores a dozen performance-related sub-weights (margin, OTA,
+   * same-day-attempt, TAT, phone-pickup, cancellation, escalation, estimate
+   * rejection, estimate TAT, customer rating) plus the top-level
+   * `performance_weight`. We now surface all of them under a single
+   * "Performance Score" section whose W splits proportionally across the
+   * signals — giving ops one cohesive knob for technician quality instead of
+   * the artificial Rating vs Completion split.
+   *
+   * Top-level dimensions now: Workload + Performance. Both must sum to 1.0.
+   * Within Performance, the sub-weights are PROPORTIONS summing to 1.0.
+   */
+  const WEIGHT_CATEGORIES: Record<'workload' | 'performance', {
     title: string; blurb: string; dimensionKey: string; subWeightKeys: string[];
   }> = {
     workload: {
@@ -235,17 +251,22 @@ export default function AutoAllocationPage() {
       dimensionKey: 'workload_weight',
       subWeightKeys: [],
     },
-    rating: {
-      title: 'Rating Weight',
-      blurb: 'Atomic dimension — controls how heavily 90-day customer ratings influence ranking. Higher → engine prefers techs with strong rating history.',
-      dimensionKey: 'rating_weight',
-      subWeightKeys: [],
-    },
-    completion: {
-      title: 'Completion Weight',
-      blurb: 'Composite dimension — the W is split proportionally across the failure-mode sub-weights below. Sub-weight values are PROPORTIONS that must sum to 1.0; each sub-weight\'s contribution = (W × proportion).',
-      dimensionKey: 'completion_weight',
-      subWeightKeys: ['cancellation_weight', 'escalation_weight', 'estimate_rejection_weight'],
+    performance: {
+      title: 'Performance Score',
+      blurb: 'Composite dimension — splits across multiple technician-quality signals (margin, OTA, same-day attempt, TAT, phone pickup, cancellation, escalation, estimate rejection, estimate TAT, customer rating). Sub-weights are PROPORTIONS that must sum to 1.0; each sub-weight\'s contribution = (W × proportion).',
+      dimensionKey: 'performance_weight',
+      subWeightKeys: [
+        'margin_weight',
+        'ota_weight',
+        'sda_weight',
+        'tat_weight',
+        'estimate_tat_weight',
+        'phone_picked_weight',
+        'rating_weight',
+        'cancellation_weight',
+        'escalation_weight',
+        'estimate_rejection_weight',
+      ],
     },
   };
   type WeightCategoryKey = keyof typeof WEIGHT_CATEGORIES;
@@ -262,9 +283,8 @@ export default function AutoAllocationPage() {
   // Per-bucket grouping: { dimension: Setting | undefined, subs: Setting[] }
   const groupedWeights = useMemo(() => {
     const out: Record<WeightCategoryKey, { dimension?: Setting; subs: Setting[] }> = {
-      workload:   { subs: [] },
-      rating:     { subs: [] },
-      completion: { subs: [] },
+      workload:    { subs: [] },
+      performance: { subs: [] },
     };
     for (const s of settings ?? []) {
       const bucket = KEY_TO_BUCKET.get(s.key);
@@ -441,26 +461,25 @@ export default function AutoAllocationPage() {
               return Number.isFinite(n) ? n : 0;
             };
             const dim = {
-              workload:   liveDimW('workload'),
-              rating:     liveDimW('rating'),
-              completion: liveDimW('completion'),
+              workload:    liveDimW('workload'),
+              performance: liveDimW('performance'),
             };
-            const dimSum = dim.workload + dim.rating + dim.completion;
+            const dimSum = dim.workload + dim.performance;
             const dimSumOK = Math.abs(dimSum - 1) < 0.001;
 
-            // Sub-weight sum within Completion (proportions — must = 1.0).
-            const completionSubSum = groupedWeights.completion.subs.reduce((acc, w) => {
+            // Sub-weight sum within Performance (proportions — must = 1.0).
+            const performanceSubSum = groupedWeights.performance.subs.reduce((acc, w) => {
               const raw = draft[w.id] ?? stringify(w.effective_value, w.data_type);
               const n = Number(raw);
               return Number.isFinite(n) ? acc + n : acc;
             }, 0);
-            const completionSubsOK =
-              groupedWeights.completion.subs.length === 0 || Math.abs(completionSubSum - 1) < 0.001;
+            const performanceSubsOK =
+              groupedWeights.performance.subs.length === 0 || Math.abs(performanceSubSum - 1) < 0.001;
 
             return (
               <Collapsible
                 title="Scoring Weights"
-                blurb="L3 composite score = (W_workload × workload_score) + (W_rating × rating_score) + (W_completion × completion_score). Workload + Rating + Completion must SUM TO 1.0. Within Completion, the failure-mode sub-weights are PROPORTIONS that split W_completion — they must also sum to 1.0."
+                blurb="L3 composite score = (W_workload × workload_score) + (W_performance × performance_score). Workload + Performance must SUM TO 1.0. Within Performance, the per-signal sub-weights are PROPORTIONS that split W_performance across margin, OTA, same-day attempt, TAT, phone-pickup, cancellation, escalation, estimate rejection, estimate TAT, and customer rating — they must also sum to 1.0."
                 open={showWeights}
                 onToggle={() => setShowWeights((s) => !s)}
               >
@@ -471,8 +490,7 @@ export default function AutoAllocationPage() {
                 )}>
                   <div className="flex items-center gap-2">
                     <span className="rounded bg-white border px-1.5 py-0.5"><strong>W_workload</strong> = {dim.workload.toFixed(2)}</span>
-                    <span className="rounded bg-white border px-1.5 py-0.5"><strong>W_rating</strong> = {dim.rating.toFixed(2)}</span>
-                    <span className="rounded bg-white border px-1.5 py-0.5"><strong>W_completion</strong> = {dim.completion.toFixed(2)}</span>
+                    <span className="rounded bg-white border px-1.5 py-0.5"><strong>W_performance</strong> = {dim.performance.toFixed(2)}</span>
                   </div>
                   <div className="ml-auto flex items-center gap-1.5">
                     <span className="text-muted-foreground">Sum:</span>
@@ -496,9 +514,8 @@ export default function AutoAllocationPage() {
                         dimensionSetting={group.dimension}
                         subSettings={group.subs}
                         subWeightKeysExpected={cat.subWeightKeys}
-                        // Only completion has sub-weight validation right now.
-                        subSumOK={catKey === 'completion' ? completionSubsOK : true}
-                        subSumActual={catKey === 'completion' ? completionSubSum : null}
+                        subSumOK={catKey === 'performance' ? performanceSubsOK : true}
+                        subSumActual={catKey === 'performance' ? performanceSubSum : null}
                         draft={draft}
                         scope={scope}
                         saving={saving}
@@ -587,7 +604,15 @@ function HowItWorks({ open, onToggle }: { open: boolean; onToggle: () => void })
               <li>Are inactive (<code>efr_status = 0</code>)</li>
               <li>Have not been profile-verified (<code>is_technician_verified = 0</code>)</li>
               <li>Are not in the customer&apos;s city (<code>tbl_easyfixer.efr_cityId</code>)</li>
-              <li>Don&apos;t cover the customer&apos;s service category (skill match on <code>efr_service_category</code>)</li>
+              <li>
+                <strong>Don&apos;t hold a deep-skill matching the job&apos;s service.</strong> Eligibility is now keyed off{' '}
+                <code>tbl_efr_deepskill_mapping</code> JOIN <code>tbl_deep_skill</code> — a tech qualifies if at
+                least one ACTIVE deep-skill they&apos;re mapped to lines up with the job&apos;s{' '}
+                <code>fk_service_catg_id</code> (and <code>fk_service_type_id</code> when set). The legacy CSV
+                substring match on <code>efr_service_category</code> is no longer used. Manage tech mappings under{' '}
+                <em>EasyFixers → Manage EasyFixers → (tech) → Skills</em>; manage the catalogue under{' '}
+                <em>Settings → Manage Deep Skills</em>.
+              </li>
               <li>
                 <strong>Are not zone-mapped to the customer&apos;s pincode.</strong> Each tech is mapped to a single{' '}
                 <em>city-zone</em> (<code>efr_zone_city_id</code>); the customer pincode is resolved through{' '}
@@ -617,40 +642,46 @@ function HowItWorks({ open, onToggle }: { open: boolean; onToggle: () => void })
           <Section title="Layer 3 — Composite score (rank what's left)">
             <p>Each surviving technician gets a score in [0, 1]:</p>
             <pre className="bg-white border rounded p-2 text-xs overflow-x-auto mt-1">
-{`score = (W_workload × workload_score)
-      + (W_rating × rating_score)
-      + (W_completion × completion_score)
+{`score = (W_workload    × workload_score)
+      + (W_performance × performance_score)
 
-workload_score   = (maxJobs − activeJobs) / maxJobs
-rating_score     = avg_customer_rating / 5             (default 3.0 if no ratings in 90d)
-completion_score = completed / (completed + cancelled) (default 0.8 if no history in 90d)
+workload_score    = (maxJobs − activeJobs) / maxJobs
+performance_score = Σ (sub_proportion × sub_signal_score)
+                    over 10 performance signals (below)
 
-Built-in defaults: W_workload = 0.45, W_rating = 0.30, W_completion = 0.25`}
+Built-in defaults: W_workload = 0.45, W_performance = 0.55`}
             </pre>
             <p>
-              Each dimension W has its own row in <code>tbl_autoallocation_setting</code> — these three values
+              Each top-level dimension W has its own row in <code>tbl_autoallocation_setting</code> — the two values
               must <strong>sum to 1.0</strong>:
             </p>
             <ul className="list-disc ml-5 space-y-1 mt-1">
               <li><strong>Workload:</strong> <code>workload_weight</code> (single value, e.g. <code>0.45</code>)</li>
-              <li><strong>Rating:</strong> <code>rating_weight</code> (single value, e.g. <code>0.30</code>)</li>
-              <li><strong>Completion:</strong> <code>completion_weight</code> (single value, e.g. <code>0.25</code>)</li>
+              <li><strong>Performance:</strong> <code>performance_weight</code> (single value, e.g. <code>0.55</code>)</li>
             </ul>
             <p className="mt-2">
-              Within <strong>Completion only</strong>, three sub-weights act as <strong>PROPORTIONS</strong> that split
-              the dimension W across failure modes — they must sum to <code>1.0</code> within the bucket:
+              Within <strong>Performance</strong>, 10 sub-weights act as <strong>PROPORTIONS</strong> that split
+              the dimension W across technician-quality signals — they must sum to <code>1.0</code> within the bucket:
             </p>
             <ul className="list-disc ml-5 space-y-1 mt-1">
-              <li><code>cancellation_weight</code> + <code>escalation_weight</code> + <code>estimate_rejection_weight</code> = 1.0</li>
-              <li>Each sub-weight&apos;s contribution = <code>W_completion × proportion</code> (e.g. <code>0.25 × 0.40 = 0.10</code>)</li>
+              <li><code>margin_weight</code> — profit margin on completed jobs</li>
+              <li><code>ota_weight</code> — on-time arrival rate</li>
+              <li><code>sda_weight</code> — same-day attempt rate</li>
+              <li><code>tat_weight</code> — turnaround time vs expected</li>
+              <li><code>estimate_tat_weight</code> — estimate submission TAT</li>
+              <li><code>phone_picked_weight</code> — customer phone-pickup rate</li>
+              <li><code>rating_weight</code> — 90-day customer rating (default 3.0 if no ratings)</li>
+              <li><code>cancellation_weight</code> — cancelled / (completed + cancelled)</li>
+              <li><code>escalation_weight</code> — escalation rate</li>
+              <li><code>estimate_rejection_weight</code> — estimate-rejection rate</li>
             </ul>
+            <p className="mt-2">Each sub-weight&apos;s contribution = <code>W_performance × proportion</code> (e.g. <code>0.55 × 0.15 = 0.0825</code>).</p>
             <p className="text-xs text-muted-foreground mt-2">
-              Per-failure-mode SCORING (computing each tech&apos;s cancellation / escalation / estimate-rejection rates
-              separately) is not yet wired in the engine — the proportions are stored + tunable now so they can shape
-              behaviour the moment that scoring lands. As a safety net, the engine still normalises dimension Ws to 1.0
-              at runtime, so if the three values drift slightly the rank order stays correct. Stats are batched in 4
-              queries regardless of how many technicians pass L1, so even saturated cities score in ~2 s against the
-              full 384 k-row job table.
+              Per-signal SCORING (computing each tech&apos;s margin / OTA / SDA / etc. separately) is progressively being
+              wired into the engine — the proportions are stored + tunable now so they can shape behaviour the moment each
+              signal lands. As a safety net, the engine still normalises dimension Ws to 1.0 at runtime, so if the two
+              values drift slightly the rank order stays correct. Stats are batched regardless of how many technicians
+              pass L1, so even saturated cities score in ~2 s against the full 384 k-row job table.
             </p>
           </Section>
 
