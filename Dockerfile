@@ -1,0 +1,81 @@
+# Easyfix_CRM_UI — multi-stage production image
+#
+# Stage 1 (deps):    Install ALL deps (incl. devDeps — Tailwind, TS, Next).
+# Stage 2 (builder): Run `next build` with NEXT_PUBLIC_API_URL baked in.
+#                    Produces .next/standalone/ thanks to output: 'standalone'
+#                    in next.config.mjs.
+# Stage 3 (runner):  Copy ONLY the standalone output + static assets +
+#                    public/. No node_modules (standalone bundles its own
+#                    minimal copy), no source, no devDeps.
+#
+# Image size: ~180 MB (vs ~900 MB if we shipped the full node_modules).
+#
+# CRITICAL: NEXT_PUBLIC_API_URL is read AT BUILD TIME and baked into the
+# static JS chunks. Every browser that loads the bundle hits whatever URL
+# was set when `next build` ran. The GitHub workflow passes this as a
+# `--build-arg` so each environment (QA / Production) gets the right URL.
+# The build-arg is reflected in the image tag too, so we never accidentally
+# deploy a QA-baked image to production.
+
+# ── Stage 1: Dependencies ────────────────────────────────────────────
+FROM node:20-alpine AS deps
+WORKDIR /app
+# Copying lockfile separately so the deps layer survives source edits.
+COPY package.json package-lock.json ./
+RUN npm ci
+
+# ── Stage 2: Builder ─────────────────────────────────────────────────
+FROM node:20-alpine AS builder
+WORKDIR /app
+
+# Build-time arg from the GitHub workflow. Defaults to a placeholder so
+# `docker build` without --build-arg fails loud at runtime instead of
+# silently baking localhost.
+ARG NEXT_PUBLIC_API_URL=http://placeholder.invalid/api
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+# Telemetry off — we don't want Next phoning home from CI.
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm run build
+
+# Sanity-check the bake — fail the build if NEXT_PUBLIC_API_URL is empty
+# or still the placeholder. Catches a missing --build-arg before the
+# bad image hits ECR.
+RUN test -n "$NEXT_PUBLIC_API_URL" \
+    && [ "$NEXT_PUBLIC_API_URL" != "http://placeholder.invalid/api" ] \
+    || (echo "✗ NEXT_PUBLIC_API_URL not provided to docker build — refusing to ship a bundle baked with localhost" && exit 1)
+
+# ── Stage 3: Runner ──────────────────────────────────────────────────
+FROM node:20-alpine AS runner
+WORKDIR /app
+
+# Non-root runtime user. node:20-alpine ships uid 1000 = `node`.
+RUN apk add --no-cache wget tini \
+    && chown -R node:node /app
+USER node
+
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=5180 \
+    HOSTNAME=0.0.0.0
+
+# Standalone bundle — server.js + pruned node_modules. Tiny.
+COPY --from=builder --chown=node:node /app/.next/standalone ./
+# Static assets (chunks + Tailwind output) — Next won't generate these
+# automatically inside standalone; copy from .next/static.
+COPY --from=builder --chown=node:node /app/.next/static ./.next/static
+# Public assets (favicon, fonts cached by next/font, etc.)
+COPY --from=builder --chown=node:node /app/public ./public
+
+EXPOSE 5180
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
+    CMD wget -qO- http://127.0.0.1:5180/login -O /dev/null || exit 1
+
+ENTRYPOINT ["/sbin/tini", "--"]
+# server.js comes from the standalone output. It's the production server
+# entry point — equivalent to `next start` but without npm/next on PATH.
+CMD ["node", "server.js"]
