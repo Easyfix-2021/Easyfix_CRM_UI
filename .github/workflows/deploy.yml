@@ -69,35 +69,50 @@ jobs:
   build-and-push:
     name: Build image & push to ECR
     needs: precheck
-    runs-on: ubuntu-latest
+    # Native arm64 runner (Graviton EC2 target). Avoids the QEMU + V8
+    # SIGILL crash during `npm ci`/`next build`.
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
     environment: 'Organisation Level Secrets'
+    # NOTE: we deliberately do NOT pass instance_id or api_url as job
+    # outputs — GitHub Actions scrubs secret values from cross-job
+    # output strings (safety feature), so the deploy job would receive
+    # empty strings. Each job that needs them re-reads from secrets.
+    # `environment:` on every consuming job makes secrets resolvable.
+    # Only env_name (non-secret) is passed across.
     outputs:
-      image_uri:   ${{ steps.meta.outputs.image_uri }}
-      env_name:    ${{ steps.target.outputs.env_name }}
-      instance_id: ${{ steps.target.outputs.instance_id }}
+      # image_uri removed — GitHub scrubs any output that contains a
+      # secret value (ECR_REGISTRY/ECR_REPOSITORY_CRM_UI), so it would
+      # arrive empty in the deploy job. We pass the non-secret tag and
+      # rebuild the URI on the consuming side from secrets.
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+      env_name:  ${{ steps.target.outputs.env_name }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Resolve target & API URL
+      - name: Resolve env name
         id: target
         run: |
           TARGET="${{ github.event.inputs.target || github.ref_name }}"
           if [[ "$TARGET" == "QA" ]]; then
-            echo "instance_id=${{ secrets.QA_INSTANCE_ID }}"  >> "$GITHUB_OUTPUT"
-            echo "api_url=${{ secrets.QA_API_URL }}"          >> "$GITHUB_OUTPUT"
-            echo "env_name=qa"                                  >> "$GITHUB_OUTPUT"
+            echo "env_name=qa"          >> "$GITHUB_OUTPUT"
           else
-            echo "instance_id=${{ secrets.PROD_INSTANCE_ID }}" >> "$GITHUB_OUTPUT"
-            echo "api_url=${{ secrets.PROD_API_URL }}"         >> "$GITHUB_OUTPUT"
-            echo "env_name=production"                          >> "$GITHUB_OUTPUT"
+            echo "env_name=production"  >> "$GITHUB_OUTPUT"
           fi
 
       - name: Validate API URL
         # Refuse to build a bundle that bakes localhost. The Dockerfile
         # also guards against this — but failing here saves a 5-min build.
+        # Read the secret directly (not via job-output, which would be
+        # scrubbed by GitHub).
+        id: validate
         run: |
-          URL="${{ steps.target.outputs.api_url }}"
+          ENV_NAME="${{ steps.target.outputs.env_name }}"
+          if [[ "$ENV_NAME" == "qa" ]]; then
+            URL="${{ secrets.QA_API_URL }}"
+          else
+            URL="${{ secrets.PROD_API_URL }}"
+          fi
           if [[ -z "$URL" || "$URL" == "http://placeholder.invalid/api" ]]; then
             echo "::error::QA_API_URL / PROD_API_URL secret is empty — refusing to build a bundle baked with localhost"
             exit 1
@@ -115,15 +130,32 @@ jobs:
 
       - name: Compute image metadata
         id: meta
+        # Validate the ECR secrets BEFORE we kick off a 5-min Next build —
+        # otherwise the build silently produces an `image:tag` without a
+        # registry and fails downstream in confusing ways.
         run: |
           REGISTRY="${{ secrets.ECR_REGISTRY }}"
           REPO="${{ secrets.ECR_REPOSITORY_CRM_UI }}"
           ENV_NAME="${{ steps.target.outputs.env_name }}"
-          SHA_TAG="${ENV_NAME}-${GITHUB_SHA::7}"
 
-          echo "image_uri=${REGISTRY}/${REPO}:${SHA_TAG}"        >> "$GITHUB_OUTPUT"
+          if [[ -z "$REGISTRY" ]]; then
+            echo "::error::ECR_REGISTRY secret is empty. Add it to the 'Organisation Level Secrets' environment with value 902810393464.dkr.ecr.ap-south-1.amazonaws.com"
+            exit 1
+          fi
+          if [[ -z "$REPO" ]]; then
+            echo "::error::ECR_REPOSITORY_CRM_UI secret is empty. Add it to the 'Organisation Level Secrets' environment with value easyfix/crm-ui"
+            exit 1
+          fi
+
+          SHA_TAG="${ENV_NAME}-${GITHUB_SHA::7}"
+          # image_tag is non-secret (env-name + sha) — safe across jobs.
+          echo "image_tag=${SHA_TAG}"                              >> "$GITHUB_OUTPUT"
+          echo "image_uri=${REGISTRY}/${REPO}:${SHA_TAG}"          >> "$GITHUB_OUTPUT"
           echo "moving_uri=${REGISTRY}/${REPO}:${ENV_NAME}-latest" >> "$GITHUB_OUTPUT"
 
+      # No QEMU needed — runs-on: ubuntu-24.04-arm gives us a native
+      # arm64 runner, so buildx produces arm64 binaries directly. QEMU
+      # emulation crashed Node's V8 during `npm ci` with SIGILL.
       - uses: docker/setup-buildx-action@v3
 
       - name: Build & push CRM-UI image
@@ -132,10 +164,13 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          # NEXT_PUBLIC_API_URL is baked into the bundle here. Dockerfile
-          # fails the build if this is empty or the placeholder.
+          platforms: linux/arm64
+          # NEXT_PUBLIC_API_URL is baked into the bundle here. We read
+          # the secret directly (env-conditional) since it can't be
+          # passed via job-output without GitHub scrubbing it. Dockerfile
+          # also fails the build if this is empty or the placeholder.
           build-args: |
-            NEXT_PUBLIC_API_URL=${{ steps.target.outputs.api_url }}
+            NEXT_PUBLIC_API_URL=${{ steps.target.outputs.env_name == 'qa' && secrets.QA_API_URL || secrets.PROD_API_URL }}
           tags: |
             ${{ steps.meta.outputs.image_uri }}
             ${{ steps.meta.outputs.moving_uri }}
@@ -156,12 +191,42 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region:            ${{ secrets.AWS_REGION }}
 
+      - name: Resolve instance ID for this env
+        id: target
+        # Read INSTANCE_ID from secrets HERE (in this job) — it can't
+        # be inherited from build-and-push because GitHub scrubs secret
+        # values from cross-job outputs.
+        run: |
+          ENV_NAME="${{ needs.build-and-push.outputs.env_name }}"
+          if [[ "$ENV_NAME" == "qa" ]]; then
+            echo "instance_id=${{ secrets.QA_INSTANCE_ID }}"  >> "$GITHUB_OUTPUT"
+          else
+            echo "instance_id=${{ secrets.PROD_INSTANCE_ID }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: SSM compose pull + up
         id: ssm
         run: |
           set -euo pipefail
-          INSTANCE_ID="${{ needs.build-and-push.outputs.instance_id }}"
-          IMAGE_URI="${{ needs.build-and-push.outputs.image_uri }}"
+          INSTANCE_ID="${{ steps.target.outputs.instance_id }}"
+          IMAGE_TAG="${{ needs.build-and-push.outputs.image_tag }}"
+          ENV_NAME="${{ needs.build-and-push.outputs.env_name }}"
+
+          # Rebuild the ECR URI from secrets here — passing it across
+          # jobs would cause GitHub to scrub it (registry/repo are
+          # secrets), arriving empty.
+          REGISTRY="${{ secrets.ECR_REGISTRY }}"
+          REPO="${{ secrets.ECR_REPOSITORY_CRM_UI }}"
+          if [[ -z "$REGISTRY" || -z "$REPO" ]]; then
+            echo "::error::ECR secrets missing — confirm ECR_REGISTRY + ECR_REPOSITORY_CRM_UI in 'Organisation Level Secrets'"
+            exit 1
+          fi
+          IMAGE_URI="${REGISTRY}/${REPO}:${IMAGE_TAG}"
+
+          if [[ -z "$INSTANCE_ID" ]]; then
+            echo "::error::INSTANCE_ID secret missing for $ENV_NAME — confirm QA_INSTANCE_ID exists in the 'Organisation Level Secrets' environment"
+            exit 1
+          fi
 
           REMOTE_SCRIPT=$(cat <<EOF
           set -euo pipefail
@@ -181,7 +246,10 @@ jobs:
             echo "CRM_UI_IMAGE=$IMAGE_URI" >> /opt/easyfix/.env
           fi
 
-          echo "▶ Pulling \$CRM_UI_IMAGE"
+          # \$IMAGE_URI is substituted at heredoc-build time on the runner;
+          # \$CRM_UI_IMAGE only exists in /opt/easyfix/.env (read by docker
+          # compose, not bash) and would trip \`set -u\`.
+          echo "▶ Pulling $IMAGE_URI"
           docker compose pull crm-ui
 
           echo "▶ Recreating crm-ui container (backend untouched)"
@@ -201,7 +269,13 @@ jobs:
           EOF
           )
 
-          PARAMS_JSON=$(jq -n --arg cmd "$REMOTE_SCRIPT" '{commands: [$cmd]}')
+          # AWS-RunShellScript runs commands via /bin/sh = dash on Ubuntu.
+          # `bash -c "<json-encoded-string>"` doesn't survive the round-trip:
+          # newlines arrive as literal `\n`, collapsing the script onto one
+          # line. Base64 sidesteps every escape layer.
+          SCRIPT_B64=$(printf '%s' "$REMOTE_SCRIPT" | base64 -w0)
+          PARAMS_JSON=$(jq -n --arg b64 "$SCRIPT_B64" \
+            '{commands: ["echo \($b64) | base64 -d | bash"]}')
 
           CMD_ID=$(aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
@@ -237,17 +311,28 @@ jobs:
       - name: Smoke-test deployed UI
         run: |
           set -euo pipefail
-          INSTANCE_ID="${{ needs.build-and-push.outputs.instance_id }}"
+          INSTANCE_ID="${{ steps.target.outputs.instance_id }}"
 
-          PARAMS_JSON=$(jq -n '{commands: [
-            "set -e",
-            "for i in 1 2 3 4 5; do",
-            "  code=$(curl -s -o /dev/null -w \"%{http_code}\" http://127.0.0.1:5180/login || echo 000)",
-            "  if [[ \"$code\" =~ ^[23] ]]; then echo \"✓ /login → $code\"; exit 0; fi",
-            "  echo \"Attempt $i: /login → $code, retrying in 5s…\"; sleep 5",
-            "done",
-            "echo \"✗ /login never returned 2xx/3xx\"; exit 1"
-          ]}')
+          # Next.js cold-start is ~10–20s. Compose start_period is 60s,
+          # so we give the smoke test ~70s total before declaring failure
+          # and dump container logs to save a debug round-trip.
+          SMOKE_SCRIPT='set -e
+          echo "Waiting 10s for cold start before probing…"; sleep 10
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5180/login || echo 000)
+            if [[ "$code" =~ ^[23] ]]; then echo "✓ /login → $code"; exit 0; fi
+            echo "Attempt $i: /login → $code, retrying in 5s…"; sleep 5
+          done
+          echo "✗ /login never returned 2xx/3xx"
+          echo "── docker compose ps ──"
+          sudo docker compose -f /opt/easyfix/docker-compose.yml ps 2>&1 || true
+          echo "── easyfix-crm-ui logs (tail 80) ──"
+          sudo docker logs easyfix-crm-ui --tail 80 2>&1 || true
+          exit 1'
+
+          SCRIPT_B64=$(printf '%s' "$SMOKE_SCRIPT" | base64 -w0)
+          PARAMS_JSON=$(jq -n --arg b64 "$SCRIPT_B64" \
+            '{commands: ["echo \($b64) | base64 -d | bash"]}')
 
           CMD_ID=$(aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
@@ -285,8 +370,8 @@ jobs:
           body: |
             CRM-UI deploy FAILED.
 
-            Image:    ${{ needs.build-and-push.outputs.image_uri }}
-            Instance: ${{ needs.build-and-push.outputs.instance_id }}
+            Image:    ${{ needs.build-and-push.outputs.image_tag }}
+            Instance: ${{ steps.target.outputs.instance_id }}
             Branch:   ${{ github.ref_name }}
             Commit:   ${{ github.sha }}
             Triggered: ${{ github.actor }}
