@@ -100,24 +100,45 @@ jobs:
             echo "env_name=production"  >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Validate API URL
-        # Refuse to build a bundle that bakes localhost. The Dockerfile
-        # also guards against this — but failing here saves a 5-min build.
-        # Read the secret directly (not via job-output, which would be
-        # scrubbed by GitHub).
-        id: validate
+      - name: Resolve API URL (with fallback)
+        # Single source of truth for NEXT_PUBLIC_API_URL: read the env-
+        # appropriate secret, fall back to a hard-coded URL if the secret
+        # is missing/empty. The fallback exists so a transient secret-
+        # access misconfiguration (e.g. org-level secret not yet granted
+        # to this repo) doesn't block the QA pipeline. The bake-time
+        # guard against localhost stays — we never want a bundle pointing
+        # at localhost to ship.
+        #
+        # Output is consumed by the build-push step below (cleaner than
+        # repeating the ternary inline).
+        id: api
         run: |
           ENV_NAME="${{ steps.target.outputs.env_name }}"
           if [[ "$ENV_NAME" == "qa" ]]; then
             URL="${{ secrets.QA_API_URL }}"
+            FALLBACK="http://10.30.2.30:5100/api"
           else
             URL="${{ secrets.PROD_API_URL }}"
+            FALLBACK=""   # no fallback for prod — fail rather than guess
           fi
-          if [[ -z "$URL" || "$URL" == "http://placeholder.invalid/api" ]]; then
-            echo "::error::QA_API_URL / PROD_API_URL secret is empty — refusing to build a bundle baked with localhost"
+
+          if [[ -z "$URL" ]]; then
+            if [[ -n "$FALLBACK" ]]; then
+              echo "::warning::Secret for $ENV_NAME API URL is empty — using fallback $FALLBACK. Add the secret to org/repo settings to silence this."
+              URL="$FALLBACK"
+            else
+              echo "::error::No API URL secret for $ENV_NAME and no fallback configured"
+              exit 1
+            fi
+          fi
+
+          if [[ "$URL" == *"localhost"* || "$URL" == "http://placeholder.invalid/api" ]]; then
+            echo "::error::Refusing to build a bundle baked with localhost: $URL"
             exit 1
           fi
+
           echo "Will bake NEXT_PUBLIC_API_URL=$URL into the bundle"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -165,12 +186,12 @@ jobs:
           file: ./Dockerfile
           push: true
           platforms: linux/arm64
-          # NEXT_PUBLIC_API_URL is baked into the bundle here. We read
-          # the secret directly (env-conditional) since it can't be
-          # passed via job-output without GitHub scrubbing it. Dockerfile
-          # also fails the build if this is empty or the placeholder.
+          # NEXT_PUBLIC_API_URL is baked into the bundle. We consume the
+          # already-resolved value from the `api` step (which handles
+          # the fallback for missing secrets) rather than reading the
+          # secret again here — single source of truth.
           build-args: |
-            NEXT_PUBLIC_API_URL=${{ steps.target.outputs.env_name == 'qa' && secrets.QA_API_URL || secrets.PROD_API_URL }}
+            NEXT_PUBLIC_API_URL=${{ steps.api.outputs.url }}
           tags: |
             ${{ steps.meta.outputs.image_uri }}
             ${{ steps.meta.outputs.moving_uri }}
