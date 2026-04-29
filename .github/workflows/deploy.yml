@@ -1,37 +1,41 @@
-# Easyfix_CRM_UI — build-on-EC2 deploy via AWS SSM
+# Easyfix_CRM_UI — build in CI → push to ECR → docker pull on EC2
 #
 # Targets:
-#   QA branch         → AWS EC2 at 10.30.2.30 (QA_INSTANCE_ID)
+#   QA branch         → AWS EC2 at 10.30.2.30 (QA_INSTANCE_ID secret)
 #                                              SHARED VM with EasyFix_Backend
 #   Production branch → AWS EC2 (PROD_INSTANCE_ID)
 #
 # Pipeline per push:
-#   1. Typecheck on github-hosted runner (cheap fail-fast on TS errors)
-#   2. SSM send-command on the EC2:
-#         a. cd /opt/easyfix/repos/Easyfix_CRM_UI && git fetch + reset
-#         b. cd /opt/easyfix && docker compose build crm-ui
-#            (NEXT_PUBLIC_API_URL comes from /opt/easyfix/.env via the
-#             compose `args:` block — Dockerfile fails the build if it's
-#             empty or the placeholder)
-#         c. docker compose up -d --no-deps crm-ui (atomic recreate)
-#         d. wait for HEALTHY
-#   3. Smoke-test http://127.0.0.1:5180/login via second SSM call
+#   1. Typecheck on github-hosted runner (cheap fail-fast)
+#   2. Build Docker image with --build-arg NEXT_PUBLIC_API_URL=<env's URL>
+#      → bakes the right backend URL into the static JS chunks
+#      → tags qa-<sha> + qa-latest, pushes both to ECR
+#   3. SSM send-command on the EC2:
+#         a. update CRM_UI_IMAGE in /opt/easyfix/.env to the new tag
+#         b. docker compose pull crm-ui
+#         c. docker compose up -d --no-deps --force-recreate crm-ui
+#         d. wait for HEALTHY status
+#   4. Smoke-test http://127.0.0.1:5180/login via second SSM call
 #
 # CRITICAL: NEXT_PUBLIC_API_URL is read at BUILD TIME, baked into the
-# bundle. It lives on the EC2 in /opt/easyfix/.env (NOT in GitHub
-# Secrets — it's not sensitive but it IS env-specific, so it lives next
-# to the docker-compose.yml that consumes it).
+# bundle. We pass it as --build-arg here; the Dockerfile also fails the
+# build if the value is empty or still the placeholder.
 #
-# Required GitHub secrets:
+# Required GitHub Environment (org-level, name "Organisation Level Secrets") secrets:
 #   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
 #   QA_INSTANCE_ID, PROD_INSTANCE_ID
-#   MAIL_USERNAME, MAIL_PASSWORD
+#   QA_API_URL                http://10.30.2.30:5100/api  (baked into bundle)
+#   PROD_API_URL              (when prod is ready)
+#   ECR_REGISTRY              902810393464.dkr.ecr.ap-south-1.amazonaws.com
+#   ECR_REPOSITORY_CRM_UI     easyfix/crm-ui
+#   MAIL_USERNAME / MAIL_PASSWORD   (optional — failure-alert SMTP)
 #
-# Notably NOT in GitHub Secrets:
-#   - NEXT_PUBLIC_API_URL → /opt/easyfix/.env on the EC2
-#   - DB / JWT / MS Graph / SMS / WhatsApp creds → /opt/easyfix/backend.env
+# `environment: 'Organisation Level Secrets'` is REQUIRED on every job
+# that reads org-level environment secrets — same rule as the backend
+# workflow. The environment name is verbatim as configured in GitHub
+# (spaces are valid; YAML quoting is required).
 
-name: Deploy CRM_UI (build-on-EC2 via SSM)
+name: Deploy CRM_UI (CI build → ECR → SSM pull)
 
 on:
   push:
@@ -61,29 +65,44 @@ jobs:
       - run: npm ci
       - name: Typecheck
         run: npx tsc --noEmit -p tsconfig.json
-      # Skipping `next build` here — it'd run again on the EC2 with the
-      # real NEXT_PUBLIC_API_URL anyway. Typecheck is the load-bearing
-      # fail-fast.
 
-  deploy:
-    name: Deploy via SSM (build on EC2)
+  build-and-push:
+    name: Build image & push to ECR
     needs: precheck
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
+    environment: 'Organisation Level Secrets'
+    outputs:
+      image_uri:   ${{ steps.meta.outputs.image_uri }}
+      env_name:    ${{ steps.target.outputs.env_name }}
+      instance_id: ${{ steps.target.outputs.instance_id }}
     steps:
-      - name: Resolve target
+      - uses: actions/checkout@v4
+
+      - name: Resolve target & API URL
         id: target
         run: |
           TARGET="${{ github.event.inputs.target || github.ref_name }}"
           if [[ "$TARGET" == "QA" ]]; then
             echo "instance_id=${{ secrets.QA_INSTANCE_ID }}"  >> "$GITHUB_OUTPUT"
-            echo "branch=QA"                                   >> "$GITHUB_OUTPUT"
-            echo "env_name=QA"                                  >> "$GITHUB_OUTPUT"
+            echo "api_url=${{ secrets.QA_API_URL }}"          >> "$GITHUB_OUTPUT"
+            echo "env_name=qa"                                  >> "$GITHUB_OUTPUT"
           else
             echo "instance_id=${{ secrets.PROD_INSTANCE_ID }}" >> "$GITHUB_OUTPUT"
-            echo "branch=Production"                            >> "$GITHUB_OUTPUT"
-            echo "env_name=Production"                           >> "$GITHUB_OUTPUT"
+            echo "api_url=${{ secrets.PROD_API_URL }}"         >> "$GITHUB_OUTPUT"
+            echo "env_name=production"                          >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Validate API URL
+        # Refuse to build a bundle that bakes localhost. The Dockerfile
+        # also guards against this — but failing here saves a 5-min build.
+        run: |
+          URL="${{ steps.target.outputs.api_url }}"
+          if [[ -z "$URL" || "$URL" == "http://placeholder.invalid/api" ]]; then
+            echo "::error::QA_API_URL / PROD_API_URL secret is empty — refusing to build a bundle baked with localhost"
+            exit 1
+          fi
+          echo "Will bake NEXT_PUBLIC_API_URL=$URL into the bundle"
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -91,72 +110,79 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region:            ${{ secrets.AWS_REGION }}
 
-      - name: SSM build & up
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Compute image metadata
+        id: meta
+        run: |
+          REGISTRY="${{ secrets.ECR_REGISTRY }}"
+          REPO="${{ secrets.ECR_REPOSITORY_CRM_UI }}"
+          ENV_NAME="${{ steps.target.outputs.env_name }}"
+          SHA_TAG="${ENV_NAME}-${GITHUB_SHA::7}"
+
+          echo "image_uri=${REGISTRY}/${REPO}:${SHA_TAG}"        >> "$GITHUB_OUTPUT"
+          echo "moving_uri=${REGISTRY}/${REPO}:${ENV_NAME}-latest" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build & push CRM-UI image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          # NEXT_PUBLIC_API_URL is baked into the bundle here. Dockerfile
+          # fails the build if this is empty or the placeholder.
+          build-args: |
+            NEXT_PUBLIC_API_URL=${{ steps.target.outputs.api_url }}
+          tags: |
+            ${{ steps.meta.outputs.image_uri }}
+            ${{ steps.meta.outputs.moving_uri }}
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+          provenance: false
+
+  deploy:
+    name: Deploy via SSM (docker pull on EC2)
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: 'Organisation Level Secrets'
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ secrets.AWS_REGION }}
+
+      - name: SSM compose pull + up
         id: ssm
         run: |
           set -euo pipefail
-          INSTANCE_ID="${{ steps.target.outputs.instance_id }}"
-          BRANCH="${{ steps.target.outputs.branch }}"
-          ENV_NAME="${{ steps.target.outputs.env_name }}"
-
-          if [[ -z "$INSTANCE_ID" ]]; then
-            echo "::error::INSTANCE_ID secret missing for $ENV_NAME"; exit 1
-          fi
+          INSTANCE_ID="${{ needs.build-and-push.outputs.instance_id }}"
+          IMAGE_URI="${{ needs.build-and-push.outputs.image_uri }}"
 
           REMOTE_SCRIPT=$(cat <<EOF
           set -euo pipefail
+          cd /opt/easyfix
 
-          REPO_URL="${{ github.server_url }}/${{ github.repository }}.git"
-          REPO_DIR=/opt/easyfix/repos/Easyfix_CRM_UI
-          COMPOSE_DIR=/opt/easyfix
-
-          # Self-healing: clone if missing, fetch+reset if present. Same
-          # pattern as the backend workflow. Private repos require
-          # /home/easyfix-deploy/.git-credentials (one-time bootstrap).
-          mkdir -p /opt/easyfix/repos
-          chown -R easyfix-deploy:easyfix-deploy /opt/easyfix/repos
-
-          if [[ ! -d "\$REPO_DIR/.git" ]]; then
-            echo "▶ Repo not present — cloning fresh"
-            sudo -u easyfix-deploy git clone --branch $BRANCH "\$REPO_URL" "\$REPO_DIR"
-          else
-            echo "▶ Pulling origin/$BRANCH"
-            sudo -u easyfix-deploy git -C "\$REPO_DIR" fetch --all --prune
-            sudo -u easyfix-deploy git -C "\$REPO_DIR" checkout $BRANCH
-            sudo -u easyfix-deploy git -C "\$REPO_DIR" reset --hard origin/$BRANCH
-          fi
-
-          # docker-compose.yml lives in the BACKEND repo's deploy/ dir.
-          # If it's not at /opt/easyfix yet, the backend repo's first
-          # deploy will install it. CRM-UI workflow can't do that here
-          # (we only have crm-ui's clone). Hard fail with a clear hint.
-          if [[ ! -f "\$COMPOSE_DIR/docker-compose.yml" ]]; then
-            echo "::error::\$COMPOSE_DIR/docker-compose.yml missing. Run the backend deploy workflow first — it bootstraps the compose file."
-            exit 1
-          fi
-
-          cd "\$COMPOSE_DIR"
-
-          # Hard preflight: env files MUST exist. Don't auto-create — they
-          # hold secrets, must be set up via deploy/bootstrap-env.sh once.
-          for required in "\$COMPOSE_DIR/.env" "\$COMPOSE_DIR/backend.env"; do
+          for required in /opt/easyfix/.env /opt/easyfix/backend.env /opt/easyfix/docker-compose.yml; do
             if [[ ! -f "\$required" ]]; then
-              echo "::error::\$required is missing. Run deploy/bootstrap-env.sh on the EC2 first — see AWS_QA_BOOTSTRAP.md §E"
+              echo "::error::\$required missing — see AWS_QA_BOOTSTRAP.md"
               exit 1
             fi
           done
 
-          # NEXT_PUBLIC_API_URL specifically — empty value would silently
-          # bake localhost into the bundle. Dockerfile also guards, but
-          # failing here saves a ~5-minute Next build.
-          if ! grep -qE '^NEXT_PUBLIC_API_URL=.+' .env; then
-            echo "::error::/opt/easyfix/.env has no NEXT_PUBLIC_API_URL — refusing to build"
-            echo "  Edit /opt/easyfix/.env (or re-run bootstrap-env.sh) to set: NEXT_PUBLIC_API_URL=http://10.30.2.30:5100/api"
-            exit 1
+          # Update CRM_UI_IMAGE in .env. Append if first run.
+          if grep -q '^CRM_UI_IMAGE=' /opt/easyfix/.env; then
+            sed -i "s|^CRM_UI_IMAGE=.*|CRM_UI_IMAGE=$IMAGE_URI|" /opt/easyfix/.env
+          else
+            echo "CRM_UI_IMAGE=$IMAGE_URI" >> /opt/easyfix/.env
           fi
 
-          echo "▶ Building crm-ui image (NEXT_PUBLIC_API_URL baked from /opt/easyfix/.env)"
-          docker compose build crm-ui
+          echo "▶ Pulling \$CRM_UI_IMAGE"
+          docker compose pull crm-ui
 
           echo "▶ Recreating crm-ui container (backend untouched)"
           docker compose up -d --no-deps --force-recreate crm-ui
@@ -169,10 +195,9 @@ jobs:
           done
 
           docker image prune -af --filter "until=72h" >/dev/null 2>&1 || true
-          docker builder prune -af --keep-storage 2GB >/dev/null 2>&1 || true
 
           docker compose ps crm-ui
-          echo "✓ Deployed \$(sudo -u easyfix-deploy git -C \$REPO_DIR rev-parse --short HEAD)"
+          echo "✓ Deployed $IMAGE_URI"
           EOF
           )
 
@@ -181,19 +206,18 @@ jobs:
           CMD_ID=$(aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
-            --comment "Deploy crm-ui ${GITHUB_SHA:0:7} → $ENV_NAME" \
+            --comment "Deploy crm-ui ${IMAGE_URI##*:}" \
             --parameters "$PARAMS_JSON" \
             --query 'Command.CommandId' --output text)
           echo "command_id=$CMD_ID" >> "$GITHUB_OUTPUT"
 
-          # Next.js build can take ~5 min cold, ~2 min warm. 12-min ceiling.
           STATUS=""
-          for i in $(seq 1 144); do
+          for i in $(seq 1 60); do
             sleep 5
             STATUS=$(aws ssm get-command-invocation \
               --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
               --query 'Status' --output text 2>/dev/null || echo Pending)
-            echo "[$i/144] SSM status: $STATUS"
+            echo "[$i/60] SSM status: $STATUS"
             case "$STATUS" in Success|Failed|Cancelled|TimedOut) break ;; esac
           done
 
@@ -213,7 +237,7 @@ jobs:
       - name: Smoke-test deployed UI
         run: |
           set -euo pipefail
-          INSTANCE_ID="${{ steps.target.outputs.instance_id }}"
+          INSTANCE_ID="${{ needs.build-and-push.outputs.instance_id }}"
 
           PARAMS_JSON=$(jq -n '{commands: [
             "set -e",
@@ -228,7 +252,7 @@ jobs:
           CMD_ID=$(aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
-            --comment "Smoke test crm-ui ${GITHUB_SHA:0:7}" \
+            --comment "Smoke test crm-ui" \
             --parameters "$PARAMS_JSON" \
             --query 'Command.CommandId' --output text)
 
@@ -255,16 +279,15 @@ jobs:
           secure: true
           username: ${{ secrets.MAIL_USERNAME }}
           password: ${{ secrets.MAIL_PASSWORD }}
-          subject: "[Deploy FAILED] CRM_UI → ${{ steps.target.outputs.env_name }} (${{ github.sha }})"
+          subject: "[Deploy FAILED] CRM_UI → ${{ needs.build-and-push.outputs.env_name }} (${{ github.sha }})"
           to: harshit@channelplay.in
           from: ${{ secrets.MAIL_USERNAME }}
           body: |
             CRM-UI deploy FAILED.
 
-            Instance:  ${{ steps.target.outputs.instance_id }}
-            Branch:    ${{ steps.target.outputs.branch }}
-            Commit:    ${{ github.sha }}
+            Image:    ${{ needs.build-and-push.outputs.image_uri }}
+            Instance: ${{ needs.build-and-push.outputs.instance_id }}
+            Branch:   ${{ github.ref_name }}
+            Commit:   ${{ github.sha }}
             Triggered: ${{ github.actor }}
-            Run URL:   ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-            SSM command id: ${{ steps.ssm.outputs.command_id }}
+            Run URL:  ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

@@ -24,11 +24,11 @@ no RSC fetches), so we don't have any of those.
 
 ## Where each var lives
 
-| Variable | File on EC2 | When read | Notes |
+| Variable | Where | When read | Notes |
 |---|---|---|---|
-| `NEXT_PUBLIC_API_URL` | `/opt/easyfix/.env` (chmod 644) | At `docker compose build crm-ui` | Baked into `.next/static/chunks/*.js`. Changing requires rebuild. |
-| (future) `NEXT_PUBLIC_*` flags | Same file | Same | |
-| (future) Runtime server-side vars | Add to `/opt/easyfix/crm-ui.env` and `env_file:` in compose | At `next start` | Don't exist yet. |
+| `NEXT_PUBLIC_API_URL` | **GitHub Environment "Organisation Level Secrets" → secret `QA_API_URL`** | At CI Docker build time, passed as `--build-arg` to `docker buildx build` | Baked into `.next/static/chunks/*.js`. Changing requires re-running the workflow. |
+| (future) `NEXT_PUBLIC_*` flags | Add as new GitHub secrets, plumb through the workflow + Dockerfile + compose | Same | See "Adding a new build-arg" below. |
+| (future) Runtime server-side vars | Would need `/opt/easyfix/crm-ui.env` + `env_file:` in compose | At `next start` | Don't exist yet. |
 
 **Notably NOT in the CRM-UI's runtime:**
 - DB credentials (UI never touches the DB directly — calls the backend API)
@@ -39,61 +39,29 @@ If you find yourself wanting to put a secret in the UI bundle, **stop** —
 it'll end up in the JS sent to every browser. Move it to the backend
 and call `/api/...` instead.
 
-## Updating `NEXT_PUBLIC_API_URL` (or any other CRM-UI build-arg)
+## Updating `NEXT_PUBLIC_API_URL`
 
-Use the shared script that lives in the **backend repo** under `deploy/`.
-It manages env vars for both apps:
+The build now happens in CI (not on the EC2), so the value lives in
+**GitHub Secrets** under the QA environment as `QA_API_URL`. Workflow
+passes it to `docker buildx build` as `--build-arg`, which the
+Dockerfile inlines into the static JS chunks.
 
-```bash
-sudo bash /opt/easyfix/repos/EasyFix_Backend/deploy/bootstrap-env.sh
-```
+To change it (e.g. when DNS moves from raw IP to a hostname):
 
-Walk-through for changing the API URL (e.g. when DNS lands):
+1. **GitHub → Repo → Settings → Environments → QA → Update `QA_API_URL`**
+   to the new value (e.g. `https://crm-api.qa.easyfix.in/api`).
+2. **Re-run the CRM-UI workflow** — either commit + push to `QA`, or
+   GitHub → Actions → Deploy CRM_UI → Run workflow → pick QA.
+3. Workflow rebuilds the image with the new URL baked in, pushes to
+   ECR, SSMs the EC2 to `docker compose pull crm-ui` + `up -d`.
 
-```
-EasyFix env-var manager (batch mode)
+End-to-end: ~3 minutes (Next build is the slow step).
 
-  ● compose / build-args (.env)         /opt/easyfix/.env  (1 keys)
-  ● backend runtime secrets (backend.env)  /opt/easyfix/backend.env  (12 keys)
+**The bootstrap-env.sh script on the EC2 will REFUSE to set this
+var** — it now lives in CI, not on the box. Editing it locally has no
+effect because the bundle is already baked.
 
-Env var KEY (or blank to finish): NEXT_PUBLIC_API_URL
-
-'NEXT_PUBLIC_API_URL' currently exists in:
-  • /opt/easyfix/.env       value: http://10.30.2.30:5100/api
-
-What do you want to do?
-  1) Update value in .env
-  9) Cancel this round
-Choice [1]: 1
-
-New value for NEXT_PUBLIC_API_URL: https://crm-api.qa.easyfix.in/api
-
-About to update:
-  Key:   NEXT_PUBLIC_API_URL
-  File:  /opt/easyfix/.env
-  Value: https://crm-api.qa.easyfix.in/api
-Proceed? [y/N] y
-✓ Wrote NEXT_PUBLIC_API_URL to /opt/easyfix/.env
-
-Add/update another var? [y/N] n
-
-Pending refreshes:
-  • crm-ui → rebuild + recreate (NEXT_PUBLIC_* baked at build time)
-
-Apply refreshes now? [y/N] y
-▶ Rebuilding + recreating crm-ui
-[+] Building 187.4s (16/16) FINISHED
-[+] Running 1/1
- ✔ Container easyfix-crm-ui  Started
-✓ All affected containers refreshed
-```
-
-The script knows that `NEXT_PUBLIC_*` requires a **rebuild** (not just
-a restart) and triggers `docker compose build crm-ui` + `up -d
---force-recreate crm-ui` automatically.
-
-End-to-end ~3 minutes — most of it is the Next build. The backend
-container is **not touched**.
+The backend container is **not touched** by a CRM-UI redeploy.
 
 ## Adding a new build-arg
 
