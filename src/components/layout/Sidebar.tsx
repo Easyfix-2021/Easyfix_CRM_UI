@@ -74,12 +74,16 @@ const URL_MAP: Record<string, string> = {
   'job':                   '/jobs',
   'uploadJobByExcel':      '/jobs/upload',
   'easyfixer':             '/easyfixers',
-  // Zone-mapping page — used by the L1 eligibility filter (auto-assign rejects
-  // techs whose efr_zone_city_id doesn't cover the customer pincode). Two keys
-  // are accepted because the legacy CRM seeded this row with url='easyfixerZones'
-  // while the new convention prefers `manage*` (mirrors `manageAutoAllocations`).
-  // Either tbl_menu.url value resolves to the same route.
-  'manageZones':           '/easyfixers/zones',
+  // Zone management lives in TWO places (intentional split):
+  //   - /settings/zones        — full management surface: CRUD + city
+  //                              mapping editor + bulk Excel upload/download.
+  //                              `manageZones` (the new sidebar entry under
+  //                              Settings) routes here.
+  //   - /easyfixers/zones      — read-only "browse zones from EasyFixers
+  //                              context" view. The legacy CRM seeded its
+  //                              tbl_menu row with url='easyfixerZones' so we
+  //                              keep that key for backwards compatibility.
+  'manageZones':           '/settings/zones',
   'easyfixerZones':        '/easyfixers/zones',
   'deepSkillTable':        '/settings/deep-skills',
   'manageAutoAllocations': '/settings/auto-allocation',
