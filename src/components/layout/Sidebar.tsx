@@ -85,6 +85,10 @@ const URL_MAP: Record<string, string> = {
   //                              keep that key for backwards compatibility.
   'manageZones':           '/settings/zones',
   'easyfixerZones':        '/easyfixers/zones',
+  // Pincode master under Settings: CRUD + bulk Excel upload. Status
+  // (Local/Travel) is computed from active-tech availability — no
+  // status column to maintain.
+  'managePincodes':        '/settings/pincodes',
   'deepSkillTable':        '/settings/deep-skills',
   'manageAutoAllocations': '/settings/auto-allocation',
   // My Orders sub-menus (legacy CRM): each tbl_menu row's `url` is the full
