@@ -89,6 +89,14 @@ const URL_MAP: Record<string, string> = {
   // (Local/Travel) is computed from active-tech availability — no
   // status column to maintain.
   'managePincodes':        '/settings/pincodes',
+  // City master under Settings: CRUD with state/district + status flag.
+  // Counts (zones / pincodes / technicians) are computed at read time
+  // from the related tables so the totals always match downstream truth.
+  'manageCities':          '/settings/cities',
+  // Legacy CRM seeded a coming-soon stub with url='city' — the migration
+  // 2026_05_01_add_settings_manage_cities_menu.sql retires that row, but
+  // an alias here keeps any in-flight bookmarks resolving cleanly.
+  'city':                  '/settings/cities',
   'deepSkillTable':        '/settings/deep-skills',
   'manageAutoAllocations': '/settings/auto-allocation',
   // My Orders sub-menus (legacy CRM): each tbl_menu row's `url` is the full
