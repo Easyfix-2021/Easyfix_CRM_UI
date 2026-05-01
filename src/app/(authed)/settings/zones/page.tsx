@@ -1,20 +1,17 @@
 'use client';
 
 /*
- * Manage Zones — Settings page (full management surface).
+ * Manage Zones — Settings page (spec-aligned model).
  *
- * Differences from /easyfixers/zones (the legacy read-only browse view):
- *   - Cards / Table view toggle (Cards default, persisted in localStorage)
- *   - "+ Add Zone", inline edit, deactivate
- *   - "Download Template" → fetches a 3-sheet xlsx with locked Zones / Cities
- *     master sheets and dropdown validations on the editable Mapping sheet
- *   - "Upload Excel" → dry-run preview then commit; per-row report
- *   - Click a zone row/card → /settings/zones/[zoneId] for the city-mapping
- *     editor (multi-select against tbl_city, replaces the zone's city set
- *     in one shot via PATCH /admin/zones/:id/cities)
+ * Spec:
+ *   - Zones are created per City (one zone belongs to ONE city).
+ *   - A zone is a group of pincodes within that city.
+ *   - One pincode belongs to one zone only.
+ *   - Zone Name is free text (e.g. "South Delhi", "Whitefield").
+ *   - List columns: Zone ID | Zone Name | City | Pincodes | Technicians.
  *
- * All endpoints live under /api/admin/zones — see EasyFix_Backend
- * routes/admin/zones.js + services/zone.service.js + zone-upload.service.js.
+ * Endpoints under /api/admin/zones — see backend services/zone.service.js
+ * + routes/admin/zones.js + zone-upload.service.js.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -28,15 +25,17 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { api, ApiError } from '@/lib/api';
+import { useLookup } from '@/lib/use-lookup';
 
 type Zone = {
   zone_id: number;
   zone_name: string;
   zone_status: number | null;
   created_date: string | null;
-  city_count: number;
-  easyfixer_count: number;
+  city_id: number | null;
+  city_name: string | null;
   pincode_count: number;
+  technician_count: number;
 };
 
 type View = 'cards' | 'table';
@@ -45,7 +44,6 @@ const VIEW_LS_KEY = 'manage-zones:view';
 export default function ManageZonesPage() {
   const [zones, setZones]   = useState<Zone[] | null>(null);
   const [search, setSearch] = useState('');
-  // Default = cards. Persist user's choice so it survives reloads.
   const [view, setView]     = useState<View>('cards');
   useEffect(() => {
     const saved = (typeof window !== 'undefined' ? localStorage.getItem(VIEW_LS_KEY) : null) as View | null;
@@ -67,14 +65,12 @@ export default function ManageZonesPage() {
     if (!zones) return [];
     if (!search) return zones;
     const q = search.toLowerCase();
-    return zones.filter((z) => z.zone_name.toLowerCase().includes(q));
+    return zones.filter((z) =>
+      z.zone_name.toLowerCase().includes(q) ||
+      (z.city_name ?? '').toLowerCase().includes(q)
+    );
   }, [zones, search]);
 
-  /*
-   * Template download — direct fetch, NOT via api wrapper, because the
-   * response is a binary blob (xlsx). We still attach the auth token + the
-   * httpOnly cookie via credentials: 'include'.
-   */
   async function downloadTemplate() {
     const base  = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5100/api';
     const token = typeof window !== 'undefined' ? localStorage.getItem('crm_auth_token') : null;
@@ -93,13 +89,13 @@ export default function ManageZonesPage() {
 
   return (
     <div className="space-y-4">
-      {/* ── Header + actions ───────────────────────────────────────── */}
+      {/* ── Header ─ */}
       <div className="flex items-end justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-semibold">Manage Zones</h1>
           <p className="text-sm text-muted-foreground">
-            Define service zones and the cities + pincodes each zone covers. The
-            auto-allocation engine uses these mappings to filter eligible technicians.
+            Each zone belongs to one city and groups the pincodes within it. Auto-allocation
+            uses the zone of the customer&apos;s pincode to filter eligible technicians.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -115,34 +111,26 @@ export default function ManageZonesPage() {
         </div>
       </div>
 
-      {/* ── Filter + view toggle ───────────────────────────────────── */}
+      {/* ── Filter + view toggle ─ */}
       <Card>
         <CardContent className="p-3">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div className="relative w-72">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
-                placeholder="Filter zones by name…"
+                placeholder="Filter by zone name or city…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="pl-9"
               />
             </div>
             <div className="inline-flex border rounded-md overflow-hidden">
-              <button
-                type="button"
-                onClick={() => pickView('cards')}
-                className={`px-3 h-9 text-xs inline-flex items-center gap-1 ${view === 'cards' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted/60'}`}
-                title="Card view (default)"
-              >
+              <button type="button" onClick={() => pickView('cards')}
+                className={`px-3 h-9 text-xs inline-flex items-center gap-1 ${view === 'cards' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted/60'}`}>
                 <LayoutGrid className="h-3.5 w-3.5" /> Cards
               </button>
-              <button
-                type="button"
-                onClick={() => pickView('table')}
-                className={`px-3 h-9 text-xs inline-flex items-center gap-1 border-l ${view === 'table' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted/60'}`}
-                title="Table view"
-              >
+              <button type="button" onClick={() => pickView('table')}
+                className={`px-3 h-9 text-xs inline-flex items-center gap-1 border-l ${view === 'table' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted/60'}`}>
                 <List className="h-3.5 w-3.5" /> Table
               </button>
             </div>
@@ -150,7 +138,7 @@ export default function ManageZonesPage() {
         </CardContent>
       </Card>
 
-      {/* ── Body ───────────────────────────────────────────────────── */}
+      {/* ── Body ─ */}
       {zones === null && <Card><CardContent className="p-8 text-center text-muted-foreground">Loading zones…</CardContent></Card>}
       {zones && filtered.length === 0 && (
         <Card><CardContent className="p-8 text-center text-muted-foreground">
@@ -169,43 +157,33 @@ export default function ManageZonesPage() {
       {view === 'table' && filtered.length > 0 && (
         <Card>
           <CardContent className="p-0 overflow-x-auto">
-            {/*
-              * Alignment rules (header + cell stay in lockstep):
-              *   Zone       → left   (text content, primary identifier)
-              *   Status / Cities / Pincodes / Easyfixers → center (short tokens / numbers)
-              *   Action     → right  (call-to-action cluster)
-              *
-              * IMPORTANT: the global `.data-table th` rule in globals.css has
-              * specificity (0,1,1) — descendant `th` + class — which wins over
-              * a bare `text-center` / `text-right` utility (0,1,0). To beat it
-              * we use the Tailwind `!` important prefix on every header/cell
-              * alignment class. Same applies to `.data-table td` defaults.
-              */}
             <table className="data-table">
               <thead>
                 <tr>
-                  <th className="!text-left">Zone</th>
-                  <th className="!text-center">Status</th>
-                  <th className="!text-center">Cities</th>
+                  <th className="!text-center">Zone ID</th>
+                  <th className="!text-left">Zone Name</th>
+                  <th className="!text-left">City</th>
                   <th className="!text-center">Pincodes</th>
-                  <th className="!text-center">Easyfixers</th>
+                  <th className="!text-center">Technicians</th>
+                  <th className="!text-center">Status</th>
                   <th className="!text-right">Action</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.map((z) => (
                   <tr key={z.zone_id} className="hover:bg-muted/40">
+                    <td className="!text-center font-mono text-xs">{z.zone_id}</td>
                     <td className="!text-left font-medium">
                       <Link href={`/settings/zones/${z.zone_id}`} className="hover:underline">{z.zone_name}</Link>
                     </td>
+                    <td className="!text-left">{z.city_name ?? <span className="text-muted-foreground">—</span>}</td>
+                    <td className="!text-center">{z.pincode_count}</td>
+                    <td className="!text-center">{z.technician_count}</td>
                     <td className="!text-center">
                       {z.zone_status
                         ? <span className="text-emerald-700 text-xs">Active</span>
                         : <span className="text-muted-foreground text-xs">Inactive</span>}
                     </td>
-                    <td className="!text-center">{z.city_count}</td>
-                    <td className="!text-center">{z.pincode_count}</td>
-                    <td className="!text-center">{z.easyfixer_count}</td>
                     <td className="!text-right whitespace-nowrap">
                       <Link href={`/settings/zones/${z.zone_id}`} className="text-primary text-xs hover:underline mr-3">Manage</Link>
                       <button type="button" onClick={() => setEditTarget(z)} className="text-xs text-muted-foreground hover:underline">
@@ -247,23 +225,28 @@ function ZoneCard({ zone, onEdit }: { zone: Zone; onEdit: () => void }) {
     <Card className="hover:shadow-md transition-shadow">
       <CardContent className="p-4 space-y-3">
         <div className="flex items-start justify-between gap-2">
-          <Link href={`/settings/zones/${zone.zone_id}`} className="text-base font-semibold hover:underline truncate">
-            {zone.zone_name}
-          </Link>
+          <div className="min-w-0">
+            <Link href={`/settings/zones/${zone.zone_id}`} className="text-base font-semibold hover:underline truncate block">
+              {zone.zone_name}
+            </Link>
+            <div className="text-xs text-muted-foreground mt-0.5">
+              <Building2 className="inline h-3 w-3 mr-1" />
+              {zone.city_name ?? 'No city'} · ID {zone.zone_id}
+            </div>
+          </div>
           <button type="button" onClick={onEdit} className="text-xs text-muted-foreground hover:underline shrink-0">
             <Pencil className="inline h-3 w-3 mr-0.5" />Edit
           </button>
         </div>
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-          <span><Building2 className="inline h-3.5 w-3.5 mr-1 text-sky-700" />{zone.city_count} {zone.city_count === 1 ? 'city' : 'cities'}</span>
-          <span><MapPin     className="inline h-3.5 w-3.5 mr-1 text-violet-700" />{zone.pincode_count} pincodes</span>
-          <span><Users      className="inline h-3.5 w-3.5 mr-1 text-emerald-700" />{zone.easyfixer_count} techs</span>
+          <span><MapPin className="inline h-3.5 w-3.5 mr-1 text-violet-700" />{zone.pincode_count} pincodes</span>
+          <span><Users  className="inline h-3.5 w-3.5 mr-1 text-emerald-700" />{zone.technician_count} technicians</span>
         </div>
         <div className="flex items-center justify-between text-xs">
           {zone.zone_status
             ? <span className="text-emerald-700">● Active</span>
             : <span className="text-muted-foreground">○ Inactive</span>}
-          <Link href={`/settings/zones/${zone.zone_id}`} className="text-primary hover:underline">Manage cities →</Link>
+          <Link href={`/settings/zones/${zone.zone_id}`} className="text-primary hover:underline">Manage pincodes →</Link>
         </div>
       </CardContent>
     </Card>
@@ -274,26 +257,46 @@ function ZoneCard({ zone, onEdit }: { zone: Zone; onEdit: () => void }) {
 function ZoneAddEditDialog({ open, zone, onClose, onSaved }: {
   open: boolean; zone: Zone | null; onClose: () => void; onSaved: () => void;
 }) {
+  const lk = useLookup();
   const [name,   setName]   = useState('');
+  const [cityId, setCityId] = useState<number | ''>('');
+  const [cityQuery, setCityQuery] = useState('');
   const [active, setActive] = useState(true);
   const [busy,   setBusy]   = useState(false);
   const [err,    setErr]    = useState<string | null>(null);
+
   useEffect(() => {
     if (open) {
       setName(zone?.zone_name ?? '');
+      setCityId(zone?.city_id ?? '');
+      setCityQuery('');
       setActive(zone ? Boolean(zone.zone_status) : true);
       setErr(null);
     }
   }, [open, zone]);
 
+  const filteredCities = useMemo(() => {
+    const q = cityQuery.trim().toLowerCase();
+    return q ? lk.cities.filter((c) => c.city_name.toLowerCase().includes(q)) : lk.cities;
+  }, [lk.cities, cityQuery]);
+
+  const selectedCityName = useMemo(
+    () => lk.cities.find((c) => c.city_id === cityId)?.city_name ?? null,
+    [lk.cities, cityId],
+  );
+
   async function save(e: React.FormEvent) {
     e.preventDefault();
+    if (!name.trim()) { setErr('Zone name is required'); return; }
+    if (!zone && !cityId) { setErr('City is required'); return; }
     setBusy(true); setErr(null);
     try {
       if (zone) {
+        // City is locked on edit — moving a zone across cities would
+        // invalidate every assigned pincode and dangle technicians.
         await api.patch(`/admin/zones/${zone.zone_id}`, { zone_name: name, zone_status: active });
       } else {
-        await api.post('/admin/zones', { zone_name: name });
+        await api.post('/admin/zones', { zone_name: name, city_id: Number(cityId) });
       }
       onSaved();
     } catch (e2) {
@@ -310,8 +313,52 @@ function ZoneAddEditDialog({ open, zone, onClose, onSaved }: {
         <form onSubmit={save} className="space-y-3 pt-2">
           <div className="space-y-1.5">
             <label className="text-sm">Zone name *</label>
-            <Input required minLength={2} maxLength={100} value={name} onChange={(e) => setName(e.target.value)} />
+            <Input required minLength={2} maxLength={100} value={name} onChange={(e) => setName(e.target.value)} placeholder='e.g. "South Delhi", "Whitefield"' />
           </div>
+
+          <div className="space-y-1.5">
+            <label className="text-sm">City *</label>
+            {zone ? (
+              <div className="text-sm bg-muted/40 border rounded px-3 py-2">
+                {zone.city_name ?? '—'}
+                <span className="ml-2 text-xs text-muted-foreground">(locked — recreate to move)</span>
+              </div>
+            ) : (
+              <>
+                <Input
+                  value={cityQuery}
+                  onChange={(e) => setCityQuery(e.target.value)}
+                  placeholder="Search cities…"
+                  className="mb-1"
+                />
+                {selectedCityName && (
+                  <div className="text-xs text-muted-foreground mb-1">
+                    Selected: <span className="font-medium text-foreground">{selectedCityName}</span>
+                  </div>
+                )}
+                <div className="border rounded bg-background max-h-44 overflow-auto" role="listbox">
+                  {filteredCities.length === 0 ? (
+                    <div className="px-3 py-2 text-sm text-muted-foreground">No cities match.</div>
+                  ) : filteredCities.map((c) => {
+                    const selected = c.city_id === cityId;
+                    return (
+                      <button
+                        type="button"
+                        key={c.city_id}
+                        role="option"
+                        aria-selected={selected}
+                        onClick={() => setCityId(c.city_id)}
+                        className={`w-full text-left px-3 py-1.5 text-sm hover:bg-muted/60 ${selected ? 'bg-blue-50 text-blue-700 font-medium' : ''}`}
+                      >
+                        {c.city_name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+
           {zone && (
             <button type="button" onClick={() => setActive((s) => !s)} className="flex items-center gap-2 text-sm">
               {active
@@ -333,8 +380,23 @@ function ZoneAddEditDialog({ open, zone, onClose, onSaved }: {
 
 // ─── Excel upload dialog ────────────────────────────────────────────
 type UploadResult = {
-  summary: { totalRows: number; validRows: number; invalidRows: number; applied: number; skipped: number; dryRun: boolean };
-  results: Array<{ rowNumber: number; status: string; reason?: string }>;
+  summary: {
+    totalRows: number;
+    createdZones: number;
+    assignedPincodes: number;
+    skipCount: number;
+    failedCount: number;
+    dryRun: boolean;
+  };
+  results: Array<{
+    rowNumber: number | null;
+    status: 'assigned' | 'skipped' | 'failed';
+    pincode?: string;
+    zone_name?: string;
+    city_name?: string;
+    reason?: string;
+    errors?: string[];
+  }>;
 };
 
 function ZoneUploadDialog({ open, onClose, onApplied }: {
@@ -370,14 +432,14 @@ function ZoneUploadDialog({ open, onClose, onApplied }: {
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Bulk upload zone-city mapping</DialogTitle>
+          <DialogTitle>Bulk upload zone-pincode mapping</DialogTitle>
         </DialogHeader>
 
         <form onSubmit={submit} className="space-y-3 pt-2">
           <p className="text-sm text-muted-foreground">
-            Use the template downloaded from the previous screen. The Mapping sheet's
-            ZoneName + CityName cells are validated against the master lists — values
-            outside the master sheets will be rejected on parse.
+            Use the template downloaded from the parent screen. Each row = (zone_name,
+            city_name, pincode). Zones not yet present get created on commit; pincodes
+            already in another zone are reported as skipped.
           </p>
 
           <input
@@ -390,7 +452,7 @@ function ZoneUploadDialog({ open, onClose, onApplied }: {
 
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} />
-            <strong>Dry run</strong> — validate only, don't write to DB (recommended on first try)
+            <strong>Dry run</strong> — validate only, don&apos;t write to DB (recommended on first try)
           </label>
 
           {err && <div className="text-sm text-destructive">{err}</div>}
@@ -398,28 +460,30 @@ function ZoneUploadDialog({ open, onClose, onApplied }: {
           {result && (
             <div className="rounded-md border p-3 space-y-2">
               <div className="flex items-center gap-2 text-sm">
-                {result.summary.invalidRows === 0
+                {result.summary.failedCount === 0
                   ? <CheckCircle2 className="h-4 w-4 text-emerald-600" />
                   : <AlertTriangle className="h-4 w-4 text-amber-600" />}
                 <span>
                   <strong>{result.summary.totalRows}</strong> rows ·
-                  valid <strong>{result.summary.validRows}</strong> ·
-                  invalid <strong>{result.summary.invalidRows}</strong> ·
-                  {result.summary.dryRun ? ' would-apply ' : ' applied '}
-                  <strong>{result.summary.applied}</strong> ·
-                  skipped (duplicates) <strong>{result.summary.skipped}</strong>
+                  zones created <strong>{result.summary.createdZones}</strong> ·
+                  pincodes assigned <strong>{result.summary.assignedPincodes}</strong> ·
+                  skipped <strong>{result.summary.skipCount}</strong> ·
+                  failed <strong>{result.summary.failedCount}</strong>
+                  {result.summary.dryRun ? ' (dry run — nothing written)' : ''}
                 </span>
               </div>
-              {result.results.some((r) => r.status === 'failed') && (
+              {result.results.some((r) => r.status === 'failed' || r.status === 'skipped') && (
                 <div className="max-h-60 overflow-y-auto text-xs border rounded">
                   <table className="data-table">
-                    <thead><tr><th>Row</th><th>Status</th><th>Reason</th></tr></thead>
+                    <thead><tr><th>Row</th><th>Status</th><th>Detail</th></tr></thead>
                     <tbody>
-                      {result.results.filter((r) => r.status === 'failed').slice(0, 200).map((r) => (
-                        <tr key={r.rowNumber}>
-                          <td>{r.rowNumber}</td>
-                          <td className="text-destructive">{r.status}</td>
-                          <td>{r.reason}</td>
+                      {result.results.filter((r) => r.status !== 'assigned').slice(0, 200).map((r, i) => (
+                        <tr key={i}>
+                          <td className="!text-center">{r.rowNumber ?? '—'}</td>
+                          <td className={`!text-center ${r.status === 'failed' ? 'text-destructive' : ''}`}>{r.status}</td>
+                          <td className="!text-left">
+                            {r.status === 'failed' ? (r.errors?.join('; ') ?? '') : (r.reason ?? '')}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
