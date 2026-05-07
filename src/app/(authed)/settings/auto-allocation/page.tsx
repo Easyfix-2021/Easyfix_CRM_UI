@@ -51,7 +51,11 @@ export default function AutoAllocationPage() {
   const [toast, setToast] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showWeights, setShowWeights] = useState(false);
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  // Advanced section holds the configurable knobs the spec calls out
+  // (Max Concurrent Jobs, Travel Kms, Default Rating, Reroute Time, …).
+  // Default to expanded so they're visible without an extra click; the
+  // header still toggles to collapse.
+  const [showAdvanced, setShowAdvanced] = useState(true);
   // Collapsed by default — ops who already know the flow shouldn't have to
   // scroll past it every visit. The chevron + tinted card make it obvious
   // there's content to expand.
@@ -318,12 +322,54 @@ export default function AutoAllocationPage() {
     'new_easyfixer_joining_days',
     'score_update_window',
     'history_days',
+    // Duplicates retired 2026-05-06 (see migration
+    // allocation-settings-prune-duplicates.sql). Listed here as a safety
+    // belt for any environment where the migration hasn't run yet — the
+    // UI never renders these even if the row is still on disk.
+    'no_rating_by_customer',          // duplicate of default_rating_value
+    'NotAllowedMessageCustomer',      // duplicate of AllowMessageCustomer (the inverse phrasing)
   ]);
-  const advanced = (settings ?? []).filter((s) =>
-    !allWeightKeys.has(s.key) &&
-    !s.key.endsWith('_weight') && // hide any uncategorised legacy *_weight rows from Advanced too
-    !HIDDEN_FROM_ADVANCED.has(s.key)
-  );
+  /*
+   * Advanced section ordering: the new spec keys (Max Concurrent Jobs,
+   * Travel Distance, Default Rating, Reroute Time) come first because
+   * they're the values ops will tune most often. Legacy / less-touched
+   * keys fall to the bottom in stable alphabetical order. Any keys not
+   * in either list go between (preserving original DB order).
+   */
+  const SPEC_KEY_ORDER = [
+    'max_concurrent_jobs',
+    'travel_distance_km',
+    'default_rating_value',
+    'reroute_after_minutes',
+  ];
+  const LEGACY_TAIL_KEYS = new Set([
+    'AllowMessageCustomer',
+    'tat_service_catg_tier',
+  ]);
+  const advanced = (settings ?? [])
+    .filter((s) =>
+      !allWeightKeys.has(s.key) &&
+      !s.key.endsWith('_weight') && // hide any uncategorised legacy *_weight rows from Advanced too
+      !HIDDEN_FROM_ADVANCED.has(s.key)
+    )
+    .sort((a, b) => {
+      const aIsSpec = SPEC_KEY_ORDER.indexOf(a.key);
+      const bIsSpec = SPEC_KEY_ORDER.indexOf(b.key);
+      const aIsLegacy = LEGACY_TAIL_KEYS.has(a.key);
+      const bIsLegacy = LEGACY_TAIL_KEYS.has(b.key);
+      // 1. Spec keys, ordered by SPEC_KEY_ORDER.
+      if (aIsSpec !== -1 || bIsSpec !== -1) {
+        if (aIsSpec === -1) return 1;
+        if (bIsSpec === -1) return -1;
+        return aIsSpec - bIsSpec;
+      }
+      // 2. Legacy tail keys go last, alphabetical among themselves.
+      if (aIsLegacy && !bIsLegacy) return 1;
+      if (bIsLegacy && !aIsLegacy) return -1;
+      if (aIsLegacy && bIsLegacy) return a.key.localeCompare(b.key);
+      // 3. Everything else preserves original (id-derived) order.
+      return 0;
+    });
 
   // Optimistic UI: show the user's last click immediately; fall back to server
   // truth once any in-flight save resolves and `load()` refreshes settings.
@@ -585,142 +631,79 @@ function HowItWorks({ open, onToggle }: { open: boolean; onToggle: () => void })
       </button>
       {open && (
         <CardContent className="space-y-4 text-[13px] text-foreground/90 leading-relaxed">
-          <Section title="When does it run?">
-            <p>
-              The engine fires once per job, immediately after the job is created (CRM, Excel upload,
-              client API or external integration) — but only if the client&apos;s <em>Auto-Allocate Jobs</em> toggle
-              is ON. The job-create response returns first; the assignment runs asynchronously, so the
-              caller never waits on it.
-            </p>
-            <p>
-              There is <strong>no batch / cron job</strong> — failed allocations stay in <span className="badge">BOOKED</span>{' '}
-              status and need manual reassignment from the job page.
-            </p>
-          </Section>
-
           <Section title="Layer 1 — Eligibility filter (who CAN do this job)">
-            <p>For each new job, technicians are excluded if they:</p>
-            <ul className="list-disc ml-5 space-y-1 mt-1">
-              <li>Are inactive (<code>efr_status = 0</code>)</li>
-              <li>Have not been profile-verified (<code>is_technician_verified = 0</code>)</li>
-              <li>Are not in the customer&apos;s city (<code>tbl_easyfixer.efr_cityId</code>)</li>
-              <li>
-                <strong>Don&apos;t hold a deep-skill matching the job&apos;s service.</strong> Eligibility is now keyed off{' '}
-                <code>tbl_efr_deepskill_mapping</code> JOIN <code>tbl_deep_skill</code> — a tech qualifies if at
-                least one ACTIVE deep-skill they&apos;re mapped to lines up with the job&apos;s{' '}
-                <code>fk_service_catg_id</code> (and <code>fk_service_type_id</code> when set). The legacy CSV
-                substring match on <code>efr_service_category</code> is no longer used. Manage tech mappings under{' '}
-                <em>EasyFixers → Manage EasyFixers → (tech) → Skills</em>; manage the catalogue under{' '}
-                <em>Settings → Manage Deep Skills</em>.
-              </li>
-              <li>
-                <strong>Are not zone-mapped to the customer&apos;s pincode.</strong> Each tech is mapped to a single{' '}
-                <em>city-zone</em> (<code>efr_zone_city_id</code>); the customer pincode is resolved through{' '}
-                <code>pincode_firefox_city_mapping</code> → <code>tbl_zone_city_mapping</code> →{' '}
-                <code>tbl_zone_master</code>. If a tech&apos;s zone doesn&apos;t cover that pincode, they&apos;re out — even
-                if they live next door. Manage zones under <em>Easyfixers → Zones</em>.
-              </li>
-              <li>
-                Have already <strong>rejected or rescheduled</strong> off this exact job earlier (a row in{' '}
-                <code>scheduling_history</code> with a non-empty <code>reschedule_reason</code>).
-              </li>
-            </ul>
+            <ol className="list-decimal ml-5 space-y-1 mt-1">
+              <li>Inactive (<code>efr_status = 0</code>)</li>
+              <li>Profile Not verified (<code>is_technician_verified = 0</code>)</li>
+              <li>Already rejected or rescheduled off this exact job earlier (a row in <code>scheduling_history</code> with a non-empty <code>reschedule_reason</code>)</li>
+              <li>Don&apos;t hold a deep-skill matching the job&apos;s service</li>
+            </ol>
           </Section>
 
           <Section title="Layer 2 — Availability filter (who SHOULDN'T get more work right now)">
-            <p>From the L1 set, drop technicians who:</p>
-            <ul className="list-disc ml-5 space-y-1 mt-1">
-              <li>Already have <code>≥ Max Concurrent Jobs</code> active (status BOOKED / SCHEDULED / IN_PROGRESS).</li>
-              <li>Have a booking conflict on the same date + time slot.</li>
+            <ol className="list-decimal ml-5 space-y-1 mt-1">
+              <li>
+                Already have more than Max Concurrent Jobs active (status BOOKED / SCHEDULED / IN_PROGRESS)
+                <ul className="list-disc ml-5 mt-1">
+                  <li>Configurable &lsquo;Max Concurrent Jobs&rsquo; value</li>
+                </ul>
+              </li>
+              <li>Have a booking conflict on the same date + time slot</li>
+              <li>
+                Technicals available for Job Pincode
+                <div className="ml-5 mt-1">
+                  <div>Local: Easyfixer Pincode = Job Pincode</div>
+                  <div>
+                    Travel: Easyfixer Pincode within 100kms of Job Pincode
+                    <ul className="list-disc ml-5 mt-1">
+                      <li>Configurable Travel Kms</li>
+                    </ul>
+                  </div>
+                </div>
+              </li>
+            </ol>
+          </Section>
+
+          <Section title="Ranking what's left on below criteria (Potential Easyfixers):">
+            <ol className="list-decimal ml-5 space-y-1 mt-1">
+              <li>
+                Performance Score (A+: =&gt;95, A: =&gt;90, B: =&gt;80, C: =&gt;70, D: =&gt;60, E: &lt;60)
+                <ul className="list-disc ml-5 mt-1">
+                  <li>
+                    Rating (30% Weight)
+                    <ul className="list-disc ml-5 mt-1">
+                      <li>Configurable Default Value</li>
+                    </ul>
+                  </li>
+                  <li>TAT (20% Weight)</li>
+                  <li>SDA (Same Day Attempt) (20% Weight)</li>
+                </ul>
+              </li>
+              <li>Worked for Client earlier or not (10% Weight)</li>
+              <li>Worked for same Vertical or not (10% Weight)</li>
+              <li>Attendance Marked (10% Weight)</li>
+            </ol>
+          </Section>
+
+          <Section title="Sorting: Account Balance of Technicial (in Easyfixer table efr_balance)">
+            <div className="ml-5">
+              paid_by (customer): balance should be greater than 500
+              <ul className="list-disc ml-5 mt-1">
+                <li>paid_by will be NOT NULL (Mandatory)</li>
+                <li>Possible Values (Customer or NE)</li>
+              </ul>
+            </div>
+          </Section>
+
+          <Section title="">
+            <ul className="list-disc ml-5 space-y-1">
+              <li>
+                Not Accepting in 30mins, Reroute
+                <ul className="list-disc ml-5 mt-1">
+                  <li>Configurable Time</li>
+                </ul>
+              </li>
             </ul>
-            <p className="text-xs text-muted-foreground mt-1.5">
-              Caps are configured under <em>Advanced</em> below. There is no longer a hard distance cap — that role
-              is handled entirely by zone membership in L1.
-            </p>
-          </Section>
-
-          <Section title="Layer 3 — Composite score (rank what's left)">
-            <p>Each surviving technician gets a score in [0, 1]:</p>
-            <pre className="bg-white border rounded p-2 text-xs overflow-x-auto mt-1">
-{`score = (W_workload    × workload_score)
-      + (W_performance × performance_score)
-
-workload_score    = (maxJobs − activeJobs) / maxJobs
-performance_score = Σ (sub_proportion × sub_signal_score)
-                    over 10 performance signals (below)
-
-Built-in defaults: W_workload = 0.45, W_performance = 0.55`}
-            </pre>
-            <p>
-              Each top-level dimension W has its own row in <code>tbl_autoallocation_setting</code> — the two values
-              must <strong>sum to 1.0</strong>:
-            </p>
-            <ul className="list-disc ml-5 space-y-1 mt-1">
-              <li><strong>Workload:</strong> <code>workload_weight</code> (single value, e.g. <code>0.45</code>)</li>
-              <li><strong>Performance:</strong> <code>performance_weight</code> (single value, e.g. <code>0.55</code>)</li>
-            </ul>
-            <p className="mt-2">
-              Within <strong>Performance</strong>, 10 sub-weights act as <strong>PROPORTIONS</strong> that split
-              the dimension W across technician-quality signals — they must sum to <code>1.0</code> within the bucket:
-            </p>
-            <ul className="list-disc ml-5 space-y-1 mt-1">
-              <li><code>margin_weight</code> — profit margin on completed jobs</li>
-              <li><code>ota_weight</code> — on-time arrival rate</li>
-              <li><code>sda_weight</code> — same-day attempt rate</li>
-              <li><code>tat_weight</code> — turnaround time vs expected</li>
-              <li><code>estimate_tat_weight</code> — estimate submission TAT</li>
-              <li><code>phone_picked_weight</code> — customer phone-pickup rate</li>
-              <li><code>rating_weight</code> — 90-day customer rating (default 3.0 if no ratings)</li>
-              <li><code>cancellation_weight</code> — cancelled / (completed + cancelled)</li>
-              <li><code>escalation_weight</code> — escalation rate</li>
-              <li><code>estimate_rejection_weight</code> — estimate-rejection rate</li>
-            </ul>
-            <p className="mt-2">Each sub-weight&apos;s contribution = <code>W_performance × proportion</code> (e.g. <code>0.55 × 0.15 = 0.0825</code>).</p>
-            <p className="text-xs text-muted-foreground mt-2">
-              Per-signal SCORING (computing each tech&apos;s margin / OTA / SDA / etc. separately) is progressively being
-              wired into the engine — the proportions are stored + tunable now so they can shape behaviour the moment each
-              signal lands. As a safety net, the engine still normalises dimension Ws to 1.0 at runtime, so if the two
-              values drift slightly the rank order stays correct. Stats are batched regardless of how many technicians
-              pass L1, so even saturated cities score in ~2 s against the full 384 k-row job table.
-            </p>
-          </Section>
-
-          <Section title="Assignment + side-effects">
-            <p>
-              The top-ranked technician is assigned via the same code path as a manual assignment from the job page:
-            </p>
-            <ul className="list-disc ml-5 space-y-1 mt-1">
-              <li>Single transaction: <code>UPDATE tbl_job</code> (sets <code>fk_easyfixter_id</code>, scheduled time, status BOOKED → SCHEDULED) + <code>INSERT scheduling_history</code>.</li>
-              <li>After commit (fire-and-forget): <code>TechAssigned</code> webhook fires to subscribed clients (Decathlon etc.).</li>
-              <li>FCM push lands on the chosen technician&apos;s device.</li>
-            </ul>
-          </Section>
-
-          <Section title="Manual reassignment + Top-10 list">
-            <p>
-              When ops click <em>Reassign</em> on a job, the same engine runs in <strong>real time</strong> and returns
-              the top 10 technicians with their scores, workload, rating and completion ratio. Ops can pick the recommended
-              technician, choose any of the other 9, or fall back to the manual searchable picker (which shows the full
-              eligible list for edge cases).
-            </p>
-          </Section>
-
-          <Section title="What if it can't assign?">
-            <p>
-              If no technician clears L1 + L2, OR the assignment errors before being persisted, the engine sends an email
-              to the address configured in <em>Failure Notification Email</em> below. The job stays in BOOKED for manual
-              triage. Once the assignment is saved in the DB, no further notifications fire — downstream webhook + FCM
-              delivery have their own retry / DLQ handling.
-            </p>
-          </Section>
-
-          <Section title="Per-client overrides">
-            <p>
-              Every setting on this page resolves <code>per-client override → global default → built-in fallback</code>.
-              Switch the <em>Scope</em> picker above to a specific client to view (or override) just that client&apos;s
-              behaviour without affecting anyone else. Reads are realtime — toggling here applies to the very next job
-              created.
-            </p>
           </Section>
         </CardContent>
       )}
@@ -752,8 +735,21 @@ function stringify(v: unknown, type: Setting['data_type']): string {
  *   running_frequency → "Running Frequency"
  *   auto_assign_failure_email → "Auto Assign Failure Email"
  *   tat_service_catg_tier → "Tat Service Catg Tier"
+ *
+ * Some keys have a friendlier human label that doesn't fall out of the
+ * snake/Pascal → Title Case rule. KEY_LABEL_OVERRIDES wins over titleCase
+ * so we can rename in the UI without renaming the DB key (which would
+ * break legacy services that read by exact-string match).
  */
+const KEY_LABEL_OVERRIDES: Record<string, string> = {
+  // Survivor of the AllowMessageCustomer / NotAllowedMessageCustomer
+  // duplicate. Legacy seed default = 'Yes'. Renamed UI-side only to
+  // describe what the toggle actually does.
+  AllowMessageCustomer: 'Notify Client on Technician Allocation?',
+};
+
 function titleCase(key: string): string {
+  if (KEY_LABEL_OVERRIDES[key]) return KEY_LABEL_OVERRIDES[key];
   return key
     .replace(/[_-]+/g, ' ')
     .split(' ')
