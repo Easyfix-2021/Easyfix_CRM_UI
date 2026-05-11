@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Search, ChevronLeft, ChevronRight, Eye,
   CalendarClock, PlayCircle, CheckCircle2, CalendarCheck,
+  UserPlus, RefreshCw,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -13,6 +14,7 @@ import { useMe } from '@/lib/auth-context';
 import { formatDate, formatEasyfixerName, statusColorClass, statusLabel } from '@/lib/utils';
 import { TABS } from '@/lib/job-tabs';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
+import { AssignTechnicianModal, type AssignMode } from '@/components/job/AssignTechnicianModal';
 import { useSort, SortHeader } from '@/lib/use-sort';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 
@@ -148,6 +150,13 @@ export default function MyOrdersPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
+
+  // Assign / Reassign Technician modal — driven by row icon clicks. Shared
+  // component (components/job/AssignTechnicianModal.tsx); same backend
+  // pipeline as on-create auto-assign.
+  const [assignModal, setAssignModal] = useState<{ open: boolean; jobId: number | null; mode: AssignMode }>({
+    open: false, jobId: null, mode: 'assign',
+  });
 
   // Modal state + URL deep-link for ?view=<id>.
   const [modal, setModal] = useState<{ open: boolean; mode: JobModalMode; id?: number }>({ open: false, mode: 'create' });
@@ -326,25 +335,55 @@ export default function MyOrdersPage() {
                         </button>
                       )}
                       {j.job_status === 0 && (
-                        <button
-                          type="button"
-                          onClick={() => openView(j.job_id)}
-                          className="inline-flex items-center gap-1 text-sky-700 text-xs hover:underline"
-                          title="Schedule — opens modal to assign a technician"
-                        >
-                          <CalendarClock className="h-3.5 w-3.5" />
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => openView(j.job_id)}
+                            className="inline-flex items-center gap-1 text-sky-700 text-xs hover:underline"
+                            title="Schedule — opens modal to assign a technician"
+                          >
+                            <CalendarClock className="h-3.5 w-3.5" />
+                          </button>
+                          {/*
+                            * Assign Technician — opens the layered-ranking
+                            * modal directly (skips the JobModal). Same
+                            * backend pipeline as on-create auto-assign.
+                            */}
+                          <button
+                            type="button"
+                            onClick={() => setAssignModal({ open: true, jobId: j.job_id, mode: 'assign' })}
+                            className="inline-flex items-center gap-1 text-indigo-700 text-xs hover:underline"
+                            title="Assign Technician — pick from ranked list"
+                          >
+                            <UserPlus className="h-3.5 w-3.5" />
+                          </button>
+                        </>
                       )}
                       {j.job_status === 1 && (
-                        <button
-                          type="button"
-                          disabled={rowBusy === j.job_id}
-                          onClick={() => quickStatusChange(j.job_id, 2, 'Check in')}
-                          className="inline-flex items-center gap-1 text-amber-700 text-xs hover:underline disabled:opacity-50"
-                          title="Check-In — technician on-site, move to In Progress"
-                        >
-                          <PlayCircle className="h-3.5 w-3.5" />
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            disabled={rowBusy === j.job_id}
+                            onClick={() => quickStatusChange(j.job_id, 2, 'Check in')}
+                            className="inline-flex items-center gap-1 text-amber-700 text-xs hover:underline disabled:opacity-50"
+                            title="Check-In — technician on-site, move to In Progress"
+                          >
+                            <PlayCircle className="h-3.5 w-3.5" />
+                          </button>
+                          {/*
+                            * Reassign Technician — same modal, mode=reassign.
+                            * Backend candidates query already excludes anyone
+                            * who's previously rejected/rescheduled this job.
+                            */}
+                          <button
+                            type="button"
+                            onClick={() => setAssignModal({ open: true, jobId: j.job_id, mode: 'reassign' })}
+                            className="inline-flex items-center gap-1 text-indigo-700 text-xs hover:underline"
+                            title="Reassign Technician — pick a different tech from the ranked list"
+                          >
+                            <RefreshCw className="h-3.5 w-3.5" />
+                          </button>
+                        </>
                       )}
                       {(j.job_status === 2 || j.job_status === 20) && (
                         <button
@@ -372,6 +411,14 @@ export default function MyOrdersPage() {
         jobId={modal.id}
         onClose={closeModal}
         onSaved={() => { cacheRef.current.clear(); load(false, true); }}
+      />
+
+      <AssignTechnicianModal
+        open={assignModal.open}
+        jobId={assignModal.jobId}
+        mode={assignModal.mode}
+        onClose={() => setAssignModal((m) => ({ ...m, open: false }))}
+        onAssigned={() => { cacheRef.current.clear(); load(false, true); }}
       />
 
       {data && data.total > PAGE_SIZE && (

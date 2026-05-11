@@ -585,21 +585,49 @@ export default function AutoAllocationPage() {
               onToggle={() => setShowAdvanced((s) => !s)}
             >
               <div className="divide-y">
-                {advanced.map((s) => (
-                  <div key={s.id} className="py-3 flex flex-col md:flex-row md:items-center md:gap-4 gap-2">
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium">{titleCase(s.key)}</div>
-                      {s.description && (
-                        <p className="text-xs text-muted-foreground whitespace-pre-line mt-0.5">{s.description}</p>
-                      )}
+                {advanced.map((s) => {
+                  /*
+                   * JSON values reflow to a vertical layout (label/description
+                   * stacked ABOVE the textarea + Save button) because the
+                   * formatted JSON regularly grows past the 18rem column the
+                   * other settings use, and a horizontal split would cramp
+                   * both the label and the structured value. Non-JSON
+                   * settings keep the side-by-side layout (unchanged).
+                   */
+                  const isJson = s.data_type === 'json';
+                  if (isJson) {
+                    return (
+                      <div key={s.id} className="py-3 flex flex-col gap-2">
+                        <div>
+                          <div className="text-sm font-medium">{titleCase(s.key)}</div>
+                          {s.description && (
+                            <p className="text-xs text-muted-foreground whitespace-pre-line mt-0.5">{s.description}</p>
+                          )}
+                        </div>
+                        <div className="flex items-start gap-2">
+                          <ValueInput setting={s} value={draft[s.id] ?? ''}
+                            onChange={(v) => setDraft((d) => ({ ...d, [s.id]: v }))} />
+                          <SaveBtn setting={s} draft={draft} scope={scope} saving={saving} onSave={saveValue} onClear={clearOverride} compact />
+                        </div>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div key={s.id} className="py-3 flex flex-col md:flex-row md:items-center md:gap-4 gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium">{titleCase(s.key)}</div>
+                        {s.description && (
+                          <p className="text-xs text-muted-foreground whitespace-pre-line mt-0.5">{s.description}</p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 md:w-[18rem] shrink-0">
+                        <ValueInput setting={s} value={draft[s.id] ?? ''}
+                          onChange={(v) => setDraft((d) => ({ ...d, [s.id]: v }))} />
+                        <SaveBtn setting={s} draft={draft} scope={scope} saving={saving} onSave={saveValue} onClear={clearOverride} compact />
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2 md:w-[18rem] shrink-0">
-                      <ValueInput setting={s} value={draft[s.id] ?? ''}
-                        onChange={(v) => setDraft((d) => ({ ...d, [s.id]: v }))} />
-                      <SaveBtn setting={s} draft={draft} scope={scope} saving={saving} onSave={saveValue} onClear={clearOverride} compact />
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </Collapsible>
           )}
@@ -631,76 +659,90 @@ function HowItWorks({ open, onToggle }: { open: boolean; onToggle: () => void })
       </button>
       {open && (
         <CardContent className="space-y-4 text-[13px] text-foreground/90 leading-relaxed">
-          <Section title="Layer 1 — Eligibility filter (who CAN do this job)">
+          <Section title="Layer 1 — Eligibility Filter (who CAN'T do this job)">
             <ol className="list-decimal ml-5 space-y-1 mt-1">
-              <li>Inactive (<code>efr_status = 0</code>)</li>
-              <li>Profile Not verified (<code>is_technician_verified = 0</code>)</li>
-              <li>Already rejected or rescheduled off this exact job earlier (a row in <code>scheduling_history</code> with a non-empty <code>reschedule_reason</code>)</li>
-              <li>Don&apos;t hold a deep-skill matching the job&apos;s service</li>
+              <li>Remove Inactive Technicians</li>
+              <li>Remove Technicians already rejected or rescheduled off this exact job earlier</li>
+              <li>Remove those who don&apos;t hold a &ldquo;Service Category&rdquo; matching the job&apos;s service</li>
             </ol>
           </Section>
 
-          <Section title="Layer 2 — Availability filter (who SHOULDN'T get more work right now)">
+          <Section title="Layer 2 — Availability Filter (who SHOULDN'T get more work right now)">
             <ol className="list-decimal ml-5 space-y-1 mt-1">
+              <li>Have less than Max Concurrent Jobs allowed</li>
+              <li>Does not have a Booking Conflict on the same Date and Time Slot</li>
               <li>
-                Already have more than Max Concurrent Jobs active (status BOOKED / SCHEDULED / IN_PROGRESS)
-                <ul className="list-disc ml-5 mt-1">
-                  <li>Configurable &lsquo;Max Concurrent Jobs&rsquo; value</li>
-                </ul>
-              </li>
-              <li>Have a booking conflict on the same date + time slot</li>
-              <li>
-                Technicals available for Job Pincode
-                <div className="ml-5 mt-1">
-                  <div>Local: Easyfixer Pincode = Job Pincode</div>
-                  <div>
-                    Travel: Easyfixer Pincode within 100kms of Job Pincode
-                    <ul className="list-disc ml-5 mt-1">
-                      <li>Configurable Travel Kms</li>
-                    </ul>
-                  </div>
+                Technicians available for Job Pincode with or without Travel
+                <div className="ml-5 mt-1 space-y-0.5">
+                  <div>A) <strong>Local</strong>: Technician&apos;s Pincode is same as Job Pincode</div>
+                  <div>B) <strong>Travel</strong>: Technician&apos;s Pincode is within the Job Zone</div>
                 </div>
               </li>
             </ol>
-          </Section>
-
-          <Section title="Ranking what's left on below criteria (Potential Easyfixers):">
-            <ol className="list-decimal ml-5 space-y-1 mt-1">
-              <li>
-                Performance Score (A+: =&gt;95, A: =&gt;90, B: =&gt;80, C: =&gt;70, D: =&gt;60, E: &lt;60)
-                <ul className="list-disc ml-5 mt-1">
-                  <li>
-                    Rating (30% Weight)
-                    <ul className="list-disc ml-5 mt-1">
-                      <li>Configurable Default Value</li>
-                    </ul>
-                  </li>
-                  <li>TAT (20% Weight)</li>
-                  <li>SDA (Same Day Attempt) (20% Weight)</li>
-                </ul>
-              </li>
-              <li>Worked for Client earlier or not (10% Weight)</li>
-              <li>Worked for same Vertical or not (10% Weight)</li>
-              <li>Attendance Marked (10% Weight)</li>
-            </ol>
-          </Section>
-
-          <Section title="Sorting: Account Balance of Technicial (in Easyfixer table efr_balance)">
-            <div className="ml-5">
-              paid_by (customer): balance should be greater than 500
-              <ul className="list-disc ml-5 mt-1">
-                <li>paid_by will be NOT NULL (Mandatory)</li>
-                <li>Possible Values (Customer or NE)</li>
-              </ul>
+            <div className="ml-5 mt-2 text-foreground/75 italic">
+              If list size is less than 5, reiterate Layers (1 and 2) with Incremental Configs.
             </div>
           </Section>
 
-          <Section title="">
-            <ul className="list-disc ml-5 space-y-1">
+          <div className="text-[12px] text-blue-900/80 italic">
+            → All Technicians filtered till here will be in the List, sorted on the ranking below.
+          </div>
+
+          <Section title="Layer 3 — Scoring and Ranking on Performance Score (Technician Quality Index)">
+            <div className="ml-5 mb-2">
+              <span className="font-medium">Technician Quality Index:</span>{' '}
+              A+: &ge;95, A: &ge;90, B: &ge;80, C: &ge;70, D: &ge;60, E: &lt;60
+            </div>
+            <ol className="list-decimal ml-5 space-y-1 mt-1">
               <li>
-                Not Accepting in 30mins, Reroute
+                <strong>Past Performance (60%)</strong>
                 <ul className="list-disc ml-5 mt-1">
-                  <li>Configurable Time</li>
+                  <li>TAT: 30%</li>
+                  <li>SDA: 40%</li>
+                  <li>Rating: 30%</li>
+                </ul>
+              </li>
+              <li>
+                <strong>Experience and Preference (40%)</strong>
+                <ul className="list-disc ml-5 mt-1">
+                  <li>Marked Attendance</li>
+                  <li>Matching Deep Skills</li>
+                  <li>Worked for the Client</li>
+                  <li>Worked for the Vertical</li>
+                  <li>Worked for the same Customer</li>
+                  <li>Worked for the same Pincode</li>
+                </ul>
+              </li>
+            </ol>
+          </Section>
+
+          <Section title="Dispatch — Selection &amp; Notification">
+            <ul className="list-disc ml-5 space-y-1 mt-1">
+              <li>
+                From the ranked list, select multiple technicians and assign
+                <ul className="list-disc ml-5 mt-1">
+                  <li>Push Notification and WhatsApp message will be sent to all selected technicians</li>
+                  <li>
+                    Wait for a technician to accept within the configured window
+                    <ul className="list-disc ml-5 mt-1">
+                      <li>
+                        Send Push Notification up to 3 times in the configured window
+                        <div className="ml-5 mt-1 text-foreground/75">
+                          Example — configured time = 30 mins:
+                          <div className="ml-3">1st Notification: Immediately</div>
+                          <div className="ml-3">2nd Notification: After 10 mins</div>
+                          <div className="ml-3">3rd Notification: After 20 mins</div>
+                        </div>
+                      </li>
+                      <li>
+                        After the window expires
+                        <ul className="list-disc ml-5 mt-1">
+                          <li>Mark the technicians as not accepted</li>
+                          <li>Trigger the flow again from Layer 1</li>
+                        </ul>
+                      </li>
+                    </ul>
+                  </li>
                 </ul>
               </li>
             </ul>
@@ -746,6 +788,11 @@ const KEY_LABEL_OVERRIDES: Record<string, string> = {
   // duplicate. Legacy seed default = 'Yes'. Renamed UI-side only to
   // describe what the toggle actually does.
   AllowMessageCustomer: 'Notify Client on Technician Allocation?',
+  // Acronym preservation: titleCase would render "Default Tat Score" /
+  // "Default Sda Score" — uppercasing matches how operators read these.
+  default_tat_score:    'Default TAT Score',
+  default_sda_score:    'Default SDA Score',
+  tat_service_catg_tier:'TAT Service Catg Tier',
 };
 
 function titleCase(key: string): string {
@@ -1012,16 +1059,80 @@ function ValueInput({
     return <Input type="number" step="0.01" value={value} onChange={(e) => onChange(e.target.value)} className="flex-1" />;
   if (setting.data_type === 'time')
     return <Input type="time" value={value} onChange={(e) => onChange(e.target.value)} className="flex-1" />;
-  if (setting.data_type === 'json')
-    return (
+  if (setting.data_type === 'json') return <JsonValueInput value={value} onChange={onChange} />;
+  return <Input value={value} onChange={(e) => onChange(e.target.value)} className="flex-1" />;
+}
+
+/*
+ * JSON value input.
+ *
+ * Behaviour:
+ *   - On first render, parse the value and re-stringify with 2-space indent
+ *     so the textarea opens with a readable, formatted structure rather
+ *     than a single-line minified blob.
+ *   - The browser's native textarea has a resize handle in the bottom-right
+ *     corner. Native handles support double-click to "auto-fit" on Firefox;
+ *     for Chrome/Safari (no native auto-fit), we detect the dblclick on the
+ *     textarea body and grow the height to fit the full content.
+ *   - User edits remain raw text — we only re-prettify on explicit click of
+ *     the "Format" button so an in-flight invalid edit isn't clobbered.
+ */
+function JsonValueInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const taRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // Pretty-print on mount + whenever an external value lands as a single
+  // line (e.g. a fresh save round-trip). We only reformat if it parses
+  // cleanly AND was previously single-line — never overwrite an in-flight
+  // mid-edit value.
+  useEffect(() => {
+    if (!value || value.includes('\n')) return;
+    try {
+      const parsed = JSON.parse(value);
+      onChange(JSON.stringify(parsed, null, 2));
+    } catch { /* leave as-is — user is mid-edit on invalid JSON */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function autoFit() {
+    const el = taRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight + 2, 600)}px`;
+  }
+
+  function format() {
+    if (!value) return;
+    try {
+      onChange(JSON.stringify(JSON.parse(value), null, 2));
+      // re-fit on the next paint after onChange propagates the value back.
+      setTimeout(autoFit, 0);
+    } catch {
+      // invalid JSON — leave the input untouched.
+    }
+  }
+
+  return (
+    <div className="flex-1 flex flex-col gap-1">
       <textarea
-        rows={2}
+        ref={taRef}
+        rows={4}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="flex-1 rounded-md border border-input bg-background px-3 py-1 text-xs font-mono shadow-sm"
+        onDoubleClick={autoFit}
+        className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs font-mono shadow-sm resize-y leading-relaxed"
+        spellCheck={false}
+        title="Double-click to auto-fit height to content"
       />
-    );
-  return <Input value={value} onChange={(e) => onChange(e.target.value)} className="flex-1" />;
+      <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+        <span>Double-click the box to auto-fit height. JSON only.</span>
+        <button type="button" onClick={format}
+          className="text-primary hover:underline disabled:text-muted-foreground"
+          disabled={!value}>
+          Format
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function SaveBtn({

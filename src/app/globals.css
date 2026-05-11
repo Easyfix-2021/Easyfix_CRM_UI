@@ -139,3 +139,35 @@
     cursor: pointer;
   }
 }
+
+/*
+ * .thin-scroll — auto-hiding-feeling scrollbar utility.
+ *
+ * The default macOS / Chrome scrollbar is 15px wide and (when the system
+ * setting is "always show") never disappears. On a data-dense modal like
+ * Assign Technician this leaves a permanent grey strip cutting through the
+ * UI. `.thin-scroll` makes the bar 6px and gives it low-contrast colours
+ * by default, brightening only when the user hovers the scrollable area.
+ *
+ * Firefox uses `scrollbar-width: thin`; Chrome / Safari use the
+ * non-standard `::-webkit-scrollbar` pseudo. Both fall back to the OS
+ * default on browsers that respect neither.
+ */
+.thin-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 116, 139, 0.25) transparent;
+}
+.thin-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.thin-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.thin-scroll::-webkit-scrollbar-thumb {
+  background-color: rgba(100, 116, 139, 0.25);
+  border-radius: 9999px;
+}
+.thin-scroll:hover::-webkit-scrollbar-thumb {
+  background-color: rgba(100, 116, 139, 0.55);
+}
