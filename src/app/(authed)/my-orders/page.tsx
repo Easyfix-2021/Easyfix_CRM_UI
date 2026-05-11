@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
 import { api } from '@/lib/api';
 import { useMe } from '@/lib/auth-context';
+import { actionFlags } from '@/lib/permissions';
 import { formatDate, formatEasyfixerName, statusColorClass, statusLabel } from '@/lib/utils';
 import { TABS } from '@/lib/job-tabs';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
@@ -66,6 +67,17 @@ const PAGE_SIZE = 50;
 
 export default function MyOrdersPage() {
   const { me } = useMe();
+  // Permission gating for the per-row action icons. View (Eye) stays open
+  // for everyone with access to this screen — it's read-only. Every other
+  // icon corresponds to a mutation and gets gated. Granular keys mirror
+  // legacy CRM convention: assign/reassign/status are three distinct
+  // permissions because operations teams often grant some but not others.
+  const canJob = actionFlags(me, [
+    'isJobConfirm',       // Confirm unconfirmed (status 9 → 0)
+    'isJobAssign',        // Assign / Schedule (status 0 → 1)
+    'isJobReassign',      // Reassign already-scheduled (status 1)
+    'isJobStatusChange',  // Check-In / Check-Out / Completion
+  ]);
   // Read the URL's ?tab=<slug> synchronously so the FIRST load fires with the
   // right filter. Previously tab initialised to 'all', and a follow-up
   // useEffect read the URL after mount — so the initial fetch returned every
@@ -324,7 +336,7 @@ export default function MyOrdersPage() {
                           We mirror that: click the icon → JobModal opens; the
                           action bar there shows Edit + Confirm & Schedule so
                           ops can fill any missing fields before promoting. */}
-                      {j.job_status === 9 && (
+                      {j.job_status === 9 && canJob.isJobConfirm && (
                         <button
                           type="button"
                           onClick={() => openConfirm(j.job_id)}
@@ -334,7 +346,7 @@ export default function MyOrdersPage() {
                           <CalendarCheck className="h-3.5 w-3.5" />
                         </button>
                       )}
-                      {j.job_status === 0 && (
+                      {j.job_status === 0 && canJob.isJobAssign && (
                         <>
                           <button
                             type="button"
@@ -361,31 +373,35 @@ export default function MyOrdersPage() {
                       )}
                       {j.job_status === 1 && (
                         <>
-                          <button
-                            type="button"
-                            disabled={rowBusy === j.job_id}
-                            onClick={() => quickStatusChange(j.job_id, 2, 'Check in')}
-                            className="inline-flex items-center gap-1 text-amber-700 text-xs hover:underline disabled:opacity-50"
-                            title="Check-In — technician on-site, move to In Progress"
-                          >
-                            <PlayCircle className="h-3.5 w-3.5" />
-                          </button>
+                          {canJob.isJobStatusChange && (
+                            <button
+                              type="button"
+                              disabled={rowBusy === j.job_id}
+                              onClick={() => quickStatusChange(j.job_id, 2, 'Check in')}
+                              className="inline-flex items-center gap-1 text-amber-700 text-xs hover:underline disabled:opacity-50"
+                              title="Check-In — technician on-site, move to In Progress"
+                            >
+                              <PlayCircle className="h-3.5 w-3.5" />
+                            </button>
+                          )}
                           {/*
                             * Reassign Technician — same modal, mode=reassign.
                             * Backend candidates query already excludes anyone
                             * who's previously rejected/rescheduled this job.
                             */}
-                          <button
-                            type="button"
-                            onClick={() => setAssignModal({ open: true, jobId: j.job_id, mode: 'reassign' })}
-                            className="inline-flex items-center gap-1 text-indigo-700 text-xs hover:underline"
-                            title="Reassign Technician — pick a different tech from the ranked list"
-                          >
-                            <RefreshCw className="h-3.5 w-3.5" />
-                          </button>
+                          {canJob.isJobReassign && (
+                            <button
+                              type="button"
+                              onClick={() => setAssignModal({ open: true, jobId: j.job_id, mode: 'reassign' })}
+                              className="inline-flex items-center gap-1 text-indigo-700 text-xs hover:underline"
+                              title="Reassign Technician — pick a different tech from the ranked list"
+                            >
+                              <RefreshCw className="h-3.5 w-3.5" />
+                            </button>
+                          )}
                         </>
                       )}
-                      {(j.job_status === 2 || j.job_status === 20) && (
+                      {(j.job_status === 2 || j.job_status === 20) && canJob.isJobStatusChange && (
                         <button
                           type="button"
                           disabled={rowBusy === j.job_id}

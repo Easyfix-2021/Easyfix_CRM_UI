@@ -18,6 +18,8 @@ import { cn, formatDate, formatEasyfixerName, statusColorClass, statusLabel } fr
 import { TABS, type TabDef, type CountsResp, countFor } from '@/lib/job-tabs';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { useSort, SortHeader } from '@/lib/use-sort';
+import { useMe } from '@/lib/auth-context';
+import { actionFlags } from '@/lib/permissions';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 
 type JobRow = {
@@ -42,6 +44,12 @@ const PAGE_SIZE = 50;
 
 export default function JobsPage() {
   const lk = useLookup();
+  const { me } = useMe();
+  // Permission gating. View remains open; create + bulk upload require
+  // explicit actions. The View-modal opened on row-click handles its own
+  // internal Edit/Save buttons separately — gate those when the modal
+  // ships a permission-aware refactor.
+  const can = actionFlags(me, ['isJobAddNew', 'isJobUpload', 'isJobEdit']);
   const [tab, setTab] = useState('all');
   // Counts are fetched once on mount + re-fetched after any save from the
   // modal (so badges stay fresh). Null = still loading; populated = ready.
@@ -234,10 +242,14 @@ export default function JobsPage() {
           <p className="text-sm text-muted-foreground">{data?.total.toLocaleString() ?? '…'} matching jobs</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" asChild>
-            <Link href="/jobs/upload"><Upload className="h-4 w-4 mr-1" /> Upload Excel</Link>
-          </Button>
-          <Button onClick={openCreate}><Plus className="h-4 w-4 mr-1" /> Add New Job</Button>
+          {can.isJobUpload && (
+            <Button variant="outline" asChild>
+              <Link href="/jobs/upload"><Upload className="h-4 w-4 mr-1" /> Upload Excel</Link>
+            </Button>
+          )}
+          {can.isJobAddNew && (
+            <Button onClick={openCreate}><Plus className="h-4 w-4 mr-1" /> Add New Job</Button>
+          )}
         </div>
       </div>
 

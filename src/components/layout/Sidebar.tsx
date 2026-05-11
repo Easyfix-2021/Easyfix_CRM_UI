@@ -23,8 +23,13 @@ import { api } from '@/lib/api';
  *      still see the item and know it's WIP.
  *   2. Icon mapping — legacy stores Font Awesome class names ("fa-home");
  *      we map the top-level parents to lucide icons. Sub-items use a bullet.
- *   3. Role filter — the DB doesn't encode per-role visibility, so we keep
- *      a hardcoded allowlist here by parent menu_name.
+ *   3. Permission filter — driven by `me.permissions.menuIds` (resolved
+ *      server-side from `tbl_role.menu_ids`, matching the legacy CRM
+ *      LoginAction.java session map). A menu (parent OR child) is visible
+ *      iff its `menu_id` appears in the allowlist. Parents with no visible
+ *      children but whose own id IS in menuIds still render (legacy
+ *      parity — the legacy `Navigation.vm` iterates the menuList without
+ *      pruning empty parents).
  *   4. Accordion behaviour — only one parent open at a time (the one whose
  *      child matches the current route, or the one the user clicked last).
  */
@@ -99,6 +104,13 @@ const URL_MAP: Record<string, string> = {
   'city':                  '/settings/cities',
   'deepSkillTable':        '/settings/deep-skills',
   'manageAutoAllocations': '/settings/auto-allocation',
+  // Manage Users (legacy `user`): internal CRM staff. Lives under Settings in
+  // the new UI even though the legacy CRM had it at the top-level — keeps the
+  // new sidebar focused on the operational verbs (Jobs, My Orders, …) and
+  // shoves the master-data verbs into Settings consistently.
+  'user':                  '/settings/manage-users',
+  // Manage Roles (legacy `usertype`): tbl_role rows + group classification.
+  'usertype':              '/settings/manage-roles',
   // My Orders sub-menus (legacy CRM): each tbl_menu row's `url` is the full
   // `dashboardChecking?enumDesc=<value>` string, so these keys match verbatim.
   // Targets point at the distinct /my-orders route — that page scopes the
@@ -114,21 +126,44 @@ const URL_MAP: Record<string, string> = {
   'dashboardChecking?enumDesc=PendingForCheckout':        '/my-orders?tab=audit-complete',
 };
 
-// Top-level parent → lucide icon + role rules. Keyed by menu_name so DB
-// changes don't break us as long as the canonical names stay stable.
-const PARENT_META: Record<string, { icon: LucideIcon; allow?: string[]; group?: string[] }> = {
+/*
+ * Top-level menu names the new CRM deliberately re-homes elsewhere — they
+ * never render as standalone sidebar items even if they're in the user's
+ * menu_ids allowlist. Their children (if any) are still reachable through
+ * the destination page noted in the comment.
+ *
+ *   'User' → folded into Settings → Manage Users / Manage Roles. The
+ *            legacy CRM had User as its own top-level dropdown; the new
+ *            CRM groups all master-data management under Settings for
+ *            visual consistency.
+ *
+ * This is a UX consolidation, NOT a permission decision — the underlying
+ * role still owns those menu_ids; we just don't surface the parent.
+ */
+const SUPPRESSED_TOP_LEVEL = new Set<string>(['User']);
+
+// Top-level parent → lucide icon. Keyed by menu_name so DB changes don't
+// break us as long as the canonical names stay stable.
+//
+// Role-based visibility used to live here as `allow` / `group` arrays. That
+// hardcoded model has been retired — visibility is now driven entirely by
+// `me.permissions.menuIds` (resolved from `tbl_role.menu_ids` server-side),
+// matching the legacy CRM's session-map semantics. This map keeps ONLY the
+// icon assignment; a parent name missing from this map still renders but
+// without a custom icon (falls back to a circle bullet).
+const PARENT_META: Record<string, { icon: LucideIcon }> = {
   'Home':              { icon: Home },
-  'Jobs':              { icon: Briefcase, group: ['admin'] },
+  'Jobs':              { icon: Briefcase },
   'My Orders':         { icon: ShoppingBag },
-  'Customers':         { icon: Users, group: ['admin'] },
-  'Clients':           { icon: Building2, allow: ['Admin', 'Business Development', 'Project Manager', 'Technology team'] },
-  'EasyFixers':        { icon: UserCircle2, allow: ['Admin', 'Executive Supply', 'Admin Supply', 'Project Manager', 'Zonal Field Team', 'Solution expert', 'Technology team'] },
-  'Finance':           { icon: Coins, allow: ['Admin', 'Finance', 'Technology team'] },
-  'User':              { icon: User, allow: ['Admin', 'Technology team'] },
-  'Settings':          { icon: Settings, allow: ['Admin', 'Technology team'] },
-  'Report':            { icon: BarChart3, group: ['admin'] },
-  'Tracking':          { icon: MapPin, group: ['admin'] },
-  'Easyfixer Advance': { icon: Wallet, allow: ['Admin', 'Finance', 'Technology team'] },
+  'Customers':         { icon: Users },
+  'Clients':           { icon: Building2 },
+  'EasyFixers':        { icon: UserCircle2 },
+  'Finance':           { icon: Coins },
+  'User':              { icon: User },
+  'Settings':          { icon: Settings },
+  'Report':            { icon: BarChart3 },
+  'Tracking':          { icon: MapPin },
+  'Easyfixer Advance': { icon: Wallet },
 };
 
 function legacyToRoute(name: string, url: string | null | undefined): string {
@@ -186,15 +221,6 @@ function isRouteActive(pathname: string, currentSearch: string, href: string) {
   return true;
 }
 
-type RoleHint = { role_name: string; group: string } | undefined;
-function allowedFor(role: RoleHint, rule: { allow?: string[]; group?: string[] }): boolean {
-  const hasRule = (rule.allow && rule.allow.length) || (rule.group && rule.group.length);
-  if (!role) return !hasRule;
-  if (rule.allow && rule.allow.length) return rule.allow.includes(role.role_name);
-  if (rule.group && rule.group.length) return rule.group.includes(role.group);
-  return true;
-}
-
 export function Sidebar() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -219,16 +245,38 @@ export function Sidebar() {
       .catch(() => setMenus([]));
   }, []);
 
-  // Tree + per-role filter.
+  // Tree + per-user permission filter.
+  //
+  // The allowlist is `me.permissions.menuIds` (server-resolved from the
+  // user's role.menu_ids CSV, exactly as legacy LoginAction did). A menu
+  // is visible iff its menu_id appears in the allowlist — parents AND
+  // children are both gated this way.
+  //
+  // Edge cases (intentional, match legacy):
+  //   - empty menuIds  → empty sidebar (no fallthrough to "show everything")
+  //   - parent in list but children not → parent still renders (legacy
+  //     Navigation.vm doesn't prune empty parents either)
+  //   - children in list but parent not → child suppressed because we
+  //     iterate from roots; if the parent isn't visible the child can't be
+  //     reached via the accordion anyway
+  const allowedMenuIds = useMemo(
+    () => new Set(me?.permissions?.menuIds ?? []),
+    [me?.permissions?.menuIds],
+  );
+
   const tree = useMemo(() => {
     if (!menus) return [];
     const roots = buildTree(menus);
-    // Filter to only parents we have metadata for (role rules + icon). Unknown
-    // top-level names get hidden — protects the UI from DB surprises.
+    // Step 1: drop roots not in the allowlist.
+    // Step 2: prune each surviving root's children to only the allowed set.
     return roots
-      .filter((r) => !!PARENT_META[r.menu_name])
-      .filter((r) => allowedFor(me?.role, PARENT_META[r.menu_name] || {}));
-  }, [menus, me]);
+      .filter((r) => allowedMenuIds.has(r.menu_id))
+      .filter((r) => !SUPPRESSED_TOP_LEVEL.has(r.menu_name))
+      .map((r) => ({
+        ...r,
+        children: r.children.filter((c) => allowedMenuIds.has(c.menu_id)),
+      }));
+  }, [menus, allowedMenuIds]);
 
   /*
    * Accordion: exactly one parent open at a time. On initial render or route
@@ -285,7 +333,11 @@ export function Sidebar() {
         )}
         <ul className="px-3 space-y-0.5">
           {tree.map((parent) => {
-            const meta = PARENT_META[parent.menu_name];
+            // Fallback to Circle for any parent whose name isn't in PARENT_META.
+            // We removed the hard-filter so DB-driven parents can render even
+            // without curated icon metadata — visibility is decided by
+            // permissions, not by what we've hand-mapped here.
+            const meta = PARENT_META[parent.menu_name] ?? { icon: Circle };
             const Icon = meta.icon;
             const open = openParent === parent.menu_name;
             const Chev = open ? ChevronDown : ChevronRight;

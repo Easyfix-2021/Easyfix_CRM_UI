@@ -16,6 +16,7 @@ type ServiceCategory = { service_catg_id: number; service_catg_name: string };
 type ServiceType = { service_type_id: number; service_type_name: string; service_catg_id: number };
 type ClientLite = { client_id: number; client_name: string };
 type UserLite = { user_id: number; user_name: string; role_name?: string };
+type RoleLite = { role_id: number; role_name: string; role_desc: string | null; role_status: number; group: string };
 type EasyfixerLite = { efr_id: number; efr_name: string; efr_no: string; city_name: string | null; is_technician_verified: boolean };
 type Reason = { id: number; reason: string };
 type Bank = { id: number; bank_name: string };
@@ -76,6 +77,7 @@ export function useLookup() {
   const [serviceTypes, setServiceTypes] = useState<ServiceType[]>([]);
   const [clients, setClients] = useState<ClientLite[]>([]);
   const [adminUsers, setAdminUsers] = useState<UserLite[]>([]);
+  const [roles, setRoles] = useState<RoleLite[]>([]);
   const [easyfixers, setEasyfixers] = useState<EasyfixerLite[]>([]);
   const [banks, setBanks] = useState<Bank[]>([]);
   const [cancelReasons, setCancelReasons] = useState<Reason[]>([]);
@@ -90,6 +92,7 @@ export function useLookup() {
       try { setServiceTypes(await fetchOnce('svcType', () => api.get<ServiceType[]>('/shared/lookup/service-types'))); } catch {}
       try { setClients(await fetchOnce('clients', () => api.get<ClientLite[]>('/shared/lookup/clients', { limit: 500 }))); } catch {}
       try { setAdminUsers(await fetchOnce('admUsers', () => api.get<UserLite[]>('/shared/lookup/users', { roleGroup: 'admin', limit: 500 }))); } catch {}
+      try { setRoles(await fetchOnce('roles', () => api.get<RoleLite[]>('/shared/lookup/roles', { group: 'admin' }))); } catch {}
       try { setEasyfixers(await fetchOnce('efrs', () => api.get<EasyfixerLite[]>('/shared/lookup/easyfixers'))); } catch {}
       try { setBanks(await fetchOnce('banks', () => api.get<Bank[]>('/shared/lookup/banks'))); } catch {}
       try { setCancelReasons(await fetchOnce('cancelR', () => api.get<Reason[]>('/shared/lookup/cancel-reasons'))); } catch {}
@@ -99,7 +102,7 @@ export function useLookup() {
   }, []);
 
   return {
-    cities, states, serviceCategories, serviceTypes, clients, adminUsers, easyfixers, banks,
+    cities, states, serviceCategories, serviceTypes, clients, adminUsers, roles, easyfixers, banks,
     cancelReasons, rescheduleReasons, documentTypes,
     toOpts: {
       cities: cities.map<SelectOption>((c) => ({ value: c.city_id, label: c.city_name })),
@@ -108,6 +111,7 @@ export function useLookup() {
       serviceTypes: serviceTypes.map<SelectOption>((t) => ({ value: t.service_type_id, label: t.service_type_name })),
       clients: clients.map<SelectOption>((c) => ({ value: c.client_id, label: c.client_name })),
       adminUsers: adminUsers.map<SelectOption>((u) => ({ value: u.user_id, label: `${u.user_name} · ${u.role_name ?? ''}` })),
+      roles: roles.map<SelectOption>((r) => ({ value: r.role_id, label: r.role_name })),
       // Easyfixer label embeds mobile + city so the SearchSelect typeahead
       // matches on any of them: "Pune", "9810…", or the technician's name.
       // formatEasyfixerName expands the legacy "(T)" prefix → "Trainee · …"

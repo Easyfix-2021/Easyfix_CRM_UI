@@ -16,6 +16,8 @@ import {
 import { api, ApiError } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
 import { cn } from '@/lib/utils';
+import { useMe } from '@/lib/auth-context';
+import { actionFlags } from '@/lib/permissions';
 
 /*
  * Manage Deep Skills — Service Category → Service Type → Deep Skill → Options.
@@ -58,6 +60,10 @@ const PRESET_OPTIONS = ['Installation', 'Repair', 'Product Servicing'] as const;
 
 export default function DeepSkillsSettingsPage() {
   const lk = useLookup();
+  const { me } = useMe();
+  // Permission gating — `is{Entity}{Verb}` convention. Needs corresponding
+  // menu_action rows seeded + assigned to Admin via Manage Roles.
+  const can = actionFlags(me, ['isDeepSkillAddNew', 'isDeepSkillEdit']);
 
   // ─── Filter state ─────────────────────────────────────────────────
   const [categoryId, setCategoryId] = useState<string>('');
@@ -175,9 +181,11 @@ export default function DeepSkillsSettingsPage() {
             Service Category → Service Type → Deep Skill → Options. Used for technician skill mapping.
           </p>
         </div>
-        <Button onClick={openCreate} size="sm">
-          <Plus className="h-4 w-4 mr-1" /> Add New
-        </Button>
+        {can.isDeepSkillAddNew && (
+          <Button onClick={openCreate} size="sm">
+            <Plus className="h-4 w-4 mr-1" /> Add New
+          </Button>
+        )}
       </div>
 
       {/* Filter strip — mirrors legacy layout */}
@@ -275,18 +283,24 @@ export default function DeepSkillsSettingsPage() {
                       : <span className="inline-flex rounded-full bg-slate-100 text-slate-600 px-2 py-0.5 text-xs font-medium">Inactive</span>}
                   </td>
                   <td className="text-right whitespace-nowrap">
-                    <button onClick={() => openEdit(s)}
-                      className="text-primary hover:underline inline-flex items-center gap-1 text-xs mr-3"
-                      title="Edit deep skill">
-                      <Pencil className="h-3.5 w-3.5" />
-                    </button>
-                    {Number(s.status) ? (
-                      <button onClick={() => deactivate(s)}
-                        className="text-destructive hover:underline inline-flex items-center gap-1 text-xs"
-                        title="Deactivate">
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    ) : null}
+                    {can.isDeepSkillEdit ? (
+                      <>
+                        <button onClick={() => openEdit(s)}
+                          className="text-primary hover:underline inline-flex items-center gap-1 text-xs mr-3"
+                          title="Edit deep skill">
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                        {Number(s.status) ? (
+                          <button onClick={() => deactivate(s)}
+                            className="text-destructive hover:underline inline-flex items-center gap-1 text-xs"
+                            title="Deactivate">
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        ) : null}
+                      </>
+                    ) : (
+                      <span className="text-[10px] text-muted-foreground">view-only</span>
+                    )}
                   </td>
                 </tr>
               ))}

@@ -30,6 +30,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { api, ApiError } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useLookup } from '@/lib/use-lookup';
+import { useMe } from '@/lib/auth-context';
+import { actionFlags } from '@/lib/permissions';
 
 type Pincode = {
   pincode_id: number;
@@ -55,6 +57,11 @@ const PAGE_SIZE = 100;
 export default function ManagePincodesPage() {
   const confirm = useConfirm();
   const lookup  = useLookup();
+  const { me } = useMe();
+  // Permission gating — keys follow the legacy `is{Entity}{Verb}` convention.
+  // Production rollout requires seeding the corresponding rows in `menu_action`
+  // and assigning them to the Admin role via Manage Roles → action checkboxes.
+  const can = actionFlags(me, ['isPincodeAddNew', 'isPincodeEdit', 'isPincodeUpload']);
 
   const [items, setItems] = useState<Pincode[]>([]);
   const [total, setTotal] = useState(0);
@@ -165,15 +172,21 @@ export default function ManagePincodesPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={downloadTemplate}>
-            <Download className="size-4 mr-1" /> Template
-          </Button>
-          <Button variant="outline" onClick={() => setUploadOpen(true)}>
-            <Upload className="size-4 mr-1" /> Upload Excel
-          </Button>
-          <Button onClick={() => { setEditing(null); setModalOpen(true); }}>
-            <Plus className="size-4 mr-1" /> Add Pincode
-          </Button>
+          {can.isPincodeUpload && (
+            <Button variant="outline" onClick={downloadTemplate}>
+              <Download className="size-4 mr-1" /> Template
+            </Button>
+          )}
+          {can.isPincodeUpload && (
+            <Button variant="outline" onClick={() => setUploadOpen(true)}>
+              <Upload className="size-4 mr-1" /> Upload Excel
+            </Button>
+          )}
+          {can.isPincodeAddNew && (
+            <Button onClick={() => { setEditing(null); setModalOpen(true); }}>
+              <Plus className="size-4 mr-1" /> Add Pincode
+            </Button>
+          )}
         </div>
       </div>
 
@@ -350,12 +363,18 @@ export default function ManagePincodesPage() {
                     <StatusPill status={p.status} count={p.active_efr_count} />
                   </td>
                   <td className="!text-right">
-                    <Button size="sm" variant="ghost" onClick={() => { setEditing(p); setModalOpen(true); }}>
-                      <Pencil className="size-3.5" />
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => handleDelete(p)}>
-                      <Trash2 className="size-3.5 text-red-600" />
-                    </Button>
+                    {can.isPincodeEdit ? (
+                      <>
+                        <Button size="sm" variant="ghost" onClick={() => { setEditing(p); setModalOpen(true); }}>
+                          <Pencil className="size-3.5" />
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => handleDelete(p)}>
+                          <Trash2 className="size-3.5 text-red-600" />
+                        </Button>
+                      </>
+                    ) : (
+                      <span className="text-[10px] text-muted-foreground">view-only</span>
+                    )}
                   </td>
                 </tr>
               ))}

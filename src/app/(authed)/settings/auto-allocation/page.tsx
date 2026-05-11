@@ -10,6 +10,8 @@ import { SearchSelect } from '@/components/ui/search-select';
 import { api, ApiError } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
 import { cn } from '@/lib/utils';
+import { useMe } from '@/lib/auth-context';
+import { hasAction } from '@/lib/permissions';
 
 /*
  * Manage Auto Allocations
@@ -1149,6 +1151,19 @@ function SaveBtn({
   const dirty = (draft[setting.id] ?? '') !== stringify(setting.effective_value, setting.data_type);
   const isSaving = saving === setting.id;
   const canClear = scope !== 'global' && setting.is_overridden;
+
+  // Permission gating happens inside the component so every call site is
+  // automatically protected without per-callsite wrapping. When the user
+  // lacks `isAutoAllocationEdit`, the buttons are hidden entirely (no
+  // disabled-state — disabled would tease the operator into thinking the
+  // form is editable; hiding makes read-only obvious).
+  const { me } = useMe();
+  const canEdit = hasAction(me, 'isAutoAllocationEdit');
+  if (!canEdit) {
+    return dirty
+      ? <span className="text-[10px] text-muted-foreground italic shrink-0">read-only</span>
+      : null;
+  }
 
   return (
     <div className="flex items-center gap-1 shrink-0">

@@ -18,6 +18,21 @@ import { api } from './api';
 export type Me = {
   user: { user_id: number; user_name: string; official_email: string };
   role?: { role_id: number; role_name: string; group: string };
+  /*
+   * Effective permissions resolved server-side from tbl_role.menu_ids +
+   * role_menu_action. Mirrors the legacy session map (LoginAction.java).
+   *
+   *   menuIds            : sidebar/menu allowlist. A menu is visible iff
+   *                        its menu_id appears in this array.
+   *   actionPermissions  : button/action-permission keys. Use hasAction()
+   *                        from lib/permissions.ts to check.
+   *
+   * Both are empty arrays when the user has no role, an inactive role, or
+   * a role with no permissions configured. The frontend treats empty as
+   * "no UI surface" — same as the legacy login (blank sidebar, all-false
+   * action map).
+   */
+  permissions?: { menuIds: number[]; actionPermissions: string[] };
 };
 
 const Ctx = createContext<{ me: Me | null; loading: boolean; refresh: () => Promise<void> }>({

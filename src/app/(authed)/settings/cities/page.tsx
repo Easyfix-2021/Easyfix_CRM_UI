@@ -24,6 +24,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { api, ApiError } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useLookup } from '@/lib/use-lookup';
+import { useMe } from '@/lib/auth-context';
+import { actionFlags } from '@/lib/permissions';
 
 type City = {
   city_id: number;
@@ -54,6 +56,13 @@ const PAGE_SIZE = 100;
 export default function ManageCitiesPage() {
   const confirm = useConfirm();
   const lookup = useLookup();
+  const { me } = useMe();
+  // Permission gating mirrors legacy CRM Constants.actionPermissions:
+  //   - isCityAddNew : Add City button visibility.
+  //   - isCityEdit   : Edit + Deactivate per-row buttons.
+  // Legacy also has isCityUpload for the bulk upload screen; we don't have
+  // a city upload page yet — gate that one when it ships.
+  const can = actionFlags(me, ['isCityAddNew', 'isCityEdit']);
 
   const [items, setItems] = useState<City[]>([]);
   const [total, setTotal] = useState(0);
@@ -171,9 +180,11 @@ export default function ManageCitiesPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button onClick={() => { setEditing(null); setModalOpen(true); }}>
-            <Plus className="size-4 mr-1" /> Add City
-          </Button>
+          {can.isCityAddNew && (
+            <Button onClick={() => { setEditing(null); setModalOpen(true); }}>
+              <Plus className="size-4 mr-1" /> Add City
+            </Button>
+          )}
         </div>
       </div>
 
@@ -342,13 +353,18 @@ export default function ManageCitiesPage() {
                       * when the cell is narrower than ~80px.
                       */}
                     <div className="inline-flex items-center justify-end gap-1">
-                      <Button size="sm" variant="ghost" onClick={() => { setEditing(c); setModalOpen(true); }}>
-                        <Pencil className="size-3.5" />
-                      </Button>
-                      {c.city_status === 1 && (
+                      {can.isCityEdit && (
+                        <Button size="sm" variant="ghost" onClick={() => { setEditing(c); setModalOpen(true); }}>
+                          <Pencil className="size-3.5" />
+                        </Button>
+                      )}
+                      {can.isCityEdit && c.city_status === 1 && (
                         <Button size="sm" variant="ghost" onClick={() => handleDeactivate(c)}>
                           <Trash2 className="size-3.5 text-red-600" />
                         </Button>
+                      )}
+                      {!can.isCityEdit && (
+                        <span className="text-[10px] text-muted-foreground">view-only</span>
                       )}
                     </div>
                   </td>

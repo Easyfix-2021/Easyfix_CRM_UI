@@ -12,6 +12,8 @@ import { useLookup } from '@/lib/use-lookup';
 import { formatDate, formatEasyfixerName } from '@/lib/utils';
 import { EasyfixerModal, type EasyfixerModalMode } from '@/components/easyfixer/EasyfixerModal';
 import { useSort, SortHeader } from '@/lib/use-sort';
+import { useMe } from '@/lib/auth-context';
+import { actionFlags } from '@/lib/permissions';
 
 type Ef = {
   efr_id: number; efr_name: string; efr_first_name: string | null; efr_last_name: string | null;
@@ -30,6 +32,13 @@ const PAGE_SIZE = 50;
 export default function EasyfixersPage() {
   const lk = useLookup();
   const router = useRouter();
+  const { me } = useMe();
+  // Permission gating. View remains open to every admin-group role; only
+  // mutations (Add New Easyfixer) require the explicit action permission.
+  // The detail/edit modal opened from row click is gated internally on
+  // submit at the API layer if the user lacks edit; UI hint kept minimal
+  // here to avoid expanding the modal contract.
+  const can = actionFlags(me, ['isEasyfixerAddNew', 'isEasyfixerEdit']);
   const searchParams = useSearchParams();
   const [data, setData] = useState<Resp | null>(null);
   // `q` is a UI-only filter — searching runs in memory over the currently
@@ -103,7 +112,9 @@ export default function EasyfixersPage() {
           <h1 className="text-2xl font-semibold">Easyfixers</h1>
           <p className="text-sm text-muted-foreground">{data?.total.toLocaleString() ?? '…'} technicians</p>
         </div>
-        <Button onClick={openCreate}><Plus className="h-4 w-4 mr-1" /> Add New Easyfixer</Button>
+        {can.isEasyfixerAddNew && (
+          <Button onClick={openCreate}><Plus className="h-4 w-4 mr-1" /> Add New Easyfixer</Button>
+        )}
       </div>
 
       <Card>

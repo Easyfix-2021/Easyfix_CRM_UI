@@ -26,6 +26,8 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { api, ApiError } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
+import { useMe } from '@/lib/auth-context';
+import { actionFlags } from '@/lib/permissions';
 
 type Zone = {
   zone_id: number;
@@ -42,6 +44,10 @@ type View = 'cards' | 'table';
 const VIEW_LS_KEY = 'manage-zones:view';
 
 export default function ManageZonesPage() {
+  const { me } = useMe();
+  // Permission gating — legacy `is{Entity}{Verb}` convention. Production
+  // rollout needs corresponding rows in `menu_action` assigned to Admin.
+  const can = actionFlags(me, ['isZoneAddNew', 'isZoneEdit', 'isZoneUpload']);
   const [zones, setZones]   = useState<Zone[] | null>(null);
   const [search, setSearch] = useState('');
   const [view, setView]     = useState<View>('cards');
@@ -99,15 +105,21 @@ export default function ManageZonesPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={downloadTemplate}>
-            <Download className="h-4 w-4 mr-1" /> Download Template
-          </Button>
-          <Button variant="outline" onClick={() => setUploadOpen(true)}>
-            <Upload className="h-4 w-4 mr-1" /> Upload Excel
-          </Button>
-          <Button onClick={() => setAddOpen(true)}>
-            <Plus className="h-4 w-4 mr-1" /> Add Zone
-          </Button>
+          {can.isZoneUpload && (
+            <Button variant="outline" onClick={downloadTemplate}>
+              <Download className="h-4 w-4 mr-1" /> Download Template
+            </Button>
+          )}
+          {can.isZoneUpload && (
+            <Button variant="outline" onClick={() => setUploadOpen(true)}>
+              <Upload className="h-4 w-4 mr-1" /> Upload Excel
+            </Button>
+          )}
+          {can.isZoneAddNew && (
+            <Button onClick={() => setAddOpen(true)}>
+              <Plus className="h-4 w-4 mr-1" /> Add Zone
+            </Button>
+          )}
         </div>
       </div>
 
@@ -149,7 +161,10 @@ export default function ManageZonesPage() {
       {view === 'cards' && filtered.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
           {filtered.map((z) => (
-            <ZoneCard key={z.zone_id} zone={z} onEdit={() => setEditTarget(z)} />
+            // canEdit controls the "Edit" affordance inside ZoneCard. When
+            // false, the card still navigates to /settings/zones/:id (read-
+            // only manage view) but the inline Edit button is suppressed.
+            <ZoneCard key={z.zone_id} zone={z} canEdit={can.isZoneEdit} onEdit={() => setEditTarget(z)} />
           ))}
         </div>
       )}
@@ -186,9 +201,11 @@ export default function ManageZonesPage() {
                     </td>
                     <td className="!text-right whitespace-nowrap">
                       <Link href={`/settings/zones/${z.zone_id}`} className="text-primary text-xs hover:underline mr-3">Manage</Link>
-                      <button type="button" onClick={() => setEditTarget(z)} className="text-xs text-muted-foreground hover:underline">
-                        <Pencil className="inline h-3 w-3 mr-0.5" />Edit
-                      </button>
+                      {can.isZoneEdit && (
+                        <button type="button" onClick={() => setEditTarget(z)} className="text-xs text-muted-foreground hover:underline">
+                          <Pencil className="inline h-3 w-3 mr-0.5" />Edit
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -220,7 +237,7 @@ export default function ManageZonesPage() {
 }
 
 // ─── Card ────────────────────────────────────────────────────────────
-function ZoneCard({ zone, onEdit }: { zone: Zone; onEdit: () => void }) {
+function ZoneCard({ zone, canEdit, onEdit }: { zone: Zone; canEdit: boolean; onEdit: () => void }) {
   return (
     <Card className="hover:shadow-md transition-shadow">
       <CardContent className="p-4 space-y-3">
@@ -234,9 +251,11 @@ function ZoneCard({ zone, onEdit }: { zone: Zone; onEdit: () => void }) {
               {zone.city_name ?? 'No city'} · ID {zone.zone_id}
             </div>
           </div>
-          <button type="button" onClick={onEdit} className="text-xs text-muted-foreground hover:underline shrink-0">
-            <Pencil className="inline h-3 w-3 mr-0.5" />Edit
-          </button>
+          {canEdit && (
+            <button type="button" onClick={onEdit} className="text-xs text-muted-foreground hover:underline shrink-0">
+              <Pencil className="inline h-3 w-3 mr-0.5" />Edit
+            </button>
+          )}
         </div>
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
           <span><MapPin className="inline h-3.5 w-3.5 mr-1 text-violet-700" />{zone.pincode_count} pincodes</span>
