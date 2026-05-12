@@ -28,8 +28,7 @@ type CustomerRow = {
   customer_name: string | null;
   customer_mob_no: string | null;
   customer_email: string | null;
-  alt_mob_no: string | null;
-  customer_status: number | null;
+  is_active: number | null;
   insert_date: string | null;
   update_date: string | null;
   job_count: number;
@@ -145,7 +144,7 @@ export default function CustomersPage() {
                   <td className="!text-left text-xs">{c.customer_email ?? <span className="text-muted-foreground">—</span>}</td>
                   <td className="!text-center font-mono text-xs">{c.job_count}</td>
                   <td className="!text-center">
-                    {c.customer_status === 1
+                    {c.is_active === 1
                       ? <span className="text-emerald-700 text-xs">Active</span>
                       : <span className="text-muted-foreground text-xs">Inactive</span>}
                   </td>
@@ -185,7 +184,6 @@ export default function CustomersPage() {
             <div className="space-y-3 text-sm">
               <div className="grid grid-cols-2 gap-2">
                 <div><span className="text-muted-foreground">Mobile:</span> <span className="font-mono">{viewing.customer_mob_no ?? '—'}</span></div>
-                <div><span className="text-muted-foreground">Alt mobile:</span> <span className="font-mono">{viewing.alt_mob_no ?? '—'}</span></div>
                 <div><span className="text-muted-foreground">Email:</span> {viewing.customer_email ?? '—'}</div>
                 <div><span className="text-muted-foreground">Jobs:</span> <span className="font-mono">{viewing.job_count}</span></div>
                 <div><span className="text-muted-foreground">Inserted:</span> {viewing.insert_date ? formatDate(viewing.insert_date) : '—'}</div>

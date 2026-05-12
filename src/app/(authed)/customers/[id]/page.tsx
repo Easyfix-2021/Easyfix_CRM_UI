@@ -36,8 +36,7 @@ type CustomerDetail = {
   customer_name: string | null;
   customer_mob_no: string | null;
   customer_email: string | null;
-  alt_mob_no: string | null;
-  customer_status: number | null;
+  is_active: number | null;
   insert_date: string | null;
   update_date: string | null;
   addresses: Address[];
@@ -136,13 +135,12 @@ export default function CustomerDetailPage() {
               </h1>
               <p className="text-xs text-muted-foreground font-mono mt-0.5">Customer #{cust.customer_id}</p>
             </div>
-            <span className={`badge ${cust.customer_status === 1 ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
-              {cust.customer_status === 1 ? 'Active' : 'Inactive'}
+            <span className={`badge ${cust.is_active === 1 ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+              {cust.is_active === 1 ? 'Active' : 'Inactive'}
             </span>
           </div>
           <dl className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm pt-3 mt-3 border-t">
             <Field icon={<Phone className="size-3.5" />} label="Mobile" value={cust.customer_mob_no} />
-            <Field icon={<Phone className="size-3.5" />} label="Alt Mobile" value={cust.alt_mob_no} />
             <Field icon={<Mail className="size-3.5" />}  label="Email"  value={cust.customer_email} />
             <Field label="Registered" value={formatDate(cust.insert_date)} />
             <Field label="Last Updated" value={formatDate(cust.update_date)} />

@@ -717,11 +717,39 @@ function UserFormModal({
             * job lists to their assigned regions.
             */}
           <div>
-            <label className="text-sm font-medium block mb-1">
-              Manages Cities <span className="text-xs text-muted-foreground font-normal">
-                ({manageCities.size} selected)
-              </span>
-            </label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-sm font-medium">
+                Manages Cities <span className="text-xs text-muted-foreground font-normal">
+                  ({manageCities.size} selected)
+                </span>
+              </label>
+              {/* Bulk-select shortcuts. Applies to the CURRENT filter:
+                  "Select all" picks every city matching the search box
+                  so an operator can search "Mum" and select all Mumbai
+                  variants in one click. With an empty search, it picks
+                  every city in the master list. */}
+              <div className="text-xs flex gap-2">
+                <button
+                  type="button"
+                  className="text-primary hover:underline"
+                  onClick={() => setManageCities(new Set([
+                    ...Array.from(manageCities),
+                    ...filteredManageCities.map((c) => c.city_id),
+                  ]))}
+                >
+                  Select {manageCitiesQuery.trim() ? 'filtered' : 'all'}
+                </button>
+                {manageCities.size > 0 && (
+                  <button
+                    type="button"
+                    className="text-muted-foreground hover:text-red-600 hover:underline"
+                    onClick={() => setManageCities(new Set())}
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            </div>
             <Input
               value={manageCitiesQuery}
               onChange={(e) => setManageCitiesQuery(e.target.value)}
@@ -771,11 +799,34 @@ function UserFormModal({
             * clients.
             */}
           <div>
-            <label className="text-sm font-medium block mb-1">
-              Manages Clients <span className="text-xs text-muted-foreground font-normal">
-                ({manageClients.size} selected)
-              </span>
-            </label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-sm font-medium">
+                Manages Clients <span className="text-xs text-muted-foreground font-normal">
+                  ({manageClients.size} selected)
+                </span>
+              </label>
+              <div className="text-xs flex gap-2">
+                <button
+                  type="button"
+                  className="text-primary hover:underline"
+                  onClick={() => setManageClients(new Set([
+                    ...Array.from(manageClients),
+                    ...filteredClients.map((c) => c.client_id),
+                  ]))}
+                >
+                  Select {clientQuery.trim() ? 'filtered' : 'all'}
+                </button>
+                {manageClients.size > 0 && (
+                  <button
+                    type="button"
+                    className="text-muted-foreground hover:text-red-600 hover:underline"
+                    onClick={() => setManageClients(new Set())}
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            </div>
             <Input
               value={clientQuery}
               onChange={(e) => setClientQuery(e.target.value)}

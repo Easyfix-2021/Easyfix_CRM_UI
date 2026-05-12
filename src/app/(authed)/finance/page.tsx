@@ -33,7 +33,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { api, ApiError } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 
-const TABS = ['invoices', 'transactions', 'purchase-orders', 'payouts', 'ndm-collection'] as const;
+const TABS = ['invoices', 'transactions', 'purchase-orders', 'payouts', 'ndm-collection', 'efr-ledger'] as const;
 type TabKey = typeof TABS[number];
 
 export default function FinanceLandingPage() {
@@ -83,12 +83,14 @@ export default function FinanceLandingPage() {
           <TabsTrigger value="purchase-orders">Purchase Orders</TabsTrigger>
           <TabsTrigger value="payouts">Payouts</TabsTrigger>
           <TabsTrigger value="ndm-collection">NDM Collection</TabsTrigger>
+          <TabsTrigger value="efr-ledger">EFR Ledger</TabsTrigger>
         </TabsList>
         <TabsContent value="invoices"><InvoicesTab clientId={clientId} /></TabsContent>
         <TabsContent value="transactions"><TransactionsTab clientId={clientId} /></TabsContent>
         <TabsContent value="purchase-orders"><PurchaseOrdersTab clientId={clientId} /></TabsContent>
         <TabsContent value="payouts"><PayoutsTab /></TabsContent>
         <TabsContent value="ndm-collection"><NdmCollectionTab /></TabsContent>
+        <TabsContent value="efr-ledger"><EfrLedgerTab /></TabsContent>
       </Tabs>
     </div>
   );
@@ -424,6 +426,103 @@ function NdmCollectionTab() {
                       </>
                     )}
                   </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── EFR Ledger ─────────────────────────────────────────────────────
+// Backend: GET /admin/finance/efr-transactions?type=&efrId=&from=&to=&limit=
+// `type` map (legacy convention): 1 = Credit, 2 = Debit.
+type EfrTxn = {
+  transaction_id: number; easyfixer_id: number;
+  efr_name: string | null; efr_no: string | null;
+  transaction_type: number; transaction_date: string;
+  amount: number | null; balance: number | null;
+  source: string | null; description: string | null;
+  job_id: number | null;
+};
+function EfrLedgerTab() {
+  const sp = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const initialType = sp.get('type') || '';
+  const [type, setType] = useState<string>(initialType);
+  const [efrId, setEfrId] = useState('');
+
+  useEffect(() => {
+    const params = new URLSearchParams(sp.toString());
+    if (type && params.get('type') !== type) {
+      params.set('type', type);
+      router.replace(`${pathname}?${params.toString()}`);
+    } else if (!type && params.has('type')) {
+      params.delete('type');
+      router.replace(`${pathname}?${params.toString()}`);
+    }
+  }, [type, sp, router, pathname]);
+
+  const qs = new URLSearchParams();
+  if (type) qs.set('type', type);
+  if (efrId) qs.set('efrId', efrId);
+  qs.set('limit', '200');
+  const url = `/admin/finance/efr-transactions?${qs.toString()}`;
+  const { data, loading, error } = useFetch<EfrTxn>(url, [type, efrId]);
+
+  return (
+    <div className="space-y-2 mt-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-xs text-muted-foreground">Type:</span>
+        {[['', 'All'], ['1', 'Credit'], ['2', 'Debit']].map(([v, label]) => (
+          <button key={v}
+            onClick={() => setType(v)}
+            className={`px-2 py-0.5 rounded text-xs ${type === v ? 'bg-primary text-white' : 'bg-slate-200 text-slate-700'}`}>
+            {label}
+          </button>
+        ))}
+        <Input className="ml-auto max-w-[180px] font-mono"
+          placeholder="Filter by Easyfixer ID"
+          value={efrId}
+          onChange={(e) => setEfrId(e.target.value.replace(/\D/g, ''))}
+        />
+      </div>
+      {loading && <Loading />}
+      {error && <Err msg={error} />}
+      {!loading && !error && data.length === 0 && <Empty msg="No ledger rows match." />}
+      {!loading && !error && data.length > 0 && (
+        <div className="rounded-lg border bg-card overflow-x-auto">
+          <table className="data-table w-full">
+            <thead>
+              <tr>
+                <th className="!text-center">Txn</th><th>Easyfixer</th>
+                <th className="!text-center">Type</th>
+                <th className="!text-right">Amount ₹</th><th className="!text-right">Balance ₹</th>
+                <th>Source</th><th>Description</th>
+                <th className="!text-center">Job</th><th>Date</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.map((t) => (
+                <tr key={t.transaction_id} className="hover:bg-slate-50">
+                  <td className="!text-center font-mono text-xs">{t.transaction_id}</td>
+                  <td className="text-xs">{t.efr_name || '—'}<br/><span className="text-muted-foreground font-mono">#{t.easyfixer_id} · {t.efr_no || ''}</span></td>
+                  <td className="!text-center text-xs">
+                    {t.transaction_type === 1
+                      ? <span className="badge bg-emerald-50 text-emerald-700">Credit</span>
+                      : t.transaction_type === 2
+                        ? <span className="badge bg-rose-50 text-rose-700">Debit</span>
+                        : t.transaction_type}
+                  </td>
+                  <td className="!text-right font-mono">{t.amount != null ? Number(t.amount).toFixed(2) : '—'}</td>
+                  <td className="!text-right font-mono">{t.balance != null ? Number(t.balance).toFixed(2) : '—'}</td>
+                  <td className="text-xs">{t.source || '—'}</td>
+                  <td className="text-xs">{t.description || '—'}</td>
+                  <td className="!text-center text-xs">{t.job_id ?? '—'}</td>
+                  <td className="text-xs">{formatDate(t.transaction_date)}</td>
                 </tr>
               ))}
             </tbody>

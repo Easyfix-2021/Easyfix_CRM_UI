@@ -48,7 +48,7 @@ type CustomerRow = {
   customer_name: string | null;
   customer_mob_no: string | null;
   customer_email: string | null;
-  customer_status: number | null;
+  is_active: number | null;
   job_count: number | string | null;
 };
 

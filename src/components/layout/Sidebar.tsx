@@ -139,34 +139,43 @@ const URL_MAP: Record<string, string> = {
   'vertical':              '/settings/verticals',
   'clientratecard':        '/settings/rate-cards-b2b',
   'retailratecard':        '/settings/rate-cards-b2c',
-  // Reports + Tracking + Admin landing pages (Phase 11 frontend).
-  // Legacy tbl_menu rows have a wider URL vocabulary than our internal
-  // map — these aliases ensure every legacy Report/Tracking row resolves
-  // to a real page instead of /coming-soon.
+  // Reports + Tracking + Admin landing pages.
+  // Every Report/Tracking sub-menu lands on the same /reports or /tracking
+  // page, but each gets a unique `?focus=` so isRouteActive can identify
+  // which sub-menu was clicked (otherwise all siblings light up
+  // simultaneously). The destination page may or may not consume `focus`
+  // to scroll/highlight a section — sidebar correctness doesn't require it.
   'reports':                '/reports',
-  'completedJobs':          '/reports',
-  'completedJobsReport':    '/reports',
-  'easyfixerReport':        '/reports',
-  'manageEfrReport':        '/reports',
-  'payoutSheet':            '/reports',
-  'cityAnalysis':           '/reports',
-  'userProductivity':       '/reports',
-  'userHours':              '/reports',
-  'userLoggingHours':       '/reports',
-  'manageFinanceReport':    '/reports',
-  'manageEscalationReport': '/reports',
-  'jobTracking':            '/tracking',
+  'completedJobs':          '/reports?focus=completed-jobs',
+  'completedJobsReport':    '/reports?focus=completed-jobs',
+  'easyfixerReport':        '/reports?focus=efr',
+  'manageEfrReport':        '/reports?focus=efr',
+  'payoutSheet':            '/reports?focus=payout',
+  'cityAnalysis':           '/reports?focus=city',
+  'userProductivity':       '/reports?focus=user-productivity',
+  'userHours':              '/reports?focus=user-hours',
+  'userLoggingHours':       '/reports?focus=user-hours',
+  'manageFinanceReport':    '/reports?focus=finance',
+  'manageEscalationReport': '/reports?focus=escalation',
   'tracking':               '/tracking',
-  'clientTracking':         '/tracking',
+  'jobTracking':            '/tracking?focus=jobs',
+  'clientTracking':         '/tracking?focus=clients',
   'adminAction':            '/admin-actions',
-  'generateClientInvoice':  '/admin-actions',
+  'generateClientInvoice':  '/admin-actions?focus=generate-invoice',
   // Finance sub-resources — Finance landing page links to these
   'clientInvoice':          '/finance?tab=invoices',
   'servicemenPayout':       '/finance?tab=payouts',
   'ndmCollection':          '/finance?tab=ndm-collection',
-  'updateRecharge':         '/finance?tab=collection-approval',
-  'easyfixerDebit':         '/finance?tab=debits',
-  'easyfixerCredit':        '/finance?tab=credits',
+  // Legacy `updateRecharge` ("Collection Approval") is the finance-side
+  // approval queue for NDM recharges submitted by node managers.
+  // Lands on the same NDM tab but with the pending-approval filter
+  // pre-selected (flag=4 mirrors legacy submitToFinanceList(0)).
+  'updateRecharge':         '/finance?tab=ndm-collection&flag=4',
+  // EFR ledger filtered by transaction_type. Legacy convention:
+  //   transaction_type=1 → Credit (incoming, e.g. recharge)
+  //   transaction_type=2 → Debit  (outgoing, e.g. job payout)
+  'easyfixerDebit':         '/finance?tab=efr-ledger&type=2',
+  'easyfixerCredit':        '/finance?tab=efr-ledger&type=1',
   'easyfixerAdvance':       '/finance/advances',
   // My Orders sub-menus (legacy CRM): each tbl_menu row's `url` is the full
   // `dashboardChecking?enumDesc=<value>` string, so these keys match verbatim.
@@ -436,7 +445,15 @@ export function Sidebar() {
                 </button>
                 {open && (
                   <ul className="mt-0.5 ml-6 pl-2 border-l border-sidebar-accent/40 space-y-0.5">
-                    {parent.children.map((c) => {
+                    {parent.children
+                      // Legacy `url='javascript:;'` rows were sidebar
+                      // category folders in the old 3-level tree. Our new
+                      // sidebar flattens to 2 levels, so those folders are
+                      // dead-link siblings of their own grandchildren. They
+                      // render as `href='#'` after `legacyToRoute()` — hide
+                      // them entirely to avoid "nothing happens on click".
+                      .filter((c) => legacyToRoute(c.menu_name, c.url) !== '#')
+                      .map((c) => {
                       const href = legacyToRoute(c.menu_name, c.url);
                       const active = href === activeChildHref;
                       return (
