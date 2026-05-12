@@ -32,6 +32,8 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { api, ApiError } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { useMe } from '@/lib/auth-context';
+import { hasAction } from '@/lib/permissions';
 
 type Candidate = {
   efr_id: number;
@@ -107,6 +109,14 @@ export function AssignTechnicianModal({
   jobId: number | null;
   mode: AssignMode;
 }) {
+  // Modal-internal permission gate. Each per-row Assign button maps to
+  // the same legacy action key as the entry icon on my-orders, so a user
+  // who can open this modal but not actually commit will see a read-only
+  // view with the Assign buttons hidden.
+  const { me } = useMe();
+  const canCommit = mode === 'reassign'
+    ? hasAction(me, 'isJobReassign')
+    : hasAction(me, 'isJobAssign');
   const confirmAction = useConfirm();
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -422,10 +432,12 @@ export function AssignTechnicianModal({
                     <td className="!text-right">
                       {c.is_current ? (
                         <span className="text-xs text-muted-foreground italic">Currently assigned</span>
-                      ) : (
+                      ) : canCommit ? (
                         <Button size="sm" disabled={assigning != null} onClick={() => assign(c)}>
                           {assigning === c.efr_id ? 'Assigning…' : (mode === 'reassign' ? 'Reassign' : 'Assign')}
                         </Button>
+                      ) : (
+                        <span className="text-[10px] text-muted-foreground">view-only</span>
                       )}
                     </td>
                   </tr>

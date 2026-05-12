@@ -12,6 +12,8 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { api, ApiError } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
 import { formatDate, formatEasyfixerName, statusColorClass, statusLabel } from '@/lib/utils';
+import { useMe } from '@/lib/auth-context';
+import { actionFlags } from '@/lib/permissions';
 
 /*
  * Unified Job modal — create | view | edit in one component.
@@ -168,6 +170,32 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
   const [assignOpen, setAssignOpen] = useState(false);
   const [autoAssignOpen, setAutoAssignOpen] = useState(false);
   const [ownerOpen, setOwnerOpen] = useState(false);
+  // Three new legacy-parity dialogs:
+  //   - Reschedule: change requested_date_time + time_slot (without
+  //     re-assigning a tech). Legacy `jobReshedule.vm`.
+  //   - Change Description: edit job_desc inline. Legacy `changeJobDesc.vm`.
+  //   - Cancel With Reason: PATCH /:id/status with status=6 + reason picker
+  //     from /lookup/cancel-reasons. Legacy `jobCancel.vm`.
+  const [rescheduleOpen, setRescheduleOpen] = useState(false);
+  const [descOpen, setDescOpen] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+
+  // Modal-internal permission gates. Each button maps to a legacy
+  // Constants.actionPermissions key so the seeded role_menu_action rows
+  // for the Admin role govern visibility. Status guards (canAssign,
+  // canCancel, etc.) AND the permission flag must both be true for the
+  // button to render.
+  const { me } = useMe();
+  const can = actionFlags(me, [
+    'isJobEdit',          // Edit form open + Change Owner
+    'isJobAssign',        // Auto-assign + Manual pick (initial)
+    'isJobReassign',      // Auto-reassign + Manual pick (when already assigned)
+    'isJobStatusChange',  // Start + Complete + Mark Incomplete
+    'isJobCancel',        // Cancel button (destructive — separate key)
+  ]);
+  const isReassign = !!job.fk_easyfixter_id;
+  const canPickTech = isReassign ? can.isJobReassign : can.isJobAssign;
 
   async function doStatus(key: BusyKey, status: number, reasonId?: number, comment?: string) {
     setBusy(key);
@@ -177,7 +205,7 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
 
   return (
     <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
-      <Button size="sm" variant="outline" onClick={onEdit}>Edit</Button>
+      {can.isJobEdit && <Button size="sm" variant="outline" onClick={onEdit}>Edit</Button>}
       {/* Confirm & Schedule for Unconfirmed orders is exposed as a dedicated
           modal mode launched from the list row (purple CalendarCheck icon),
           not a button in this action bar. That matches the legacy flow where
@@ -189,23 +217,26 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
           engine action visually distinct from the generic Edit / Change Owner
           buttons next to it. Manual searchable picker stays available beside as
           a fallback for the "I need this specific person" cases. */}
-      {canAssign(s) && (
+      {canAssign(s) && canPickTech && (
         <Button size="sm" onClick={() => setAutoAssignOpen(true)}>
           <Sparkles className="h-3.5 w-3.5 mr-1" />
-          {job.fk_easyfixter_id ? 'Auto-reassign' : 'Auto-assign'}
+          {isReassign ? 'Auto-reassign' : 'Auto-assign'}
         </Button>
       )}
-      {canAssign(s) && (
+      {canAssign(s) && canPickTech && (
         <Button size="sm" variant="outline" onClick={() => setAssignOpen(true)}>
           <Search className="h-3.5 w-3.5 mr-1" />
           Manual pick
         </Button>
       )}
-      {canChangeOwner(s)    && <Button size="sm" variant="outline" onClick={() => setOwnerOpen(true)}>Change Owner</Button>}
-      {canStart(s)          && <LoadBtn size="sm" variant="outline" loading={busy === 'start'}      onClick={() => doStatus('start', ST.IN_PROGRESS)}>Start</LoadBtn>}
-      {canComplete(s)       && <LoadBtn size="sm" variant="outline" loading={busy === 'complete'}   onClick={() => doStatus('complete', ST.COMPLETED)}>Complete</LoadBtn>}
-      {canCancel(s)         && <LoadBtn size="sm" variant="destructive" loading={busy === 'cancel'} onClick={() => doStatus('cancel', ST.CANCELLED, 1, 'Cancelled from CRM')}>Cancel</LoadBtn>}
-      {canMarkIncomplete(s) && <LoadBtn size="sm" variant="outline" loading={busy === 'incomplete'} onClick={() => doStatus('incomplete', ST.REVISIT, undefined, 'Marked incomplete from CRM')}>Mark InComplete</LoadBtn>}
+      {canChangeOwner(s)    && can.isJobEdit && <Button size="sm" variant="outline" onClick={() => setOwnerOpen(true)}>Change Owner</Button>}
+      {can.isJobEdit && <Button size="sm" variant="outline" onClick={() => setRescheduleOpen(true)}>Reschedule</Button>}
+      {can.isJobEdit && <Button size="sm" variant="outline" onClick={() => setDescOpen(true)}>Edit Description</Button>}
+      {can.isJobEdit && <Button size="sm" variant="outline" onClick={() => setFeedbackOpen(true)}>Feedback</Button>}
+      {canStart(s)          && can.isJobStatusChange && <LoadBtn size="sm" variant="outline" loading={busy === 'start'}      onClick={() => doStatus('start', ST.IN_PROGRESS)}>Start</LoadBtn>}
+      {canComplete(s)       && can.isJobStatusChange && <LoadBtn size="sm" variant="outline" loading={busy === 'complete'}   onClick={() => doStatus('complete', ST.COMPLETED)}>Complete</LoadBtn>}
+      {canCancel(s)         && can.isJobCancel       && <Button size="sm" variant="destructive" onClick={() => setCancelOpen(true)}>Cancel</Button>}
+      {canMarkIncomplete(s) && can.isJobStatusChange && <LoadBtn size="sm" variant="outline" loading={busy === 'incomplete'} onClick={() => doStatus('incomplete', ST.REVISIT, undefined, 'Marked incomplete from CRM')}>Mark InComplete</LoadBtn>}
 
       <AssignDialog
         open={assignOpen} onClose={() => setAssignOpen(false)}
@@ -228,6 +259,40 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
           setOwnerOpen(false); onChanged();
         }}
       />
+      <RescheduleDialog
+        open={rescheduleOpen} onClose={() => setRescheduleOpen(false)}
+        initialDate={String(job.requested_date_time ?? '')}
+        initialSlot={String(job.time_slot ?? '')}
+        onSubmit={async (date, slot) => {
+          await api.patch(`/admin/jobs/${jobId}`, {
+            requested_date_time: date,
+            time_slot: slot || null,
+          });
+          setRescheduleOpen(false); onChanged();
+        }}
+      />
+      <ChangeDescriptionDialog
+        open={descOpen} onClose={() => setDescOpen(false)}
+        initialDesc={String(job.job_desc ?? '')}
+        onSubmit={async (desc) => {
+          await api.patch(`/admin/jobs/${jobId}`, { job_desc: desc });
+          setDescOpen(false); onChanged();
+        }}
+      />
+      <CancelWithReasonDialog
+        open={cancelOpen} onClose={() => setCancelOpen(false)}
+        onSubmit={async (reasonId, comment) => {
+          await api.patch(`/admin/jobs/${jobId}/status`, {
+            status: ST.CANCELLED, reasonId, comment,
+          });
+          setCancelOpen(false); onChanged();
+        }}
+      />
+      <FeedbackDialog
+        open={feedbackOpen} onClose={() => setFeedbackOpen(false)}
+        jobId={jobId}
+        onSaved={() => { setFeedbackOpen(false); onChanged(); }}
+      />
     </div>
   );
 }
@@ -235,12 +300,20 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
 // ─── View body (tabbed read-only display) ────────────────────────────────────
 
 function ViewBody({ job }: { job: Job }) {
+  const images = Array.isArray((job as Record<string, unknown>).images)
+    ? ((job as Record<string, unknown>).images as Array<Record<string, unknown>>)
+    : [];
   return (
     <Tabs defaultValue="summary">
       <TabsList>
         <TabsTrigger value="summary">Summary</TabsTrigger>
         <TabsTrigger value="services">Services ({Array.isArray(job.services) ? job.services.length : 0})</TabsTrigger>
         <TabsTrigger value="schedule">Schedule</TabsTrigger>
+        <TabsTrigger value="images">Images ({images.length})</TabsTrigger>
+        <TabsTrigger value="questionnaire">Questionnaire</TabsTrigger>
+        <TabsTrigger value="comments">Comments</TabsTrigger>
+        <TabsTrigger value="materials">Materials</TabsTrigger>
+        <TabsTrigger value="quotations">Quotations</TabsTrigger>
       </TabsList>
 
       <TabsContent value="summary">
@@ -308,7 +381,571 @@ function ViewBody({ job }: { job: Job }) {
           ]}/>
         </div>
       </TabsContent>
+
+      {/*
+        * Images tab — legacy `jobImg.vm` + `jobImageList.vm`. Data already
+        * lives on `job.images` (returned by services/job.service.js::getById
+        * line 217). Each row has `image` (filename) which is served by
+        * Nginx under `/easydoc/upload_jobs/<filename>` per CLAUDE.md's
+        * file-storage table.
+        */}
+      <TabsContent value="images">
+        <JobImagesTab images={images} />
+      </TabsContent>
+
+      {/*
+        * Questionnaire Answers tab — legacy `jobQuestionaireAnswerList.vm`.
+        * Backend: GET /admin/questionnaires/answers/:jobId.
+        */}
+      <TabsContent value="questionnaire">
+        <JobQuestionnaireTab jobId={job.job_id as number} />
+      </TabsContent>
+
+      {/* Comments tab — legacy `jobComment.vm` + `jobCommentList.vm`.
+          Backend: GET/POST /admin/jobs/:id/comments (tbl_job_comment).
+          comment_on stages: 1=created, 2=check_in, 3=check_out, 4=in_progress. */}
+      <TabsContent value="comments">
+        <JobCommentsTab jobId={job.job_id as number} />
+      </TabsContent>
+
+      {/* Materials tab — legacy `material.vm` + MaterialAction.java.
+          Backend: GET /admin/aux/materials/job/:jobId, POST /admin/aux/materials,
+          DELETE /admin/aux/materials/:id (job_material table). */}
+      <TabsContent value="materials">
+        <JobMaterialsTab jobId={job.job_id as number} />
+      </TabsContent>
+
+      {/* Quotations tab — read-only list of product+material quotations against
+          this job. Backend: GET /admin/quotations?jobId=… (quotation_details table).
+          Create/edit deferred — typical flow is technician submits via mobile app. */}
+      <TabsContent value="quotations">
+        <JobQuotationsTab jobId={job.job_id as number} />
+      </TabsContent>
     </Tabs>
+  );
+}
+
+// ─── Quotations tab ─────────────────────────────────────────────────
+// Quotation rows come from `quotation_details` (legacy + ACD_APIs schema).
+// Columns observed: id, job_id, quotation_type ('product'|'material'),
+// product_name / material_name, quantity, unit_price, total_price,
+// status, insert_date. Schema varies — we render any subset gracefully.
+type QuotationRow = Record<string, unknown> & {
+  id: number;
+  job_id: number | null;
+  quotation_type?: string | null;
+  product_name?: string | null;
+  material_name?: string | null;
+  quantity?: number | string | null;
+  unit_price?: number | string | null;
+  total_price?: number | string | null;
+  status?: string | null;
+  insert_date?: string | null;
+};
+
+function JobQuotationsTab({ jobId }: { jobId: number }) {
+  const [rows, setRows] = useState<QuotationRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true); setError(null);
+      try {
+        const data = await api.get<QuotationRow[]>(`/admin/quotations?jobId=${jobId}`);
+        if (!cancelled) setRows(Array.isArray(data) ? data : []);
+      } catch (e) {
+        if (!cancelled) setError(e instanceof ApiError ? e.message : 'Failed to load quotations');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [jobId]);
+
+  if (loading) return <div className="text-sm text-muted-foreground py-6 text-center">Loading…</div>;
+  if (error)   return <div className="text-sm text-red-600 py-3">{error}</div>;
+  if (rows.length === 0) {
+    return (
+      <div className="rounded-lg border bg-card p-8 text-center text-sm text-muted-foreground">
+        No quotations recorded for this job. Quotations are typically submitted by the technician via the mobile app.
+      </div>
+    );
+  }
+
+  const total = rows.reduce((sum, r) => sum + (Number(r.total_price) || 0), 0);
+
+  return (
+    <div className="space-y-3">
+      <div className="text-sm text-muted-foreground">
+        {rows.length} quotation row{rows.length === 1 ? '' : 's'} · Total: ₹{total.toFixed(2)}
+      </div>
+      <div className="rounded-lg border bg-card overflow-hidden">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th className="!text-center w-12">#</th>
+              <th className="!text-left">Type</th>
+              <th className="!text-left">Item</th>
+              <th className="!text-right">Qty</th>
+              <th className="!text-right">Unit ₹</th>
+              <th className="!text-right">Total ₹</th>
+              <th className="!text-center">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => {
+              const type = String(r.quotation_type ?? '—');
+              const name = String(r.product_name ?? r.material_name ?? '—');
+              return (
+                <tr key={r.id}>
+                  <td className="!text-center text-xs text-muted-foreground">{i + 1}</td>
+                  <td className="!text-left text-xs">
+                    <span className="inline-block bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">{type}</span>
+                  </td>
+                  <td className="!text-left">{name}</td>
+                  <td className="!text-right font-mono text-xs">{String(r.quantity ?? '')}</td>
+                  <td className="!text-right font-mono text-xs">{r.unit_price != null ? Number(r.unit_price).toFixed(2) : '—'}</td>
+                  <td className="!text-right font-mono">{r.total_price != null ? Number(r.total_price).toFixed(2) : '—'}</td>
+                  <td className="!text-center text-xs">{String(r.status ?? '—')}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ─── Materials tab ──────────────────────────────────────────────────
+type JobMaterial = {
+  id: number;
+  job_id: number;
+  material_name: string;
+  description: string | null;
+  sku: string | null;
+  unit: string | null;
+  unit_price: number | null;
+  total_price: number | null;
+};
+
+function JobMaterialsTab({ jobId }: { jobId: number }) {
+  const [items, setItems] = useState<JobMaterial[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const data = await api.get<JobMaterial[]>(`/admin/aux/materials/job/${jobId}`);
+      setItems(Array.isArray(data) ? data : []);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Failed to load materials');
+    } finally { setLoading(false); }
+  }
+  useEffect(() => { void load(); /* eslint-disable-next-line */ }, [jobId]);
+
+  async function deleteItem(id: number) {
+    if (!window.confirm('Remove this material line item?')) return;
+    try {
+      await api.delete(`/admin/aux/materials/${id}`);
+      await load();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Delete failed');
+    }
+  }
+
+  const totalCost = items.reduce((sum, it) => sum + (Number(it.total_price) || 0), 0);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="text-sm text-muted-foreground">
+          {items.length} line item{items.length === 1 ? '' : 's'} · Total: ₹{totalCost.toFixed(2)}
+        </div>
+        <Button size="sm" onClick={() => setAddOpen(true)}>Add Material</Button>
+      </div>
+      {error && <div className="text-sm text-red-600">{error}</div>}
+      {loading && <div className="text-sm text-muted-foreground py-6 text-center">Loading…</div>}
+      {!loading && items.length === 0 && (
+        <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
+          No materials recorded for this job.
+        </div>
+      )}
+      {!loading && items.length > 0 && (
+        <div className="rounded-lg border bg-card overflow-hidden">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th className="!text-center w-12">#</th>
+                <th className="!text-left">Material</th>
+                <th className="!text-left">SKU</th>
+                <th className="!text-left">Unit</th>
+                <th className="!text-right">Unit ₹</th>
+                <th className="!text-right">Total ₹</th>
+                <th className="!text-right w-16">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((m, i) => (
+                <tr key={m.id}>
+                  <td className="!text-center text-xs text-muted-foreground">{i + 1}</td>
+                  <td className="!text-left">
+                    <div className="font-medium">{m.material_name}</div>
+                    {m.description && <div className="text-xs text-muted-foreground">{m.description}</div>}
+                  </td>
+                  <td className="!text-left font-mono text-xs">{m.sku ?? <span className="text-muted-foreground">—</span>}</td>
+                  <td className="!text-left text-xs">{m.unit ?? <span className="text-muted-foreground">—</span>}</td>
+                  <td className="!text-right font-mono text-xs">{m.unit_price != null ? Number(m.unit_price).toFixed(2) : '—'}</td>
+                  <td className="!text-right font-mono">{m.total_price != null ? Number(m.total_price).toFixed(2) : '—'}</td>
+                  <td className="!text-right">
+                    <button onClick={() => deleteItem(m.id)} className="text-xs text-red-600 hover:underline">Delete</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <AddMaterialDialog
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        onSubmit={async (payload) => {
+          await api.post('/admin/aux/materials', { jobId, ...payload });
+          setAddOpen(false);
+          await load();
+        }}
+      />
+    </div>
+  );
+}
+
+function AddMaterialDialog({ open, onClose, onSubmit }: {
+  open: boolean; onClose: () => void;
+  onSubmit: (payload: { materialName: string; description?: string; sku?: string; unit?: string; unitPrice?: number; totalPrice?: number }) => Promise<void>;
+}) {
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [sku, setSku] = useState('');
+  const [unit, setUnit] = useState('');
+  const [unitPrice, setUnitPrice] = useState('');
+  const [qty, setQty] = useState('1');
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      setName(''); setDescription(''); setSku(''); setUnit('');
+      setUnitPrice(''); setQty('1'); setErr(null);
+    }
+  }, [open]);
+
+  const totalPrice = (Number(unitPrice) || 0) * (Number(qty) || 0);
+
+  async function go() {
+    if (!name.trim()) { setErr('Material name is required'); return; }
+    setLoading(true); setErr(null);
+    try {
+      await onSubmit({
+        materialName: name.trim(),
+        description: description.trim() || undefined,
+        sku: sku.trim() || undefined,
+        unit: unit.trim() || undefined,
+        unitPrice: unitPrice ? Number(unitPrice) : undefined,
+        totalPrice: totalPrice || undefined,
+      });
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'Save failed');
+    } finally { setLoading(false); }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader><DialogTitle>Add Material</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <div>
+            <Label className="text-sm font-medium block mb-1">Material Name *</Label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder='e.g. "Copper wire — 2.5 sqmm"' />
+          </div>
+          <div>
+            <Label className="text-sm font-medium block mb-1">Description</Label>
+            <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Optional spec / brand" />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <Label className="text-sm font-medium block mb-1">SKU</Label>
+              <Input value={sku} onChange={(e) => setSku(e.target.value)} className="font-mono" />
+            </div>
+            <div>
+              <Label className="text-sm font-medium block mb-1">Unit</Label>
+              <Input value={unit} onChange={(e) => setUnit(e.target.value)} placeholder='e.g. "m", "pcs"' />
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <Label className="text-sm font-medium block mb-1">Unit ₹</Label>
+              <Input
+                value={unitPrice}
+                onChange={(e) => setUnitPrice(e.target.value.replace(/[^\d.]/g, ''))}
+                className="font-mono"
+                inputMode="decimal"
+              />
+            </div>
+            <div>
+              <Label className="text-sm font-medium block mb-1">Qty</Label>
+              <Input
+                value={qty}
+                onChange={(e) => setQty(e.target.value.replace(/[^\d.]/g, ''))}
+                className="font-mono"
+                inputMode="decimal"
+              />
+            </div>
+            <div>
+              <Label className="text-sm font-medium block mb-1">Total ₹</Label>
+              <Input value={totalPrice ? totalPrice.toFixed(2) : ''} readOnly className="font-mono bg-muted/30" />
+            </div>
+          </div>
+          {err && <div className="text-sm text-red-600">{err}</div>}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={onClose} disabled={loading}>Cancel</Button>
+            <Button onClick={go} disabled={loading}>{loading ? 'Saving…' : 'Add'}</Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Comments tab ───────────────────────────────────────────────────
+// Schema VERIFIED 2026-05-12 against legacy tbl_job_comment:
+//   created_on (auto-stamp), commented_by (FK tbl_user.user_id),
+//   appointment_on, enum_reason_id, efr_id.
+// `user_name` comes from the LEFT JOIN on tbl_user.
+type JobComment = {
+  id: number;
+  job_id: number;
+  comments: string;
+  comment_on: number;
+  stage: string;
+  created_on: string;
+  appointment_on: string | null;
+  commented_by: number | null;
+  user_name: string | null;
+  efr_id: number | null;
+  enum_reason_id: number | null;
+  enum_desc: string | null;
+};
+
+const COMMENT_STAGE_LABEL: Record<number, string> = {
+  1: 'On Creation',
+  2: 'On Check-In',
+  3: 'On Check-Out',
+  4: 'In Progress',
+};
+
+function JobCommentsTab({ jobId }: { jobId: number }) {
+  const [comments, setComments] = useState<JobComment[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
+  const [stage, setStage] = useState<number>(4);
+  const [posting, setPosting] = useState(false);
+
+  async function load() {
+    setLoading(true); setError(null);
+    try {
+      const data = await api.get<JobComment[]>(`/admin/jobs/${jobId}/comments`);
+      setComments(Array.isArray(data) ? data : []);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Failed to load comments');
+    } finally { setLoading(false); }
+  }
+  useEffect(() => { void load(); /* eslint-disable-next-line */ }, [jobId]);
+
+  async function postComment() {
+    const text = draft.trim();
+    if (!text) return;
+    setPosting(true); setError(null);
+    try {
+      await api.post(`/admin/jobs/${jobId}/comments`, { comments: text, comment_on: stage });
+      setDraft('');
+      await load();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Failed to post comment');
+    } finally { setPosting(false); }
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Add form */}
+      <div className="rounded-lg border bg-card p-3 space-y-2">
+        <Label className="text-sm font-medium">Add a comment</Label>
+        <textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          className="w-full border rounded px-2 py-1 text-sm bg-background min-h-[80px]"
+          placeholder="Note about the job, check-in observation, customer remark…"
+          maxLength={2000}
+        />
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <select
+            value={stage}
+            onChange={(e) => setStage(Number(e.target.value))}
+            className="border rounded h-9 px-2 text-sm bg-background"
+          >
+            {Object.entries(COMMENT_STAGE_LABEL).map(([v, label]) => (
+              <option key={v} value={v}>{label}</option>
+            ))}
+          </select>
+          <Button size="sm" onClick={postComment} disabled={posting || !draft.trim()}>
+            {posting ? 'Posting…' : 'Post Comment'}
+          </Button>
+        </div>
+      </div>
+
+      {error && <div className="text-sm text-red-600">{error}</div>}
+
+      {/* List */}
+      {loading && <div className="text-sm text-muted-foreground py-6 text-center">Loading…</div>}
+      {!loading && comments.length === 0 && (
+        <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
+          No comments on this job yet.
+        </div>
+      )}
+      {!loading && comments.length > 0 && (
+        <ul className="space-y-2">
+          {comments.map((c) => (
+            <li key={c.id} className="rounded-md border bg-card p-3">
+              <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
+                <span>
+                  <span className="font-medium text-foreground">{c.user_name ?? 'Unknown user'}</span>
+                  {' · '}
+                  <span className="inline-block bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">
+                    {COMMENT_STAGE_LABEL[c.comment_on] ?? c.stage}
+                  </span>
+                </span>
+                <span>{formatDate(c.created_on)}</span>
+              </div>
+              <div className="text-sm whitespace-pre-wrap">{c.comments}</div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// ─── Images tab ─────────────────────────────────────────────────────
+function JobImagesTab({ images }: { images: Array<Record<string, unknown>> }) {
+  // Image storage convention from CLAUDE.md: filenames are stored bare; the
+  // public URL is `/easydoc/upload_jobs/<filename>`. Mirrors legacy CRM
+  // exactly (Nginx serves the easydoc tree).
+  const prefix = '/easydoc/upload_jobs/';
+  if (images.length === 0) {
+    return (
+      <div className="rounded-lg border bg-card p-8 text-center text-sm text-muted-foreground">
+        No images uploaded for this job.
+      </div>
+    );
+  }
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+      {images.map((img) => {
+        const id       = String(img.image_id ?? '');
+        const filename = String(img.image ?? '');
+        const stage    = String(img.job_stage ?? '');
+        const category = String(img.image_category ?? '');
+        if (!filename) return null;
+        return (
+          <a
+            key={id}
+            href={`${prefix}${filename}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block border rounded-md overflow-hidden hover:shadow-sm transition-shadow"
+            title={`${stage}${category ? ` · ${category}` : ''}`}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={`${prefix}${filename}`}
+              alt={stage || filename}
+              className="w-full h-32 object-cover bg-muted"
+              loading="lazy"
+            />
+            <div className="px-2 py-1 text-[10px] text-muted-foreground truncate">
+              {stage || category || filename}
+            </div>
+          </a>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Questionnaire Answers tab ──────────────────────────────────────
+type QAnswer = {
+  id: number;
+  question_id: number;
+  question_text: string | null;
+  answer_text: string | null;
+  answer_value: string | null;
+};
+
+function JobQuestionnaireTab({ jobId }: { jobId: number }) {
+  const [answers, setAnswers] = useState<QAnswer[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true); setError(null);
+      try {
+        const data = await api.get<QAnswer[]>(`/admin/questionnaires/answers/${jobId}`);
+        if (!cancelled) setAnswers(Array.isArray(data) ? data : []);
+      } catch (e) {
+        if (!cancelled) setError(e instanceof ApiError ? e.message : 'Failed to load questionnaire answers');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [jobId]);
+
+  if (loading) return <div className="text-sm text-muted-foreground py-6 text-center">Loading…</div>;
+  if (error)   return <div className="text-sm text-red-600 py-3">{error}</div>;
+  if (answers.length === 0) {
+    return (
+      <div className="rounded-lg border bg-card p-8 text-center text-sm text-muted-foreground">
+        No questionnaire answers recorded for this job.
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-lg border bg-card overflow-hidden">
+      <table className="data-table">
+        <thead>
+          <tr>
+            <th className="!text-center w-12">#</th>
+            <th className="!text-left">Question</th>
+            <th className="!text-left">Answer</th>
+          </tr>
+        </thead>
+        <tbody>
+          {answers.map((a, i) => (
+            <tr key={a.id}>
+              <td className="!text-center text-xs text-muted-foreground">{i + 1}</td>
+              <td className="!text-left text-sm">{a.question_text ?? `Q-${a.question_id}`}</td>
+              <td className="!text-left text-sm">{a.answer_text ?? a.answer_value ?? <span className="text-muted-foreground">—</span>}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -1432,6 +2069,293 @@ function Field({ label, children, full }: { label: string; children: React.React
       <Label>{label}</Label>
       {children}
     </div>
+  );
+}
+
+// ─── Reschedule dialog ──────────────────────────────────────────────
+// Mirrors legacy `jobReshedule.vm` — change requested_date_time +
+// time_slot. Doesn't re-stamp scheduled_date_time (that's the assign
+// flow's job). Backend support: PATCH /admin/jobs/:id with both fields
+// in MUTABLE_COLUMNS.
+function RescheduleDialog({ open, onClose, initialDate, initialSlot, onSubmit }: {
+  open: boolean; onClose: () => void;
+  initialDate: string; initialSlot: string;
+  onSubmit: (date: string, slot: string) => Promise<void>;
+}) {
+  const [date, setDate] = useState('');
+  const [slot, setSlot] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (open) {
+      // Convert MySQL DATETIME to <input type="datetime-local"> value.
+      // Slice to YYYY-MM-DDTHH:mm; the input ignores seconds + TZ.
+      setDate(initialDate ? initialDate.replace(' ', 'T').slice(0, 16) : '');
+      setSlot(initialSlot || '');
+      setErr(null);
+    }
+  }, [open, initialDate, initialSlot]);
+  async function go() {
+    if (!date) { setErr('Date is required'); return; }
+    setLoading(true); setErr(null);
+    try {
+      // Convert back to MySQL DATETIME shape for the backend.
+      await onSubmit(date.replace('T', ' ') + ':00', slot);
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'Save failed');
+    } finally { setLoading(false); }
+  }
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader><DialogTitle>Reschedule Job</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <div>
+            <Label className="text-sm font-medium block mb-1">Requested Date / Time *</Label>
+            <Input type="datetime-local" value={date} onChange={(e) => setDate(e.target.value)} />
+          </div>
+          <div>
+            <Label className="text-sm font-medium block mb-1">Time Slot</Label>
+            <Input value={slot} onChange={(e) => setSlot(e.target.value)} placeholder='e.g. "10am-12pm"' />
+          </div>
+          {err && <div className="text-sm text-red-600">{err}</div>}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={onClose} disabled={loading}>Cancel</Button>
+            <Button onClick={go} disabled={loading}>{loading ? 'Saving…' : 'Reschedule'}</Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Change Description dialog ──────────────────────────────────────
+// Legacy `changeJobDesc.vm`. PATCH /admin/jobs/:id { job_desc }.
+function ChangeDescriptionDialog({ open, onClose, initialDesc, onSubmit }: {
+  open: boolean; onClose: () => void;
+  initialDesc: string;
+  onSubmit: (desc: string) => Promise<void>;
+}) {
+  const [desc, setDesc] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (open) { setDesc(initialDesc); setErr(null); }
+  }, [open, initialDesc]);
+  async function go() {
+    setLoading(true); setErr(null);
+    try { await onSubmit(desc.trim()); }
+    catch (e) { setErr(e instanceof ApiError ? e.message : 'Save failed'); }
+    finally { setLoading(false); }
+  }
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader><DialogTitle>Edit Job Description</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <textarea
+            value={desc}
+            onChange={(e) => setDesc(e.target.value)}
+            className="w-full border rounded px-2 py-1 text-sm bg-background min-h-[140px]"
+            placeholder="Describe the work to be done…"
+            maxLength={2000}
+          />
+          <div className="text-[10px] text-muted-foreground text-right">{desc.length} / 2000</div>
+          {err && <div className="text-sm text-red-600">{err}</div>}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={onClose} disabled={loading}>Cancel</Button>
+            <Button onClick={go} disabled={loading}>{loading ? 'Saving…' : 'Save'}</Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Cancel With Reason dialog ──────────────────────────────────────
+// Legacy `jobCancel.vm`. Reason picker comes from /api/shared/lookup/cancel-reasons
+// (tbl_cancel_reason / job_cancel_reason_by_easyfixer_app per CLAUDE.md).
+// PATCH /:id/status with status=6 + reasonId + comment.
+function CancelWithReasonDialog({ open, onClose, onSubmit }: {
+  open: boolean; onClose: () => void;
+  onSubmit: (reasonId: number, comment: string) => Promise<void>;
+}) {
+  const lk = useLookup();
+  const [reasonId, setReasonId] = useState('');
+  const [comment, setComment] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (open) { setReasonId(''); setComment(''); setErr(null); }
+  }, [open]);
+  async function go() {
+    const id = Number(reasonId);
+    if (!id) { setErr('Cancel reason is required'); return; }
+    setLoading(true); setErr(null);
+    try { await onSubmit(id, comment.trim()); }
+    catch (e) { setErr(e instanceof ApiError ? e.message : 'Cancel failed'); }
+    finally { setLoading(false); }
+  }
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader><DialogTitle>Cancel Job</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <div>
+            <Label className="text-sm font-medium block mb-1">Cancellation Reason *</Label>
+            <select
+              value={reasonId}
+              onChange={(e) => setReasonId(e.target.value)}
+              className="border rounded h-9 px-2 text-sm bg-background w-full"
+            >
+              <option value="">Select a reason…</option>
+              {lk.cancelReasons.map((r) => (
+                <option key={r.id} value={r.id}>{r.reason}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <Label className="text-sm font-medium block mb-1">Comment (optional)</Label>
+            <textarea
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+              className="w-full border rounded px-2 py-1 text-sm bg-background min-h-[80px]"
+              placeholder="Additional context for the cancellation…"
+              maxLength={500}
+            />
+          </div>
+          {err && <div className="text-sm text-red-600">{err}</div>}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={onClose} disabled={loading}>Back</Button>
+            <Button variant="destructive" onClick={go} disabled={loading}>
+              {loading ? 'Cancelling…' : 'Cancel Job'}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Feedback dialog ────────────────────────────────────────────────
+// Legacy `feedback.vm`. Backend GET/PUT /admin/jobs/:id/feedback writes
+// to tbl_customer_feedback. Upserts a single row per job (job_id is the
+// natural key).
+//
+// VERIFIED schema 2026-05-12 against legacy tbl_customer_feedback:
+//   easyfixer_rating  → handyman/technician rating (1–5)
+//   easyfix_rating    → overall EasyFix-service rating (1–5)
+//   happy_with_service→ tinyint 0/1 — "was the customer happy?"
+//
+// `customer_rating` lives in a separate table (tbl_easyfixer_rating_by_customer)
+// and is NOT writable here. Earlier UI assumed `overall_rating`,
+// `feedback_text`, `customer_name` columns — they DO NOT EXIST.
+type FeedbackData = {
+  id?: number;
+  job_id?: number;
+  easyfixer_rating?: number | null;
+  easyfix_rating?: number | null;
+  happy_with_service?: number | null;
+};
+
+function FeedbackDialog({ open, onClose, jobId, onSaved }: {
+  open: boolean; onClose: () => void; jobId: number; onSaved: () => void;
+}) {
+  const [efrRating, setEfrRating] = useState('');
+  const [efxRating, setEfxRating] = useState('');
+  const [happy, setHappy] = useState<'' | '0' | '1'>('');
+  const [loading, setLoading] = useState(false);
+  const [loadingExisting, setLoadingExisting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setErr(null);
+    setLoadingExisting(true);
+    (async () => {
+      try {
+        const data = await api.get<FeedbackData | null>(`/admin/jobs/${jobId}/feedback`);
+        setEfrRating(data?.easyfixer_rating != null ? String(data.easyfixer_rating) : '');
+        setEfxRating(data?.easyfix_rating != null ? String(data.easyfix_rating) : '');
+        setHappy(
+          data?.happy_with_service === 1 ? '1' :
+          data?.happy_with_service === 0 ? '0' : ''
+        );
+      } catch {
+        setEfrRating(''); setEfxRating(''); setHappy('');
+      } finally {
+        setLoadingExisting(false);
+      }
+    })();
+  }, [open, jobId]);
+
+  async function go() {
+    const er = efrRating ? Number(efrRating) : undefined;
+    const ex = efxRating ? Number(efxRating) : undefined;
+    if (er != null && (er < 1 || er > 5)) { setErr('Easyfixer rating must be 1–5'); return; }
+    if (ex != null && (ex < 1 || ex > 5)) { setErr('EasyFix service rating must be 1–5'); return; }
+    if (er == null && ex == null && happy === '') {
+      setErr('Enter at least one feedback field'); return;
+    }
+    setLoading(true); setErr(null);
+    try {
+      await api.put(`/admin/jobs/${jobId}/feedback`, {
+        easyfixerRating: er,
+        easyfixRating: ex,
+        happyWithService: happy === '' ? undefined : Number(happy),
+      });
+      onSaved();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'Save failed');
+    } finally { setLoading(false); }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader><DialogTitle>Customer Feedback</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          {loadingExisting && <div className="text-xs text-muted-foreground">Loading existing feedback…</div>}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-sm font-medium block mb-1">Easyfixer Rating (1–5)</Label>
+              <Input
+                type="number" min={1} max={5}
+                value={efrRating}
+                onChange={(e) => setEfrRating(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground mt-1">Rates the technician.</p>
+            </div>
+            <div>
+              <Label className="text-sm font-medium block mb-1">EasyFix Service Rating (1–5)</Label>
+              <Input
+                type="number" min={1} max={5}
+                value={efxRating}
+                onChange={(e) => setEfxRating(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground mt-1">Rates overall EasyFix experience.</p>
+            </div>
+          </div>
+          <div>
+            <Label className="text-sm font-medium block mb-1">Happy with Service?</Label>
+            <select
+              value={happy}
+              onChange={(e) => setHappy(e.target.value as '' | '0' | '1')}
+              className="border rounded h-9 px-2 text-sm bg-background w-full"
+            >
+              <option value="">—</option>
+              <option value="1">Yes</option>
+              <option value="0">No</option>
+            </select>
+          </div>
+          {err && <div className="text-sm text-red-600">{err}</div>}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={onClose} disabled={loading}>Cancel</Button>
+            <Button onClick={go} disabled={loading}>{loading ? 'Saving…' : 'Save Feedback'}</Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

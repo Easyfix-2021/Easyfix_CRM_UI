@@ -185,15 +185,15 @@ export default function EasyfixerZonesPage() {
                 <dl className="text-xs space-y-1">
                   <div className="flex items-center justify-between">
                     <dt className="flex items-center gap-1.5 text-muted-foreground"><Building2 className="h-3 w-3" /> Cities</dt>
-                    <dd className="font-medium tabular-nums">{z.city_count.toLocaleString()}</dd>
+                    <dd className="font-medium tabular-nums">{Number(z.city_count ?? 0).toLocaleString()}</dd>
                   </div>
                   <div className="flex items-center justify-between">
                     <dt className="flex items-center gap-1.5 text-muted-foreground"><Hash className="h-3 w-3" /> Pincodes</dt>
-                    <dd className="font-medium tabular-nums">{z.pincode_count.toLocaleString()}</dd>
+                    <dd className="font-medium tabular-nums">{Number(z.pincode_count ?? 0).toLocaleString()}</dd>
                   </div>
                   <div className="flex items-center justify-between">
                     <dt className="flex items-center gap-1.5 text-muted-foreground"><Users className="h-3 w-3" /> Technicians</dt>
-                    <dd className="font-medium tabular-nums">{z.easyfixer_count.toLocaleString()}</dd>
+                    <dd className="font-medium tabular-nums">{Number(z.easyfixer_count ?? 0).toLocaleString()}</dd>
                   </div>
                 </dl>
               </button>

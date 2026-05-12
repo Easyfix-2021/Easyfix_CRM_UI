@@ -4,7 +4,7 @@ Next.js 15 App Router + Tailwind + shadcn-style components. Consumes `EasyFix_Ba
 at `/api/admin/*`, `/api/auth/*`, `/api/shared/*`.
 
 **Master spec**: `/Users/harshit/Documents/GitHub/EasyFix Docs/EasyFix_Platform_Blueprint.md` §6.
-Also see `/Users/harshit/Documents/GitHub/EasyFix_Backend/PHASE_PLAN.md` — Phase 1B is this repo.
+This repo is the CRM (staff-facing) frontend — formerly tracked as Phase 1B. The migration is complete across all phases as of 2026-05-12.
 
 ## Visual style (match legacy EasyFix_CRM)
 

@@ -11,6 +11,8 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { api, ApiError } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
 import { formatDate, formatEasyfixerName } from '@/lib/utils';
+import { useMe } from '@/lib/auth-context';
+import { actionFlags } from '@/lib/permissions';
 
 /*
  * One component, three modes — `create` | `edit` | `view`. The field set is
@@ -62,6 +64,13 @@ export function EasyfixerModal({
   onSaved?: (record: EfRecord) => void;
 }) {
   const lk = useLookup();
+  // Modal-internal permission gates. View mode is open to anyone with
+  // access to /easyfixers; Edit + Activate/Deactivate + Save require
+  // the legacy `isEasyfixerEdit` action, and the Create form's submit
+  // requires `isEasyfixerAddNew` so a user who can browse but not add
+  // doesn't see a non-functional submit button after switching modes.
+  const { me } = useMe();
+  const can = actionFlags(me, ['isEasyfixerAddNew', 'isEasyfixerEdit']);
   const [mode, setMode] = useState<EasyfixerModalMode>(initialMode);
   const [record, setRecord] = useState<EfRecord | null>(null);
   const [form, setForm] = useState<FormShape>(emptyForm);
@@ -149,13 +158,16 @@ export function EasyfixerModal({
               <DialogTitle className="truncate">{title}</DialogTitle>
               {subtitle && <DialogDescription className="mt-1">{subtitle}</DialogDescription>}
             </div>
-            {mode === 'view' && record && (
+            {mode === 'view' && record && can.isEasyfixerEdit && (
               <div className="flex items-center gap-2 shrink-0">
                 <Button size="sm" variant="outline" onClick={() => setMode('edit')}>Edit</Button>
                 <Button size="sm" variant={Number(record.efr_status) ? 'destructive' : 'default'} onClick={toggleStatus}>
                   {Number(record.efr_status) ? 'Deactivate' : 'Activate'}
                 </Button>
               </div>
+            )}
+            {mode === 'view' && record && !can.isEasyfixerEdit && (
+              <span className="text-xs text-muted-foreground italic shrink-0">view-only</span>
             )}
           </div>
         </DialogHeader>
@@ -173,9 +185,14 @@ export function EasyfixerModal({
 
         <div className="px-6 py-3 border-t bg-muted/30 flex justify-end gap-2">
           <Button variant="outline" onClick={onClose}>Close</Button>
-          {mode !== 'view' && (
+          {mode === 'create' && can.isEasyfixerAddNew && (
             <Button type="submit" form="efr-form" disabled={saving || loading}>
-              {saving ? 'Saving…' : mode === 'create' ? 'Create Easyfixer' : 'Save changes'}
+              {saving ? 'Saving…' : 'Create Easyfixer'}
+            </Button>
+          )}
+          {mode === 'edit' && can.isEasyfixerEdit && (
+            <Button type="submit" form="efr-form" disabled={saving || loading}>
+              {saving ? 'Saving…' : 'Save changes'}
             </Button>
           )}
         </div>

@@ -78,7 +78,24 @@ const URL_MAP: Record<string, string> = {
   'home':                  '/dashboard',
   'job':                   '/jobs',
   'uploadJobByExcel':      '/jobs/upload',
+  'changeJobOwner':        '/jobs',
+  'callLater':             '/jobs?tab=call-later',
+  // Legacy `androidAppJob` (App Job) calls SP sp_ef_app_job_list which
+  // returns the same 5-bucket per-user dashboard our `/my-orders` page
+  // already shows (PendingForScheduling, NotStarted, NotCompleted,
+  // PendingForCheckout, PendingFeedback). Aliasing to /my-orders
+  // avoids duplicating the same view at a different URL.
+  'androidAppJob':         '/my-orders',
+  // Top-level master-data pages that ALREADY exist in the new app
+  // — sidebar links were silently falling through to /coming-soon
+  // because URL_MAP didn't include these legacy `tbl_menu.url` keys.
+  'customer':              '/customers',
+  'client':                '/clients',
   'easyfixer':             '/easyfixers',
+  // Search-by-mobile / efr_no / name. Used by call-flow staff.
+  'checkBalance':          '/search',
+  // Onboarding queue — EasyFixers awaiting technician verification.
+  'efer-registration':     '/easyfixers/registrations',
   // Zone management lives in TWO places (intentional split):
   //   - /settings/zones        — full management surface: CRUD + city
   //                              mapping editor + bulk Excel upload/download.
@@ -111,6 +128,46 @@ const URL_MAP: Record<string, string> = {
   'user':                  '/settings/manage-users',
   // Manage Roles (legacy `usertype`): tbl_role rows + group classification.
   'usertype':              '/settings/manage-roles',
+  // Master-data settings ported from legacy CRM.
+  'servicecategory':       '/settings/service-categories',
+  'servicetype':           '/settings/service-types',
+  'documentType':          '/settings/document-types',
+  'skill':                 '/settings/skill-levels',
+  'tool':                  '/settings/tools',
+  'questionaire':          '/settings/questionnaires',
+  'questionnaires':        '/settings/questionnaires',
+  'vertical':              '/settings/verticals',
+  'clientratecard':        '/settings/rate-cards-b2b',
+  'retailratecard':        '/settings/rate-cards-b2c',
+  // Reports + Tracking + Admin landing pages (Phase 11 frontend).
+  // Legacy tbl_menu rows have a wider URL vocabulary than our internal
+  // map — these aliases ensure every legacy Report/Tracking row resolves
+  // to a real page instead of /coming-soon.
+  'reports':                '/reports',
+  'completedJobs':          '/reports',
+  'completedJobsReport':    '/reports',
+  'easyfixerReport':        '/reports',
+  'manageEfrReport':        '/reports',
+  'payoutSheet':            '/reports',
+  'cityAnalysis':           '/reports',
+  'userProductivity':       '/reports',
+  'userHours':              '/reports',
+  'userLoggingHours':       '/reports',
+  'manageFinanceReport':    '/reports',
+  'manageEscalationReport': '/reports',
+  'jobTracking':            '/tracking',
+  'tracking':               '/tracking',
+  'clientTracking':         '/tracking',
+  'adminAction':            '/admin-actions',
+  'generateClientInvoice':  '/admin-actions',
+  // Finance sub-resources — Finance landing page links to these
+  'clientInvoice':          '/finance?tab=invoices',
+  'servicemenPayout':       '/finance?tab=payouts',
+  'ndmCollection':          '/finance?tab=ndm-collection',
+  'updateRecharge':         '/finance?tab=collection-approval',
+  'easyfixerDebit':         '/finance?tab=debits',
+  'easyfixerCredit':        '/finance?tab=credits',
+  'easyfixerAdvance':       '/finance/advances',
   // My Orders sub-menus (legacy CRM): each tbl_menu row's `url` is the full
   // `dashboardChecking?enumDesc=<value>` string, so these keys match verbatim.
   // Targets point at the distinct /my-orders route — that page scopes the
@@ -126,24 +183,14 @@ const URL_MAP: Record<string, string> = {
   'dashboardChecking?enumDesc=PendingForCheckout':        '/my-orders?tab=audit-complete',
 };
 
-/*
- * Top-level menu names the new CRM deliberately re-homes elsewhere — they
- * never render as standalone sidebar items even if they're in the user's
- * menu_ids allowlist. Their children (if any) are still reachable through
- * the destination page noted in the comment.
- *
- *   'User' → folded into Settings → Manage Users / Manage Roles. The
- *            legacy CRM had User as its own top-level dropdown; the new
- *            CRM groups all master-data management under Settings for
- *            visual consistency.
- *
- * This is a UX consolidation, NOT a permission decision — the underlying
- * role still owns those menu_ids; we just don't surface the parent.
- */
-const SUPPRESSED_TOP_LEVEL = new Set<string>(['User']);
-
 // Top-level parent → lucide icon. Keyed by menu_name so DB changes don't
 // break us as long as the canonical names stay stable.
+//
+// No code-level menu-name suppression: tbl_menu is the single source of
+// truth for which menus exist and which parent each one sits under. To
+// move a menu (e.g. "Manage User") between parents, edit the row's
+// parent_menu in tbl_menu; to hide it entirely, set menu_status = 0 or
+// remove its menu_id from the role's menu_ids CSV.
 //
 // Role-based visibility used to live here as `allow` / `group` arrays. That
 // hardcoded model has been retired — visibility is now driven entirely by
@@ -271,7 +318,6 @@ export function Sidebar() {
     // Step 2: prune each surviving root's children to only the allowed set.
     return roots
       .filter((r) => allowedMenuIds.has(r.menu_id))
-      .filter((r) => !SUPPRESSED_TOP_LEVEL.has(r.menu_name))
       .map((r) => ({
         ...r,
         children: r.children.filter((c) => allowedMenuIds.has(c.menu_id)),
