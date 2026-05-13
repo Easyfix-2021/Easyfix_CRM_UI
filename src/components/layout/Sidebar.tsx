@@ -162,6 +162,8 @@ const URL_MAP: Record<string, string> = {
   'clientTracking':         '/tracking?focus=clients',
   'adminAction':            '/admin-actions',
   'generateClientInvoice':  '/admin-actions?focus=generate-invoice',
+  'webhook':                '/admin-actions/webhooks',
+  'webhookManager':         '/admin-actions/webhooks',
   // Finance sub-resources — Finance landing page links to these
   'clientInvoice':          '/finance?tab=invoices',
   'servicemenPayout':       '/finance?tab=payouts',

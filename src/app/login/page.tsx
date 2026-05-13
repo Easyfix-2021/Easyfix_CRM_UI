@@ -136,12 +136,26 @@ export default function LoginPage() {
                 />
               </div>
               {error && <div className="text-sm text-destructive text-center">{error}</div>}
-              <div className="flex gap-2">
-                <Button type="button" variant="outline" onClick={() => { setStep('identifier'); setError(null); setOtp(''); }}>Back</Button>
-                <Button type="submit" className="flex-1" disabled={loading || otp.length !== 4}>
-                  {loading ? 'Verifying…' : 'Verify & Sign in'}
-                </Button>
-              </div>
+              {/*
+                * Auto-submit fires on the 4th digit (see onComplete above) so
+                * we don't need a "Verify" button. A loading spinner appears
+                * during the submit; otherwise the only action a user might
+                * need is to correct a typo in their identifier — surface that
+                * as a small inline link rather than a chunky Back button.
+                */}
+              {loading ? (
+                <div className="text-sm text-muted-foreground text-center">Verifying…</div>
+              ) : (
+                <div className="text-sm text-center">
+                  <button
+                    type="button"
+                    className="text-primary hover:underline"
+                    onClick={() => { setStep('identifier'); setError(null); setOtp(''); }}
+                  >
+                    Change Email/Mobile Number
+                  </button>
+                </div>
+              )}
             </form>
           )}
         </CardContent>

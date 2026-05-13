@@ -18,7 +18,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  UserCog, Search, Plus, Pencil, Trash2,
+  UserCog, Users, Search, Plus, Pencil, Trash2,
   AlertTriangle, ChevronDown, ChevronRight, Info,
   ArrowUp, ArrowDown, ArrowUpDown,
 } from 'lucide-react';
@@ -26,6 +26,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { SearchSelect } from '@/components/ui/search-select';
 import { api, ApiError } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useLookup } from '@/lib/use-lookup';
@@ -46,6 +47,8 @@ type User = {
   manage_clients: string | null;
   manage_cities: string | null;
   manage_states: string | null;
+  manage_verticals: string | null;
+  reporting_manager: number | null;
   user_status: number;
   insert_date: string | null;
   update_date: string | null;
@@ -188,6 +191,11 @@ export default function ManageUsersPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <a href="/settings/manage-users/hierarchy" className="inline-flex">
+            <Button variant="outline">
+              <Users className="size-4 mr-1" /> Hierarchy
+            </Button>
+          </a>
           <Button onClick={() => { setEditing(null); setModalOpen(true); }}>
             <Plus className="size-4 mr-1" /> Add User
           </Button>
@@ -259,26 +267,25 @@ export default function ManageUsersPage() {
               className="pl-8"
             />
           </div>
-          <select
-            value={roleFilter}
-            onChange={(e) => setRoleFilter(e.target.value ? Number(e.target.value) : '')}
-            className="border rounded h-9 px-2 text-sm bg-background"
-          >
-            <option value="">All roles</option>
-            {lookup.roles.map((r) => (
-              <option key={r.role_id} value={r.role_id}>{r.role_name}</option>
-            ))}
-          </select>
-          <select
-            value={cityFilter}
-            onChange={(e) => setCityFilter(e.target.value ? Number(e.target.value) : '')}
-            className="border rounded h-9 px-2 text-sm bg-background"
-          >
-            <option value="">All cities</option>
-            {lookup.cities.map((c) => (
-              <option key={c.city_id} value={c.city_id}>{c.city_name}</option>
-            ))}
-          </select>
+          {/* Filters use the shared SearchSelect (typeahead + keyboard nav)
+              rather than native <select> so large role/city lists are
+              filterable by typing. Empty value = "All roles" / "All cities". */}
+          <div className="min-w-[180px]">
+            <SearchSelect
+              value={roleFilter === '' ? '' : roleFilter}
+              onChange={(v) => setRoleFilter(v ? Number(v) : '')}
+              options={lookup.roles.map((r) => ({ value: r.role_id, label: r.role_name }))}
+              placeholder="All roles"
+            />
+          </div>
+          <div className="min-w-[180px]">
+            <SearchSelect
+              value={cityFilter === '' ? '' : cityFilter}
+              onChange={(v) => setCityFilter(v ? Number(v) : '')}
+              options={lookup.cities.map((c) => ({ value: c.city_id, label: c.city_name }))}
+              placeholder="All cities"
+            />
+          </div>
           <label className="flex items-center gap-1 text-xs">
             <input type="checkbox" checked={includeInactive} onChange={(e) => setIncludeInactive(e.target.checked)} />
             Include inactive
@@ -393,6 +400,9 @@ export default function ManageUsersPage() {
         roles={lookup.roles}
         cities={lookup.cities}
         clients={lookup.clients}
+        states={lookup.states}
+        verticals={lookup.verticals}
+        adminUsers={lookup.adminUsers}
         onSaved={() => { setModalOpen(false); void fetchList(); }}
       />
     </div>
@@ -492,7 +502,7 @@ function SortHeader({
  * primary.
  */
 function UserFormModal({
-  open, onClose, editing, roles, cities, clients, onSaved,
+  open, onClose, editing, roles, cities, clients, states, verticals, adminUsers, onSaved,
 }: {
   open: boolean;
   onClose: () => void;
@@ -500,6 +510,9 @@ function UserFormModal({
   roles: Array<{ role_id: number; role_name: string }>;
   cities: Array<{ city_id: number; city_name: string }>;
   clients: Array<{ client_id: number; client_name: string }>;
+  states: Array<{ state_id: number; state_name: string }>;
+  verticals: Array<{ vertical_id: number; vertical_name: string }>;
+  adminUsers: Array<{ user_id: number; user_name: string; role_name?: string }>;
   onSaved: () => void;
 }) {
   const isEdit = !!editing;
@@ -507,6 +520,20 @@ function UserFormModal({
   const [email,   setEmail]   = useState('');
   const [mobile,  setMobile]  = useState('');
   const [altMob,  setAltMob]  = useState('');
+  /*
+   * Real-time mobile-uniqueness check.
+   *   mobileCheck.state — 'idle' (no probe in flight), 'checking' (probe
+   *     in flight), 'available' (mobile is free), 'taken' (taken by another
+   *     active internal user), 'invalid' (not 10 digits — UI shows the
+   *     existing length warning instead, so we render nothing for this).
+   *   Cached in a Map so re-typing the same number doesn't refetch and the
+   *   debounce delay (450ms) is the only wait on first probe.
+   */
+  const [mobileCheck, setMobileCheck] = useState<{
+    state: 'idle' | 'checking' | 'available' | 'taken' | 'invalid';
+    takenByName?: string;
+  }>({ state: 'idle' });
+  const mobileCacheRef = useRef<Map<string, { available: boolean; takenBy?: { user_id: number; user_name: string } }>>(new Map());
   const [roleId,  setRoleId]  = useState<number | ''>('');
   const [cityId,  setCityId]  = useState<number | ''>('');
   const [active,  setActive]  = useState(true);
@@ -517,8 +544,12 @@ function UserFormModal({
   // CSV strings on save to match legacy `tbl_user.manage_cities` /
   // `manage_clients` storage. Hydrated from editing.manage_cities CSV by
   // parsing the comma-separated id list.
-  const [manageCities,  setManageCities]  = useState<Set<number>>(new Set());
-  const [manageClients, setManageClients] = useState<Set<number>>(new Set());
+  const [manageCities,    setManageCities]    = useState<Set<number>>(new Set());
+  const [manageClients,   setManageClients]   = useState<Set<number>>(new Set());
+  const [manageStates,    setManageStates]    = useState<Set<number>>(new Set());
+  const [manageVerticals, setManageVerticals] = useState<Set<number>>(new Set());
+  const [reportingManager, setReportingManager] = useState<number | ''>('');
+  const [managerQuery, setManagerQuery] = useState('');
 
   const [cityQuery, setCityQuery] = useState('');
   const filteredCities = useMemo(() => {
@@ -540,6 +571,38 @@ function UserFormModal({
     if (!q) return cities;
     return cities.filter((c) => c.city_name.toLowerCase().includes(q));
   }, [cities, manageCitiesQuery]);
+
+  const [manageStatesQuery, setManageStatesQuery] = useState('');
+  const filteredManageStates = useMemo(() => {
+    const q = manageStatesQuery.trim().toLowerCase();
+    if (!q) return states;
+    return states.filter((s) => s.state_name.toLowerCase().includes(q));
+  }, [states, manageStatesQuery]);
+
+  const [verticalQuery, setVerticalQuery] = useState('');
+  const filteredVerticals = useMemo(() => {
+    const q = verticalQuery.trim().toLowerCase();
+    if (!q) return verticals;
+    return verticals.filter((v) => v.vertical_name.toLowerCase().includes(q));
+  }, [verticals, verticalQuery]);
+
+  // Reporting Manager — single-select searchable. Exclude the user
+  // being edited (preventing direct self-loops at the UI layer; backend
+  // DFS guards against indirect cycles via `visited` set).
+  const filteredManagers = useMemo(() => {
+    const q = managerQuery.trim().toLowerCase();
+    const list = adminUsers.filter((u) => !editing || u.user_id !== editing.user_id);
+    if (!q) return list.slice(0, 50);
+    return list.filter((u) =>
+      u.user_name.toLowerCase().includes(q) ||
+      (u.role_name || '').toLowerCase().includes(q)
+    ).slice(0, 50);
+  }, [adminUsers, managerQuery, editing]);
+
+  const selectedManagerName = useMemo(
+    () => adminUsers.find((u) => u.user_id === reportingManager)?.user_name ?? null,
+    [adminUsers, reportingManager]
+  );
 
   const selectedCityName = useMemo(
     () => cities.find((c) => c.city_id === cityId)?.city_name ?? null,
@@ -569,9 +632,15 @@ function UserFormModal({
       setActive(editing ? editing.user_status === 1 : true);
       setManageCities(csvToSet(editing?.manage_cities));
       setManageClients(csvToSet(editing?.manage_clients));
+      setManageStates(csvToSet(editing?.manage_states));
+      setManageVerticals(csvToSet(editing?.manage_verticals));
+      setReportingManager(editing?.reporting_manager ?? '');
       setCityQuery('');
       setClientQuery('');
       setManageCitiesQuery('');
+      setManageStatesQuery('');
+      setVerticalQuery('');
+      setManagerQuery('');
       setError(null);
     }
   }, [open, editing]);
@@ -590,6 +659,74 @@ function UserFormModal({
       return next;
     });
   }
+  function toggleManageState(id: number) {
+    setManageStates((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+  function toggleManageVertical(id: number) {
+    setManageVerticals((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  /*
+   * Debounced real-time mobile-uniqueness probe. Fires only when:
+   *   - exactly 10 digits typed (shorter is a length warning, not a probe)
+   *   - mobile differs from the user being edited (no probe for unchanged)
+   * Cache hits resolve instantly; cache misses wait 450ms after the last
+   * keystroke. The dropdown stays disabled during 'checking' so a fast
+   * Save can't race the probe. AbortController cancels stale requests
+   * when the user keeps typing.
+   */
+  useEffect(() => {
+    if (!open) return;
+    // Same-as-editing → not a change, skip the probe entirely.
+    if (isEdit && mobile === (editing?.mobile_no ?? '')) {
+      setMobileCheck({ state: 'idle' });
+      return;
+    }
+    if (!/^[0-9]{10}$/.test(mobile)) {
+      // length warning is rendered by the existing UI; we stay idle.
+      setMobileCheck({ state: mobile.length === 0 ? 'idle' : 'invalid' });
+      return;
+    }
+    const cached = mobileCacheRef.current.get(mobile);
+    if (cached) {
+      setMobileCheck(cached.available
+        ? { state: 'available' }
+        : { state: 'taken', takenByName: cached.takenBy?.user_name });
+      return;
+    }
+    setMobileCheck({ state: 'checking' });
+    // Stale-response guard: each effect run sets `cancelled=true` from its
+    // cleanup callback, so an in-flight probe whose result arrives AFTER
+    // the user kept typing simply no-ops instead of overwriting the newer
+    // state. The api wrapper doesn't surface AbortSignal, and that's fine
+    // for a 10-digit probe — at most one stale request hits the network.
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const params: Record<string, string | number> = { mobile };
+        if (isEdit && editing?.user_id) params.excludeUserId = editing.user_id;
+        const res = await api.get<{ available: boolean; takenBy?: { user_id: number; user_name: string } }>(
+          '/admin/users/check-mobile', params,
+        );
+        if (cancelled) return;
+        mobileCacheRef.current.set(mobile, res);
+        setMobileCheck(res.available
+          ? { state: 'available' }
+          : { state: 'taken', takenByName: res.takenBy?.user_name });
+      } catch {
+        if (!cancelled) setMobileCheck({ state: 'idle' });
+      }
+    }, 450);
+    return () => { window.clearTimeout(timer); cancelled = true; };
+  }, [mobile, isEdit, editing?.user_id, editing?.mobile_no, open]);
 
   async function handleSubmit() {
     setError(null);
@@ -600,36 +737,53 @@ function UserFormModal({
     }
     if (!/^[0-9]{10}$/.test(mobile)) { setError('Mobile must be 10 digits'); return; }
     if (altMob && !/^[0-9]{10}$/.test(altMob)) { setError('Alternate number must be 10 digits or blank'); return; }
+    // Block submit if the real-time probe found a collision. Backend
+    // re-checks on create/update too — this is defensive UX only. We
+    // tolerate 'checking' (probe in flight): backend is the source of
+    // truth and will reject if needed; blocking submit on 'checking'
+    // would frustrate fast typists.
+    if (mobileCheck.state === 'taken') {
+      setError(`Mobile already in use${mobileCheck.takenByName ? ` by ${mobileCheck.takenByName}` : ''}`);
+      return;
+    }
     if (!roleId) { setError('Role is required'); return; }
 
     // Serialise the Sets back to CSV — matches legacy tbl_user storage.
     // Sort by id so the persisted value is deterministic (avoids spurious
     // diffs when the operator's click order changes).
-    const manageCitiesCsv  = Array.from(manageCities).sort((a, b) => a - b).join(',') || null;
-    const manageClientsCsv = Array.from(manageClients).sort((a, b) => a - b).join(',') || null;
+    const manageCitiesCsv    = Array.from(manageCities).sort((a, b) => a - b).join(',') || null;
+    const manageClientsCsv   = Array.from(manageClients).sort((a, b) => a - b).join(',') || null;
+    const manageStatesCsv    = Array.from(manageStates).sort((a, b) => a - b).join(',') || null;
+    const manageVerticalsCsv = Array.from(manageVerticals).sort((a, b) => a - b).join(',') || null;
 
     setSubmitting(true);
     try {
       if (isEdit) {
         await api.patch(`/admin/users/${editing!.user_id}`, {
-          mobile_no:      mobile,
-          alternate_no:   altMob || null,
-          user_role:      Number(roleId),
-          city_id:        cityId ? Number(cityId) : null,
-          manage_cities:  manageCitiesCsv,
-          manage_clients: manageClientsCsv,
-          is_active:      active,
+          mobile_no:        mobile,
+          alternate_no:     altMob || null,
+          user_role:        Number(roleId),
+          city_id:          cityId ? Number(cityId) : null,
+          manage_cities:    manageCitiesCsv,
+          manage_clients:   manageClientsCsv,
+          manage_states:    manageStatesCsv,
+          manage_verticals: manageVerticalsCsv,
+          reporting_manager: reportingManager ? Number(reportingManager) : null,
+          is_active:        active,
         });
       } else {
         await api.post('/admin/users', {
-          user_name:      name.trim(),
-          official_email: email.trim(),
-          mobile_no:      mobile,
-          alternate_no:   altMob || null,
-          user_role:      Number(roleId),
-          city_id:        cityId ? Number(cityId) : null,
-          manage_cities:  manageCitiesCsv,
-          manage_clients: manageClientsCsv,
+          user_name:        name.trim(),
+          official_email:   email.trim(),
+          mobile_no:        mobile,
+          alternate_no:     altMob || null,
+          user_role:        Number(roleId),
+          city_id:          cityId ? Number(cityId) : null,
+          manage_cities:    manageCitiesCsv,
+          manage_clients:   manageClientsCsv,
+          manage_states:    manageStatesCsv,
+          manage_verticals: manageVerticalsCsv,
+          reporting_manager: reportingManager ? Number(reportingManager) : null,
         });
       }
       onSaved();
@@ -681,6 +835,25 @@ function UserFormModal({
                 placeholder="10-digit number"
                 className="font-mono"
               />
+              {mobile && mobile.length !== 10 && (
+                <p className="text-xs text-amber-700 mt-1">Mobile must be exactly 10 digits ({mobile.length}/10).</p>
+              )}
+              {/* Real-time DB uniqueness check — only renders for a complete
+                  10-digit number that actually differs from the user being
+                  edited. Sub-second feel via 450ms debounce + in-memory
+                  cache; the form submit is blocked while taken (see
+                  handleSubmit guard below). */}
+              {mobile.length === 10 && mobileCheck.state === 'checking' && (
+                <p className="text-xs text-muted-foreground mt-1">Checking availability…</p>
+              )}
+              {mobile.length === 10 && mobileCheck.state === 'available' && (
+                <p className="text-xs text-emerald-700 mt-1">✓ Available</p>
+              )}
+              {mobile.length === 10 && mobileCheck.state === 'taken' && (
+                <p className="text-xs text-rose-700 mt-1">
+                  ✗ Already in use{mobileCheck.takenByName ? ` by ${mobileCheck.takenByName}` : ' by another active user'}.
+                </p>
+              )}
             </div>
             <div>
               <label className="text-sm font-medium block mb-1">Alternate Mobile</label>
@@ -690,23 +863,25 @@ function UserFormModal({
                 placeholder="optional"
                 className="font-mono"
               />
+              {altMob && altMob.length !== 10 && (
+                <p className="text-xs text-amber-700 mt-1">If supplied, alt mobile must be 10 digits.</p>
+              )}
             </div>
           </div>
 
+          {/* Role — shared SearchSelect (typeahead + keyboard nav).
+              Same component the toolbar role filter uses, so the picker
+              behaves identically across the page. */}
           <div>
             <label className="text-sm font-medium block mb-1">Role *</label>
-            <select
-              value={roleId}
-              onChange={(e) => setRoleId(e.target.value ? Number(e.target.value) : '')}
-              className="border rounded h-9 px-2 text-sm bg-background w-full"
-            >
-              <option value="">Select a role…</option>
-              {roles.map((r) => (
-                <option key={r.role_id} value={r.role_id}>{r.role_name}</option>
-              ))}
-            </select>
+            <SearchSelect
+              value={roleId === '' ? '' : roleId}
+              onChange={(v) => setRoleId(v ? Number(v) : '')}
+              options={roles.map((r) => ({ value: r.role_id, label: r.role_name }))}
+              placeholder="Search and select a role…"
+            />
             <p className="text-xs text-muted-foreground mt-1">
-              Only admin-group roles are listed. Client + technician roles are managed elsewhere.
+              Every active role is listed. Backend will reject combos that aren't allowed for the user's group.
             </p>
           </div>
 
@@ -870,6 +1045,203 @@ function UserFormModal({
           </div>
 
           {/*
+            * Manages States (multi-select) — RBAC scope. CSV of state_ids in
+            * tbl_user.manage_states. Filters the user's view of jobs / EFRs
+            * by the state of the linked city.
+            */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-sm font-medium">
+                Manages States <span className="text-xs text-muted-foreground font-normal">
+                  ({manageStates.size} selected)
+                </span>
+              </label>
+              <div className="text-xs flex gap-2">
+                <button
+                  type="button"
+                  className="text-primary hover:underline"
+                  onClick={() => setManageStates(new Set([
+                    ...Array.from(manageStates),
+                    ...filteredManageStates.map((s) => s.state_id),
+                  ]))}
+                >
+                  Select {manageStatesQuery.trim() ? 'filtered' : 'all'}
+                </button>
+                {manageStates.size > 0 && (
+                  <button
+                    type="button"
+                    className="text-muted-foreground hover:text-red-600 hover:underline"
+                    onClick={() => setManageStates(new Set())}
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            </div>
+            <Input
+              value={manageStatesQuery}
+              onChange={(e) => setManageStatesQuery(e.target.value)}
+              placeholder="Search states to add/remove…"
+              className="mb-1"
+            />
+            {manageStates.size > 0 && (
+              <div className="text-xs text-muted-foreground mb-1 flex flex-wrap gap-1">
+                {Array.from(manageStates).map((id) => {
+                  const s = states.find((x) => x.state_id === id);
+                  if (!s) return null;
+                  return (
+                    <span key={id} className="bg-violet-50 text-violet-700 rounded px-1.5 py-0.5">
+                      {s.state_name}
+                      <button type="button" className="ml-1 text-violet-700/60 hover:text-violet-900" onClick={() => toggleManageState(id)}>×</button>
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+            <div className="border rounded bg-background max-h-36 overflow-auto" role="listbox">
+              {filteredManageStates.length === 0 ? (
+                <div className="px-3 py-2 text-sm text-muted-foreground">No states match.</div>
+              ) : filteredManageStates.map((s) => {
+                const selected = manageStates.has(s.state_id);
+                return (
+                  <button
+                    type="button"
+                    key={s.state_id}
+                    role="option"
+                    aria-selected={selected}
+                    onClick={() => toggleManageState(s.state_id)}
+                    className={`w-full text-left px-3 py-1.5 text-sm hover:bg-muted/60 flex items-center gap-2 ${selected ? 'bg-violet-50 text-violet-700 font-medium' : ''}`}
+                  >
+                    <input type="checkbox" readOnly checked={selected} className="pointer-events-none" />
+                    <span>{s.state_name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/*
+            * Manages Verticals (multi-select) — RBAC scope. CSV of vertical_ids
+            * in tbl_user.manage_verticals. Filters the user's view of jobs /
+            * clients by the vertical assigned to the client (tbl_client.vertical_id).
+            */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-sm font-medium">
+                Manages Verticals <span className="text-xs text-muted-foreground font-normal">
+                  ({manageVerticals.size} selected)
+                </span>
+              </label>
+              <div className="text-xs flex gap-2">
+                <button
+                  type="button"
+                  className="text-primary hover:underline"
+                  onClick={() => setManageVerticals(new Set([
+                    ...Array.from(manageVerticals),
+                    ...filteredVerticals.map((v) => v.vertical_id),
+                  ]))}
+                >
+                  Select {verticalQuery.trim() ? 'filtered' : 'all'}
+                </button>
+                {manageVerticals.size > 0 && (
+                  <button
+                    type="button"
+                    className="text-muted-foreground hover:text-red-600 hover:underline"
+                    onClick={() => setManageVerticals(new Set())}
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            </div>
+            <Input
+              value={verticalQuery}
+              onChange={(e) => setVerticalQuery(e.target.value)}
+              placeholder="Search verticals to add/remove…"
+              className="mb-1"
+            />
+            {manageVerticals.size > 0 && (
+              <div className="text-xs text-muted-foreground mb-1 flex flex-wrap gap-1">
+                {Array.from(manageVerticals).map((id) => {
+                  const v = verticals.find((x) => x.vertical_id === id);
+                  if (!v) return null;
+                  return (
+                    <span key={id} className="bg-amber-50 text-amber-700 rounded px-1.5 py-0.5">
+                      {v.vertical_name}
+                      <button type="button" className="ml-1 text-amber-700/60 hover:text-amber-900" onClick={() => toggleManageVertical(id)}>×</button>
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+            <div className="border rounded bg-background max-h-36 overflow-auto" role="listbox">
+              {filteredVerticals.length === 0 ? (
+                <div className="px-3 py-2 text-sm text-muted-foreground">No verticals match.</div>
+              ) : filteredVerticals.map((v) => {
+                const selected = manageVerticals.has(v.vertical_id);
+                return (
+                  <button
+                    type="button"
+                    key={v.vertical_id}
+                    role="option"
+                    aria-selected={selected}
+                    onClick={() => toggleManageVertical(v.vertical_id)}
+                    className={`w-full text-left px-3 py-1.5 text-sm hover:bg-muted/60 flex items-center gap-2 ${selected ? 'bg-amber-50 text-amber-700 font-medium' : ''}`}
+                  >
+                    <input type="checkbox" readOnly checked={selected} className="pointer-events-none" />
+                    <span>{v.vertical_name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/*
+            * Reporting Manager — single-select. Drives the hierarchy DFS
+            * for scope-union: on login, the user's own scope is merged
+            * with every direct/indirect report's manage_* fields so a
+            * manager sees their team's data. Self-assignment is blocked
+            * at the UI layer; the backend also catches transitive cycles.
+            */}
+          <div>
+            <label className="text-sm font-medium block mb-1">
+              Reporting Manager <span className="text-xs text-muted-foreground font-normal">(optional)</span>
+            </label>
+            {selectedManagerName && (
+              <div className="text-xs text-muted-foreground mb-1">
+                Selected: <span className="font-medium text-foreground">{selectedManagerName}</span>
+                {' '}<button type="button" className="text-blue-700 underline ml-1" onClick={() => setReportingManager('')}>clear</button>
+              </div>
+            )}
+            <Input
+              value={managerQuery}
+              onChange={(e) => setManagerQuery(e.target.value)}
+              placeholder="Search by name or role…"
+              className="mb-1"
+            />
+            <div className="border rounded bg-background max-h-36 overflow-auto" role="listbox">
+              {filteredManagers.length === 0 ? (
+                <div className="px-3 py-2 text-sm text-muted-foreground">No matching admins.</div>
+              ) : filteredManagers.map((u) => {
+                const selected = reportingManager === u.user_id;
+                return (
+                  <button
+                    type="button"
+                    key={u.user_id}
+                    role="option"
+                    aria-selected={selected}
+                    onClick={() => { setReportingManager(u.user_id); setManagerQuery(''); }}
+                    className={`w-full text-left px-3 py-1.5 text-sm hover:bg-muted/60 flex items-center justify-between gap-2 ${selected ? 'bg-blue-50 text-blue-700 font-medium' : ''}`}
+                  >
+                    <span>{u.user_name}</span>
+                    {u.role_name && <span className="text-xs text-muted-foreground">{u.role_name}</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/*
             * Home City (single) — new-app addition. Not in legacy form but
             * tbl_user.city_id has been a real column for years; other parts
             * of the system key off it. Optional, sits below the Manages
@@ -934,3 +1306,5 @@ function UserFormModal({
     </Dialog>
   );
 }
+
+

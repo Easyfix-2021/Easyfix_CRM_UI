@@ -21,6 +21,7 @@ type EasyfixerLite = { efr_id: number; efr_name: string; efr_no: string; city_na
 type Reason = { id: number; reason: string };
 type Bank = { id: number; bank_name: string };
 type DocumentType = { document_type_id: number; document_name: string };
+type Vertical = { vertical_id: number; vertical_name: string };
 
 /*
  * Three-tier cache:
@@ -83,16 +84,22 @@ export function useLookup() {
   const [cancelReasons, setCancelReasons] = useState<Reason[]>([]);
   const [rescheduleReasons, setRescheduleReasons] = useState<Reason[]>([]);
   const [documentTypes, setDocumentTypes] = useState<DocumentType[]>([]);
+  const [verticals, setVerticals] = useState<Vertical[]>([]);
 
   useEffect(() => {
     (async () => {
       try { setCities(await fetchOnce('cities', () => api.get<City[]>('/shared/lookup/cities', { limit: 1000 }))); } catch {}
+      try { setVerticals(await fetchOnce('verticals', () => api.get<Vertical[]>('/shared/lookup/verticals'))); } catch {}
       try { setStates(await fetchOnce('states', () => api.get<State[]>('/shared/lookup/states'))); } catch {}
       try { setServiceCategories(await fetchOnce('svcCat', () => api.get<ServiceCategory[]>('/shared/lookup/service-categories'))); } catch {}
       try { setServiceTypes(await fetchOnce('svcType', () => api.get<ServiceType[]>('/shared/lookup/service-types'))); } catch {}
       try { setClients(await fetchOnce('clients', () => api.get<ClientLite[]>('/shared/lookup/clients', { limit: 500 }))); } catch {}
       try { setAdminUsers(await fetchOnce('admUsers', () => api.get<UserLite[]>('/shared/lookup/users', { roleGroup: 'admin', limit: 500 }))); } catch {}
-      try { setRoles(await fetchOnce('roles', () => api.get<RoleLite[]>('/shared/lookup/roles', { group: 'admin' }))); } catch {}
+      // Fetch EVERY role (not just admin-group). Some legacy roles aren't
+      // classified in role.service.js::ROLE_ID_TO_GROUP, which made them
+      // invisible in the Manage Users role dropdown. The picker should
+      // show all options and let the backend reject invalid combos at save.
+      try { setRoles(await fetchOnce('roles', () => api.get<RoleLite[]>('/shared/lookup/roles'))); } catch {}
       try { setEasyfixers(await fetchOnce('efrs', () => api.get<EasyfixerLite[]>('/shared/lookup/easyfixers'))); } catch {}
       try { setBanks(await fetchOnce('banks', () => api.get<Bank[]>('/shared/lookup/banks'))); } catch {}
       try { setCancelReasons(await fetchOnce('cancelR', () => api.get<Reason[]>('/shared/lookup/cancel-reasons'))); } catch {}
@@ -103,7 +110,7 @@ export function useLookup() {
 
   return {
     cities, states, serviceCategories, serviceTypes, clients, adminUsers, roles, easyfixers, banks,
-    cancelReasons, rescheduleReasons, documentTypes,
+    cancelReasons, rescheduleReasons, documentTypes, verticals,
     toOpts: {
       cities: cities.map<SelectOption>((c) => ({ value: c.city_id, label: c.city_name })),
       states: states.map<SelectOption>((s) => ({ value: s.state_id, label: s.state_name })),

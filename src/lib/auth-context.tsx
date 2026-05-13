@@ -33,6 +33,27 @@ export type Me = {
    * action map).
    */
   permissions?: { menuIds: number[]; actionPermissions: string[] };
+  /*
+   * Row-level RBAC scope — parsed from tbl_user.manage_clients /
+   * manage_cities / manage_states / manage_verticals. Each dimension
+   * has a mode:
+   *   'all'   → wildcard (legacy CSV "0"); user sees every row
+   *   'allow' → only ids in `ids[]`
+   *   'none'  → no access in this dimension; queries return zero rows
+   * Admin and Finance roles bypass scope server-side and receive
+   * mode='all' across the board.
+   *
+   * Frontend doesn't usually need to consult `scope` directly — the
+   * backend already row-filters list endpoints. It's exposed mainly so
+   * the UI can pre-narrow lookups (e.g. only show the SPOC's allowed
+   * clients in the New-Job picker) and show "no access" hints.
+   */
+  scope?: {
+    clients:   { mode: 'all' | 'allow' | 'none'; ids: number[] };
+    cities:    { mode: 'all' | 'allow' | 'none'; ids: number[] };
+    states:    { mode: 'all' | 'allow' | 'none'; ids: number[] };
+    verticals: { mode: 'all' | 'allow' | 'none'; ids: number[] };
+  };
 };
 
 const Ctx = createContext<{ me: Me | null; loading: boolean; refresh: () => Promise<void> }>({
@@ -51,6 +72,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   useEffect(() => { refresh(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+  // Re-fetch on window focus so role/scope updates made in another tab
+  // (or by an admin while the user is logged in) propagate without
+  // requiring a hard refresh. Throttle to once per 30s to avoid
+  // hammering /auth/me when a user flips between tabs rapidly.
+  useEffect(() => {
+    let lastAt = Date.now();
+    function onFocus() {
+      if (Date.now() - lastAt < 30_000) return;
+      lastAt = Date.now();
+      void refresh();
+    }
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return <Ctx.Provider value={{ me, loading, refresh }}>{children}</Ctx.Provider>;
 }

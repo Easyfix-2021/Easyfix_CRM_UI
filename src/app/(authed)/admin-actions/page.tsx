@@ -54,15 +54,11 @@ const ACTIONS = [
     title: 'Job Tracking / Audit',
     blurb: 'Reconstruct any job’s scheduling-history timeline for dispute investigation.',
   },
-  // Webhook surface — placeholder href until a dedicated screen ships.
-  // Backend already exposes /api/admin/webhooks (Phase 2 DONE per backend
-  // CLAUDE.md). When the admin screen lands, swap this href and add an
-  // actionKey like `isWebhookManage`.
   {
-    href: '/coming-soon?title=Webhook+Manager&legacyPath=webhook',
+    href: '/admin-actions/webhooks',
     icon: Webhook,
     title: 'Webhook Manager',
-    blurb: 'Backend endpoints exist (/api/admin/webhooks). Frontend admin screen ships next.',
+    blurb: 'Inspect event registry, per-client callback mappings, and delivery audit logs.',
   },
 ];
 
