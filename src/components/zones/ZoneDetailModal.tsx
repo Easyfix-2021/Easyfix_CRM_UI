@@ -54,6 +54,13 @@ export function ZoneDetailModal({ zoneId, open, onClose }: {
       setQ({ easyfixers: '', pincodes: '', cities: '' });
       return;
     }
+    // Stale-data fix: clear previously-loaded zone data BEFORE firing the
+    // new requests. Without this, opening modal for zone B right after
+    // closing zone A showed A's name/city list while B's fetches were in
+    // flight. `null` for both → renderer falls through to the loading
+    // skeleton (`!detail` / `!easyfixers` branches below).
+    setDetail(null);
+    setEasyfixers(null);
     api.get<ZoneDetail>(`/admin/zones/${zoneId}`).then(setDetail).catch(() => setDetail(null));
     api.get<Easyfixer[]>(`/admin/zones/${zoneId}/easyfixers`, { limit: 500 })
        .then(setEasyfixers).catch(() => setEasyfixers([]));

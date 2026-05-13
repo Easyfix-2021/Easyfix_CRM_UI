@@ -50,6 +50,20 @@ export default function JobsPage() {
   // internal Edit/Save buttons separately — gate those when the modal
   // ships a permission-aware refactor.
   const can = actionFlags(me, ['isJobAddNew', 'isJobUpload', 'isJobEdit']);
+  // Per-row action gates — same keys /my-orders uses. Manage Jobs was
+  // previously ungated, so Confirm/Schedule/Check-In/Check-Out icons
+  // showed regardless of permission. That asymmetry let Admin appear to
+  // "have" actions on /jobs that My Orders correctly hid (because Admin's
+  // `role_menu_action` rows for these keys weren't seeded). With both
+  // pages gated identically, the migration
+  // `2026-05-13-seed-new-action-permissions.sql` is the single source of
+  // truth: grant in DB → button appears on both pages; revoke → hidden
+  // on both.
+  const canJob = actionFlags(me, [
+    'isJobConfirm',
+    'isJobAssign',
+    'isJobStatusChange',
+  ]);
   const [tab, setTab] = useState('all');
   // Counts are fetched once on mount + re-fetched after any save from the
   // modal (so badges stay fresh). Null = still loading; populated = ready.
@@ -394,8 +408,9 @@ export default function JobsPage() {
                       </button>
                       {/* Unconfirmed (status=9) → opens JobModal which exposes
                           the "Confirm & Schedule" action that moves the job
-                          to BOOKED, mirroring legacy `addEditJob → Book Call`. */}
-                      {j.job_status === 9 && (
+                          to BOOKED, mirroring legacy `addEditJob → Book Call`.
+                          Gate: isJobConfirm. */}
+                      {j.job_status === 9 && canJob.isJobConfirm && (
                         <button
                           type="button"
                           onClick={() => openConfirm(j.job_id)}
@@ -405,7 +420,10 @@ export default function JobsPage() {
                           <CalendarCheck className="h-3.5 w-3.5" />
                         </button>
                       )}
-                      {j.job_status === 0 && (
+                      {/* Schedule (status=0): opens JobModal for tech
+                          assignment. Gate: isJobAssign — same key
+                          /my-orders uses. */}
+                      {j.job_status === 0 && canJob.isJobAssign && (
                         <button
                           type="button"
                           onClick={() => openView(j.job_id)}
@@ -415,7 +433,9 @@ export default function JobsPage() {
                           <CalendarClock className="h-3.5 w-3.5" />
                         </button>
                       )}
-                      {j.job_status === 1 && (
+                      {/* Check-In + Check-Out are both status mutations →
+                          isJobStatusChange. */}
+                      {j.job_status === 1 && canJob.isJobStatusChange && (
                         <button
                           type="button"
                           disabled={rowBusy === j.job_id}
@@ -426,7 +446,7 @@ export default function JobsPage() {
                           <PlayCircle className="h-3.5 w-3.5" />
                         </button>
                       )}
-                      {(j.job_status === 2 || j.job_status === 20) && (
+                      {(j.job_status === 2 || j.job_status === 20) && canJob.isJobStatusChange && (
                         <button
                           type="button"
                           disabled={rowBusy === j.job_id}

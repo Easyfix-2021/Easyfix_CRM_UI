@@ -19,6 +19,29 @@
 
 import type { Me } from './auth-context';
 
+/*
+ * Why no Admin bypass here:
+ *   An earlier iteration short-circuited every check to TRUE for
+ *   role_name === 'Admin'. That violated the workflow rule
+ *   ("page name must appear in Manage Role so access can be granted"):
+ *   it masked the real bug, which was that several new action keys
+ *   (isJobConfirm / isJobAssign / isJobReassign / isJobStatusChange /
+ *   isJobCancel / isClientQuestionaire) had never been seeded into
+ *   `menu_action`. Without rows in that table, NO role — including
+ *   Admin — could have them in `role_menu_action`, so the Admin's
+ *   `permissions.actionPermissions` array couldn't contain them.
+ *
+ *   The correct fix is the data fix: migration
+ *   `2026-05-13-seed-new-action-permissions.sql` inserts the missing
+ *   `menu_action` rows and grants them to Admin via the legacy upsert
+ *   pattern. Once that runs, Admin holds these permissions through the
+ *   same code path every other role uses — no special casing needed.
+ *
+ *   If a future action key fires this same "Admin can't see X" issue,
+ *   add it to that migration (or write a new one) rather than adding a
+ *   bypass here.
+ */
+
 export function hasAction(me: Me | null | undefined, action: string): boolean {
   if (!me?.permissions?.actionPermissions) return false;
   return me.permissions.actionPermissions.includes(action);

@@ -85,8 +85,15 @@ export function EasyfixerModal({
 
   useEffect(() => {
     if (!open || !easyfixerId) { if (!easyfixerId) { setRecord(null); setForm(emptyForm); } return; }
+    // Stale-data fix: clear record + form BEFORE the fetch so the title,
+    // subtitle, and any field that reads from `record.efr_name` don't
+    // flash the previously-opened easyfixer's details. Title/subtitle
+    // fall through to "Loading…" via the !loading gate below.
+    setRecord(null);
+    setForm(emptyForm);
+    setError(null);
+    setLoading(true);
     (async () => {
-      setLoading(true); setError(null);
       try {
         const data = await api.get<EfRecord>(`/admin/easyfixers/${easyfixerId}`);
         setRecord(data);
@@ -140,10 +147,15 @@ export function EasyfixerModal({
     onSaved?.(refreshed);
   }
 
+  // While the fresh record is loading, suppress the identity-bearing
+  // parts of the title/subtitle (name, id, city) so the operator can't
+  // see the previously-opened easyfixer's details flash. Create mode
+  // and Edit mode without a hydrated record fall back to neutral text.
   const title = mode === 'create' ? 'Add New Easyfixer'
-             : mode === 'edit'   ? `Edit · ${formatEasyfixerName(record?.efr_name ?? '')}`
+             : loading            ? 'Loading easyfixer…'
+             : mode === 'edit'    ? `Edit · ${formatEasyfixerName(record?.efr_name ?? '')}`
              : formatEasyfixerName(record?.efr_name ?? '') || 'Easyfixer';
-  const subtitle = mode === 'view' && record
+  const subtitle = mode === 'view' && !loading && record
     ? `Easyfixer #${record.efr_id} · ${String(record.efr_no ?? '')} · ${String(record.city_name ?? '—')}`
     : undefined;
 

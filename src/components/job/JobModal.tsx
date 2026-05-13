@@ -74,11 +74,20 @@ export function JobModal({
   useEffect(() => { if (open) { setMode(initialMode); setError(null); } }, [open, initialMode, jobId]);
 
   // Reset or load as the modal opens with a different job.
+  //
+  // Stale-data fix: clear `job` to null BEFORE awaiting the fetch. Without
+  // this, the header (title `Job #N`, status badge, ActionBar) renders
+  // from the previously-loaded job for the duration of the request — the
+  // operator saw last-modal's customer name flash on every re-open. With
+  // `job` cleared up front, the header falls through to the "Loading…"
+  // branch (see render below) until the new payload arrives.
   useEffect(() => {
     if (!open) return;
     if (!jobId) { setJob(null); return; }
+    setJob(null);            // hide stale header immediately
+    setError(null);
+    setLoading(true);
     (async () => {
-      setLoading(true); setError(null);
       try { setJob(await api.get<Job>(`/admin/jobs/${jobId}`)); }
       catch { setError('Could not load job details'); }
       finally { setLoading(false); }
@@ -91,10 +100,16 @@ export function JobModal({
     catch { /* swallow — outer error state is set by action handlers */ }
   }
 
+  // While loading a fresh job we render a neutral title so the operator
+  // doesn't see last-modal's job id flash. The non-view modes embed the
+  // jobId from props (always current — no stale risk) so they render
+  // normally. View mode depends on `job`, so we wait for the fetch.
   const title = mode === 'create'  ? 'Create New Job'
              : mode === 'edit'    ? `Edit Job #${jobId}`
              : mode === 'confirm' ? `Confirm & Schedule · Job #${jobId}`
-             : job ? `Job #${job.job_id}` : 'Job';
+             : loading            ? 'Loading job…'
+             : job                ? `Job #${job.job_id}`
+             :                       'Job';
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
@@ -106,7 +121,10 @@ export function JobModal({
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <DialogTitle className="truncate">{title}</DialogTitle>
-              {mode === 'view' && job && (
+              {/* Status badge + job-type sub-line only show once we have
+                  the fresh `job` payload — gated on `!loading` so the
+                  previous job's badge can't flash on re-open. */}
+              {mode === 'view' && !loading && job && (
                 <DialogDescription className="mt-1 flex items-center gap-2">
                   <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${statusColorClass(Number(job.job_status))}`}>
                     {statusLabel(Number(job.job_status), { assigned: job.fk_easyfixter_id != null })}
@@ -115,7 +133,10 @@ export function JobModal({
                 </DialogDescription>
               )}
             </div>
-            {mode === 'view' && job && (
+            {/* ActionBar's buttons depend on the loaded job (status drives
+                which actions are valid), so we wait until loading clears
+                and `job` is populated. */}
+            {mode === 'view' && !loading && job && (
               <ActionBar
                 job={job}
                 jobId={Number(jobId)}
@@ -625,7 +646,7 @@ function JobMaterialsTab({ jobId }: { jobId: number }) {
 
 function AddMaterialDialog({ open, onClose, onSubmit }: {
   open: boolean; onClose: () => void;
-  onSubmit: (payload: { materialName: string; description?: string; sku?: string; unit?: string; unitPrice?: number; totalPrice?: number }) => Promise<void>;
+  onSubmit: (payload: { materialName: string; description?: string; sku?: string; unit?: string; unitPrice?: number; quantity?: number; totalPrice?: number }) => Promise<void>;
 }) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -635,30 +656,78 @@ function AddMaterialDialog({ open, onClose, onSubmit }: {
   const [qty, setQty] = useState('1');
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Field-level invalid markers — set by the submit guard and cleared as
+  // the operator types. Drives the red border on each input so they can
+  // see WHICH field needs attention instead of just reading a single
+  // top-of-modal error message.
+  const [invalid, setInvalid] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (open) {
       setName(''); setDescription(''); setSku(''); setUnit('');
       setUnitPrice(''); setQty('1'); setErr(null);
+      setInvalid(new Set());
     }
   }, [open]);
 
+  // Total ₹ auto-computes from Unit ₹ × Qty and is shown read-only. We
+  // also POST this server-side, but the backend recomputes from
+  // unitPrice × quantity so the stored value can't drift if the client
+  // ever sent something inconsistent.
   const totalPrice = (Number(unitPrice) || 0) * (Number(qty) || 0);
 
+  // Mark a field valid as soon as the operator types into it. Cheap UX
+  // win — the red border disappears the moment they engage with it.
+  function clearInvalid(field: string) {
+    setInvalid((prev) => {
+      if (!prev.has(field)) return prev;
+      const next = new Set(prev); next.delete(field); return next;
+    });
+  }
+  // Tailwind doesn't compose `aria-invalid` styles by default — we
+  // toggle a red border class explicitly so the visual cue is obvious.
+  const errCls = (f: string) => invalid.has(f) ? 'border-red-500 focus-visible:ring-red-500' : '';
+
   async function go() {
-    if (!name.trim()) { setErr('Material name is required'); return; }
+    // Collect EVERY missing/invalid field in one pass so the operator
+    // sees them all highlighted at once, not one-at-a-time on each click.
+    const next = new Set<string>();
+    if (!name.trim())                                  next.add('materialName');
+    if (!sku.trim())                                   next.add('sku');
+    if (!unit.trim())                                  next.add('unit');
+    const upn = Number(unitPrice);
+    if (!unitPrice || !Number.isFinite(upn) || upn <= 0) next.add('unitPrice');
+    const qn = Number(qty);
+    if (!qty || !Number.isFinite(qn) || qn <= 0)       next.add('quantity');
+    if (next.size > 0) {
+      setInvalid(next);
+      setErr('Please fill the highlighted fields.');
+      return;
+    }
     setLoading(true); setErr(null);
     try {
       await onSubmit({
         materialName: name.trim(),
         description: description.trim() || undefined,
-        sku: sku.trim() || undefined,
-        unit: unit.trim() || undefined,
-        unitPrice: unitPrice ? Number(unitPrice) : undefined,
-        totalPrice: totalPrice || undefined,
+        sku: sku.trim(),
+        unit: unit.trim(),
+        unitPrice: upn,
+        quantity: qn,
+        totalPrice,
       });
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : 'Save failed');
+      // Backend returns `details.missing: [...]` on its own validation
+      // failure — translate that into the same red borders for parity
+      // (defence in depth: covers the case where the client validator
+      // is lenient but the backend rejects).
+      if (e instanceof ApiError) {
+        type Details = { missing?: string[] };
+        const d = (e.details as Details | undefined);
+        if (Array.isArray(d?.missing)) setInvalid(new Set(d.missing));
+        setErr(e.message);
+      } else {
+        setErr('Save failed');
+      }
     } finally { setLoading(false); }
   }
 
@@ -669,7 +738,12 @@ function AddMaterialDialog({ open, onClose, onSubmit }: {
         <div className="space-y-3">
           <div>
             <Label className="text-sm font-medium block mb-1">Material Name *</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder='e.g. "Copper wire — 2.5 sqmm"' />
+            <Input
+              value={name}
+              onChange={(e) => { setName(e.target.value); clearInvalid('materialName'); }}
+              placeholder='e.g. "Copper wire — 2.5 sqmm"'
+              className={errCls('materialName')}
+            />
           </div>
           <div>
             <Label className="text-sm font-medium block mb-1">Description</Label>
@@ -677,36 +751,50 @@ function AddMaterialDialog({ open, onClose, onSubmit }: {
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <Label className="text-sm font-medium block mb-1">SKU</Label>
-              <Input value={sku} onChange={(e) => setSku(e.target.value)} className="font-mono" />
+              <Label className="text-sm font-medium block mb-1">SKU *</Label>
+              <Input
+                value={sku}
+                onChange={(e) => { setSku(e.target.value); clearInvalid('sku'); }}
+                className={`font-mono ${errCls('sku')}`}
+              />
             </div>
             <div>
-              <Label className="text-sm font-medium block mb-1">Unit</Label>
-              <Input value={unit} onChange={(e) => setUnit(e.target.value)} placeholder='e.g. "m", "pcs"' />
+              <Label className="text-sm font-medium block mb-1">Unit *</Label>
+              <Input
+                value={unit}
+                onChange={(e) => { setUnit(e.target.value); clearInvalid('unit'); }}
+                placeholder='e.g. "m", "pcs"'
+                className={errCls('unit')}
+              />
             </div>
           </div>
           <div className="grid grid-cols-3 gap-2">
             <div>
-              <Label className="text-sm font-medium block mb-1">Unit ₹</Label>
+              <Label className="text-sm font-medium block mb-1">Unit ₹ *</Label>
               <Input
                 value={unitPrice}
-                onChange={(e) => setUnitPrice(e.target.value.replace(/[^\d.]/g, ''))}
-                className="font-mono"
+                onChange={(e) => { setUnitPrice(e.target.value.replace(/[^\d.]/g, '')); clearInvalid('unitPrice'); }}
+                className={`font-mono ${errCls('unitPrice')}`}
                 inputMode="decimal"
               />
             </div>
             <div>
-              <Label className="text-sm font-medium block mb-1">Qty</Label>
+              <Label className="text-sm font-medium block mb-1">Qty *</Label>
               <Input
                 value={qty}
-                onChange={(e) => setQty(e.target.value.replace(/[^\d.]/g, ''))}
-                className="font-mono"
+                onChange={(e) => { setQty(e.target.value.replace(/[^\d.]/g, '')); clearInvalid('quantity'); }}
+                className={`font-mono ${errCls('quantity')}`}
                 inputMode="decimal"
               />
             </div>
             <div>
               <Label className="text-sm font-medium block mb-1">Total ₹</Label>
-              <Input value={totalPrice ? totalPrice.toFixed(2) : ''} readOnly className="font-mono bg-muted/30" />
+              <Input
+                value={totalPrice ? totalPrice.toFixed(2) : ''}
+                readOnly
+                className="font-mono bg-muted/30"
+                title="Auto-calculated as Unit ₹ × Qty"
+              />
             </div>
           </div>
           {err && <div className="text-sm text-red-600">{err}</div>}

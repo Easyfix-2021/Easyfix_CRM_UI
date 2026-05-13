@@ -78,7 +78,12 @@ const URL_MAP: Record<string, string> = {
   'home':                  '/dashboard',
   'job':                   '/jobs',
   'uploadJobByExcel':      '/jobs/upload',
-  'changeJobOwner':        '/jobs',
+  // Distinct ?focus param so isRouteActive() can tell Manage Jobs and
+  // Change Job Owner apart — both target /jobs, and without a discriminator
+  // the sidebar lit up both rows when the user was on plain /jobs. Same
+  // pattern as Reports/Tracking sub-menus. The /jobs page may or may not
+  // consume `focus=change-owner` to scroll/highlight the action.
+  'changeJobOwner':        '/jobs?focus=change-owner',
   'callLater':             '/jobs?tab=call-later',
   // Legacy `androidAppJob` (App Job) calls SP sp_ef_app_job_list which
   // returns the same 5-bucket per-user dashboard our `/my-orders` page
