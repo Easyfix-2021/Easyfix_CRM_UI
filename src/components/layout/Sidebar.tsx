@@ -311,17 +311,20 @@ export function Sidebar() {
   // Tree + per-user permission filter.
   //
   // The allowlist is `me.permissions.menuIds` (server-resolved from the
-  // user's role.menu_ids CSV, exactly as legacy LoginAction did). A menu
-  // is visible iff its menu_id appears in the allowlist — parents AND
-  // children are both gated this way.
+  // user's role.menu_ids CSV, exactly as legacy LoginAction did).
   //
-  // Edge cases (intentional, match legacy):
+  // Visibility rules:
   //   - empty menuIds  → empty sidebar (no fallthrough to "show everything")
-  //   - parent in list but children not → parent still renders (legacy
-  //     Navigation.vm doesn't prune empty parents either)
-  //   - children in list but parent not → child suppressed because we
-  //     iterate from roots; if the parent isn't visible the child can't be
-  //     reached via the accordion anyway
+  //   - parent in list → parent renders (legacy Navigation.vm doesn't
+  //     prune empty parents)
+  //   - parent NOT in list but at least one child IS → render the parent
+  //     so the child is actually reachable. This handles the data shape
+  //     produced by the Manage Roles editor when the operator checks
+  //     "Manage Jobs" without explicitly also checking the "Jobs"
+  //     parent. Without this fallthrough, granting a child-only role
+  //     (e.g. Executive Supply with `Manage Jobs` but no `Jobs` parent
+  //     id) produced a sidebar that only showed Home even though the
+  //     role had several menus.
   const allowedMenuIds = useMemo(
     () => new Set(me?.permissions?.menuIds ?? []),
     [me?.permissions?.menuIds],
@@ -330,14 +333,17 @@ export function Sidebar() {
   const tree = useMemo(() => {
     if (!menus) return [];
     const roots = buildTree(menus);
-    // Step 1: drop roots not in the allowlist.
-    // Step 2: prune each surviving root's children to only the allowed set.
     return roots
-      .filter((r) => allowedMenuIds.has(r.menu_id))
       .map((r) => ({
         ...r,
         children: r.children.filter((c) => allowedMenuIds.has(c.menu_id)),
-      }));
+      }))
+      // Keep a parent if EITHER it's directly granted OR it has at least
+      // one allowed child after pruning. Roots with no children at all
+      // (legacy top-level pages like Home) still need their own id in
+      // the allowlist to render — they have no implicit "via a child"
+      // path.
+      .filter((r) => allowedMenuIds.has(r.menu_id) || r.children.length > 0);
   }, [menus, allowedMenuIds]);
 
   /*

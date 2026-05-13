@@ -758,13 +758,37 @@ function RoleFormModal({
     if (!name.trim()) { setError('Role name is required'); return; }
     if (name.trim().length < 2) { setError('Role name is too short'); return; }
 
+    // Auto-include parent menu_ids of any selected child. Without this
+    // step, an operator checking "Manage Jobs" (child) without also
+    // explicitly checking "Jobs" (parent) saves only the child id —
+    // and the sidebar's parent-required visibility rule then drops
+    // the whole branch, so the role ends up seeing only Home. The
+    // sidebar now also tolerates orphan children (Sidebar.tsx),
+    // but writing the canonical {parent, child} pair into menu_ids
+    // means the legacy DB shape stays clean and any other consumer
+    // of tbl_role.menu_ids (legacy CRM still reads it during the
+    // coexistence window) sees a complete tree.
+    const menusByIdLocal = new Map(menus.map((m) => [m.menu_id, m]));
+    const expandedMenuIds = new Set(selectedMenus);
+    for (const id of selectedMenus) {
+      let cur = menusByIdLocal.get(id);
+      // Walk up the parent chain. tbl_menu only has one level today
+      // (parent_menu = 0 for roots, non-zero pointing at the root)
+      // but we loop defensively in case the schema grows a 3rd level.
+      while (cur && cur.parent_menu && cur.parent_menu !== 0) {
+        if (expandedMenuIds.has(cur.parent_menu)) break;
+        expandedMenuIds.add(cur.parent_menu);
+        cur = menusByIdLocal.get(cur.parent_menu);
+      }
+    }
+
     // Drop selected actions whose menu is not also selected — saving them
     // would result in dead permissions (button visible at action level but
     // its menu hidden from sidebar). Match the legacy form which simply
     // hides actions for unselected menus.
     const effectiveActions = Array.from(selectedActions).filter((aid) => {
       const a = allActions.find((row) => row.id === aid);
-      return a && selectedMenus.has(a.menu_id);
+      return a && expandedMenuIds.has(a.menu_id);
     });
 
     setSubmitting(true);
@@ -774,14 +798,16 @@ function RoleFormModal({
           role_name:       name.trim(),
           role_desc:       desc.trim() || null,
           is_active:       active,
-          menu_ids:        Array.from(selectedMenus),
+          // Send the parent-expanded set, not the raw selection — see
+          // expandedMenuIds construction above.
+          menu_ids:        Array.from(expandedMenuIds),
           menu_action_ids: effectiveActions,
         });
       } else {
         await api.post('/admin/roles', {
           role_name:       name.trim(),
           role_desc:       desc.trim() || null,
-          menu_ids:        Array.from(selectedMenus),
+          menu_ids:        Array.from(expandedMenuIds),
           menu_action_ids: effectiveActions,
         });
       }
