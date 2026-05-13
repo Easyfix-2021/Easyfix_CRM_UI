@@ -27,7 +27,8 @@ import {
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Switch } from '@/components/ui/switch';
 import { api, ApiError } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useMe } from '@/lib/auth-context';
@@ -74,14 +75,6 @@ type SortKey = 'role_id' | 'role_name' | 'role_desc' | 'role_status' | 'user_cou
 type SortDir = 'asc' | 'desc';
 
 const PAGE_SIZE = 100;
-
-const GROUP_PILL: Record<string, string> = {
-  admin:   'bg-blue-100 text-blue-700',
-  client:  'bg-emerald-100 text-emerald-700',
-  mobile:  'bg-amber-100 text-amber-700',
-  default: 'bg-slate-100 text-slate-700',
-  unknown: 'bg-red-100 text-red-700',
-};
 
 export default function ManageRolesPage() {
   const confirm = useConfirm();
@@ -250,7 +243,7 @@ export default function ManageRolesPage() {
             <ShieldCheck className="size-6" /> Manage Roles
           </h1>
           <p className="text-sm text-muted-foreground">
-            CRM roles and their classification group. Group decides which route mount the role can hit.
+            CRM roles, the menus they can reach, and the per-button actions they can perform.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -280,24 +273,12 @@ export default function ManageRolesPage() {
               <section>
                 <h3 className="font-semibold text-foreground mb-1">1. What a role row holds</h3>
                 <p>
-                  Each role row has a name, a description, and a status flag. The
-                  &ldquo;Group&rdquo; column shows which surface this role can access
-                  (admin = CRM, client = client dashboard, mobile = technician app).
+                  Each role row has a name, a description, a status flag, and the
+                  set of menus + per-button actions it can use across the CRM.
                 </p>
               </section>
               <section>
-                <h3 className="font-semibold text-foreground mb-1">2. Group is read-only</h3>
-                <p>
-                  Group classification is set in code, not from this form — it gates
-                  route mounts at the network layer, so flipping it from a UI would be
-                  a privilege-escalation event. Adding a new role here creates the DB
-                  row; mapping it to a group requires a code change + deploy.
-                  Newly-added roles start in the <em>unknown</em> group and can&apos;t
-                  reach any application surface until the mapping ships.
-                </p>
-              </section>
-              <section>
-                <h3 className="font-semibold text-foreground mb-1">3. Deactivation requires zero active users</h3>
+                <h3 className="font-semibold text-foreground mb-1">2. Deactivation requires zero active users</h3>
                 <p>
                   A role can only be deactivated when no active CRM user is currently
                   assigned to it. Reassign users in Manage Users first; come back here
@@ -338,37 +319,34 @@ export default function ManageRolesPage() {
       <Card>
         <CardContent className="p-0">
           <table className="data-table w-full" style={{ tableLayout: 'fixed' }}>
+            {/* Group column was removed earlier (admin/client/mobile is a
+                code-level concept). The dedicated chevron column has now
+                also been removed — the expand/collapse affordance lives
+                on the Menu Access cell itself (the cell is the click
+                target; a chevron renders after the text and rotates with
+                the expanded state). Total freed: 4% chevron → spread
+                across Name/Description/Menu Access. */}
             <colgroup>
-              <col style={{ width: '4%'  }} /> {/* Expand chevron */}
               <col style={{ width: '6%'  }} /> {/* Role ID */}
-              <col style={{ width: '15%' }} /> {/* Name */}
-              <col style={{ width: '21%' }} /> {/* Description (was 20% — picked up freed Actions space) */}
-              <col style={{ width: '8%'  }} /> {/* Group */}
-              <col style={{ width: '22%' }} /> {/* Menu Access (was 20% — picked up freed Actions space) */}
+              <col style={{ width: '17%' }} /> {/* Name */}
+              <col style={{ width: '25%' }} /> {/* Description */}
+              <col style={{ width: '28%' }} /> {/* Menu Access (clickable) */}
               <col style={{ width: '8%'  }} /> {/* Users */}
               <col style={{ width: '8%'  }} /> {/* Status */}
-              {/* Actions reduced from 11% → 8% to match the action-column
-                  density on Manage Users and the other settings pages.
-                  With only 2 icons (no "view-only" chip), the previous
-                  11% left a large empty gap left-of-icons even with
-                  justify-end. Freed space went to Description + Menu
-                  Access which truncate most often. */}
               <col style={{ width: '8%'  }} /> {/* Actions */}
             </colgroup>
             <thead>
               <tr>
-                <th className="!text-center"></th>
                 <SortHeader col="role_id"     align="center" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Role ID</SortHeader>
                 <SortHeader col="role_name"   align="left"   sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Role Name</SortHeader>
                 <SortHeader col="role_desc"   align="left"   sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Description</SortHeader>
-                <th className="!text-center whitespace-nowrap">Group</th>
                 {/*
                   * "Menu Access" = expanded menu names from tbl_role.menu_ids.
-                  * Mirrors the legacy /usertype list. Click the chevron in
-                  * the first column to expand the row and see per-menu action
+                  * Mirrors the legacy /usertype list. Click anywhere on
+                  * the cell (entire td) to expand and see per-menu action
                   * permissions (legacy "Data" column).
                   */}
-                <th className="!text-left whitespace-nowrap" title="Menus this role can reach (tbl_role.menu_ids)">Menu Access</th>
+                <th className="!text-left whitespace-nowrap" title="Menus this role can reach — click to expand">Menu Access</th>
                 <SortHeader col="user_count"  align="center" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Users</SortHeader>
                 <SortHeader col="role_status" align="center" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Status</SortHeader>
                 <th className="!text-right whitespace-nowrap">Actions</th>
@@ -376,39 +354,39 @@ export default function ManageRolesPage() {
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={9} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
+                <tr><td colSpan={7} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
               )}
               {!loading && items.length === 0 && (
-                <tr><td colSpan={9} className="!text-center text-muted-foreground py-6">No roles match the current filters.</td></tr>
+                <tr><td colSpan={7} className="!text-center text-muted-foreground py-6">No roles match the current filters.</td></tr>
               )}
               {!loading && items.map((r) => {
                 const expanded = expandedRoles.has(r.role_id);
                 return (
                   <React.Fragment key={r.role_id}>
                     <tr>
-                      <td className="!text-center">
-                        <button
-                          type="button"
-                          onClick={() => { toggleExpanded(r.role_id); void ensureActionsLoaded(r.role_id); }}
-                          className="text-muted-foreground hover:text-foreground"
-                          title={expanded ? 'Collapse details' : 'Expand to see per-menu action permissions'}
-                          aria-expanded={expanded}
-                        >
-                          {expanded ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
-                        </button>
-                      </td>
                       <td className="!text-center font-mono text-xs truncate">{r.role_id}</td>
                       <td className="!text-left font-medium truncate" title={r.role_name}>{r.role_name}</td>
                       <td className="!text-left truncate text-muted-foreground" title={r.role_desc ?? ''}>
                         {r.role_desc ?? <span>—</span>}
                       </td>
-                      <td className="!text-center whitespace-nowrap">
-                        <span className={`text-[10px] font-medium rounded px-1.5 py-0.5 ${GROUP_PILL[r.group] ?? GROUP_PILL.unknown}`}>
-                          {r.group}
+                      {/* Entire cell is the expand/collapse click target.
+                          Chevron renders at the END of the text and
+                          rotates between right (collapsed) and down
+                          (expanded). Hover gives a subtle bg cue so the
+                          affordance is discoverable. */}
+                      <td
+                        className="!text-left truncate cursor-pointer hover:bg-muted/40"
+                        onClick={() => { toggleExpanded(r.role_id); void ensureActionsLoaded(r.role_id); }}
+                        aria-expanded={expanded}
+                        role="button"
+                        title={expanded ? 'Click to collapse' : 'Click to expand and see per-menu action permissions'}
+                      >
+                        <span className="inline-flex items-center gap-1">
+                          <MenuAccessCell menuIds={r.menu_ids} nameById={menuNameById} />
+                          {expanded
+                            ? <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+                            : <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />}
                         </span>
-                      </td>
-                      <td className="!text-left truncate">
-                        <MenuAccessCell menuIds={r.menu_ids} nameById={menuNameById} />
                       </td>
                       <td className="!text-center font-mono text-xs">{r.user_count}</td>
                       <td className="!text-center whitespace-nowrap">
@@ -442,7 +420,7 @@ export default function ManageRolesPage() {
                       */}
                     {expanded && (
                       <tr className="bg-slate-50">
-                        <td colSpan={9} className="!text-left p-3">
+                        <td colSpan={7} className="!text-left p-3">
                           <RoleDataDetail
                             role={r}
                             menus={allMenus}
@@ -821,23 +799,62 @@ function RoleFormModal({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="!max-w-[900px] w-[95vw]">
+      {/* Wider modal — 1100px gives the Menu & Action tree room to lay
+          out two columns of per-menu action checkboxes on most screens,
+          and matches the wider Add/Edit User modal so the two settings
+          forms feel like siblings. */}
+      <DialogContent className="!max-w-[1100px] w-[95vw]">
         <DialogHeader>
           <DialogTitle>{isEdit ? `Edit "${editing!.role_name}"` : 'Add Role'}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4 max-h-[75vh] overflow-y-auto pr-1">
-          {/* Identity */}
+          {/* Identity — two-column layout:
+                Row 1:  Role Name  (left)            |  Status toggle (right, edit only)
+                Row 2:  Description spans both columns
+              On <md screens the grid collapses to one column so the form
+              stays usable on narrow viewports. */}
           <section className="space-y-3">
-            <div>
-              <label className="text-sm font-medium block mb-1">Role Name *</label>
-              <Input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder='e.g. "Quality Auditor"'
-              />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-end">
+              <div>
+                <label className="text-sm font-medium block mb-1">Role Name *</label>
+                <Input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder='e.g. "Quality Auditor"'
+                />
+              </div>
+
+              {isEdit ? (
+                /* `justify-end` previously made the whole row shift left/
+                   right as the trailing "Active"/"Inactive" label width
+                   changed — pulling the "Status" label along with it on
+                   every toggle. Fix: pin the trailing label to a fixed
+                   width (`w-16 text-left`) so the row's total width is
+                   constant, and the toggle + Status label stay anchored
+                   visually. */
+                <div className="flex items-center justify-end gap-3 pb-1.5">
+                  <span className="text-sm font-medium">Status</span>
+                  <Switch
+                    checked={active}
+                    onCheckedChange={setActive}
+                    ariaLabel="Toggle role active"
+                  />
+                  <span
+                    className={`text-xs w-16 inline-block text-left ${
+                      active ? 'text-emerald-700' : 'text-muted-foreground'
+                    }`}
+                  >
+                    {active ? 'Active' : 'Inactive'}
+                  </span>
+                </div>
+              ) : (
+                /* Spacer placeholder so the Description below stays
+                   spanning both columns on md+. */
+                <div className="hidden md:block" aria-hidden="true" />
+              )}
             </div>
 
-            <div>
+            <div className="md:col-span-2">
               <label className="text-sm font-medium block mb-1">Description</label>
               <textarea
                 value={desc}
@@ -847,26 +864,7 @@ function RoleFormModal({
                 maxLength={500}
               />
             </div>
-
-            {isEdit && (
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
-                <span>Active</span>
-              </label>
-            )}
           </section>
-
-          {!isEdit && (
-            <div className="text-xs bg-amber-50 border border-amber-200 text-amber-900 rounded p-2 flex items-start gap-2">
-              <Info className="size-3.5 shrink-0 mt-0.5" />
-              <span>
-                Newly-added roles start in the <strong>unknown</strong> group and can&apos;t
-                reach any application surface until an engineer maps the role to a group
-                (admin / client / mobile) in code. The menu + action selections below
-                still get saved — they activate once the group mapping ships.
-              </span>
-            </div>
-          )}
 
           {/* Menu Access + per-menu Action Permissions, in one combined tree.
               Putting actions inline under each menu (rather than as a
@@ -953,14 +951,13 @@ function RoleFormModal({
               <AlertTriangle className="size-4" /> {error}
             </div>
           )}
-
-          <div className="flex justify-end gap-2 pt-2 sticky bottom-0 bg-background pb-1">
-            <Button variant="outline" onClick={onClose} disabled={submitting}>Cancel</Button>
-            <Button onClick={handleSubmit} disabled={submitting}>
-              {submitting ? 'Saving…' : isEdit ? 'Save Changes' : 'Add Role'}
-            </Button>
-          </div>
         </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={submitting}>Cancel</Button>
+          <Button onClick={handleSubmit} disabled={submitting}>
+            {submitting ? 'Saving…' : isEdit ? 'Save Changes' : 'Add Role'}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
@@ -983,10 +980,15 @@ function MenuActionRows({
   onToggle: (id: number) => void;
 }) {
   if (actions.length === 0) return null;
+  // Single-column list: one action per row. Previously this used
+  // `flex flex-wrap gap-x-4` which packed 2-3 actions onto each line.
+  // That made long permission labels truncate awkwardly and forced
+  // operators to scan two dimensions to find a specific action.
   return (
-    <div className={`px-3 pl-12 py-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs ${enabled ? '' : 'opacity-50'}`}>
+    <ul className={`px-3 pl-12 py-1.5 flex flex-col gap-y-1 text-xs ${enabled ? '' : 'opacity-50'}`}>
       {actions.map((a) => (
-        <label key={a.id} className="flex items-center gap-1 cursor-pointer">
+        <li key={a.id}>
+        <label className="flex items-center gap-1 cursor-pointer">
           <input
             type="checkbox"
             disabled={!enabled}
@@ -996,7 +998,8 @@ function MenuActionRows({
           <span>{a.name}</span>
           <span className="text-[10px] font-mono text-muted-foreground">({a.action_name})</span>
         </label>
+        </li>
       ))}
-    </div>
+    </ul>
   );
 }

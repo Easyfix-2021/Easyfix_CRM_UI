@@ -25,8 +25,10 @@ import {
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { SearchSelect } from '@/components/ui/search-select';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { SearchSelect, type SearchOption } from '@/components/ui/search-select';
+import { SearchMultiSelect } from '@/components/ui/search-multi-select';
+import { Switch } from '@/components/ui/switch';
 import { api, ApiError } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useLookup } from '@/lib/use-lookup';
@@ -549,65 +551,12 @@ function UserFormModal({
   const [manageStates,    setManageStates]    = useState<Set<number>>(new Set());
   const [manageVerticals, setManageVerticals] = useState<Set<number>>(new Set());
   const [reportingManager, setReportingManager] = useState<number | ''>('');
-  const [managerQuery, setManagerQuery] = useState('');
 
-  const [cityQuery, setCityQuery] = useState('');
-  const filteredCities = useMemo(() => {
-    const q = cityQuery.trim().toLowerCase();
-    if (!q) return cities;
-    return cities.filter((c) => c.city_name.toLowerCase().includes(q));
-  }, [cities, cityQuery]);
-
-  const [clientQuery, setClientQuery] = useState('');
-  const filteredClients = useMemo(() => {
-    const q = clientQuery.trim().toLowerCase();
-    if (!q) return clients;
-    return clients.filter((c) => c.client_name.toLowerCase().includes(q));
-  }, [clients, clientQuery]);
-
-  const [manageCitiesQuery, setManageCitiesQuery] = useState('');
-  const filteredManageCities = useMemo(() => {
-    const q = manageCitiesQuery.trim().toLowerCase();
-    if (!q) return cities;
-    return cities.filter((c) => c.city_name.toLowerCase().includes(q));
-  }, [cities, manageCitiesQuery]);
-
-  const [manageStatesQuery, setManageStatesQuery] = useState('');
-  const filteredManageStates = useMemo(() => {
-    const q = manageStatesQuery.trim().toLowerCase();
-    if (!q) return states;
-    return states.filter((s) => s.state_name.toLowerCase().includes(q));
-  }, [states, manageStatesQuery]);
-
-  const [verticalQuery, setVerticalQuery] = useState('');
-  const filteredVerticals = useMemo(() => {
-    const q = verticalQuery.trim().toLowerCase();
-    if (!q) return verticals;
-    return verticals.filter((v) => v.vertical_name.toLowerCase().includes(q));
-  }, [verticals, verticalQuery]);
-
-  // Reporting Manager — single-select searchable. Exclude the user
-  // being edited (preventing direct self-loops at the UI layer; backend
-  // DFS guards against indirect cycles via `visited` set).
-  const filteredManagers = useMemo(() => {
-    const q = managerQuery.trim().toLowerCase();
-    const list = adminUsers.filter((u) => !editing || u.user_id !== editing.user_id);
-    if (!q) return list.slice(0, 50);
-    return list.filter((u) =>
-      u.user_name.toLowerCase().includes(q) ||
-      (u.role_name || '').toLowerCase().includes(q)
-    ).slice(0, 50);
-  }, [adminUsers, managerQuery, editing]);
-
-  const selectedManagerName = useMemo(
-    () => adminUsers.find((u) => u.user_id === reportingManager)?.user_name ?? null,
-    [adminUsers, reportingManager]
-  );
-
-  const selectedCityName = useMemo(
-    () => cities.find((c) => c.city_id === cityId)?.city_name ?? null,
-    [cities, cityId],
-  );
+  // Reporting Manager + Home City + Role + all 4 scope multi-selects now
+  // use `SearchSelect`/`SearchMultiSelect`, which own their own internal
+  // filter + selected-label state. The previous module-local
+  // `managerQuery` / `cityQuery` / `filtered*` / `selected*Name` memos
+  // were therefore removed — leaving them would have been dead state.
 
   // Helper to convert a CSV string to a Set<number>. Tolerant of nulls,
   // whitespace, junk — matches the backend's parseMenuIdsCsv.
@@ -635,12 +584,6 @@ function UserFormModal({
       setManageStates(csvToSet(editing?.manage_states));
       setManageVerticals(csvToSet(editing?.manage_verticals));
       setReportingManager(editing?.reporting_manager ?? '');
-      setCityQuery('');
-      setClientQuery('');
-      setManageCitiesQuery('');
-      setManageStatesQuery('');
-      setVerticalQuery('');
-      setManagerQuery('');
       setError(null);
     }
   }, [open, editing]);
@@ -796,34 +739,78 @@ function UserFormModal({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
+      {/* Wider modal — matches Add/Edit Role so the two settings forms
+          feel like siblings, and gives the multi-select pickers enough
+          horizontal room for the chip rows below them. */}
+      <DialogContent className="!max-w-[1100px] w-[95vw]">
         <DialogHeader>
           <DialogTitle>{isEdit ? `Edit "${editing!.user_name}"` : 'Add User'}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3 max-h-[70vh] overflow-y-auto pr-1">
-          <div>
-            <label className="text-sm font-medium block mb-1">
-              Full Name * {isEdit && <span className="text-xs text-muted-foreground font-normal">(not editable)</span>}
-            </label>
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Priya Sharma"
-              disabled={isEdit}
-            />
+          {/* Row 1: Full Name | Status toggle (edit only).
+              On Add, the Status column is unused — Status defaults to
+              Active for new users so we omit it entirely instead of
+              showing a redundant always-on switch. Grid collapses to one
+              column on narrow viewports so the toggle drops below the
+              name field gracefully. */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-end">
+            <div>
+              <label className="text-sm font-medium block mb-1">
+                Full Name * {isEdit && <span className="text-xs text-muted-foreground font-normal">(not editable)</span>}
+              </label>
+              <Input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="e.g. Priya Sharma"
+                disabled={isEdit}
+              />
+            </div>
+            {isEdit ? (
+              <div className="flex items-center justify-end gap-3 pb-1.5">
+                <span className="text-sm font-medium">Status</span>
+                <Switch checked={active} onCheckedChange={setActive} ariaLabel="Toggle user active" />
+                <span
+                  className={`text-xs w-16 inline-block text-left ${
+                    active ? 'text-emerald-700' : 'text-muted-foreground'
+                  }`}
+                >
+                  {active ? 'Active' : 'Inactive'}
+                </span>
+              </div>
+            ) : (
+              /* Spacer so the grid keeps its two-column layout on md+
+                 (otherwise Full Name would stretch full-width which
+                 doesn't match the rest of the form's row rhythm). */
+              <div className="hidden md:block" aria-hidden="true" />
+            )}
           </div>
 
-          <div>
-            <label className="text-sm font-medium block mb-1">
-              Official Email * {isEdit && <span className="text-xs text-muted-foreground font-normal">(not editable)</span>}
-            </label>
-            <Input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="priya@channelplay.in"
-              disabled={isEdit}
-            />
+          {/* Row 2: Official Email | Role.
+              Email is non-editable on edit (it keys OTP delivery). Role
+              uses the shared SearchSelect so the dropdown matches every
+              other typeahead in the form. */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <label className="text-sm font-medium block mb-1">
+                Official Email * {isEdit && <span className="text-xs text-muted-foreground font-normal">(not editable)</span>}
+              </label>
+              <Input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="priya@channelplay.in"
+                disabled={isEdit}
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium block mb-1">Role *</label>
+              <SearchSelect
+                value={roleId === '' ? '' : roleId}
+                onChange={(v) => setRoleId(v ? Number(v) : '')}
+                options={roles.map((r) => ({ value: r.role_id, label: r.role_name }))}
+                placeholder="Search and select a role…"
+              />
+            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -869,441 +856,240 @@ function UserFormModal({
             </div>
           </div>
 
-          {/* Role — shared SearchSelect (typeahead + keyboard nav).
-              Same component the toolbar role filter uses, so the picker
-              behaves identically across the page. */}
-          <div>
-            <label className="text-sm font-medium block mb-1">Role *</label>
-            <SearchSelect
-              value={roleId === '' ? '' : roleId}
-              onChange={(v) => setRoleId(v ? Number(v) : '')}
-              options={roles.map((r) => ({ value: r.role_id, label: r.role_name }))}
-              placeholder="Search and select a role…"
+          {/* Role helper text — kept under the Email | Role row above
+              (instead of inside the picker block) so the grid stays
+              clean. Backend rejects role+group mismatches; this hint
+              tells operators what to expect if a combo fails. */}
+          <p className="text-xs text-muted-foreground -mt-1">
+            Every active role is listed. Backend will reject combos that aren&apos;t allowed for the user&apos;s group.
+          </p>
+
+          {/*
+            * Multi-select scope fields — Cities / Clients / States / Verticals.
+            *
+            * REFACTORED: previously each field rendered its own search box,
+            * a chips-row ABOVE the scrollable list, then the list itself.
+            * That layout pushed selected chips into the reading flow before
+            * the operator finished selecting, made tall sections in the
+            * form (4 × 36-line lists = a lot of scrolling), and duplicated
+            * the same search/clear logic four times.
+            *
+            * Now: each field renders a single `SearchMultiSelect` trigger
+            * (matches the look of other dropdowns in the form) and chips
+            * appear BELOW it once selected. The popover's internal
+            * filter + "select all / clear" footer replaces the old
+            * inline Input + bulk action row.
+            *
+            * Layout: two columns on md+ so the four scopes fit on one
+            * screen without a long vertical scroll. Falls back to a
+            * single column on narrow viewports.
+            */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Cities */}
+            <ScopeMultiSelect
+              label="Manages Cities"
+              chipColor="blue"
+              selected={manageCities}
+              onChange={(next) => setManageCities(new Set(next as number[]))}
+              options={cities.map((c) => ({ value: c.city_id, label: c.city_name }))}
+              chipFor={(id) => cities.find((x) => x.city_id === id)?.city_name}
+              onRemoveOne={toggleManageCity}
+              placeholder="Select cities…"
+              selectedLabel="cities"
             />
-            <p className="text-xs text-muted-foreground mt-1">
-              Every active role is listed. Backend will reject combos that aren't allowed for the user's group.
-            </p>
+
+            {/* Clients */}
+            <ScopeMultiSelect
+              label="Manages Clients"
+              chipColor="emerald"
+              selected={manageClients}
+              onChange={(next) => setManageClients(new Set(next as number[]))}
+              options={clients.map((c) => ({ value: c.client_id, label: c.client_name }))}
+              chipFor={(id) => clients.find((x) => x.client_id === id)?.client_name}
+              onRemoveOne={toggleManageClient}
+              placeholder="Select clients…"
+              selectedLabel="clients"
+            />
+
+            {/* States */}
+            <ScopeMultiSelect
+              label="Manages States"
+              chipColor="violet"
+              selected={manageStates}
+              onChange={(next) => setManageStates(new Set(next as number[]))}
+              options={states.map((s) => ({ value: s.state_id, label: s.state_name }))}
+              chipFor={(id) => states.find((x) => x.state_id === id)?.state_name}
+              onRemoveOne={toggleManageState}
+              placeholder="Select states…"
+              selectedLabel="states"
+            />
+
+            {/* Verticals */}
+            <ScopeMultiSelect
+              label="Manages Verticals"
+              chipColor="amber"
+              selected={manageVerticals}
+              onChange={(next) => setManageVerticals(new Set(next as number[]))}
+              options={verticals.map((v) => ({ value: v.vertical_id, label: v.vertical_name }))}
+              chipFor={(id) => verticals.find((x) => x.vertical_id === id)?.vertical_name}
+              onRemoveOne={toggleManageVertical}
+              placeholder="Select verticals…"
+              selectedLabel="verticals"
+            />
           </div>
 
           {/*
-            * Manages Cities (multi-select) — legacy field. Persisted as a CSV
-            * of city_ids in tbl_user.manage_cities. Users with role-based
-            * city scoping (e.g. Zonal Field Team) need this to limit their
-            * job lists to their assigned regions.
+            * Reporting Manager + Home City — both single-select. Side
+            * by side so the identity-graph metadata clusters together.
+            *
+            * Reporting Manager drives the hierarchy DFS for scope-union
+            * (on login, the user's own scope is merged with every
+            * direct/indirect report's manage_* fields). Self-assignment
+            * is blocked at the UI layer (`adminUsers` filtered to
+            * exclude the current user); backend also catches transitive
+            * cycles.
+            *
+            * Home City (tbl_user.city_id) is a new-app addition — not
+            * in the legacy form but the column has existed for years
+            * and other surfaces key off it.
+            *
+            * Both fields share the SearchSelect component so the
+            * "(optional)" label, picker UI, and clear affordance all
+            * stay identical. The clear-X inside SearchSelect replaces
+            * the prior bespoke "Selected: X | clear" line below each
+            * field.
             */}
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="text-sm font-medium">
-                Manages Cities <span className="text-xs text-muted-foreground font-normal">
-                  ({manageCities.size} selected)
-                </span>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <label className="text-sm font-medium block mb-1">
+                Reporting Manager <span className="text-xs text-muted-foreground font-normal">(optional)</span>
               </label>
-              {/* Bulk-select shortcuts. Applies to the CURRENT filter:
-                  "Select all" picks every city matching the search box
-                  so an operator can search "Mum" and select all Mumbai
-                  variants in one click. With an empty search, it picks
-                  every city in the master list. */}
-              <div className="text-xs flex gap-2">
-                <button
-                  type="button"
-                  className="text-primary hover:underline"
-                  onClick={() => setManageCities(new Set([
-                    ...Array.from(manageCities),
-                    ...filteredManageCities.map((c) => c.city_id),
-                  ]))}
-                >
-                  Select {manageCitiesQuery.trim() ? 'filtered' : 'all'}
-                </button>
-                {manageCities.size > 0 && (
-                  <button
-                    type="button"
-                    className="text-muted-foreground hover:text-red-600 hover:underline"
-                    onClick={() => setManageCities(new Set())}
-                  >
-                    Clear
-                  </button>
-                )}
-              </div>
+              <SearchSelect
+                value={reportingManager === '' ? '' : reportingManager}
+                onChange={(v) => setReportingManager(v ? Number(v) : '')}
+                options={adminUsers
+                  .filter((u) => !editing || u.user_id !== editing.user_id)
+                  .map((u) => ({
+                    value: u.user_id,
+                    label: u.role_name ? `${u.user_name} · ${u.role_name}` : u.user_name,
+                  }))}
+                placeholder="Search by name or role…"
+              />
             </div>
-            <Input
-              value={manageCitiesQuery}
-              onChange={(e) => setManageCitiesQuery(e.target.value)}
-              placeholder="Search cities to add/remove…"
-              className="mb-1"
-            />
-            {manageCities.size > 0 && (
-              <div className="text-xs text-muted-foreground mb-1 flex flex-wrap gap-1">
-                {Array.from(manageCities).map((id) => {
-                  const c = cities.find((x) => x.city_id === id);
-                  if (!c) return null;
-                  return (
-                    <span key={id} className="bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">
-                      {c.city_name}
-                      <button type="button" className="ml-1 text-blue-700/60 hover:text-blue-900" onClick={() => toggleManageCity(id)}>×</button>
-                    </span>
-                  );
-                })}
-              </div>
-            )}
-            <div className="border rounded bg-background max-h-36 overflow-auto" role="listbox">
-              {filteredManageCities.length === 0 ? (
-                <div className="px-3 py-2 text-sm text-muted-foreground">No cities match.</div>
-              ) : filteredManageCities.map((c) => {
-                const selected = manageCities.has(c.city_id);
-                return (
-                  <button
-                    type="button"
-                    key={c.city_id}
-                    role="option"
-                    aria-selected={selected}
-                    onClick={() => toggleManageCity(c.city_id)}
-                    className={`w-full text-left px-3 py-1.5 text-sm hover:bg-muted/60 flex items-center gap-2 ${selected ? 'bg-blue-50 text-blue-700 font-medium' : ''}`}
-                  >
-                    <input type="checkbox" readOnly checked={selected} className="pointer-events-none" />
-                    <span>{c.city_name}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/*
-            * Manages Clients (multi-select) — legacy field. CSV of client_ids
-            * in tbl_user.manage_clients. Roles like Business Development +
-            * Project Manager use this to scope their views to specific
-            * clients.
-            */}
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="text-sm font-medium">
-                Manages Clients <span className="text-xs text-muted-foreground font-normal">
-                  ({manageClients.size} selected)
-                </span>
+            <div>
+              <label className="text-sm font-medium block mb-1">
+                Home City <span className="text-xs text-muted-foreground font-normal">(optional)</span>
               </label>
-              <div className="text-xs flex gap-2">
-                <button
-                  type="button"
-                  className="text-primary hover:underline"
-                  onClick={() => setManageClients(new Set([
-                    ...Array.from(manageClients),
-                    ...filteredClients.map((c) => c.client_id),
-                  ]))}
-                >
-                  Select {clientQuery.trim() ? 'filtered' : 'all'}
-                </button>
-                {manageClients.size > 0 && (
-                  <button
-                    type="button"
-                    className="text-muted-foreground hover:text-red-600 hover:underline"
-                    onClick={() => setManageClients(new Set())}
-                  >
-                    Clear
-                  </button>
-                )}
-              </div>
-            </div>
-            <Input
-              value={clientQuery}
-              onChange={(e) => setClientQuery(e.target.value)}
-              placeholder="Search clients to add/remove…"
-              className="mb-1"
-            />
-            {manageClients.size > 0 && (
-              <div className="text-xs text-muted-foreground mb-1 flex flex-wrap gap-1">
-                {Array.from(manageClients).map((id) => {
-                  const c = clients.find((x) => x.client_id === id);
-                  if (!c) return null;
-                  return (
-                    <span key={id} className="bg-emerald-50 text-emerald-700 rounded px-1.5 py-0.5">
-                      {c.client_name}
-                      <button type="button" className="ml-1 text-emerald-700/60 hover:text-emerald-900" onClick={() => toggleManageClient(id)}>×</button>
-                    </span>
-                  );
-                })}
-              </div>
-            )}
-            <div className="border rounded bg-background max-h-36 overflow-auto" role="listbox">
-              {filteredClients.length === 0 ? (
-                <div className="px-3 py-2 text-sm text-muted-foreground">No clients match.</div>
-              ) : filteredClients.map((c) => {
-                const selected = manageClients.has(c.client_id);
-                return (
-                  <button
-                    type="button"
-                    key={c.client_id}
-                    role="option"
-                    aria-selected={selected}
-                    onClick={() => toggleManageClient(c.client_id)}
-                    className={`w-full text-left px-3 py-1.5 text-sm hover:bg-muted/60 flex items-center gap-2 ${selected ? 'bg-emerald-50 text-emerald-700 font-medium' : ''}`}
-                  >
-                    <input type="checkbox" readOnly checked={selected} className="pointer-events-none" />
-                    <span>{c.client_name}</span>
-                  </button>
-                );
-              })}
+              <SearchSelect
+                value={cityId === '' ? '' : cityId}
+                onChange={(v) => setCityId(v ? Number(v) : '')}
+                options={cities.map((c) => ({ value: c.city_id, label: c.city_name }))}
+                placeholder="Search cities…"
+              />
             </div>
           </div>
 
-          {/*
-            * Manages States (multi-select) — RBAC scope. CSV of state_ids in
-            * tbl_user.manage_states. Filters the user's view of jobs / EFRs
-            * by the state of the linked city.
-            */}
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="text-sm font-medium">
-                Manages States <span className="text-xs text-muted-foreground font-normal">
-                  ({manageStates.size} selected)
-                </span>
-              </label>
-              <div className="text-xs flex gap-2">
-                <button
-                  type="button"
-                  className="text-primary hover:underline"
-                  onClick={() => setManageStates(new Set([
-                    ...Array.from(manageStates),
-                    ...filteredManageStates.map((s) => s.state_id),
-                  ]))}
-                >
-                  Select {manageStatesQuery.trim() ? 'filtered' : 'all'}
-                </button>
-                {manageStates.size > 0 && (
-                  <button
-                    type="button"
-                    className="text-muted-foreground hover:text-red-600 hover:underline"
-                    onClick={() => setManageStates(new Set())}
-                  >
-                    Clear
-                  </button>
-                )}
-              </div>
-            </div>
-            <Input
-              value={manageStatesQuery}
-              onChange={(e) => setManageStatesQuery(e.target.value)}
-              placeholder="Search states to add/remove…"
-              className="mb-1"
-            />
-            {manageStates.size > 0 && (
-              <div className="text-xs text-muted-foreground mb-1 flex flex-wrap gap-1">
-                {Array.from(manageStates).map((id) => {
-                  const s = states.find((x) => x.state_id === id);
-                  if (!s) return null;
-                  return (
-                    <span key={id} className="bg-violet-50 text-violet-700 rounded px-1.5 py-0.5">
-                      {s.state_name}
-                      <button type="button" className="ml-1 text-violet-700/60 hover:text-violet-900" onClick={() => toggleManageState(id)}>×</button>
-                    </span>
-                  );
-                })}
-              </div>
-            )}
-            <div className="border rounded bg-background max-h-36 overflow-auto" role="listbox">
-              {filteredManageStates.length === 0 ? (
-                <div className="px-3 py-2 text-sm text-muted-foreground">No states match.</div>
-              ) : filteredManageStates.map((s) => {
-                const selected = manageStates.has(s.state_id);
-                return (
-                  <button
-                    type="button"
-                    key={s.state_id}
-                    role="option"
-                    aria-selected={selected}
-                    onClick={() => toggleManageState(s.state_id)}
-                    className={`w-full text-left px-3 py-1.5 text-sm hover:bg-muted/60 flex items-center gap-2 ${selected ? 'bg-violet-50 text-violet-700 font-medium' : ''}`}
-                  >
-                    <input type="checkbox" readOnly checked={selected} className="pointer-events-none" />
-                    <span>{s.state_name}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/*
-            * Manages Verticals (multi-select) — RBAC scope. CSV of vertical_ids
-            * in tbl_user.manage_verticals. Filters the user's view of jobs /
-            * clients by the vertical assigned to the client (tbl_client.vertical_id).
-            */}
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="text-sm font-medium">
-                Manages Verticals <span className="text-xs text-muted-foreground font-normal">
-                  ({manageVerticals.size} selected)
-                </span>
-              </label>
-              <div className="text-xs flex gap-2">
-                <button
-                  type="button"
-                  className="text-primary hover:underline"
-                  onClick={() => setManageVerticals(new Set([
-                    ...Array.from(manageVerticals),
-                    ...filteredVerticals.map((v) => v.vertical_id),
-                  ]))}
-                >
-                  Select {verticalQuery.trim() ? 'filtered' : 'all'}
-                </button>
-                {manageVerticals.size > 0 && (
-                  <button
-                    type="button"
-                    className="text-muted-foreground hover:text-red-600 hover:underline"
-                    onClick={() => setManageVerticals(new Set())}
-                  >
-                    Clear
-                  </button>
-                )}
-              </div>
-            </div>
-            <Input
-              value={verticalQuery}
-              onChange={(e) => setVerticalQuery(e.target.value)}
-              placeholder="Search verticals to add/remove…"
-              className="mb-1"
-            />
-            {manageVerticals.size > 0 && (
-              <div className="text-xs text-muted-foreground mb-1 flex flex-wrap gap-1">
-                {Array.from(manageVerticals).map((id) => {
-                  const v = verticals.find((x) => x.vertical_id === id);
-                  if (!v) return null;
-                  return (
-                    <span key={id} className="bg-amber-50 text-amber-700 rounded px-1.5 py-0.5">
-                      {v.vertical_name}
-                      <button type="button" className="ml-1 text-amber-700/60 hover:text-amber-900" onClick={() => toggleManageVertical(id)}>×</button>
-                    </span>
-                  );
-                })}
-              </div>
-            )}
-            <div className="border rounded bg-background max-h-36 overflow-auto" role="listbox">
-              {filteredVerticals.length === 0 ? (
-                <div className="px-3 py-2 text-sm text-muted-foreground">No verticals match.</div>
-              ) : filteredVerticals.map((v) => {
-                const selected = manageVerticals.has(v.vertical_id);
-                return (
-                  <button
-                    type="button"
-                    key={v.vertical_id}
-                    role="option"
-                    aria-selected={selected}
-                    onClick={() => toggleManageVertical(v.vertical_id)}
-                    className={`w-full text-left px-3 py-1.5 text-sm hover:bg-muted/60 flex items-center gap-2 ${selected ? 'bg-amber-50 text-amber-700 font-medium' : ''}`}
-                  >
-                    <input type="checkbox" readOnly checked={selected} className="pointer-events-none" />
-                    <span>{v.vertical_name}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/*
-            * Reporting Manager — single-select. Drives the hierarchy DFS
-            * for scope-union: on login, the user's own scope is merged
-            * with every direct/indirect report's manage_* fields so a
-            * manager sees their team's data. Self-assignment is blocked
-            * at the UI layer; the backend also catches transitive cycles.
-            */}
-          <div>
-            <label className="text-sm font-medium block mb-1">
-              Reporting Manager <span className="text-xs text-muted-foreground font-normal">(optional)</span>
-            </label>
-            {selectedManagerName && (
-              <div className="text-xs text-muted-foreground mb-1">
-                Selected: <span className="font-medium text-foreground">{selectedManagerName}</span>
-                {' '}<button type="button" className="text-blue-700 underline ml-1" onClick={() => setReportingManager('')}>clear</button>
-              </div>
-            )}
-            <Input
-              value={managerQuery}
-              onChange={(e) => setManagerQuery(e.target.value)}
-              placeholder="Search by name or role…"
-              className="mb-1"
-            />
-            <div className="border rounded bg-background max-h-36 overflow-auto" role="listbox">
-              {filteredManagers.length === 0 ? (
-                <div className="px-3 py-2 text-sm text-muted-foreground">No matching admins.</div>
-              ) : filteredManagers.map((u) => {
-                const selected = reportingManager === u.user_id;
-                return (
-                  <button
-                    type="button"
-                    key={u.user_id}
-                    role="option"
-                    aria-selected={selected}
-                    onClick={() => { setReportingManager(u.user_id); setManagerQuery(''); }}
-                    className={`w-full text-left px-3 py-1.5 text-sm hover:bg-muted/60 flex items-center justify-between gap-2 ${selected ? 'bg-blue-50 text-blue-700 font-medium' : ''}`}
-                  >
-                    <span>{u.user_name}</span>
-                    {u.role_name && <span className="text-xs text-muted-foreground">{u.role_name}</span>}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/*
-            * Home City (single) — new-app addition. Not in legacy form but
-            * tbl_user.city_id has been a real column for years; other parts
-            * of the system key off it. Optional, sits below the Manages
-            * fields so legacy-parity inputs stay primary.
-            */}
-          <div>
-            <label className="text-sm font-medium block mb-1">Home City (optional)</label>
-            <Input
-              value={cityQuery}
-              onChange={(e) => setCityQuery(e.target.value)}
-              placeholder="Search cities…"
-              className="mb-1"
-            />
-            {selectedCityName && (
-              <div className="text-xs text-muted-foreground mb-1">
-                Selected: <span className="font-medium text-foreground">{selectedCityName}</span>
-                {' '}<button type="button" className="text-blue-700 underline ml-1" onClick={() => setCityId('')}>clear</button>
-              </div>
-            )}
-            <div className="border rounded bg-background max-h-32 overflow-auto" role="listbox">
-              {filteredCities.length === 0 ? (
-                <div className="px-3 py-2 text-sm text-muted-foreground">No cities match.</div>
-              ) : filteredCities.map((c) => {
-                const selected = c.city_id === cityId;
-                return (
-                  <button
-                    type="button"
-                    key={c.city_id}
-                    role="option"
-                    aria-selected={selected}
-                    onClick={() => setCityId(c.city_id)}
-                    className={`w-full text-left px-3 py-1.5 text-sm hover:bg-muted/60 ${selected ? 'bg-blue-50 text-blue-700 font-medium' : ''}`}
-                  >
-                    {c.city_name}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {isEdit && (
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
-              <span>Active</span>
-            </label>
-          )}
+          {/* Status toggle previously lived here at the bottom of the
+              form; moved to row 1 (alongside Full Name) so the
+              identity-level metadata clusters together. */}
 
           {error && (
             <div className="text-sm text-red-600 flex items-center gap-1">
               <AlertTriangle className="size-4" /> {error}
             </div>
           )}
-
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={onClose} disabled={submitting}>Cancel</Button>
-            <Button onClick={handleSubmit} disabled={submitting}>
-              {submitting ? 'Saving…' : isEdit ? 'Save Changes' : 'Add User'}
-            </Button>
-          </div>
         </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={submitting}>Cancel</Button>
+          <Button onClick={handleSubmit} disabled={submitting}>
+            {submitting ? 'Saving…' : isEdit ? 'Save Changes' : 'Add User'}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/*
+ * Small helper that pairs a `SearchMultiSelect` picker with a row of
+ * removable chips below it. Used for the 4 scope fields (Cities,
+ * Clients, States, Verticals) inside the User modal — keeps each field
+ * compact (one trigger + a wrap of chips) instead of four duplicated
+ * search-list-chips blocks.
+ *
+ * The chip color is a theme prop so each scope keeps its identity
+ * (blue cities, emerald clients, violet states, amber verticals).
+ */
+type ChipColor = 'blue' | 'emerald' | 'violet' | 'amber';
+const CHIP_CLASSES: Record<ChipColor, { bg: string; text: string; closeHover: string }> = {
+  blue:    { bg: 'bg-blue-50',    text: 'text-blue-700',    closeHover: 'hover:text-blue-900' },
+  emerald: { bg: 'bg-emerald-50', text: 'text-emerald-700', closeHover: 'hover:text-emerald-900' },
+  violet:  { bg: 'bg-violet-50',  text: 'text-violet-700',  closeHover: 'hover:text-violet-900' },
+  amber:   { bg: 'bg-amber-50',   text: 'text-amber-700',   closeHover: 'hover:text-amber-900' },
+};
+
+function ScopeMultiSelect({
+  label,
+  chipColor,
+  selected,
+  onChange,
+  options,
+  chipFor,
+  onRemoveOne,
+  placeholder,
+  selectedLabel,
+}: {
+  label: string;
+  chipColor: ChipColor;
+  selected: Set<number>;
+  onChange: (next: Array<string | number>) => void;
+  options: SearchOption[];
+  chipFor: (id: number) => string | undefined;
+  onRemoveOne: (id: number) => void;
+  placeholder: string;
+  selectedLabel: string;
+}) {
+  const cls = CHIP_CLASSES[chipColor];
+  return (
+    <div>
+      <label className="text-sm font-medium block mb-1">
+        {label}{' '}
+        <span className="text-xs text-muted-foreground font-normal">
+          ({selected.size} selected)
+        </span>
+      </label>
+      <SearchMultiSelect
+        value={Array.from(selected)}
+        onChange={onChange}
+        options={options}
+        placeholder={placeholder}
+        selectedLabel={selectedLabel}
+      />
+      {selected.size > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {Array.from(selected).map((id) => {
+            const name = chipFor(id);
+            if (!name) return null;
+            return (
+              <span
+                key={id}
+                className={`text-xs rounded px-1.5 py-0.5 ${cls.bg} ${cls.text}`}
+              >
+                {name}
+                <button
+                  type="button"
+                  className={`ml-1 opacity-60 ${cls.closeHover}`}
+                  onClick={() => onRemoveOne(id)}
+                  aria-label={`Remove ${name}`}
+                >
+                  ×
+                </button>
+              </span>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 
