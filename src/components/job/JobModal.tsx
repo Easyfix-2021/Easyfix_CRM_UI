@@ -104,10 +104,15 @@ export function JobModal({
   // doesn't see last-modal's job id flash. The non-view modes embed the
   // jobId from props (always current — no stale risk) so they render
   // normally. View mode depends on `job`, so we wait for the fetch.
+  //
+  // We deliberately do NOT show "Loading job…" in the title while
+  // loading — that produced two visible loading indicators (one in the
+  // header, one in the body). The body now owns the single centered
+  // loader; the header just stays generic ("Job") until the payload
+  // lands and the real `Job #N` title can render.
   const title = mode === 'create'  ? 'Create New Job'
              : mode === 'edit'    ? `Edit Job #${jobId}`
              : mode === 'confirm' ? `Confirm & Schedule · Job #${jobId}`
-             : loading            ? 'Loading job…'
              : job                ? `Job #${job.job_id}`
              :                       'Job';
 
@@ -148,7 +153,19 @@ export function JobModal({
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto px-6 py-5">
-          {loading && <div className="text-sm text-muted-foreground">Loading…</div>}
+          {/* Single, properly-centered loader. Replaces the prior small
+              left-aligned "Loading…" text which combined with the
+              header's "Loading job…" string to produce TWO loading
+              indicators on every modal open. The wrapper takes the full
+              remaining vertical space so the spinner+label sit in the
+              optical centre, not at the top edge. */}
+          {loading && (
+            <div className="flex items-center justify-center h-full">
+              <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+                <Spinner /> Loading…
+              </span>
+            </div>
+          )}
           {error && !job && <div className="text-sm text-destructive">{error}</div>}
           {!loading && mode === 'view' && job && <ViewBody job={job} />}
           {!loading && mode !== 'view' && (

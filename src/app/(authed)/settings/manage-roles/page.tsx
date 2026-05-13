@@ -342,12 +342,18 @@ export default function ManageRolesPage() {
               <col style={{ width: '4%'  }} /> {/* Expand chevron */}
               <col style={{ width: '6%'  }} /> {/* Role ID */}
               <col style={{ width: '15%' }} /> {/* Name */}
-              <col style={{ width: '20%' }} /> {/* Description */}
+              <col style={{ width: '21%' }} /> {/* Description (was 20% — picked up freed Actions space) */}
               <col style={{ width: '8%'  }} /> {/* Group */}
-              <col style={{ width: '20%' }} /> {/* Menu Access (names) */}
+              <col style={{ width: '22%' }} /> {/* Menu Access (was 20% — picked up freed Actions space) */}
               <col style={{ width: '8%'  }} /> {/* Users */}
               <col style={{ width: '8%'  }} /> {/* Status */}
-              <col style={{ width: '11%' }} /> {/* Actions */}
+              {/* Actions reduced from 11% → 8% to match the action-column
+                  density on Manage Users and the other settings pages.
+                  With only 2 icons (no "view-only" chip), the previous
+                  11% left a large empty gap left-of-icons even with
+                  justify-end. Freed space went to Description + Menu
+                  Access which truncate most often. */}
+              <col style={{ width: '8%'  }} /> {/* Actions */}
             </colgroup>
             <thead>
               <tr>

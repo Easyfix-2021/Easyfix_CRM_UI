@@ -149,10 +149,13 @@ export function EasyfixerModal({
 
   // While the fresh record is loading, suppress the identity-bearing
   // parts of the title/subtitle (name, id, city) so the operator can't
-  // see the previously-opened easyfixer's details flash. Create mode
-  // and Edit mode without a hydrated record fall back to neutral text.
+  // see the previously-opened easyfixer's details flash. We render a
+  // neutral title ("Easyfixer") rather than "Loading easyfixer…" so
+  // the centered body loader is the ONLY loading indicator visible —
+  // header + body together used to produce two loading hints which
+  // looked sloppy.
   const title = mode === 'create' ? 'Add New Easyfixer'
-             : loading            ? 'Loading easyfixer…'
+             : loading            ? 'Easyfixer'
              : mode === 'edit'    ? `Edit · ${formatEasyfixerName(record?.efr_name ?? '')}`
              : formatEasyfixerName(record?.efr_name ?? '') || 'Easyfixer';
   const subtitle = mode === 'view' && !loading && record
@@ -185,7 +188,20 @@ export function EasyfixerModal({
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto px-6 py-5">
-          {loading && <div className="text-sm text-muted-foreground">Loading…</div>}
+          {/* Single centered loader — see JobModal for the same pattern.
+              Header title stays neutral while loading; this is the only
+              loading indicator the operator sees. */}
+          {loading && (
+            <div className="flex items-center justify-center h-full">
+              <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+                <svg className="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeOpacity="0.25" strokeWidth="4" />
+                  <path d="M22 12a10 10 0 0 1-10 10" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />
+                </svg>
+                Loading…
+              </span>
+            </div>
+          )}
           {!loading && mode === 'view' && record && <ViewBody record={record} />}
           {!loading && mode !== 'view' && (
             <form id="efr-form" onSubmit={submit} className="space-y-5">
