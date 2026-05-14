@@ -18,6 +18,7 @@ import { ClipboardList, Plus, AlertTriangle, ChevronDown, ChevronRight } from 'l
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { CancelButton } from '@/components/ui/cancel-button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { api, ApiError } from '@/lib/api';
 import { useMe } from '@/lib/auth-context';
@@ -202,7 +203,7 @@ function AddQuestionnaireDialog({ open, onClose, onSubmit }: {
           />
           {err && <div className="text-sm text-red-600">{err}</div>}
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={onClose} disabled={loading}>Cancel</Button>
+            <CancelButton onCancel={onClose} disabled={loading} />
             <Button onClick={go} disabled={loading}>{loading ? 'Saving…' : 'Create'}</Button>
           </div>
         </div>

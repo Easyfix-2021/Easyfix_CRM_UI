@@ -1,6 +1,8 @@
 'use client';
+import * as React from 'react';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   PhoneCall, ShoppingCart, CalendarClock, BellRing,
   Play, CheckCircle2, ShieldCheck, MessageSquare,
@@ -9,6 +11,7 @@ import {
 import { Card, CardContent } from '@/components/ui/card';
 import { api } from '@/lib/api';
 import { formatEasyfixerName, statusColorClass, statusLabel } from '@/lib/utils';
+import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 
 /*
  * Dashboard — legacy CRM-inspired data-flow layout.
@@ -108,11 +111,29 @@ const FLOW: FlowCard[] = [
  * Visual rhythm — top: small icon chip · middle: title (2 lines max) +
  * one-line sub · bottom: big count. Same gradient palette as before.
  */
+/*
+ * Card now sized for a SINGLE 8-up row at all viewport widths above
+ * the mobile breakpoint. Each card is constrained to a fixed height
+ * (`h-32` = 128px) so the row is visually uniform regardless of which
+ * title text wraps. Title and sub-text use the new MarqueeOnHover
+ * helper: if the text doesn't fit on one line it scrolls horizontally
+ * while the operator hovers the card, so nothing is hidden behind a
+ * truncating ellipsis.
+ */
 function FlowCardTile({ card, value, loading }: { card: FlowCard; value: number; loading: boolean }) {
   const Icon = card.icon;
+  // Operator feedback: cards that animate only ONE of their two lines
+  // look uneven. Either both move on hover or neither does. We hoist
+  // the overflow decision up to the card: each MarqueeOnHover reports
+  // its own overflow state via `onMeasure`, and we pass an `animate`
+  // flag down so both children either run the marquee or stay still
+  // together.
+  const [titleOverflows, setTitleOverflows] = React.useState(false);
+  const [subOverflows, setSubOverflows] = React.useState(false);
+  const animateBoth = titleOverflows || subOverflows;
   return (
-    <Link href={card.href} className="block">
-      <div className={`rounded-lg bg-gradient-to-br ${card.tint} text-white shadow-sm hover:shadow-md hover:scale-[1.02] transition-all p-3 h-full flex flex-col gap-2 min-h-[130px]`}>
+    <Link href={card.href} className="block h-full group/card">
+      <div className={`rounded-lg bg-gradient-to-br ${card.tint} text-white shadow-sm hover:shadow-md hover:scale-[1.02] transition-all p-3 h-32 flex flex-col gap-2 overflow-hidden`}>
         <div className="flex items-center justify-between">
           <div className="h-7 w-7 rounded-md bg-white/15 grid place-items-center shrink-0">
             <Icon className="h-4 w-4" />
@@ -123,12 +144,113 @@ function FlowCardTile({ card, value, loading }: { card: FlowCard; value: number;
             {loading ? <span className="inline-block h-6 w-10 rounded bg-white/20 animate-pulse" /> : value.toLocaleString('en-IN')}
           </div>
         </div>
-        <div className="mt-auto">
-          <div className="text-[13px] font-semibold leading-snug line-clamp-2">{card.title}</div>
-          <div className="text-[11px] opacity-80 leading-snug truncate">{card.sub}</div>
+        <div className="mt-auto min-w-0">
+          <MarqueeOnHover
+            className="text-[13px] font-semibold leading-snug"
+            animateOverride={animateBoth}
+            onMeasure={setTitleOverflows}
+          >
+            {card.title}
+          </MarqueeOnHover>
+          <MarqueeOnHover
+            className="text-[11px] opacity-80 leading-snug"
+            animateOverride={animateBoth}
+            onMeasure={setSubOverflows}
+          >
+            {card.sub}
+          </MarqueeOnHover>
         </div>
       </div>
     </Link>
+  );
+}
+
+/*
+ * MarqueeOnHover — single-line text that scrolls horizontally on hover
+ * if (and only if) the content overflows its container. Uses a measure-
+ * pass on mount + resize to decide whether to animate; the actual
+ * animation is CSS keyframes driven so we don't run a JS-side rAF loop
+ * just to animate marquees on idle cards.
+ *
+ * Implementation notes:
+ *   - The inner span gets `whitespace-nowrap` so it can grow past the
+ *     wrapper's width.
+ *   - The wrapper is `overflow-hidden`, so the non-overflowing case
+ *     simply renders as a clipped single-line string (no ellipsis —
+ *     overflowing text just hides off the right edge until hover).
+ *   - Animation distance = (innerWidth - wrapperWidth). We set the
+ *     `--marquee-distance` CSS variable so the same keyframe works
+ *     across all card widths.
+ *   - Duration is proportional to distance (1 px ≈ 30ms) so short
+ *     overflows scroll quickly and long ones don't rush.
+ *   - We only animate on `:hover` so idle cards are visually quiet.
+ */
+function MarqueeOnHover({
+  children,
+  className,
+  animateOverride,
+  onMeasure,
+}: {
+  children: React.ReactNode;
+  className?: string;
+  /* When set by the parent (e.g. FlowCardTile decides "if either line
+   * overflows, both animate"), this overrides the local overflow check.
+   * Lets two side-by-side marquees stay synchronised. */
+  animateOverride?: boolean;
+  /* Reports the local overflow status back to the parent so a card
+   * can union the per-line states into one shared decision. */
+  onMeasure?: (overflows: boolean) => void;
+}) {
+  const wrapRef = React.useRef<HTMLDivElement>(null);
+  const innerRef = React.useRef<HTMLSpanElement>(null);
+  const [overflow, setOverflow] = React.useState(0);
+  const [exitDist, setExitDist] = React.useState(0);
+
+  React.useEffect(() => {
+    const measure = () => {
+      const w = wrapRef.current?.clientWidth ?? 0;
+      const i = innerRef.current?.scrollWidth ?? 0;
+      const ov = Math.max(0, i - w);
+      setOverflow(ov);
+      setExitDist(i);
+      onMeasure?.(ov > 0);
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [children, onMeasure]);
+
+  // animate if EITHER our own line overflows OR the parent told us to
+  // (because a sibling line on the same card overflows). Keeps both
+  // lines moving in unison even when one of them fits.
+  const animates = (animateOverride ?? false) || overflow > 0;
+  const PX_PER_SEC = 80;
+  const durationMs = Math.max(3000, Math.round((exitDist / PX_PER_SEC) * 1000));
+
+  return (
+    <div ref={wrapRef} className={`${className ?? ''} overflow-hidden`}>
+      <span
+        ref={innerRef}
+        // `group-hover-marquee` is paused by default; the
+        // `a:hover .group-hover-marquee` rule in globals.css starts it.
+        // When hover ends, animation-play-state goes back to `paused`.
+        // Critically, the CSS now also resets `animation` (name+timing)
+        // so the next hover replays the keyframes from 0% — matches the
+        // operator request "Marquee Should Reset from Start when cursor
+        // moves out from card".
+        className={`inline-block whitespace-nowrap ${animates ? 'group-hover-marquee' : ''}`}
+        style={
+          animates
+            ? ({
+                ['--marquee-distance' as string]: `-${exitDist + 16}px`,
+                ['--marquee-duration' as string]: `${durationMs}ms`,
+              } as React.CSSProperties)
+            : undefined
+        }
+      >
+        {children}
+      </span>
+    </div>
   );
 }
 
@@ -140,6 +262,28 @@ export default function DashboardPage() {
   const [recent, setRecent] = useState<JobRow[]>([]);
   const [loadingStats, setLoadingStats] = useState(true);
   const [loadingRecent, setLoadingRecent] = useState(true);
+
+  /*
+   * Book New Call deep-link handler — the Navbar's button pushes
+   * `/dashboard?new=1` so the modal lives WITH the dashboard, not the
+   * Manage Jobs page. Ops 2026-05-14: redirecting operators to the
+   * jobs queue interrupted the booking flow with a queue refresh they
+   * didn't want.
+   */
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const [modal, setModal] = useState<{ open: boolean; mode: JobModalMode }>({ open: false, mode: 'create' });
+
+  useEffect(() => {
+    if (searchParams.get('new') === '1') setModal({ open: true, mode: 'create' });
+  }, [searchParams]);
+
+  function closeModal() {
+    setModal((m) => ({ ...m, open: false }));
+    // Strip the ?new=1 so a refresh doesn't auto-reopen the modal and
+    // the URL goes back to a clean /dashboard.
+    if (searchParams.get('new')) router.replace('/dashboard');
+  }
 
   useEffect(() => {
     // One counts query covers every status bucket we need. Two requests fire
@@ -192,14 +336,19 @@ export default function DashboardPage() {
       </div>
 
       {/*
-        * Data-flow funnel — 8 cards left-to-right, wraps on narrow viewports.
-        * Breakpoints tuned so each card has ≥150 px of content width:
-        *   <640  → 2 cols (cards ~45% viewport, fits title comfortably)
-        *   640+  → 4 cols (half-width still comfortable)
-        *   1024+ → 4 cols held (2xl would be too tight on typical laptops)
-        *   1536+ → 8 cols (ultrawide: full funnel visible in one row)
+        * Data-flow funnel — 8 cards in a single horizontal row at all
+        * viewports above mobile. Each card is uniform `h-32` (set on
+        * the tile component) and `grid-cols-8` divides the row equally
+        * so the widths match too. On very narrow viewports the grid
+        * falls back to `grid-cols-2` then `grid-cols-4` so the row
+        * remains usable on tablets/phones, but at desktop widths the
+        * operator gets the full funnel at a glance.
+        *
+        * Overflowing titles/sub-text now use MarqueeOnHover (see the
+        * FlowCardTile helper above) — hover scrolls the long string
+        * horizontally instead of truncating it behind an ellipsis.
         */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 2xl:grid-cols-8 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
         {FLOW.map((card) => (
           <FlowCardTile key={card.title} card={card} value={stats[card.statKey]} loading={loadingStats} />
         ))}
@@ -253,6 +402,18 @@ export default function DashboardPage() {
           </table>
         </CardContent>
       </Card>
+
+      {/* Book New Call modal — mounted here (not on /jobs) so the
+          booking flow keeps the dashboard context behind it. Saving a
+          new job doesn't auto-refresh the cards/recent list to avoid
+          a perceived "jump" right after the operator hits Book Call;
+          the next genuine page load picks up the count. */}
+      <JobModal
+        open={modal.open}
+        mode={modal.mode}
+        onClose={closeModal}
+        onSaved={() => { /* dashboard cards refresh on next page load */ }}
+      />
     </div>
   );
 }

@@ -1,4 +1,11 @@
 import type { Config } from 'tailwindcss';
+// ESM import instead of CommonJS `require('tailwindcss-animate')`. Next.js
+// 15 + Node 20's newer ESM loader runs this .ts config as an ES module
+// when Tailwind triggers a config refresh during route compilation
+// (observed on the call-info page load — `require is not defined`).
+// The plugin ships dual CJS + ESM exports so the import works at both
+// dev-server boot and on hot-reload.
+import animate from 'tailwindcss-animate';
 
 /*
  * Palette tuned to match the legacy Metronic look of EasyFix_CRM:
@@ -67,7 +74,7 @@ const config: Config = {
       },
     },
   },
-  plugins: [require('tailwindcss-animate')],
+  plugins: [animate],
 };
 
 export default config;

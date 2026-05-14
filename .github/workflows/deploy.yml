@@ -190,8 +190,17 @@ jobs:
           # already-resolved value from the `api` step (which handles
           # the fallback for missing secrets) rather than reading the
           # secret again here — single source of truth.
+          #
+          # QuickSight bridge URLs are also baked at build time (read by
+          # navbar's openQuickSight()). They default to the canonical
+          # UAT/prod hosts in the Dockerfile so the build still works
+          # if the secrets aren't set; override here when the
+          # QUICKSIGHT_QA_URL / QUICKSIGHT_PROD_URL GitHub secrets are
+          # populated.
           build-args: |
             NEXT_PUBLIC_API_URL=${{ steps.api.outputs.url }}
+            NEXT_PUBLIC_QA_QUICKSIGHT_URL=${{ secrets.QUICKSIGHT_QA_URL || 'https://uat.easyfix.in' }}
+            NEXT_PUBLIC_PROD_QUICKSIGHT_URL=${{ secrets.QUICKSIGHT_PROD_URL || 'https://corporates.core.easyfix.in' }}
           tags: |
             ${{ steps.meta.outputs.image_uri }}
             ${{ steps.meta.outputs.moving_uri }}

@@ -29,6 +29,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { SearchSelect, type SearchOption } from '@/components/ui/search-select';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
 import { Switch } from '@/components/ui/switch';
+import { useCancelConfirm } from '@/lib/use-cancel-confirm';
 import { api, ApiError } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useLookup } from '@/lib/use-lookup';
@@ -306,15 +307,29 @@ export default function ManageUsersPage() {
       <Card>
         <CardContent className="p-0">
           <table className="data-table w-full" style={{ tableLayout: 'fixed' }}>
+            {/*
+                Column widths (must match the th/td sequence below):
+                  6 percent  User ID
+                  16 percent Name
+                  18 percent Email
+                  10 percent Mobile
+                  13 percent Role
+                  20 percent Manage Cities
+                  8 percent  Status
+                  9 percent  Actions
+                Inline JSX expression comments are illegal inside colgroup
+                (they introduce single-space text nodes that fail
+                hydration). See manage-roles for the full backstory.
+            */}
             <colgroup>
-              <col style={{ width: '6%'  }} /> {/* User ID */}
-              <col style={{ width: '16%' }} /> {/* Name */}
-              <col style={{ width: '18%' }} /> {/* Email */}
-              <col style={{ width: '10%' }} /> {/* Mobile */}
-              <col style={{ width: '13%' }} /> {/* Role */}
-              <col style={{ width: '20%' }} /> {/* Manage Cities */}
-              <col style={{ width: '8%'  }} /> {/* Status */}
-              <col style={{ width: '9%'  }} /> {/* Actions */}
+              <col style={{ width: '6%' }} />
+              <col style={{ width: '16%' }} />
+              <col style={{ width: '18%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '13%' }} />
+              <col style={{ width: '20%' }} />
+              <col style={{ width: '8%' }} />
+              <col style={{ width: '9%' }} />
             </colgroup>
             <thead>
               <tr>
@@ -540,6 +555,9 @@ function UserFormModal({
   const [cityId,  setCityId]  = useState<number | ''>('');
   const [active,  setActive]  = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  // Prompt before discarding the form on Cancel — applies to every Add
+  // / Edit User open. See `useCancelConfirm` for the standard copy.
+  const cancelWithConfirm = useCancelConfirm(onClose);
   const [error, setError] = useState<string | null>(null);
 
   // Manages Cities + Manages Clients — Sets for O(1) toggle. Persisted as
@@ -1000,7 +1018,7 @@ function UserFormModal({
           )}
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={submitting}>Cancel</Button>
+          <Button variant="outline" onClick={cancelWithConfirm} disabled={submitting}>Cancel</Button>
           <Button onClick={handleSubmit} disabled={submitting}>
             {submitting ? 'Saving…' : isEdit ? 'Save Changes' : 'Add User'}
           </Button>

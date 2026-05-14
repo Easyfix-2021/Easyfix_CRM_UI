@@ -26,6 +26,7 @@ import {
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { CancelButton } from '@/components/ui/cancel-button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { api, ApiError } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -595,7 +596,7 @@ function PincodeFormModal({
           )}
 
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={onClose} disabled={submitting}>Cancel</Button>
+            <CancelButton onCancel={onClose} disabled={submitting} />
             <Button onClick={handleSubmit} disabled={submitting}>
               {submitting ? 'Saving…' : isEdit ? 'Save Changes' : 'Add Pincode'}
             </Button>

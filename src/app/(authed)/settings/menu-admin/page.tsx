@@ -20,6 +20,7 @@ import { MenuSquare, Plus, Pencil, Trash2, AlertTriangle } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { CancelButton } from '@/components/ui/cancel-button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { api, ApiError } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -265,7 +266,7 @@ function MenuFormDialog({ open, onClose, editing, rows, onSaved }: {
           )}
           {err && <div className="text-sm text-red-600">{err}</div>}
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={onClose} disabled={loading}>Cancel</Button>
+            <CancelButton onCancel={onClose} disabled={loading} />
             <Button onClick={go} disabled={loading}>{loading ? 'Saving…' : isEdit ? 'Save Changes' : 'Add Menu'}</Button>
           </div>
         </div>

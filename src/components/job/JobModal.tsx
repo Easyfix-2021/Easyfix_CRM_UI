@@ -1,13 +1,19 @@
 'use client';
 
+import * as React from 'react';
 import { useEffect, useState } from 'react';
-import { Sparkles, Search, CalendarCheck } from 'lucide-react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { Sparkles, Search, CalendarCheck, History, Eye, Plus, X } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { CancelButton } from '@/components/ui/cancel-button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { SearchSelect } from '@/components/ui/search-select';
+import { SearchMultiSelect } from '@/components/ui/search-multi-select';
+import { Switch } from '@/components/ui/switch';
+import { AddressAutocomplete } from '@/components/ui/address-autocomplete';
+import { AddressEditDialog, type EditableAddress } from './AddressEditDialog';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { api, ApiError } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
@@ -70,6 +76,18 @@ export function JobModal({
   const [job, setJob] = useState<Job | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /*
+   * `compact` shrinks the modal to fit-to-content while the create-flow
+   * mobile gate is showing. Once the operator submits the mobile and
+   * the gate transitions to the full form, the gate calls
+   * setCompact(false) and the dialog expands to its standard 5xl/85vh
+   * footprint. For non-create modes the dialog is always full-size.
+   */
+  const [compact, setCompact] = useState(true);
+  useEffect(() => {
+    // Reset to compact every time the modal re-opens in create mode.
+    if (open) setCompact(initialMode === 'create');
+  }, [open, initialMode]);
 
   useEffect(() => { if (open) { setMode(initialMode); setError(null); } }, [open, initialMode, jobId]);
 
@@ -110,7 +128,9 @@ export function JobModal({
   // header, one in the body). The body now owns the single centered
   // loader; the header just stays generic ("Job") until the payload
   // lands and the real `Job #N` title can render.
-  const title = mode === 'create'  ? 'Create New Job'
+  // Create-mode title is now "Book New Call" to match the legacy CRM
+  // header button label exactly. Edit/Confirm/View titles unchanged.
+  const title = mode === 'create'  ? 'Book New Call'
              : mode === 'edit'    ? `Edit Job #${jobId}`
              : mode === 'confirm' ? `Confirm & Schedule · Job #${jobId}`
              : job                ? `Job #${job.job_id}`
@@ -121,8 +141,28 @@ export function JobModal({
       {/* Fixed-height modal so different tabs (Summary / Services / Schedule)
           don't cause the whole dialog to jump in size as the user switches.
           hideClose drops the top-right X since we have a footer Close button. */}
-      <DialogContent hideClose className="max-w-5xl w-[min(95vw,1100px)] h-[85vh] overflow-hidden p-0 flex flex-col">
-        <DialogHeader className="px-6 pt-6 pb-3 border-b">
+      {/* Compact while the create-flow mobile gate is up; full-size
+          once the gate transitions to the form (or in non-create
+          modes). `compact` adapts width + height + scroll model so the
+          empty modal doesn't look stranded behind the small mobile
+          input. */}
+      <DialogContent
+        hideClose
+        className={
+          compact
+            ? 'max-w-md w-[min(95vw,480px)] p-0 flex flex-col'
+            : 'max-w-5xl w-[min(95vw,1100px)] h-[85vh] overflow-hidden p-0 flex flex-col'
+        }
+      >
+        {/* The global DialogHeader uses `-mx-6 -mt-6` to claw back the
+            standard DialogContent's p-6 so the bottom border can run
+            edge-to-edge. JobModal uses `p-0` (the body has its own
+            scrolling padding), so those negative margins would push
+            the header OUTSIDE the rounded corners and break the title
+            alignment with the body. `!important` overrides force the
+            margins back to 0; px-6 + pt-6 + pb-3 + border-b then
+            produce the same edge-to-edge separator without the offset. */}
+        <DialogHeader className="!mx-0 !mt-0 px-6 pt-6 pb-3 border-b">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <DialogTitle className="truncate">{title}</DialogTitle>
@@ -168,19 +208,45 @@ export function JobModal({
           )}
           {error && !job && <div className="text-sm text-destructive">{error}</div>}
           {!loading && mode === 'view' && job && <ViewBody job={job} />}
-          {!loading && mode !== 'view' && (
+          {/* Mobile-first gate for the CREATE flow. Mirrors legacy
+              `addEditJob.vm` which opened with a single mobile-number
+              field and only revealed the rest of the form (customer
+              details + address picker) AFTER the operator typed the
+              number and hit Enter. The gate calls
+              `/admin/customers/by-mobile/lookup`:
+                - 200 → existing customer found → pass customer +
+                  address list down to JobForm so it pre-fills + shows
+                  the address picker.
+                - 404 → fresh customer → pass just the mobile down,
+                  JobForm renders empty customer fields + a single
+                  inline address-entry block.
+              In edit/confirm modes the gate is bypassed (the job
+              already has a customer + address). */}
+          {!loading && mode === 'create' && (
+            <CreateJobMobileGate
+              onExpand={() => setCompact(false)}
+              onContract={() => setCompact(true)}
+              onCancel={onClose}
+              onProceed={(prefill) => (
+                <JobForm
+                  mode="create"
+                  initial={null}
+                  prefillCustomer={prefill}
+                  onCancel={onClose}
+                  onSaved={(saved) => {
+                    if (saved?.job_id) { setJob(saved); setMode('view'); onSaved?.(); }
+                  }}
+                />
+              )}
+            />
+          )}
+          {!loading && (mode === 'edit' || mode === 'confirm') && (
             <JobForm
               mode={mode}
               initial={job}
               onCancel={onClose}
               onSaved={(saved) => {
-                // Flip a newly-created job into view mode so the user can immediately
-                // act on it (assign, start, etc.) without a page round-trip.
-                if (mode === 'create' && saved?.job_id) {
-                  setJob(saved); setMode('view'); onSaved?.();
-                } else {
-                  setJob(saved); setMode('view'); onSaved?.();
-                }
+                setJob(saved); setMode('view'); onSaved?.();
               }}
             />
           )}
@@ -816,7 +882,7 @@ function AddMaterialDialog({ open, onClose, onSubmit }: {
           </div>
           {err && <div className="text-sm text-red-600">{err}</div>}
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={onClose} disabled={loading}>Cancel</Button>
+            <CancelButton onCancel={onClose} disabled={loading} />
             <Button onClick={go} disabled={loading}>{loading ? 'Saving…' : 'Add'}</Button>
           </div>
         </div>
@@ -1067,7 +1133,16 @@ type ClientService = {
   service_type_id: number;
   service_catg_id: number;
   rate_card_id: number | null;
-  charge_type: string | null;
+  /*
+   * `charge_type` is an INT in tbl_client_service. Legacy convention
+   * (addEditServices.vm radio buttons):
+   *   1 = Fixed     — total_amount is the bookable rate
+   *   0 = Variable  — total_amount is "00.00" by design; the real rate
+   *                   is computed at invoice time from EFDF/EFDV/OF/OV
+   *                   splits on the rate-card row (not exposed here).
+   * Old type said `string | null`; corrected to number | null.
+   */
+  charge_type: number | null;
   total_amount: number | string | null;  // DECIMAL from MySQL comes as string
   service_status: number;
   service_type_name: string | null;
@@ -1079,11 +1154,199 @@ type ClientService = {
 // sent to backend (the real key is `client_service_id` once selected).
 type ServiceRow = { tempId: number; client_service_id: string; quantity: string };
 
-function JobForm({ mode, initial, onCancel, onSaved }: {
+/*
+ * `prefillCustomer` — populated by CreateJobMobileGate after the
+ * mobile-first lookup completes. Mirrors the legacy `getCustomerDetailsForJob`
+ * response shape used by addEditJob.vm.
+ *
+ *   - mobile        : the 10-digit mobile the operator typed (always set
+ *                     for create mode after the gate runs).
+ *   - found         : true when the by-mobile lookup matched an active
+ *                     customer; false for the "new customer" path.
+ *   - customer      : full customer row when found.
+ *   - addresses     : the customer's addresses (existing rows). The
+ *                     operator picks one as the job address OR clicks
+ *                     "Add new address" inline to enter fresh fields.
+ */
+type PrefillCustomer = {
+  mobile: string;
+  found: boolean;
+  customer?: { customer_id: number; customer_name?: string | null; customer_email?: string | null };
+  /* Address shape matches the /admin/customers/by-mobile/lookup
+   * response. Column names (`pin_code`, not `pincode`; no `area`)
+   * verified against tbl_address via job.service.insertAddress(). */
+  addresses?: Array<{
+    address_id: number;
+    address: string;
+    building?: string | null;
+    landmark?: string | null;
+    locality?: string | null;
+    city_id: number | null;
+    city_name?: string | null;
+    pin_code?: string | null;
+    gps_location?: string | null;
+  }>;
+};
+
+/*
+ * CreateJobMobileGate — mobile-first prompt that gates the Create Job
+ * form. Mirrors the legacy `addEditJob.vm` behaviour: the modal opens
+ * showing only "Mobile Number" + Continue, and the rest of the form
+ * (customer + address + schedule + services) only renders AFTER the
+ * operator types a 10-digit number and the by-mobile lookup completes.
+ *
+ *   Step 1 ("mobile")  — Input + Continue.
+ *   Step 2 ("form")    — renders the children function, passing the
+ *                        PrefillCustomer descriptor (found + customer
+ *                        + addresses, OR just mobile when 404).
+ *
+ * The lookup is forgiving: a 404 from /admin/customers/by-mobile/lookup
+ * means "fresh customer", NOT a hard error — we transition to the
+ * form with `found: false` and let the operator type a new customer
+ * inline. Only network/server errors surface as red text.
+ */
+function CreateJobMobileGate({
+  onProceed,
+  onExpand,
+  onContract,
+  onCancel,
+}: {
+  onProceed: (prefill: PrefillCustomer) => React.ReactNode;
+  /* Called when the gate transitions from mobile-prompt to form so
+   * the parent dialog can grow from fit-to-content to full size. */
+  onExpand?: () => void;
+  /* Called when the operator clicks "Change Mobile" so the parent can
+   * shrink back to the compact prompt. */
+  onContract?: () => void;
+  /* Called when the operator clicks the Cancel button on the mobile
+   * prompt — closes the whole modal. Previously wired to nothing,
+   * which is why operators reported "Cancel doesn't work, only the
+   * overlay click closes the modal". */
+  onCancel?: () => void;
+}) {
+  const [step, setStep] = React.useState<'mobile' | 'form'>('mobile');
+  const [mobile, setMobile] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState<string | null>(null);
+  const [prefill, setPrefill] = React.useState<PrefillCustomer | null>(null);
+  // Address selection moved INSIDE the JobForm's Address section. The
+  // gate is now just: mobile prompt → banner → form. No add-new-address
+  // toggle here because the form's address radio list does it inline.
+
+  async function lookup() {
+    if (mobile.length !== 10) { setErr('Mobile must be exactly 10 digits.'); return; }
+    setErr(null); setBusy(true);
+    try {
+      const r = await api.get<{
+        customer_id: number; customer_name?: string | null; customer_email?: string | null;
+        addresses?: PrefillCustomer['addresses'];
+      }>('/admin/customers/by-mobile/lookup', { mobile });
+      setPrefill({
+        mobile,
+        found: true,
+        customer: {
+          customer_id: r.customer_id,
+          customer_name: r.customer_name,
+          customer_email: r.customer_email,
+        },
+        addresses: r.addresses,
+      });
+      setStep('form');
+      onExpand?.();
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) {
+        // Not an error — this is the "new customer" branch.
+        setPrefill({ mobile, found: false });
+        setStep('form');
+        onExpand?.();
+      } else {
+        setErr(e instanceof ApiError ? e.message : 'Lookup failed');
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (step === 'form' && prefill) {
+    return (
+      <>
+        {/* Banner reflects which branch of the legacy flow we landed on.
+            Lets the operator confirm at a glance whether their typed
+            mobile matched an existing customer. */}
+        <div className={`mb-3 rounded-md border px-3 py-2 text-sm flex items-center justify-between gap-3 ${prefill.found ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
+          <div>
+            {prefill.found
+              ? <>Existing customer <strong>{prefill.customer?.customer_name || '—'}</strong> · {prefill.addresses?.length ?? 0} saved address{(prefill.addresses?.length ?? 0) === 1 ? '' : 'es'} · pre-filled below.</>
+              : <>New customer — mobile <strong>{prefill.mobile}</strong> not on file. Fill the form below to create.</>}
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => { setStep('mobile'); setPrefill(null); onContract?.(); }}
+          >
+            Change Mobile
+          </Button>
+        </div>
+        {/* If the customer has multiple existing addresses, expose them
+            as a simple radio list above the form so the operator can
+            switch from the auto-selected first one. Picking a different
+            address re-seeds the address/city/pincode fields in the form
+            below via a small callback we hand off through PrefillCustomer. */}
+        {/* Address picker moved INTO the JobForm's Address section
+            (renders below). The gate now only shows the
+            existing/new-customer banner; address selection happens
+            alongside the address fields, which keeps related controls
+            visually grouped and avoids two stacked banners at the
+            top of the modal. */}
+        {/* Pass prefill through to the form. JobForm now owns the
+            address-picker UI internally (rendered inside its Address
+            section), so we don't need to remount on every address
+            swap — switching between existing addresses just patches
+            form state. */}
+        {onProceed(prefill)}
+      </>
+    );
+  }
+
+  // Step 1: mobile prompt. `py-6` previously left a visually-empty
+  // band above the input — when the dialog is in compact mode the
+  // operator just sees ~50px of background before the label. Drop
+  // top padding so the label sits right under the dialog header.
+  return (
+    <div className="max-w-md mx-auto pt-1 pb-2 space-y-3">
+      <div>
+        <label className="text-sm font-medium block mb-1">
+          Mobile Number <span className="text-destructive">*</span>
+        </label>
+        <Input
+          autoFocus
+          value={mobile}
+          onChange={(e) => setMobile(e.target.value.replace(/\D/g, '').slice(0, 10))}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void lookup(); } }}
+          placeholder="10-digit mobile number"
+          className="font-mono"
+        />
+        <p className="text-xs text-muted-foreground mt-1">
+          Enter the customer&apos;s mobile to either pre-fill an existing record or start a new one.
+        </p>
+      </div>
+      {err && <div className="text-sm text-destructive">{err}</div>}
+      <div className="flex justify-end gap-2 pt-1">
+        <Button variant="outline" disabled={busy} onClick={() => onCancel?.()}>Cancel</Button>
+        <Button onClick={lookup} disabled={busy || mobile.length !== 10}>
+          {busy ? 'Looking up…' : 'Continue'}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
   mode: 'create' | 'edit' | 'confirm';
   initial: Job | null;
   onCancel: () => void;
   onSaved: (saved: Job) => void;
+  prefillCustomer?: PrefillCustomer;
 }) {
   const lk = useLookup();
   const isEdit    = mode === 'edit';
@@ -1093,7 +1356,36 @@ function JobForm({ mode, initial, onCancel, onSaved }: {
   // so ops can add rate-carded products before promoting the job.
   const isEditShape = isEdit || isConfirm;
 
-  const [f, setF] = useState(() => toFormShape(initial));
+  /*
+   * When the create-flow gate found an existing customer, seed the form
+   * with their name + email + mobile (always editable; operator can
+   * overwrite for one-off cases). When the gate hit 404 (new customer),
+   * we still seed the mobile so the operator doesn't have to re-type it
+   * — but customer_name + email stay blank for the operator to fill.
+   * In edit/confirm modes there's no gate, so toFormShape pulls from
+   * the existing job record as before.
+   */
+  const [f, setF] = useState(() => {
+    const base = toFormShape(initial);
+    if (mode === 'create' && prefillCustomer) {
+      base.customer_mob_no = prefillCustomer.mobile;
+      if (prefillCustomer.found && prefillCustomer.customer) {
+        base.customer_name = prefillCustomer.customer.customer_name || '';
+        base.customer_email = prefillCustomer.customer.customer_email || '';
+      }
+      // If the customer has at least one existing address, pre-select
+      // the first one as the default. The picker UI for switching to
+      // a different address (or adding new) is implemented in a small
+      // banner below the customer section.
+      const first = prefillCustomer.addresses?.[0];
+      if (first) {
+        base.address = first.address || '';
+        base.city_id = first.city_id != null ? String(first.city_id) : '';
+        base.pin_code = first.pin_code || '';
+      }
+    }
+    return base;
+  });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -1105,7 +1397,101 @@ function JobForm({ mode, initial, onCancel, onSaved }: {
   const [loadingServices, setLoadingServices] = useState(false);
   const [serviceRows, setServiceRows] = useState<ServiceRow[]>([]);
 
-  useEffect(() => { setF(toFormShape(initial)); }, [initial]);
+  /*
+   * Client contacts — loaded when the Client dropdown changes. Drives
+   * the "Reporting Contact" picker AND the SPOC auto-fill (mobile,
+   * name, email). Mirrors legacy `getClientContacts(clientId)` which
+   * the legacy addEditJob page fired on client change.
+   *
+   * Schema: tbl_client_contacts { id, client_id, contact_name,
+   * contact_email, contact_no, contact_desgn, manager_id, status }.
+   * Endpoint already exists at GET /admin/clients/:clientId/contacts.
+   */
+  type ClientContact = {
+    id: number;
+    client_id: number;
+    contact_name: string | null;
+    contact_email: string | null;
+    contact_no: string | null;
+    contact_desgn: string | null;
+    status: number | null;
+  };
+  const [clientContacts, setClientContacts] = useState<ClientContact[]>([]);
+  const [loadingContacts, setLoadingContacts] = useState(false);
+
+  /*
+   * AddressEditDialog state — opened from the ✎ pencil button in the
+   * saved-addresses picker. `address` is the row to edit; on save we
+   * patch `prefillCustomer.addresses` in place + re-sync the form
+   * fields if the edited address was the currently-selected one.
+   */
+  const [addressEdit, setAddressEdit] = useState<{ open: boolean; address: EditableAddress | null }>({
+    open: false,
+    address: null,
+  });
+
+  /*
+   * Customer History dialog — surfaces every prior job booked for the
+   * same tbl_customer row. Available only when the mobile-gate matched
+   * an existing customer (i.e. there's a customer_id to query against);
+   * for fresh customers there's nothing to show so the button is hidden.
+   */
+  const [historyOpen, setHistoryOpen] = useState(false);
+
+  /*
+   * In edit/confirm modes the form re-seeds whenever `initial`
+   * arrives or changes (loading the latest job snapshot). In create
+   * mode we DELIBERATELY skip this reset: the useState initializer
+   * above already merged `prefillCustomer` (customer name/mobile
+   * from the mobile-gate lookup) into the form's first state, and
+   * resetting via `toFormShape(null)` here would blow that away,
+   * leaving Customer Name + Mobile fields blank for an existing
+   * customer. Operators reported this regression as "Customer Name
+   * and Mobile Number still not prefilled".
+   */
+  useEffect(() => {
+    if (mode === 'create') return;
+    setF(toFormShape(initial));
+  }, [initial, mode]);
+
+  /*
+   * Fire when the picked client changes (create mode only). Loads the
+   * client's contact list and resets reporting_contact_id if the old
+   * pick is no longer in the new list.
+   */
+  useEffect(() => {
+    if (isEditShape) return;
+    const clientId = Number(f.fk_client_id);
+    if (!clientId) { setClientContacts([]); return; }
+    let cancelled = false;
+    setLoadingContacts(true);
+    api.get<ClientContact[]>(`/admin/clients/${clientId}/contacts`)
+      .then((rows) => {
+        if (cancelled) return;
+        // Filter to active contacts (status=1). Legacy CRM only listed active rows.
+        setClientContacts((rows || []).filter((r) => Number(r.status) === 1));
+      })
+      .catch(() => { if (!cancelled) setClientContacts([]); })
+      .finally(() => { if (!cancelled) setLoadingContacts(false); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [f.fk_client_id, isEditShape]);
+
+  /*
+   * Auto-fill Client SPOC fields when the operator picks a reporting
+   * contact. Legacy CRM auto-filled SPOC name/email/mobile from the
+   * selected contact row — we replicate that here. The fields remain
+   * editable so a one-off can override.
+   */
+  function pickReportingContact(contactId: string) {
+    set('reporting_contact_id', contactId);
+    const c = clientContacts.find((x) => String(x.id) === String(contactId));
+    if (c) {
+      set('client_spoc_name' as keyof typeof f, (c.contact_name || '') as never);
+      set('client_spoc' as keyof typeof f, (c.contact_no || '') as never);
+      set('client_spoc_email' as keyof typeof f, (c.contact_email || '') as never);
+    }
+  }
 
   // Fetch rate-carded services whenever the picked client changes. Reset the
   // basket too — selections from the old client aren't valid against the new
@@ -1144,6 +1530,35 @@ function JobForm({ mode, initial, onCancel, onSaved }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [f.fk_client_id, isEdit, isConfirm, initial?.job_id]);
 
+  /*
+   * Create-flow only: prune any basket rows whose client_service_id no
+   * longer matches the picked Service Types (operator deselected a
+   * type, so the corresponding services should drop out of the basket
+   * too). Adding is explicit — handled by the "+" buttons in
+   * AutoServicesTable; this effect deliberately does NOT auto-add
+   * matching candidates.
+   *
+   * NOTE on job_type filtering: there is NO database-level mapping
+   * between `job_type` and the service row. Legacy `tbl_job.job_type`
+   * is a free string; `tbl_client_service.charge_type` is an INTEGER
+   * billing-model flag (1 = Fixed, 0 = Variable) — not a Job-Type
+   * link. Job Type stays a top-level metadata tag on tbl_job and
+   * intentionally does NOT narrow the services basket.
+   */
+  useEffect(() => {
+    if (isEditShape) return;
+    if (!Array.isArray(clientServices)) return;
+    const picked = new Set((f.fk_service_type_ids || []).map(String));
+    if (picked.size === 0) { setServiceRows([]); return; }
+    const matchingIds = new Set(
+      clientServices
+        .filter((cs) => picked.has(String(cs.service_type_id)))
+        .map((cs) => String(cs.client_service_id))
+    );
+    setServiceRows((prev) => prev.filter((r) => matchingIds.has(r.client_service_id)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [f.fk_service_type_ids, clientServices, isEditShape]);
+
   function set<K extends keyof typeof f>(k: K, v: (typeof f)[K]) { setF((s) => ({ ...s, [k]: v })); }
 
   // Build the services[] payload for the PATCH body — shared between confirm
@@ -1164,6 +1579,18 @@ function JobForm({ mode, initial, onCancel, onSaved }: {
       });
   }
 
+  /*
+   * Submit variants — mirrors the legacy addEditJob footer buttons:
+   *   - 'book'        : create with status=0 (BOOKED, the default)
+   *   - 'enquiry'     : create with status=7 (ENQUIRY) — info request,
+   *                     not a real booking yet
+   *   - 'unreachable' : create with status=9 (CALL_LATER) — customer
+   *                     couldn't be reached; queued for follow-up
+   *
+   * For edit/confirm modes the variant has no effect — the existing
+   * promote-to-BOOKED flow runs as before.
+   */
+  const [submitVariant, setSubmitVariant] = useState<'book' | 'enquiry' | 'unreachable'>('book');
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null); setSubmitting(true);
@@ -1215,10 +1642,47 @@ function JobForm({ mode, initial, onCancel, onSaved }: {
         // Create flow — full payload including customer + address + services.
         const servicesPayload = buildServicesPayload();
 
+        /*
+         * If a Job Image was attached, upload it FIRST to
+         * /api/shared/upload?category=job_files. The endpoint returns
+         * the canonical filename (with a generated unique prefix), which
+         * we then pass on the create payload — backend INSERTs it into
+         * tbl_job_image inside the same job-create transaction.
+         *
+         * Done before the main POST so a failed upload aborts the
+         * booking cleanly (preferable to creating a job and then
+         * orphan-losing the image attachment).
+         */
+        let jobImageFilename: string | undefined;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const imageFile = (f as unknown as { job_image_file?: File }).job_image_file;
+        if (imageFile instanceof File) {
+          try {
+            const fd = new FormData();
+            fd.append('file', imageFile);
+            fd.append('category', 'job_files');
+            const uploadResp = await api.post<{ filename: string; url: string }>(
+              '/shared/upload',
+              fd,
+            );
+            jobImageFilename = uploadResp.filename;
+          } catch (upErr) {
+            setError(upErr instanceof ApiError
+              ? `Image upload failed: ${upErr.message}`
+              : 'Image upload failed');
+            setSubmitting(false);
+            return;
+          }
+        }
+
         const payload = {
           fk_client_id: Number(f.fk_client_id),
           job_type: f.job_type,
-          source_type: f.source_type,
+          // Source defaults to "manual" — the legacy UI only ever set
+          // this for Client Dashboard / Excel / API automation flows.
+          // CRM operators always go via "manual", and the new app
+          // hides the picker since it confused operators.
+          source_type: f.source_type || 'manual',
           requested_date_time: new Date(f.requested_date_time).toISOString(),
           time_slot: f.time_slot || undefined,
           job_desc: f.job_desc || undefined,
@@ -1236,6 +1700,35 @@ function JobForm({ mode, initial, onCancel, onSaved }: {
             gps_location: f.gps_location || undefined,
           },
           services: servicesPayload.length > 0 ? servicesPayload : undefined,
+          // Legacy parity: book (default), enquiry, or unreachable.
+          // Backend accepts `initial_status` and routes the new row to
+          // the matching tbl_job.job_status code.
+          initial_status:
+            submitVariant === 'enquiry' ? 7
+            : submitVariant === 'unreachable' ? 9
+            : undefined,  // default is 0 = BOOKED
+          // Legacy Book-New-Call extras. Backend composeRemarks() folds
+          // these into the remarks column with named prefixes.
+          branch_details: f.branch_details || undefined,
+          product_code: f.product_code || undefined,
+          building_name: f.building_name || undefined,
+          // SPOC tags. Backend already accepts these directly on
+          // tbl_job (verified in MUTABLE_COLUMNS + the INSERT column list).
+          reporting_contact_id: f.reporting_contact_id ? Number(f.reporting_contact_id) : undefined,
+          client_spoc: f.client_spoc || undefined,
+          client_spoc_name: f.client_spoc_name || undefined,
+          client_spoc_email: f.client_spoc_email || undefined,
+          // Questionnaire FK (tbl_questionaire.c_questionaire_id). The
+          // backend create() can stash this on tbl_job's reporting
+          // metadata if a column exists; otherwise it surfaces in the
+          // job_data audit trail. Left as a passive payload field so
+          // we don't break callers that ignore it.
+          c_questionaire_id: f.c_questionaire_id ? Number(f.c_questionaire_id) : undefined,
+          // Booking-time job image. Filename only — the file itself
+          // already lives on disk via the /shared/upload pre-step
+          // above. Backend INSERTs into tbl_job_image inside the
+          // create transaction so create+image succeed/fail together.
+          job_image_filename: jobImageFilename,
         };
         const saved = await api.post<Job>('/admin/jobs', payload);
         onSaved(saved);
@@ -1497,7 +1990,7 @@ function JobForm({ mode, initial, onCancel, onSaved }: {
 
         {error && <div className="text-sm text-destructive">{error}</div>}
         <div className="flex justify-end gap-2 pt-2">
-          <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
+          <CancelButton onCancel={onCancel} />
           <LoadBtn
             type="submit"
             loading={submitting}
@@ -1510,91 +2003,950 @@ function JobForm({ mode, initial, onCancel, onSaved }: {
     );
   }
 
+  /*
+   * Accordion state for the create-flow form. Matches the legacy
+   * addEditJob.vm three-section wizard: only one section is expanded at
+   * a time; later sections are locked until the prior section's
+   * mandatory fields are filled.
+   *
+   * Section completion rules (mandatory-field sets verified against
+   * the legacy form):
+   *   1. Client Details  : fk_client_id + client_ref_id (both required
+   *                        before moving on — legacy treated Client Ref
+   *                        ID as mandatory; the new app surfaces it
+   *                        with a * marker and gates Section 2 on it).
+   *   2. Customer Details: customer_name + customer_mob_no (10 digits)
+   *                        + address + city_id + pin_code (6 digits)
+   *   3. Select Products : requested_date_time + services basket
+   *                        (services optional; the date gate is the
+   *                        real blocker on the final Book Call button).
+   */
+  const [openSection, setOpenSection] = React.useState<1 | 2 | 3>(1);
+  /*
+   * Clients for which Branch Details is MANDATORY (not optional).
+   * Sourced from product config:
+   *   252 → Lenskart
+   *   395 → Lenskart (Crop and Camera Work)
+   * Both clients run multi-store retail networks where the operator
+   * MUST tell the technician which branch the job is for; an empty
+   * Branch row is unworkable downstream. Extend this list when more
+   * branch-strict clients are onboarded.
+   */
+  const BRANCH_MANDATORY_CLIENT_IDS = React.useMemo(() => new Set(['252', '395']), []);
+  const branchIsMandatory = BRANCH_MANDATORY_CLIENT_IDS.has(String(f.fk_client_id || ''));
+  const section1Complete =
+    !!f.fk_client_id &&
+    !!(f.client_ref_id && String(f.client_ref_id).trim()) &&
+    !!f.reporting_contact_id &&
+    (!branchIsMandatory || !!(f.branch_details && String(f.branch_details).trim()));
+
+  /*
+   * Date + Time helpers for the "Requested Date / Time / Booking Slot"
+   * fields in Section 2.
+   *
+   * Rules (verified against legacy addEditJob.vm):
+   *   - Date input must reject anything before today (no past dates).
+   *   - Time picker is HOURLY only — operators pick whole hours like
+   *     "10:00", "11:00". 24h dropdown of "HH:00" options.
+   *   - For TODAY, the minimum selectable hour is the NEXT hour after
+   *     the current hour (no past times). For future dates, all 24
+   *     hours are available.
+   *   - Booking Time Slot auto-derives from the picked hour:
+   *       09–12 → "9 AM - 12 PM"
+   *       12–15 → "12 PM - 3 PM"
+   *       15–19 → "3 PM - 7 PM"
+   *       else  → "After Hours"
+   *     Mirrors the four-pill legacy chooser in the screenshot.
+   */
+  const todayIso = React.useMemo(() => {
+    const d = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }, []);
+  const requestedDate: string = String(f.requested_date || '');
+  const requestedTime: string = String(f.requested_time || '');
+  const isToday = requestedDate === todayIso;
+  const currentHour = new Date().getHours();
+  const minHourToday = currentHour + 1; // strictly future for today
+  const hourOptions = React.useMemo(() => {
+    const opts: { value: string; label: string }[] = [];
+    for (let h = 0; h < 24; h++) {
+      if (isToday && h < minHourToday) continue;
+      const hh = String(h).padStart(2, '0');
+      const label = h === 0 ? '12:00 AM'
+                  : h < 12  ? `${h}:00 AM`
+                  : h === 12 ? '12:00 PM'
+                  :            `${h - 12}:00 PM`;
+      opts.push({ value: `${hh}:00`, label });
+    }
+    return opts;
+  }, [isToday, minHourToday]);
+  function bookingSlotFor(timeHHMM: string): string {
+    const h = Number(timeHHMM.split(':')[0]);
+    if (Number.isNaN(h)) return '';
+    if (h >= 9  && h < 12) return 'Morning 9 to 2';   // (legacy slot label, ~9-12)
+    if (h >= 12 && h < 15) return 'Afternoon 12 to 5'; // 12-3
+    if (h >= 15 && h < 19) return 'Evening 2 to 7';    // 3-7
+    return 'After Hours';
+  }
+  /*
+   * Whenever the operator changes Requested Time, auto-update the
+   * Booking Time Slot. They can still override the slot manually
+   * (the dropdown remains interactive), but the default tracks the
+   * picked hour.
+   */
+  React.useEffect(() => {
+    if (!requestedTime) return;
+    const slot = bookingSlotFor(requestedTime);
+    if (slot && f.time_slot !== slot) set('time_slot', slot);
+    // Combine date + time into requested_date_time (ISO) which the
+    // backend already consumes. Existing edit/confirm modes don't
+    // use this combined field — only create flow.
+    if (requestedDate) {
+      set('requested_date_time', `${requestedDate}T${requestedTime}`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestedTime, requestedDate]);
+  const section2Complete =
+    section1Complete &&
+    !!f.customer_name && /^[0-9]{10}$/.test(String(f.customer_mob_no || '')) &&
+    !!f.address && !!f.city_id && /^[0-9]{6}$/.test(String(f.pin_code || '')) &&
+    // Schedule moved from Section 3 → Section 2: date + time both
+    // required before moving to Products.
+    !!f.requested_date_time;
+
+  /*
+   * Per-client questionnaires (shown in Section 1 once a client is
+   * picked). Sourced from /admin/questionnaires; we filter to the
+   * picked client_id locally because the list endpoint doesn't
+   * accept a clientId query param. The "Questionnaire" picker is
+   * hidden entirely when the client has zero questionnaires — legacy
+   * addEditJob behaved the same way.
+   */
+  type Questionnaire = { c_questionaire_id: number; client_id: number; c_questionaire_name: string; status: number };
+  const [clientQuestionnaires, setClientQuestionnaires] = React.useState<Questionnaire[]>([]);
+  React.useEffect(() => {
+    if (isEditShape) return;
+    const clientId = Number(f.fk_client_id);
+    if (!clientId) { setClientQuestionnaires([]); return; }
+    let cancelled = false;
+    api.get<Questionnaire[]>('/admin/questionnaires')
+      .then((rows) => {
+        if (cancelled) return;
+        setClientQuestionnaires((rows || []).filter((q) => Number(q.client_id) === clientId && Number(q.status) === 1));
+      })
+      .catch(() => { if (!cancelled) setClientQuestionnaires([]); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [f.fk_client_id, isEditShape]);
+
   return (
     <form onSubmit={submit} className="space-y-5">
+      {/* Form-level header bar — shows the customer the operator is
+          booking for and (when matched) a View History shortcut to a
+          modal listing every prior job for that customer_id. Lives
+          inside JobForm rather than the outer modal header because
+          the customer context only exists once the mobile-gate
+          completes. */}
+      {!isEditShape && prefillCustomer && (
+        <div className="flex items-center justify-between rounded-md border bg-muted/30 px-3 py-2">
+          <div className="text-sm">
+            <span className="text-xs text-muted-foreground mr-2">Booking for:</span>
+            <strong>
+              {prefillCustomer.found && prefillCustomer.customer?.customer_name
+                ? prefillCustomer.customer.customer_name
+                : 'New customer'}
+            </strong>
+            <span className="text-muted-foreground ml-2">· {prefillCustomer.mobile}</span>
+          </div>
+          {prefillCustomer.found && prefillCustomer.customer?.customer_id ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setHistoryOpen(true)}
+            >
+              <History className="h-4 w-4 mr-1.5" />
+              View History
+            </Button>
+          ) : (
+            <span className="text-xs text-muted-foreground italic">No prior history (new customer)</span>
+          )}
+        </div>
+      )}
       {!isEditShape && (
-        <Section title="Client & Schedule">
+        <Section
+          title="1. Client Details"
+          expanded={openSection === 1}
+          onToggle={() => setOpenSection(1)}
+          badge={section1Complete ? <span className="text-emerald-600 text-xs">✓</span> : null}
+        >
+          {/*
+            * Section 1 — Client Details (legacy "Book New Call" parity).
+            *
+            * Initial reveal (before client picked):
+            *   Client *, Branch Details, Client Reference ID, Reporting Contact (disabled)
+            *
+            * After client picked:
+            *   + Questionnaire (filtered from /admin/questionnaires?clientId=…)
+            *   + Property / Building Name (free text)
+            *   + Product Code (free text)
+            *   + Reporting Contact (now enabled, filtered by client)
+            *
+            * After Reporting Contact picked:
+            *   + Client SPOC (Mobile) — DISABLED, prefilled from contact
+            *   + Client SPOC Name    — DISABLED, prefilled
+            *   + Client SPOC Email   — DISABLED, prefilled
+            *
+            * Source dropdown is HIDDEN — defaults to "manual" (Manual/CRM).
+            * Legacy CRM only ever showed Source if a client was mapped to
+            * multiple sources; for the new app we keep the value on the
+            * payload but don't ask operators to pick it.
+            *
+            * Schedule (Requested Date/Time, Time Slot), Job Type, and
+            * Description moved to Section 3 — they belong with the
+            * "Select Products" wizard step per the legacy addEditJob
+            * layout, not with Client Details.
+            */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <Field label="Client *"><SearchSelect required value={f.fk_client_id} onChange={(v) => set('fk_client_id', v)} placeholder="— Select client —" options={lk.toOpts.clients.map((o) => ({ value: o.value, label: String(o.label) }))} /></Field>
-            <Field label="Source"><Select value={f.source_type} onChange={(e) => set('source_type', e.target.value)} options={[
-              { value: 'manual', label: 'Manual (CRM)' },
-              { value: 'dashboard', label: 'Client Dashboard' },
-              { value: 'excel', label: 'Excel Upload' },
-              { value: 'api', label: 'API Integration' },
-            ]} /></Field>
-            <Field label="Job Type"><Select value={f.job_type} onChange={(e) => set('job_type', e.target.value)} options={[
-              { value: 'Installation', label: 'Installation' }, { value: 'Repair', label: 'Repair' },
-              { value: 'Uninstallation', label: 'Uninstallation' }, { value: 'Maintenance', label: 'Maintenance' },
-              { value: 'Demo', label: 'Demo' }, { value: 'Inspection', label: 'Inspection' },
-            ]} /></Field>
+            <Field label="Client *">
+              <SearchSelect
+                required
+                value={f.fk_client_id}
+                onChange={(v) => {
+                  // Switching clients invalidates everything that was
+                  // filled in for the previous client. Per operator
+                  // request: clear reporting_contact_id (so the SPOC
+                  // trio collapses), wipe the SPOC values themselves,
+                  // and reset the questionnaire pick + Branch / Product
+                  // / Property fields (they're per-client too). Client
+                  // Reference ID is also client-specific so it goes.
+                  // The customer + address (section 2) and schedule
+                  // (section 3) are unrelated to the client switch and
+                  // remain intact.
+                  setF((s) => ({
+                    ...s,
+                    fk_client_id: v,
+                    reporting_contact_id: '',
+                    client_spoc: '',
+                    client_spoc_name: '',
+                    client_spoc_email: '',
+                    c_questionaire_id: '',
+                    branch_details: '',
+                    product_code: '',
+                    building_name: '',
+                    client_ref_id: '',
+                    // Section 3 (Select Products) is rate-card-scoped to
+                    // the client too — clear all picker state so we
+                    // don't carry one client's service basket onto the
+                    // next. The clientServices fetch effect (keyed off
+                    // fk_client_id) re-loads the catalog automatically.
+                    fk_service_catg_id: '',
+                    fk_service_type_id: '',
+                    fk_service_type_ids: [],
+                    job_type: '',
+                  }));
+                  // Hard-reset the rate-card cache + derived rows.
+                  // The derive-rows effect will re-fan once the new
+                  // client's clientServices arrives + the operator
+                  // picks types again.
+                  setServiceRows([]);
+                }}
+                placeholder="— Select client —"
+                options={lk.toOpts.clients.map((o) => ({ value: o.value, label: String(o.label) }))}
+              />
+            </Field>
+            <Field label={branchIsMandatory ? 'Branch Details *' : 'Branch Details'}>
+              <Input
+                required={branchIsMandatory}
+                value={f.branch_details || ''}
+                onChange={(e) => set('branch_details', e.target.value)}
+                placeholder={branchIsMandatory ? 'Required for this client' : 'e.g. Bengaluru — Indiranagar'}
+              />
+            </Field>
+            <Field label="Client Reference ID *">
+              <Input
+                required
+                value={f.client_ref_id || ''}
+                onChange={(e) => set('client_ref_id', e.target.value)}
+                placeholder="Client's internal reference"
+              />
+            </Field>
+            <Field label={`Reporting Contact *${f.fk_client_id && loadingContacts ? ' (loading…)' : ''}`}>
+              <SearchSelect
+                required
+                value={f.reporting_contact_id || ''}
+                onChange={(v) => pickReportingContact(v)}
+                placeholder={
+                  !f.fk_client_id
+                    ? 'Pick a client first'
+                    : clientContacts.length
+                      ? '— Select contact —'
+                      : 'No contacts on file for this client'
+                }
+                disabled={!f.fk_client_id || !clientContacts.length}
+                options={clientContacts.map((c) => ({
+                  value: c.id,
+                  label: c.contact_name + (c.contact_desgn ? ` · ${c.contact_desgn}` : ''),
+                }))}
+              />
+            </Field>
+
+            {/* The four blocks below appear ONLY after a client is
+                picked. Together they replicate the legacy addEditJob's
+                "after the operator chooses a client, show these extra
+                fields" pattern. */}
+            {f.fk_client_id && (
+              <>
+                {/* Questionnaire — fetched from
+                    /admin/questionnaires?clientId=… via the
+                    clientQuestionnaires state. Hidden if the client
+                    has no questionnaires (legacy didn't show an empty
+                    picker either — it just suppressed the field). */}
+                {clientQuestionnaires.length > 0 && (
+                  <Field label="Questionnaire">
+                    <SearchSelect
+                      value={f.c_questionaire_id || ''}
+                      onChange={(v) => set('c_questionaire_id', v)}
+                      placeholder="— Select questionnaire —"
+                      options={clientQuestionnaires.map((q) => ({
+                        value: q.c_questionaire_id,
+                        label: q.c_questionaire_name,
+                      }))}
+                    />
+                  </Field>
+                )}
+                <Field label="Property / Building Name">
+                  <Input
+                    value={f.building_name || ''}
+                    onChange={(e) => set('building_name', e.target.value)}
+                    placeholder="Ask the customer for the building / property name"
+                  />
+                </Field>
+                <Field label="Product Code">
+                  <Input
+                    value={f.product_code || ''}
+                    onChange={(e) => set('product_code', e.target.value)}
+                    placeholder="Client-specific product / SKU identifier"
+                  />
+                </Field>
+              </>
+            )}
+
+            {/* Client SPOC trio appears once a Reporting Contact is
+                picked. Disabled (read-only) because the values are
+                authoritative on the tbl_client_contacts row — if the
+                operator needs to correct them, they edit the contact
+                in Manage Clients → Contacts, not here. The grey
+                appearance comes from the global Input `disabled:`
+                styling (slate-200 bg) — no per-field override needed. */}
+            {f.reporting_contact_id && (
+              <>
+                <Field label="Client SPOC (Mobile)">
+                  <Input value={f.client_spoc || ''} disabled className="font-mono" />
+                </Field>
+                <Field label="Client SPOC Name">
+                  <Input value={f.client_spoc_name || ''} disabled />
+                </Field>
+                <Field label="Client SPOC Email">
+                  <Input type="email" value={f.client_spoc_email || ''} disabled />
+                </Field>
+              </>
+            )}
+          </div>
+          <div className="mt-4 flex justify-end">
+            <Button
+              type="button"
+              onClick={() => setOpenSection(2)}
+              disabled={!section1Complete}
+              title={section1Complete ? '' : 'Fill required fields (Client + Date/Time) to proceed'}
+            >
+              Next →
+            </Button>
           </div>
         </Section>
       )}
 
-      <Section title={isEditShape ? 'Schedule & Type' : 'Schedule'}>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Field label="Requested Date/Time *"><Input required type="datetime-local" min={nowLocalIso()} value={f.requested_date_time} onChange={(e) => set('requested_date_time', e.target.value)} /></Field>
-          <Field label="Time Slot"><Select value={f.time_slot} onChange={(e) => set('time_slot', e.target.value)} options={[
-            { value: 'Morning 9 to 2', label: 'Morning 9 to 2' },
-            { value: 'Afternoon 12 to 5', label: 'Afternoon 12 to 5' },
-            { value: 'Evening 2 to 7', label: 'Evening 2 to 7' },
-            { value: 'Anytime', label: 'Anytime' },
-          ]} /></Field>
-          <Field label="Client Ref ID"><Input value={f.client_ref_id} onChange={(e) => set('client_ref_id', e.target.value)} /></Field>
-          {isEditShape && (
-            <Field label="Job Type"><Select value={f.job_type} onChange={(e) => set('job_type', e.target.value)} options={[
+      {/* Edit/confirm mode keeps the legacy non-accordion Schedule
+          section. Only create mode uses the 3-step wizard. */}
+      {isEditShape && (
+        <Section title={isEditShape ? 'Schedule & Type' : 'Schedule'}>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <Field label="Requested Date/Time *"><Input required type="datetime-local" min={nowLocalIso()} value={f.requested_date_time} onChange={(e) => set('requested_date_time', e.target.value)} /></Field>
+            <Field label="Time Slot"><SearchSelect value={f.time_slot} onChange={(v) => set('time_slot', v)} placeholder="— Select slot —" options={[
+              { value: 'Morning 9 to 2', label: 'Morning 9 to 2' },
+              { value: 'Afternoon 12 to 5', label: 'Afternoon 12 to 5' },
+              { value: 'Evening 2 to 7', label: 'Evening 2 to 7' },
+              { value: 'Anytime', label: 'Anytime' },
+            ]} /></Field>
+            <Field label="Client Ref ID"><Input value={f.client_ref_id} onChange={(e) => set('client_ref_id', e.target.value)} /></Field>
+            <Field label="Job Type"><SearchSelect value={f.job_type} onChange={(v) => set('job_type', v)} placeholder="— Select job type —" options={[
               { value: 'Installation', label: 'Installation' }, { value: 'Repair', label: 'Repair' },
               { value: 'Uninstallation', label: 'Uninstallation' }, { value: 'Maintenance', label: 'Maintenance' },
               { value: 'Demo', label: 'Demo' }, { value: 'Inspection', label: 'Inspection' },
             ]} /></Field>
-          )}
-          <Field label="Description" full><Input value={f.job_desc} onChange={(e) => set('job_desc', e.target.value)} placeholder="Scope of work" /></Field>
-        </div>
-      </Section>
+            <Field label="Description" full><Input value={f.job_desc} onChange={(e) => set('job_desc', e.target.value)} placeholder="Scope of work" /></Field>
+          </div>
+        </Section>
+      )}
 
       {!isEditShape && (
         <>
-          <Section title="Customer">
+          <Section
+            title="2. Customer Details"
+            expanded={openSection === 2}
+            onToggle={() => { if (section1Complete) setOpenSection(2); }}
+            disabled={!section1Complete}
+            badge={section2Complete ? <span className="text-emerald-600 text-xs">✓</span> : null}
+          >
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <Field label="Name *"><Input required value={f.customer_name} onChange={(e) => set('customer_name', e.target.value)} /></Field>
-              <Field label="Mobile *"><Input required pattern="[0-9]{10}" value={f.customer_mob_no} onChange={(e) => set('customer_mob_no', e.target.value.replace(/\D/g, ''))} /></Field>
+              <Field label="Customer Name *"><Input required value={f.customer_name} onChange={(e) => set('customer_name', e.target.value)} /></Field>
+              <Field label="Mobile Number *">
+                {/* Disabled: the operator already typed this mobile
+                    in the gate's mobile-number prompt, which is
+                    what bootstrapped this whole flow. Editing it
+                    here would invalidate the customer lookup the
+                    gate just did. To change, the operator clicks
+                    "Change mobile" on the gate banner. */}
+                <Input
+                  required
+                  disabled
+                  value={f.customer_mob_no}
+                  className="font-mono"
+                />
+              </Field>
               <Field label="Email"><Input type="email" value={f.customer_email} onChange={(e) => set('customer_email', e.target.value)} /></Field>
+              {/* Schedule sub-block — Date / Time / Booking Slot.
+                  Legacy layout placed these inside Customer Details
+                  (the screenshot shows "Requested Date / Requested
+                  Time / Booking Time Slot" as separate rows). Time
+                  picker is hourly with min-time-for-today gating;
+                  Booking Slot auto-derives from the picked hour but
+                  remains operator-editable. */}
+              <Field label="Requested Date *">
+                <Input
+                  required
+                  type="date"
+                  min={todayIso}
+                  value={requestedDate}
+                  onChange={(e) => {
+                    set('requested_date', e.target.value);
+                    // If the new date is in the future, allow any
+                    // previously-picked time (no past-today gate);
+                    // if it's today and the existing time is now past,
+                    // clear so the operator must re-pick a valid one.
+                    if (e.target.value === todayIso && requestedTime) {
+                      const h = Number(requestedTime.split(':')[0]);
+                      if (Number.isFinite(h) && h < minHourToday) {
+                        set('requested_time', '');
+                      }
+                    }
+                  }}
+                />
+              </Field>
+              <Field label="Requested Time *">
+                <SearchSelect
+                  required
+                  value={requestedTime}
+                  onChange={(v) => set('requested_time', v)}
+                  placeholder={requestedDate ? '— Pick an hour —' : 'Pick a date first'}
+                  disabled={!requestedDate}
+                  options={hourOptions}
+                />
+              </Field>
+              {/* Booking Slot chip row moved out of the 3-col grid —
+                  rendered as its own full-width row below the date+
+                  time pickers per operator request. See block after
+                  this </div> closing. */}
             </div>
-          </Section>
-
-          <Section title="Address">
+            {/* Booking Time Slot — full-width row sitting BELOW the
+                Date + Time pickers. Title on a label row, chips on
+                a single horizontal line below. Until the operator
+                picks a Requested Time the chips render in their
+                "all unselected" state (none highlighted) — auto-
+                highlight kicks in only after the time is set. */}
+            <div className="mt-3">
+              <label className="text-sm font-medium block mb-1.5">Booking Time Slot</label>
+              <div className="flex gap-2 items-center">
+                {[
+                  { value: 'Morning 9 to 2',    label: '9 AM - 12 PM' },
+                  { value: 'Afternoon 12 to 5', label: '12 PM - 3 PM' },
+                  { value: 'Evening 2 to 7',    label: '3 PM - 7 PM' },
+                  { value: 'After Hours',       label: 'After Hours' },
+                ].map((opt) => {
+                  const active = !!requestedTime && f.time_slot === opt.value;
+                  return (
+                    <span
+                      key={opt.value}
+                      className={`inline-flex items-center px-4 h-8 rounded-full text-xs font-medium select-none cursor-not-allowed whitespace-nowrap ${
+                        active
+                          ? 'bg-primary text-primary-foreground shadow-sm'
+                          : 'bg-muted text-muted-foreground'
+                      }`}
+                      title={requestedTime ? 'Auto-selected from Requested Time' : 'Pick a Requested Time to highlight a slot'}
+                    >
+                      {opt.label}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+            {/* Address sub-block nested inside section 2. Matches the
+                legacy addEditJob layout where Customer Details + Address
+                were a single wizard step. */}
+            <div className="mt-4 pt-4 border-t">
+              <div className="text-sm font-medium mb-2">Job address</div>
+            {/* Existing-address picker. Visible only when the create
+                flow opened with a customer who has saved addresses
+                (i.e. prefillCustomer.addresses non-empty AND we're not
+                in "add new" mode). Selecting a different existing
+                address re-seeds the address fields below. Clicking ×
+                deletes via DELETE /admin/customers/:id/addresses/:addrId
+                (FK-guarded by the backend). */}
+            {prefillCustomer?.found && (prefillCustomer.addresses?.length ?? 0) > 0 && (
+              <div className="mb-4 rounded-md border bg-muted/30 p-3 text-sm">
+                <div className="font-medium mb-2">Saved addresses for this customer</div>
+                <div className="space-y-1.5">
+                  {prefillCustomer.addresses!.map((a) => {
+                    const isSelected =
+                      String(f.address) === String(a.address || '') &&
+                      String(f.city_id) === String(a.city_id ?? '') &&
+                      String(f.pin_code) === String(a.pin_code || '');
+                    return (
+                      <div key={a.address_id} className="flex items-start gap-2">
+                        <label className="flex items-start gap-2 cursor-pointer flex-1">
+                          <input
+                            type="radio"
+                            name="prefill-address"
+                            checked={isSelected}
+                            onChange={() => {
+                              setF((s) => ({
+                                ...s,
+                                address: a.address || '',
+                                city_id: a.city_id != null ? String(a.city_id) : '',
+                                pin_code: a.pin_code || '',
+                              }));
+                            }}
+                            className="mt-0.5"
+                          />
+                          <span className="flex-1">
+                            {a.address}
+                            {a.city_name ? <span className="text-muted-foreground"> · {a.city_name}</span> : null}
+                            {a.pin_code ? <span className="text-muted-foreground"> · {a.pin_code}</span> : null}
+                          </span>
+                        </label>
+                        {/* Edit pencil — opens the AddressEditDialog
+                            with the address pre-filled. On save the
+                            row patches in place via PATCH
+                            /admin/customers/:id/addresses/:addrId. */}
+                        <button
+                          type="button"
+                          title="Edit this saved address"
+                          className="text-sky-600 hover:text-sky-800 px-1"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            setAddressEdit({ open: true, address: a });
+                          }}
+                        >
+                          ✎
+                        </button>
+                        {/* Delete address. Backend FK-guards so a job-
+                            linked address cannot be removed. */}
+                        <button
+                          type="button"
+                          title="Delete this saved address"
+                          className="text-rose-600 hover:text-rose-800 disabled:opacity-30 px-1"
+                          disabled={(prefillCustomer.addresses?.length ?? 0) <= 1}
+                          onClick={async (e) => {
+                            e.preventDefault();
+                            if (!prefillCustomer.customer?.customer_id) return;
+                            if (!confirm('Delete this saved address?')) return;
+                            try {
+                              await api.delete(`/admin/customers/${prefillCustomer.customer.customer_id}/addresses/${a.address_id}`);
+                              // Mutating the prefill prop isn't ideal,
+                              // but the prefill object lives on the
+                              // gate one level up and we just need to
+                              // visually drop the row; the form's
+                              // current address fields stay untouched
+                              // unless this WAS the selected one (then
+                              // we clear them).
+                              if (isSelected) {
+                                setF((s) => ({ ...s, address: '', city_id: '', pin_code: '' }));
+                              }
+                              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                              (prefillCustomer.addresses as any) =
+                                (prefillCustomer.addresses || []).filter((x) => x.address_id !== a.address_id);
+                              // Force a re-render by setting a benign field on itself.
+                              setF((s) => ({ ...s }));
+                            } catch (err) {
+                              alert(err instanceof ApiError ? err.message : 'Delete failed');
+                            }
+                          }}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    );
+                  })}
+                  <button
+                    type="button"
+                    className="text-xs text-primary hover:underline pt-1"
+                    onClick={() => setF((s) => ({ ...s, address: '', city_id: '', pin_code: '', building: '', gps_location: '' }))}
+                  >
+                    + Add a new address (clears fields below)
+                  </button>
+                </div>
+              </div>
+            )}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <Field label="Address *" full><Input required value={f.address} onChange={(e) => set('address', e.target.value)} /></Field>
+              {/* Google Places-backed autosuggest. Operator types →
+                  debounced backend proxy hits Google → suggestions
+                  drop. Picking a suggestion auto-fills GPS + tries
+                  to match City + PIN from the geocoded components.
+                  Free-typing a custom address still works (no
+                  Google match → just persists the typed string). */}
+              <Field label="Address *" full>
+                <AddressAutocomplete
+                  required
+                  value={f.address}
+                  onChange={(v) => set('address', v)}
+                  onPick={(p) => {
+                    setF((s) => ({
+                      ...s,
+                      address: p.description,
+                      // GPS is "<lat>,<lng>" — matches the legacy
+                      // tbl_address.gps_location format.
+                      gps_location: p.lat != null && p.lng != null
+                        ? `${p.lat},${p.lng}`
+                        : s.gps_location,
+                      // Auto-fill PIN if Google returned one.
+                      pin_code: p.components.postal_code || s.pin_code,
+                      // City matching: look up the picked city name in
+                      // the lookup options and snap to its city_id.
+                      // If no match, leave the operator to pick
+                      // manually (won't blank a previous selection).
+                      city_id: (() => {
+                        const wanted = (p.components.city || '').toLowerCase();
+                        if (!wanted) return s.city_id;
+                        const hit = lk.toOpts.cities.find(
+                          (o) => String(o.label).toLowerCase() === wanted
+                        );
+                        return hit ? String(hit.value) : s.city_id;
+                      })(),
+                    }));
+                  }}
+                  placeholder="Start typing — Google will suggest matches"
+                />
+              </Field>
               <Field label="Building"><Input value={f.building} onChange={(e) => set('building', e.target.value)} /></Field>
               <Field label="City *"><SearchSelect required value={f.city_id} onChange={(v) => set('city_id', v)} placeholder="— Select city —" options={lk.toOpts.cities.map((o) => ({ value: o.value, label: String(o.label) }))} /></Field>
               <Field label="PIN *"><Input required pattern="[0-9]{6}" value={f.pin_code} onChange={(e) => set('pin_code', e.target.value.replace(/\D/g, ''))} /></Field>
-              <Field label="GPS"><Input value={f.gps_location} onChange={(e) => set('gps_location', e.target.value)} placeholder="28.6139,77.2090" /></Field>
+              {/* GPS field: auto-populated by the address autosuggest
+                  pick. Disabled — operators don't hand-edit lat/lng;
+                  if it's wrong, picking a different address fixes
+                  it (or re-geocoding via the address edit flow). */}
+              <Field label="GPS (auto-detected)">
+                <Input
+                  value={f.gps_location}
+                  readOnly
+                  disabled
+                  placeholder="Auto-filled from address selection"
+                />
+              </Field>
+            </div>
+            </div>
+            <div className="mt-4 flex justify-between">
+              <Button type="button" variant="outline" onClick={() => setOpenSection(1)}>← Back</Button>
+              <Button
+                type="button"
+                onClick={() => setOpenSection(3)}
+                disabled={!section2Complete}
+                title={section2Complete ? '' : 'Fill customer name + mobile + address + city + PIN to proceed'}
+              >
+                Next →
+              </Button>
             </div>
           </Section>
 
-          <Section title="Services">
-            <ServicesBasket
-              clientPicked={!!f.fk_client_id}
+          <Section
+            title="3. Select Products"
+            expanded={openSection === 3}
+            onToggle={() => { if (section2Complete) setOpenSection(3); }}
+            disabled={!section2Complete}
+          >
+            {/* Three mandatory pickers up top: Service Category, Service
+                Type (multi-select, filtered by Category), Job Type.
+                Legacy parity — operator must classify the job before the
+                rate-card auto-fans services into the table below.
+                Picking a Service Type immediately appends a row for
+                every matching rate-carded service (qty fixed at 1);
+                deselecting removes those rows. Manual quantity / amount
+                editing is intentionally suppressed — the rate card is
+                the source of truth and ops asked us to stop letting
+                operators tweak it inline. */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+              <Field label="Service Category *">
+                <SearchSelect
+                  required
+                  value={f.fk_service_catg_id || ''}
+                  onChange={(v) => {
+                    set('fk_service_catg_id', v);
+                    // Clear dependent fields on category change so we
+                    // don't carry stale type selections across categories.
+                    set('fk_service_type_id', '');
+                    set('fk_service_type_ids' as keyof typeof f, [] as never);
+                  }}
+                  placeholder="— Select category —"
+                  options={(lk.serviceCategories || []).map((c) => ({ value: c.service_catg_id, label: c.service_catg_name }))}
+                />
+              </Field>
+              <Field label="Service Type *">
+                {/* Service Type list is narrowed to only types that
+                    actually appear on THIS client's rate card. Without
+                    this filter the operator could pick a type that has
+                    no priced row in tbl_client_service and end up with
+                    an empty services table + an unbookable job. The
+                    category filter still applies on top. */}
+                <SearchMultiSelect
+                  value={f.fk_service_type_ids || []}
+                  onChange={(next) => set('fk_service_type_ids' as keyof typeof f, next.map(String) as never)}
+                  placeholder={f.fk_service_catg_id ? '— Select service type(s) —' : 'Pick a category first'}
+                  disabled={!f.fk_service_catg_id}
+                  options={(() => {
+                    const inRateCard = new Set(
+                      (clientServices || []).map((cs) => String(cs.service_type_id))
+                    );
+                    return (lk.serviceTypes || [])
+                      .filter((t) => !f.fk_service_catg_id || String(t.service_catg_id) === String(f.fk_service_catg_id))
+                      .filter((t) => inRateCard.has(String(t.service_type_id)))
+                      .map((t) => ({ value: String(t.service_type_id), label: t.service_type_name }));
+                  })()}
+                />
+              </Field>
+              <Field label="Job Type *">
+                {/* Canonical Job Type set per ops 2026-05-14:
+                      Installation, Repair, Uninstallation.
+                    Maintenance / Demo / Inspection were carry-over from
+                    a legacy enum that included rows we no longer book
+                    against; trimmed to match the rate-card charge_type
+                    universe in production. */}
+                <SearchSelect
+                  required
+                  value={f.job_type}
+                  onChange={(v) => set('job_type', v)}
+                  placeholder="— Select job type —"
+                  options={[
+                    { value: 'Installation', label: 'Installation' },
+                    { value: 'Repair', label: 'Repair' },
+                    { value: 'Uninstallation', label: 'Uninstallation' },
+                  ]}
+                />
+              </Field>
+            </div>
+            {/* Auto-populated services table. Each selected Service Type
+                contributes every matching client_service row (by
+                service_type_id) at qty 1 with the rate card's price.
+                Rate card is canonical — no inline editing. */}
+            <AutoServicesTable
               services={clientServices}
               loading={loadingServices}
+              serviceTypeIds={f.fk_service_type_ids || []}
               rows={serviceRows}
               setRows={setServiceRows}
             />
+            {/* Job metadata fields below the services table. Special
+                Comments + Anything Handyman sit half-half on a single
+                row (per ops request — paired textareas read together
+                better than stacked). resize-y allows vertical-only drag,
+                so the form doesn't grow horizontally and bust the modal. */}
+            <div className="mt-5 pt-4 border-t space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Field label="Job Image">
+                  <Input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => set('job_image_file' as keyof typeof f, (e.target.files?.[0] || null) as never)}
+                  />
+                </Field>
+                <div className="flex items-center gap-6 pt-6">
+                  <label className="flex items-center gap-2 text-sm">
+                    <Switch
+                      checked={!!f.helper_req}
+                      onCheckedChange={(v: boolean) => set('helper_req' as keyof typeof f, v as never)}
+                      ariaLabel="Helper required"
+                    />
+                    Helper Required
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <Switch
+                      checked={!!f.material_req}
+                      onCheckedChange={(v: boolean) => set('material_req' as keyof typeof f, v as never)}
+                      ariaLabel="Material required"
+                    />
+                    Material Required
+                  </label>
+                </div>
+              </div>
+              {/* Side-by-side textareas. NOT `full` (would col-span-2 and
+                  push them onto separate rows); the 2-col outer grid
+                  already gives each its half. resize-y locks horizontal
+                  resize so the operator can't bust the modal width. */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Field label="Special Comments *">
+                  <textarea
+                    required
+                    rows={3}
+                    value={f.remarks}
+                    onChange={(e) => set('remarks', e.target.value)}
+                    className="w-full border rounded px-3 py-2 text-sm bg-white resize-y"
+                    placeholder="Internal notes for ops"
+                  />
+                </Field>
+                <Field label="Anything Handyman should keep in mind? *">
+                  <textarea
+                    required
+                    rows={3}
+                    value={f.efr_special_notes}
+                    onChange={(e) => set('efr_special_notes', e.target.value)}
+                    className="w-full border rounded px-3 py-2 text-sm bg-white resize-y"
+                    placeholder="Notes for the technician"
+                  />
+                </Field>
+              </div>
+              {/* Collected By stays on its own row — no longer paired
+                  with Description (removed per ops; Special Comments
+                  covers the same intent). */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Field label="Collected By *">
+                  <SearchSelect
+                    required
+                    value={f.collected_by || 'Easyfix'}
+                    onChange={(v) => set('collected_by', v)}
+                    options={[
+                      { value: 'Easyfix',  label: 'Easyfix' },
+                      { value: 'Serviceman', label: 'Serviceman' },
+                    ]}
+                  />
+                </Field>
+              </div>
+            </div>
+            <div className="mt-4 flex justify-start">
+              <Button type="button" variant="outline" onClick={() => setOpenSection(2)}>← Back</Button>
+            </div>
           </Section>
         </>
       )}
 
       {error && <div className="text-sm text-destructive">{error}</div>}
-      <div className="flex justify-end gap-2 pt-2">
-        <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
-        <LoadBtn
-          type="submit"
-          loading={submitting}
-          className={isConfirm ? 'bg-purple-600 hover:bg-purple-700 text-white' : undefined}
-        >
-          {isConfirm ? 'Confirm & Schedule (Book Call)' : isEdit ? 'Save changes' : 'Create Job'}
-        </LoadBtn>
+      {/* Footer — three save variants mapped to legacy status codes:
+            Unreachable (status 9 — customer couldn't be reached)
+            Enquiry     (status 7 — information request, not booked)
+            Book Call   (status 0 — Confirmed, happy path)
+          Edit/Confirm modes keep the original single-button footer. */}
+      <div className="flex justify-end gap-2 pt-2 flex-wrap">
+        <CancelButton onCancel={onCancel} />
+        {!isEditShape ? (
+          <>
+            <LoadBtn
+              type="submit"
+              loading={submitting && submitVariant === 'unreachable'}
+              variant="outline"
+              onClick={() => setSubmitVariant('unreachable')}
+              title="Customer couldn't be reached — queue for follow-up (status: Unconfirmed)"
+            >
+              Unreachable
+            </LoadBtn>
+            <LoadBtn
+              type="submit"
+              loading={submitting && submitVariant === 'enquiry'}
+              variant="outline"
+              onClick={() => setSubmitVariant('enquiry')}
+              title="Information request only (status: Enquiry)"
+            >
+              Enquiry
+            </LoadBtn>
+            <LoadBtn
+              type="submit"
+              loading={submitting && submitVariant === 'book'}
+              onClick={() => setSubmitVariant('book')}
+            >
+              Book Call
+            </LoadBtn>
+          </>
+        ) : (
+          <LoadBtn
+            type="submit"
+            loading={submitting}
+            className={isConfirm ? 'bg-purple-600 hover:bg-purple-700 text-white' : undefined}
+          >
+            {isConfirm ? 'Confirm & Schedule (Book Call)' : 'Save changes'}
+          </LoadBtn>
+        )}
       </div>
+      {/* Address edit dialog — opens from the ✎ pencil per saved
+          address. The dialog handles its own PATCH; on success the
+          callback below patches the address into prefillCustomer's
+          local list and re-syncs the form fields if the edited
+          address was the currently-selected one. */}
+      <AddressEditDialog
+        open={addressEdit.open}
+        onClose={() => setAddressEdit({ open: false, address: null })}
+        customerId={prefillCustomer?.customer?.customer_id ?? 0}
+        address={addressEdit.address}
+        onSaved={(updated) => {
+          // Mutate prefillCustomer.addresses in place (same pattern
+          // the delete handler uses — the prop object lives one
+          // level up, and we want the visual list to reflect the
+          // change without forcing a parent refetch).
+          if (prefillCustomer?.addresses && addressEdit.address) {
+            const idx = prefillCustomer.addresses.findIndex(
+              (x) => x.address_id === addressEdit.address!.address_id
+            );
+            if (idx !== -1) {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              (prefillCustomer.addresses as any)[idx] = {
+                ...prefillCustomer.addresses[idx],
+                ...updated,
+              };
+            }
+          }
+          // If the edited address was the one currently populating
+          // the form fields, re-sync so the operator sees the new
+          // values immediately.
+          if (
+            addressEdit.address &&
+            String(f.address) === String(addressEdit.address.address || '') &&
+            String(f.city_id) === String(addressEdit.address.city_id ?? '') &&
+            String(f.pin_code) === String(addressEdit.address.pin_code || '')
+          ) {
+            setF((s) => ({
+              ...s,
+              address: updated.address || '',
+              building: updated.building || '',
+              city_id: updated.city_id != null ? String(updated.city_id) : '',
+              pin_code: updated.pin_code || '',
+              gps_location: updated.gps_location || '',
+            }));
+          } else {
+            // Force a re-render so the new label shows in the picker.
+            setF((s) => ({ ...s }));
+          }
+        }}
+      />
+      {/* Customer History dialog — only meaningful in create mode after
+          the mobile-gate matched an existing customer (we need a
+          customer_id to query against). The dialog drops back to a
+          plain "no history" message if the customer hasn't booked
+          before. */}
+      {!isEditShape && prefillCustomer?.found && prefillCustomer.customer?.customer_id ? (
+        <CustomerHistoryDialog
+          open={historyOpen}
+          onClose={() => setHistoryOpen(false)}
+          customerId={prefillCustomer.customer.customer_id}
+          customerName={prefillCustomer.customer.customer_name || ''}
+          mobile={prefillCustomer.mobile}
+        />
+      ) : null}
     </form>
   );
 }
@@ -1780,6 +3132,411 @@ function toRate(v: unknown): number | null {
   if (v === null || v === undefined || v === '') return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+/*
+ * AutoServicesTable — read-only services table for the create-flow
+ * Section 3. Replaces the manual ServicesBasket: operator picks one
+ * or more Service Types in the multi-select above, and every matching
+ * rate-carded client_service row appears here at qty=1 with its rate
+ * card price. The rate card is canonical, so there's no manual edit
+ * surface — to drop a service, the operator deselects its Service Type.
+ *
+ * The matching parent component derives the actual serviceRows that
+ * are POSTed; this is purely a presentational summary so the operator
+ * can confirm what's about to be booked + see the running total.
+ */
+function AutoServicesTable({
+  services, loading, serviceTypeIds, rows, setRows,
+}: {
+  services: ClientService[] | null;
+  loading: boolean;
+  serviceTypeIds: string[];
+  /** Authoritative basket rows (same shape that gets POSTed). Quantity
+   *  here is editable; the parent's reconciler effect adds/removes
+   *  rows on type changes while preserving these quantities. */
+  rows: ServiceRow[];
+  setRows: React.Dispatch<React.SetStateAction<ServiceRow[]>>;
+}) {
+  if (loading) {
+    return <div className="text-sm text-muted-foreground">Loading rate-carded services…</div>;
+  }
+  if (services === null) {
+    return <div className="text-sm text-muted-foreground">Pick a client in Section 1 to load its rate card.</div>;
+  }
+  if (services.length === 0) {
+    return (
+      <div className="text-sm text-amber-900 rounded border border-amber-200 bg-amber-50 px-3 py-2">
+        This client has no active rate-carded services. Map them under <em>Settings → Manage Services</em> before booking.
+      </div>
+    );
+  }
+  if (!serviceTypeIds || serviceTypeIds.length === 0) {
+    return (
+      <div className="text-sm text-muted-foreground rounded border border-dashed px-3 py-3 text-center">
+        Pick one or more Service Types above — services will auto-populate here from the client&apos;s rate card.
+      </div>
+    );
+  }
+
+  /*
+   * Two-tier display: every client_service matching the picked Service
+   * Types is shown as a CANDIDATE row. The leading column carries a
+   * "+" button when the candidate is NOT yet in the basket, or a qty
+   * input + ✕ remove when it IS. Rate column is always populated; the
+   * Amount column is only populated for added rows (since qty is the
+   * second input to the line amount and unadded rows have no qty).
+   * The footer Total sums ONLY added rows — matches operator
+   * expectation: until I click +, this row doesn't count.
+   */
+  const picked = new Set(serviceTypeIds.map(String));
+  const candidates = (services || []).filter((s) => picked.has(String(s.service_type_id)));
+
+  if (candidates.length === 0) {
+    return (
+      <div className="text-sm text-amber-900 rounded border border-amber-200 bg-amber-50 px-3 py-2">
+        The selected Service Type(s) aren&apos;t mapped on this client&apos;s rate card. Pick a different type or map the service under <em>Settings → Manage Services</em>.
+      </div>
+    );
+  }
+
+  // Build a lookup from client_service_id → its row in `rows` so each
+  // candidate can render its qty/amount in O(1).
+  const rowByCsId = new Map(rows.map((r) => [r.client_service_id, r] as const));
+
+  /*
+   * Rate resolution per row. Legacy semantics:
+   *   - charge_type === 1 (Fixed)    → total_amount is the bookable
+   *     rate. Fall back to "—" if total_amount is 0/null (misconfigured).
+   *   - charge_type === 0 (Variable) → computed at invoice time. The
+   *     basket can't show a number; display "Variable" and exclude
+   *     from grandTotal (legacy behaviour).
+   *
+   * `resolveRate` returns `{ rate, kind }`:
+   *   - kind 'fixed'    → rate is a number > 0; counts toward total
+   *   - kind 'variable' → no rate to show; doesn't count toward total
+   *   - kind 'missing'  → looks fixed but no price configured;
+   *                       flagged but doesn't count.
+   */
+  function resolveRate(s: ClientService): { rate: number | null; kind: 'fixed' | 'variable' | 'missing' } {
+    const ct = Number(s.charge_type);
+    if (ct === 0) return { rate: null, kind: 'variable' };
+    const r = toRate(s.total_amount);
+    if (r === null || r === 0) return { rate: null, kind: 'missing' };
+    return { rate: r, kind: 'fixed' };
+  }
+
+  const lineAmounts = candidates.map((s) => {
+    const row = rowByCsId.get(String(s.client_service_id));
+    if (!row) return 0;                       // unadded → 0 contribution
+    const { rate, kind } = resolveRate(s);
+    if (kind !== 'fixed' || rate === null) return null;
+    const qty = Number(row.quantity) || 0;
+    return rate * qty;
+  });
+  const grandTotal = lineAmounts.reduce<number>((acc, n) => acc + (n ?? 0), 0);
+  const anyAddedMissingRate = candidates.some((s, i) => {
+    const row = rowByCsId.get(String(s.client_service_id));
+    if (!row) return false;                   // not added → not relevant
+    return lineAmounts[i] === null;
+  });
+
+  function addService(cs: ClientService) {
+    setRows((prev) => {
+      // Guard against double-add (e.g. fast double-click on +).
+      if (prev.some((r) => r.client_service_id === String(cs.client_service_id))) return prev;
+      return [...prev, {
+        tempId: Date.now() + Math.random(),
+        client_service_id: String(cs.client_service_id),
+        quantity: '1',
+      }];
+    });
+  }
+  function removeService(csId: string) {
+    setRows((prev) => prev.filter((r) => r.client_service_id !== csId));
+  }
+  function setRowQty(csId: string, qty: string) {
+    setRows((prev) => prev.map((r) =>
+      r.client_service_id === csId ? { ...r, quantity: qty } : r
+    ));
+  }
+
+  return (
+    <div className="rounded-md border overflow-hidden">
+      <table className="w-full text-sm">
+        <thead className="bg-muted/50 text-xs">
+          <tr>
+            <th className="text-center px-2 py-2 font-medium w-10"> </th>
+            <th className="text-left px-3 py-2 font-medium">Service</th>
+            <th className="text-left px-3 py-2 font-medium">Category</th>
+            <th className="text-left px-3 py-2 font-medium">Type</th>
+            <th className="text-right px-3 py-2 font-medium w-24">Qty</th>
+            <th className="text-right px-3 py-2 font-medium w-32">Rate</th>
+            <th className="text-right px-3 py-2 font-medium w-32">Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          {candidates.map((s) => {
+            const csId = String(s.client_service_id);
+            const row = rowByCsId.get(csId);
+            const added = !!row;
+            const { rate, kind } = resolveRate(s);
+            const qty = added && row ? (Number(row.quantity) || 0) : 0;
+            const lineAmount = added && kind === 'fixed' && rate !== null ? rate * qty : null;
+            return (
+              <tr key={csId} className={`border-t transition-colors ${added ? 'bg-sky-50/40' : 'hover:bg-muted/30'}`}>
+                <td className="px-2 py-2 text-center">
+                  {/* Cleaner inline toggle — flat icon button, no
+                      coloured chip. The row's own background tint is
+                      the visual "added" cue; the trailing icon just
+                      swaps + → ✕ so the action stays obvious. Uses
+                      lucide-react icons to match the rest of the app. */}
+                  {added ? (
+                    <button
+                      type="button"
+                      onClick={() => removeService(csId)}
+                      title="Remove from booking"
+                      aria-label="Remove from booking"
+                      className="inline-flex items-center justify-center h-7 w-7 rounded text-rose-600 hover:bg-rose-50 hover:text-rose-700 transition-colors"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => addService(s)}
+                      title="Add to booking"
+                      aria-label="Add to booking"
+                      className="inline-flex items-center justify-center h-7 w-7 rounded text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 transition-colors"
+                    >
+                      <Plus className="h-4 w-4" />
+                    </button>
+                  )}
+                </td>
+                <td className="px-3 py-2">{s.crc_ratecard_name || '—'}</td>
+                <td className="px-3 py-2">{s.service_catg_name || '—'}</td>
+                <td className="px-3 py-2">{s.service_type_name || '—'}</td>
+                <td className="px-3 py-2">
+                  {added && row ? (
+                    /* Qty: scroll-wheel blurs to prevent silent
+                       bumps; spinner arrows hidden via Tailwind
+                       arbitrary selectors; native Up/Down keys still
+                       work since type stays "number". On blur, snap
+                       empty/zero back to 1 (a 0-qty row would silently
+                       drop out of buildServicesPayload). */
+                    <Input
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={row.quantity}
+                      onChange={(e) => setRowQty(csId, e.target.value.replace(/\D/g, ''))}
+                      onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
+                      onBlur={() => {
+                        if (!row.quantity || Number(row.quantity) < 1) setRowQty(csId, '1');
+                      }}
+                      className="h-8 text-right tabular-nums [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-inner-spin-button]:m-0"
+                    />
+                  ) : (
+                    <span className="text-xs text-muted-foreground">—</span>
+                  )}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums">
+                  {/* Rate display per charge_type:
+                        fixed    → ₹X.XX
+                        variable → "Variable" pill (invoice-time price)
+                        missing  → "Not set" in amber (misconfigured rate card)
+                      This replaces the previous ₹0.00 display that was
+                      misleading operators into thinking the booking
+                      would invoice at zero. */}
+                  {kind === 'fixed' && rate !== null
+                    ? `₹${rate.toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`
+                    : kind === 'variable'
+                      ? <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-medium bg-sky-50 text-sky-700 border border-sky-200">Variable</span>
+                      : <span className="text-[11px] text-amber-700" title="Rate not configured on this client's rate card">Not set</span>}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums">
+                  {!added ? <span className="text-muted-foreground">—</span>
+                    : kind === 'variable'
+                      ? <span className="text-[11px] text-sky-700">Computed</span>
+                      : lineAmount === null
+                        ? <span className="text-[11px] text-amber-700">—</span>
+                        : `₹${lineAmount.toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+        <tfoot className="bg-muted/30 text-sm">
+          <tr className="border-t">
+            <td colSpan={6} className="px-3 py-2 text-right font-medium">
+              Total
+              <span className="text-xs text-muted-foreground ml-2">
+                ({rows.length} added of {candidates.length} available)
+              </span>
+            </td>
+            <td className="px-3 py-2 text-right tabular-nums font-semibold">
+              ₹{grandTotal.toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })}
+              {anyAddedMissingRate && (
+                <div className="text-[10px] text-amber-700 font-normal">
+                  (some services are Variable or missing a rate — excluded from total)
+                </div>
+              )}
+            </td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  );
+}
+
+/*
+ * CustomerHistoryDialog — paginated list of every prior job booked
+ * for the supplied customer_id. Renders inside its own Dialog so the
+ * Book-New-Call form behind stays open + scrollable underneath.
+ *
+ * Data source: GET /admin/jobs?customerId=X&limit=100. Backend already
+ * RBAC-scopes the result (manage_clients × manage_cities), so an
+ * operator only sees jobs they're allowed to view even when the
+ * customer's history spans clients outside their permission set.
+ *
+ * Row click opens the existing /jobs/{id} detail page in a NEW TAB so
+ * the booking flow isn't lost. (We considered an inline drill-down,
+ * but the JobModal is already mounted for the current booking — a
+ * second JobModal on top would confuse the operator.)
+ */
+function CustomerHistoryDialog({
+  open, onClose, customerId, customerName, mobile,
+}: {
+  open: boolean;
+  onClose: () => void;
+  customerId: number;
+  customerName: string;
+  mobile: string;
+}) {
+  const [rows, setRows] = useState<Job[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  /*
+   * Inline view-job state. When the operator clicks the Eye on a
+   * history row we open ANOTHER JobModal stacked on top of the history
+   * dialog (which itself is stacked on top of the Book-New-Call
+   * modal). Native Radix Dialog z-index handles the stacking; closing
+   * the view-modal returns the operator to the history list without
+   * losing booking context.
+   */
+  const [viewJobId, setViewJobId] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setLoading(true); setErr(null); setRows(null);
+    api.get<{ items: Job[]; total?: number }>('/admin/jobs', { customerId, limit: 100 })
+      .then((resp) => { if (!cancelled) setRows(resp.items || []); })
+      .catch((e) => { if (!cancelled) setErr(e instanceof ApiError ? e.message : 'Failed to load history'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [open, customerId]);
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="!max-w-[1000px] w-[95vw] max-h-[85vh] overflow-hidden flex flex-col p-0">
+        <DialogHeader className="!mx-0 !mt-0 px-6 pt-6 pb-3 border-b">
+          <DialogTitle className="flex items-center gap-2">
+            <History className="h-5 w-5" />
+            Job History
+            <span className="text-sm font-normal text-muted-foreground">
+              · {customerName || 'Customer'} · {mobile}
+            </span>
+          </DialogTitle>
+        </DialogHeader>
+        <div className="flex-1 overflow-y-auto px-6 py-4">
+          {loading && (
+            <div className="text-sm text-muted-foreground py-8 text-center">Loading…</div>
+          )}
+          {err && (
+            <div className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded px-2 py-1">{err}</div>
+          )}
+          {!loading && !err && rows && rows.length === 0 && (
+            <div className="text-sm text-muted-foreground py-8 text-center">
+              No prior jobs found for this customer.
+            </div>
+          )}
+          {!loading && !err && rows && rows.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm data-table">
+                <thead>
+                  <tr className="bg-muted/50 text-xs">
+                    <th className="text-left px-3 py-2 font-medium">Job ID</th>
+                    <th className="text-left px-3 py-2 font-medium">Requested</th>
+                    <th className="text-left px-3 py-2 font-medium">Client</th>
+                    <th className="text-left px-3 py-2 font-medium">Job Type</th>
+                    <th className="text-left px-3 py-2 font-medium">Status</th>
+                    <th className="text-left px-3 py-2 font-medium">Easyfixer</th>
+                    <th className="text-left px-3 py-2 font-medium">City</th>
+                    <th className="text-left px-3 py-2 font-medium">Address</th>
+                    <th className="text-left px-3 py-2 font-medium w-24"> </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((j) => (
+                    <tr key={String(j.job_id)} className="border-t hover:bg-muted/40">
+                      <td className="px-3 py-2 font-mono text-xs">#{String(j.job_id ?? '—')}</td>
+                      <td className="px-3 py-2">{formatDate(j.requested_date_time as string | undefined)}</td>
+                      <td className="px-3 py-2">{String(j.client_name ?? '—')}</td>
+                      <td className="px-3 py-2">{String(j.job_type ?? '—')}</td>
+                      <td className="px-3 py-2">
+                        <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${statusColorClass(Number(j.job_status))}`}>
+                          {statusLabel(Number(j.job_status), { assigned: j.fk_easyfixter_id != null })}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2">{String(j.easyfixer_name ?? '—')}</td>
+                      <td className="px-3 py-2">{String(j.city_name ?? '—')}</td>
+                      <td className="px-3 py-2 max-w-[280px] truncate" title={String(j.address ?? '')}>
+                        {String(j.address ?? '—')}
+                      </td>
+                      <td className="px-3 py-2">
+                        {/* Eye icon opens the job details in a stacked
+                            JobModal (view mode) without leaving the
+                            history list / booking flow. Replaces the
+                            old "Open ↗" new-tab link per ops feedback —
+                            operators want to peek a past job and come
+                            back without losing booking context. */}
+                        <button
+                          type="button"
+                          onClick={() => setViewJobId(Number(j.job_id))}
+                          className="inline-flex items-center justify-center h-7 w-7 rounded border hover:bg-muted"
+                          title="View job details"
+                          aria-label="View job details"
+                        >
+                          <Eye className="h-4 w-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="text-xs text-muted-foreground mt-3 text-right">
+                {rows.length} job{rows.length === 1 ? '' : 's'} · click the <Eye className="inline h-3 w-3 align-text-bottom" /> icon for full details.
+              </div>
+            </div>
+          )}
+        </div>
+        <DialogFooter className="px-6 py-3 border-t bg-muted/30">
+          <Button variant="outline" onClick={onClose}>Close</Button>
+        </DialogFooter>
+      </DialogContent>
+      {/* Stacked view-job modal — opens INSIDE the history dialog so
+          closing it returns to the history list, not all the way out
+          to the Book-New-Call flow. JobModal handles its own loader,
+          status badge, and action bar in view mode. */}
+      <JobModal
+        open={viewJobId != null}
+        mode="view"
+        jobId={viewJobId ?? undefined}
+        onClose={() => setViewJobId(null)}
+      />
+    </Dialog>
+  );
 }
 
 // ─── Dialog helpers (Assign + Change Owner) ──────────────────────────────────
@@ -2079,8 +3836,30 @@ function toFormShape(j: Job | null) {
     job_desc: pick('job_desc'),
     client_ref_id: pick('client_ref_id'),
     customer_name: pick('customer_name'), customer_mob_no: pick('customer_mob_no'), customer_email: pick('customer_email'),
+    // Split form fields for the Section 2 Schedule sub-block.
+    // `requested_date_time` (ISO) is what the backend ultimately
+    // consumes; we maintain it via a useEffect when either of these
+    // two changes.
+    requested_date: '',
+    requested_time: '',
     address: pick('address'), building: pick('building'), landmark: pick('landmark'),
     city_id: pick('city_id'), pin_code: pick('pin_code'), gps_location: pick('gps_location'),
+    // Client SPOC + Reporting Contact — section 1 dynamic fields.
+    // Auto-filled from tbl_client_contacts when the operator picks
+    // a Reporting Contact in the create-flow modal (pickReportingContact).
+    reporting_contact_id: pick('reporting_contact_id'),
+    client_spoc_name: pick('client_spoc_name'),
+    client_spoc: pick('client_spoc'),
+    client_spoc_email: pick('client_spoc_email'),
+    // Legacy Book-New-Call fields.
+    // branch_details — dedicated tbl_job column (verified).
+    // product_code + building_name — folded into `remarks` with
+    // named prefixes by composeRemarks() until columns are verified.
+    branch_details: pick('branch_details'),
+    product_code: pick('product_code'),
+    building_name: pick('building_name'),
+    // Questionnaire FK — picker visible after a client is selected.
+    c_questionaire_id: pick('c_questionaire_id'),
     // Section-3 / Products metadata — matches legacy addEditJob fields.
     remarks: pick('remarks'),
     efr_special_notes: pick('efr_special_notes'),
@@ -2089,6 +3868,12 @@ function toFormShape(j: Job | null) {
     collected_by: pick('collected_by') || 'Easyfix',
     fk_service_catg_id: pick('fk_service_catg_id'),
     fk_service_type_id: pick('fk_service_type_id'),
+    // Multi-select used in create flow's "Select Products" section.
+    // Picking one or more Service Types auto-fans them out into the
+    // rate-card services table below (qty=1 each). Confirm/Edit
+    // still use the singular `fk_service_type_id` above so existing
+    // rows don't unintentionally get rewritten.
+    fk_service_type_ids: [] as string[],
   };
 }
 
@@ -2142,11 +3927,57 @@ export function slotBoundsForPicker(currentIso: string): { min: string; max: str
   return { min: fmt(minDate), max: fmt(max) };
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+/*
+ * Section — collapsible accordion section for the Create-job form.
+ *
+ * Behaviour:
+ *   - `expanded` (controlled) — when set by the parent, drives open/closed
+ *     state. The parent enforces the legacy "1 open at a time" rule.
+ *   - `onToggle` — fired on header click. Disabled clicks if `disabled`.
+ *   - `disabled` — header click is suppressed (used when prior section's
+ *     mandatory fields aren't filled yet — matches legacy addEditJob's
+ *     "Next button" gating).
+ *   - Falls back to a non-collapsible block when neither `expanded` nor
+ *     `onToggle` is supplied — preserves the existing Confirm/Edit
+ *     mode layout that wasn't accordion-shaped.
+ */
+function Section({
+  title,
+  children,
+  expanded,
+  onToggle,
+  disabled,
+  badge,
+}: {
+  title: string;
+  children: React.ReactNode;
+  expanded?: boolean;
+  onToggle?: () => void;
+  disabled?: boolean;
+  badge?: React.ReactNode;
+}) {
+  const collapsible = onToggle !== undefined;
+  const isOpen = !collapsible || expanded;
   return (
     <section className="rounded-lg border bg-card">
-      <div className="px-5 py-3 border-b bg-muted/30"><h3 className="text-sm font-semibold">{title}</h3></div>
-      <div className="p-5">{children}</div>
+      <button
+        type="button"
+        onClick={() => { if (collapsible && !disabled) onToggle?.(); }}
+        className={`w-full px-5 py-3 border-b bg-muted/30 flex items-center justify-between gap-3 text-left ${collapsible && !disabled ? 'hover:bg-muted/50 cursor-pointer' : ''} ${disabled ? 'opacity-60 cursor-not-allowed' : ''}`}
+        disabled={!collapsible || disabled}
+        aria-expanded={isOpen}
+      >
+        <h3 className="text-sm font-semibold flex items-center gap-2">
+          {title}
+          {badge}
+        </h3>
+        {collapsible && (
+          <span className="text-muted-foreground text-xs">
+            {isOpen ? '▲' : '▼'}
+          </span>
+        )}
+      </button>
+      {isOpen && <div className="p-5">{children}</div>}
     </section>
   );
 }
@@ -2225,7 +4056,7 @@ function RescheduleDialog({ open, onClose, initialDate, initialSlot, onSubmit }:
           </div>
           {err && <div className="text-sm text-red-600">{err}</div>}
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={onClose} disabled={loading}>Cancel</Button>
+            <CancelButton onCancel={onClose} disabled={loading} />
             <Button onClick={go} disabled={loading}>{loading ? 'Saving…' : 'Reschedule'}</Button>
           </div>
         </div>
@@ -2268,7 +4099,7 @@ function ChangeDescriptionDialog({ open, onClose, initialDesc, onSubmit }: {
           <div className="text-[10px] text-muted-foreground text-right">{desc.length} / 2000</div>
           {err && <div className="text-sm text-red-600">{err}</div>}
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={onClose} disabled={loading}>Cancel</Button>
+            <CancelButton onCancel={onClose} disabled={loading} />
             <Button onClick={go} disabled={loading}>{loading ? 'Saving…' : 'Save'}</Button>
           </div>
         </div>
@@ -2287,17 +4118,45 @@ function CancelWithReasonDialog({ open, onClose, onSubmit }: {
 }) {
   const lk = useLookup();
   const [reasonId, setReasonId] = useState('');
+  const [customReason, setCustomReason] = useState('');
+  /*
+   * `customMode` swaps the SearchSelect for a free-text input when the
+   * operator can't find a matching DB reason. The cancel-reasons list
+   * IS DB-sourced (tbl_cancel_reason / job_cancel_reason_by_easyfixer_app
+   * — see CLAUDE.md table-name notes), so we don't pollute it with
+   * ad-hoc entries. Instead, custom reasons are submitted with the
+   * smallest valid reason_id as the FK (accounting buckets all "other"
+   * cancellations under the same code) and the typed string is prepended
+   * to the comment as `[Custom] <reason> — <operator comment>`, so the
+   * audit trail still captures the operator's intent.
+   */
+  const [customMode, setCustomMode] = useState(false);
   const [comment, setComment] = useState('');
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
-    if (open) { setReasonId(''); setComment(''); setErr(null); }
+    if (open) {
+      setReasonId(''); setCustomReason(''); setCustomMode(false);
+      setComment(''); setErr(null);
+    }
   }, [open]);
   async function go() {
-    const id = Number(reasonId);
-    if (!id) { setErr('Cancel reason is required'); return; }
+    let resolvedId: number;
+    let resolvedComment = comment.trim();
+    if (customMode) {
+      if (!customReason.trim()) { setErr('Enter a custom reason'); return; }
+      // Use the smallest reason id as the FK fallback. Audit detail
+      // lives in the comment column, prefixed [Custom] for filtering.
+      const fallback = (lk.cancelReasons[0]?.id) ?? 0;
+      if (!fallback) { setErr('No cancel-reason rows seeded — ask ops to add one'); return; }
+      resolvedId = fallback;
+      resolvedComment = `[Custom] ${customReason.trim()}${resolvedComment ? ' — ' + resolvedComment : ''}`;
+    } else {
+      resolvedId = Number(reasonId);
+      if (!resolvedId) { setErr('Cancel reason is required'); return; }
+    }
     setLoading(true); setErr(null);
-    try { await onSubmit(id, comment.trim()); }
+    try { await onSubmit(resolvedId, resolvedComment); }
     catch (e) { setErr(e instanceof ApiError ? e.message : 'Cancel failed'); }
     finally { setLoading(false); }
   }
@@ -2307,17 +4166,33 @@ function CancelWithReasonDialog({ open, onClose, onSubmit }: {
         <DialogHeader><DialogTitle>Cancel Job</DialogTitle></DialogHeader>
         <div className="space-y-3">
           <div>
-            <Label className="text-sm font-medium block mb-1">Cancellation Reason *</Label>
-            <select
-              value={reasonId}
-              onChange={(e) => setReasonId(e.target.value)}
-              className="border rounded h-9 px-2 text-sm bg-background w-full"
-            >
-              <option value="">Select a reason…</option>
-              {lk.cancelReasons.map((r) => (
-                <option key={r.id} value={r.id}>{r.reason}</option>
-              ))}
-            </select>
+            <div className="flex items-center justify-between mb-1">
+              <Label className="text-sm font-medium">Cancellation Reason *</Label>
+              <button
+                type="button"
+                className="text-xs text-primary hover:underline"
+                onClick={() => { setCustomMode((m) => !m); setReasonId(''); setCustomReason(''); }}
+              >
+                {customMode ? 'Pick from list instead' : 'Reason not in list? Add custom'}
+              </button>
+            </div>
+            {customMode ? (
+              <Input
+                value={customReason}
+                onChange={(e) => setCustomReason(e.target.value)}
+                placeholder="Describe the cancellation reason…"
+                maxLength={200}
+              />
+            ) : (
+              /* SearchSelect — already searchable. Operator types to
+                 filter; arrow keys + Enter to pick. */
+              <SearchSelect
+                value={reasonId}
+                onChange={(v) => setReasonId(v)}
+                options={lk.cancelReasons.map((r) => ({ value: r.id, label: r.reason }))}
+                placeholder="Select a reason…"
+              />
+            )}
           </div>
           <div>
             <Label className="text-sm font-medium block mb-1">Comment (optional)</Label>
@@ -2455,7 +4330,7 @@ function FeedbackDialog({ open, onClose, jobId, onSaved }: {
           </div>
           {err && <div className="text-sm text-red-600">{err}</div>}
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={onClose} disabled={loading}>Cancel</Button>
+            <CancelButton onCancel={onClose} disabled={loading} />
             <Button onClick={go} disabled={loading}>{loading ? 'Saving…' : 'Save Feedback'}</Button>
           </div>
         </div>

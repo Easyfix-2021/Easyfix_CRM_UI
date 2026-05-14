@@ -136,7 +136,9 @@ export function SearchMultiSelect({
         onClick={() => setOpen((o) => !o)}
         className={cn(
           'flex h-9 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm',
-          'focus:outline-none focus:ring-1 focus:ring-ring',
+          // Matches SearchSelect — no ring on click, subtle border-color
+          // shift on keyboard focus only.
+          'focus:outline-none focus-visible:outline-none focus-visible:border-foreground/40',
           disabled && 'cursor-not-allowed opacity-50',
           count === 0 && 'text-muted-foreground',
         )}

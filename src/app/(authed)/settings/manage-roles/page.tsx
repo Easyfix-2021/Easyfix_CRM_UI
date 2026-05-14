@@ -29,6 +29,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Switch } from '@/components/ui/switch';
+import { useCancelConfirm } from '@/lib/use-cancel-confirm';
 import { api, ApiError } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useMe } from '@/lib/auth-context';
@@ -319,21 +320,45 @@ export default function ManageRolesPage() {
       <Card>
         <CardContent className="p-0">
           <table className="data-table w-full" style={{ tableLayout: 'fixed' }}>
-            {/* Group column was removed earlier (admin/client/mobile is a
-                code-level concept). The dedicated chevron column has now
-                also been removed — the expand/collapse affordance lives
-                on the Menu Access cell itself (the cell is the click
-                target; a chevron renders after the text and rotates with
-                the expanded state). Total freed: 4% chevron → spread
-                across Name/Description/Menu Access. */}
+            {/*
+                Column widths, in order (must match the th/td sequence below):
+                  6 percent  Role ID
+                  17 percent Name
+                  25 percent Description
+                  28 percent Menu Access (clickable to expand)
+                  8 percent  Users
+                  8 percent  Status
+                  8 percent  Actions
+
+                HISTORY of this colgroup hydration bug, kept for the
+                next person who tries to add comments inside:
+                  - colgroup may only contain col children. Text nodes
+                    (including whitespace) are illegal.
+                  - JSX preserves any whitespace adjacent to an inline
+                    expression. An inline comment AFTER a col element
+                    introduces a single-space text node before the
+                    comment, which counts as a forbidden child of
+                    colgroup and triggers a React hydration error in
+                    dev.
+                  - The ONLY safe layout is one element per line with
+                    no inline JSX expressions inside colgroup. Document
+                    each column purpose ABOVE the colgroup (as done
+                    here) instead.
+
+                NOTE on syntax inside JSX comments: angle brackets are
+                spelled out here intentionally. A raw HTML tag inside a
+                JSX block comment can confuse the TSX parser, and a
+                literal brace expression inside a JSX expression comment
+                breaks parsing too. Plain words sidestep both.
+            */}
             <colgroup>
-              <col style={{ width: '6%'  }} /> {/* Role ID */}
-              <col style={{ width: '17%' }} /> {/* Name */}
-              <col style={{ width: '25%' }} /> {/* Description */}
-              <col style={{ width: '28%' }} /> {/* Menu Access (clickable) */}
-              <col style={{ width: '8%'  }} /> {/* Users */}
-              <col style={{ width: '8%'  }} /> {/* Status */}
-              <col style={{ width: '8%'  }} /> {/* Actions */}
+              <col style={{ width: '6%' }} />
+              <col style={{ width: '17%' }} />
+              <col style={{ width: '25%' }} />
+              <col style={{ width: '28%' }} />
+              <col style={{ width: '8%' }} />
+              <col style={{ width: '8%' }} />
+              <col style={{ width: '8%' }} />
             </colgroup>
             <thead>
               <tr>
@@ -626,6 +651,10 @@ function RoleFormModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hydrating, setHydrating] = useState(false);
+  // Cancel button now prompts before closing — applies to every Add /
+  // Edit Role open, since the form state is always at risk of being
+  // discarded by an accidental click.
+  const cancelWithConfirm = useCancelConfirm(onClose);
 
   // Catalogue data — fetched once on first open, cached on the component.
   const [menus, setMenus] = useState<MenuRow[]>([]);
@@ -953,7 +982,7 @@ function RoleFormModal({
           )}
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={submitting}>Cancel</Button>
+          <Button variant="outline" onClick={cancelWithConfirm} disabled={submitting}>Cancel</Button>
           <Button onClick={handleSubmit} disabled={submitting}>
             {submitting ? 'Saving…' : isEdit ? 'Save Changes' : 'Add Role'}
           </Button>

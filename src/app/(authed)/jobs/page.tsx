@@ -122,10 +122,18 @@ export default function JobsPage() {
        *     Scheduling / Pending-App-Ack tabs.
        * `undefined` values are stripped by `api.get` — no empty query params.
        */
+      // `?focus=escalated` drives the legacy CRM header's "Escalated
+      // Jobs" link — narrows the list to rows where tbl_job.is_escalated=1
+      // regardless of which tab is active. Implemented as a separate
+      // backend filter (not a tab) because escalation is a cross-cutting
+      // flag, not a status bucket. When focus is unset, isEscalated is
+      // omitted so the list behaves exactly as before.
+      const isEscalated = searchParams.get('focus') === 'escalated' ? 'true' : undefined;
       const r = await api.get<Resp>('/admin/jobs', {
         status:    tabDef?.statuses ? undefined : tabDef?.status,
         statuses:  tabDef?.statuses ? tabDef.statuses.join(',') : undefined,
         assigned:  tabDef?.assigned === undefined ? undefined : String(tabDef.assigned),
+        isEscalated,
         limit: PAGE_SIZE, offset: off,
         clientId: filters.clientId || undefined,
         cityId: filters.cityId || undefined,
@@ -142,6 +150,10 @@ export default function JobsPage() {
 
   useEffect(() => { setOffset(0); load(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [tab]);
   useEffect(() => { load(false); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [offset]);
+  // Reload when ?focus=… changes — drives the Escalated Jobs deep-link
+  // from the navbar.
+  const focusParam = useSearchParams().get('focus');
+  useEffect(() => { setOffset(0); load(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [focusParam]);
 
   /*
    * Counts fetch — runs once on mount and again after a save from the modal.

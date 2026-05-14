@@ -101,7 +101,11 @@ export function SearchSelect({
         onClick={() => setOpen((o) => !o)}
         className={cn(
           'flex h-9 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm',
-          'focus:outline-none focus:ring-1 focus:ring-ring',
+          // Was: `focus:ring-1 focus:ring-ring` which fired on every
+          // click. Replaced with a subtle border-color shift that only
+          // appears on keyboard focus, so mouse-clicked triggers don't
+          // get the blue ring outline the user asked us to remove.
+          'focus:outline-none focus-visible:outline-none focus-visible:border-foreground/40',
           disabled && 'cursor-not-allowed opacity-50',
           !selected && 'text-muted-foreground'
         )}

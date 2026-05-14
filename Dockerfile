@@ -34,6 +34,18 @@ WORKDIR /app
 ARG NEXT_PUBLIC_API_URL=http://placeholder.invalid/api
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 
+# QuickSight bridge URLs. Same build-time mechanic as the API URL —
+# `process.env.NEXT_PUBLIC_QA_QUICKSIGHT_URL` is read inside the navbar's
+# openQuickSight() and Next inlines whatever was set when `next build`
+# ran. Defaults are the canonical UAT + prod hosts so a build without
+# explicit --build-args still works against the legacy QuickSight
+# servers; CI passes them explicitly so the choice is auditable in the
+# workflow log.
+ARG NEXT_PUBLIC_QA_QUICKSIGHT_URL=https://uat.easyfix.in
+ENV NEXT_PUBLIC_QA_QUICKSIGHT_URL=${NEXT_PUBLIC_QA_QUICKSIGHT_URL}
+ARG NEXT_PUBLIC_PROD_QUICKSIGHT_URL=https://corporates.core.easyfix.in
+ENV NEXT_PUBLIC_PROD_QUICKSIGHT_URL=${NEXT_PUBLIC_PROD_QUICKSIGHT_URL}
+
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 

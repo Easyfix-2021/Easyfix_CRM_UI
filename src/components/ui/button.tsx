@@ -4,7 +4,14 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '@/lib/utils';
 
 const buttonVariants = cva(
-  'inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50',
+  // No focus ring: the visible blue ring previously painted on every
+  // click (mouse OR keyboard) was distracting and the user explicitly
+  // asked us to remove it. `focus:outline-none` is also set so the
+  // browser's default outline doesn't take over once Tailwind's ring
+  // utility is gone. Buttons still have a clear hover state via the
+  // variant-specific `hover:bg-*` classes; keyboard users still see the
+  // disabled / hover affordances on Tab navigation through those.
+  'inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus:outline-none focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50',
   {
     variants: {
       variant: {

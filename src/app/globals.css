@@ -50,6 +50,77 @@
     font-feature-settings: 'rlig' 1, 'calt' 1;
   }
 
+  /*
+   * Suppress the browser-default focus outline on bare <textarea>
+   * elements. The Input primitive already does this on `<input>`; the
+   * project has ~15 inline `<textarea>` usages (Role/User modals,
+   * settings forms, JobModal feedback boxes), each with its own ad-hoc
+   * classes — patching each one would scatter the same fix across many
+   * files. A single global rule keeps the textarea behaviour consistent
+   * with the Input primitive: no ring on click, subtle border-color
+   * shift on keyboard focus. If a caller ever NEEDS a focus ring it can
+   * opt in by adding `focus-visible:ring-2 focus-visible:ring-ring`
+   * locally (Tailwind utilities still win the specificity battle).
+   */
+  textarea:focus {
+    outline: none;
+  }
+  textarea:focus-visible {
+    outline: none;
+    border-color: hsl(var(--foreground) / 0.4);
+  }
+
+  /*
+   * Marquee-on-hover used by the dashboard card titles. The wrapping
+   * <div> is `overflow-hidden`; the inner span gets this class when
+   * the JS measure pass detects overflow, and the parent's :hover
+   * triggers the translateX animation.
+   *
+   * `--marquee-distance` (negative px) and `--marquee-duration` are
+   * set inline on the span. The distance equals the FULL inner-text
+   * width (not just the overflow) so the text scrolls completely
+   * past the left edge of the card before the cycle restarts —
+   * matches the legacy newsticker feel the operator asked for.
+   *
+   * Lifecycle of one cycle:
+   *   - 0%   text fully visible at left (translateX = 0)
+   *   - 8%   still at 0 — brief hold so the reader registers the
+   *          first chars before motion starts
+   *   - 100% text fully off-screen left (translateX = -innerWidth)
+   *          → animation completes, snaps back to 0, re-enters
+   *            the hold phase
+   *
+   * The `linear` timing function keeps the scroll speed constant
+   * (an ease-in-out felt jerky once the distance grew).
+   * `paused` by default → only runs when the parent matches :hover.
+   */
+  @keyframes marquee-scroll {
+    0%   { transform: translateX(0); }
+    8%   { transform: translateX(0); }
+    100% { transform: translateX(var(--marquee-distance, 0)); }
+  }
+  /*
+   * Default state (not hovered): NO animation is applied. The text
+   * sits at translateX(0) — fully visible at left. When the user
+   * hovers the card link, the `a:hover` rule below grafts the
+   * animation onto the span, which starts from 0% and plays forward.
+   * When hover ends, the animation is removed entirely, so the
+   * transform snaps back to 0 (no leftover frame position). Next
+   * hover replays from 0% — matches the operator request:
+   * "Marquee should reset from start when cursor moves out from card".
+   *
+   * Earlier we kept the animation declared in both states with
+   * `play-state: paused` toggling to `running`. That paused the
+   * keyframe mid-scroll on hover-out, so the next hover resumed from
+   * wherever it had stopped instead of restarting cleanly.
+   */
+  .group-hover-marquee {
+    /* no animation by default — transform stays at translateX(0) */
+  }
+  a:hover .group-hover-marquee {
+    animation: marquee-scroll var(--marquee-duration, 4s) linear infinite;
+  }
+
   /* Legacy-style data table: dense rows, subtle borders */
   .data-table {
     @apply w-full text-sm;
