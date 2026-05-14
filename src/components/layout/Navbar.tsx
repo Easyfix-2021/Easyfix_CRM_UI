@@ -7,6 +7,7 @@ import { api, ApiError } from '@/lib/api';
 import { useMe, clearMeCache } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
 import { EscalatedJobsModal } from '@/components/job/EscalatedJobsModal';
+import { CallInfoModal } from '@/components/call-info/CallInfoModal';
 
 export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
   const router = useRouter();
@@ -36,6 +37,11 @@ export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
   // previous "navigate to /jobs?focus=escalated" behaviour with the
   // dedicated escalation table that matches the legacy column shape.
   const [escalatedOpen, setEscalatedOpen] = useState(false);
+  // Call Info modal — opens from the navbar button. Replaces the
+  // previous "navigate to /admin-actions/call-info" page so ops stay
+  // on Dashboard / Manage Jobs while picking a date range and reading
+  // the resulting call history table.
+  const [callInfoOpen, setCallInfoOpen] = useState(false);
 
   useEffect(() => {
     api.get<{ unread: number }>('/admin/notifications/inbox/count').then((d) => setUnread(d.unread)).catch(() => {});
@@ -143,7 +149,7 @@ export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
         {can.callInfo && (
           <button
             type="button"
-            onClick={() => router.push('/admin-actions/call-info')}
+            onClick={() => setCallInfoOpen(true)}
             className="inline-flex items-center gap-1.5 px-3 h-9 rounded-md bg-teal-600 text-white text-xs font-semibold shadow-sm hover:bg-teal-700 hover:shadow-md hover:scale-[1.02] transition-all"
           >
             <Info className="h-4 w-4" />
@@ -222,6 +228,13 @@ export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
       <EscalatedJobsModal
         open={escalatedOpen}
         onClose={() => setEscalatedOpen(false)}
+      />
+      {/* Call Info modal — date-range picker + result table. Shares the
+          same lift-state-to-navbar pattern as EscalatedJobsModal so we
+          don't stack multiple portal instances per page. */}
+      <CallInfoModal
+        open={callInfoOpen}
+        onClose={() => setCallInfoOpen(false)}
       />
     </header>
   );
