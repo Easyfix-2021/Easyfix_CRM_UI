@@ -5,7 +5,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Select } from '@/components/ui/select';
 import { SearchSelect } from '@/components/ui/search-select';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { api, ApiError } from '@/lib/api';
@@ -336,7 +335,7 @@ function FormSections({ form, set, lk }: {
           <Field label="Date of birth"><Input type="date" value={form.date_of_birth} onChange={(e) => set('date_of_birth', e.target.value)} /></Field>
           <Field label="Age"><Input type="number" min={16} max={90} value={form.efr_age} onChange={(e) => set('efr_age', e.target.value)} /></Field>
           <Field label="Marital status">
-            <Select value={form.efr_marital_status} onChange={(e) => set('efr_marital_status', e.target.value)} placeholder="— Select —" options={[
+            <SearchSelect value={form.efr_marital_status} onChange={(v) => set('efr_marital_status', v)} placeholder="— Select —" options={[
               { value: 'Single', label: 'Single' }, { value: 'Married', label: 'Married' },
               { value: 'Divorced', label: 'Divorced' }, { value: 'Widowed', label: 'Widowed' },
             ]} />

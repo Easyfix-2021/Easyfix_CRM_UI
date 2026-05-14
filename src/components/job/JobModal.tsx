@@ -8,7 +8,6 @@ import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Select } from '@/components/ui/select';
 import { SearchSelect } from '@/components/ui/search-select';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
 import { Switch } from '@/components/ui/switch';
@@ -1923,9 +1922,9 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
               />
             </Field>
             <Field label="Job Type *">
-              <Select
+              <SearchSelect
                 value={f.job_type}
-                onChange={(e) => set('job_type', e.target.value)}
+                onChange={(v) => set('job_type', v)}
                 options={[
                   { value: 'Installation',   label: 'Installation' },
                   { value: 'Repair',         label: 'Repair' },
@@ -1996,9 +1995,9 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
               />
             </Field>
             <Field label="Collected By *">
-              <Select
+              <SearchSelect
                 value={f.collected_by}
-                onChange={(e) => set('collected_by', e.target.value)}
+                onChange={(v) => set('collected_by', v)}
                 options={[
                   { value: 'Easyfix', label: 'Easyfix' },
                   { value: 'Client',  label: 'Client' },

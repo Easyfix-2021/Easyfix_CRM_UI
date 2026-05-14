@@ -1,7 +1,14 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { api } from './api';
-import type { SelectOption } from '@/components/ui/select';
+/*
+ * `SelectOption` here is an alias of `SearchOption` (same {value, label}
+ * shape). The legacy `Select` component is no longer used anywhere
+ * in JSX after the 2026-05-14 SearchSelect migration; this type
+ * import now points at the canonical search-select definition so we
+ * don't carry a phantom dependency on the unused Select component.
+ */
+import type { SearchOption as SelectOption } from '@/components/ui/search-select';
 import { formatEasyfixerName } from './utils';
 
 /*

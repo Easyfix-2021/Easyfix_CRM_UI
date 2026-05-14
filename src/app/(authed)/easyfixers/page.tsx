@@ -4,7 +4,6 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Plus, Search, Filter, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Select } from '@/components/ui/select';
 import { Card, CardContent } from '@/components/ui/card';
 import { SearchSelect } from '@/components/ui/search-select';
 import { api } from '@/lib/api';
@@ -137,10 +136,10 @@ export default function EasyfixersPage() {
                 onChange={(v) => setFilters({ ...filters, serviceCategory: v })}
                 options={lk.serviceCategories.map((c) => ({ value: c.service_catg_name, label: c.service_catg_name }))}
               />
-              <Select placeholder="Any verified status" value={filters.isVerified} onChange={(e) => setFilters({ ...filters, isVerified: e.target.value })} options={[
+              <SearchSelect placeholder="Any verified status" value={filters.isVerified} onChange={(v) => setFilters({ ...filters, isVerified: v })} options={[
                 { value: 'true', label: 'Verified' }, { value: 'false', label: 'Not verified' },
               ]} />
-              <Select placeholder="Any active status" value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })} options={[
+              <SearchSelect placeholder="Any active status" value={filters.status} onChange={(v) => setFilters({ ...filters, status: v })} options={[
                 { value: '1', label: 'Active' }, { value: '0', label: 'Inactive' },
               ]} />
               <div className="md:col-span-4 flex justify-end">
