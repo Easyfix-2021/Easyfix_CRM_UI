@@ -3,7 +3,7 @@
 import * as React from 'react';
 import { useEffect, useState } from 'react';
 import { Sparkles, Search, CalendarCheck, History, Eye, Plus, X } from 'lucide-react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
 import { Input } from '@/components/ui/input';
@@ -1012,10 +1012,29 @@ function JobCommentsTab({ jobId }: { jobId: number }) {
 
 // ─── Images tab ─────────────────────────────────────────────────────
 function JobImagesTab({ images }: { images: Array<Record<string, unknown>> }) {
-  // Image storage convention from CLAUDE.md: filenames are stored bare; the
-  // public URL is `/easydoc/upload_jobs/<filename>`. Mirrors legacy CRM
-  // exactly (Nginx serves the easydoc tree).
-  const prefix = '/easydoc/upload_jobs/';
+  /*
+   * Image URL resolution (2026-05-14 ops update):
+   *
+   *   Use the backend redirect endpoint `/api/admin/jobs/images/:id/file`
+   *   instead of constructing /easydoc URLs client-side. The endpoint
+   *   reads the stored `tbl_job_image.image` value and decides:
+   *     1. If the file exists in S3 at Job_Images/<key> → 302 to a
+   *        presigned URL (5-min TTL).
+   *     2. Else → 302 to the legacy local URL `/easydoc/upload_jobs/<file>`.
+   *
+   *   This keeps the S3-or-local fallback decision SERVER-SIDE so the
+   *   frontend doesn't need to know the storage convention, and any
+   *   future move (e.g. migrating older filesystem images into S3)
+   *   doesn't require a frontend redeploy.
+   *
+   *   API base note: the api wrapper rewrites /api/* to the backend,
+   *   but a 302 redirect to a presigned URL OR /easydoc/* needs to be
+   *   FOLLOWED by the browser. Setting `src` to the absolute API path
+   *   triggers a normal browser fetch that follows redirects naturally.
+   */
+  const apiBase = process.env.NEXT_PUBLIC_API_URL || '/api';
+  const fileUrl = (imageId: string | number) => `${apiBase}/admin/jobs/images/${imageId}/file`;
+
   if (images.length === 0) {
     return (
       <div className="rounded-lg border bg-card p-8 text-center text-sm text-muted-foreground">
@@ -1027,14 +1046,15 @@ function JobImagesTab({ images }: { images: Array<Record<string, unknown>> }) {
     <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
       {images.map((img) => {
         const id       = String(img.image_id ?? '');
-        const filename = String(img.image ?? '');
+        const stored   = String(img.image ?? '');
         const stage    = String(img.job_stage ?? '');
         const category = String(img.image_category ?? '');
-        if (!filename) return null;
+        if (!id || !stored) return null;
+        const url = fileUrl(id);
         return (
           <a
             key={id}
-            href={`${prefix}${filename}`}
+            href={url}
             target="_blank"
             rel="noopener noreferrer"
             className="block border rounded-md overflow-hidden hover:shadow-sm transition-shadow"
@@ -1042,13 +1062,13 @@ function JobImagesTab({ images }: { images: Array<Record<string, unknown>> }) {
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={`${prefix}${filename}`}
-              alt={stage || filename}
+              src={url}
+              alt={stage || stored}
               className="w-full h-32 object-cover bg-muted"
               loading="lazy"
             />
             <div className="px-2 py-1 text-[10px] text-muted-foreground truncate">
-              {stage || category || filename}
+              {stage || category || stored}
             </div>
           </a>
         );
@@ -1643,37 +1663,21 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
         const servicesPayload = buildServicesPayload();
 
         /*
-         * If a Job Image was attached, upload it FIRST to
-         * /api/shared/upload?category=job_files. The endpoint returns
-         * the canonical filename (with a generated unique prefix), which
-         * we then pass on the create payload — backend INSERTs it into
-         * tbl_job_image inside the same job-create transaction.
+         * Job Image: uploaded as a SECOND step AFTER the job is
+         * created, against POST /admin/jobs/:id/images. That endpoint
+         * routes the binary to S3 at Job_Images/<jobId>_<seq> (per ops
+         * spec 2026-05-14) with the local filesystem as fallback when
+         * S3 is disabled / unreachable. The jobId is needed in the key
+         * so the upload necessarily happens after job creation.
          *
-         * Done before the main POST so a failed upload aborts the
-         * booking cleanly (preferable to creating a job and then
-         * orphan-losing the image attachment).
+         * Trade-off vs. uploading first: if the image upload fails,
+         * the job still exists without an image. We surface a
+         * non-fatal warning rather than rolling back the job — the
+         * operator can re-attach the image from the View screen
+         * later, and the booking itself is the higher-stakes record.
          */
-        let jobImageFilename: string | undefined;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const imageFile = (f as unknown as { job_image_file?: File }).job_image_file;
-        if (imageFile instanceof File) {
-          try {
-            const fd = new FormData();
-            fd.append('file', imageFile);
-            fd.append('category', 'job_files');
-            const uploadResp = await api.post<{ filename: string; url: string }>(
-              '/shared/upload',
-              fd,
-            );
-            jobImageFilename = uploadResp.filename;
-          } catch (upErr) {
-            setError(upErr instanceof ApiError
-              ? `Image upload failed: ${upErr.message}`
-              : 'Image upload failed');
-            setSubmitting(false);
-            return;
-          }
-        }
 
         const payload = {
           fk_client_id: Number(f.fk_client_id),
@@ -1724,13 +1728,29 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
           // job_data audit trail. Left as a passive payload field so
           // we don't break callers that ignore it.
           c_questionaire_id: f.c_questionaire_id ? Number(f.c_questionaire_id) : undefined,
-          // Booking-time job image. Filename only — the file itself
-          // already lives on disk via the /shared/upload pre-step
-          // above. Backend INSERTs into tbl_job_image inside the
-          // create transaction so create+image succeed/fail together.
-          job_image_filename: jobImageFilename,
         };
         const saved = await api.post<Job>('/admin/jobs', payload);
+
+        /*
+         * Two-step image upload (new S3 flow). Failure to upload the
+         * image after the job is created is NOT a booking failure —
+         * we log a non-fatal warning so ops know to retry from the
+         * View screen, then move on.
+         */
+        if (imageFile instanceof File && saved?.job_id) {
+          try {
+            const fd = new FormData();
+            fd.append('file', imageFile);
+            await api.post(`/admin/jobs/${saved.job_id}/images`, fd);
+          } catch (upErr) {
+            // Non-fatal: job is saved; just warn in the console so
+            // ops can see what happened. The operator gets the job
+            // detail view and can re-attach the image there.
+            // eslint-disable-next-line no-console
+            console.warn('Job created but image upload failed:', upErr);
+          }
+        }
+
         onSaved(saved);
       }
     } catch (err) {
@@ -3521,9 +3541,14 @@ function CustomerHistoryDialog({
             </div>
           )}
         </div>
-        <DialogFooter className="px-6 py-3 border-t bg-muted/30">
+        {/* Plain <div> footer — DialogFooter's built-in `-mx-6 -mb-6`
+            negative margins assume a p-6 DialogContent, but this
+            dialog uses p-0 (inner sections own their padding), so
+            the negatives would push the footer outside the modal
+            box. Matches the EscalatedJobsModal pattern. */}
+        <div className="px-6 py-3 border-t bg-muted/30 flex items-center justify-end gap-2">
           <Button variant="outline" onClick={onClose}>Close</Button>
-        </DialogFooter>
+        </div>
       </DialogContent>
       {/* Stacked view-job modal — opens INSIDE the history dialog so
           closing it returns to the history list, not all the way out
