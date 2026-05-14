@@ -347,18 +347,56 @@ export function Sidebar() {
   }, [menus, allowedMenuIds]);
 
   /*
+   * Single globally-active href across the entire sidebar.
+   *
+   * Bug this prevents: when two menu rows in DIFFERENT parents share a
+   * pathname (e.g. "App Job" → /my-orders and a Manage-Orders submenu
+   * → /my-orders?focus=X), both used to highlight simultaneously
+   * because each parent picked its own most-specific match in
+   * isolation. Per-parent scoring is correct within a parent but
+   * doesn't reconcile across parents.
+   *
+   * Fix: collect every renderable href once (leaves + children),
+   * filter to those that match the current URL via isRouteActive,
+   * and pick the LONGEST one — the most-specific URL that still
+   * matches is the actual destination the operator clicked.
+   * Everything else stays inactive. Mirrors the legacy CRM's
+   * "exact match wins" behaviour.
+   */
+  const globalActiveHref = useMemo(() => {
+    const all: string[] = [];
+    for (const parent of tree) {
+      if (!parent.children || parent.children.length === 0) {
+        all.push(legacyToRoute(parent.menu_name, parent.url));
+      } else {
+        for (const c of parent.children) {
+          all.push(legacyToRoute(c.menu_name, c.url));
+        }
+      }
+    }
+    const matches = all
+      .filter((h) => h !== '#' && isRouteActive(pathname, currentSearch, h))
+      .sort((a, b) => b.length - a.length);
+    return matches[0] ?? null;
+  }, [tree, pathname, currentSearch]);
+
+  /*
    * Accordion: exactly one parent open at a time. On initial render or route
-   * change, auto-open the parent whose child matches the current URL. When
-   * the user clicks a parent, close all others and toggle this one.
+   * change, auto-open the parent whose child OWNS the globally-active href.
+   * Using the global match (not per-parent isRouteActive) ensures the opened
+   * parent is the same one whose row visually highlights — otherwise an
+   * earlier-in-tree parent that incidentally matched the same pathname could
+   * auto-open instead of the right one.
    */
   const autoOpenLabel = useMemo(() => {
+    if (!globalActiveHref) return null;
     for (const p of tree) {
-      if (p.children.some((c) => isRouteActive(pathname, currentSearch, legacyToRoute(c.menu_name, c.url)))) {
+      if (p.children?.some((c) => legacyToRoute(c.menu_name, c.url) === globalActiveHref)) {
         return p.menu_name;
       }
     }
     return null;
-  }, [tree, pathname, currentSearch]);
+  }, [tree, globalActiveHref]);
 
   const [openParent, setOpenParent] = useState<string | null>(autoOpenLabel);
   /*
@@ -413,7 +451,9 @@ export function Sidebar() {
             // Parent with no children → render as leaf link.
             if (!parent.children || parent.children.length === 0) {
               const href = legacyToRoute(parent.menu_name, parent.url);
-              const active = isRouteActive(pathname, currentSearch, href);
+              // Compare against the globally-resolved active href so
+              // siblings with overlapping URLs don't all light up.
+              const active = href === globalActiveHref;
               return (
                 <li key={parent.menu_id}>
                   <Link
@@ -432,12 +472,16 @@ export function Sidebar() {
               );
             }
 
-            // Parent with children → accordion header + list.
-            const activeChildHref = parent.children
-              .map((c) => legacyToRoute(c.menu_name, c.url))
-              .filter((href) => isRouteActive(pathname, currentSearch, href))
-              .sort((a, b) => b.length - a.length)[0] ?? null;
-            const anyChildActive = activeChildHref !== null;
+            // Parent with children → accordion header + list. The
+            // single globally-active href (computed above) decides
+            // which child lights up; this parent is "active" only if
+            // ITS list contains that href. Previously each parent
+            // computed its own most-specific match in isolation, which
+            // caused multiple parents to light up at once when two of
+            // their children shared a pathname (App Job vs Manage Orders).
+            const anyChildActive = globalActiveHref !== null && parent.children
+              .some((c) => legacyToRoute(c.menu_name, c.url) === globalActiveHref);
+            const activeChildHref = anyChildActive ? globalActiveHref : null;
 
             return (
               <li key={parent.menu_id}>
