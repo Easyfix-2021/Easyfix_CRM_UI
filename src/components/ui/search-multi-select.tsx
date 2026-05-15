@@ -141,6 +141,31 @@ export function SearchMultiSelect({
     return () => root.removeEventListener('wheel', handler, { capture: true });
   }, [open]);
 
+  /*
+   * Focus-trap workaround — see SearchSelect for the full rationale.
+   * Window-capture focusin/focusout listeners stopPropagation on
+   * events targeting [data-portal-popover] descendants so Radix
+   * Dialog's FocusScope (document-capture) never sees them and never
+   * pulls focus back to the dialog content. Without this, the
+   * "Type to filter…" input can't be typed into.
+   */
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: FocusEvent) => {
+      const target = e.target as Element | null;
+      if (target?.closest?.('[data-portal-popover]')) {
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+      }
+    };
+    window.addEventListener('focusin', handler, true);
+    window.addEventListener('focusout', handler, true);
+    return () => {
+      window.removeEventListener('focusin', handler, true);
+      window.removeEventListener('focusout', handler, true);
+    };
+  }, [open]);
+
   function toggle(opt: SearchOption) {
     const key = String(opt.value);
     if (selectedSet.has(key)) {

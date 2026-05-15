@@ -28,10 +28,12 @@ RUN npm ci
 FROM node:20-alpine AS builder
 WORKDIR /app
 
-# Build-time arg from the GitHub workflow. Defaults to a placeholder so
-# `docker build` without --build-arg fails loud at runtime instead of
-# silently baking localhost.
-ARG NEXT_PUBLIC_API_URL=http://placeholder.invalid/api
+# Build-time arg from the GitHub workflow. NO default — leaving it
+# empty here forces the sanity check below to fail loud when someone
+# runs `docker build` without --build-arg. Silently baking a wrong /
+# placeholder URL would produce a working-looking image that 404s on
+# every API call once deployed, which is far worse than a build error.
+ARG NEXT_PUBLIC_API_URL=
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 
 # QuickSight bridge URLs. Same build-time mechanic as the API URL —
@@ -49,16 +51,41 @@ ENV NEXT_PUBLIC_PROD_QUICKSIGHT_URL=${NEXT_PUBLIC_PROD_QUICKSIGHT_URL}
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
+# Sanity-check the bake BEFORE building so we don't waste 30s+ on a
+# Next.js build that produces an unusable image. Three guarantees:
+#   1. Non-empty — caller passed --build-arg NEXT_PUBLIC_API_URL=…
+#   2. Not localhost / not a placeholder — we'd never ship a bundle
+#      that talks to localhost in prod.
+#   3. Ends with `/api` — `src/lib/api.ts` constructs requests as
+#      `${NEXT_PUBLIC_API_URL}${path}` where path is `/admin/…`
+#      (no `/api` prefix). The backend serves at `/api/admin/…`, so
+#      the bundle MUST be baked with a base ending in `/api`. The
+#      previous version of this check rejected the CORRECT URL by
+#      mistake — fixed 2026-05-15.
+RUN if [ -z "$NEXT_PUBLIC_API_URL" ]; then \
+      echo "✗ NEXT_PUBLIC_API_URL not provided to docker build."; \
+      echo "  Pass --build-arg NEXT_PUBLIC_API_URL=<https://your-api/api>"; \
+      exit 1; \
+    fi; \
+    case "$NEXT_PUBLIC_API_URL" in \
+      *localhost*|*placeholder*) \
+        echo "✗ Refusing to bake a localhost/placeholder URL into the bundle: $NEXT_PUBLIC_API_URL"; \
+        exit 1 ;; \
+    esac; \
+    case "$NEXT_PUBLIC_API_URL" in \
+      */api|*/api/) ;; \
+      *) \
+        echo "✗ NEXT_PUBLIC_API_URL must end with '/api' (got: $NEXT_PUBLIC_API_URL)"; \
+        echo "  The frontend builds request URLs as <NEXT_PUBLIC_API_URL>/<path>"; \
+        echo "  where <path> starts with /admin, /auth, /shared, etc. — NOT with /api."; \
+        echo "  The backend serves at /api/admin/…, so the base MUST include /api."; \
+        exit 1 ;; \
+    esac; \
+    echo "✓ NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL"
+
 # Telemetry off — we don't want Next phoning home from CI.
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
-
-# Sanity-check the bake — fail the build if NEXT_PUBLIC_API_URL is empty
-# or still the placeholder. Catches a missing --build-arg before the
-# bad image hits ECR.
-RUN test -n "$NEXT_PUBLIC_API_URL" \
-    && [ "$NEXT_PUBLIC_API_URL" != "http://placeholder.invalid/api" ] \
-    || (echo "✗ NEXT_PUBLIC_API_URL not provided to docker build — refusing to ship a bundle baked with localhost" && exit 1)
 
 # ── Stage 3: Runner ──────────────────────────────────────────────────
 FROM node:20-alpine AS runner

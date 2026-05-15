@@ -24,11 +24,17 @@
 # Required GitHub Environment (org-level, name "Organisation Level Secrets") secrets:
 #   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
 #   QA_INSTANCE_ID, PROD_INSTANCE_ID
-#   QA_API_URL                http://10.30.2.30:5100/api  (baked into bundle)
-#   PROD_API_URL              (when prod is ready)
+#   QA_API_URL                https://qa.backend.easyfix.in/api  (must end with /api)
+#   PROD_API_URL              (when prod is ready — must end with /api)
 #   ECR_REGISTRY              902810393464.dkr.ecr.ap-south-1.amazonaws.com
 #   ECR_REPOSITORY_CRM_UI     easyfix/crm-ui
 #   MAIL_USERNAME / MAIL_PASSWORD   (optional — failure-alert SMTP)
+#
+# `*_API_URL` MUST end with `/api` — the FE's `src/lib/api.ts` builds
+# request URLs as `${NEXT_PUBLIC_API_URL}${path}` where `path` is
+# `/admin/…` etc. (no `/api` prefix), and the backend serves at
+# `/api/admin/…`. The Dockerfile sanity check enforces this and will
+# fail the build if the suffix is missing.
 #
 # `environment: 'Organisation Level Secrets'` is REQUIRED on every job
 # that reads org-level environment secrets — same rule as the backend

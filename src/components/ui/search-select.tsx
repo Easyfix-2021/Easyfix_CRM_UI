@@ -148,6 +148,42 @@ export function SearchSelect({
     return () => root.removeEventListener('wheel', handler, { capture: true });
   }, [open]);
 
+  /*
+   * Focus-trap workaround: Radix Dialog with `modal=true` uses
+   * `FocusScope` which listens for `focusin`/`focusout` on document
+   * and pulls focus back into the dialog content when it leaves.
+   * Our body-portaled popover is "outside" by that accounting — so
+   * when the operator clicks the filter input, focus lands for ~1ms
+   * and FocusScope immediately yanks it back. User can't type.
+   *
+   * Fix: `window`-capture listeners that `stopPropagation` /
+   * `stopImmediatePropagation` on focus events whose target lives
+   * inside `[data-portal-popover]`. Window-capture fires BEFORE
+   * document-capture in the event flow, so Radix's FocusScope
+   * listener never sees the event and never tries to refocus.
+   *
+   * This is symmetric to the wheel-trap above (Radix's
+   * `react-remove-scroll` interception) — same family of "modal
+   * infrastructure treats body-portaled siblings as outside" bugs,
+   * same shape of fix.
+   */
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: FocusEvent) => {
+      const target = e.target as Element | null;
+      if (target?.closest?.('[data-portal-popover]')) {
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+      }
+    };
+    window.addEventListener('focusin', handler, true);
+    window.addEventListener('focusout', handler, true);
+    return () => {
+      window.removeEventListener('focusin', handler, true);
+      window.removeEventListener('focusout', handler, true);
+    };
+  }, [open]);
+
   function pick(opt: SearchOption) {
     onChange(String(opt.value));
     setOpen(false);
