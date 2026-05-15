@@ -66,7 +66,9 @@ export function SearchMultiSelect({
   // wrapRef, so a single wrap check would close on every option click).
   const triggerRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
-  const { style: popStyle } = usePopoverPosition(open, triggerRef);
+  // popoverRef goes into the hook's rAF tracker so the popover follows
+  // the trigger imperatively on every paint frame (no chase-glitch).
+  const { style: popStyle } = usePopoverPosition(open, triggerRef, popoverRef);
 
   // Dedup by value (same rationale as SearchSelect — upstream lookups
   // occasionally have duplicate rows we don't want to render twice).
@@ -107,6 +109,37 @@ export function SearchMultiSelect({
 
   useEffect(() => { if (open) setTimeout(() => inputRef.current?.focus(), 0); }, [open]);
   useEffect(() => { if (!open) setQuery(''); }, [open]);
+
+  /*
+   * Wheel-trap to work around Radix Dialog's `react-remove-scroll` body
+   * lock — see SearchSelect for the full rationale. Capture-phase
+   * listener on the popover root fires after document-capture but before
+   * descendants; manually advances ul.scrollTop and stopPropagation()s
+   * so the event never reaches Radix's lock or the modal body.
+   *
+   * `deltaMode` normalisation matters for trackpad swipes that report
+   * line-mode (deltaMode=1) with tiny line counts — without the
+   * multiplier the scroll is imperceptible.
+   */
+  useEffect(() => {
+    if (!open) return;
+    const root = popoverRef.current;
+    if (!root) return;
+
+    const handler = (e: WheelEvent) => {
+      const ul = root.querySelector('ul') as HTMLUListElement | null;
+      if (!ul) return;
+      let delta = e.deltaY;
+      if (e.deltaMode === 1) delta *= 16;
+      else if (e.deltaMode === 2) delta *= ul.clientHeight;
+      ul.scrollTop += delta;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    root.addEventListener('wheel', handler, { passive: false, capture: true });
+    return () => root.removeEventListener('wheel', handler, { capture: true });
+  }, [open]);
 
   function toggle(opt: SearchOption) {
     const key = String(opt.value);
@@ -160,36 +193,25 @@ export function SearchMultiSelect({
       </button>
 
       {/*
-       * Portaled popover — same rationale as SearchSelect:
-       *   - escapes Dialog `overflow-y-auto` clipping
-       *   - `position: fixed` follows the trigger across ancestor scrolls
-       *   - auto-flips above the trigger when below is tight
-       *   - flex column + min-h-0 lets the option list scroll within
-       *     whatever viewport space the hook allocates
+       * Portaled popover, ALWAYS below the trigger (no flip). Plain
+       * block layout — popover root has no max-height; the inner
+       * `<ul max-h-72>` owns the scroll region. The wheel-trap
+       * useEffect intercepts wheels inside the popover unconditionally
+       * so the modal never scrolls. `data-portal-popover` marker
+       * keeps the dialog open when clicking inside (see dialog.tsx).
        */}
       {open && typeof document !== 'undefined' && createPortal(
         <div
           ref={popoverRef}
           style={popStyle}
-          /*
-           * `data-portal-popover` is the marker our Dialog primitive's
-           * `onInteractOutside` looks for to keep the dialog open and
-           * let clicks through. Without it, Radix DismissableLayer
-           * intercepts every click inside this popover. See dialog.tsx.
-           *
-           * `overflow-hidden` is LOAD-BEARING — see search-select.tsx
-           * for the rationale. Without it the inner <ul> won't scroll
-           * even though it has `flex-1 min-h-0 overflow-y-auto`,
-           * because `max-height` alone doesn't actually clip content.
-           */
           data-portal-popover=""
           /*
-           * `overscroll-contain` blocks scroll-chaining into the modal
-           * body. Without it, scrolling inside the popover would bubble
-           * up once the ul hits its top/bottom or when there's no
-           * overflow at all — making the modal scroll instead.
+           * Flex column. The hook's `maxHeight` caps the popover;
+           * `overflow-hidden` enforces the cap; filter + footer are
+           * `shrink-0`; the ul gets `flex-1 min-h-0` to fill the
+           * remaining height and scroll within it.
            */
-          className="flex flex-col overflow-hidden overscroll-contain rounded-md border bg-white shadow-lg"
+          className="flex flex-col overflow-hidden rounded-md border bg-white shadow-lg"
         >
           <div className="flex items-center gap-2 px-3 py-2 border-b shrink-0">
             <Search className="h-4 w-4 text-muted-foreground" />

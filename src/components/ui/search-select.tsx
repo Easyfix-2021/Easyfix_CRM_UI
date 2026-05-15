@@ -50,7 +50,10 @@ export function SearchSelect({
    */
   const triggerRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
-  const { style: popStyle } = usePopoverPosition(open, triggerRef);
+  // popoverRef is passed in so the hook's rAF loop can write
+  // `style.top/left/maxHeight` directly to the DOM node — bypassing
+  // React state for smooth modal-scroll tracking.
+  const { style: popStyle } = usePopoverPosition(open, triggerRef, popoverRef);
 
   /*
    * Deduplicate by `value` — if the caller passes rows with identical values
@@ -97,6 +100,53 @@ export function SearchSelect({
   useEffect(() => { if (open) setTimeout(() => inputRef.current?.focus(), 0); }, [open]);
   useEffect(() => { if (!open) setQuery(''); }, [open]);
   useEffect(() => { setActiveIdx(0); }, [query, open]);
+
+  /*
+   * Wheel-trap for the trackpad-swipe case.
+   *
+   * The scrollbar-drag case already works (proven by user testing) — the
+   * ul IS scrollable, `scrollTop` writes land correctly. What doesn't
+   * work is the trackpad/mousewheel gesture. The culprit: Radix Dialog
+   * with `modal=true` ships `react-remove-scroll`, which attaches a
+   * document-level wheel listener that `preventDefault`s scroll events
+   * on elements outside its allowed scroll zone. Our body-portaled
+   * popover is "outside" by that accounting, so its native wheel-driven
+   * scroll is suppressed.
+   *
+   * Workaround: this handler runs in CAPTURE phase on the popover root,
+   * which fires AFTER document-level capture (Radix) but BEFORE any
+   * descendant handler. We:
+   *   1. Read deltaY, normalising for `deltaMode` (some trackpads
+   *      report line-mode with tiny deltas like 1–3 that scroll
+   *      imperceptibly without the multiplier).
+   *   2. Advance the ul's `scrollTop` directly — direct property
+   *      mutation, not a "default action", so it works even if Radix
+   *      already preventDefault'd the native scroll.
+   *   3. `stopPropagation` so the event doesn't bubble to the modal
+   *      body and trigger any other ancestor scroll machinery.
+   *
+   * `passive: false` is required for the listener to be able to call
+   * preventDefault (React's onWheel prop is passive — no good).
+   */
+  useEffect(() => {
+    if (!open) return;
+    const root = popoverRef.current;
+    if (!root) return;
+
+    const handler = (e: WheelEvent) => {
+      const ul = root.querySelector('ul') as HTMLUListElement | null;
+      if (!ul) return;
+      let delta = e.deltaY;
+      if (e.deltaMode === 1) delta *= 16;          // line mode → ~16px/line
+      else if (e.deltaMode === 2) delta *= ul.clientHeight; // page mode
+      ul.scrollTop += delta;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    root.addEventListener('wheel', handler, { passive: false, capture: true });
+    return () => root.removeEventListener('wheel', handler, { capture: true });
+  }, [open]);
 
   function pick(opt: SearchOption) {
     onChange(String(opt.value));
@@ -147,44 +197,34 @@ export function SearchSelect({
 
       {/*
        * Popover renders through a portal into <body> so it escapes the
-       * Dialog's `overflow-y-auto` clip. Positioning is `fixed` (driven
-       * by usePopoverPosition) so it follows the trigger regardless of
-       * which ancestor scroll container scrolls. `bg-white` (vs the
-       * `bg-popover` token) keeps the panel fully opaque when it floats
-       * over form inputs inside a modal.
+       * Dialog's `overflow-y-auto` clip. Positioning is `fixed` directly
+       * BELOW the trigger (no flip — see `usePopoverPosition`).
        *
-       * `flex` + `min-h-0` on the body + `flex-1` on the ul lets the
-       * option list shrink + scroll within the available viewport space
-       * computed by the hook — no second internal `max-h` cap needed.
+       * Layout is plain block flow (NOT flex). The popover root has no
+       * max-height; total height = filter input + ul (capped at
+       * `max-h-72`). This keeps the scrollable region size predictable
+       * regardless of viewport — long lists scroll the ul, short lists
+       * just fit. The wheel-trap useEffect above intercepts wheels
+       * inside the popover unconditionally.
+       *
+       * `data-portal-popover` is the marker `dialog.tsx`'s
+       * `onInteractOutside` looks for to keep the dialog open when
+       * a click lands inside this popover (clicks on body-level
+       * portal siblings are "outside" by Radix's accounting).
        */}
       {open && typeof document !== 'undefined' && createPortal(
         <div
           ref={popoverRef}
           style={popStyle}
-          /*
-           * `data-portal-popover` is the marker our Dialog primitive's
-           * `onInteractOutside` looks for to KEEP the dialog open when
-           * the click lands inside this popover. Without it, Radix's
-           * DismissableLayer treats the portaled popover as "outside"
-           * the dialog (since it's a body-level sibling of the dialog
-           * content) and either closes the dialog or eats the click
-           * before it can reach our option onClick. See dialog.tsx.
-           *
-           * `overflow-hidden` on the popover root is LOAD-BEARING:
-           * without it, the inner `<ul flex-1 min-h-0 overflow-y-auto>`
-           * never engages its scrollbar because `max-height` alone
-           * doesn't visually clip content — adding overflow-hidden
-           * enforces the cap and lets the ul shrink under min-h-0.
-           */
           data-portal-popover=""
           /*
-           * `overscroll-contain` on the popover root + the inner ul
-           * prevents scroll-chaining into the modal body. Without it,
-           * scrolling inside the dropdown bubbles up to ancestors once
-           * the ul reaches its top/bottom boundary (or when there's no
-           * overflow), making the modal scroll instead of the popover.
+           * Flex column so the inner ul fills whatever vertical
+           * space the hook's `maxHeight` allocates minus the filter
+           * row. `overflow-hidden` enforces the maxHeight cap (CSS
+           * max-height alone doesn't actually clip content — it
+           * advisory-caps but lets overflow paint past).
            */
-          className="flex flex-col overflow-hidden overscroll-contain rounded-md border bg-white shadow-lg"
+          className="flex flex-col overflow-hidden rounded-md border bg-white shadow-lg"
         >
           <div className="flex items-center gap-2 px-3 py-2 border-b shrink-0">
             <Search className="h-4 w-4 text-muted-foreground" />
@@ -197,6 +237,9 @@ export function SearchSelect({
               className="flex-1 bg-transparent outline-none text-sm placeholder:text-muted-foreground"
             />
           </div>
+          {/* `flex-1 min-h-0` = fills remaining height + can shrink
+              below content size. `overflow-y-auto overscroll-contain`
+              = native scrollbar + boundary chain stops here. */}
           <ul className="flex-1 min-h-0 overflow-y-auto overscroll-contain py-1 text-sm" role="listbox">
             {filtered.length === 0 && (
               <li className="px-3 py-2 text-muted-foreground">{emptyText}</li>

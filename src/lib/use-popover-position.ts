@@ -1,146 +1,165 @@
 'use client';
 
-import { useEffect, useLayoutEffect, useState, type RefObject, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject, type CSSProperties } from 'react';
 
 /*
- * usePopoverPosition — viewport-aware fixed positioning for a popover
- * (combobox / dropdown / menu) that renders via a portal.
+ * usePopoverPosition — fixed-positioned popover anchored under the
+ * trigger, with smooth (rAF-driven) tracking when the trigger moves.
  *
- * Solves two problems the older inline `position: absolute` popovers
- * could not:
+ * Behaviour:
+ *   - Always positions directly BELOW the trigger (no flip-above).
+ *   - Width matches the trigger (default) so the popover lines up
+ *     under the closed button visually.
+ *   - `maxHeight` is computed dynamically from viewport space below
+ *     the trigger, clamped to [minHeight, maxHeight]. Combined with
+ *     `overflow-hidden` + flex layout on the popover root, this gives
+ *     the inner ul a clean, reliable height budget to scroll within.
+ *   - **Tracks the trigger via `requestAnimationFrame`** so when the
+ *     modal body (or any ancestor) scrolls, the popover follows
+ *     smoothly on every paint. No React state in the loop — the rAF
+ *     callback writes `style.top/left` directly to the popover DOM
+ *     node, so there's zero render-cycle lag. This eliminates the
+ *     "chase-glitch" of state-driven tracking.
  *
- *  1. ESCAPE OVERFLOW. Inside a Dialog (or any container with
- *     `overflow-y-auto` / `overflow-hidden`), an absolutely-positioned
- *     popover gets clipped at the container edge — the option list
- *     disappears off the bottom or auto-scrolls the modal body. Portals
- *     + `position: fixed` (relative to the viewport) sidestep both.
- *
- *  2. FLIP UP WHEN BELOW IS TIGHT. The hook measures the trigger's
- *     viewport rectangle on every open, scroll, and resize. If there
- *     isn't enough room below for the popover's max height, it places
- *     the popover above the trigger instead (and shrinks it to the
- *     larger of the two gaps if neither side is comfortable). The
- *     caller doesn't pick a direction — the hook decides per render.
+ * Why rAF instead of a scroll listener:
+ *   A scroll listener fires per scroll event, which the browser may
+ *   throttle. setState inside the listener won't land in the DOM
+ *   until React's next render → paint cycle (1–2 frames later).
+ *   On a 60fps modal scroll that's enough lag to look like the
+ *   popover is chasing. rAF runs synchronously with each paint, and
+ *   imperative `style.top = …` mutates the DOM before the same frame
+ *   commits, so the popover moves with the trigger pixel-perfect.
  *
  * Returns:
- *   - `style`: a CSSProperties object the caller spreads onto the
- *     portal popover root. Includes `position: fixed`, `left`, `width`,
- *     `top` or `bottom` (depending on flip), `maxHeight`, and `zIndex`.
- *   - `placement`: `"bottom"` or `"top"` — useful if the caller wants
- *     to flip a corner radius / arrow / shadow direction.
- *
- * Notes:
- *   - The scroll listener uses capture (`true` 3rd arg) so it fires
- *     when ANY ancestor scroll container moves (e.g. a Dialog body) —
- *     not only the document. Without capture, scrolling inside the
- *     modal would leave the popover stuck at the wrong screen position.
- *   - `useLayoutEffect` keeps the popover painted at the right place on
- *     first render; using `useEffect` would briefly flash the popover
- *     at (0,0) before the position kicks in.
+ *   - `style`: initial style for first paint. Spread onto the popover
+ *     root. The rAF loop will OVERWRITE `top` and `left` directly on
+ *     the DOM node after mount — the React style only seeds the
+ *     first frame so the popover doesn't flash at (0,0).
+ *   - `popoverRef`: ref the caller MUST attach to the popover root.
+ *     The rAF loop uses this to write style imperatively.
  */
 
 type Options = {
-  /*
-   * Hard cap on popover height in pixels. The hook will shrink the
-   * computed maxHeight further when there isn't enough space on
-   * either side. Default 320px matches Tailwind's `max-h-80`, which
-   * comfortably holds 8–10 dropdown rows + filter input + footer.
-   */
-  maxHeight?: number;
-  /*
-   * Gap in pixels between the trigger edge and the popover edge.
-   * Default 4px — matches the old `mt-1` (4px) spacing.
-   */
+  /* Gap between trigger bottom and popover top. Default 4px. */
   gap?: number;
-  /*
-   * When true (default), the popover width matches the trigger width
-   * exactly. When false, the popover gets `minWidth` of the trigger
-   * but can grow wider — useful for option lists with long labels.
-   */
+  /* Match trigger width (default) vs use as minWidth only. */
   matchTriggerWidth?: boolean;
+  /* Upper bound on popover height (px). Default 400. */
+  maxHeight?: number;
+  /* Floor when the trigger sits low in the viewport (px). Default 200. */
+  minHeight?: number;
 };
 
 export function usePopoverPosition(
   open: boolean,
   triggerRef: RefObject<HTMLElement | null>,
+  popoverRef: RefObject<HTMLElement | null>,
   options: Options = {},
-): { style: CSSProperties; placement: 'top' | 'bottom' } {
-  const { maxHeight = 320, gap = 4, matchTriggerWidth = true } = options;
+): { style: CSSProperties } {
+  const {
+    gap = 4,
+    matchTriggerWidth = true,
+    maxHeight = 400,
+    minHeight = 200,
+  } = options;
 
   const [style, setStyle] = useState<CSSProperties>({});
-  const [placement, setPlacement] = useState<'top' | 'bottom'>('bottom');
+  const rafRef = useRef<number | null>(null);
 
-  // useLayoutEffect so the popover gets its first paint at the correct
-  // place — preventing the (0,0) flash you get with useEffect.
+  // Compute the initial style synchronously so first paint is correct.
+  // After mount, the rAF loop owns top/left and overwrites them.
   useLayoutEffect(() => {
     if (!open) return;
-    const trig = triggerRef.current;
-    if (!trig) return;
+    if (!triggerRef.current) return;
 
-    function update() {
+    const t = triggerRef.current;
+    const r = t.getBoundingClientRect();
+    const viewW = window.innerWidth;
+    const viewH = window.innerHeight;
+
+    const spaceBelow = viewH - r.bottom - gap - 8;
+    const finalMaxHeight = Math.max(minHeight, Math.min(maxHeight, spaceBelow));
+
+    const desiredWidth = matchTriggerWidth ? r.width : Math.max(r.width, 220);
+    const maxLeft = viewW - desiredWidth - 8;
+    const left = Math.min(Math.max(8, r.left), Math.max(8, maxLeft));
+
+    setStyle({
+      position: 'fixed',
+      left,
+      top: r.bottom + gap,
+      ...(matchTriggerWidth ? { width: r.width } : { minWidth: r.width }),
+      maxHeight: finalMaxHeight,
+      zIndex: 60,
+      // Defensive: Radix Dialog sets `pointer-events: none` on <body>
+      // when modal=true. Our portaled popover is a body-level sibling
+      // of the dialog overlay. pointer-events doesn't inherit by
+      // default, but some browsers / wrapped layouts have caused it
+      // to silently drop wheel/click events on body-portaled siblings
+      // in past investigations. Explicit `auto` here is a belt-and-
+      // suspenders guarantee that the popover always receives events.
+      pointerEvents: 'auto',
+    });
+  }, [open, triggerRef, gap, matchTriggerWidth, maxHeight, minHeight]);
+
+  // rAF loop: imperatively update the popover's top/left every frame
+  // while open. This is what makes scroll-tracking smooth — no React
+  // state in the hot path, no render-cycle lag.
+  useEffect(() => {
+    if (!open) return;
+
+    let lastTop = -1;
+    let lastLeft = -1;
+    let lastWidth = -1;
+    let lastMaxH = -1;
+
+    function tick() {
       const t = triggerRef.current;
-      if (!t) return;
-      const r = t.getBoundingClientRect();
-      const viewH = window.innerHeight;
-      const viewW = window.innerWidth;
+      const p = popoverRef.current;
+      if (t && p) {
+        const r = t.getBoundingClientRect();
+        const viewH = window.innerHeight;
+        const viewW = window.innerWidth;
 
-      const spaceBelow = viewH - r.bottom - gap;
-      const spaceAbove = r.top - gap;
+        const spaceBelow = viewH - r.bottom - gap - 8;
+        const finalMaxHeight = Math.max(minHeight, Math.min(maxHeight, spaceBelow));
 
-      // Prefer below when it fits the requested maxHeight. Only flip
-      // above if (a) below is too tight AND (b) above has more room.
-      // This avoids unnecessary flips when both directions are
-      // adequate — operators expect "down" by default.
-      const flipUp = spaceBelow < maxHeight && spaceAbove > spaceBelow;
-      const chosenSpace = flipUp ? spaceAbove : spaceBelow;
-      // Leave at least 8px from the viewport edge so the popover
-      // doesn't kiss the bottom of the screen.
-      const finalMaxH = Math.max(120, Math.min(maxHeight, chosenSpace - 8));
+        const desiredWidth = matchTriggerWidth ? r.width : Math.max(r.width, 220);
+        const maxLeft = viewW - desiredWidth - 8;
+        const left = Math.min(Math.max(8, r.left), Math.max(8, maxLeft));
+        const top = r.bottom + gap;
 
-      // Clamp `left` so the popover doesn't run off the right edge of
-      // the viewport on narrow screens or when the trigger is near
-      // the right side. The 8px padding keeps it visually inset.
-      const desiredWidth = matchTriggerWidth ? r.width : Math.max(r.width, 220);
-      const maxLeft = viewW - desiredWidth - 8;
-      const left = Math.min(Math.max(8, r.left), Math.max(8, maxLeft));
-
-      const next: CSSProperties = {
-        position: 'fixed',
-        left,
-        ...(matchTriggerWidth ? { width: r.width } : { minWidth: r.width }),
-        maxHeight: finalMaxH,
-        // Above the Dialog overlay (which sits at z-50). Anything that
-        // floats over modals lives at z-[60]+ in this app.
-        zIndex: 60,
-      };
-      if (flipUp) {
-        next.bottom = viewH - r.top + gap;
-      } else {
-        next.top = r.bottom + gap;
+        // Only write to DOM when something changed — avoids needless
+        // style recalculations on idle frames.
+        if (top !== lastTop || left !== lastLeft) {
+          p.style.top = `${top}px`;
+          p.style.left = `${left}px`;
+          lastTop = top;
+          lastLeft = left;
+        }
+        if (matchTriggerWidth && r.width !== lastWidth) {
+          p.style.width = `${r.width}px`;
+          lastWidth = r.width;
+        }
+        if (finalMaxHeight !== lastMaxH) {
+          p.style.maxHeight = `${finalMaxHeight}px`;
+          lastMaxH = finalMaxHeight;
+        }
       }
-      setStyle(next);
-      setPlacement(flipUp ? 'top' : 'bottom');
+      rafRef.current = requestAnimationFrame(tick);
     }
 
-    update();
-
-    // Capture mode so we hear scrolls from ancestor scroll containers
-    // (Dialog body, page, sidebar) — not just window scroll. Without
-    // this, scrolling the modal would leave the popover stranded at
-    // a stale screen position.
-    window.addEventListener('scroll', update, true);
-    window.addEventListener('resize', update);
+    rafRef.current = requestAnimationFrame(tick);
     return () => {
-      window.removeEventListener('scroll', update, true);
-      window.removeEventListener('resize', update);
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
     };
-  }, [open, triggerRef, maxHeight, gap, matchTriggerWidth]);
+  }, [open, triggerRef, popoverRef, gap, matchTriggerWidth, maxHeight, minHeight]);
 
-  // When the popover closes, clear the computed style so the next open
-  // doesn't briefly paint at the LAST position before recomputing.
+  // Clear computed style on close so the next open doesn't briefly
+  // paint at the last position.
   useEffect(() => {
     if (!open) setStyle({});
   }, [open]);
 
-  return { style, placement };
+  return { style };
 }
