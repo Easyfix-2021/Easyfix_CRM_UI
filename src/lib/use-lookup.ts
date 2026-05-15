@@ -17,11 +17,11 @@ import { formatEasyfixerName } from './utils';
  * within a session, and a page-level refetch is always available via refresh().
  */
 
-type City = { city_id: number; city_name: string };
+type City = { city_id: number; city_name: string; state_id: number | null };
 type State = { state_id: number; state_name: string };
 type ServiceCategory = { service_catg_id: number; service_catg_name: string };
 type ServiceType = { service_type_id: number; service_type_name: string; service_catg_id: number };
-type ClientLite = { client_id: number; client_name: string };
+type ClientLite = { client_id: number; client_name: string; vertical_id: number | null };
 type UserLite = { user_id: number; user_name: string; role_name?: string };
 type RoleLite = { role_id: number; role_name: string; role_desc: string | null; role_status: number; group: string };
 type EasyfixerLite = { efr_id: number; efr_name: string; efr_no: string; city_name: string | null; is_technician_verified: boolean };

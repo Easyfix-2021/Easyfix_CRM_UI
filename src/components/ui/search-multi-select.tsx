@@ -1,8 +1,10 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Check, ChevronDown, Search, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { usePopoverPosition } from '@/lib/use-popover-position';
 import type { SearchOption } from './search-select';
 
 /*
@@ -59,6 +61,12 @@ export function SearchMultiSelect({
   const [query, setQuery] = useState('');
   const wrapRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Dual-ref outside-click + portal positioning — see search-select.tsx
+  // for the rationale (the portaled popover isn't a DOM descendant of
+  // wrapRef, so a single wrap check would close on every option click).
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const { style: popStyle } = usePopoverPosition(open, triggerRef);
 
   // Dedup by value (same rationale as SearchSelect — upstream lookups
   // occasionally have duplicate rows we don't want to render twice).
@@ -88,7 +96,10 @@ export function SearchMultiSelect({
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      const inWrap = wrapRef.current?.contains(target);
+      const inPopover = popoverRef.current?.contains(target);
+      if (!inWrap && !inPopover) setOpen(false);
     };
     document.addEventListener('mousedown', onDoc);
     return () => document.removeEventListener('mousedown', onDoc);
@@ -131,6 +142,7 @@ export function SearchMultiSelect({
   return (
     <div ref={wrapRef} className={cn('relative', className)}>
       <button
+        ref={triggerRef}
         type="button"
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
@@ -147,9 +159,39 @@ export function SearchMultiSelect({
         <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
       </button>
 
-      {open && (
-        <div className="absolute z-50 mt-1 w-full rounded-md border bg-white shadow-lg">
-          <div className="flex items-center gap-2 px-3 py-2 border-b">
+      {/*
+       * Portaled popover — same rationale as SearchSelect:
+       *   - escapes Dialog `overflow-y-auto` clipping
+       *   - `position: fixed` follows the trigger across ancestor scrolls
+       *   - auto-flips above the trigger when below is tight
+       *   - flex column + min-h-0 lets the option list scroll within
+       *     whatever viewport space the hook allocates
+       */}
+      {open && typeof document !== 'undefined' && createPortal(
+        <div
+          ref={popoverRef}
+          style={popStyle}
+          /*
+           * `data-portal-popover` is the marker our Dialog primitive's
+           * `onInteractOutside` looks for to keep the dialog open and
+           * let clicks through. Without it, Radix DismissableLayer
+           * intercepts every click inside this popover. See dialog.tsx.
+           *
+           * `overflow-hidden` is LOAD-BEARING — see search-select.tsx
+           * for the rationale. Without it the inner <ul> won't scroll
+           * even though it has `flex-1 min-h-0 overflow-y-auto`,
+           * because `max-height` alone doesn't actually clip content.
+           */
+          data-portal-popover=""
+          /*
+           * `overscroll-contain` blocks scroll-chaining into the modal
+           * body. Without it, scrolling inside the popover would bubble
+           * up once the ul hits its top/bottom or when there's no
+           * overflow at all — making the modal scroll instead.
+           */
+          className="flex flex-col overflow-hidden overscroll-contain rounded-md border bg-white shadow-lg"
+        >
+          <div className="flex items-center gap-2 px-3 py-2 border-b shrink-0">
             <Search className="h-4 w-4 text-muted-foreground" />
             <input
               ref={inputRef}
@@ -173,7 +215,7 @@ export function SearchMultiSelect({
               scrolling. "Select filtered" reads "Select all" when the
               query box is empty — matches operator intent without an
               extra prop. */}
-          <div className="flex items-center justify-between px-3 py-1.5 border-b bg-slate-50">
+          <div className="flex items-center justify-between px-3 py-1.5 border-b bg-slate-50 shrink-0">
             <span className="text-[11px] text-muted-foreground">
               {filtered.length} option{filtered.length === 1 ? '' : 's'} · {count} selected
             </span>
@@ -196,7 +238,7 @@ export function SearchMultiSelect({
               )}
             </div>
           </div>
-          <ul className="max-h-64 overflow-y-auto py-1 text-sm" role="listbox" aria-multiselectable>
+          <ul className="flex-1 min-h-0 overflow-y-auto overscroll-contain py-1 text-sm" role="listbox" aria-multiselectable>
             {filtered.length === 0 && (
               <li className="px-3 py-2 text-muted-foreground">{emptyText}</li>
             )}
@@ -229,7 +271,8 @@ export function SearchMultiSelect({
               );
             })}
           </ul>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

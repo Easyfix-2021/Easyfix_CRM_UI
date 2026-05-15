@@ -1,8 +1,10 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Check, ChevronDown, Search, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { usePopoverPosition } from '@/lib/use-popover-position';
 
 /*
  * Typeahead/combobox replacement for <select> when the option list is long
@@ -38,6 +40,17 @@ export function SearchSelect({
   const [activeIdx, setActiveIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
+  /*
+   * `triggerRef` measures the button for popover positioning; `popoverRef`
+   * exists so the outside-click listener can tell apart "clicked the
+   * portaled popover" (keep open) from "clicked outside everything"
+   * (close). The popover is no longer a DOM descendant of `wrapRef`
+   * after the portal switch, so a single wrap-based check would close
+   * the popover on every option click.
+   */
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const { style: popStyle } = usePopoverPosition(open, triggerRef);
 
   /*
    * Deduplicate by `value` — if the caller passes rows with identical values
@@ -70,7 +83,12 @@ export function SearchSelect({
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      // Clicks inside the trigger wrap OR the portaled popover both
+      // keep it open. Anything else closes.
+      const inWrap = wrapRef.current?.contains(target);
+      const inPopover = popoverRef.current?.contains(target);
+      if (!inWrap && !inPopover) setOpen(false);
     };
     document.addEventListener('mousedown', onDoc);
     return () => document.removeEventListener('mousedown', onDoc);
@@ -96,6 +114,7 @@ export function SearchSelect({
     <div ref={wrapRef} className={cn('relative', className)}>
       {/* The "closed" button looks like a native select. */}
       <button
+        ref={triggerRef}
         type="button"
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
@@ -126,13 +145,48 @@ export function SearchSelect({
         </div>
       </button>
 
-      {open && (
-        // Explicit `bg-white` (instead of `bg-popover`) guarantees the dropdown
-        // is fully opaque even when it floats over form inputs inside a modal.
-        // Previously the `bg-popover` token was resolving translucent, so the
-        // Schedule section text bled through behind the options list.
-        <div className="absolute z-50 mt-1 w-full rounded-md border bg-white shadow-lg">
-          <div className="flex items-center gap-2 px-3 py-2 border-b">
+      {/*
+       * Popover renders through a portal into <body> so it escapes the
+       * Dialog's `overflow-y-auto` clip. Positioning is `fixed` (driven
+       * by usePopoverPosition) so it follows the trigger regardless of
+       * which ancestor scroll container scrolls. `bg-white` (vs the
+       * `bg-popover` token) keeps the panel fully opaque when it floats
+       * over form inputs inside a modal.
+       *
+       * `flex` + `min-h-0` on the body + `flex-1` on the ul lets the
+       * option list shrink + scroll within the available viewport space
+       * computed by the hook — no second internal `max-h` cap needed.
+       */}
+      {open && typeof document !== 'undefined' && createPortal(
+        <div
+          ref={popoverRef}
+          style={popStyle}
+          /*
+           * `data-portal-popover` is the marker our Dialog primitive's
+           * `onInteractOutside` looks for to KEEP the dialog open when
+           * the click lands inside this popover. Without it, Radix's
+           * DismissableLayer treats the portaled popover as "outside"
+           * the dialog (since it's a body-level sibling of the dialog
+           * content) and either closes the dialog or eats the click
+           * before it can reach our option onClick. See dialog.tsx.
+           *
+           * `overflow-hidden` on the popover root is LOAD-BEARING:
+           * without it, the inner `<ul flex-1 min-h-0 overflow-y-auto>`
+           * never engages its scrollbar because `max-height` alone
+           * doesn't visually clip content — adding overflow-hidden
+           * enforces the cap and lets the ul shrink under min-h-0.
+           */
+          data-portal-popover=""
+          /*
+           * `overscroll-contain` on the popover root + the inner ul
+           * prevents scroll-chaining into the modal body. Without it,
+           * scrolling inside the dropdown bubbles up to ancestors once
+           * the ul reaches its top/bottom boundary (or when there's no
+           * overflow), making the modal scroll instead of the popover.
+           */
+          className="flex flex-col overflow-hidden overscroll-contain rounded-md border bg-white shadow-lg"
+        >
+          <div className="flex items-center gap-2 px-3 py-2 border-b shrink-0">
             <Search className="h-4 w-4 text-muted-foreground" />
             <input
               ref={inputRef}
@@ -143,7 +197,7 @@ export function SearchSelect({
               className="flex-1 bg-transparent outline-none text-sm placeholder:text-muted-foreground"
             />
           </div>
-          <ul className="max-h-64 overflow-y-auto py-1 text-sm" role="listbox">
+          <ul className="flex-1 min-h-0 overflow-y-auto overscroll-contain py-1 text-sm" role="listbox">
             {filtered.length === 0 && (
               <li className="px-3 py-2 text-muted-foreground">{emptyText}</li>
             )}
@@ -169,7 +223,8 @@ export function SearchSelect({
               );
             })}
           </ul>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

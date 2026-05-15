@@ -33,11 +33,50 @@ type DialogContentExtraProps = { hideClose?: boolean };
 export const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & DialogContentExtraProps
->(({ className, children, hideClose, ...props }, ref) => (
+>(({ className, children, hideClose, onInteractOutside, onPointerDownOutside, ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay />
     <DialogPrimitive.Content
       ref={ref}
+      /*
+       * Radix's `DismissableLayer` treats any click whose target isn't
+       * a DOM descendant of <Content> as "outside" — including clicks
+       * on PORTALED popovers (SearchSelect, SearchMultiSelect, …)
+       * which live as body-level siblings of <Content>. Without this
+       * override, every click on a popover option closes the dialog
+       * or gets eaten before reaching the option's onClick.
+       *
+       * The fix: portaled popovers carry `data-portal-popover` (see
+       * SearchSelect / SearchMultiSelect). When the outside-interaction
+       * target sits inside one of those, we `preventDefault()` to
+       * keep the dialog open AND let the underlying click propagate
+       * to the option handler normally.
+       *
+       * We override BOTH events because Radix fires `onPointerDownOutside`
+       * for pointer/mouse and `onInteractOutside` as a superset (also
+       * includes focus). Letting either through closes the dialog.
+       */
+      onPointerDownOutside={(e) => {
+        // Radix's CustomEvent.target points at the layer (not the
+        // original click target). The actual target is in
+        // `detail.originalEvent.target`. Always read THAT, not e.target.
+        const original = (e as unknown as { detail?: { originalEvent?: Event } })
+          .detail?.originalEvent?.target as Element | null;
+        if (original?.closest?.('[data-portal-popover]')) {
+          e.preventDefault();
+          return;
+        }
+        onPointerDownOutside?.(e);
+      }}
+      onInteractOutside={(e) => {
+        const original = (e as unknown as { detail?: { originalEvent?: Event } })
+          .detail?.originalEvent?.target as Element | null;
+        if (original?.closest?.('[data-portal-popover]')) {
+          e.preventDefault();
+          return;
+        }
+        onInteractOutside?.(e);
+      }}
       className={cn(
         'fixed left-1/2 top-1/2 z-50 grid w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 border bg-background p-6 shadow-lg sm:rounded-lg',
         // Suppresses the default browser focus outline that Radix's

@@ -418,27 +418,27 @@ export function EscalatedJobsModal({
                   clickable + shows the active-state arrow. */}
               <thead>
                 <tr>
-                  <SortHeader<Row> colKey="escalated_time"     sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Date &amp; Time Escalated</SortHeader>
-                  <SortHeader<Row> colKey="job_id"             sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-center whitespace-nowrap sticky top-0 z-10 bg-card">Job ID</SortHeader>
-                  <SortHeader<Row> colKey="client_name"        sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Client</SortHeader>
-                  <SortHeader<Row> colKey="city_name"          sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">City</SortHeader>
-                  <SortHeader<Row> colKey="job_stage_history"  sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Job Stage</SortHeader>
-                  <SortHeader<Row> colKey="job_status"         sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-center whitespace-nowrap sticky top-0 z-10 bg-card">Current Status</SortHeader>
-                  <SortHeader<Row> colKey="no_of_escalations"  sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-center whitespace-nowrap sticky top-0 z-10 bg-card">No of Escalations</SortHeader>
-                  <SortHeader<Row> colKey="escalated_from"     sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Escalated From</SortHeader>
-                  <SortHeader<Row> colKey="escalated_comments" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Reason For Escalation</SortHeader>
-                  <SortHeader<Row> colKey="escalated_by_name"  sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Escalated By</SortHeader>
-                  <SortHeader<Row> colKey="inprogress_action"  sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Team Action</SortHeader>
-                  <SortHeader<Row> colKey="completed_action"   sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Completed Action</SortHeader>
-                  <SortHeader<Row> colKey="closed_action"      sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Closed Action</SortHeader>
+                  <SortHeader col="escalated_time"     sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Date &amp; Time Escalated</SortHeader>
+                  <SortHeader col="job_id"             sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="!text-center whitespace-nowrap sticky top-0 z-10 bg-card">Job ID</SortHeader>
+                  <SortHeader col="client_name"        sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Client</SortHeader>
+                  <SortHeader col="city_name"          sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">City</SortHeader>
+                  <SortHeader col="job_stage_history"  sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Job Stage</SortHeader>
+                  <SortHeader col="job_status"         sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="!text-center whitespace-nowrap sticky top-0 z-10 bg-card">Current Status</SortHeader>
+                  <SortHeader col="no_of_escalations"  sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="!text-center whitespace-nowrap sticky top-0 z-10 bg-card">No of Escalations</SortHeader>
+                  <SortHeader col="escalated_from"     sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Escalated From</SortHeader>
+                  <SortHeader col="escalated_comments" sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Reason For Escalation</SortHeader>
+                  <SortHeader col="escalated_by_name"  sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Escalated By</SortHeader>
+                  <SortHeader col="inprogress_action"  sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Team Action</SortHeader>
+                  <SortHeader col="completed_action"   sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Completed Action</SortHeader>
+                  <SortHeader col="closed_action"      sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Closed Action</SortHeader>
                   {/* Escalated Hours sorts on the underlying
                       escalated_time so newer escalations cluster
                       together; the visible label is a derived
                       duration string which wouldn't sort numerically
                       ("9 hours" < "10 hours" alphabetically). */}
-                  <SortHeader<Row> colKey="escalated_time"     sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Escalated Hours</SortHeader>
-                  <SortHeader<Row> colKey="requested_date_time" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Original Appointment Date</SortHeader>
-                  <SortHeader<Row> colKey="no_of_escalations"  sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-center whitespace-nowrap sticky top-0 z-10 bg-card">Reopened</SortHeader>
+                  <SortHeader col="escalated_time"     sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Escalated Hours</SortHeader>
+                  <SortHeader col="requested_date_time" sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Original Appointment Date</SortHeader>
+                  <SortHeader col="no_of_escalations"  sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="!text-center whitespace-nowrap sticky top-0 z-10 bg-card">Reopened</SortHeader>
                 </tr>
               </thead>
               <tbody>

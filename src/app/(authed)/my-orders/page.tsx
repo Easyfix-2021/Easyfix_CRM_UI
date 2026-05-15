@@ -282,14 +282,14 @@ export default function MyOrdersPage() {
           <table className="data-table">
             <thead>
               <tr>
-                <SortHeader<JobRow> colKey="job_id"             sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="stick-col-head stick-left">Job #</SortHeader>
-                <SortHeader<JobRow> colKey="client_name"        sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Client</SortHeader>
-                <SortHeader<JobRow> colKey="customer_name"      sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Customer</SortHeader>
-                <SortHeader<JobRow> colKey="customer_mob_no"    sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Mobile</SortHeader>
-                <SortHeader<JobRow> colKey="city_name"          sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>City</SortHeader>
-                <SortHeader<JobRow> colKey="easyfixer_name"     sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Technician</SortHeader>
-                <SortHeader<JobRow> colKey="requested_date_time" sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Requested</SortHeader>
-                <SortHeader<JobRow> colKey="job_status"         sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Status</SortHeader>
+                <SortHeader col="job_id"             sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="stick-col-head stick-left">Job #</SortHeader>
+                <SortHeader col="client_name"        sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Client</SortHeader>
+                <SortHeader col="customer_name"      sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Customer</SortHeader>
+                <SortHeader col="customer_mob_no"    sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Mobile</SortHeader>
+                <SortHeader col="city_name"          sortBy={sortKey} sortDir={sortDir} onSort={toggle}>City</SortHeader>
+                <SortHeader col="easyfixer_name"     sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Technician</SortHeader>
+                <SortHeader col="requested_date_time" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Requested</SortHeader>
+                <SortHeader col="job_status"         sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Status</SortHeader>
                 <th className="stick-col-head stick-right text-right">Action</th>
               </tr>
             </thead>

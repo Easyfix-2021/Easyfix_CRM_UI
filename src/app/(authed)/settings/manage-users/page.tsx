@@ -20,7 +20,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   UserCog, Users, Search, Plus, Pencil, Trash2,
   AlertTriangle, ChevronDown, ChevronRight, Info,
-  ArrowUp, ArrowDown, ArrowUpDown,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -28,6 +27,8 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { SearchSelect, type SearchOption } from '@/components/ui/search-select';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
+import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
+import { SortHeader, cycleSort } from '@/lib/use-sort';
 import { Switch } from '@/components/ui/switch';
 import { useCancelConfirm } from '@/lib/use-cancel-confirm';
 import { api, ApiError } from '@/lib/api';
@@ -65,7 +66,8 @@ type SortKey =
   | 'role_name' | 'city_name' | 'user_status' | 'insert_date';
 type SortDir = 'asc' | 'desc';
 
-const PAGE_SIZE = 100;
+// PAGE_SIZE is now operator-controlled via the TablePagination footer
+// dropdown. Default 10 matches the new spec.
 
 export default function ManageUsersPage() {
   const confirm = useConfirm();
@@ -97,22 +99,26 @@ export default function ManageUsersPage() {
   const [cityFilter, setCityFilter] = useState<number | ''>('');
   const [includeInactive, setIncludeInactive] = useState(false);
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState<TablePageSize>(10);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [editing, setEditing] = useState<User | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
 
-  const [sortBy,  setSortBy]  = useState<SortKey>('user_name');
+  /*
+   * sortBy is nullable so the 3rd click on a column can clear sort
+   * entirely (canonical cycle from `cycleSort` in `lib/use-sort`).
+   * When null, fetchList omits the sortBy/sortDir params so the BE
+   * falls back to its default order.
+   */
+  const [sortBy,  setSortBy]  = useState<SortKey | null>('user_name');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
 
   function onSort(col: SortKey) {
-    if (sortBy === col) {
-      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-    } else {
-      setSortBy(col);
-      setSortDir('asc');
-    }
+    const next = cycleSort<SortKey>(col, { sortBy, sortDir });
+    setSortBy(next.sortBy);
+    setSortDir(next.sortDir);
     setPage(0);
   }
 
@@ -138,7 +144,7 @@ export default function ManageUsersPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, roleFilter, cityFilter, includeInactive]);
 
-  useEffect(() => { void fetchList(); /* eslint-disable-next-line */ }, [page, sortBy, sortDir]);
+  useEffect(() => { void fetchList(); /* eslint-disable-next-line */ }, [page, pageSize, sortBy, sortDir]);
 
   async function fetchList() {
     setLoading(true);
@@ -149,10 +155,14 @@ export default function ManageUsersPage() {
       if (roleFilter)    params.set('roleId', String(roleFilter));
       if (cityFilter)    params.set('cityId', String(cityFilter));
       if (includeInactive) params.set('includeInactive', 'true');
-      params.set('limit',  String(PAGE_SIZE));
-      params.set('offset', String(page * PAGE_SIZE));
-      params.set('sortBy', sortBy);
-      params.set('sortDir', sortDir);
+      const limit = pageSizeToLimit(pageSize);
+      params.set('limit',  String(limit));
+      params.set('offset', String(page * limit));
+      // Null sortBy = 3rd-click unsort → omit params, BE picks default.
+      if (sortBy) {
+        params.set('sortBy', sortBy);
+        params.set('sortDir', sortDir);
+      }
       const data = await api.get<ListResponse>(`/admin/users?${params}`);
       setItems(data.items);
       setTotal(data.total);
@@ -180,7 +190,7 @@ export default function ManageUsersPage() {
     }
   }
 
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  // totalPages now computed inside <TablePagination>; no local mirror needed.
 
   return (
     <div className="space-y-4">
@@ -258,44 +268,6 @@ export default function ManageUsersPage() {
         </CardContent>
       </Card>
 
-      {/* Filters */}
-      <Card>
-        <CardContent className="p-3 flex items-center gap-2 flex-wrap">
-          <div className="relative flex-1 min-w-[240px]">
-            <Search className="size-4 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              placeholder="Search by name, email, mobile, or code…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="pl-8"
-            />
-          </div>
-          {/* Filters use the shared SearchSelect (typeahead + keyboard nav)
-              rather than native <select> so large role/city lists are
-              filterable by typing. Empty value = "All roles" / "All cities". */}
-          <div className="min-w-[180px]">
-            <SearchSelect
-              value={roleFilter === '' ? '' : roleFilter}
-              onChange={(v) => setRoleFilter(v ? Number(v) : '')}
-              options={lookup.roles.map((r) => ({ value: r.role_id, label: r.role_name }))}
-              placeholder="All roles"
-            />
-          </div>
-          <div className="min-w-[180px]">
-            <SearchSelect
-              value={cityFilter === '' ? '' : cityFilter}
-              onChange={(v) => setCityFilter(v ? Number(v) : '')}
-              options={lookup.cities.map((c) => ({ value: c.city_id, label: c.city_name }))}
-              placeholder="All cities"
-            />
-          </div>
-          <label className="flex items-center gap-1 text-xs">
-            <input type="checkbox" checked={includeInactive} onChange={(e) => setIncludeInactive(e.target.checked)} />
-            Include inactive
-          </label>
-        </CardContent>
-      </Card>
-
       {error && (
         <Card>
           <CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
@@ -304,8 +276,55 @@ export default function ManageUsersPage() {
         </Card>
       )}
 
+      {/*
+        * Unified table card — filter row, table, and pagination all
+        * live inside the same Card with internal borders so they read
+        * as one cohesive table instead of three stacked sections.
+        *   ┌─────────────────────────────────────────────────┐
+        *   │  search · role · city · include inactive        │  ← thead-like
+        *   ├─────────────────────────────────────────────────┤
+        *   │  <table>                                        │
+        *   ├─────────────────────────────────────────────────┤
+        *   │  Show: 10 · « ‹ 6 / 8 › »                       │  ← tfoot-like
+        *   └─────────────────────────────────────────────────┘
+        */}
       <Card>
         <CardContent className="p-0">
+          {/* Filter band — acts as the table's visual header row. */}
+          <div className="p-3 flex items-center gap-2 flex-wrap border-b">
+            <div className="relative flex-1 min-w-[240px]">
+              <Search className="size-4 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Search by name, email, mobile, or code…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="pl-8"
+              />
+            </div>
+            {/* Filters use the shared SearchSelect (typeahead + keyboard nav)
+                rather than native <select> so large role/city lists are
+                filterable by typing. Empty value = "All roles" / "All cities". */}
+            <div className="min-w-[180px]">
+              <SearchSelect
+                value={roleFilter === '' ? '' : roleFilter}
+                onChange={(v) => setRoleFilter(v ? Number(v) : '')}
+                options={lookup.roles.map((r) => ({ value: r.role_id, label: r.role_name }))}
+                placeholder="All roles"
+              />
+            </div>
+            <div className="min-w-[180px]">
+              <SearchSelect
+                value={cityFilter === '' ? '' : cityFilter}
+                onChange={(v) => setCityFilter(v ? Number(v) : '')}
+                options={lookup.cities.map((c) => ({ value: c.city_id, label: c.city_name }))}
+                placeholder="All cities"
+              />
+            </div>
+            <label className="flex items-center gap-1 text-xs">
+              <input type="checkbox" checked={includeInactive} onChange={(e) => setIncludeInactive(e.target.checked)} />
+              Include inactive
+            </label>
+          </div>
           <table className="data-table w-full" style={{ tableLayout: 'fixed' }}>
             {/*
                 Column widths (must match the th/td sequence below):
@@ -351,13 +370,22 @@ export default function ManageUsersPage() {
               </tr>
             </thead>
             <tbody>
-              {loading && (
+              {/*
+                * Loading row appears ONLY when there's no existing data
+                * to keep visible. On refetch (filter / page-size /
+                * sort changes), we keep the previously-loaded rows
+                * rendered so the table doesn't flash empty during the
+                * 200ms server round-trip. Page-size changes especially
+                * benefit — operators see the existing 10 rows stay
+                * put, then the additional rows append on response.
+                */}
+              {loading && items.length === 0 && (
                 <tr><td colSpan={8} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
               )}
               {!loading && items.length === 0 && (
                 <tr><td colSpan={8} className="!text-center text-muted-foreground py-6">No users match the current filters.</td></tr>
               )}
-              {!loading && items.map((u) => (
+              {items.map((u) => (
                 <tr key={u.user_id}>
                   <td className="!text-center font-mono text-xs truncate">{u.user_id}</td>
                   <td className="!text-left font-medium truncate" title={u.user_name}>{u.user_name}</td>
@@ -375,16 +403,39 @@ export default function ManageUsersPage() {
                       : <span className="text-muted-foreground text-xs">Inactive</span>}
                   </td>
                   <td className="!text-right whitespace-nowrap">
-                    <div className="inline-flex items-center justify-end gap-1">
+                    {/*
+                      * Icon-only row actions: tight cluster, no per-
+                      * button hover background. Previously each icon
+                      * sat inside `<Button size="sm" variant="ghost">`
+                      * which gave them `px-3` (12px) of horizontal
+                      * padding plus a hover bg, making the two icons
+                      * look ~50px apart. Plain `<button>` with `p-1`
+                      * compresses the cluster while keeping a
+                      * touch-friendly 24px tap target and just a
+                      * subtle hover ring on the icon itself.
+                      */}
+                    <div className="inline-flex items-center justify-end">
                       {can.isUserEdit && (
-                        <Button size="sm" variant="ghost" onClick={() => { setEditing(u); setModalOpen(true); }}>
+                        <button
+                          type="button"
+                          onClick={() => { setEditing(u); setModalOpen(true); }}
+                          className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors"
+                          aria-label="Edit user"
+                          title="Edit user"
+                        >
                           <Pencil className="size-3.5" />
-                        </Button>
+                        </button>
                       )}
                       {can.isUserEdit && u.user_status === 1 && (
-                        <Button size="sm" variant="ghost" onClick={() => handleDeactivate(u)}>
-                          <Trash2 className="size-3.5 text-red-600" />
-                        </Button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeactivate(u)}
+                          className="p-1 rounded text-red-600 hover:text-red-700 transition-colors"
+                          aria-label="Deactivate user"
+                          title="Deactivate user"
+                        >
+                          <Trash2 className="size-3.5" />
+                        </button>
                       )}
                       {!can.isUserEdit && (
                         <span className="text-[10px] text-muted-foreground">view-only</span>
@@ -395,20 +446,19 @@ export default function ManageUsersPage() {
               ))}
             </tbody>
           </table>
+          {/* Pagination band — acts as the table's visual footer row,
+              sharing the same Card boundary as the filter band + table. */}
+          <div className="px-3 py-2 border-t">
+            <TablePagination
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onPageChange={setPage}
+              onPageSizeChange={(s) => { setPageSize(s); setPage(0); }}
+            />
+          </div>
         </CardContent>
       </Card>
-
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-muted-foreground">
-            Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, total)} of {total}
-          </span>
-          <div className="flex gap-1">
-            <Button size="sm" variant="outline" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>Previous</Button>
-            <Button size="sm" variant="outline" disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)}>Next</Button>
-          </div>
-        </div>
-      )}
 
       <UserFormModal
         open={modalOpen}
@@ -462,41 +512,9 @@ function ManageCitiesCell({ csv, nameById }: { csv: string | null | undefined; n
   );
 }
 
-// ─── Sortable column header ─────────────────────────────────────────
-function SortHeader({
-  col, align, sortBy, sortDir, onSort, children,
-}: {
-  col: SortKey;
-  align: 'left' | 'center' | 'right';
-  sortBy: SortKey;
-  sortDir: SortDir;
-  onSort: (col: SortKey) => void;
-  children: React.ReactNode;
-}) {
-  const isActive = sortBy === col;
-  const alignCls = align === 'left' ? '!text-left'
-                 : align === 'right' ? '!text-right'
-                 : '!text-center';
-  const justify  = align === 'left' ? 'justify-start'
-                 : align === 'right' ? 'justify-end'
-                 : 'justify-center';
-  const Icon = !isActive ? ArrowUpDown
-             : sortDir === 'asc' ? ArrowUp
-             : ArrowDown;
-  return (
-    <th
-      className={`${alignCls} cursor-pointer select-none hover:bg-muted/40 transition-colors whitespace-nowrap overflow-hidden`}
-      onClick={() => onSort(col)}
-      role="button"
-      aria-sort={isActive ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
-    >
-      <span className={`inline-flex items-center gap-1 whitespace-nowrap ${justify}`}>
-        {children}
-        <Icon className={`size-3 shrink-0 ${isActive ? 'text-foreground' : 'text-muted-foreground/40'}`} />
-      </span>
-    </th>
-  );
-}
+// Local SortHeader removed 2026-05-15 — migrated to the shared
+// component in `lib/use-sort.tsx` (3-state cycle + icon only on
+// active column). See `cycleSort` + `<SortHeader>` import above.
 
 // ─── Add/Edit modal ─────────────────────────────────────────────────
 /*
@@ -525,8 +543,15 @@ function UserFormModal({
   onClose: () => void;
   editing: User | null;
   roles: Array<{ role_id: number; role_name: string }>;
-  cities: Array<{ city_id: number; city_name: string }>;
-  clients: Array<{ client_id: number; client_name: string }>;
+  /*
+   * Cities/clients now carry their parent FK (state_id / vertical_id)
+   * so the Manages Cities / Manages Clients pickers can cascade off
+   * Manages States / Manages Verticals. Both fields default to null
+   * for orphan rows — those are excluded from the cascaded view since
+   * they belong to no parent.
+   */
+  cities: Array<{ city_id: number; city_name: string; state_id: number | null }>;
+  clients: Array<{ client_id: number; client_name: string; vertical_id: number | null }>;
   states: Array<{ state_id: number; state_name: string }>;
   verticals: Array<{ vertical_id: number; vertical_name: string }>;
   adminUsers: Array<{ user_id: number; user_name: string; role_name?: string }>;
@@ -620,20 +645,92 @@ function UserFormModal({
       return next;
     });
   }
-  function toggleManageState(id: number) {
-    setManageStates((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
+
+  /*
+   * Cascade rules for Verticals → Clients and States → Cities
+   * (introduced 2026-05-15):
+   *
+   * - Picker options for the dependent field (Clients / Cities) only
+   *   include rows whose parent FK is in the currently-selected parent
+   *   set. If 0 parents are selected, the picker shows nothing — the
+   *   operator must pick a parent first.
+   * - When a parent is REMOVED, prune the selected dependents whose
+   *   parent FK was that removed parent (and isn't in any of the
+   *   still-selected parents). "Don't remove for parents not altered"
+   *   — adding never prunes.
+   * - Orphan dependents (parent FK = null) are dropped whenever the
+   *   filter is active (any parent selected). They can never be added
+   *   through the strict picker; clearing all parents leaves them
+   *   un-addable until a parent is picked again.
+   * - Initial DB hydration of the form is NOT a "change" — load is
+   *   raw csvToSet, so existing legacy data with mismatched parents
+   *   stays visible as chips until the operator interacts with the
+   *   parent field. This preserves backwards-compat for old records
+   *   saved before this constraint existed.
+   *
+   * The cascade lives in the change/toggle handlers (not a useEffect
+   * on [manageVerticals]) so the initial hydration doesn't trigger
+   * an unwanted prune.
+   */
+  function applyManageVerticals(next: Set<number>) {
+    setManageVerticals(next);
+    setManageClients((prevClients) => {
+      // Adding a vertical: prevClients ⊆ allowed-by-prev ⊆ allowed-by-next
+      // → no prune needed (but pruning is also idempotent so the filter
+      // below stays safe to run unconditionally).
+      if (next.size === 0) return new Set();
+      const pruned = new Set<number>();
+      for (const cid of prevClients) {
+        const c = clients.find((x) => x.client_id === cid);
+        if (!c || c.vertical_id == null) continue;
+        if (next.has(c.vertical_id)) pruned.add(cid);
+      }
+      return pruned;
     });
   }
   function toggleManageVertical(id: number) {
-    setManageVerticals((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
+    const next = new Set(manageVerticals);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    applyManageVerticals(next);
+  }
+
+  function applyManageStates(next: Set<number>) {
+    setManageStates(next);
+    setManageCities((prevCities) => {
+      if (next.size === 0) return new Set();
+      const pruned = new Set<number>();
+      for (const cid of prevCities) {
+        const c = cities.find((x) => x.city_id === cid);
+        if (!c || c.state_id == null) continue;
+        if (next.has(c.state_id)) pruned.add(cid);
+      }
+      return pruned;
     });
   }
+  function toggleManageState(id: number) {
+    const next = new Set(manageStates);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    applyManageStates(next);
+  }
+
+  /*
+   * Derived option lists for the cascaded pickers. When no parent is
+   * selected, the list is empty — a helper note under each picker
+   * tells the operator to pick a parent first. Orphan rows (parent
+   * FK = null) are excluded from the strict-filtered view.
+   */
+  const filteredClientOptions = useMemo(() => {
+    if (manageVerticals.size === 0) return [] as SearchOption[];
+    return clients
+      .filter((c) => c.vertical_id != null && manageVerticals.has(c.vertical_id))
+      .map((c) => ({ value: c.client_id, label: c.client_name }));
+  }, [clients, manageVerticals]);
+  const filteredCityOptions = useMemo(() => {
+    if (manageStates.size === 0) return [] as SearchOption[];
+    return cities
+      .filter((c) => c.state_id != null && manageStates.has(c.state_id))
+      .map((c) => ({ value: c.city_id, label: c.city_name }));
+  }, [cities, manageStates]);
 
   /*
    * Debounced real-time mobile-uniqueness probe. Fires only when:
@@ -902,39 +999,55 @@ function UserFormModal({
             * screen without a long vertical scroll. Falls back to a
             * single column on narrow viewports.
             */}
+          {/*
+            * Layout (2026-05-15):
+            *   Row 1: Verticals | Clients
+            *   Row 2: States    | Cities
+            * The dependent pickers (Clients, Cities) sit immediately
+            * to the right of their parent (Verticals, States) so the
+            * cascade direction is visually obvious. Clients options
+            * are filtered to selected Verticals; Cities options are
+            * filtered to selected States — see `applyManageVerticals`
+            * / `applyManageStates` for the prune-on-remove rules.
+            */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Cities */}
+            {/* Verticals — parent of Clients */}
             <ScopeMultiSelect
-              label="Manages Cities"
-              chipColor="blue"
-              selected={manageCities}
-              onChange={(next) => setManageCities(new Set(next as number[]))}
-              options={cities.map((c) => ({ value: c.city_id, label: c.city_name }))}
-              chipFor={(id) => cities.find((x) => x.city_id === id)?.city_name}
-              onRemoveOne={toggleManageCity}
-              placeholder="Select cities…"
-              selectedLabel="cities"
+              label="Manages Verticals"
+              chipColor="amber"
+              selected={manageVerticals}
+              onChange={(next) => applyManageVerticals(new Set(next as number[]))}
+              options={verticals.map((v) => ({ value: v.vertical_id, label: v.vertical_name }))}
+              chipFor={(id) => verticals.find((x) => x.vertical_id === id)?.vertical_name}
+              onRemoveOne={toggleManageVertical}
+              placeholder="Select verticals…"
+              selectedLabel="verticals"
             />
 
-            {/* Clients */}
+            {/* Clients — filtered by selected Verticals */}
             <ScopeMultiSelect
               label="Manages Clients"
               chipColor="emerald"
               selected={manageClients}
               onChange={(next) => setManageClients(new Set(next as number[]))}
-              options={clients.map((c) => ({ value: c.client_id, label: c.client_name }))}
+              options={filteredClientOptions}
               chipFor={(id) => clients.find((x) => x.client_id === id)?.client_name}
               onRemoveOne={toggleManageClient}
               placeholder="Select clients…"
               selectedLabel="clients"
+              helperText={
+                manageVerticals.size === 0
+                  ? 'Pick at least one vertical above to choose clients.'
+                  : undefined
+              }
             />
 
-            {/* States */}
+            {/* States — parent of Cities */}
             <ScopeMultiSelect
               label="Manages States"
               chipColor="violet"
               selected={manageStates}
-              onChange={(next) => setManageStates(new Set(next as number[]))}
+              onChange={(next) => applyManageStates(new Set(next as number[]))}
               options={states.map((s) => ({ value: s.state_id, label: s.state_name }))}
               chipFor={(id) => states.find((x) => x.state_id === id)?.state_name}
               onRemoveOne={toggleManageState}
@@ -942,17 +1055,22 @@ function UserFormModal({
               selectedLabel="states"
             />
 
-            {/* Verticals */}
+            {/* Cities — filtered by selected States */}
             <ScopeMultiSelect
-              label="Manages Verticals"
-              chipColor="amber"
-              selected={manageVerticals}
-              onChange={(next) => setManageVerticals(new Set(next as number[]))}
-              options={verticals.map((v) => ({ value: v.vertical_id, label: v.vertical_name }))}
-              chipFor={(id) => verticals.find((x) => x.vertical_id === id)?.vertical_name}
-              onRemoveOne={toggleManageVertical}
-              placeholder="Select verticals…"
-              selectedLabel="verticals"
+              label="Manages Cities"
+              chipColor="blue"
+              selected={manageCities}
+              onChange={(next) => setManageCities(new Set(next as number[]))}
+              options={filteredCityOptions}
+              chipFor={(id) => cities.find((x) => x.city_id === id)?.city_name}
+              onRemoveOne={toggleManageCity}
+              placeholder="Select cities…"
+              selectedLabel="cities"
+              helperText={
+                manageStates.size === 0
+                  ? 'Pick at least one state above to choose cities.'
+                  : undefined
+              }
             />
           </div>
 
@@ -1056,6 +1174,7 @@ function ScopeMultiSelect({
   onRemoveOne,
   placeholder,
   selectedLabel,
+  helperText,
 }: {
   label: string;
   chipColor: ChipColor;
@@ -1066,6 +1185,12 @@ function ScopeMultiSelect({
   onRemoveOne: (id: number) => void;
   placeholder: string;
   selectedLabel: string;
+  /*
+   * Optional muted hint rendered between the trigger and the chips.
+   * Used by cascaded pickers (Clients depends on Verticals, Cities
+   * depends on States) to explain why the option list is empty.
+   */
+  helperText?: string;
 }) {
   const cls = CHIP_CLASSES[chipColor];
   return (
@@ -1083,6 +1208,9 @@ function ScopeMultiSelect({
         placeholder={placeholder}
         selectedLabel={selectedLabel}
       />
+      {helperText && (
+        <p className="text-xs text-muted-foreground mt-1">{helperText}</p>
+      )}
       {selected.size > 0 && (
         <div className="mt-1.5 flex flex-wrap gap-1">
           {Array.from(selected).map((id) => {

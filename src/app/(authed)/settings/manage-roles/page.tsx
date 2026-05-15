@@ -22,7 +22,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ShieldCheck, Search, Plus, Pencil, Trash2,
   AlertTriangle, ChevronDown, ChevronRight, Info,
-  ArrowUp, ArrowDown, ArrowUpDown,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -34,6 +33,8 @@ import { api, ApiError } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
+import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
+import { SortHeader, cycleSort } from '@/lib/use-sort';
 
 type Role = {
   role_id: number;
@@ -75,7 +76,8 @@ type ListResponse = { items: Role[]; total: number };
 type SortKey = 'role_id' | 'role_name' | 'role_desc' | 'role_status' | 'user_count';
 type SortDir = 'asc' | 'desc';
 
-const PAGE_SIZE = 100;
+// PAGE_SIZE is operator-controlled via the TablePagination footer.
+// Default 10 matches the spec shared across Manage Users / Manage Roles.
 
 export default function ManageRolesPage() {
   const confirm = useConfirm();
@@ -92,6 +94,7 @@ export default function ManageRolesPage() {
   const [search, setSearch] = useState('');
   const [includeInactive, setIncludeInactive] = useState(false);
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState<TablePageSize>(10);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -150,16 +153,18 @@ export default function ManageRolesPage() {
     }
   }
 
-  const [sortBy,  setSortBy]  = useState<SortKey>('role_name');
+  /*
+   * sortBy is nullable so the 3rd click on a column clears sort
+   * (canonical cycle via `cycleSort`). When null, fetchList omits
+   * the sortBy/sortDir params and the BE returns its default order.
+   */
+  const [sortBy,  setSortBy]  = useState<SortKey | null>('role_name');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
 
   function onSort(col: SortKey) {
-    if (sortBy === col) {
-      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-    } else {
-      setSortBy(col);
-      setSortDir('asc');
-    }
+    const next = cycleSort<SortKey>(col, { sortBy, sortDir });
+    setSortBy(next.sortBy);
+    setSortDir(next.sortDir);
     setPage(0);
   }
 
@@ -185,7 +190,7 @@ export default function ManageRolesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, includeInactive]);
 
-  useEffect(() => { void fetchList(); /* eslint-disable-next-line */ }, [page, sortBy, sortDir]);
+  useEffect(() => { void fetchList(); /* eslint-disable-next-line */ }, [page, pageSize, sortBy, sortDir]);
 
   async function fetchList() {
     setLoading(true);
@@ -194,10 +199,14 @@ export default function ManageRolesPage() {
       const params = new URLSearchParams();
       if (search.trim()) params.set('q', search.trim());
       if (includeInactive) params.set('includeInactive', 'true');
-      params.set('limit',  String(PAGE_SIZE));
-      params.set('offset', String(page * PAGE_SIZE));
-      params.set('sortBy', sortBy);
-      params.set('sortDir', sortDir);
+      const limit = pageSizeToLimit(pageSize);
+      params.set('limit',  String(limit));
+      params.set('offset', String(page * limit));
+      // Null sortBy = 3rd-click unsort → omit params, BE picks default.
+      if (sortBy) {
+        params.set('sortBy', sortBy);
+        params.set('sortDir', sortDir);
+      }
       const data = await api.get<ListResponse>(`/admin/roles?${params}`);
       setItems(data.items);
       setTotal(data.total);
@@ -234,7 +243,7 @@ export default function ManageRolesPage() {
     }
   }
 
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  // totalPages now computed inside <TablePagination>.
 
   return (
     <div className="space-y-4">
@@ -291,24 +300,6 @@ export default function ManageRolesPage() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardContent className="p-3 flex items-center gap-2 flex-wrap">
-          <div className="relative flex-1 min-w-[240px]">
-            <Search className="size-4 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              placeholder="Search by name or description…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="pl-8"
-            />
-          </div>
-          <label className="flex items-center gap-1 text-xs">
-            <input type="checkbox" checked={includeInactive} onChange={(e) => setIncludeInactive(e.target.checked)} />
-            Include inactive
-          </label>
-        </CardContent>
-      </Card>
-
       {error && (
         <Card>
           <CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
@@ -317,8 +308,29 @@ export default function ManageRolesPage() {
         </Card>
       )}
 
+      {/*
+        * Unified table card — filter band + table + pagination share
+        * one Card with internal borders so they read as a single
+        * cohesive table. Same pattern as Manage Users.
+        */}
       <Card>
         <CardContent className="p-0">
+          {/* Filter band — visual table header row. */}
+          <div className="p-3 flex items-center gap-2 flex-wrap border-b">
+            <div className="relative flex-1 min-w-[240px]">
+              <Search className="size-4 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Search by name or description…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="pl-8"
+              />
+            </div>
+            <label className="flex items-center gap-1 text-xs">
+              <input type="checkbox" checked={includeInactive} onChange={(e) => setIncludeInactive(e.target.checked)} />
+              Include inactive
+            </label>
+          </div>
           <table className="data-table w-full" style={{ tableLayout: 'fixed' }}>
             {/*
                 Column widths, in order (must match the th/td sequence below):
@@ -378,13 +390,15 @@ export default function ManageRolesPage() {
               </tr>
             </thead>
             <tbody>
-              {loading && (
+              {/* Keep existing rows visible during refetch — see
+                  manage-users for the rationale. */}
+              {loading && items.length === 0 && (
                 <tr><td colSpan={7} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
               )}
               {!loading && items.length === 0 && (
                 <tr><td colSpan={7} className="!text-center text-muted-foreground py-6">No roles match the current filters.</td></tr>
               )}
-              {!loading && items.map((r) => {
+              {items.map((r) => {
                 const expanded = expandedRoles.has(r.role_id);
                 return (
                   <React.Fragment key={r.role_id}>
@@ -420,16 +434,38 @@ export default function ManageRolesPage() {
                           : <span className="text-muted-foreground text-xs">Inactive</span>}
                       </td>
                       <td className="!text-right whitespace-nowrap">
-                        <div className="inline-flex items-center justify-end gap-1">
+                        {/*
+                          * Icon-only row actions — same tight pattern
+                          * as Manage Users. Plain <button> with `p-1`
+                          * instead of `<Button size="sm" variant="ghost">`
+                          * so we don't pick up the ghost variant's
+                          * `px-3` (12px) horizontal padding plus a
+                          * hover bg that made the two icons look ~50px
+                          * apart and gave each its own "button card"
+                          * feel on hover.
+                          */}
+                        <div className="inline-flex items-center justify-end">
                           {can.isRollEdit && (
-                            <Button size="sm" variant="ghost" onClick={() => { setEditing(r); setModalOpen(true); }}>
+                            <button
+                              type="button"
+                              onClick={() => { setEditing(r); setModalOpen(true); }}
+                              className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors"
+                              aria-label="Edit role"
+                              title="Edit role"
+                            >
                               <Pencil className="size-3.5" />
-                            </Button>
+                            </button>
                           )}
                           {can.isRollEdit && r.role_status === 1 && (
-                            <Button size="sm" variant="ghost" onClick={() => handleDeactivate(r)}>
-                              <Trash2 className="size-3.5 text-red-600" />
-                            </Button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeactivate(r)}
+                              className="p-1 rounded text-red-600 hover:text-red-700 transition-colors"
+                              aria-label="Deactivate role"
+                              title="Deactivate role"
+                            >
+                              <Trash2 className="size-3.5" />
+                            </button>
                           )}
                           {!can.isRollEdit && (
                             <span className="text-[10px] text-muted-foreground">view-only</span>
@@ -460,20 +496,18 @@ export default function ManageRolesPage() {
               })}
             </tbody>
           </table>
+          {/* Pagination band — visual table footer row. */}
+          <div className="px-3 py-2 border-t">
+            <TablePagination
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onPageChange={setPage}
+              onPageSizeChange={(s) => { setPageSize(s); setPage(0); }}
+            />
+          </div>
         </CardContent>
       </Card>
-
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-muted-foreground">
-            Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, total)} of {total}
-          </span>
-          <div className="flex gap-1">
-            <Button size="sm" variant="outline" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>Previous</Button>
-            <Button size="sm" variant="outline" disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)}>Next</Button>
-          </div>
-        </div>
-      )}
 
       <RoleFormModal
         open={modalOpen}
@@ -581,41 +615,9 @@ function RoleDataDetail({
   );
 }
 
-// ─── Sortable column header ─────────────────────────────────────────
-function SortHeader({
-  col, align, sortBy, sortDir, onSort, children,
-}: {
-  col: SortKey;
-  align: 'left' | 'center' | 'right';
-  sortBy: SortKey;
-  sortDir: SortDir;
-  onSort: (col: SortKey) => void;
-  children: React.ReactNode;
-}) {
-  const isActive = sortBy === col;
-  const alignCls = align === 'left' ? '!text-left'
-                 : align === 'right' ? '!text-right'
-                 : '!text-center';
-  const justify  = align === 'left' ? 'justify-start'
-                 : align === 'right' ? 'justify-end'
-                 : 'justify-center';
-  const Icon = !isActive ? ArrowUpDown
-             : sortDir === 'asc' ? ArrowUp
-             : ArrowDown;
-  return (
-    <th
-      className={`${alignCls} cursor-pointer select-none hover:bg-muted/40 transition-colors whitespace-nowrap overflow-hidden`}
-      onClick={() => onSort(col)}
-      role="button"
-      aria-sort={isActive ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
-    >
-      <span className={`inline-flex items-center gap-1 whitespace-nowrap ${justify}`}>
-        {children}
-        <Icon className={`size-3 shrink-0 ${isActive ? 'text-foreground' : 'text-muted-foreground/40'}`} />
-      </span>
-    </th>
-  );
-}
+// Local SortHeader removed 2026-05-15 — migrated to the shared
+// component in `lib/use-sort.tsx` (3-state cycle + icon only on the
+// active column). See `cycleSort` + `<SortHeader>` import above.
 
 // ─── Add/Edit modal ─────────────────────────────────────────────────
 /*

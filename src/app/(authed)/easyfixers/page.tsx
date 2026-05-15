@@ -155,17 +155,17 @@ export default function EasyfixersPage() {
           <table className="data-table">
             <thead>
               <tr>
-                <SortHeader<Ef> colKey="efr_id"                 sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="stick-col-head stick-left">ID</SortHeader>
-                <SortHeader<Ef> colKey="efr_name"               sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Name</SortHeader>
-                <SortHeader<Ef> colKey="efr_no"                 sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Mobile</SortHeader>
-                <SortHeader<Ef> colKey="efr_email"              sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Email</SortHeader>
-                <SortHeader<Ef> colKey="city_name"              sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>City</SortHeader>
-                <SortHeader<Ef> colKey="efr_service_category"   sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Category</SortHeader>
-                <SortHeader<Ef> colKey="efr_service_type"       sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Service Type</SortHeader>
-                <SortHeader<Ef> colKey="efr_profile_perc"       sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Profile %</SortHeader>
-                <SortHeader<Ef> colKey="is_technician_verified" sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Verified</SortHeader>
-                <SortHeader<Ef> colKey="efr_status"             sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Status</SortHeader>
-                <SortHeader<Ef> colKey="insert_date"            sortKey={sortKey} sortDir={sortDir} onToggle={toggle}>Joined</SortHeader>
+                <SortHeader col="efr_id"                 sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="stick-col-head stick-left">ID</SortHeader>
+                <SortHeader col="efr_name"               sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Name</SortHeader>
+                <SortHeader col="efr_no"                 sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Mobile</SortHeader>
+                <SortHeader col="efr_email"              sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Email</SortHeader>
+                <SortHeader col="city_name"              sortBy={sortKey} sortDir={sortDir} onSort={toggle}>City</SortHeader>
+                <SortHeader col="efr_service_category"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Category</SortHeader>
+                <SortHeader col="efr_service_type"       sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Service Type</SortHeader>
+                <SortHeader col="efr_profile_perc"       sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Profile %</SortHeader>
+                <SortHeader col="is_technician_verified" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Verified</SortHeader>
+                <SortHeader col="efr_status"             sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Status</SortHeader>
+                <SortHeader col="insert_date"            sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Joined</SortHeader>
                 <th className="stick-col-head stick-right text-right">Action</th>
               </tr>
             </thead>
