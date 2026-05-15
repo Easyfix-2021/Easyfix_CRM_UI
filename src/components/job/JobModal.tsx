@@ -1950,7 +1950,22 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 border-t">
             <Field label="Job Image">
-              <Input type="file" accept="image/*,.pdf" onChange={() => { /* wired when upload endpoint is ready */ }} />
+              {/*
+                * Stashes the selected File on `f.job_image_file`. The
+                * post-create handler (see submit() above) picks it up
+                * and POSTs to /admin/jobs/:id/images, which uploads to
+                * s3://<bucket>/JobSupportings/Booking_<jobId>_<seq>
+                * per the 2026-05-15 ops convention (extension is not
+                * part of the key; MIME is preserved on the S3 object's
+                * Content-Type). Failure to upload is non-fatal — the
+                * job is already saved, operator can retry from the
+                * detail view.
+                */}
+              <Input
+                type="file"
+                accept="image/*,.pdf"
+                onChange={(e) => set('job_image_file' as keyof typeof f, (e.target.files?.[0] || null) as never)}
+              />
             </Field>
             <Field label="Helper Required">
               <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
