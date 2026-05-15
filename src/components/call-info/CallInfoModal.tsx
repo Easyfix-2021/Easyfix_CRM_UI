@@ -22,10 +22,11 @@
  */
 
 import * as React from 'react';
-import { Phone, Search, Download, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react';
+import { Phone, Search, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { DownloadButton } from '@/components/ui/download-button';
 import { Label } from '@/components/ui/label';
 import { DateRangePopover } from '@/components/ui/date-range-popover';
 import { JobModal } from '@/components/job/JobModal';
@@ -361,22 +362,24 @@ export function CallInfoModal({ open, onClose }: { open: boolean; onClose: () =>
                 */}
               {(() => {
                 const hasRows = !!rows && rows.length > 0;
-                const disabled = downloading || loading || !hasRows;
+                /*
+                 * DownloadButton internally disables while
+                 * `downloading` is true, so we only need to pass
+                 * `disabled` for the business-state reasons (no rows
+                 * yet, or a fetch is already in flight blocking the
+                 * action). The component handles the loading state.
+                 */
                 return (
-                  <Button
-                    type="button"
+                  <DownloadButton
                     onClick={() => { void downloadXlsx(); }}
-                    disabled={disabled}
-                    className="md:w-auto w-full h-9 bg-emerald-600 hover:bg-emerald-700 text-white inline-flex items-center gap-1.5 disabled:bg-emerald-600/40 disabled:hover:bg-emerald-600/40 disabled:cursor-not-allowed"
+                    disabled={loading || !hasRows}
+                    downloading={downloading}
                     title={
                       !hasRows
                         ? 'No calls in the selected range to download'
                         : 'Download the current range as a styled Excel sheet'
                     }
-                  >
-                    <Download className="h-4 w-4" />
-                    {downloading ? 'Preparing…' : 'Download'}
-                  </Button>
+                  />
                 );
               })()}
             </div>

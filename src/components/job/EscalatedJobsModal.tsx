@@ -15,14 +15,16 @@
  */
 
 import * as React from 'react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Search, X } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { DownloadButton } from '@/components/ui/download-button';
 import { Input } from '@/components/ui/input';
 import { SearchSelect } from '@/components/ui/search-select';
 import { api, ApiError } from '@/lib/api';
 import { statusLabel, statusColorClass } from '@/lib/utils';
+import { useSort, SortHeader } from '@/lib/use-sort';
 
 /*
  * formatDateOnly / formatTimeOnly — split a single ISO/MySQL DATETIME
@@ -175,8 +177,11 @@ export function EscalatedJobsModal({
   open, onClose,
 }: { open: boolean; onClose: () => void }) {
   const [status, setStatus] = useState('open');
+  // `q` is a UI-only filter — matches caselessly across every visible
+  // column on the currently loaded page (200 rows). The status
+  // dropdown still drives a server-side refetch so the loaded page
+  // contains what the operator wants to search through.
   const [q, setQ] = useState('');
-  const [debouncedQ, setDebouncedQ] = useState('');
   const [data, setData] = useState<Resp | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -213,18 +218,11 @@ export function EscalatedJobsModal({
     }
   }
 
-  // Debounce free-text search by 300ms so each keystroke doesn't fire a
-  // request. The status dropdown reloads immediately on change.
-  useEffect(() => {
-    const t = setTimeout(() => setDebouncedQ(q.trim()), 300);
-    return () => clearTimeout(t);
-  }, [q]);
-
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     setLoading(true); setError(null);
-    api.get<Resp>('/admin/jobs/escalated', { status, q: debouncedQ || undefined, limit: 200 })
+    api.get<Resp>('/admin/jobs/escalated', { status, limit: 200 })
       .then((r) => { if (!cancelled) setData(r); })
       .catch((e) => {
         if (cancelled) return;
@@ -232,7 +230,91 @@ export function EscalatedJobsModal({
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [open, status, debouncedQ]);
+  }, [open, status]);
+
+  /*
+   * Client-side filter — runs over every visible field for the
+   * currently-loaded page. Includes derived strings (status label,
+   * date/time formatted views, escalation duration) so the operator
+   * can search by what they see on the row, not just the underlying
+   * column value.
+   */
+  const filteredItems = useMemo(() => {
+    if (!data) return [];
+    const needle = q.trim().toLowerCase();
+    if (!needle) return data.items;
+    return data.items.filter((r) => {
+      const haystacks: Array<string | number | null | undefined> = [
+        r.job_id, r.client_name, r.city_name, r.job_stage_history,
+        statusLabel(Number(r.job_status), { assigned: r.fk_easyfixter_id != null }),
+        r.no_of_escalations, r.escalated_from, r.escalated_comments,
+        r.escalated_by_name,
+        formatDateOnly(r.escalated_time), formatTimeOnly(r.escalated_time),
+        formatDateOnly(r.requested_date_time), formatTimeOnly(r.requested_date_time),
+        escalationDurationLabel(r.escalated_time, r.resolved_time),
+        (r.no_of_escalations ?? 0) > 1 ? 'reopened' : '',
+      ];
+      return haystacks.some((h) => h != null && String(h).toLowerCase().includes(needle));
+    });
+  }, [data, q]);
+
+  const { sorted, sortKey, sortDir, toggle } = useSort<Row>(filteredItems);
+
+  const [downloading, setDownloading] = useState(false);
+
+  /*
+   * Download — fetches the styled XLSX from the backend so the file
+   * inherits the same brand band / header band / row banding as the
+   * Call History export. Same fetch+blob+anchor pattern as
+   * CallInfoModal.downloadXlsx — we can't use the JSON-parsing
+   * `api.get` helper for a binary stream.
+   *
+   * Filter note: the download contains every row in the current
+   * STATUS filter (e.g. all 12,859 Open escalations), not just the
+   * 200 loaded into the modal and not the in-modal search subset.
+   * The search box is a presentational filter; exports reflect the
+   * dataset the operator asked the backend for. This matches the
+   * Call History export contract.
+   */
+  async function downloadXlsx() {
+    if (downloading) return;
+    setDownloading(true);
+    setError(null);
+    try {
+      const base = process.env.NEXT_PUBLIC_API_URL || '/api';
+      const qs = new URLSearchParams({ status });
+      const url = `${base}/admin/jobs/escalated/export.xlsx?${qs.toString()}`;
+      const token = typeof window !== 'undefined' ? localStorage.getItem('crm_auth_token') : null;
+      const resp = await fetch(url, {
+        method: 'GET',
+        credentials: 'include',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        cache: 'no-store',
+      });
+      if (!resp.ok) {
+        let msg = `HTTP ${resp.status}`;
+        try {
+          const j = await resp.json();
+          if (j?.error) msg = String(j.error);
+        } catch { /* not JSON, ignore */ }
+        throw new Error(msg);
+      }
+      const blob = await resp.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const today = new Date().toISOString().slice(0, 10);
+      a.href = objectUrl;
+      a.download = `escalated-jobs_${status}_${today}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 500);
+    } catch (e) {
+      setError(e instanceof Error ? `Download failed: ${e.message}` : 'Download failed');
+    } finally {
+      setDownloading(false);
+    }
+  }
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
@@ -242,31 +324,37 @@ export function EscalatedJobsModal({
       >
         <DialogHeader className="!mx-0 !mt-0 px-6 pt-6 pb-3 border-b">
           <div className="flex items-start justify-between gap-3">
-            <div>
-              <DialogTitle className="flex items-center gap-2">
-                <AlertTriangle className="h-5 w-5 text-rose-600" />
-                Escalated Jobs
-                {data && (
-                  <span className="text-sm font-normal text-muted-foreground">
-                    · {data.total.toLocaleString('en-IN')} total
-                  </span>
-                )}
-              </DialogTitle>
-              <p className="text-xs text-muted-foreground mt-1">
-                Jobs flagged via the legacy customer-rating escalation flow
-                (<code className="text-[10px] bg-muted px-1 rounded">tbl_easyfixer_rating_by_customer</code>).
-                Click any row to drill into the underlying job.
-              </p>
-            </div>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-rose-600" />
+              Escalated Jobs
+              {data && (
+                <span className="text-sm font-normal text-muted-foreground">
+                  · {data.total.toLocaleString('en-IN')} total
+                </span>
+              )}
+            </DialogTitle>
             <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close">
               <X className="h-4 w-4" />
             </Button>
           </div>
         </DialogHeader>
 
-        {/* Filter row — status dropdown + search input. Both apply
-            server-side so the row count badge stays accurate. */}
+        {/* Filter row — search left, status filter + download right.
+            Search runs client-side over every column on the currently
+            loaded page; the status dropdown drives the server-side
+            refetch. Download streams a styled XLSX of the full
+            status-filtered dataset (not just the loaded page or the
+            in-modal search subset) from the backend. */}
         <div className="px-6 py-3 border-b bg-card/40 flex items-center gap-3 flex-wrap">
+          <div className="relative flex-1 min-w-[240px]">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Search"
+              className="pl-7"
+            />
+          </div>
           <div className="w-44">
             <SearchSelect
               value={status}
@@ -276,16 +364,16 @@ export function EscalatedJobsModal({
               required
             />
           </div>
-          <div className="relative flex-1 min-w-[240px]">
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Search job ID / client / city…"
-              className="pl-7"
-            />
-          </div>
-          {loading && <span className="text-xs text-muted-foreground">Loading…</span>}
+          <DownloadButton
+            onClick={() => { void downloadXlsx(); }}
+            disabled={loading || !data || data.items.length === 0}
+            downloading={downloading}
+            title={
+              !data || data.items.length === 0
+                ? 'No escalations to export'
+                : 'Download the current status filter as a styled Excel sheet'
+            }
+          />
         </div>
 
         {/* Table body — overflow-auto on BOTH axes (legacy modal had
@@ -299,35 +387,62 @@ export function EscalatedJobsModal({
               {error}
             </div>
           )}
-          {!error && data && data.items.length === 0 && !loading && (
+          {/* Body-level loading state. Replaces the in-toolbar "Loading…"
+              chip — that location was visually awkward (sat between two
+              unrelated controls) and operators told us they missed it.
+              Shown only when there's no existing table to layer over
+              (initial open + status change with no prior data). On a
+              refresh of an already-loaded view we let the visible table
+              stay so the modal doesn't flash empty during the network
+              round-trip. */}
+          {!error && loading && (!data || sorted.length === 0) && (
             <div className="text-sm text-muted-foreground text-center py-8">
-              No {status} escalations match the current filter.
+              Loading escalations…
             </div>
           )}
-          {!error && data && data.items.length > 0 && (
+          {!error && !loading && data && sorted.length === 0 && (
+            <div className="text-sm text-muted-foreground text-center py-8">
+              {data.items.length === 0
+                ? `No ${status} escalations match the current filter.`
+                : 'No rows match your search.'}
+            </div>
+          )}
+          {!error && data && sorted.length > 0 && (
             <table className="data-table w-max min-w-full">
+              {/* Sticky headers: each <th> pins to the top of the
+                  scrollable container so columns stay visible while
+                  rows scroll. `bg-card` matches the modal background
+                  so the row beneath doesn't bleed through. z-10 sits
+                  above the cells; if we later add sticky-left columns
+                  they'd need z-20. SortHeader makes the column
+                  clickable + shows the active-state arrow. */}
               <thead>
                 <tr>
-                  <th className="!text-left whitespace-nowrap">Date &amp; Time Escalated</th>
-                  <th className="!text-center whitespace-nowrap">Job ID</th>
-                  <th className="!text-left whitespace-nowrap">Client</th>
-                  <th className="!text-left whitespace-nowrap">City</th>
-                  <th className="!text-left whitespace-nowrap">Job Stage</th>
-                  <th className="!text-center whitespace-nowrap">Current Status</th>
-                  <th className="!text-center whitespace-nowrap">No of Escalations</th>
-                  <th className="!text-left whitespace-nowrap">Escalated From</th>
-                  <th className="!text-left whitespace-nowrap">Reason For Escalation</th>
-                  <th className="!text-left whitespace-nowrap">Escalated By</th>
-                  <th className="!text-left whitespace-nowrap">Team Action</th>
-                  <th className="!text-left whitespace-nowrap">Completed Action</th>
-                  <th className="!text-left whitespace-nowrap">Closed Action</th>
-                  <th className="!text-left whitespace-nowrap">Escalated Hours</th>
-                  <th className="!text-left whitespace-nowrap">Original Appointment Date</th>
-                  <th className="!text-center whitespace-nowrap">Reopened</th>
+                  <SortHeader<Row> colKey="escalated_time"     sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Date &amp; Time Escalated</SortHeader>
+                  <SortHeader<Row> colKey="job_id"             sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-center whitespace-nowrap sticky top-0 z-10 bg-card">Job ID</SortHeader>
+                  <SortHeader<Row> colKey="client_name"        sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Client</SortHeader>
+                  <SortHeader<Row> colKey="city_name"          sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">City</SortHeader>
+                  <SortHeader<Row> colKey="job_stage_history"  sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Job Stage</SortHeader>
+                  <SortHeader<Row> colKey="job_status"         sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-center whitespace-nowrap sticky top-0 z-10 bg-card">Current Status</SortHeader>
+                  <SortHeader<Row> colKey="no_of_escalations"  sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-center whitespace-nowrap sticky top-0 z-10 bg-card">No of Escalations</SortHeader>
+                  <SortHeader<Row> colKey="escalated_from"     sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Escalated From</SortHeader>
+                  <SortHeader<Row> colKey="escalated_comments" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Reason For Escalation</SortHeader>
+                  <SortHeader<Row> colKey="escalated_by_name"  sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Escalated By</SortHeader>
+                  <SortHeader<Row> colKey="inprogress_action"  sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Team Action</SortHeader>
+                  <SortHeader<Row> colKey="completed_action"   sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Completed Action</SortHeader>
+                  <SortHeader<Row> colKey="closed_action"      sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Closed Action</SortHeader>
+                  {/* Escalated Hours sorts on the underlying
+                      escalated_time so newer escalations cluster
+                      together; the visible label is a derived
+                      duration string which wouldn't sort numerically
+                      ("9 hours" < "10 hours" alphabetically). */}
+                  <SortHeader<Row> colKey="escalated_time"     sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Escalated Hours</SortHeader>
+                  <SortHeader<Row> colKey="requested_date_time" sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-left  whitespace-nowrap sticky top-0 z-10 bg-card">Original Appointment Date</SortHeader>
+                  <SortHeader<Row> colKey="no_of_escalations"  sortKey={sortKey} sortDir={sortDir} onToggle={toggle} className="!text-center whitespace-nowrap sticky top-0 z-10 bg-card">Reopened</SortHeader>
                 </tr>
               </thead>
               <tbody>
-                {data.items.map((r) => (
+                {sorted.map((r) => (
                   <tr
                     key={r.table_id}
                     className="cursor-pointer hover:bg-muted/40"
@@ -446,7 +561,9 @@ export function EscalatedJobsModal({
         <div className="px-6 py-3 border-t bg-muted/30 flex items-center justify-between">
           <span className="text-xs text-muted-foreground">
             {data
-              ? `Showing ${data.items.length} of ${data.total.toLocaleString('en-IN')}`
+              ? q.trim()
+                ? `Showing ${sorted.length.toLocaleString('en-IN')} of ${data.items.length.toLocaleString('en-IN')} loaded (${data.total.toLocaleString('en-IN')} total)`
+                : `Showing ${data.items.length.toLocaleString('en-IN')} of ${data.total.toLocaleString('en-IN')}`
               : ' '}
           </span>
           <Button variant="outline" onClick={onClose}>Close</Button>
