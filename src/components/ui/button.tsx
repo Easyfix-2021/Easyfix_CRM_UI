@@ -17,7 +17,11 @@ const buttonVariants = cva(
       variant: {
         default: 'bg-primary text-primary-foreground hover:bg-primary/90',
         destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive/90',
-        outline: 'border border-input bg-background hover:bg-muted',
+        // text-foreground is explicit (not inherited) so outline buttons
+        // stay legible when placed inside dark-text-context containers
+        // like the dark-slate DialogHeader band — without it, the white
+        // bg would render with inherited white text and disappear.
+        outline: 'border border-input bg-background text-foreground hover:bg-muted',
         secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80',
         ghost: 'hover:bg-muted',
         link: 'text-primary underline-offset-4 hover:underline',

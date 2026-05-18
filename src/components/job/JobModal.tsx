@@ -1021,6 +1021,62 @@ function JobCommentsTab({ jobId }: { jobId: number }) {
 }
 
 // ─── Images tab ─────────────────────────────────────────────────────
+/*
+ * Single image tile.
+ *
+ * URL contains `?token=<jwt>` — the image file endpoint accepts the
+ * JWT either via Authorization header (default) or query string for
+ * exactly this use case (`<img src>` requests carry no Authorization
+ * header, and we want "open in new tab" to work too). See
+ * EasyFix_Backend/middleware/auth.js for the CSRF/leakage trade-off
+ * write-up. The token here is the same one stored in localStorage by
+ * the api wrapper.
+ *
+ * `onError` flips to the "Image not found" empty state when the BE
+ * responds 404 (image lost from S3 AND local disk, or imageId stale).
+ */
+function JobImageTile({ id, url, label, tooltip }: { id: string; url: string; label: string; tooltip: string }) {
+  const [broken, setBroken] = useState(false);
+
+  const authedUrl = React.useMemo(() => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('crm_auth_token') : null;
+    if (!token) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}token=${encodeURIComponent(token)}`;
+  }, [url]);
+
+  return (
+    <a
+      key={id}
+      href={authedUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="block border rounded-md overflow-hidden hover:shadow-sm transition-shadow"
+      title={tooltip}
+    >
+      {broken ? (
+        <div className="flex h-32 w-full flex-col items-center justify-center gap-1 bg-muted text-[11px] text-muted-foreground">
+          <span className="text-base">⚠️</span>
+          <span>Image not found</span>
+          <span className="text-[10px]">Re-upload to restore</span>
+        </div>
+      ) : (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={authedUrl}
+          alt={label}
+          className="w-full h-32 object-cover bg-muted"
+          loading="lazy"
+          onError={() => setBroken(true)}
+        />
+      )}
+      <div className="px-2 py-1 text-[10px] text-muted-foreground truncate">
+        {label}
+      </div>
+    </a>
+  );
+}
+
 function JobImagesTab({ images }: { images: Array<Record<string, unknown>> }) {
   /*
    * Image URL resolution (2026-05-14 ops update):
@@ -1061,26 +1117,21 @@ function JobImagesTab({ images }: { images: Array<Record<string, unknown>> }) {
         const category = String(img.image_category ?? '');
         if (!id || !stored) return null;
         const url = fileUrl(id);
+        // Friendly category label for the alt text + tooltip — avoids
+        // the placeholder rendering "0" as alt when job_stage is the
+        // sentinel `0` (Booking). Falls back to the stored filename so
+        // legacy local-only rows still get something useful.
+        const friendly = category
+          ? category.charAt(0).toUpperCase() + category.slice(1)
+          : (stage && stage !== '0' ? `Stage ${stage}` : stored || `Image ${id}`);
         return (
-          <a
+          <JobImageTile
             key={id}
-            href={url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="block border rounded-md overflow-hidden hover:shadow-sm transition-shadow"
-            title={`${stage}${category ? ` · ${category}` : ''}`}
-          >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={url}
-              alt={stage || stored}
-              className="w-full h-32 object-cover bg-muted"
-              loading="lazy"
-            />
-            <div className="px-2 py-1 text-[10px] text-muted-foreground truncate">
-              {stage || category || stored}
-            </div>
-          </a>
+            id={id}
+            url={url}
+            label={friendly}
+            tooltip={`${friendly}${stored ? ` · ${stored}` : ''}`}
+          />
         );
       })}
     </div>
@@ -1893,11 +1944,13 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
 
         // Upload the image (if any) to the first successful job.
         const firstSaved = created[0];
+        let uploadedImage = false;
         if (imageFile instanceof File && firstSaved?.job_id) {
           try {
             const fd = new FormData();
             fd.append('file', imageFile);
             await api.post(`/admin/jobs/${firstSaved.job_id}/images`, fd);
+            uploadedImage = true;
           } catch (upErr) {
             // eslint-disable-next-line no-console
             console.warn('Job created but image upload failed:', upErr);
@@ -1913,7 +1966,24 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
           );
         }
 
-        onSaved(firstSaved);
+        // If an image was uploaded AFTER the create POST, re-fetch the
+        // job detail so the post-submit view-mode modal renders the
+        // image instead of showing `Images (0)`. The POST /admin/jobs
+        // response was captured BEFORE the image upload, so its
+        // `images` array is empty even though the row is now in
+        // `tbl_job_image`. Re-fetch is best-effort: on failure we fall
+        // back to the stale payload — the image is safely saved, the
+        // operator will see it on the next modal open.
+        let toSave: Job = firstSaved;
+        if (uploadedImage && firstSaved?.job_id) {
+          try {
+            const fresh = await api.get<Job>(`/admin/jobs/${firstSaved.job_id}`);
+            if (fresh) toSave = fresh;
+          } catch {
+            // ignore — fall back to the stale `firstSaved`
+          }
+        }
+        onSaved(toSave);
       }
     } catch (err) {
       setError(err instanceof ApiError
