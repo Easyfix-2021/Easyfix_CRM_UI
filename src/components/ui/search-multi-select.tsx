@@ -107,7 +107,51 @@ export function SearchMultiSelect({
     return () => document.removeEventListener('mousedown', onDoc);
   }, [open]);
 
-  useEffect(() => { if (open) setTimeout(() => inputRef.current?.focus(), 0); }, [open]);
+  /*
+   * Focus guard — rAF version (2026-05-18 v3).
+   *
+   * Two-layer defense:
+   *
+   *   Layer 1 — rAF tight loop for first 500ms after open. Runs every
+   *   animation frame (~16ms @ 60Hz), checking whether focus is inside
+   *   the popover; if not, snap to the input. 30 frames is enough to
+   *   outlast Radix `FocusScope`'s mount-time scope-membership checks,
+   *   and the loop is invisible to the user (much shorter than human
+   *   reaction time, so the operator never sees an unfocused input).
+   *
+   *   Layer 2 — `onBlur` handler on the filter input (rendered below).
+   *   Catches any focus steal AFTER the 500ms initial window. Schedules
+   *   a refocus on next macrotask, then checks activeElement; if focus
+   *   has actually left the popover, snap it back. Event-driven so
+   *   there's no ongoing polling.
+   *
+   *   Why the previous 100ms-interval version felt slow: the guard
+   *   could miss a steal that happened 50ms before the next tick,
+   *   leaving the user with up to 99ms of dead-input time. At rAF
+   *   frequency (16ms) the worst case is 1 frame — invisible.
+   */
+  useEffect(() => {
+    if (!open) return;
+    inputRef.current?.focus();
+
+    let rafId: number | null = null;
+    const startedAt = performance.now();
+    function tick() {
+      if (performance.now() - startedAt > 500) {
+        rafId = null;
+        return;
+      }
+      const root = popoverRef.current;
+      const input = inputRef.current;
+      if (root && input) {
+        const active = document.activeElement;
+        if (!active || !root.contains(active)) input.focus();
+      }
+      rafId = requestAnimationFrame(tick);
+    }
+    rafId = requestAnimationFrame(tick);
+    return () => { if (rafId !== null) cancelAnimationFrame(rafId); };
+  }, [open]);
   useEffect(() => { if (!open) setQuery(''); }, [open]);
 
   /*
@@ -142,28 +186,64 @@ export function SearchMultiSelect({
   }, [open]);
 
   /*
-   * Focus-trap workaround — see SearchSelect for the full rationale.
-   * Window-capture focusin/focusout listeners stopPropagation on
-   * events targeting [data-portal-popover] descendants so Radix
-   * Dialog's FocusScope (document-capture) never sees them and never
-   * pulls focus back to the dialog content. Without this, the
-   * "Type to filter…" input can't be typed into.
+   * Focus-trap workaround v4 (2026-05-18) — most aggressive.
+   *
+   * User's diagnostic: focus stays on the trigger button (which lives
+   * inside DialogContent / FocusScope), NOT on the popover input.
+   * Selecting an item via mouse then "fixes" the filter — that's
+   * because the mousedown on an option transfers focus through the
+   * popover, after which our previous guards keep it there.
+   *
+   * Root cause: even with window-capture `focusin` stopPropagation,
+   * Radix `FocusScope` performs scope-membership re-checks that fire
+   * AFTER our listener via a different mechanism (likely a
+   * microtask scheduled from its own internal focus-tracking). Those
+   * re-checks find the popover input "outside" the scope and snap
+   * focus back to the trigger.
+   *
+   * The v4 fix: window-capture `focusin` ALSO intercepts focus
+   * events targeting elements INSIDE the trigger's wrap (i.e., the
+   * trigger button) while the popover is open. If we see focus land
+   * on the trigger while the popover is open, snap it immediately
+   * back to the input. This converts Radix's "steal" into a no-op
+   * — the steal still fires, but the input regains focus before
+   * the user can perceive the change.
+   *
+   * Layered with: (a) rAF tight loop for first 500ms after open,
+   * (b) `onBlur` on the input itself, (c) the existing stopProp
+   * for focus events inside the popover.
    */
   useEffect(() => {
     if (!open) return;
     const handler = (e: FocusEvent) => {
       const target = e.target as Element | null;
-      if (target?.closest?.('[data-portal-popover]')) {
+      const popover = popoverRef.current;
+      const wrap = wrapRef.current;
+      const input = inputRef.current;
+      if (!target) return;
+
+      // Focus going INTO the popover — stopPropagation so Radix can't
+      // see it ("focus inside popover" → Radix would otherwise treat
+      // it as focus leaving its scope and try to clamp back).
+      if (popover && popover.contains(target)) {
         e.stopPropagation();
         e.stopImmediatePropagation();
+        return;
+      }
+
+      // Focus landing on the trigger (or anything in the trigger
+      // wrap) while the popover is open — Radix's steal. Snap it
+      // back to the input on the next microtask. setTimeout(0) gives
+      // any current focus-related work a chance to finish before we
+      // re-focus, otherwise we can fight with Radix's same-tick steal.
+      if (wrap && wrap.contains(target) && input) {
+        window.setTimeout(() => {
+          if (popoverRef.current && inputRef.current) inputRef.current.focus();
+        }, 0);
       }
     };
     window.addEventListener('focusin', handler, true);
-    window.addEventListener('focusout', handler, true);
-    return () => {
-      window.removeEventListener('focusin', handler, true);
-      window.removeEventListener('focusout', handler, true);
-    };
+    return () => window.removeEventListener('focusin', handler, true);
   }, [open]);
 
   function toggle(opt: SearchOption) {
@@ -246,6 +326,23 @@ export function SearchMultiSelect({
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Type to filter…"
               className="flex-1 bg-transparent outline-none text-sm placeholder:text-muted-foreground"
+              /*
+               * Layer-2 focus guard. The rAF loop above covers the
+               * 500ms mount-time race; this handles any LATER focus
+               * steal from Radix `FocusScope`'s scope re-checks.
+               * On blur, queue a next-tick check: if focus has
+               * actually left the popover, snap it back. Event-
+               * driven (no polling) so it costs nothing at idle.
+               */
+              onBlur={() => {
+                window.setTimeout(() => {
+                  if (!open) return;
+                  const root = popoverRef.current;
+                  const input = inputRef.current;
+                  if (!root || !input) return;
+                  if (!root.contains(document.activeElement)) input.focus();
+                }, 0);
+              }}
             />
             {query && (
               <button

@@ -97,7 +97,33 @@ export function SearchSelect({
     return () => document.removeEventListener('mousedown', onDoc);
   }, [open]);
 
-  useEffect(() => { if (open) setTimeout(() => inputRef.current?.focus(), 0); }, [open]);
+  /*
+   * Focus guard — rAF version. See SearchMultiSelect for the full
+   * rationale. Layer 1: rAF tight loop for first 500ms (invisible to
+   * user). Layer 2: input onBlur handler (rendered below).
+   */
+  useEffect(() => {
+    if (!open) return;
+    inputRef.current?.focus();
+
+    let rafId: number | null = null;
+    const startedAt = performance.now();
+    function tick() {
+      if (performance.now() - startedAt > 500) {
+        rafId = null;
+        return;
+      }
+      const root = popoverRef.current;
+      const input = inputRef.current;
+      if (root && input) {
+        const active = document.activeElement;
+        if (!active || !root.contains(active)) input.focus();
+      }
+      rafId = requestAnimationFrame(tick);
+    }
+    rafId = requestAnimationFrame(tick);
+    return () => { if (rafId !== null) cancelAnimationFrame(rafId); };
+  }, [open]);
   useEffect(() => { if (!open) setQuery(''); }, [open]);
   useEffect(() => { setActiveIdx(0); }, [query, open]);
 
@@ -149,39 +175,33 @@ export function SearchSelect({
   }, [open]);
 
   /*
-   * Focus-trap workaround: Radix Dialog with `modal=true` uses
-   * `FocusScope` which listens for `focusin`/`focusout` on document
-   * and pulls focus back into the dialog content when it leaves.
-   * Our body-portaled popover is "outside" by that accounting — so
-   * when the operator clicks the filter input, focus lands for ~1ms
-   * and FocusScope immediately yanks it back. User can't type.
-   *
-   * Fix: `window`-capture listeners that `stopPropagation` /
-   * `stopImmediatePropagation` on focus events whose target lives
-   * inside `[data-portal-popover]`. Window-capture fires BEFORE
-   * document-capture in the event flow, so Radix's FocusScope
-   * listener never sees the event and never tries to refocus.
-   *
-   * This is symmetric to the wheel-trap above (Radix's
-   * `react-remove-scroll` interception) — same family of "modal
-   * infrastructure treats body-portaled siblings as outside" bugs,
-   * same shape of fix.
+   * Focus-trap workaround v4 — see SearchMultiSelect for the full
+   * rationale. tl;dr: (1) stopProp focusin events inside the popover
+   * so Radix can't act on them, (2) when focus lands on the trigger
+   * wrap while popover is open (Radix's steal), snap it back to the
+   * input on next microtask.
    */
   useEffect(() => {
     if (!open) return;
     const handler = (e: FocusEvent) => {
       const target = e.target as Element | null;
-      if (target?.closest?.('[data-portal-popover]')) {
+      const popover = popoverRef.current;
+      const wrap = wrapRef.current;
+      const input = inputRef.current;
+      if (!target) return;
+      if (popover && popover.contains(target)) {
         e.stopPropagation();
         e.stopImmediatePropagation();
+        return;
+      }
+      if (wrap && wrap.contains(target) && input) {
+        window.setTimeout(() => {
+          if (popoverRef.current && inputRef.current) inputRef.current.focus();
+        }, 0);
       }
     };
     window.addEventListener('focusin', handler, true);
-    window.addEventListener('focusout', handler, true);
-    return () => {
-      window.removeEventListener('focusin', handler, true);
-      window.removeEventListener('focusout', handler, true);
-    };
+    return () => window.removeEventListener('focusin', handler, true);
   }, [open]);
 
   function pick(opt: SearchOption) {
@@ -271,6 +291,20 @@ export function SearchSelect({
               onKeyDown={onKey}
               placeholder="Type to filter…"
               className="flex-1 bg-transparent outline-none text-sm placeholder:text-muted-foreground"
+              /*
+               * Layer-2 focus guard — see SearchMultiSelect for the
+               * full rationale. Snaps focus back to the input if
+               * Radix steals it after the 500ms rAF window.
+               */
+              onBlur={() => {
+                window.setTimeout(() => {
+                  if (!open) return;
+                  const root = popoverRef.current;
+                  const input = inputRef.current;
+                  if (!root || !input) return;
+                  if (!root.contains(document.activeElement)) input.focus();
+                }, 0);
+              }}
             />
           </div>
           {/* `flex-1 min-h-0` = fills remaining height + can shrink

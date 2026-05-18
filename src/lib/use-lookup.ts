@@ -98,8 +98,18 @@ export function useLookup() {
       try { setCities(await fetchOnce('cities', () => api.get<City[]>('/shared/lookup/cities', { limit: 1000 }))); } catch {}
       try { setVerticals(await fetchOnce('verticals', () => api.get<Vertical[]>('/shared/lookup/verticals'))); } catch {}
       try { setStates(await fetchOnce('states', () => api.get<State[]>('/shared/lookup/states'))); } catch {}
-      try { setServiceCategories(await fetchOnce('svcCat', () => api.get<ServiceCategory[]>('/shared/lookup/service-categories'))); } catch {}
-      try { setServiceTypes(await fetchOnce('svcType', () => api.get<ServiceType[]>('/shared/lookup/service-types'))); } catch {}
+      try {
+        // Many legacy tbl_service_catg rows carry a stray trailing
+        // apostrophe ("Electrician Services'"). Strip on load so every
+        // consumer (dropdowns, Job-tab labels, reports) sees a clean
+        // name — single source of truth.
+        const raw = await fetchOnce('svcCat', () => api.get<ServiceCategory[]>('/shared/lookup/service-categories'));
+        setServiceCategories(raw.map((c) => ({ ...c, service_catg_name: (c.service_catg_name || '').replace(/'+$/u, '').trim() })));
+      } catch {}
+      try {
+        const raw = await fetchOnce('svcType', () => api.get<ServiceType[]>('/shared/lookup/service-types'));
+        setServiceTypes(raw.map((t) => ({ ...t, service_type_name: (t.service_type_name || '').replace(/'+$/u, '').trim() })));
+      } catch {}
       try { setClients(await fetchOnce('clients', () => api.get<ClientLite[]>('/shared/lookup/clients', { limit: 500 }))); } catch {}
       try { setAdminUsers(await fetchOnce('admUsers', () => api.get<UserLite[]>('/shared/lookup/users', { roleGroup: 'admin', limit: 500 }))); } catch {}
       // Fetch EVERY role (not just admin-group). Some legacy roles aren't

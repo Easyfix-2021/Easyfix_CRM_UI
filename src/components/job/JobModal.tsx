@@ -1417,6 +1417,17 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
   const [serviceRows, setServiceRows] = useState<ServiceRow[]>([]);
 
   /*
+   * Per-Job tab index for the create-flow services table. When the
+   * operator picks N service categories, the modal will POST N create-
+   * job requests (one per category), so the services table presents N
+   * tabs labelled "Job 1 — <Cat A>", "Job 2 — <Cat B>", etc. The
+   * active tab filters which service types + rows are shown. Default
+   * 0 (first picked category); reset whenever the category set
+   * changes so an out-of-range index never points at nothing.
+   */
+  const [activeJobTab, setActiveJobTab] = useState(0);
+
+  /*
    * Client contacts — loaded when the Client dropdown changes. Drives
    * the "Reporting Contact" picker AND the SPOC auto-fill (mobile,
    * name, email). Mirrors legacy `getClientContacts(clientId)` which
@@ -1580,6 +1591,39 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
 
   function set<K extends keyof typeof f>(k: K, v: (typeof f)[K]) { setF((s) => ({ ...s, [k]: v })); }
 
+  /*
+   * Client's "Collected By" preference. Read from the client profile
+   * (tbl_client_custom_properties) via the BE endpoint added 2026-05-15.
+   *   - null      → "Any" — operator picks freely from both options
+   *   - 'Easyfix' → lock dropdown to "Easyfix"
+   *   - 'Client'  → lock dropdown to "Client"
+   * The Collected By <SearchSelect> below reads `collectedByPref` to
+   * decide its options + disabled state.
+   */
+  const [collectedByPref, setCollectedByPref] = useState<string | null>(null);
+  useEffect(() => {
+    const clientId = Number(f.fk_client_id) || Number(initial?.fk_client_id);
+    if (!clientId) { setCollectedByPref(null); return; }
+    let cancelled = false;
+    api.get<{ preferred: string | null }>(`/admin/clients/${clientId}/collected-by-preference`)
+      .then((r) => { if (!cancelled) setCollectedByPref(r?.preferred ?? null); })
+      .catch(() => { if (!cancelled) setCollectedByPref(null); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [f.fk_client_id, initial?.fk_client_id]);
+
+  // When the client locks the preference, auto-populate the form field
+  // so the operator can't save with a value that contradicts the lock.
+  useEffect(() => {
+    if (collectedByPref) set('collected_by', collectedByPref);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collectedByPref]);
+
+  // Reset the per-Job tab index whenever the picked category set
+  // changes — guarantees activeJobTab is always in range and the
+  // operator always lands on Job 1 of the new set.
+  useEffect(() => { setActiveJobTab(0); }, [f.fk_service_catg_ids]);
+
   // Build the services[] payload for the PATCH body — shared between confirm
   // and future edit flows. Silently drops partially-filled rows.
   function buildServicesPayload() {
@@ -1678,7 +1722,32 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const imageFile = (f as unknown as { job_image_file?: File }).job_image_file;
 
-        const payload = {
+        /*
+         * Service Category multi-select (2026-05-15): if the operator
+         * picked N categories, we POST N create-job requests in a
+         * loop, each with a single `fk_service_catg_id`. All N jobs
+         * share the same `client_ref_id` so they're discoverable as
+         * a group. If only one category is picked, behaviour is
+         * identical to the legacy single-category flow.
+         *
+         * Failure semantics: failures are surfaced per-row in the
+         * console; the form's `error` state shows a summary. We do
+         * NOT auto-rollback already-created jobs — partial success
+         * is preferable to silently throwing away successfully-
+         * created bookings.
+         */
+        const categoryIds = (f.fk_service_catg_ids || '')
+          .split(',')
+          .filter(Boolean)
+          .map(Number)
+          .filter((n) => Number.isInteger(n) && n > 0);
+        // Always at least one category in the payload — either the
+        // multi list, or fall back to the single-select state.
+        const catsToCreate = categoryIds.length > 0
+          ? categoryIds
+          : (f.fk_service_catg_id ? [Number(f.fk_service_catg_id)] : [0]);
+
+        const basePayload = {
           fk_client_id: Number(f.fk_client_id),
           job_type: f.job_type,
           // Source defaults to "manual" — the legacy UI only ever set
@@ -1728,29 +1797,73 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
           // we don't break callers that ignore it.
           c_questionaire_id: f.c_questionaire_id ? Number(f.c_questionaire_id) : undefined,
         };
-        const saved = await api.post<Job>('/admin/jobs', payload);
 
         /*
-         * Two-step image upload (new S3 flow). Failure to upload the
-         * image after the job is created is NOT a booking failure —
-         * we log a non-fatal warning so ops know to retry from the
-         * View screen, then move on.
+         * Multi-category create loop. For each picked category we
+         * POST one job sharing the same payload + client_ref_id.
+         * The image upload (if any) is attached only to the FIRST
+         * created job — duplicating a single uploaded image across
+         * N S3 keys would waste storage; the operator can re-attach
+         * the image to siblings from the detail view if needed.
          */
-        if (imageFile instanceof File && saved?.job_id) {
+        const created: Job[] = [];
+        const failures: string[] = [];
+        for (const catId of catsToCreate) {
+          /*
+           * Per-category services filter. When the operator picked N
+           * categories, the global `servicesPayload` carries rows
+           * across all of them. For each job we POST only the rows
+           * whose `service_category_id` matches this iteration's
+           * category — matches the per-Job tab UX so each created
+           * job carries only the services the operator put under
+           * its tab. With 0 picked categories the filter is a
+           * passthrough (single-job legacy behaviour).
+           */
+          const filteredServices = catId > 0
+            ? servicesPayload.filter((s) => Number(s.service_category_id) === catId)
+            : servicesPayload;
+          const payload = {
+            ...basePayload,
+            services: filteredServices.length > 0 ? filteredServices : undefined,
+            ...(catId > 0 ? { fk_service_catg_id: catId } : {}),
+          };
+          try {
+            const saved = await api.post<Job>('/admin/jobs', payload);
+            created.push(saved);
+          } catch (err) {
+            const msg = err instanceof ApiError ? err.message : 'create failed';
+            failures.push(`category ${catId}: ${msg}`);
+          }
+        }
+
+        if (created.length === 0) {
+          setError(`No jobs were created. ${failures.join(' · ')}`);
+          return;
+        }
+
+        // Upload the image (if any) to the first successful job.
+        const firstSaved = created[0];
+        if (imageFile instanceof File && firstSaved?.job_id) {
           try {
             const fd = new FormData();
             fd.append('file', imageFile);
-            await api.post(`/admin/jobs/${saved.job_id}/images`, fd);
+            await api.post(`/admin/jobs/${firstSaved.job_id}/images`, fd);
           } catch (upErr) {
-            // Non-fatal: job is saved; just warn in the console so
-            // ops can see what happened. The operator gets the job
-            // detail view and can re-attach the image there.
             // eslint-disable-next-line no-console
             console.warn('Job created but image upload failed:', upErr);
           }
         }
 
-        onSaved(saved);
+        // Surface any partial-failure to the operator without
+        // discarding the successful jobs. Common cause: one category
+        // is inactive at the BE while others are fine.
+        if (failures.length > 0) {
+          setError(
+            `${created.length} job(s) created; ${failures.length} failed: ${failures.join(' · ')}`,
+          );
+        }
+
+        onSaved(firstSaved);
       }
     } catch (err) {
       setError(err instanceof ApiError
@@ -1903,12 +2016,33 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
           */}
         <NumberedSection num={3} title="Select Products">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-            <Field label="Service Category *">
-              <SearchSelect
-                required
-                value={f.fk_service_catg_id}
-                onChange={(v) => set('fk_service_catg_id', v)}
-                placeholder="— Select category —"
+            {/*
+              * Service Category — MULTI-SELECT (2026-05-15).
+              * Selecting multiple categories causes the submit handler
+              * below to POST N create-job requests, one per category,
+              * all sharing the same `client_ref_id`. The result is N
+              * distinct `job_id`s under a single operator-visible
+              * reference. State key: `fk_service_catg_ids` (CSV
+              * string of category IDs). The legacy single-select
+              * field `fk_service_catg_id` is still derived for
+              * compat with downstream rate-card filtering until that
+              * UI is migrated; first selected category drives the
+              * basket filter.
+              */}
+            <Field label="Service Categories *">
+              <SearchMultiSelect
+                value={(f.fk_service_catg_ids || '').split(',').filter(Boolean)}
+                onChange={(next) => {
+                  const ids = (next as Array<string | number>).map(String);
+                  set('fk_service_catg_ids' as keyof typeof f, ids.join(',') as never);
+                  // Keep the single-select field in sync with the
+                  // FIRST selected category so the rate-card basket
+                  // / service-type filter (which still uses the
+                  // single field) shows something sensible.
+                  set('fk_service_catg_id', ids[0] || '');
+                }}
+                placeholder="— Select one or more —"
+                selectedLabel="categories"
                 options={lk.toOpts.serviceCategories.map((o) => ({ value: o.value, label: String(o.label) }))}
               />
             </Field>
@@ -1921,10 +2055,24 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                 options={lk.toOpts.serviceTypes.map((o) => ({ value: o.value, label: String(o.label) }))}
               />
             </Field>
+            {/*
+              * Job Type — MULTI-SELECT (2026-05-15). Stored as a
+              * comma-separated string in the existing `job_type`
+              * varchar(100) column. A single job row carries the
+              * CSV; downstream consumers (reports, webhooks) that
+              * read `job_type` for display will see the CSV. Legacy
+              * parity is preserved when only one value is picked
+              * (CSV with one element equals the original string).
+              */}
             <Field label="Job Type *">
-              <SearchSelect
-                value={f.job_type}
-                onChange={(v) => set('job_type', v)}
+              <SearchMultiSelect
+                value={(f.job_type || '').split(',').filter(Boolean)}
+                onChange={(next) => {
+                  const csv = (next as Array<string | number>).map(String).join(',');
+                  set('job_type', csv);
+                }}
+                placeholder="— Select job type(s) —"
+                selectedLabel="types"
                 options={[
                   { value: 'Installation',   label: 'Installation' },
                   { value: 'Repair',         label: 'Repair' },
@@ -2009,15 +2157,38 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                 placeholder="Notes for the technician"
               />
             </Field>
+            {/*
+              * Collected By — gated by the client's profile preference
+              * (tbl_client_custom_properties; see BE endpoint
+              * /admin/clients/:clientId/collected-by-preference).
+              *   - collectedByPref === null     → "Any": dropdown
+              *       enabled, both options visible.
+              *   - collectedByPref === 'Easyfix' → locked to "Easyfix"
+              *       (operator can see the value but can't change it).
+              *   - collectedByPref === 'Client'  → locked to "Client".
+              * A small hint below explains the lock to the operator
+              * so it doesn't look like the dropdown is broken.
+              */}
             <Field label="Collected By *">
               <SearchSelect
-                value={f.collected_by}
-                onChange={(v) => set('collected_by', v)}
-                options={[
-                  { value: 'Easyfix', label: 'Easyfix' },
-                  { value: 'Client',  label: 'Client' },
-                ]}
+                value={collectedByPref ?? f.collected_by}
+                onChange={(v) => { if (!collectedByPref) set('collected_by', v); }}
+                disabled={!!collectedByPref}
+                options={
+                  collectedByPref
+                    ? [{ value: collectedByPref, label: collectedByPref }]
+                    : [
+                        { value: 'Easyfix',   label: 'Easyfix' },
+                        { value: 'Easyfixer', label: 'Easyfixer' },
+                        { value: 'Client',    label: 'Client' },
+                      ]
+                }
               />
+              {collectedByPref && (
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Locked by client profile (Collected By = {collectedByPref}).
+                </p>
+              )}
             </Field>
           </div>
         </NumberedSection>
@@ -2276,6 +2447,7 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                     // next. The clientServices fetch effect (keyed off
                     // fk_client_id) re-loads the catalog automatically.
                     fk_service_catg_id: '',
+                    fk_service_catg_ids: '',
                     fk_service_type_id: '',
                     fk_service_type_ids: [],
                     job_type: '',
@@ -2719,56 +2891,105 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                 the source of truth and ops asked us to stop letting
                 operators tweak it inline. */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-              <Field label="Service Category *">
-                <SearchSelect
-                  required
-                  value={f.fk_service_catg_id || ''}
-                  onChange={(v) => {
-                    set('fk_service_catg_id', v);
+              {/*
+                * Service Category — MULTI-SELECT (2026-05-15).
+                * Picking N categories causes the submit handler to POST
+                * N create-job requests sharing one `client_ref_id`.
+                * State key: `fk_service_catg_ids` (CSV of category IDs).
+                * The legacy single-select `fk_service_catg_id` is kept
+                * in sync with the FIRST selected category so the
+                * downstream Service-Type filter + rate-card basket
+                * (which still use the single field) have something
+                * sensible to show.
+                */}
+              {/*
+                * Service Categories — restricted to categories that
+                * actually appear in THIS client's rate card. Otherwise
+                * the operator could pick a category that has no priced
+                * services and end up with an empty services table.
+                * The set is derived from `clientServices` (loaded from
+                * `/shared/lookup/client-services?clientId=`). While
+                * the rate card is loading, fall back to ALL active
+                * categories so the dropdown isn't empty during the
+                * 100–300ms BE round-trip.
+                */}
+              <Field label="Service Categories *">
+                <SearchMultiSelect
+                  value={(f.fk_service_catg_ids || '').split(',').filter(Boolean)}
+                  onChange={(next) => {
+                    const ids = (next as Array<string | number>).map(String);
+                    set('fk_service_catg_ids' as keyof typeof f, ids.join(',') as never);
+                    set('fk_service_catg_id', ids[0] || '');
                     // Clear dependent fields on category change so we
                     // don't carry stale type selections across categories.
                     set('fk_service_type_id', '');
                     set('fk_service_type_ids' as keyof typeof f, [] as never);
                   }}
-                  placeholder="— Select category —"
-                  options={(lk.serviceCategories || []).map((c) => ({ value: c.service_catg_id, label: c.service_catg_name }))}
+                  placeholder="— Select one or more —"
+                  selectedLabel="categories"
+                  options={(() => {
+                    // Build the allowed category set from the client's
+                    // rate card. If the card hasn't loaded yet
+                    // (clientServices === null) or is empty, show all
+                    // categories — the dependent Service Type picker
+                    // will still gate against the empty card.
+                    const allowed = new Set(
+                      (clientServices || []).map((cs) => String(cs.service_catg_id)),
+                    );
+                    return (lk.serviceCategories || [])
+                      .filter((c) => allowed.size === 0 || allowed.has(String(c.service_catg_id)))
+                      .map((c) => ({ value: c.service_catg_id, label: c.service_catg_name }));
+                  })()}
                 />
               </Field>
               <Field label="Service Type *">
-                {/* Service Type list is narrowed to only types that
-                    actually appear on THIS client's rate card. Without
-                    this filter the operator could pick a type that has
-                    no priced row in tbl_client_service and end up with
-                    an empty services table + an unbookable job. The
-                    category filter still applies on top. */}
+                {/* Service Type list now reacts to ALL picked categories,
+                    not just the first. When the operator selects N
+                    categories, the dropdown surfaces service types
+                    matching any of them, still filtered to types that
+                    appear on THIS client's rate card (otherwise the
+                    operator could pick a type with no priced row and
+                    end up with an empty services table + unbookable
+                    job). When no category is selected the dropdown is
+                    disabled with a clear hint. */}
                 <SearchMultiSelect
                   value={f.fk_service_type_ids || []}
                   onChange={(next) => set('fk_service_type_ids' as keyof typeof f, next.map(String) as never)}
-                  placeholder={f.fk_service_catg_id ? '— Select service type(s) —' : 'Pick a category first'}
-                  disabled={!f.fk_service_catg_id}
+                  placeholder={(f.fk_service_catg_ids || f.fk_service_catg_id) ? '— Select service type(s) —' : 'Pick a category first'}
+                  disabled={!(f.fk_service_catg_ids || f.fk_service_catg_id)}
                   options={(() => {
                     const inRateCard = new Set(
                       (clientServices || []).map((cs) => String(cs.service_type_id))
                     );
+                    const pickedCats = new Set(
+                      (f.fk_service_catg_ids || '').split(',').filter(Boolean),
+                    );
+                    // Fall back to the single field if multi is empty (edit/confirm flows).
+                    if (pickedCats.size === 0 && f.fk_service_catg_id) {
+                      pickedCats.add(String(f.fk_service_catg_id));
+                    }
                     return (lk.serviceTypes || [])
-                      .filter((t) => !f.fk_service_catg_id || String(t.service_catg_id) === String(f.fk_service_catg_id))
+                      .filter((t) => pickedCats.size === 0 || pickedCats.has(String(t.service_catg_id)))
                       .filter((t) => inRateCard.has(String(t.service_type_id)))
                       .map((t) => ({ value: String(t.service_type_id), label: t.service_type_name }));
                   })()}
                 />
               </Field>
+              {/*
+                * Job Type — MULTI-SELECT (2026-05-15). CSV-stored in
+                * `f.job_type`; a single pick produces a CSV of length 1
+                * which equals the original single-value string, so
+                * backward compatibility is preserved.
+                */}
               <Field label="Job Type *">
-                {/* Canonical Job Type set per ops 2026-05-14:
-                      Installation, Repair, Uninstallation.
-                    Maintenance / Demo / Inspection were carry-over from
-                    a legacy enum that included rows we no longer book
-                    against; trimmed to match the rate-card charge_type
-                    universe in production. */}
-                <SearchSelect
-                  required
-                  value={f.job_type}
-                  onChange={(v) => set('job_type', v)}
-                  placeholder="— Select job type —"
+                <SearchMultiSelect
+                  value={(f.job_type || '').split(',').filter(Boolean)}
+                  onChange={(next) => {
+                    const csv = (next as Array<string | number>).map(String).join(',');
+                    set('job_type', csv);
+                  }}
+                  placeholder="— Select job type(s) —"
+                  selectedLabel="types"
                   options={[
                     { value: 'Installation', label: 'Installation' },
                     { value: 'Repair', label: 'Repair' },
@@ -2777,17 +2998,96 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                 />
               </Field>
             </div>
-            {/* Auto-populated services table. Each selected Service Type
-                contributes every matching client_service row (by
-                service_type_id) at qty 1 with the rate card's price.
-                Rate card is canonical — no inline editing. */}
-            <AutoServicesTable
-              services={clientServices}
-              loading={loadingServices}
-              serviceTypeIds={f.fk_service_type_ids || []}
-              rows={serviceRows}
-              setRows={setServiceRows}
-            />
+            {/*
+              * Per-Job tab bar (2026-05-18). When the operator picked
+              * N categories, the submit will create N jobs — one per
+              * category. The tab bar lets them flip between "what
+              * goes into Job K" with a click. Each tab is filtered to
+              * service types + basket rows whose category matches the
+              * active tab. With 0 or 1 category picked the tabs are
+              * hidden (legacy single-job UX).
+              */}
+            {(() => {
+              const pickedCatIds = (f.fk_service_catg_ids || '')
+                .split(',')
+                .filter(Boolean);
+              if (pickedCatIds.length < 2) return null;
+              // Defensive: clamp activeJobTab if categories shrunk.
+              const tabIdx = Math.min(activeJobTab, pickedCatIds.length - 1);
+              return (
+                <div className="flex gap-1 mb-3 border-b">
+                  {pickedCatIds.map((cid, i) => {
+                    const cat = (lk.serviceCategories || []).find(
+                      (c) => String(c.service_catg_id) === String(cid),
+                    );
+                    const label = cat?.service_catg_name || `Category ${cid}`;
+                    const active = i === tabIdx;
+                    return (
+                      <button
+                        key={cid}
+                        type="button"
+                        onClick={() => setActiveJobTab(i)}
+                        className={
+                          'px-3 py-1.5 text-sm -mb-px border-b-2 transition-colors ' +
+                          (active
+                            ? 'border-sky-600 text-sky-700 font-medium'
+                            : 'border-transparent text-muted-foreground hover:text-foreground')
+                        }
+                      >
+                        Job {i + 1} — {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+            {/*
+              * Auto-populated services table — now filtered to the
+              * active Job-tab's category (when there is one). Each
+              * selected Service Type belonging to that category
+              * contributes every matching client_service row at qty 1
+              * with the rate card's price. Rate card is canonical —
+              * no inline editing. The full `serviceRows` state is
+              * still passed down so the table can update it; rendering
+              * filters per-category at display time.
+              */}
+            {(() => {
+              const pickedCatIds = (f.fk_service_catg_ids || '')
+                .split(',')
+                .filter(Boolean);
+              // Single-category (or 0): show all picked types — legacy behaviour.
+              if (pickedCatIds.length < 2) {
+                return (
+                  <AutoServicesTable
+                    services={clientServices}
+                    loading={loadingServices}
+                    serviceTypeIds={f.fk_service_type_ids || []}
+                    rows={serviceRows}
+                    setRows={setServiceRows}
+                  />
+                );
+              }
+              // Multi-category: narrow service types to the active tab's
+              // category so each tab shows only its own services.
+              const tabIdx = Math.min(activeJobTab, pickedCatIds.length - 1);
+              const activeCatId = pickedCatIds[tabIdx];
+              const typesInActiveCat = new Set(
+                (lk.serviceTypes || [])
+                  .filter((t) => String(t.service_catg_id) === String(activeCatId))
+                  .map((t) => String(t.service_type_id)),
+              );
+              const filteredTypeIds = (f.fk_service_type_ids || [])
+                .filter((id) => typesInActiveCat.has(String(id)));
+              return (
+                <AutoServicesTable
+                  services={clientServices}
+                  loading={loadingServices}
+                  serviceTypeIds={filteredTypeIds}
+                  rows={serviceRows}
+                  setRows={setServiceRows}
+                />
+              );
+            })()}
             {/* Job metadata fields below the services table. Special
                 Comments + Anything Handyman sit half-half on a single
                 row (per ops request — paired textareas read together
@@ -2847,20 +3147,44 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                   />
                 </Field>
               </div>
-              {/* Collected By stays on its own row — no longer paired
-                  with Description (removed per ops; Special Comments
-                  covers the same intent). */}
+              {/*
+                * Collected By — gated by the client's profile
+                * preference (tbl_client_custom_properties; BE endpoint
+                * /admin/clients/:clientId/collected-by-preference).
+                *   - collectedByPref === null     → "Any": both options.
+                *   - collectedByPref === 'Easyfix' → locked to "Easyfix".
+                *   - collectedByPref === 'Client'  → locked to "Client".
+                * Locked dropdown shows a single option and a small hint
+                * line so the operator knows it's not a UI bug.
+                */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <Field label="Collected By *">
+                  {/*
+                    * Canonical options come from `tbl_client.collected_by`
+                    * code values 1/2/3 (Easyfixer/Easyfix/Client) per
+                    * ops 2026-05-18. Code 0 = "any" (no lock) and falls
+                    * through to the three-option dropdown.
+                    */}
                   <SearchSelect
                     required
-                    value={f.collected_by || 'Easyfix'}
-                    onChange={(v) => set('collected_by', v)}
-                    options={[
-                      { value: 'Easyfix',  label: 'Easyfix' },
-                      { value: 'Serviceman', label: 'Serviceman' },
-                    ]}
+                    value={collectedByPref ?? (f.collected_by || 'Easyfix')}
+                    onChange={(v) => { if (!collectedByPref) set('collected_by', v); }}
+                    disabled={!!collectedByPref}
+                    options={
+                      collectedByPref
+                        ? [{ value: collectedByPref, label: collectedByPref }]
+                        : [
+                            { value: 'Easyfix',   label: 'Easyfix' },
+                            { value: 'Easyfixer', label: 'Easyfixer' },
+                            { value: 'Client',    label: 'Client' },
+                          ]
+                    }
                   />
+                  {collectedByPref && (
+                    <p className="text-[11px] text-muted-foreground mt-1">
+                      Locked by client profile (Collected By = {collectedByPref}).
+                    </p>
+                  )}
                 </Field>
               </div>
             </div>
@@ -3906,6 +4230,10 @@ function toFormShape(j: Job | null) {
     material_req: Boolean(j?.material_req),
     collected_by: pick('collected_by') || 'Easyfix',
     fk_service_catg_id: pick('fk_service_catg_id'),
+    // CSV of category IDs for the Book-New-Call multi-select. Empty
+    // string on edit (each tbl_job carries one category — multi-pick
+    // only exists at booking time to fan out into multiple jobs).
+    fk_service_catg_ids: '',
     fk_service_type_id: pick('fk_service_type_id'),
     // Multi-select used in create flow's "Select Products" section.
     // Picking one or more Service Types auto-fans them out into the
