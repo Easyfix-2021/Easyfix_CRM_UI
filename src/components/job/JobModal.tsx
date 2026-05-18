@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { useEffect, useState } from 'react';
-import { Sparkles, Search, CalendarCheck, History, Eye, Plus, X } from 'lucide-react';
+import { Sparkles, Search, CalendarCheck, History, Eye, Plus, X, Pencil } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
@@ -1654,6 +1654,45 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
    * promote-to-BOOKED flow runs as before.
    */
   const [submitVariant, setSubmitVariant] = useState<'book' | 'enquiry' | 'unreachable'>('book');
+
+  /*
+   * Job-outcome dialog (Unreachable / Enquiry) — added 2026-05-18 to
+   * match the legacy CRM popup that asks the operator WHY the job is
+   * being routed to one of those statuses. Captures:
+   *   - dueTo    : 'Customer' | 'Client' | 'EasyFix' | 'Technician'
+   *   - reasonId : free-text label from a canonical reason list
+   *   - remarks  : operator's notes
+   * Submitting the popup runs the existing submit() with the
+   * relevant `submitVariant` AND the popup data folded into
+   * `f.remarks` as a structured prefix so the BE record carries
+   * the context without needing new columns on tbl_job.
+   */
+  const [outcomeDialog, setOutcomeDialog] = useState<null | { mode: 'unreachable' | 'enquiry' }>(null);
+
+  /*
+   * Permission gate for Unreachable / Enquiry buttons.
+   *
+   * Originally gated by `isJobAddNew` — but that action key was never
+   * seeded into `menu_action`, so the helper (which fails-closed and
+   * has no Admin bypass — see src/lib/permissions.ts:23) returned
+   * false for EVERY role, hiding the buttons platform-wide.
+   *
+   * Available Job-related action keys (verified 2026-05-18 against
+   * menu_action): isJobAssign, isJobCancel, isJobConfirm, isJobReassign,
+   * isJobStatusChange, isTransferJobOwnership. None of these
+   * semantically match "create a job in alternate status".
+   *
+   * Since the Book Call submit itself has NO gate (anyone who opens
+   * this modal can create a job in status BOOKED), Unreachable/Enquiry
+   * — which are submit variants creating jobs in status 9 / 7 — should
+   * follow the same posture. Upstream Navbar/Dashboard buttons that
+   * open the modal already gate at the entry point.
+   *
+   * If ops later wants to restrict these flows, seed `isJobUnreachable`
+   * / `isJobEnquiry` (or reuse `isJobStatusChange`) in `menu_action`
+   * and re-gate here.
+   */
+  const canOutcomeButtons = true;
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null); setSubmitting(true);
@@ -3291,29 +3330,34 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
             Unreachable (status 9 — customer couldn't be reached)
             Enquiry     (status 7 — information request, not booked)
             Book Call   (status 0 — Confirmed, happy path)
+          Unreachable/Enquiry both open a confirm popup first (matches
+          legacy CRM) to capture "Pending Due To / Reason / Remarks";
+          Book Call submits directly.
           Edit/Confirm modes keep the original single-button footer. */}
       <div className="flex justify-end gap-2 pt-2 flex-wrap">
         <CancelButton onCancel={onCancel} />
         {!isEditShape ? (
           <>
-            <LoadBtn
-              type="submit"
-              loading={submitting && submitVariant === 'unreachable'}
-              variant="outline"
-              onClick={() => setSubmitVariant('unreachable')}
-              title="Customer couldn't be reached — queue for follow-up (status: Unconfirmed)"
-            >
-              Unreachable
-            </LoadBtn>
-            <LoadBtn
-              type="submit"
-              loading={submitting && submitVariant === 'enquiry'}
-              variant="outline"
-              onClick={() => setSubmitVariant('enquiry')}
-              title="Information request only (status: Enquiry)"
-            >
-              Enquiry
-            </LoadBtn>
+            {canOutcomeButtons && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setOutcomeDialog({ mode: 'unreachable' })}
+                title="Customer couldn't be reached — queue for follow-up (status: Unconfirmed)"
+              >
+                Unreachable
+              </Button>
+            )}
+            {canOutcomeButtons && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setOutcomeDialog({ mode: 'enquiry' })}
+                title="Information request only (status: Enquiry)"
+              >
+                Enquiry
+              </Button>
+            )}
             <LoadBtn
               type="submit"
               loading={submitting && submitVariant === 'book'}
@@ -3332,6 +3376,41 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
           </LoadBtn>
         )}
       </div>
+      {/*
+        * JobOutcomeDialog — legacy "Job Unreachable" / "Job Enquiry"
+        * popup that gathers Pending Due To + Reason + Remarks before
+        * the actual create POST fires. On Submit:
+        *   1. Fold the popup data into the form's `remarks` field as
+        *      a structured prefix `[Unreachable · By Client · Reason:
+        *      Product return] <operator notes>`. BE doesn't need new
+        *      columns this way — the context is preserved in the
+        *      existing remarks column for audit + future parsing.
+        *   2. Set submitVariant to 'unreachable' / 'enquiry'.
+        *   3. Trigger the form's submit programmatically.
+        */}
+      <JobOutcomeDialog
+        open={outcomeDialog !== null}
+        mode={outcomeDialog?.mode ?? 'unreachable'}
+        onClose={() => setOutcomeDialog(null)}
+        onSubmit={({ dueTo, reason, remarks }) => {
+          const mode = outcomeDialog?.mode ?? 'unreachable';
+          const tag = mode === 'unreachable' ? 'Unreachable' : 'Enquiry';
+          const dueLabel = mode === 'unreachable' ? 'Pending Due To' : 'Open Due To';
+          const prefix = `[${tag} · ${dueLabel}: ${dueTo} · Reason: ${reason}]`;
+          // Preserve any existing remarks the operator typed below
+          // the structured prefix.
+          const merged = remarks ? `${prefix} ${remarks}` : prefix;
+          setF((s) => ({ ...s, remarks: merged }));
+          setSubmitVariant(mode);
+          setOutcomeDialog(null);
+          // Programmatic submit — defer one tick so the state updates
+          // above land in the form before submit reads them.
+          setTimeout(() => {
+            const form = document.querySelector('form');
+            if (form) form.requestSubmit();
+          }, 0);
+        }}
+      />
       {/* Address edit dialog — opens from the ✎ pencil per saved
           address. The dialog handles its own PATCH; on success the
           callback below patches the address into prefillCustomer's
@@ -4445,6 +4524,176 @@ function Section({
  * 2 Customer Details, 3 Select Products" layout. The leading badge gives ops
  * a familiar visual anchor when confirming unconfirmed orders.
  */
+/*
+ * JobOutcomeDialog — the "Job Unreachable" / "Job Enquiry" confirm
+ * popup from the legacy CRM. Both modes share the same shape:
+ *   - "Pending Due To" / "Open Due To" radio (Customer / Client /
+ *     EasyFix / Technician)
+ *   - Reason dropdown (fetched live from BE)
+ *   - Remarks textarea
+ *   - Submit / Cancel
+ *
+ * Reasons are sourced from `GET /admin/jobs/action-reasons?type=…`
+ * which reads `action_taken_reason` joined to `action_type` (confirmed
+ * by ops 2026-05-18). Falls back to an empty list if the endpoint
+ * errors so the popup remains operable.
+ *
+ * The component is fully controlled — open/close + submit-payload
+ * shape stays in the parent's hands. On Submit, parent gets
+ * `{ dueTo, reason, remarks }` and decides what to do with it.
+ */
+const DUE_TO_OPTIONS: Array<'Customer' | 'Client' | 'EasyFix' | 'Technician'> = [
+  'Customer',
+  'Client',
+  'EasyFix',
+  'Technician',
+];
+
+function JobOutcomeDialog({
+  open,
+  mode,
+  onClose,
+  onSubmit,
+}: {
+  open: boolean;
+  mode: 'unreachable' | 'enquiry';
+  onClose: () => void;
+  onSubmit: (payload: { dueTo: string; reason: string; remarks: string }) => void;
+}) {
+  const [dueTo, setDueTo] = useState<string>('Customer');
+  const [reason, setReason] = useState<string>('');
+  const [remarks, setRemarks] = useState<string>('');
+  // BE-sourced reasons (action_taken_reason joined to action_type).
+  const [reasons, setReasons] = useState<Array<{ id: number | null; label: string }>>([]);
+  const [reasonsLoading, setReasonsLoading] = useState(false);
+
+  // Reset fields whenever the dialog opens / mode flips.
+  useEffect(() => {
+    if (open) {
+      setDueTo('Customer');
+      setReason('');
+      setRemarks('');
+    }
+  }, [open, mode]);
+
+  // Fetch reasons for the active mode whenever the dialog opens or
+  // mode flips. Empty result is acceptable — the dropdown will show
+  // the placeholder option only, and Submit stays disabled until a
+  // reason is picked.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setReasonsLoading(true);
+    api.get<Array<{ id: number | null; label: string }>>('/admin/jobs/action-reasons', { type: mode })
+      .then((rows) => { if (!cancelled) setReasons(rows || []); })
+      .catch(() => { if (!cancelled) setReasons([]); })
+      .finally(() => { if (!cancelled) setReasonsLoading(false); });
+    return () => { cancelled = true; };
+  }, [open, mode]);
+
+  const title = mode === 'unreachable' ? 'Job Unreachable' : 'Job Enquiry';
+  const dueLabel = mode === 'unreachable' ? 'Pending Due To' : 'Open Due To';
+  const reasonLabel = mode === 'unreachable' ? 'Unreachable Reason' : 'Enquiry Reason';
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!reason || !remarks.trim()) return; // required-field guard
+    onSubmit({ dueTo, reason, remarks: remarks.trim() });
+  }
+
+  // SearchSelect needs unique string values; reasons are sourced by label
+  // (since FE persists the label into `tbl_job.remarks` as a structured
+  // prefix — id is not needed downstream). Dedupe by label so duplicate
+  // free-text entries from `action_taken_reason` don't trigger React's
+  // duplicate-key warning.
+  const reasonOptions = React.useMemo(
+    () => reasons.map((r) => ({ value: r.label, label: r.label })),
+    [reasons],
+  );
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="!max-w-xl p-0 gap-0 overflow-hidden">
+        {/* Sky header band matches the legacy CRM's blue title bar.
+            Plain <div> wrapper (NOT DialogHeader): DialogHeader hardcodes
+            `-mx-6 -mt-6` assuming the parent has p-6 padding, but we use
+            `!p-0` to let the band sit edge-to-edge — those negative
+            margins would push the band 24px outside the panel.
+            DialogTitle alone satisfies Radix's a11y check. */}
+        <div className="px-5 py-3 bg-sky-600 text-white flex items-center gap-2">
+          <Pencil className="h-4 w-4" />
+          <DialogTitle className="text-base font-semibold text-white">{title}</DialogTitle>
+        </div>
+        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          <div className="grid grid-cols-[150px_1fr] items-center gap-3">
+            <label className="text-sm font-medium text-right">
+              {dueLabel}<span className="text-rose-600">*</span>
+            </label>
+            <div className="flex flex-wrap items-center gap-4">
+              {DUE_TO_OPTIONS.map((opt) => (
+                <label key={opt} className="inline-flex items-center gap-1.5 text-sm cursor-pointer">
+                  <input
+                    type="radio"
+                    name="due-to"
+                    value={opt}
+                    checked={dueTo === opt}
+                    onChange={() => setDueTo(opt)}
+                    className="accent-purple-600"
+                  />
+                  {opt === 'Customer' ? 'By Customer' : opt}
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="grid grid-cols-[150px_1fr] items-center gap-3">
+            <label className="text-sm font-medium text-right">
+              {reasonLabel}<span className="text-rose-600">*</span>
+            </label>
+            <SearchSelect
+              value={reason}
+              onChange={setReason}
+              options={reasonOptions}
+              placeholder={reasonsLoading ? 'Loading reasons…' : `Select ${reasonLabel}`}
+              disabled={reasonsLoading}
+              required
+            />
+          </div>
+          <div className="grid grid-cols-[150px_1fr] items-start gap-3">
+            <label className="text-sm font-medium text-right pt-2">
+              Remarks<span className="text-rose-600">*</span>
+            </label>
+            <textarea
+              required
+              rows={3}
+              value={remarks}
+              onChange={(e) => setRemarks(e.target.value)}
+              placeholder="Write Comment…"
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus-visible:border-foreground/40 resize-y"
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-2 border-t">
+            <Button
+              type="submit"
+              className="bg-teal-500 hover:bg-teal-600 text-white"
+              disabled={!reason || !remarks.trim()}
+            >
+              Submit
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="bg-rose-500 hover:bg-rose-600 text-white border-rose-500 hover:text-white"
+              onClick={onClose}
+            >
+              Cancel
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function NumberedSection({ num, title, children }: { num: number; title: string; children: React.ReactNode }) {
   return (
     <section className="rounded-lg border bg-card">
