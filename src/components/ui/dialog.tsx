@@ -4,7 +4,39 @@ import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export const Dialog = DialogPrimitive.Root;
+/*
+ * Dialog wrapper — defaults `modal={false}` so Radix's `FocusScope`
+ * doesn't trap focus inside the dialog content.
+ *
+ * Why this matters (2026-05-18 — after five failed focus-guard
+ * iterations):
+ *   Every dropdown in our app uses a body-portaled popover for its
+ *   option list (escapes ancestor overflow clips). When the popover
+ *   opens INSIDE a Radix modal Dialog, FocusScope sees the popover
+ *   input as "outside the scope" and immediately steals focus back
+ *   to the dialog content. No event-listener interception works
+ *   reliably because FocusScope uses an internal scope-recheck
+ *   mechanism, not a plain event listener. We tried staggered
+ *   retries, intervals, rAF tight loops, and a focusin trigger-wrap
+ *   detector — each failed in different races. The only fix that
+ *   works for the cause (not the symptom) is to disable the trap.
+ *
+ *   Trade-off: `modal={false}` also drops Radix's `react-remove-scroll`
+ *   body lock. Background CAN scroll while a modal is open. The
+ *   visual overlay still discourages background interaction; click-
+ *   outside-to-close, Esc-to-close, animations, and DismissableLayer
+ *   pointer detection all keep working.
+ *
+ *   Callers that genuinely need a focus-trapped modal (rare — usually
+ *   only fully-blocking confirmation flows) can opt back in:
+ *     <Dialog modal={true}>...</Dialog>
+ *   But before doing so, make sure the dialog has NO nested portaled
+ *   popovers — otherwise typing in those popovers will break again.
+ */
+type DialogRootProps = React.ComponentPropsWithoutRef<typeof DialogPrimitive.Root>;
+export function Dialog({ modal = false, ...props }: DialogRootProps) {
+  return <DialogPrimitive.Root modal={modal} {...props} />;
+}
 export const DialogTrigger = DialogPrimitive.Trigger;
 export const DialogPortal = DialogPrimitive.Portal;
 export const DialogClose = DialogPrimitive.Close;
@@ -62,7 +94,20 @@ export const DialogContent = React.forwardRef<
         // `detail.originalEvent.target`. Always read THAT, not e.target.
         const original = (e as unknown as { detail?: { originalEvent?: Event } })
           .detail?.originalEvent?.target as Element | null;
-        if (original?.closest?.('[data-portal-popover]')) {
+        // Two kinds of "outside click" we want to IGNORE:
+        //   1. Click landed inside one of our portaled popovers
+        //      (SearchSelect / SearchMultiSelect option list).
+        //   2. Click landed inside ANOTHER Radix dialog (e.g. the
+        //      "Discard changes?" confirm that opens on Cancel).
+        //      With `modal={false}` the parent dialog's
+        //      DismissableLayer now sees these clicks as outside its
+        //      own content — without this guard, clicking a button
+        //      in a nested confirm dialog would close the parent.
+        if (
+          original?.closest?.('[data-portal-popover]') ||
+          original?.closest?.('[role="dialog"]') ||
+          original?.closest?.('[role="alertdialog"]')
+        ) {
           e.preventDefault();
           return;
         }
@@ -71,7 +116,11 @@ export const DialogContent = React.forwardRef<
       onInteractOutside={(e) => {
         const original = (e as unknown as { detail?: { originalEvent?: Event } })
           .detail?.originalEvent?.target as Element | null;
-        if (original?.closest?.('[data-portal-popover]')) {
+        if (
+          original?.closest?.('[data-portal-popover]') ||
+          original?.closest?.('[role="dialog"]') ||
+          original?.closest?.('[role="alertdialog"]')
+        ) {
           e.preventDefault();
           return;
         }

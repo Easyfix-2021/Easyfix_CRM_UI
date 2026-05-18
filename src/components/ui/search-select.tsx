@@ -98,31 +98,13 @@ export function SearchSelect({
   }, [open]);
 
   /*
-   * Focus guard — rAF version. See SearchMultiSelect for the full
-   * rationale. Layer 1: rAF tight loop for first 500ms (invisible to
-   * user). Layer 2: input onBlur handler (rendered below).
+   * Focus the filter input on open. Plain `.focus()` works now that
+   * our `Dialog` primitive defaults to `modal={false}` — see
+   * dialog.tsx for the trade-off explanation.
    */
   useEffect(() => {
     if (!open) return;
     inputRef.current?.focus();
-
-    let rafId: number | null = null;
-    const startedAt = performance.now();
-    function tick() {
-      if (performance.now() - startedAt > 500) {
-        rafId = null;
-        return;
-      }
-      const root = popoverRef.current;
-      const input = inputRef.current;
-      if (root && input) {
-        const active = document.activeElement;
-        if (!active || !root.contains(active)) input.focus();
-      }
-      rafId = requestAnimationFrame(tick);
-    }
-    rafId = requestAnimationFrame(tick);
-    return () => { if (rafId !== null) cancelAnimationFrame(rafId); };
   }, [open]);
   useEffect(() => { if (!open) setQuery(''); }, [open]);
   useEffect(() => { setActiveIdx(0); }, [query, open]);
@@ -174,35 +156,6 @@ export function SearchSelect({
     return () => root.removeEventListener('wheel', handler, { capture: true });
   }, [open]);
 
-  /*
-   * Focus-trap workaround v4 — see SearchMultiSelect for the full
-   * rationale. tl;dr: (1) stopProp focusin events inside the popover
-   * so Radix can't act on them, (2) when focus lands on the trigger
-   * wrap while popover is open (Radix's steal), snap it back to the
-   * input on next microtask.
-   */
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: FocusEvent) => {
-      const target = e.target as Element | null;
-      const popover = popoverRef.current;
-      const wrap = wrapRef.current;
-      const input = inputRef.current;
-      if (!target) return;
-      if (popover && popover.contains(target)) {
-        e.stopPropagation();
-        e.stopImmediatePropagation();
-        return;
-      }
-      if (wrap && wrap.contains(target) && input) {
-        window.setTimeout(() => {
-          if (popoverRef.current && inputRef.current) inputRef.current.focus();
-        }, 0);
-      }
-    };
-    window.addEventListener('focusin', handler, true);
-    return () => window.removeEventListener('focusin', handler, true);
-  }, [open]);
 
   function pick(opt: SearchOption) {
     onChange(String(opt.value));
@@ -291,20 +244,6 @@ export function SearchSelect({
               onKeyDown={onKey}
               placeholder="Type to filter…"
               className="flex-1 bg-transparent outline-none text-sm placeholder:text-muted-foreground"
-              /*
-               * Layer-2 focus guard — see SearchMultiSelect for the
-               * full rationale. Snaps focus back to the input if
-               * Radix steals it after the 500ms rAF window.
-               */
-              onBlur={() => {
-                window.setTimeout(() => {
-                  if (!open) return;
-                  const root = popoverRef.current;
-                  const input = inputRef.current;
-                  if (!root || !input) return;
-                  if (!root.contains(document.activeElement)) input.focus();
-                }, 0);
-              }}
             />
           </div>
           {/* `flex-1 min-h-0` = fills remaining height + can shrink
