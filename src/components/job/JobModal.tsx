@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { useEffect, useState } from 'react';
-import { Sparkles, Search, CalendarCheck, History, Eye, Plus, X, Pencil } from 'lucide-react';
+import { Sparkles, Search, CalendarCheck, History, Eye, Plus, X, Pencil, CalendarPlus, CheckCircle2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
@@ -154,28 +154,39 @@ export function JobModal({
         }
       >
         {/* The global DialogHeader uses `-mx-6 -mt-6` to claw back the
-            standard DialogContent's p-6 so the bottom border can run
+            standard DialogContent's p-6 so the dark-slate band runs
             edge-to-edge. JobModal uses `p-0` (the body has its own
             scrolling padding), so those negative margins would push
-            the header OUTSIDE the rounded corners and break the title
-            alignment with the body. `!important` overrides force the
-            margins back to 0; px-6 + pt-6 + pb-3 + border-b then
-            produce the same edge-to-edge separator without the offset. */}
-        <DialogHeader className="!mx-0 !mt-0 px-6 pt-6 pb-3 border-b">
+            the band OUTSIDE the rounded corners. `!important` overrides
+            force the margins back to 0; px-6 + py-3.5 + !mb-0 produces
+            the same edge-to-edge band without the offset. */}
+        <DialogHeader className="!mx-0 !mt-0 px-6 py-4 !mb-0">
           <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <DialogTitle className="truncate">{title}</DialogTitle>
-              {/* Status badge + job-type sub-line only show once we have
-                  the fresh `job` payload — gated on `!loading` so the
-                  previous job's badge can't flash on re-open. */}
-              {mode === 'view' && !loading && job && (
-                <DialogDescription className="mt-1 flex items-center gap-2">
-                  <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${statusColorClass(Number(job.job_status))}`}>
-                    {statusLabel(Number(job.job_status), { assigned: job.fk_easyfixter_id != null })}
-                  </span>
-                  <span className="text-xs">{String(job.job_type ?? '')}</span>
-                </DialogDescription>
-              )}
+            <div className="flex items-center gap-2.5 min-w-0">
+              {/* Sky-accented icon tile gives the header a visual anchor
+                  instead of a lone text title. CalendarPlus signals
+                  "schedule a new call" for create; Pencil for edit;
+                  Eye for view. */}
+              <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-sky-500/20 ring-1 ring-sky-400/40">
+                {mode === 'create'  ? <CalendarPlus className="h-4 w-4 text-sky-300" />
+                 : mode === 'edit'  ? <Pencil className="h-4 w-4 text-sky-300" />
+                 : mode === 'confirm' ? <CheckCircle2 className="h-4 w-4 text-sky-300" />
+                 : <Eye className="h-4 w-4 text-sky-300" />}
+              </span>
+              <div className="min-w-0">
+                <DialogTitle className="truncate">{title}</DialogTitle>
+                {/* Status badge + job-type sub-line only show once we have
+                    the fresh `job` payload — gated on `!loading` so the
+                    previous job's badge can't flash on re-open. */}
+                {mode === 'view' && !loading && job && (
+                  <DialogDescription className="mt-1 flex items-center gap-2">
+                    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${statusColorClass(Number(job.job_status))}`}>
+                      {statusLabel(Number(job.job_status), { assigned: job.fk_easyfixter_id != null })}
+                    </span>
+                    <span className="text-xs">{String(job.job_type ?? '')}</span>
+                  </DialogDescription>
+                )}
+              </div>
             </div>
             {/* ActionBar's buttons depend on the loaded job (status drives
                 which actions are valid), so we wait until loading clears
@@ -4614,15 +4625,17 @@ function JobOutcomeDialog({
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent className="!max-w-xl p-0 gap-0 overflow-hidden">
-        {/* Sky header band matches the legacy CRM's blue title bar.
-            Plain <div> wrapper (NOT DialogHeader): DialogHeader hardcodes
-            `-mx-6 -mt-6` assuming the parent has p-6 padding, but we use
-            `!p-0` to let the band sit edge-to-edge — those negative
-            margins would push the band 24px outside the panel.
-            DialogTitle alone satisfies Radix's a11y check. */}
-        <div className="px-5 py-3 bg-sky-600 text-white flex items-center gap-2">
-          <Pencil className="h-4 w-4" />
-          <DialogTitle className="text-base font-semibold text-white">{title}</DialogTitle>
+        {/* Dark-slate gradient header band with sky accent underline —
+            matches the global modal-header look. Plain <div> wrapper
+            (NOT DialogHeader) because DialogHeader's `-mx-6 -mt-6`
+            assumes the parent has p-6 padding, but we use `!p-0` to
+            let the band sit edge-to-edge. DialogTitle alone satisfies
+            Radix's a11y check. */}
+        <div className="px-6 py-4 bg-gradient-to-r from-slate-900 via-slate-700 to-slate-900 text-white flex items-center gap-2.5 shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]">
+          <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-sky-500/20 ring-1 ring-sky-400/40">
+            <Pencil className="h-3.5 w-3.5 text-sky-300" />
+          </span>
+          <DialogTitle className="text-[15px] font-semibold tracking-tight">{title}</DialogTitle>
         </div>
         <form onSubmit={handleSubmit} className="p-5 space-y-4">
           <div className="grid grid-cols-[150px_1fr] items-center gap-3">

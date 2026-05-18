@@ -61,7 +61,9 @@ export const DialogOverlay = React.forwardRef<
      *     duration so they enter as one motion.
      */
     className={cn(
-      'fixed inset-0 z-50 bg-black/55 backdrop-blur-[2px]',
+      // Strong dim (75%) + 4px blur so busy backgrounds (dashboard
+      // cards, data tables) clearly recede when a modal opens.
+      'fixed inset-0 z-50 bg-slate-900/75 backdrop-blur-[4px]',
       'data-[state=open]:animate-in data-[state=open]:fade-in-0',
       'data-[state=closed]:animate-out data-[state=closed]:fade-out-0',
       'duration-200',
@@ -165,7 +167,11 @@ export const DialogContent = React.forwardRef<
          */
         'border border-slate-200/80 bg-background',
         'shadow-2xl ring-1 ring-black/5',
-        'p-6',
+        // overflow-hidden so the dark-slate DialogHeader band clips to
+        // the panel's rounded corners (the header uses `-mx-6 -mt-6` to
+        // sit edge-to-edge; without clipping the band's square top-edge
+        // pokes past the rounded container).
+        'p-6 overflow-hidden',
         /*
          * Open/close animation. Combines fade + zoom + a tiny
          * downward slide so the dialog feels like it "lands" from
@@ -187,7 +193,13 @@ export const DialogContent = React.forwardRef<
     >
       {children}
       {!hideClose && (
-        <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 transition-opacity hover:opacity-100 focus:outline-none">
+        // Visible-on-slate close: tinted background pill so the X reads
+        // against the dark band (was disappearing as a low-contrast glyph
+        // before). Hover bumps to white/15 for clear feedback.
+        <DialogPrimitive.Close
+          className="absolute right-3 top-3 inline-flex h-7 w-7 items-center justify-center rounded-md bg-white/10 text-white/85 hover:bg-white/20 hover:text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+          aria-label="Close"
+        >
           <X className="h-4 w-4" />
           <span className="sr-only">Close</span>
         </DialogPrimitive.Close>
@@ -198,19 +210,41 @@ export const DialogContent = React.forwardRef<
 DialogContent.displayName = DialogPrimitive.Content.displayName;
 
 /*
- * Header gets a bottom border so the header is visually separated from
- * the body. Uses negative horizontal margin + matching padding so the
- * border-b extends edge-to-edge of the modal (DialogContent retains its
- * default p-6 — we couldn't move padding wholesale without breaking
- * every existing modal call site). `-mt-6 + pt-6` reclaims the
- * DialogContent's top padding so the header text sits where it was
- * before, just now with the separator line below it.
+ * Header band — Metronic-style dark slate gradient + thin sky accent
+ * underline so the band feels lifted and on-brand rather than flat.
+ *
+ * Layout: negative horizontal/top margins so the coloured band runs
+ * edge-to-edge of the modal (DialogContent retains its default p-6 —
+ * we couldn't move padding wholesale without breaking every existing
+ * modal call site). `-mt-6 + py-3.5` reclaims the DialogContent's top
+ * padding so the band sits flush with the top.
+ *
+ * Visual layering:
+ *   - `bg-gradient-to-r from-sidebar via-sidebar-accent to-sidebar`
+ *     gives the band a subtle horizontal sheen so the header reads as
+ *     a "lit surface" rather than a flat fill.
+ *   - `shadow-[inset_0_-2px_0_0_theme(colors.sky.500/0.55)]` paints a
+ *     2px sky-500 accent line at the bottom of the band — the
+ *     EasyFix-blue tie-in without using an extra DOM node.
+ *   - `text-white` for the title region; `DialogDescription` softens to
+ *     a slate-200/75 sub-tone for hierarchy.
+ *
+ * If a call site uses `DialogContent` with `!p-0`, the call site MUST
+ * override the negative margins (`!mx-0 !mt-0`) — see [JobModal.tsx]
+ * for the standard pattern.
  */
 export const DialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
   <div
     className={cn(
-      'flex flex-col space-y-1.5 text-center sm:text-left',
-      '-mx-6 -mt-6 px-6 pt-5 pb-3 mb-1 border-b',
+      'flex flex-col space-y-1 text-left',
+      '-mx-6 -mt-6 px-6 py-4 mb-5',
+      // Pronounced slate gradient (slate-900 → slate-700 → slate-900)
+      // gives the band visible depth instead of a flat fill.
+      'bg-gradient-to-r from-slate-900 via-slate-700 to-slate-900 text-white',
+      // 3px sky-500 underline drawn with a literal rgba inset shadow —
+      // Tailwind's `theme()`-with-opacity syntax doesn't reliably
+      // resolve in arbitrary values, so we spell the colour out.
+      'shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]',
       className,
     )}
     {...props}
@@ -239,7 +273,13 @@ export const DialogTitle = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Title>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Title>
 >(({ className, ...props }, ref) => (
-  <DialogPrimitive.Title ref={ref} className={cn('text-lg font-semibold leading-none tracking-tight', className)} {...props} />
+  // Crisp white title; tighter tracking + leading-tight so multi-word
+  // titles ("Reassign Technician · Job #123") sit on one line cleanly.
+  <DialogPrimitive.Title
+    ref={ref}
+    className={cn('text-[15px] font-semibold leading-tight tracking-tight text-white', className)}
+    {...props}
+  />
 ));
 DialogTitle.displayName = DialogPrimitive.Title.displayName;
 
@@ -247,6 +287,8 @@ export const DialogDescription = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Description>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Description>
 >(({ className, ...props }, ref) => (
-  <DialogPrimitive.Description ref={ref} className={cn('text-sm text-muted-foreground', className)} {...props} />
+  // Soft slate-tint sub-line under the title for context (date range,
+  // job reference, etc.). Readable but clearly secondary.
+  <DialogPrimitive.Description ref={ref} className={cn('text-[12px] text-slate-300/85', className)} {...props} />
 ));
 DialogDescription.displayName = DialogPrimitive.Description.displayName;
