@@ -47,7 +47,26 @@ export const DialogOverlay = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Overlay
     ref={ref}
-    className={cn('fixed inset-0 z-50 bg-black/60 data-[state=open]:animate-in data-[state=closed]:animate-out', className)}
+    /*
+     * Layered backdrop:
+     *   - `bg-black/55` — slightly softer than 60% so content underneath
+     *     remains readable but clearly inactive.
+     *   - `backdrop-blur-[2px]` — subtle frost so the page behind feels
+     *     visually pushed back without distortion. Heavier blurs
+     *     (`backdrop-blur-sm` and above) start to read as a Mac/iOS
+     *     trick and don't match the Metronic palette; 2px is the
+     *     sweet spot.
+     *   - `data-[state=open]:animate-in fade-in-0` — fades in over
+     *     200ms when the dialog mounts; matches the content's
+     *     duration so they enter as one motion.
+     */
+    className={cn(
+      'fixed inset-0 z-50 bg-black/55 backdrop-blur-[2px]',
+      'data-[state=open]:animate-in data-[state=open]:fade-in-0',
+      'data-[state=closed]:animate-out data-[state=closed]:fade-out-0',
+      'duration-200',
+      className,
+    )}
     {...props}
   />
 ));
@@ -127,7 +146,36 @@ export const DialogContent = React.forwardRef<
         onInteractOutside?.(e);
       }}
       className={cn(
-        'fixed left-1/2 top-1/2 z-50 grid w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 border bg-background p-6 shadow-lg sm:rounded-lg',
+        /*
+         * Position + box. `fixed` centering via top/left 50% +
+         * translate-50%; max-width + grid container; 24px padding;
+         * rounded corners on sm+ viewports (mobile gets full-bleed).
+         */
+        'fixed left-1/2 top-1/2 z-50 grid w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 sm:rounded-xl',
+        /*
+         * 3D surface (2026-05-18):
+         *   - Layered shadow: outer `shadow-2xl` for depth + an inner
+         *     `ring-1 ring-black/5` creates a subtle high-light edge.
+         *     Together they give the modal a "lifted" feel without
+         *     the cartoon-y bevel of harder shadows.
+         *   - `border border-slate-200/80` — soft slate border so the
+         *     edge reads in light backgrounds; combines with the ring
+         *     for a layered border feel.
+         *   - `bg-background` keeps the panel surface neutral.
+         */
+        'border border-slate-200/80 bg-background',
+        'shadow-2xl ring-1 ring-black/5',
+        'p-6',
+        /*
+         * Open/close animation. Combines fade + zoom + a tiny
+         * downward slide so the dialog feels like it "lands" from
+         * just above the centre. 220ms is the snappy-but-noticeable
+         * sweet spot — fast enough not to feel laggy, slow enough
+         * to read as intentional motion.
+         */
+        'data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=open]:slide-in-from-top-[2%]',
+        'data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=closed]:slide-out-to-top-[2%]',
+        'duration-200',
         // Suppresses the default browser focus outline that Radix's
         // auto-focus-on-open paints around the modal — was rendering as
         // a thick blue border on Chromium. Dialog is still announced via
