@@ -228,9 +228,23 @@ function NavBtn({
 
 /*
  * Helper for parents that need to translate `pageSize` into a backend
- * `limit` query param. 'all' becomes a very high number so the SQL
- * still has a safety cap.
+ * `limit` query param.
+ *
+ * 'all' becomes `maxLimit` (default 1000) — the highest value most
+ * admin list endpoints' Joi validators accept (`Joi.number().max(1000)`).
+ * Passing 100_000 like the original implementation did would fail
+ * validation across the board. Callers whose endpoint caps lower
+ * (e.g. `/admin/jobs` caps at 500, `/admin/customers` at 500, the
+ * generic auxiliary lookups at 5000) should pass their endpoint's
+ * actual cap explicitly so the FE "All" maps to that endpoint's true
+ * maximum without 400ing.
+ *
+ * Worth noting: "All" is a soft cap — for tables that have millions
+ * of rows (jobs table at ~384k), even maxLimit=500 can't truly show
+ * everything. The label still reads "All" because operators rarely
+ * scroll past the first thousand rows in a table view; they filter
+ * down to what they actually want.
  */
-export function pageSizeToLimit(pageSize: TablePageSize): number {
-  return pageSize === 'all' ? 100_000 : pageSize;
+export function pageSizeToLimit(pageSize: TablePageSize, maxLimit = 1000): number {
+  return pageSize === 'all' ? maxLimit : pageSize;
 }

@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
-  Search, ChevronLeft, ChevronRight, Eye,
+  Search, Eye,
   CalendarClock, PlayCircle, CheckCircle2, CalendarCheck,
   UserPlus, RefreshCw,
 } from 'lucide-react';
@@ -18,6 +18,11 @@ import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { AssignTechnicianModal, type AssignMode } from '@/components/job/AssignTechnicianModal';
 import { useSort, SortHeader } from '@/lib/use-sort';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
+
+// `/admin/jobs` Joi caps limit at 500 — pass to pageSizeToLimit so
+// "All" sends 500 instead of the default 1000 (which would 400).
+const JOBS_MAX_LIMIT = 500;
 
 /*
  * MY ORDERS — user-scoped view of tbl_job.
@@ -63,7 +68,9 @@ type JobRow = {
 };
 type Resp = { items: JobRow[]; total: number; limit: number; offset: number };
 
-const PAGE_SIZE = 50;
+// Operator-controlled via the TablePagination footer. "All" maps to
+// JOBS_MAX_LIMIT (the BE Joi cap on /admin/jobs).
+const DEFAULT_PAGE_SIZE: TablePageSize = 50;
 
 export default function MyOrdersPage() {
   const { me } = useMe();
@@ -91,7 +98,10 @@ export default function MyOrdersPage() {
     return t && TABS.some((x) => x.value === t) ? t : 'all';
   });
   const [q, setQ] = useState('');
-  const [offset, setOffset] = useState(0);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState<TablePageSize>(DEFAULT_PAGE_SIZE);
+  const limit = pageSizeToLimit(pageSize, JOBS_MAX_LIMIT);
+  const offset = page * limit;
   const [data, setData] = useState<Resp | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -113,13 +123,15 @@ export default function MyOrdersPage() {
   async function load(reset = false, force = false) {
     const tabDef = TABS.find((t) => t.value === tab);
     const off = reset ? 0 : offset;
-    const key = `${tab}|${off}|${scopedOwnerId ?? 'admin-all'}`;
+    // Cache key includes pageSize so changing rows-per-page doesn't
+    // serve a stale 50-row payload.
+    const key = `${tab}|${off}|${limit}|${scopedOwnerId ?? 'admin-all'}`;
 
     if (!force) {
       const hit = cacheRef.current.get(key);
       if (hit && Date.now() - hit.at < TAB_CACHE_TTL) {
         setData(hit.data);
-        if (reset) setOffset(0);
+        if (reset) setPage(0);
         return;
       }
     }
@@ -130,19 +142,19 @@ export default function MyOrdersPage() {
         status:    tabDef?.statuses ? undefined : tabDef?.status,
         statuses:  tabDef?.statuses ? tabDef.statuses.join(',') : undefined,
         assigned:  tabDef?.assigned === undefined ? undefined : String(tabDef.assigned),
-        limit: PAGE_SIZE, offset: off,
+        limit, offset: off,
         ownerId: scopedOwnerId,
       });
       setData(r);
       cacheRef.current.set(key, { at: Date.now(), data: r });
-      if (reset) setOffset(0);
+      if (reset) setPage(0);
     } finally { setLoading(false); }
   }
 
-  // Refetch on tab change, offset change, and when auth resolves so admin vs.
-  // non-admin scoping takes effect as soon as we know who the user is.
-  useEffect(() => { setOffset(0); load(true, true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [tab, scopedOwnerId]);
-  useEffect(() => { load(false); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [offset]);
+  // Refetch on tab/scope change AND on page/pageSize change. pageSize
+  // change resets page via the onPageSizeChange handler below.
+  useEffect(() => { setPage(0); load(true, true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [tab, scopedOwnerId]);
+  useEffect(() => { load(false); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [page, pageSize]);
 
   // (refreshCounts removed with the pill bar — each sub-menu is its own page
   // so we don't need cross-tab counts; `data.total` in the subtitle covers
@@ -158,7 +170,7 @@ export default function MyOrdersPage() {
     const resolved = t && TABS.some((x) => x.value === t) ? t : 'all';
     if (resolved !== tab) {
       setTab(resolved);
-      setOffset(0);
+      setPage(0);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
@@ -437,18 +449,14 @@ export default function MyOrdersPage() {
         onAssigned={() => { cacheRef.current.clear(); load(false, true); }}
       />
 
-      {data && data.total > PAGE_SIZE && (
-        <div className="flex items-center justify-end gap-2 text-sm">
-          <span className="text-muted-foreground">
-            Showing {offset + 1}–{Math.min(offset + PAGE_SIZE, data.total)} of {data.total.toLocaleString()}
-          </span>
-          <Button variant="outline" size="sm" disabled={offset === 0} onClick={() => setOffset((o) => Math.max(0, o - PAGE_SIZE))}>
-            <ChevronLeft className="h-4 w-4" /> Prev
-          </Button>
-          <Button variant="outline" size="sm" disabled={offset + PAGE_SIZE >= data.total} onClick={() => setOffset((o) => o + PAGE_SIZE)}>
-            Next <ChevronRight className="h-4 w-4" />
-          </Button>
-        </div>
+      {data && (
+        <TablePagination
+          page={page}
+          pageSize={pageSize}
+          total={data.total}
+          onPageChange={setPage}
+          onPageSizeChange={(s) => { setPageSize(s); setPage(0); }}
+        />
       )}
     </div>
   );

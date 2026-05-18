@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
-  Plus, Upload, Search, Filter, ChevronLeft, ChevronRight,
+  Plus, Upload, Search, Filter,
   // Row-level quick-action icons (mirror the legacy Manage Jobs action column)
   Eye, CalendarClock, PlayCircle, CheckCircle2, CalendarCheck,
 } from 'lucide-react';
@@ -20,6 +20,11 @@ import { useSort, SortHeader } from '@/lib/use-sort';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
+
+// `/admin/jobs` Joi caps limit at 500 — pass to pageSizeToLimit so
+// "All" sends 500 instead of the default 1000 (which would 400).
+const JOBS_MAX_LIMIT = 500;
 
 type JobRow = {
   job_id: number; job_reference_id: string | null; client_ref_id: string | null;
@@ -39,7 +44,9 @@ type Resp = { items: JobRow[]; total: number; limit: number; offset: number };
 // shared with /my-orders. Any change to the lifecycle mapping lands in both
 // places automatically.
 
-const PAGE_SIZE = 50;
+// Default rows-per-page; operator-controlled via the TablePagination
+// footer. "All" maps to JOBS_MAX_LIMIT (the BE Joi cap on /admin/jobs).
+const DEFAULT_PAGE_SIZE: TablePageSize = 50;
 
 export default function JobsPage() {
   const lk = useLookup();
@@ -75,7 +82,13 @@ export default function JobsPage() {
     clientId: '', cityId: '', ownerId: '', easyfixerId: '',
     startDate: '', endDate: '',
   });
-  const [offset, setOffset] = useState(0);
+  // page is 0-indexed at the API boundary (offset = page * pageSize),
+  // but TablePagination displays it 1-indexed. Switching pageSize
+  // resets page to 0 so the operator always lands on the first row.
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState<TablePageSize>(DEFAULT_PAGE_SIZE);
+  const limit = pageSizeToLimit(pageSize, JOBS_MAX_LIMIT);
+  const offset = page * limit;
   const [data, setData] = useState<Resp | null>(null);
   const [loading, setLoading] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
@@ -99,13 +112,15 @@ export default function JobsPage() {
   async function load(reset = false, force = false) {
     const tabDef = TABS.find((t) => t.value === tab);
     const off = reset ? 0 : offset;
-    const key = `${tab}|${off}|${filterKey()}`;
+    // Cache key includes pageSize so changing rows-per-page doesn't
+    // serve a stale fixed-50 payload.
+    const key = `${tab}|${off}|${limit}|${filterKey()}`;
 
     if (!force) {
       const hit = cacheRef.current.get(key);
       if (hit && Date.now() - hit.at < TAB_CACHE_TTL) {
         setData(hit.data);
-        if (reset) setOffset(0);
+        if (reset) setPage(0);
         return;
       }
     }
@@ -133,7 +148,7 @@ export default function JobsPage() {
         statuses:  tabDef?.statuses ? tabDef.statuses.join(',') : undefined,
         assigned:  tabDef?.assigned === undefined ? undefined : String(tabDef.assigned),
         isEscalated,
-        limit: PAGE_SIZE, offset: off,
+        limit, offset: off,
         clientId: filters.clientId || undefined,
         cityId: filters.cityId || undefined,
         ownerId: filters.ownerId || undefined,
@@ -143,16 +158,19 @@ export default function JobsPage() {
       });
       setData(r);
       cacheRef.current.set(key, { at: Date.now(), data: r });
-      if (reset) setOffset(0);
+      if (reset) setPage(0);
     } finally { setLoading(false); }
   }
 
-  useEffect(() => { setOffset(0); load(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [tab]);
-  useEffect(() => { load(false); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [offset]);
+  useEffect(() => { setPage(0); load(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [tab]);
+  // Refetch on page or pageSize change. pageSize change resets page
+  // via the onPageSizeChange handler below, so an explicit reset isn't
+  // needed here.
+  useEffect(() => { load(false); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [page, pageSize]);
   // Reload when ?focus=… changes — drives the Escalated Jobs deep-link
   // from the navbar.
   const focusParam = useSearchParams().get('focus');
-  useEffect(() => { setOffset(0); load(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [focusParam]);
+  useEffect(() => { setPage(0); load(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [focusParam]);
 
   /*
    * Counts fetch — runs once on mount and again after a save from the modal.
@@ -165,7 +183,7 @@ export default function JobsPage() {
   }
   useEffect(() => { refreshCounts(); }, []);
   // Filter changes refetch (backend-driven); the search box doesn't — see below.
-  useEffect(() => { setOffset(0); load(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ },
+  useEffect(() => { setPage(0); load(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ },
     [filters.clientId, filters.cityId, filters.ownerId, filters.easyfixerId, filters.startDate, filters.endDate]);
 
   // Modal state + URL-driven deep-link support (matches Easyfixer pattern).
@@ -192,7 +210,7 @@ export default function JobsPage() {
     const t = searchParams.get('tab');
     if (t && TABS.some((x) => x.value === t) && t !== tab) {
       setTab(t);
-      setOffset(0);
+      setPage(0);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
@@ -485,18 +503,14 @@ export default function JobsPage() {
         onSaved={() => { cacheRef.current.clear(); load(false, true); refreshCounts(); }}
       />
 
-      {data && data.total > PAGE_SIZE && (
-        <div className="flex items-center justify-end gap-2 text-sm">
-          <span className="text-muted-foreground">
-            Showing {offset + 1}–{Math.min(offset + PAGE_SIZE, data.total)} of {data.total.toLocaleString()}
-          </span>
-          <Button variant="outline" size="sm" disabled={offset === 0} onClick={() => setOffset((o) => Math.max(0, o - PAGE_SIZE))}>
-            <ChevronLeft className="h-4 w-4" /> Prev
-          </Button>
-          <Button variant="outline" size="sm" disabled={offset + PAGE_SIZE >= data.total} onClick={() => setOffset((o) => o + PAGE_SIZE)}>
-            Next <ChevronRight className="h-4 w-4" />
-          </Button>
-        </div>
+      {data && (
+        <TablePagination
+          page={page}
+          pageSize={pageSize}
+          total={data.total}
+          onPageChange={setPage}
+          onPageSizeChange={(s) => { setPageSize(s); setPage(0); }}
+        />
       )}
     </div>
   );
