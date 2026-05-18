@@ -2236,14 +2236,72 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
    * MUST tell the technician which branch the job is for; an empty
    * Branch row is unworkable downstream. Extend this list when more
    * branch-strict clients are onboarded.
+   *
+   * UPDATE 2026-05-18: this hardcoded list is no longer used. The
+   * mandatory + visibility flags now come from
+   * `tbl_client_custom_properties` via the BE endpoint
+   * `/admin/clients/:clientId/custom-properties`. See
+   * `clientCustomProps` below.
    */
-  const BRANCH_MANDATORY_CLIENT_IDS = React.useMemo(() => new Set(['252', '395']), []);
-  const branchIsMandatory = BRANCH_MANDATORY_CLIENT_IDS.has(String(f.fk_client_id || ''));
+
+  /*
+   * Client custom-properties (loaded when a client is picked).
+   * Map of `propertyName → { mandatory: boolean }`. Drives:
+   *   - Visibility of "Branch Details", "Property / Building Name",
+   *     "Product Code" inputs in Section 1. A field shows ONLY when
+   *     its property name appears in this map. If the client has no
+   *     row for `building_name`, the input is hidden.
+   *   - Required state + visual `*` on each field, driven by the
+   *     property's `mandatory` flag in the DB.
+   *
+   * Property name conventions (must match the FE labels below):
+   *   - `branch_details` (or `branch`) → Branch Details
+   *   - `building_name`  (or `property_name` / `building`) → Property / Building Name
+   *   - `product_code`   (or `sku`) → Product Code
+   *
+   * Anything else in the response is captured but currently unused.
+   */
+  type CustomProp = { name: string; mandatory: boolean; label: string | null; value: string | null };
+  const [clientCustomProps, setClientCustomProps] = useState<Map<string, CustomProp>>(new Map());
+  useEffect(() => {
+    const clientId = Number(f.fk_client_id) || Number(initial?.fk_client_id);
+    if (!clientId) { setClientCustomProps(new Map()); return; }
+    let cancelled = false;
+    api.get<CustomProp[]>(`/admin/clients/${clientId}/custom-properties`)
+      .then((rows) => {
+        if (cancelled) return;
+        const map = new Map<string, CustomProp>();
+        for (const p of (rows || [])) {
+          // Normalise common name variants to canonical FE keys.
+          const n = String(p.name || '').toLowerCase().trim();
+          const canonical = (() => {
+            if (n === 'branch' || n === 'branch_details') return 'branch_details';
+            if (n === 'building' || n === 'building_name' || n === 'property_name' || n === 'property') return 'building_name';
+            if (n === 'sku' || n === 'product_code') return 'product_code';
+            return n;
+          })();
+          map.set(canonical, { ...p, name: canonical });
+        }
+        setClientCustomProps(map);
+      })
+      .catch(() => { if (!cancelled) setClientCustomProps(new Map()); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [f.fk_client_id, initial?.fk_client_id]);
+
+  // Convenience flags — present + mandatory derived from the map.
+  const branchProp     = clientCustomProps.get('branch_details');
+  const buildingProp   = clientCustomProps.get('building_name');
+  const productProp    = clientCustomProps.get('product_code');
+  const branchIsMandatory = !!branchProp?.mandatory;
+
   const section1Complete =
     !!f.fk_client_id &&
     !!(f.client_ref_id && String(f.client_ref_id).trim()) &&
     !!f.reporting_contact_id &&
-    (!branchIsMandatory || !!(f.branch_details && String(f.branch_details).trim()));
+    (!branchProp || !branchProp.mandatory || !!(f.branch_details && String(f.branch_details).trim())) &&
+    (!buildingProp || !buildingProp.mandatory || !!(f.building_name && String(f.building_name).trim())) &&
+    (!productProp || !productProp.mandatory || !!(f.product_code && String(f.product_code).trim()));
 
   /*
    * Date + Time helpers for the "Requested Date / Time / Booking Slot"
@@ -2462,20 +2520,41 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                 options={lk.toOpts.clients.map((o) => ({ value: o.value, label: String(o.label) }))}
               />
             </Field>
-            <Field label={branchIsMandatory ? 'Branch Details *' : 'Branch Details'}>
-              <Input
-                required={branchIsMandatory}
-                value={f.branch_details || ''}
-                onChange={(e) => set('branch_details', e.target.value)}
-                placeholder={branchIsMandatory ? 'Required for this client' : 'e.g. Bengaluru — Indiranagar'}
-              />
-            </Field>
+            {/*
+              * Branch Details — renders ONLY when the client has a
+              * `branch_details` row in tbl_client_custom_properties.
+              * Mandatory flag from the same row drives required + the
+              * trailing "*" on the label.
+              */}
+            {branchProp && (
+              <Field label={branchProp.mandatory ? 'Branch Details *' : 'Branch Details'}>
+                <Input
+                  required={branchProp.mandatory}
+                  value={f.branch_details || ''}
+                  onChange={(e) => set('branch_details', e.target.value)}
+                  placeholder={branchProp.mandatory ? 'Required for this client' : 'e.g. Bengaluru — Indiranagar'}
+                />
+              </Field>
+            )}
             <Field label="Client Reference ID *">
+              {/*
+                * Strict input filter: alphanumeric + hyphen + underscore
+                * only (per ops 2026-05-18). Spaces, slashes, pipes,
+                * accented chars etc. are silently stripped as the
+                * operator types. This avoids downstream issues with
+                * external systems that consume `client_ref_id` as a
+                * file-system-safe / URL-safe identifier.
+                *
+                * pattern= attribute mirrors the filter for browser
+                * form-submission validation as a belt-and-suspenders.
+                */}
               <Input
                 required
                 value={f.client_ref_id || ''}
-                onChange={(e) => set('client_ref_id', e.target.value)}
-                placeholder="Client's internal reference"
+                onChange={(e) => set('client_ref_id', e.target.value.replace(/[^A-Za-z0-9_-]/g, ''))}
+                pattern="[A-Za-z0-9_-]+"
+                title="Only letters, numbers, hyphens, and underscores are allowed"
+                placeholder="Client's internal reference (a-z, 0-9, -, _)"
               />
             </Field>
             <Field label={`Reporting Contact *${f.fk_client_id && loadingContacts ? ' (loading…)' : ''}`}>
@@ -2522,20 +2601,32 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                     />
                   </Field>
                 )}
-                <Field label="Property / Building Name">
-                  <Input
-                    value={f.building_name || ''}
-                    onChange={(e) => set('building_name', e.target.value)}
-                    placeholder="Ask the customer for the building / property name"
-                  />
-                </Field>
-                <Field label="Product Code">
-                  <Input
-                    value={f.product_code || ''}
-                    onChange={(e) => set('product_code', e.target.value)}
-                    placeholder="Client-specific product / SKU identifier"
-                  />
-                </Field>
+                {/*
+                  * Property / Building Name + Product Code — render
+                  * ONLY when the client has the corresponding row in
+                  * tbl_client_custom_properties (per ops 2026-05-18).
+                  * Mandatory flag from each row drives required + "*".
+                  */}
+                {buildingProp && (
+                  <Field label={buildingProp.mandatory ? 'Property / Building Name *' : 'Property / Building Name'}>
+                    <Input
+                      required={buildingProp.mandatory}
+                      value={f.building_name || ''}
+                      onChange={(e) => set('building_name', e.target.value)}
+                      placeholder="Ask the customer for the building / property name"
+                    />
+                  </Field>
+                )}
+                {productProp && (
+                  <Field label={productProp.mandatory ? 'Product Code *' : 'Product Code'}>
+                    <Input
+                      required={productProp.mandatory}
+                      value={f.product_code || ''}
+                      onChange={(e) => set('product_code', e.target.value)}
+                      placeholder="Client-specific product / SKU identifier"
+                    />
+                  </Field>
+                )}
               </>
             )}
 
