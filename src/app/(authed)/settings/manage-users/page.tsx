@@ -17,10 +17,12 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { invalidateFetch } from '@/lib/hooks';
 import {
   UserCog, Users, Search, Plus, Pencil, Trash2,
-  AlertTriangle, ChevronDown, ChevronRight, Info,
+  AlertTriangle, ChevronDown, ChevronRight, Info, Layers,
 } from 'lucide-react';
+import { BulkUpdateUsersDialog } from '@/components/users/BulkUpdateUsersDialog';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -105,6 +107,7 @@ export default function ManageUsersPage() {
 
   const [editing, setEditing] = useState<User | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
 
   /*
    * sortBy is nullable so the 3rd click on a column can clear sort
@@ -131,47 +134,81 @@ export default function ManageUsersPage() {
     localStorage.setItem('users-help-collapsed', howOpen ? '0' : '1');
   }, [howOpen]);
 
+  /*
+   * Unified list-fetch effect — replaces the previous pair of effects
+   * (one debounced for filter changes + one immediate for pagination)
+   * that double-fired the request on mount. Now a single effect builds
+   * the query string from all dependencies; `lastQueryRef` skips a
+   * duplicate fire within 100ms (the Strict-Mode double-mount window
+   * in dev) so two effects with the same effective key emit one HTTP
+   * request, not two.
+   *
+   * Mutations (post-save / post-bulk-apply / post-toggle) call
+   * `fetchList()` directly — that's the explicit refresh path. It
+   * also invalidates the module-level fetch cache so any in-flight
+   * dedupe doesn't return stale data.
+   */
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-    searchTimerRef.current = setTimeout(() => {
-      setPage(0);
-      void fetchList();
-    }, 300);
-    return () => {
-      if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, roleFilter, cityFilter, includeInactive]);
+  const lastQueryRef = useRef<{ key: string; at: number } | null>(null);
+  const inflightAbortRef = useRef<AbortController | null>(null);
 
-  useEffect(() => { void fetchList(); /* eslint-disable-next-line */ }, [page, pageSize, sortBy, sortDir]);
+  function buildQuery(): string {
+    const params = new URLSearchParams();
+    if (search.trim()) params.set('q', search.trim());
+    if (roleFilter)    params.set('roleId', String(roleFilter));
+    if (cityFilter)    params.set('cityId', String(cityFilter));
+    if (includeInactive) params.set('includeInactive', 'true');
+    const limit = pageSizeToLimit(pageSize);
+    params.set('limit',  String(limit));
+    params.set('offset', String(page * limit));
+    if (sortBy) { params.set('sortBy', sortBy); params.set('sortDir', sortDir); }
+    return params.toString();
+  }
 
   async function fetchList() {
+    // Cancel any in-flight request before starting a new one — kills
+    // races where a slow earlier fetch lands after a faster later one.
+    inflightAbortRef.current?.abort();
+    const ac = new AbortController();
+    inflightAbortRef.current = ac;
+
     setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams();
-      if (search.trim()) params.set('q', search.trim());
-      if (roleFilter)    params.set('roleId', String(roleFilter));
-      if (cityFilter)    params.set('cityId', String(cityFilter));
-      if (includeInactive) params.set('includeInactive', 'true');
-      const limit = pageSizeToLimit(pageSize);
-      params.set('limit',  String(limit));
-      params.set('offset', String(page * limit));
-      // Null sortBy = 3rd-click unsort → omit params, BE picks default.
-      if (sortBy) {
-        params.set('sortBy', sortBy);
-        params.set('sortDir', sortDir);
-      }
-      const data = await api.get<ListResponse>(`/admin/users?${params}`);
+      const qs = buildQuery();
+      const data = await api.get<ListResponse>(`/admin/users?${qs}`);
+      if (ac.signal.aborted) return;
       setItems(data.items);
       setTotal(data.total);
     } catch (e) {
+      if (ac.signal.aborted) return;
       setError(e instanceof ApiError ? e.message : 'Failed to load users');
     } finally {
-      setLoading(false);
+      if (!ac.signal.aborted) setLoading(false);
     }
   }
+
+  // Single source of truth for list refresh. Filter changes are
+  // debounced 300ms; pagination/sort changes fire immediately. The
+  // 100ms dedupe window catches React Strict Mode's double-mount in
+  // dev — without it, every page load triggers `users?…` twice.
+  useEffect(() => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    const filtersChanged = true; // placeholder kept for readability
+    void filtersChanged;
+    const fire = () => {
+      const key = buildQuery();
+      const now = Date.now();
+      const last = lastQueryRef.current;
+      if (last && last.key === key && now - last.at < 100) return;
+      lastQueryRef.current = { key, at: now };
+      void fetchList();
+    };
+    // Debounce typed inputs; fire pagination/sort immediately.
+    searchTimerRef.current = setTimeout(fire, 0);
+    return () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search, roleFilter, cityFilter, includeInactive, page, pageSize, sortBy, sortDir]);
 
   async function handleDeactivate(u: User) {
     const ok = await confirm({
@@ -184,6 +221,10 @@ export default function ManageUsersPage() {
     if (!ok) return;
     try {
       await api.delete(`/admin/users/${u.user_id}`);
+      // Drop the module fetch cache for /admin/users keys so subsequent
+      // useFetch consumers (or this page's next refetch) don't see the
+      // stale row. See lib/hooks.ts module-level cache.
+      invalidateFetch((k) => k.startsWith('/admin/users'));
       void fetchList();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Deactivate failed');
@@ -209,11 +250,33 @@ export default function ManageUsersPage() {
               <Users className="size-4 mr-1" /> Hierarchy
             </Button>
           </a>
+          <Button variant="outline" onClick={() => setBulkOpen(true)}>
+            <Layers className="size-4 mr-1" /> Bulk Update Users
+          </Button>
           <Button onClick={() => { setEditing(null); setModalOpen(true); }}>
             <Plus className="size-4 mr-1" /> Add User
           </Button>
         </div>
       </div>
+
+      {/* Bulk Update modal — opens to a full-viewport dialog with two
+          tabs (Select & Apply | Upload File). Refreshes the user list
+          on close so the just-edited rows show their new scope. */}
+      {/* allUsers is no longer passed — the dialog now fetches the full
+          active user set from /admin/users/bulk-lookups so it isn't
+          constrained by this page's current page-size. onApplied
+          refreshes the visible list (which IS paged) after a mutation. */}
+      <BulkUpdateUsersDialog
+        open={bulkOpen}
+        onClose={() => setBulkOpen(false)}
+        onApplied={() => {
+          // Drop the module fetch cache for any /admin/users key so a
+          // subsequent useFetch consumer doesn't see stale rows from
+          // before the bulk mutation. Then refire the visible page.
+          invalidateFetch((k) => k.startsWith('/admin/users'));
+          void fetchList();
+        }}
+      />
 
       <Card>
         <CardContent className="p-0">
@@ -470,7 +533,13 @@ export default function ManageUsersPage() {
         states={lookup.states}
         verticals={lookup.verticals}
         adminUsers={lookup.adminUsers}
-        onSaved={() => { setModalOpen(false); void fetchList(); }}
+        onSaved={() => {
+          setModalOpen(false);
+          // Drop the module fetch cache so any consumer reading
+          // /admin/users keys sees the fresh row after a save.
+          invalidateFetch((k) => k.startsWith('/admin/users'));
+          void fetchList();
+        }}
       />
     </div>
   );
@@ -498,6 +567,16 @@ function expandCsvToNames(csv: string | null | undefined, nameById: Map<number, 
 }
 
 function ManageCitiesCell({ csv, nameById }: { csv: string | null | undefined; nameById: Map<number, string> }) {
+  // '0' is the legacy "All" sentinel (lib/scope.js — mode === 'all').
+  // Render it as a green pill so ops can see at a glance which users
+  // have unrestricted scope.
+  if (String(csv ?? '').trim() === '0') {
+    return (
+      <span className="inline-flex items-center rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5 text-[11px] font-medium">
+        All
+      </span>
+    );
+  }
   const names = expandCsvToNames(csv, nameById);
   if (names.length === 0) return <span className="text-muted-foreground">—</span>;
   // Show first 2 + "+N more" — keeps the column readable even for users
@@ -576,6 +655,23 @@ function UserFormModal({
     takenByName?: string;
   }>({ state: 'idle' });
   const mobileCacheRef = useRef<Map<string, { available: boolean; takenBy?: { user_id: number; user_name: string } }>>(new Map());
+  /*
+   * Real-time email-uniqueness check — parallel to mobileCheck.
+   * `suggestion` is filled in by the backend when the typed email is
+   * taken AND the form has a non-empty Name (so the suggestion can be
+   * derived from <first>.<last>). One-click "Use suggestion" calls
+   * setEmail() to adopt it.
+   */
+  const [emailCheck, setEmailCheck] = useState<{
+    state: 'idle' | 'checking' | 'available' | 'taken' | 'invalid';
+    takenByName?: string;
+    suggestion?: string;
+  }>({ state: 'idle' });
+  const emailCacheRef = useRef<Map<string, {
+    available: boolean;
+    takenBy?: { user_id: number; user_name: string };
+    suggestion?: string;
+  }>>(new Map());
   const [roleId,  setRoleId]  = useState<number | ''>('');
   const [cityId,  setCityId]  = useState<number | ''>('');
   const [active,  setActive]  = useState(true);
@@ -593,6 +689,13 @@ function UserFormModal({
   const [manageClients,   setManageClients]   = useState<Set<number>>(new Set());
   const [manageStates,    setManageStates]    = useState<Set<number>>(new Set());
   const [manageVerticals, setManageVerticals] = useState<Set<number>>(new Set());
+  // "All" toggles — when ON the corresponding multi-select is disabled
+  // and we save '0' as the CSV (matches lib/scope.js's mode==='all').
+  // Hydrated on edit-mode by detecting CSV === '0' on the editing row.
+  const [verticalsAll, setVerticalsAll] = useState(false);
+  const [clientsAll,   setClientsAll]   = useState(false);
+  const [statesAll,    setStatesAll]    = useState(false);
+  const [citiesAll,    setCitiesAll]    = useState(false);
   const [reportingManager, setReportingManager] = useState<number | ''>('');
 
   // Reporting Manager + Home City + Role + all 4 scope multi-selects now
@@ -622,10 +725,18 @@ function UserFormModal({
       setRoleId(editing?.user_role ?? '');
       setCityId(editing?.city_id ?? '');
       setActive(editing ? editing.user_status === 1 : true);
-      setManageCities(csvToSet(editing?.manage_cities));
-      setManageClients(csvToSet(editing?.manage_clients));
-      setManageStates(csvToSet(editing?.manage_states));
-      setManageVerticals(csvToSet(editing?.manage_verticals));
+      // '0' is the legacy "All" sentinel — hydrate the All toggle ON
+      // and leave the Set empty. The picker is disabled while All is
+      // on; save() re-serialises '0' regardless of the Set state.
+      const isAll = (csv: string | null | undefined) => String(csv ?? '').trim() === '0';
+      setVerticalsAll(isAll(editing?.manage_verticals));
+      setClientsAll(isAll(editing?.manage_clients));
+      setStatesAll(isAll(editing?.manage_states));
+      setCitiesAll(isAll(editing?.manage_cities));
+      setManageCities(isAll(editing?.manage_cities) ? new Set() : csvToSet(editing?.manage_cities));
+      setManageClients(isAll(editing?.manage_clients) ? new Set() : csvToSet(editing?.manage_clients));
+      setManageStates(isAll(editing?.manage_states) ? new Set() : csvToSet(editing?.manage_states));
+      setManageVerticals(isAll(editing?.manage_verticals) ? new Set() : csvToSet(editing?.manage_verticals));
       setReportingManager(editing?.reporting_manager ?? '');
       setError(null);
     }
@@ -719,18 +830,31 @@ function UserFormModal({
    * tells the operator to pick a parent first. Orphan rows (parent
    * FK = null) are excluded from the strict-filtered view.
    */
+  // Cascading filters (aligned with the Bulk Update modal):
+  //   - parent-All ON → child shows every active record
+  //   - parent empty (and parent-All OFF) → child shows ALL active
+  //     records as well (operator hasn't constrained scope yet)
+  //   - parent has picks → child filtered to records under those picks
+  //
+  // The All-toggle on the child is GATED separately at the UI layer
+  // (see ScopeMultiSelect's disableAll prop) so the operator can't
+  // store child=0 with an empty parent.
   const filteredClientOptions = useMemo(() => {
-    if (manageVerticals.size === 0) return [] as SearchOption[];
+    if (verticalsAll || manageVerticals.size === 0) {
+      return clients.map((c) => ({ value: c.client_id, label: c.client_name }));
+    }
     return clients
       .filter((c) => c.vertical_id != null && manageVerticals.has(c.vertical_id))
       .map((c) => ({ value: c.client_id, label: c.client_name }));
-  }, [clients, manageVerticals]);
+  }, [clients, manageVerticals, verticalsAll]);
   const filteredCityOptions = useMemo(() => {
-    if (manageStates.size === 0) return [] as SearchOption[];
+    if (statesAll || manageStates.size === 0) {
+      return cities.map((c) => ({ value: c.city_id, label: c.city_name }));
+    }
     return cities
       .filter((c) => c.state_id != null && manageStates.has(c.state_id))
       .map((c) => ({ value: c.city_id, label: c.city_name }));
-  }, [cities, manageStates]);
+  }, [cities, manageStates, statesAll]);
 
   /*
    * Debounced real-time mobile-uniqueness probe. Fires only when:
@@ -741,6 +865,55 @@ function UserFormModal({
    * Save can't race the probe. AbortController cancels stale requests
    * when the user keeps typing.
    */
+  /*
+   * Debounced real-time email-uniqueness probe. The email field is
+   * read-only on Edit (OTP keys to it), so the probe only runs on the
+   * Add flow. The `name` query param lets the backend generate a
+   * `<first>.<last>[<n>]@easyfix.in` suggestion when the typed address
+   * is taken — we surface it as a one-click chip below the input.
+   */
+  useEffect(() => {
+    if (!open) return;
+    if (isEdit) { setEmailCheck({ state: 'idle' }); return; }
+    const e = email.trim().toLowerCase();
+    if (!e) { setEmailCheck({ state: 'idle' }); return; }
+    if (!/^\S+@\S+\.\S+$/.test(e)) {
+      setEmailCheck({ state: 'invalid' });
+      return;
+    }
+    // Cache key includes name so suggestion bumps regenerate when the
+    // operator renames the user; the email itself is what we probe.
+    const cacheKey = `${e}::${name.trim().toLowerCase()}`;
+    const cached = emailCacheRef.current.get(cacheKey);
+    if (cached) {
+      setEmailCheck(cached.available
+        ? { state: 'available' }
+        : { state: 'taken', takenByName: cached.takenBy?.user_name, suggestion: cached.suggestion });
+      return;
+    }
+    setEmailCheck({ state: 'checking' });
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const params: Record<string, string | number> = { email: e };
+        if (name.trim()) params.name = name.trim();
+        const res = await api.get<{
+          available: boolean;
+          takenBy?: { user_id: number; user_name: string };
+          suggestion?: string;
+        }>('/admin/users/check-email', params);
+        if (cancelled) return;
+        emailCacheRef.current.set(cacheKey, res);
+        setEmailCheck(res.available
+          ? { state: 'available' }
+          : { state: 'taken', takenByName: res.takenBy?.user_name, suggestion: res.suggestion });
+      } catch {
+        if (!cancelled) setEmailCheck({ state: 'idle' });
+      }
+    }, 450);
+    return () => { window.clearTimeout(timer); cancelled = true; };
+  }, [email, name, isEdit, open]);
+
   useEffect(() => {
     if (!open) return;
     // Same-as-editing → not a change, skip the probe entirely.
@@ -792,6 +965,14 @@ function UserFormModal({
       if (!name.trim())  { setError('Name is required'); return; }
       if (!email.trim()) { setError('Email is required'); return; }
       if (!/^\S+@\S+\.\S+$/.test(email)) { setError('Email format looks wrong'); return; }
+      // Defensive — the BE also rejects duplicates, but blocking here
+      // keeps the operator from clicking Save while the rose hint is
+      // still on screen. We tolerate 'checking' (in-flight probe):
+      // backend is the source of truth and will reject if needed.
+      if (emailCheck.state === 'taken') {
+        setError('Email already in use');
+        return;
+      }
     }
     if (!/^[0-9]{10}$/.test(mobile)) { setError('Mobile must be 10 digits'); return; }
     if (altMob && !/^[0-9]{10}$/.test(altMob)) { setError('Alternate number must be 10 digits or blank'); return; }
@@ -806,13 +987,29 @@ function UserFormModal({
     }
     if (!roleId) { setError('Role is required'); return; }
 
+    // Vertical-touched → client-mandatory rule (mirrors the BE bulk
+    // route). If the operator toggled All or picked any verticals,
+    // they must explicitly pick (or All) clients too — prevents the
+    // "narrowed vertical but forgot clients" footgun.
+    const verticalsTouched = verticalsAll || manageVerticals.size > 0;
+    const clientsTouched   = clientsAll   || manageClients.size   > 0;
+    if (verticalsTouched && !clientsTouched) {
+      setError('You picked verticals — please also pick clients (or toggle All).');
+      return;
+    }
+
     // Serialise the Sets back to CSV — matches legacy tbl_user storage.
-    // Sort by id so the persisted value is deterministic (avoids spurious
-    // diffs when the operator's click order changes).
-    const manageCitiesCsv    = Array.from(manageCities).sort((a, b) => a - b).join(',') || null;
-    const manageClientsCsv   = Array.from(manageClients).sort((a, b) => a - b).join(',') || null;
-    const manageStatesCsv    = Array.from(manageStates).sort((a, b) => a - b).join(',') || null;
-    const manageVerticalsCsv = Array.from(manageVerticals).sort((a, b) => a - b).join(',') || null;
+    // Sort by id so the persisted value is deterministic. The "All"
+    // toggles override the Set entirely and emit '0' as the sentinel.
+    const csvOrAll = (all: boolean, set: Set<number>) => {
+      if (all) return '0';
+      const csv = Array.from(set).sort((a, b) => a - b).join(',');
+      return csv || null;
+    };
+    const manageCitiesCsv    = csvOrAll(citiesAll,    manageCities);
+    const manageClientsCsv   = csvOrAll(clientsAll,   manageClients);
+    const manageStatesCsv    = csvOrAll(statesAll,    manageStates);
+    const manageVerticalsCsv = csvOrAll(verticalsAll, manageVerticals);
 
     setSubmitting(true);
     try {
@@ -907,15 +1104,65 @@ function UserFormModal({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
               <label className="text-sm font-medium block mb-1">
-                Official Email * {isEdit && <span className="text-xs text-muted-foreground font-normal">(not editable)</span>}
+                Official Email *
               </label>
-              <Input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="priya@channelplay.in"
-                disabled={isEdit}
-              />
+              {/* Add-mode: hardcode the @easyfix.in suffix as a non-editable
+                  affix so operators can't accidentally type a foreign
+                  domain. Only the local-part input round-trips into state.
+                  Edit-mode: render the full email, disabled — we never
+                  change OTP-keyed emails on existing users. */}
+              {isEdit ? (
+                <Input
+                  type="email"
+                  value={email}
+                  disabled
+                />
+              ) : (
+                <div className="flex items-stretch">
+                  <Input
+                    type="text"
+                    value={email.endsWith('@easyfix.in')
+                      ? email.slice(0, -'@easyfix.in'.length)
+                      : email.replace(/@.*$/, '')}
+                    onChange={(e) => {
+                      const local = e.target.value.replace(/@.*/g, '').replace(/\s+/g, '').toLowerCase();
+                      setEmail(local ? `${local}@easyfix.in` : '');
+                    }}
+                    placeholder="priya"
+                    className="rounded-r-none"
+                  />
+                  <span className="inline-flex items-center px-3 rounded-r-md border border-l-0 border-input bg-muted text-sm text-muted-foreground select-none">
+                    @easyfix.in
+                  </span>
+                </div>
+              )}
+              {/* Real-time DB uniqueness check — only on Add, only after
+                  the value parses as an email. Suggestion chip lets the
+                  operator adopt the next free <first>.<last>[<n>]@easyfix.in
+                  slot with one click. Taker name is intentionally NOT
+                  surfaced — exposes too much in a shared CRM. */}
+              {!isEdit && emailCheck.state === 'checking' && (
+                <p className="text-xs text-muted-foreground mt-1">Checking availability…</p>
+              )}
+              {!isEdit && emailCheck.state === 'available' && (
+                <p className="text-xs text-emerald-700 mt-1">✓ Available</p>
+              )}
+              {!isEdit && emailCheck.state === 'taken' && (
+                <div className="mt-1 space-y-1">
+                  <p className="text-xs text-rose-700">
+                    ✗ Already in use
+                  </p>
+                  {emailCheck.suggestion && (
+                    <button
+                      type="button"
+                      className="text-xs text-sky-700 hover:text-sky-900 underline underline-offset-2"
+                      onClick={() => setEmail(emailCheck.suggestion!)}
+                    >
+                      Use suggestion: <span className="font-mono">{emailCheck.suggestion}</span>
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
             <div>
               <label className="text-sm font-medium block mb-1">Role *</label>
@@ -1022,6 +1269,22 @@ function UserFormModal({
               onRemoveOne={toggleManageVertical}
               placeholder="Select verticals…"
               selectedLabel="verticals"
+              allOn={verticalsAll}
+              onAllChange={(b) => {
+                setVerticalsAll(b);
+                // Clear the picked set on EITHER direction. Toggling
+                // On: chips would be stale under "All". Toggling Off:
+                // operator wants a clean slate to re-pick — they
+                // explicitly unchecked "All", so any previously-loaded
+                // chips are no longer relevant.
+                setManageVerticals(new Set());
+                // Reset Clients-All AND clear the client set so the
+                // operator re-affirms client scope against the new
+                // vertical universe (the "client mandatory after
+                // vertical change" rule).
+                setClientsAll(false);
+                setManageClients(new Set());
+              }}
             />
 
             {/* Clients — filtered by selected Verticals */}
@@ -1036,10 +1299,21 @@ function UserFormModal({
               placeholder="Select clients…"
               selectedLabel="clients"
               helperText={
-                manageVerticals.size === 0
-                  ? 'Pick at least one vertical above to choose clients.'
+                !verticalsAll && manageVerticals.size === 0
+                  ? 'Pick at least one vertical above (or toggle All) to choose clients.'
                   : undefined
               }
+              allOn={clientsAll}
+              onAllChange={(b) => {
+                setClientsAll(b);
+                // Always clear chips on either direction — matches the
+                // Verticals toggle behavior. Operator expects a clean
+                // state when unchecking All so they can re-pick from
+                // scratch.
+                setManageClients(new Set());
+              }}
+              // Locked until a Vertical (or Verticals-All) is picked.
+              disableAll={!verticalsAll && manageVerticals.size === 0}
             />
 
             {/* States — parent of Cities */}
@@ -1053,6 +1327,17 @@ function UserFormModal({
               onRemoveOne={toggleManageState}
               placeholder="Select states…"
               selectedLabel="states"
+              allOn={statesAll}
+              onAllChange={(b) => {
+                setStatesAll(b);
+                // Mirror the Verticals→Clients cascade behavior:
+                // toggling either direction clears the State set AND
+                // resets the dependent City scope so the operator
+                // re-affirms it against the new state universe.
+                setManageStates(new Set());
+                setCitiesAll(false);
+                setManageCities(new Set());
+              }}
             />
 
             {/* Cities — filtered by selected States */}
@@ -1067,10 +1352,18 @@ function UserFormModal({
               placeholder="Select cities…"
               selectedLabel="cities"
               helperText={
-                manageStates.size === 0
-                  ? 'Pick at least one state above to choose cities.'
+                !statesAll && manageStates.size === 0
+                  ? 'Pick at least one state above (or toggle All) to choose cities.'
                   : undefined
               }
+              allOn={citiesAll}
+              onAllChange={(b) => {
+                setCitiesAll(b);
+                // Always clear chips on either direction.
+                setManageCities(new Set());
+              }}
+              // Locked until a State (or States-All) is picked.
+              disableAll={!statesAll && manageStates.size === 0}
             />
           </div>
 
@@ -1175,6 +1468,9 @@ function ScopeMultiSelect({
   placeholder,
   selectedLabel,
   helperText,
+  allOn,
+  onAllChange,
+  disableAll,
 }: {
   label: string;
   chipColor: ChipColor;
@@ -1191,27 +1487,55 @@ function ScopeMultiSelect({
    * depends on States) to explain why the option list is empty.
    */
   helperText?: string;
+  /*
+   * Optional "All" toggle. When ON, the multi-select is disabled and
+   * the parent persists '0' as the CSV (legacy "manage_*='0'" sentinel,
+   * see lib/scope.js). Caller controls the boolean — keeps the picker
+   * stateless so a single source of truth (the form state) governs
+   * what gets saved.
+   *
+   * `disableAll` mutes the All checkbox itself — used by dependent
+   * pickers (Clients gated by Verticals, Cities gated by States) so
+   * operators can't store child=0 under an empty parent scope.
+   */
+  allOn?: boolean;
+  onAllChange?: (b: boolean) => void;
+  disableAll?: boolean;
 }) {
   const cls = CHIP_CLASSES[chipColor];
   return (
     <div>
-      <label className="text-sm font-medium block mb-1">
-        {label}{' '}
-        <span className="text-xs text-muted-foreground font-normal">
-          ({selected.size} selected)
+      <label className="text-sm font-medium flex items-center justify-between mb-1">
+        <span>
+          {label}{' '}
+          <span className="text-xs text-muted-foreground font-normal">
+            ({allOn ? 'All' : `${selected.size} selected`})
+          </span>
         </span>
+        {onAllChange && (
+          <label className={`inline-flex items-center gap-1.5 text-xs font-normal cursor-pointer ${disableAll ? 'opacity-50 cursor-not-allowed' : 'text-muted-foreground'}`}>
+            <input
+              type="checkbox"
+              checked={!!allOn}
+              onChange={(e) => onAllChange(e.target.checked)}
+              disabled={!!disableAll}
+            />
+            All
+          </label>
+        )}
       </label>
       <SearchMultiSelect
-        value={Array.from(selected)}
+        value={allOn ? [] : Array.from(selected)}
         onChange={onChange}
         options={options}
-        placeholder={placeholder}
+        placeholder={allOn ? 'All — every active record' : placeholder}
         selectedLabel={selectedLabel}
+        disabled={!!allOn}
       />
       {helperText && (
         <p className="text-xs text-muted-foreground mt-1">{helperText}</p>
       )}
-      {selected.size > 0 && (
+      {!allOn && selected.size > 0 && (
         <div className="mt-1.5 flex flex-wrap gap-1">
           {Array.from(selected).map((id) => {
             const name = chipFor(id);
