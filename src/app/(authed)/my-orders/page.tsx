@@ -15,6 +15,7 @@ import { actionFlags } from '@/lib/permissions';
 import { formatDate, formatEasyfixerName, statusColorClass, statusLabel } from '@/lib/utils';
 import { TABS } from '@/lib/job-tabs';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
+import { UnconfirmedJobsTable } from '@/components/job/UnconfirmedJobsTable';
 import { AssignTechnicianModal, type AssignMode } from '@/components/job/AssignTechnicianModal';
 import { useSort, SortHeader } from '@/lib/use-sort';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -60,6 +61,10 @@ type JobRow = {
   job_desc: string | null;
   created_date_time: string; requested_date_time: string; scheduled_date_time: string | null;
   checkin_date_time: string | null; checkout_date_time: string | null;
+  // Extra fields surfaced on the Unconfirmed tab — see UnconfirmedJobsTable.
+  ticket_created_date_time: string | null; time_slot: string | null;
+  client_spoc: string | null; client_spoc_name: string | null;
+  remarks: string | null;
   fk_customer_id: number; customer_name: string | null; customer_mob_no: string | null;
   fk_client_id: number; client_name: string | null;
   fk_easyfixter_id: number | null; easyfixer_name: string | null;
@@ -291,6 +296,15 @@ export default function MyOrdersPage() {
 
       <Card>
         <CardContent className="p-0 overflow-x-auto">
+          {tab === 'unconfirmed' ? (
+            <UnconfirmedJobsTable
+              rows={sorted}
+              loading={loading}
+              canConfirm={!!canJob.isJobConfirm}
+              openView={openView}
+              openConfirm={openConfirm}
+            />
+          ) : (
           <table className="data-table">
             <thead>
               <tr>
@@ -430,6 +444,7 @@ export default function MyOrdersPage() {
               ))}
             </tbody>
           </table>
+          )}
         </CardContent>
       </Card>
 
