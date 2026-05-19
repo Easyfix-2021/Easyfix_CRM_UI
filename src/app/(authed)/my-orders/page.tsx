@@ -224,14 +224,24 @@ export default function MyOrdersPage() {
     } finally { setRowBusy(null); }
   }
 
-  // Client-side search over the currently-loaded page.
+  // Client-side search over the currently-loaded page. Matches every
+  // visible column including the human-readable status label and the
+  // formatted date strings — see jobs/page.tsx for the rationale.
   const filteredItems = (data?.items ?? []).filter((j) => {
     if (!q) return true;
     const needle = q.toLowerCase();
-    const haystacks = [
+    const haystacks: Array<unknown> = [
       j.job_id, j.job_reference_id, j.client_ref_id,
       j.client_name, j.customer_name, j.customer_mob_no,
       j.city_name, j.easyfixer_name, j.owner_name, j.job_type,
+      j.source_type,
+      j.job_status,
+      statusLabel(Number(j.job_status), { assigned: j.fk_easyfixter_id != null }),
+      j.created_date_time && formatDate(j.created_date_time),
+      j.requested_date_time && formatDate(j.requested_date_time),
+      j.scheduled_date_time && formatDate(j.scheduled_date_time),
+      j.checkin_date_time && formatDate(j.checkin_date_time),
+      j.checkout_date_time && formatDate(j.checkout_date_time),
     ];
     return haystacks.some((h) => h != null && String(h).toLowerCase().includes(needle));
   });

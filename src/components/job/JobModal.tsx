@@ -13,6 +13,7 @@ import { SearchMultiSelect } from '@/components/ui/search-multi-select';
 import { Switch } from '@/components/ui/switch';
 import { AddressAutocomplete } from '@/components/ui/address-autocomplete';
 import { AddressEditDialog, type EditableAddress } from './AddressEditDialog';
+import { JobTransactionView } from './JobTransactionView';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { api, ApiError } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
@@ -35,11 +36,33 @@ import { actionFlags } from '@/lib/permissions';
  */
 
 const ST = { BOOKED: 0, SCHEDULED: 1, IN_PROGRESS: 2, COMPLETED: 3, COMPLETED_ALT: 5, CANCELLED: 6, ENQUIRY: 7, CALL_LATER: 9, REVISIT: 10 } as const;
-const canAssign         = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.ENQUIRY, ST.CALL_LATER, ST.REVISIT].includes(s as never);
+
+/*
+ * PII masking helper — show only the first 4 digits of any mobile
+ * number; mask the rest with bullets. Used wherever a mobile is
+ * rendered read-only inside JobModal (view summary, confirm header,
+ * confirm form's disabled inputs, etc.). Editable inputs are
+ * deliberately NOT masked so operators can still type/edit numbers
+ * during create.
+ *
+ * Non-digits are stripped before masking so country codes / spaces /
+ * dashes don't throw the prefix-4 count off.
+ */
+function maskMobile(mob: unknown): string {
+  if (mob == null || mob === '') return '—';
+  const digits = String(mob).replace(/\D/g, '');
+  if (!digits) return '—';
+  return digits.slice(0, 4) + '•'.repeat(Math.max(0, digits.length - 4));
+}
+// Unconfirmed (CALL_LATER = 9) is intentionally excluded from canAssign
+// and canCancel: ops should drive those orders through the dedicated
+// Confirm-and-Schedule flow (purple CalendarCheck on the row), not
+// directly assign/cancel from the View modal. Legacy CRM behaviour.
+const canAssign         = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.ENQUIRY, ST.REVISIT].includes(s as never);
 const canChangeOwner    = (s: number) => ![ST.COMPLETED, ST.COMPLETED_ALT, ST.CANCELLED].includes(s as never);
 const canStart          = (s: number) => [ST.SCHEDULED, ST.REVISIT].includes(s as never);
 const canComplete       = (s: number) => s === ST.IN_PROGRESS;
-const canCancel         = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.IN_PROGRESS, ST.ENQUIRY, ST.CALL_LATER, ST.REVISIT].includes(s as never);
+const canCancel         = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.IN_PROGRESS, ST.ENQUIRY, ST.REVISIT].includes(s as never);
 const canMarkIncomplete = (s: number) => [ST.COMPLETED, ST.COMPLETED_ALT].includes(s as never);
 // NOTE: Confirm & Schedule for Unconfirmed orders (status 9 → 0) is handled
 // via JobModal's dedicated `'confirm'` mode, launched from the row-level
@@ -75,6 +98,9 @@ export function JobModal({
   const [job, setJob] = useState<Job | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Add-Remarks popup for the Unconfirmed view-mode footer. Lives at
+  // the modal root so it can dismiss without unmounting JobForm/View.
+  const [addRemarksOpen, setAddRemarksOpen] = useState(false);
   /*
    * `compact` shrinks the modal to fit-to-content while the create-flow
    * mobile gate is showing. Once the operator submits the mobile and
@@ -150,7 +176,11 @@ export function JobModal({
         className={
           compact
             ? 'max-w-md w-[min(95vw,480px)] p-0 flex flex-col'
-            : 'max-w-5xl w-[min(95vw,1100px)] h-[85vh] overflow-hidden p-0 flex flex-col'
+            // Near-full-viewport modal per ops spec — leaves ~24px on every
+            // side. `!max-w-none` overrides DialogContent's default
+            // `max-w-lg`; `!important` because the base class wins
+            // otherwise due to Tailwind specificity.
+            : '!max-w-none w-[calc(100vw-48px)] h-[calc(100vh-48px)] overflow-hidden p-0 flex flex-col'
         }
       >
         {/* The global DialogHeader uses `-mx-6 -mt-6` to claw back the
@@ -217,7 +247,15 @@ export function JobModal({
             </div>
           )}
           {error && !job && <div className="text-sm text-destructive">{error}</div>}
-          {!loading && mode === 'view' && job && <ViewBody job={job} />}
+          {!loading && mode === 'view' && job && (
+            // Unconfirmed (status=9) gets the legacy "Job Transaction"
+            // single-page read-only layout — no tabs, no edits. Every
+            // other status keeps the tabbed Summary/Services/Schedule/
+            // Images/etc. view that ops uses for active jobs.
+            Number(job.job_status) === 9
+              ? <JobTransactionView jobId={Number(job.job_id)} />
+              : <ViewBody job={job} />
+          )}
           {/* Mobile-first gate for the CREATE flow. Mirrors legacy
               `addEditJob.vm` which opened with a single mobile-number
               field and only revealed the rest of the form (customer
@@ -263,11 +301,42 @@ export function JobModal({
         </div>
 
         {mode === 'view' && (
-          <div className="px-6 py-3 border-t bg-muted/30 flex justify-end">
+          <div className="px-6 py-3 border-t bg-muted/30 flex items-center justify-between gap-2">
+            {/* Left side: "Add Remarks" for Unconfirmed (status=9) jobs.
+                Mirrors the legacy "Job Transaction → Add Remarks"
+                affordance ops uses to log follow-up notes on orders
+                that aren't yet booked. Writes to tbl_job_comment (the
+                same store legacy uses) via POST /admin/jobs/:id/comments
+                with comment_on=1 (the "created" stage code from the
+                Joi schema). Rendered only when we have a job loaded so
+                it doesn't flash during the initial fetch. */}
+            <div>
+              {!loading && job && Number(job.job_status) === 9 && (
+                <Button
+                  variant="outline"
+                  className="bg-teal-500 hover:bg-teal-600 text-white border-teal-500 hover:text-white"
+                  onClick={() => setAddRemarksOpen(true)}
+                >
+                  Add Remarks
+                </Button>
+              )}
+            </div>
             <Button variant="outline" onClick={onClose}>Close</Button>
           </div>
         )}
       </DialogContent>
+      {/* AddRemarks popup — POSTs to /admin/jobs/:id/comments with the
+          legacy "created" stage code (comment_on=1). Reuses the
+          existing comments endpoint so the remark lands in
+          tbl_job_comment alongside any prior follow-up notes. */}
+      {jobId && (
+        <AddRemarksDialog
+          open={addRemarksOpen}
+          jobId={Number(jobId)}
+          onClose={() => setAddRemarksOpen(false)}
+          onSaved={() => { setAddRemarksOpen(false); refresh(); onSaved?.(); }}
+        />
+      )}
     </Dialog>
   );
 }
@@ -433,7 +502,7 @@ function ViewBody({ job }: { job: Job }) {
       <TabsContent value="summary">
         <div className="grid md:grid-cols-2 gap-5">
           <DlCard title="Customer" rows={[
-            ['Name', job.customer_name], ['Mobile', job.customer_mob_no], ['Email', job.customer_email],
+            ['Name', job.customer_name], ['Mobile', maskMobile(job.customer_mob_no)], ['Email', job.customer_email],
           ]}/>
           <DlCard title="Address" rows={[
             ['Address', job.address], ['Building', job.building], ['Landmark', job.landmark],
@@ -1796,10 +1865,22 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
           if (f.fk_service_type_id) patch.fk_service_type_id = Number(f.fk_service_type_id);
         }
         const saved = await api.patch<Job>(`/admin/jobs/${initial.job_id}`, patch);
-        // Confirm flow → immediately promote status 9 (Unconfirmed) → 0 (BOOKED).
-        // This mirrors legacy `Book Call` which did save+promote atomically.
+        // Confirm flow → status promotion depends on which footer
+        // variant the operator picked (revised 2026-05-19):
+        //   'book'        → 0 (BOOKED) — the happy "Confirm & Schedule" path
+        //   'enquiry'     → 7 (ENQUIRY)
+        //   'unreachable' → 9 (CALL_LATER) — already 9; re-stamp is a no-op
+        //                   but ensures consistency if the row was edited
+        //                   to a different status in between.
+        // For non-'book' variants we intentionally do NOT re-trigger
+        // the BE's "auto status bumps on first assign" path; ops wants
+        // the order to STAY in its bucket until they explicitly book it.
         if (isConfirm) {
-          await api.patch(`/admin/jobs/${initial.job_id}/status`, { status: 0 });
+          const targetStatus =
+            submitVariant === 'enquiry' ? 7
+              : submitVariant === 'unreachable' ? 9
+              : 0;
+          await api.patch(`/admin/jobs/${initial.job_id}/status`, { status: targetStatus });
         }
         onSaved(saved);
       } else {
@@ -1993,10 +2074,34 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
   }
 
   /*
-   * Confirm-mode UX: top summary strip + 3 numbered sections replicating the
-   * legacy `addEditJob?loc=home` modal structure. Rendered as a separate
-   * branch from the edit/create flow so each layout stays readable.
+   * Confirm-mode UX: top summary strip + 3 accordion sections replicating
+   * the legacy `addEditJob?loc=home` modal structure. Rendered as a
+   * separate branch from the edit/create flow so each layout stays
+   * readable.
+   *
+   * Accordion state (added 2026-05-19): mirrors the create-flow gating
+   * — Customer Details and Select Products start collapsed; each
+   * unlocks only when the prior section's mandatory fields are filled.
+   * `confirmOpenSection` lives ABOVE the early-return so React's
+   * Rules of Hooks are satisfied regardless of which branch renders.
    */
+  const [confirmOpenSection, setConfirmOpenSection] = React.useState<1 | 2 | 3>(1);
+  // Section 1 (Client Details) is complete once Client Reference ID
+  // is non-empty. Client itself + SPOC trio are read-only in confirm,
+  // so the ref-id is the only mandatory operator-typed field here.
+  const confirmSection1Complete = !!(f.client_ref_id && String(f.client_ref_id).trim());
+  // Section 2 (Customer Details) requires the full set of legacy
+  // mandatory fields: name + slot + datetime + address + city + 6-digit
+  // pincode. Customer mobile is read-only in confirm so it's not gated.
+  const confirmSection2Complete =
+    confirmSection1Complete &&
+    !!f.customer_name &&
+    !!f.time_slot &&
+    !!f.requested_date_time &&
+    !!f.address &&
+    !!String(f.city_id || '').trim() &&
+    /^[0-9]{6}$/.test(String(f.pin_code || ''));
+
   if (isConfirm && initial) {
     return (
       <form onSubmit={submit} className="space-y-4">
@@ -2010,8 +2115,11 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
         <div className="rounded-lg border bg-sky-50/60 px-4 py-3 text-sm">
           <div className="flex items-center justify-between gap-3 mb-2">
             <div className="text-xs font-semibold text-sky-900 uppercase tracking-wide">Job Summary</div>
-            <a href={`tel:${initial.customer_mob_no}`} className="text-sky-800 hover:underline font-semibold">
-              ☎ {String(initial.customer_mob_no ?? '—')}
+            {/* Mobile is masked (first-4 + bullets) for PII — the
+                `tel:` href still uses the full number so click-to-call
+                works seamlessly. */}
+            <a href={`tel:${initial.customer_mob_no}`} className="text-sky-800 hover:underline font-semibold tabular-nums">
+              ☎ {maskMobile(initial.customer_mob_no)}
             </a>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1">
@@ -2023,7 +2131,12 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
         </div>
 
         {/* ── 1 · Client Details ─────────────────────────────────────────── */}
-        <NumberedSection num={1} title="Client Details">
+        <Section
+          title="1 · Client Details"
+          expanded={confirmOpenSection === 1}
+          onToggle={() => setConfirmOpenSection(1)}
+          badge={confirmSection1Complete ? <span className="text-emerald-600 text-xs">✓</span> : null}
+        >
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Field label="Client">
               <Input value={String(initial.client_name ?? '')} readOnly disabled />
@@ -2032,7 +2145,7 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
               <Input required value={f.client_ref_id} onChange={(e) => set('client_ref_id', e.target.value)} placeholder="Ticket or order ID" />
             </Field>
             <Field label="Client SPOC Phone">
-              <Input value={String(initial.client_spoc ?? '')} readOnly disabled />
+              <Input value={maskMobile(initial.client_spoc)} readOnly disabled className="tabular-nums" />
             </Field>
             <Field label="Client SPOC Name">
               <Input value={String(initial.client_spoc_name ?? '')} readOnly disabled />
@@ -2041,16 +2154,35 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
               <Input value={String(initial.client_spoc_email ?? '')} readOnly disabled />
             </Field>
           </div>
-        </NumberedSection>
+          <div className="mt-4 flex justify-end">
+            <Button
+              type="button"
+              onClick={() => setConfirmOpenSection(2)}
+              disabled={!confirmSection1Complete}
+              title={confirmSection1Complete ? '' : 'Fill Client Reference ID to proceed'}
+            >
+              Next →
+            </Button>
+          </div>
+        </Section>
 
         {/* ── 2 · Customer Details ───────────────────────────────────────── */}
-        <NumberedSection num={2} title="Customer Details">
+        <Section
+          title="2 · Customer Details"
+          expanded={confirmOpenSection === 2}
+          onToggle={() => { if (confirmSection1Complete) setConfirmOpenSection(2); }}
+          disabled={!confirmSection1Complete}
+          badge={confirmSection2Complete ? <span className="text-emerald-600 text-xs">✓</span> : null}
+        >
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Field label="Customer Name *">
               <Input required value={f.customer_name} onChange={(e) => set('customer_name', e.target.value)} />
             </Field>
             <Field label="Mobile Number">
-              <Input value={f.customer_mob_no} readOnly disabled />
+              {/* Read-only in confirm — operators can't edit the
+                  customer's mobile after the order was created. Masked
+                  for PII. */}
+              <Input value={maskMobile(f.customer_mob_no)} readOnly disabled className="tabular-nums" />
             </Field>
             <Field label="Customer Email">
               <Input type="email" value={f.customer_email} onChange={(e) => set('customer_email', e.target.value)} />
@@ -2118,7 +2250,18 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
               <Input value={f.gps_location} onChange={(e) => set('gps_location', e.target.value)} placeholder="28.6139,77.2090" />
             </Field>
           </div>
-        </NumberedSection>
+          <div className="mt-4 flex justify-between">
+            <Button type="button" variant="outline" onClick={() => setConfirmOpenSection(1)}>← Back</Button>
+            <Button
+              type="button"
+              onClick={() => setConfirmOpenSection(3)}
+              disabled={!confirmSection2Complete}
+              title={confirmSection2Complete ? '' : 'Fill customer name + date/slot + address + city + 6-digit pincode to proceed'}
+            >
+              Next →
+            </Button>
+          </div>
+        </Section>
 
         {/*
           * ── 3 · Select Products ─────────────────────────────────────────
@@ -2134,7 +2277,12 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
           * options shown below (full list stays available — we don't hide
           * rows, just highlight).
           */}
-        <NumberedSection num={3} title="Select Products">
+        <Section
+          title="3 · Select Products"
+          expanded={confirmOpenSection === 3}
+          onToggle={() => { if (confirmSection2Complete) setConfirmOpenSection(3); }}
+          disabled={!confirmSection2Complete}
+        >
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
             {/*
               * Service Category — MULTI-SELECT (2026-05-15).
@@ -2311,19 +2459,77 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
               )}
             </Field>
           </div>
-        </NumberedSection>
+          <div className="mt-4 flex justify-start">
+            <Button type="button" variant="outline" onClick={() => setConfirmOpenSection(2)}>← Back</Button>
+          </div>
+        </Section>
 
         {error && <div className="text-sm text-destructive">{error}</div>}
-        <div className="flex justify-end gap-2 pt-2">
+        {/* Confirm-mode footer — three-button layout matching the legacy
+            CRM "Add Job (Bulk Upload)" confirm screen (ref screenshots
+            2026-05-19). All three submit the same form; the difference
+            is which `submitVariant` lands in the status promotion at
+            the end of submit(). Unreachable/Enquiry open the reason
+            popup first to capture Pending Due To + Reason + Remarks
+            and fold them into the remarks column as a structured
+            prefix. See JobOutcomeDialog block below. */}
+        <div className="flex justify-end gap-2 pt-2 flex-wrap">
           <CancelButton onCancel={onCancel} />
+          {canOutcomeButtons && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setOutcomeDialog({ mode: 'unreachable' })}
+              title="Customer couldn't be reached — keep status Unconfirmed with reason"
+            >
+              Unreachable
+            </Button>
+          )}
+          {canOutcomeButtons && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setOutcomeDialog({ mode: 'enquiry' })}
+              title="Information request only — move status to Enquiry"
+            >
+              Enquiry
+            </Button>
+          )}
           <LoadBtn
             type="submit"
-            loading={submitting}
+            loading={submitting && submitVariant === 'book'}
+            onClick={() => setSubmitVariant('book')}
             className="bg-purple-600 hover:bg-purple-700 text-white"
           >
-            Confirm &amp; Schedule (Book Call)
+            Book Call
           </LoadBtn>
         </div>
+        {/* Outcome popup — identical to the one wired on the create
+            form below. Inlined here because confirm-mode early-returns
+            before reaching the create form's render block, so the
+            shared dialog would otherwise never mount in confirm mode. */}
+        <JobOutcomeDialog
+          open={outcomeDialog !== null}
+          mode={outcomeDialog?.mode ?? 'unreachable'}
+          onClose={() => setOutcomeDialog(null)}
+          onSubmit={({ dueTo, reason, remarks }) => {
+            const mode = outcomeDialog?.mode ?? 'unreachable';
+            const tag = mode === 'unreachable' ? 'Unreachable' : 'Enquiry';
+            const dueLabel = mode === 'unreachable' ? 'Pending Due To' : 'Open Due To';
+            const prefix = `[${tag} · ${dueLabel}: ${dueTo} · Reason: ${reason}]`;
+            const merged = remarks ? `${prefix} ${remarks}` : prefix;
+            setF((s) => ({ ...s, remarks: merged }));
+            setSubmitVariant(mode);
+            setOutcomeDialog(null);
+            // requestSubmit on the closest form ancestor — defer one
+            // tick so the state updates above land before submit reads
+            // them.
+            setTimeout(() => {
+              const form = document.querySelector('form');
+              if (form) form.requestSubmit();
+            }, 0);
+          }}
+        />
       </form>
     );
   }
@@ -2760,7 +2966,10 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
             {f.reporting_contact_id && (
               <>
                 <Field label="Client SPOC (Mobile)">
-                  <Input value={f.client_spoc || ''} disabled className="font-mono" />
+                  {/* SPOC mobile is read-only; mask for PII consistent
+                      with customer mobile. The contact row itself is
+                      edited via Manage Clients → Contacts. */}
+                  <Input value={maskMobile(f.client_spoc)} disabled className="font-mono tabular-nums" />
                 </Field>
                 <Field label="Client SPOC Name">
                   <Input value={f.client_spoc_name || ''} disabled />
@@ -3407,24 +3616,29 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
       )}
 
       {error && <div className="text-sm text-destructive">{error}</div>}
-      {/* Footer — three save variants mapped to legacy status codes:
-            Unreachable (status 9 — customer couldn't be reached)
-            Enquiry     (status 7 — information request, not booked)
-            Book Call   (status 0 — Confirmed, happy path)
-          Unreachable/Enquiry both open a confirm popup first (matches
-          legacy CRM) to capture "Pending Due To / Reason / Remarks";
-          Book Call submits directly.
-          Edit/Confirm modes keep the original single-button footer. */}
+      {/* Footer — placement of Unreachable / Enquiry buttons (revised
+          2026-05-19 per ops): the outcome buttons belong on the
+          Unconfirmed → Confirm modal (mode === 'confirm'), NOT on the
+          CRM-create Book New Call modal. Rationale: external sources
+          create orders in Unconfirmed (status 9); when ops opens the
+          row to confirm, they may discover the customer is unreachable
+          or the request is just an enquiry, and need to re-route the
+          order without leaving the modal. CRM-create skips Unconfirmed
+          entirely (status BOOKED on insert), so Unreachable/Enquiry
+          have no use there.
+          - create mode : Book Call only
+          - confirm mode: Unreachable / Enquiry / Confirm & Schedule
+          - edit mode   : Save changes (unchanged) */}
       <div className="flex justify-end gap-2 pt-2 flex-wrap">
         <CancelButton onCancel={onCancel} />
-        {!isEditShape ? (
+        {isConfirm ? (
           <>
             {canOutcomeButtons && (
               <Button
                 type="button"
                 variant="outline"
                 onClick={() => setOutcomeDialog({ mode: 'unreachable' })}
-                title="Customer couldn't be reached — queue for follow-up (status: Unconfirmed)"
+                title="Customer couldn't be reached — keep status Unconfirmed with reason"
               >
                 Unreachable
               </Button>
@@ -3434,7 +3648,7 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                 type="button"
                 variant="outline"
                 onClick={() => setOutcomeDialog({ mode: 'enquiry' })}
-                title="Information request only (status: Enquiry)"
+                title="Information request only — move status to Enquiry"
               >
                 Enquiry
               </Button>
@@ -3443,17 +3657,22 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
               type="submit"
               loading={submitting && submitVariant === 'book'}
               onClick={() => setSubmitVariant('book')}
+              className="bg-purple-600 hover:bg-purple-700 text-white"
             >
               Book Call
             </LoadBtn>
           </>
+        ) : isEdit ? (
+          <LoadBtn type="submit" loading={submitting}>
+            Save changes
+          </LoadBtn>
         ) : (
           <LoadBtn
             type="submit"
-            loading={submitting}
-            className={isConfirm ? 'bg-purple-600 hover:bg-purple-700 text-white' : undefined}
+            loading={submitting && submitVariant === 'book'}
+            onClick={() => setSubmitVariant('book')}
           >
-            {isConfirm ? 'Confirm & Schedule (Book Call)' : 'Save changes'}
+            Book Call
           </LoadBtn>
         )}
       </div>
@@ -4048,7 +4267,7 @@ function CustomerHistoryDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="!max-w-[1000px] w-[95vw] max-h-[85vh] overflow-hidden flex flex-col p-0">
+      <DialogContent className="!max-w-none w-[calc(100vw-48px)] h-[calc(100vh-48px)] overflow-hidden flex flex-col p-0">
         <DialogHeader className="!mx-0 !mt-0 px-6 pt-6 pb-3 border-b">
           <DialogTitle className="flex items-center gap-2">
             <History className="h-5 w-5" />
@@ -4891,6 +5110,180 @@ function ChangeDescriptionDialog({ open, onClose, initialDesc, onSubmit }: {
           <div className="flex justify-end gap-2 pt-2">
             <CancelButton onCancel={onClose} disabled={loading} />
             <Button onClick={go} disabled={loading}>{loading ? 'Saving…' : 'Save'}</Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/*
+ * AddRemarksDialog — legacy "Job CheckOut Remarks" layout (refreshed
+ * 2026-05-19). Mirrors the JobOutcomeDialog structure pixel-for-pixel:
+ *
+ *   ┌──────────────────────────────────────────────────────┐
+ *   │ Job CheckOut Remarks                                 │  ← dark band
+ *   ├──────────────────────────────────────────────────────┤
+ *   │ Open Due To *  ◉ By Customer  ○ Client …             │
+ *   │ Reason *       [SearchSelect dropdown ▾]             │
+ *   │ Remarks *      [textarea…]                           │
+ *   │                       [Submit]      [Cancel]         │
+ *   └──────────────────────────────────────────────────────┘
+ *
+ * Submit POSTs to /admin/jobs/:id/comments with:
+ *   {
+ *     comments:        "[Open Due To: Client · Reason: <label>] <ops remark>",
+ *     comment_on:      1,    // legacy "created" stage code
+ *     enum_reason_id:  <id>  // picked from the reason dropdown
+ *   }
+ *
+ * Reason list comes from GET /admin/jobs/comment-reasons which
+ * returns `tbl_enum_reason` rows for the legacy "Others" pool
+ * (enum_type=4 default). Operators see the same dropdown legacy
+ * surfaces; new and old apps remain readable from each other.
+ */
+const REMARK_DUE_TO_OPTIONS: Array<'Customer' | 'Client' | 'EasyFix' | 'Technician'> = [
+  'Customer', 'Client', 'EasyFix', 'Technician',
+];
+function AddRemarksDialog({ open, jobId, onClose, onSaved }: {
+  open: boolean; jobId: number;
+  onClose: () => void; onSaved: () => void;
+}) {
+  const [dueTo, setDueTo] = useState<string>('Customer');
+  const [reasonId, setReasonId] = useState<string>('');
+  const [text, setText] = useState('');
+  const [reasons, setReasons] = useState<Array<{ id: number; label: string }>>([]);
+  const [reasonsLoading, setReasonsLoading] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Reset on each open.
+  useEffect(() => {
+    if (open) { setDueTo('Customer'); setReasonId(''); setText(''); setErr(null); }
+  }, [open]);
+
+  // Fetch the reason list filtered by Open-Due-To. Legacy CRM's
+  // dropdown narrows dynamically as the operator switches the radio
+  // (verified against the screenshot's exact labels — those rows
+  // live under user_type=2 / "Client" in action_taken_reason). The
+  // refetch resets the picked reason since a stale id from a
+  // different bucket would render as an opaque number.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setReasonsLoading(true);
+    setReasonId('');
+    api.get<Array<{ id: number; label: string }>>('/admin/jobs/comment-reasons', {
+      dueTo: dueTo.toLowerCase(),
+    })
+      .then((rows) => { if (!cancelled) setReasons(rows || []); })
+      .catch(() => { if (!cancelled) setReasons([]); })
+      .finally(() => { if (!cancelled) setReasonsLoading(false); });
+    return () => { cancelled = true; };
+  }, [open, dueTo]);
+
+  const reasonOptions = React.useMemo(
+    () => reasons.map((r) => ({ value: String(r.id), label: r.label })),
+    [reasons],
+  );
+
+  async function go() {
+    const remark = text.trim();
+    if (!reasonId) { setErr('Please pick a reason.'); return; }
+    if (!remark) { setErr('Please enter a remark before saving.'); return; }
+    setLoading(true); setErr(null);
+    try {
+      const reasonLabel = reasons.find((r) => String(r.id) === reasonId)?.label || '';
+      // Structured prefix is the same shape as JobOutcomeDialog so
+      // ops can grep / parse remarks the same way regardless of which
+      // popup created the row.
+      const prefix = `[Open Due To: ${dueTo} · Reason: ${reasonLabel}]`;
+      const payload = {
+        comments: `${prefix} ${remark}`,
+        comment_on: 1, // legacy "created" stage code — see commentBody Joi schema
+        enum_reason_id: Number(reasonId),
+      };
+      await api.post(`/admin/jobs/${jobId}/comments`, payload);
+      onSaved();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'Failed to save remark');
+    } finally { setLoading(false); }
+  }
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="!max-w-xl p-0 gap-0 overflow-hidden">
+        {/* Dark-slate band header matching JobOutcomeDialog. */}
+        <div className="px-6 py-4 bg-gradient-to-r from-slate-900 via-slate-700 to-slate-900 text-white flex items-center gap-2.5 shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]">
+          <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-sky-500/20 ring-1 ring-sky-400/40">
+            <Pencil className="h-3.5 w-3.5 text-sky-300" />
+          </span>
+          <DialogTitle className="text-[15px] font-semibold tracking-tight">Job CheckOut Remarks</DialogTitle>
+        </div>
+        <div className="p-5 space-y-4">
+          <div className="grid grid-cols-[150px_1fr] items-center gap-3">
+            <label className="text-sm font-medium text-right">
+              Open Due To<span className="text-rose-600">*</span>
+            </label>
+            <div className="flex flex-wrap items-center gap-4">
+              {REMARK_DUE_TO_OPTIONS.map((opt) => (
+                <label key={opt} className="inline-flex items-center gap-1.5 text-sm cursor-pointer">
+                  <input
+                    type="radio"
+                    name="add-remarks-due-to"
+                    value={opt}
+                    checked={dueTo === opt}
+                    onChange={() => setDueTo(opt)}
+                    className="accent-purple-600"
+                  />
+                  {opt === 'Customer' ? 'By Customer' : opt}
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="grid grid-cols-[150px_1fr] items-center gap-3">
+            <label className="text-sm font-medium text-right">
+              Reason<span className="text-rose-600">*</span>
+            </label>
+            <SearchSelect
+              value={reasonId}
+              onChange={setReasonId}
+              options={reasonOptions}
+              placeholder={reasonsLoading ? 'Loading reasons…' : 'Select Reason'}
+              disabled={reasonsLoading}
+              required
+            />
+          </div>
+          <div className="grid grid-cols-[150px_1fr] items-start gap-3">
+            <label className="text-sm font-medium text-right pt-2">
+              Remarks<span className="text-rose-600">*</span>
+            </label>
+            <textarea
+              required
+              rows={3}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="Write Comment…"
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus-visible:border-foreground/40 resize-y"
+              maxLength={2000}
+            />
+          </div>
+          {err && <div className="text-sm text-red-600 text-right">{err}</div>}
+          <div className="flex justify-end gap-2 pt-2 border-t">
+            <Button
+              onClick={go}
+              disabled={loading || !reasonId || !text.trim()}
+              className="bg-teal-500 hover:bg-teal-600 text-white"
+            >
+              {loading ? 'Saving…' : 'Submit'}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="bg-rose-500 hover:bg-rose-600 text-white border-rose-500 hover:text-white"
+              onClick={onClose}
+            >
+              Cancel
+            </Button>
           </div>
         </div>
       </DialogContent>

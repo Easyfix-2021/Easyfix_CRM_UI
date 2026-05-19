@@ -253,8 +253,10 @@ export function AssignTechnicianModal({
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent
-        // wider than the default sm:max-w-md — this modal is data-dense.
-        className="!max-w-[1200px] w-[95vw]"
+        // Near-full-viewport per ops spec (~24px gutter all sides).
+        // This modal is data-dense (technician candidate table); the
+        // extra real estate gives the table room to breathe.
+        className="!max-w-none w-[calc(100vw-48px)] h-[calc(100vh-48px)] overflow-hidden flex flex-col"
       >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">

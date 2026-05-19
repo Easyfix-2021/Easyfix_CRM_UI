@@ -261,15 +261,32 @@ export default function JobsPage() {
     }
   }
 
-  // Apply UI-only search filter before sorting. Matches against any visible
-  // text column (job #, refs, client, customer name, mobile, city, tech, owner).
+  // Apply UI-only search filter before sorting. Matches against every
+  // visible column INCLUDING the human-readable status label (so typing
+  // "scheduled" matches status=1 rows) and the source text. Date columns
+  // are stringified via formatDate so operators can also type "12 May"
+  // or partial dates and get hits. The needle is lowercased once and
+  // compared against the lowercase string form of each candidate.
   const filteredItems = (data?.items ?? []).filter((j) => {
     if (!q) return true;
     const needle = q.toLowerCase();
-    const haystacks = [
+    const haystacks: Array<unknown> = [
       j.job_id, j.job_reference_id, j.client_ref_id,
       j.client_name, j.customer_name, j.customer_mob_no,
       j.city_name, j.easyfixer_name, j.owner_name, j.job_type,
+      j.source_type,
+      // Status as both numeric code AND human label so "scheduled",
+      // "completed", "cancelled" all match. statusLabel takes the same
+      // {assigned} hint the row renders.
+      j.job_status,
+      statusLabel(Number(j.job_status), { assigned: j.fk_easyfixter_id != null }),
+      // Date columns rendered via formatDate so partial date typing
+      // matches what the operator visually sees.
+      j.created_date_time && formatDate(j.created_date_time),
+      j.requested_date_time && formatDate(j.requested_date_time),
+      j.scheduled_date_time && formatDate(j.scheduled_date_time),
+      j.checkin_date_time && formatDate(j.checkin_date_time),
+      j.checkout_date_time && formatDate(j.checkout_date_time),
     ];
     return haystacks.some((h) => h != null && String(h).toLowerCase().includes(needle));
   });
