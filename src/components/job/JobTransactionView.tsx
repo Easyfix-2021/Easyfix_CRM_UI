@@ -45,6 +45,7 @@ type TransactionResp = {
   job: Record<string, unknown> & {
     job_id: number; job_status: number;
     customer_name: string | null; customer_mob_no: string | null;
+    job_customer_name?: string | null;
     client_name: string | null;
     address: string | null; city_name: string | null; pin_code: string | null;
     owner_name: string | null; easyfixer_name: string | null;
@@ -177,7 +178,7 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
 
           <div className="mt-3 pt-3 border-t border-slate-200">
             <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Customer Details</div>
-            <DLRow label="Name:">{fmt(j.customer_name)}</DLRow>
+            <DLRow label="Name:">{fmt(j.job_customer_name || j.customer_name)}</DLRow>
             <DLRow label="Contact No.:">
               <a href={`tel:${j.customer_mob_no ?? ''}`} className="inline-flex items-center gap-1 text-sky-700 hover:underline tabular-nums">
                 <Phone className="h-3 w-3" /> {maskMobile(j.customer_mob_no)}

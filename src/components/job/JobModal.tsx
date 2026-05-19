@@ -1616,12 +1616,22 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
   }, [initial, mode]);
 
   /*
-   * Fire when the picked client changes (create mode only). Loads the
-   * client's contact list and resets reporting_contact_id if the old
-   * pick is no longer in the new list.
+   * Fire when the picked client changes. Loads the client's contact
+   * list for the Reporting Contact dropdown and resets
+   * reporting_contact_id if the old pick is no longer in the new list.
+   *
+   * Modes:
+   *   - create  : always fetch — operator picks client + contact.
+   *   - confirm : fetch — operator MUST pick a contact for an
+   *               Unconfirmed order (bulk-uploaded rows arrive with no
+   *               SPOC info; confirming needs one).
+   *   - edit    : skip — the SPOC trio is editable inline via the
+   *               existing job-level fields; no contact picker.
+   *
+   * Endpoint shared with Book New Call: `/admin/clients/:id/contacts`.
    */
   useEffect(() => {
-    if (isEditShape) return;
+    if (isEdit && !isConfirm) return;
     const clientId = Number(f.fk_client_id);
     if (!clientId) { setClientContacts([]); return; }
     let cancelled = false;
@@ -1636,7 +1646,7 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
       .finally(() => { if (!cancelled) setLoadingContacts(false); });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [f.fk_client_id, isEditShape]);
+  }, [f.fk_client_id, isEdit, isConfirm]);
 
   /*
    * Auto-fill Client SPOC fields when the operator picks a reporting
@@ -1841,8 +1851,14 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
         // skips services to preserve historical rows untouched.
         if (isConfirm) {
           patch.services = buildServicesPayload();
+          // Customer name is written to tbl_job.job_customer_name
+          // (the per-job copy) — NOT the master tbl_customer row.
+          // This lets the same mobile carry a different per-job
+          // display name without mutating the customer master.
+          // Email still updates the master record because it's a
+          // contact channel, not a per-job alias.
+          patch.job_customer_name = f.customer_name;
           patch.customer = {
-            customer_name:  f.customer_name,
             customer_email: f.customer_email,
           };
           patch.address = {
@@ -2086,10 +2102,16 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
    * Rules of Hooks are satisfied regardless of which branch renders.
    */
   const [confirmOpenSection, setConfirmOpenSection] = React.useState<1 | 2 | 3>(1);
-  // Section 1 (Client Details) is complete once Client Reference ID
-  // is non-empty. Client itself + SPOC trio are read-only in confirm,
-  // so the ref-id is the only mandatory operator-typed field here.
-  const confirmSection1Complete = !!(f.client_ref_id && String(f.client_ref_id).trim());
+  // Section 1 (Client Details) is complete once BOTH Client Reference
+  // ID is non-empty AND a Reporting Contact has been picked. Client
+  // itself is read-only in confirm; SPOC trio auto-fills from the
+  // contact. Bulk-uploaded orders arrive with no SPOC info, so the
+  // Reporting Contact pick is the only way ops attaches a SPOC
+  // before booking — making it mandatory matches that intent.
+  const confirmSection1Complete = !!(
+    f.client_ref_id && String(f.client_ref_id).trim()
+    && f.reporting_contact_id && String(f.reporting_contact_id).trim()
+  );
   // Section 2 (Customer Details) requires the full set of legacy
   // mandatory fields: name + slot + datetime + address + city + 6-digit
   // pincode. Customer mobile is read-only in confirm so it's not gated.
@@ -2144,14 +2166,53 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
             <Field label="Client Reference ID *">
               <Input required value={f.client_ref_id} onChange={(e) => set('client_ref_id', e.target.value)} placeholder="Ticket or order ID" />
             </Field>
+            {/* Reporting Contact — same dropdown the Book New Call
+                flow exposes. Lets ops pick a contact from
+                tbl_client_contacts for the job's client; picking
+                auto-fills the SPOC trio below. Empty-state messaging
+                mirrors create-mode. The bulk-uploaded order arrives
+                with NO SPOC info, so this is the only way for ops to
+                attach a contact before booking. */}
+            <Field label={`Reporting Contact *${f.fk_client_id && loadingContacts ? ' (loading…)' : ''}`}>
+              <SearchSelect
+                value={f.reporting_contact_id || ''}
+                onChange={(v) => pickReportingContact(String(v))}
+                placeholder={
+                  loadingContacts ? 'Loading…'
+                    : clientContacts.length
+                      ? '— Select contact —'
+                      : 'No active contacts for this client'
+                }
+                disabled={!f.fk_client_id || !clientContacts.length}
+                options={clientContacts.map((c) => ({
+                  value: String(c.id),
+                  label: `${c.contact_name || '(no name)'} · ${c.contact_desgn || 'contact'}`,
+                }))}
+              />
+            </Field>
+            {/* SPOC trio — readonly but bound to `f.*` (not `initial.*`)
+                so picking a Reporting Contact above immediately fills
+                them. Falls back to initial values when no contact has
+                been picked yet (i.e. the BE already had SPOC info on
+                the row). */}
             <Field label="Client SPOC Phone">
-              <Input value={maskMobile(initial.client_spoc)} readOnly disabled className="tabular-nums" />
+              <Input
+                value={maskMobile(f.client_spoc || initial.client_spoc)}
+                readOnly disabled
+                className="tabular-nums"
+              />
             </Field>
             <Field label="Client SPOC Name">
-              <Input value={String(initial.client_spoc_name ?? '')} readOnly disabled />
+              <Input
+                value={String(f.client_spoc_name || initial.client_spoc_name || '')}
+                readOnly disabled
+              />
             </Field>
             <Field label="Client SPOC Email">
-              <Input value={String(initial.client_spoc_email ?? '')} readOnly disabled />
+              <Input
+                value={String(f.client_spoc_email || initial.client_spoc_email || '')}
+                readOnly disabled
+              />
             </Field>
           </div>
           <div className="mt-4 flex justify-end">
@@ -2159,7 +2220,7 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
               type="button"
               onClick={() => setConfirmOpenSection(2)}
               disabled={!confirmSection1Complete}
-              title={confirmSection1Complete ? '' : 'Fill Client Reference ID to proceed'}
+              title={confirmSection1Complete ? '' : 'Fill Client Reference ID and pick a Reporting Contact to proceed'}
             >
               Next →
             </Button>
@@ -2232,6 +2293,15 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                     if (slot) set('time_slot', slot);
                   }}
                 />
+                {/* Surfaces the date the operator entered on the upload
+                    sheet (which had no time component). Pre-fill is
+                    intentionally blank so they must explicitly pick a
+                    time slot — see toFormShape's isBulkSentinel branch. */}
+                {f.upload_date_hint && !f.requested_date_time && (
+                  <p className="text-[11px] text-amber-700">
+                    From upload: <strong>{f.upload_date_hint}</strong> — pick a time slot to proceed.
+                  </p>
+                )}
               </div>
             </div>
             <Field label="Complete Address *" full>
@@ -4660,15 +4730,46 @@ function toFormShape(j: Job | null) {
       return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
     } catch { return ''; }
   };
+
+  // Bulk-upload sentinel: when the row arrived from an Excel upload
+  // (source_type='excel') AND the time portion is exactly 00:00, the
+  // operator did NOT pick a time on the spreadsheet — the parser
+  // defaulted to midnight as a "needs ops to pick" marker. Blank both
+  // `requested_date_time` and `time_slot` so the Confirm form's
+  // Section 2 gate forces an explicit choice before unlocking.
+  // The original upload date is still surfaced as a hint in the
+  // Confirm form via `upload_date_hint` below.
+  const isBulkSentinel = (() => {
+    const src = String(j?.source_type ?? '').toLowerCase();
+    if (src !== 'excel') return false;
+    const v = j?.requested_date_time;
+    if (!v) return false;
+    const d = new Date(String(v));
+    return !isNaN(+d) && d.getHours() === 0 && d.getMinutes() === 0;
+  })();
+  const uploadDateHint = isBulkSentinel
+    ? (() => {
+        const d = new Date(String(j?.requested_date_time));
+        return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+      })()
+    : '';
+
   return {
     fk_client_id: pick('fk_client_id'),
     job_type: pick('job_type') || 'Installation',
     source_type: pick('source_type') || 'manual',
-    requested_date_time: dt('requested_date_time'),
-    time_slot: pick('time_slot') || 'Morning 9 to 2',
+    requested_date_time: isBulkSentinel ? '' : dt('requested_date_time'),
+    time_slot: isBulkSentinel ? '' : (pick('time_slot') || 'Morning 9 to 2'),
+    upload_date_hint: uploadDateHint,
     job_desc: pick('job_desc'),
     client_ref_id: pick('client_ref_id'),
-    customer_name: pick('customer_name'), customer_mob_no: pick('customer_mob_no'), customer_email: pick('customer_email'),
+    // Prefer the job-row copy `job_customer_name` when present (set by
+    // the bulk-upload flow + any prior Confirm-mode edit) so the
+    // operator sees the order's specific name. Fall back to the master
+    // tbl_customer.customer_name when the job-row copy is blank — the
+    // typical case for jobs created directly via Book New Call.
+    customer_name: pick('job_customer_name') || pick('customer_name'),
+    customer_mob_no: pick('customer_mob_no'), customer_email: pick('customer_email'),
     // Split form fields for the Section 2 Schedule sub-block.
     // `requested_date_time` (ISO) is what the backend ultimately
     // consumes; we maintain it via a useEffect when either of these
