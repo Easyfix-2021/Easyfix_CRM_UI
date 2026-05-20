@@ -1,9 +1,10 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { Bell, LogOut, Menu, BarChart3, Info, AlertTriangle, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { api, ApiError } from '@/lib/api';
+import { useFetchOnce } from '@/lib/hooks';
 import { useMe, clearMeCache } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
 import { EscalatedJobsModal } from '@/components/job/EscalatedJobsModal';
@@ -28,11 +29,18 @@ export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
   // and both Navbar + Sidebar consume from context. Saves one duplicate HTTP
   // request + DB lookup per page load.
   const { me } = useMe();
-  const [unread, setUnread] = useState<number>(0);
-  // Escalated job count — legacy CRM showed `Escalated Jobs ($count)` in the
-  // page header. Sourced from the same `/admin/jobs/counts` endpoint the
-  // dashboard cards use (extended to include `escalated` 2026-05-13).
-  const [escalatedCount, setEscalatedCount] = useState<number | null>(null);
+  /*
+   * Notification + escalation badges use `useFetchOnce` — the
+   * module-level dedupe + 30s cache in lib/hooks.ts collapses the
+   * Strict-Mode double-invoke into one round-trip AND shares the
+   * cached response with any other Navbar instance / re-mount that
+   * happens within the TTL (e.g. routing between authed pages).
+   * Without dedupe each /jobs route load fired this twice in dev.
+   */
+  const inbox = useFetchOnce<{ unread: number }>('/admin/notifications/inbox/count');
+  const counts = useFetchOnce<{ escalated?: number }>('/admin/jobs/counts');
+  const unread = inbox.data?.unread ?? 0;
+  const escalatedCount = counts.data ? (counts.data.escalated ?? 0) : null;
   // Escalated Jobs modal — opens from the navbar button. Replaces the
   // previous "navigate to /jobs?focus=escalated" behaviour with the
   // dedicated escalation table that matches the legacy column shape.
@@ -42,11 +50,6 @@ export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
   // on Dashboard / Manage Jobs while picking a date range and reading
   // the resulting call history table.
   const [callInfoOpen, setCallInfoOpen] = useState(false);
-
-  useEffect(() => {
-    api.get<{ unread: number }>('/admin/notifications/inbox/count').then((d) => setUnread(d.unread)).catch(() => {});
-    api.get<{ escalated: number }>('/admin/jobs/counts').then((d) => setEscalatedCount(d.escalated ?? 0)).catch(() => setEscalatedCount(null));
-  }, []);
 
   // Permission gates — mirror the legacy CRM, which only showed each header
   // button if the operator had the matching action permission. Keys

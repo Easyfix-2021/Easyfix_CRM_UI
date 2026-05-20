@@ -162,6 +162,24 @@ export default function JobsPage() {
    * the ops user returns to the Scheduled tab.
    */
   const cacheRef = useRef<Map<string, { at: number; data: Resp }>>(new Map());
+  /*
+   * In-flight request dedupe. Multiple useEffects (tab / page /
+   * filters / focusParam) plus React Strict Mode's double-invoke
+   * in dev fan out to 4-8 concurrent calls for the same query key
+   * on /jobs page load. Without this Map we get N round-trips
+   * where 1 would do. The Promise sits in the Map only while the
+   * request is in flight; any caller that resolves the same key
+   * while it's there reuses the same Promise. Cleared in the
+   * `finally` block once the response (or error) lands.
+   */
+  const inflightRef = useRef<Map<string, Promise<Resp>>>(new Map());
+  /*
+   * Same dedupe pattern for /counts. The dashboard's `refreshCounts`
+   * effect fires twice in Strict Mode; with this guard the second
+   * call attaches to the in-flight Promise instead of starting a
+   * fresh request.
+   */
+  const inflightCountsRef = useRef<Promise<CountsResp> | null>(null);
   const TAB_CACHE_TTL = 30_000;
 
   function filterKey() {
@@ -191,6 +209,21 @@ export default function JobsPage() {
         if (reset) setPage(0);
         return;
       }
+    }
+
+    // In-flight dedupe: if a request for this exact key is already
+    // mid-air (Strict Mode double-fire, or two effects landing in
+    // the same tick), attach to it instead of starting a fresh one.
+    // The Promise hasn't settled yet, so the cache isn't populated —
+    // but the response is on the way; we just await it.
+    const inflight = inflightRef.current.get(key);
+    if (inflight) {
+      try {
+        const r = await inflight;
+        setData(r);
+        if (reset) setPage(0);
+      } catch { /* ignore — the originating call will surface the error */ }
+      return;
     }
 
     setLoading(true);
@@ -227,7 +260,10 @@ export default function JobsPage() {
         ? BUCKET_STATUS_MAP[filters.bucketStatus]
         : null;
       const explicitStatus = filters.status ? Number(filters.status) : undefined;
-      const r = await api.get<Resp>('/admin/jobs', {
+      // Build the request promise and register it in the in-flight
+      // Map before awaiting — so a Strict-Mode replay of this effect
+      // in the same tick can attach. Cleared in `finally`.
+      const reqPromise = api.get<Resp>('/admin/jobs', {
         status:    bucketStatuses
           ? undefined
           : (explicitStatus
@@ -271,10 +307,15 @@ export default function JobsPage() {
         dueTo:  filters.dueTo  || undefined,
         zonalId: filters.zonalId || undefined,
       });
+      inflightRef.current.set(key, reqPromise);
+      const r = await reqPromise;
       setData(r);
       cacheRef.current.set(key, { at: Date.now(), data: r });
       if (reset) setPage(0);
-    } finally { setLoading(false); }
+    } finally {
+      inflightRef.current.delete(key);
+      setLoading(false);
+    }
   }
 
   useEffect(() => { setPage(0); load(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [tab]);
@@ -293,8 +334,24 @@ export default function JobsPage() {
    * Null-safe: if the request fails, badges simply don't render, no toast.
    */
   async function refreshCounts() {
-    try { setCounts(await api.get<CountsResp>('/admin/jobs/counts')); }
-    catch { /* swallow — the tab bar is still functional without badges */ }
+    // In-flight dedupe: if another caller is already waiting on
+    // /counts (Strict Mode replay, or a mid-effect Save callback),
+    // attach to the same Promise. Single-key dedupe (counts has no
+    // query params worth keying on) keeps this simpler than the
+    // Map-keyed dedupe used for the LIST endpoint.
+    if (inflightCountsRef.current) {
+      try { setCounts(await inflightCountsRef.current); }
+      catch { /* swallow — the tab bar is still functional without badges */ }
+      return;
+    }
+    const promise = api.get<CountsResp>('/admin/jobs/counts');
+    inflightCountsRef.current = promise;
+    try {
+      setCounts(await promise);
+    } catch { /* swallow — the tab bar is still functional without badges */ }
+    finally {
+      inflightCountsRef.current = null;
+    }
   }
   useEffect(() => { refreshCounts(); }, []);
   // Filter changes refetch (backend-driven); the search box doesn't — see below.

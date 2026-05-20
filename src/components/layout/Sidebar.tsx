@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useMe } from '@/lib/auth-context';
-import { api } from '@/lib/api';
+import { useFetchOnce } from '@/lib/hooks';
 
 /*
  * Sidebar is now driven by tbl_menu (via /api/shared/lookup/menus). The
@@ -290,23 +290,27 @@ export function Sidebar() {
   const currentSearch = searchParams.toString();
   const { me } = useMe();
 
-  const [menus, setMenus] = useState<MenuRow[] | null>(null);
-  useEffect(() => {
-    /*
-     * Defence in depth: backend `lookup.service.js::menus()` already
-     * filters `WHERE menu_status = 1`, so this `.filter` is normally
-     * a no-op. We keep it because:
-     *   (a) if a future refactor accidentally drops the WHERE clause,
-     *       the sidebar still hides inactive menus instead of leaking
-     *       half-built routes to operators;
-     *   (b) it documents the intended contract at the call site.
-     * Mirrors the legacy CRM behaviour where menus toggled off in
-     * `tbl_menu.menu_status` immediately disappear from the sidebar.
-     */
-    api.get<MenuRow[]>('/shared/lookup/menus')
-      .then((rows) => setMenus((rows ?? []).filter((r) => Number(r.menu_status) === 1)))
-      .catch(() => setMenus([]));
-  }, []);
+  /*
+   * Menus go through `useFetchOnce` for module-level Strict-Mode
+   * dedupe + 30s cache. Without this, Sidebar's mount effect fired
+   * twice on every authed-page load in dev. The defence-in-depth
+   * `menu_status === 1` filter runs in a useMemo over the hook
+   * output so we don't re-derive on every render.
+   *
+   * Defence in depth: backend `lookup.service.js::menus()` already
+   * filters `WHERE menu_status = 1`, so this `.filter` is normally
+   * a no-op. We keep it because:
+   *   (a) if a future refactor accidentally drops the WHERE clause,
+   *       the sidebar still hides inactive menus instead of leaking
+   *       half-built routes to operators;
+   *   (b) it documents the intended contract at the call site.
+   * Mirrors the legacy CRM behaviour where menus toggled off in
+   * `tbl_menu.menu_status` immediately disappear from the sidebar.
+   */
+  const menusFetch = useFetchOnce<MenuRow[]>('/shared/lookup/menus');
+  const menus: MenuRow[] | null = menusFetch.loading
+    ? null
+    : (menusFetch.data ?? []).filter((r) => Number(r.menu_status) === 1);
 
   // Tree + per-user permission filter.
   //

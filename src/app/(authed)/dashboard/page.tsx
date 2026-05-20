@@ -9,9 +9,18 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
-import { api } from '@/lib/api';
+import { useFetchOnce } from '@/lib/hooks';
 import { formatEasyfixerName, statusColorClass, statusLabel } from '@/lib/utils';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
+
+/*
+ * Dashboard fetches now go through `useFetchOnce` (lib/hooks.ts) —
+ * the module-level dedupe + 30s cache means the dashboard's `/counts`
+ * call shares its Promise + cache entry with the Navbar's identical
+ * `/counts` call instead of firing it separately. Down from 3 calls
+ * on first dashboard load (1 dashboard + 2 Strict-Mode-doubled
+ * Navbar) to 1 total.
+ */
 
 /*
  * Dashboard — legacy CRM-inspired data-flow layout.
@@ -285,48 +294,59 @@ export default function DashboardPage() {
     if (searchParams.get('new')) router.replace('/dashboard');
   }
 
+  /*
+   * Both fetches now go through `useFetchOnce`. The hook keys by the
+   * exact URL string, so:
+   *   - `/admin/jobs/counts` here SHARES its cache entry with the
+   *     identical key in the Navbar — one round-trip serves both.
+   *   - `/admin/jobs?limit=8` is dashboard-exclusive but still
+   *     benefits from Strict-Mode dedup + 30s TTL on remount.
+   * The `setStats` / `setRecent` derived-state translation happens
+   * in two useEffects below that watch the hook output.
+   */
+  const countsFetch = useFetchOnce<{
+    total: number;
+    byStatus: Record<string, number>;
+    bookedUnassigned: number;
+    bookedAssigned: number;
+  }>('/admin/jobs/counts');
+  const recentFetch = useFetchOnce<ListResp>('/admin/jobs?limit=8');
+
   useEffect(() => {
-    // One counts query covers every status bucket we need. Two requests fire
-    // in parallel (counts + recent list). Single pool hit per request.
-    (async () => {
-      try {
-        const r = await api.get<{
-          total: number;
-          byStatus: Record<string, number>;
-          bookedUnassigned: number;
-          bookedAssigned: number;
-        }>('/admin/jobs/counts');
-        const b = r.byStatus || {};
-        /*
-         * Canonical status → card mapping (2026-04-20 truth):
-         *   21                  → Orders in Followup
-         *   9                   → Unconfirmed Orders
-         *   0 + tech null       → Pending for Scheduling (bookedUnassigned)
-         *   0 + tech not null   → Pending App Ack        (bookedAssigned)
-         *   1                   → Pending to Start
-         *   2, 20               → Pending to Close
-         *   3, 5                → Audit & Complete
-         *   10                  → Pending for Feedback
-         */
-        setStats({
-          followup:          b['21'] ?? 0,
-          unconfirmed:       b['9']  ?? 0,
-          pendingScheduling: r.bookedUnassigned ?? 0,
-          pendingAppAck:     r.bookedAssigned   ?? 0,
-          pendingToStart:    b['1']  ?? 0,
-          pendingToClose:    (b['2'] ?? 0) + (b['20'] ?? 0),
-          auditComplete:     (b['3'] ?? 0) + (b['5']  ?? 0),
-          pendingFeedback:   b['10'] ?? 0,
-        });
-      } finally { setLoadingStats(false); }
-    })();
-    (async () => {
-      try {
-        const r = await api.get<ListResp>('/admin/jobs', { limit: 8 });
-        setRecent(r.items);
-      } finally { setLoadingRecent(false); }
-    })();
-  }, []);
+    if (countsFetch.loading) return;
+    if (countsFetch.data) {
+      const r = countsFetch.data;
+      const b = r.byStatus || {};
+      /*
+       * Canonical status → card mapping (2026-04-20 truth):
+       *   21                  → Orders in Followup
+       *   9                   → Unconfirmed Orders
+       *   0 + tech null       → Pending for Scheduling (bookedUnassigned)
+       *   0 + tech not null   → Pending App Ack        (bookedAssigned)
+       *   1                   → Pending to Start
+       *   2, 20               → Pending to Close
+       *   3, 5                → Audit & Complete
+       *   10                  → Pending for Feedback
+       */
+      setStats({
+        followup:          b['21'] ?? 0,
+        unconfirmed:       b['9']  ?? 0,
+        pendingScheduling: r.bookedUnassigned ?? 0,
+        pendingAppAck:     r.bookedAssigned   ?? 0,
+        pendingToStart:    b['1']  ?? 0,
+        pendingToClose:    (b['2'] ?? 0) + (b['20'] ?? 0),
+        auditComplete:     (b['3'] ?? 0) + (b['5']  ?? 0),
+        pendingFeedback:   b['10'] ?? 0,
+      });
+    }
+    setLoadingStats(false);
+  }, [countsFetch.loading, countsFetch.data]);
+
+  useEffect(() => {
+    if (recentFetch.loading) return;
+    if (recentFetch.data) setRecent(recentFetch.data.items);
+    setLoadingRecent(false);
+  }, [recentFetch.loading, recentFetch.data]);
 
   return (
     <div className="space-y-6">

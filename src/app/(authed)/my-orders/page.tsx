@@ -124,6 +124,14 @@ export default function MyOrdersPage() {
   // every key on any mutation (modal save, row quick-action) — simpler than
   // per-tab invalidation and the list is small enough that a refetch is cheap.
   const cacheRef = useRef<Map<string, { at: number; data: Resp }>>(new Map());
+  /*
+   * In-flight request dedupe — same pattern as /jobs. Multiple
+   * useEffects (tab+scope, page+pageSize) plus React Strict Mode's
+   * double-invoke fan out to 4+ concurrent calls for the same key
+   * on /my-orders page load. This Map collapses them to one
+   * round-trip; later callers attach to the same Promise.
+   */
+  const inflightRef = useRef<Map<string, Promise<Resp>>>(new Map());
   const TAB_CACHE_TTL = 30_000;
 
   async function load(reset = false, force = false) {
@@ -142,19 +150,35 @@ export default function MyOrdersPage() {
       }
     }
 
+    // In-flight dedupe — see comment on inflightRef.
+    const inflight = inflightRef.current.get(key);
+    if (inflight) {
+      try {
+        const r = await inflight;
+        setData(r);
+        if (reset) setPage(0);
+      } catch { /* originator surfaces the error */ }
+      return;
+    }
+
     setLoading(true);
     try {
-      const r = await api.get<Resp>('/admin/jobs', {
+      const reqPromise = api.get<Resp>('/admin/jobs', {
         status:    tabDef?.statuses ? undefined : tabDef?.status,
         statuses:  tabDef?.statuses ? tabDef.statuses.join(',') : undefined,
         assigned:  tabDef?.assigned === undefined ? undefined : String(tabDef.assigned),
         limit, offset: off,
         ownerId: scopedOwnerId,
       });
+      inflightRef.current.set(key, reqPromise);
+      const r = await reqPromise;
       setData(r);
       cacheRef.current.set(key, { at: Date.now(), data: r });
       if (reset) setPage(0);
-    } finally { setLoading(false); }
+    } finally {
+      inflightRef.current.delete(key);
+      setLoading(false);
+    }
   }
 
   // Refetch on tab/scope change AND on page/pageSize change. pageSize
