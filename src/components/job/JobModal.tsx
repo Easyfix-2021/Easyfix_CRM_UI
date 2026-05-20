@@ -1592,6 +1592,51 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
   });
 
   /*
+   * Saved-address picker UI state. Previous design used a fuzzy
+   * field-by-field equality check to compute `isSelected` on each
+   * radio — fragile because trailing whitespace / null-vs-empty
+   * normalisation in either side broke selection visibility.
+   *
+   * Now we track the picked address by its row id explicitly. The
+   * radio's `checked` prop reads from `selectedAddressId`; clicking
+   * the radio sets the id AND copies the row fields into the form.
+   * Operator edits to the address fields after selection don't
+   * deselect the radio — the id stays pinned until they explicitly
+   * "Add a new address".
+   *
+   * `addressQuery` is the search-input value; `addressShowAll`
+   * toggles "show latest 10" vs "view all". Both reset whenever the
+   * dialog closes.
+   */
+  const [selectedAddressId, setSelectedAddressId] = useState<number | null>(null);
+  const [addressQuery, setAddressQuery] = useState<string>('');
+  const [addressShowAll, setAddressShowAll] = useState<boolean>(false);
+  /*
+   * Hydrate `selectedAddressId` whenever the prefillCustomer arrives
+   * (create flow) or the form initialises with an existing
+   * fk_address_id (edit/confirm). The first matching saved address —
+   * matched first by address_id from the form's `fk_address_id`, then
+   * by fuzzy field equality as a fallback — is the one already
+   * populated in the form state, so the radio shows it as checked.
+   * Reset on modal close so re-opens start clean.
+   */
+  useEffect(() => {
+    if (!prefillCustomer?.found || !prefillCustomer.addresses?.length) {
+      setSelectedAddressId(null);
+      return;
+    }
+    // Prefer the first address (matches the auto-prefill in the form
+    // initialiser above). Edit/confirm modes can override later via
+    // an explicit click — id-based selection means the form's
+    // separate edits to address/city/pin won't accidentally
+    // deselect the row.
+    const firstId = prefillCustomer.addresses[0]?.address_id ?? null;
+    setSelectedAddressId(firstId);
+    setAddressQuery('');
+    setAddressShowAll(false);
+  }, [prefillCustomer?.customer?.customer_id]);
+
+  /*
    * Customer History dialog — surfaces every prior job booked for the
    * same tbl_customer row. Available only when the mobile-gate matched
    * an existing customer (i.e. there's a customer_id to query against);
@@ -2378,19 +2423,67 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                   // / service-type filter (which still uses the
                   // single field) shows something sensible.
                   set('fk_service_catg_id', ids[0] || '');
+                  // Clear dependent type selections so a stale
+                  // type from a previously-picked category doesn't
+                  // hang around when the operator switches.
+                  set('fk_service_type_id', '');
+                  set('fk_service_type_ids' as keyof typeof f, [] as never);
                 }}
                 placeholder="— Select one or more —"
                 selectedLabel="categories"
-                options={lk.toOpts.serviceCategories.map((o) => ({ value: o.value, label: String(o.label) }))}
+                options={(() => {
+                  // Restrict to categories that appear in THIS client's
+                  // rate card (same rule as create-mode). When the rate
+                  // card is still loading, fall back to all categories.
+                  const allowed = new Set(
+                    (clientServices || []).map((cs) => String(cs.service_catg_id)),
+                  );
+                  return (lk.serviceCategories || [])
+                    .filter((c) => allowed.size === 0 || allowed.has(String(c.service_catg_id)))
+                    .map((c) => ({ value: c.service_catg_id, label: c.service_catg_name }));
+                })()}
               />
             </Field>
             <Field label="Service Type *">
-              <SearchSelect
-                required
-                value={f.fk_service_type_id}
-                onChange={(v) => set('fk_service_type_id', v)}
-                placeholder="— Select service type —"
-                options={lk.toOpts.serviceTypes.map((o) => ({ value: o.value, label: String(o.label) }))}
+              {/* Service Type list reacts to picked categories AND
+                  the client's rate card — same logic as create
+                  mode. Earlier this was a flat single-select pulling
+                  every type in the system; switching to the
+                  category-aware multi unbreaks the Confirm mode
+                  filter for bulk-uploaded jobs (where the operator
+                  has just picked a category in the multi above). */}
+              <SearchMultiSelect
+                value={f.fk_service_type_ids || []}
+                onChange={(next) => {
+                  const ids = (next as Array<string | number>).map(String);
+                  set('fk_service_type_ids' as keyof typeof f, ids as never);
+                  // Keep the legacy single field in sync (first pick
+                  // wins) so any downstream consumer that still reads
+                  // fk_service_type_id gets a non-empty value.
+                  set('fk_service_type_id', ids[0] || '');
+                }}
+                placeholder={(f.fk_service_catg_ids || f.fk_service_catg_id) ? '— Select service type(s) —' : 'Pick a category first'}
+                disabled={!(f.fk_service_catg_ids || f.fk_service_catg_id)}
+                options={(() => {
+                  const inRateCard = new Set(
+                    (clientServices || []).map((cs) => String(cs.service_type_id))
+                  );
+                  const pickedCats = new Set(
+                    (f.fk_service_catg_ids || '').split(',').filter(Boolean),
+                  );
+                  // Fall back to the single field if multi is empty
+                  // (extra safety net — confirm form init now seeds
+                  // multi from single, but the guard handles the
+                  // race where the operator opens Section 3 mid-
+                  // hydration).
+                  if (pickedCats.size === 0 && f.fk_service_catg_id) {
+                    pickedCats.add(String(f.fk_service_catg_id));
+                  }
+                  return (lk.serviceTypes || [])
+                    .filter((t) => pickedCats.size === 0 || pickedCats.has(String(t.service_catg_id)))
+                    .filter((t) => inRateCard.size === 0 || inRateCard.has(String(t.service_type_id)))
+                    .map((t) => ({ value: String(t.service_type_id), label: t.service_type_name }));
+                })()}
               />
             </Field>
             {/*
@@ -2412,12 +2505,13 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                 placeholder="— Select job type(s) —"
                 selectedLabel="types"
                 options={[
+                  // Job Type vocabulary trimmed to the 3 ops-supported
+                  // values (2026-05-19). Removed Maintenance/Demo/
+                  // Inspection — historical placeholders, never used
+                  // by ops + not wired into rate-card pricing.
                   { value: 'Installation',   label: 'Installation' },
                   { value: 'Repair',         label: 'Repair' },
                   { value: 'Uninstallation', label: 'Uninstallation' },
-                  { value: 'Maintenance',    label: 'Maintenance' },
-                  { value: 'Demo',           label: 'Demo' },
-                  { value: 'Inspection',     label: 'Inspection' },
                 ]}
               />
             </Field>
@@ -2425,10 +2519,15 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
 
           <div className="mb-4">
             <Label className="mb-2 block">Products from client rate card</Label>
-            <ServicesBasket
-              clientPicked
+            {/* Confirm mode now uses AutoServicesTable (same as create
+                mode) — the legacy per-row "Select service" dropdown
+                wasn't what ops wanted. Picking Service Type(s) above
+                renders the matching rate-card rows here with + / ×
+                toggles + an above-table search. */}
+            <AutoServicesTable
               services={clientServices}
               loading={loadingServices}
+              serviceTypeIds={f.fk_service_type_ids || []}
               rows={serviceRows}
               setRows={setServiceRows}
             />
@@ -3078,8 +3177,7 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
             <Field label="Client Ref ID"><Input value={f.client_ref_id} onChange={(e) => set('client_ref_id', e.target.value)} /></Field>
             <Field label="Job Type"><SearchSelect value={f.job_type} onChange={(v) => set('job_type', v)} placeholder="— Select job type —" options={[
               { value: 'Installation', label: 'Installation' }, { value: 'Repair', label: 'Repair' },
-              { value: 'Uninstallation', label: 'Uninstallation' }, { value: 'Maintenance', label: 'Maintenance' },
-              { value: 'Demo', label: 'Demo' }, { value: 'Inspection', label: 'Inspection' },
+              { value: 'Uninstallation', label: 'Uninstallation' },
             ]} /></Field>
             <Field label="Description" full><Input value={f.job_desc} onChange={(e) => set('job_desc', e.target.value)} placeholder="Scope of work" /></Field>
           </div>
@@ -3199,15 +3297,46 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                 address re-seeds the address fields below. Clicking ×
                 deletes via DELETE /admin/customers/:id/addresses/:addrId
                 (FK-guarded by the backend). */}
-            {prefillCustomer?.found && (prefillCustomer.addresses?.length ?? 0) > 0 && (
+            {prefillCustomer?.found && (prefillCustomer.addresses?.length ?? 0) > 0 && (() => {
+              /*
+               * Search + latest-10 paging over the saved addresses.
+               *   - `addressQuery` filters across address / city /
+               *     pin_code (all the operator-visible columns).
+               *   - When the query is empty we sort by address_id
+               *     DESC (latest first) and show the first 10;
+               *     "View all" toggles the full set.
+               *   - When the query is non-empty we ALWAYS show every
+               *     match (search is for finding, not browsing).
+               */
+              const all = prefillCustomer.addresses!;
+              const q = addressQuery.trim().toLowerCase();
+              const matches = q
+                ? all.filter((a) =>
+                    String(a.address || '').toLowerCase().includes(q) ||
+                    String(a.city_name || '').toLowerCase().includes(q) ||
+                    String(a.pin_code || '').toLowerCase().includes(q))
+                : [...all].sort((x, y) => (y.address_id - x.address_id));
+              const sliced = q || addressShowAll ? matches : matches.slice(0, 10);
+              const hiddenCount = q ? 0 : Math.max(0, matches.length - sliced.length);
+              return (
               <div className="mb-4 rounded-md border bg-muted/30 p-3 text-sm">
-                <div className="font-medium mb-2">Saved addresses for this customer</div>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="font-medium">Saved addresses for this customer</div>
+                  <div className="text-xs text-muted-foreground">
+                    {q
+                      ? `${matches.length} match${matches.length === 1 ? '' : 'es'}`
+                      : `${all.length} total`}
+                  </div>
+                </div>
+                <Input
+                  className="mb-2"
+                  placeholder="Search saved addresses (text, city or PIN)…"
+                  value={addressQuery}
+                  onChange={(e) => setAddressQuery(e.target.value)}
+                />
                 <div className="space-y-1.5">
-                  {prefillCustomer.addresses!.map((a) => {
-                    const isSelected =
-                      String(f.address) === String(a.address || '') &&
-                      String(f.city_id) === String(a.city_id ?? '') &&
-                      String(f.pin_code) === String(a.pin_code || '');
+                  {sliced.map((a) => {
+                    const isSelected = selectedAddressId === a.address_id;
                     return (
                       <div key={a.address_id} className="flex items-start gap-2">
                         <label className="flex items-start gap-2 cursor-pointer flex-1">
@@ -3216,6 +3345,7 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                             name="prefill-address"
                             checked={isSelected}
                             onChange={() => {
+                              setSelectedAddressId(a.address_id);
                               setF((s) => ({
                                 ...s,
                                 address: a.address || '',
@@ -3267,6 +3397,7 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                               // unless this WAS the selected one (then
                               // we clear them).
                               if (isSelected) {
+                                setSelectedAddressId(null);
                                 setF((s) => ({ ...s, address: '', city_id: '', pin_code: '' }));
                               }
                               // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -3284,16 +3415,49 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                       </div>
                     );
                   })}
-                  <button
-                    type="button"
-                    className="text-xs text-primary hover:underline pt-1"
-                    onClick={() => setF((s) => ({ ...s, address: '', city_id: '', pin_code: '', building: '', gps_location: '' }))}
-                  >
-                    + Add a new address (clears fields below)
-                  </button>
+                  {/* No-results hint when the search returns nothing. */}
+                  {sliced.length === 0 && (
+                    <div className="text-xs text-muted-foreground italic py-2">
+                      No saved addresses match &quot;{addressQuery}&quot;.
+                    </div>
+                  )}
+                  {/* "View all" toggle — only when we're hiding rows
+                      (default 10-row slice has more behind it AND no
+                      active search). */}
+                  {hiddenCount > 0 && (
+                    <button
+                      type="button"
+                      className="text-xs text-sky-700 hover:text-sky-900 hover:underline pt-1"
+                      onClick={() => setAddressShowAll(true)}
+                    >
+                      View all {matches.length} addresses ({hiddenCount} more)
+                    </button>
+                  )}
+                  {addressShowAll && !q && all.length > 10 && (
+                    <button
+                      type="button"
+                      className="text-xs text-muted-foreground hover:underline pt-1 ml-3"
+                      onClick={() => setAddressShowAll(false)}
+                    >
+                      Collapse to latest 10
+                    </button>
+                  )}
+                  <div className="border-t mt-2 pt-2">
+                    <button
+                      type="button"
+                      className="text-xs text-primary hover:underline"
+                      onClick={() => {
+                        setSelectedAddressId(null);
+                        setF((s) => ({ ...s, address: '', city_id: '', pin_code: '', building: '', gps_location: '' }));
+                      }}
+                    >
+                      + Add a new address (clears fields below)
+                    </button>
+                  </div>
                 </div>
               </div>
-            )}
+              );
+            })()}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {/* Google Places-backed autosuggest. Operator types →
                   debounced backend proxy hits Google → suggestions
@@ -3875,17 +4039,34 @@ function ServicesBasket({
   rows: ServiceRow[];
   setRows: React.Dispatch<React.SetStateAction<ServiceRow[]>>;
 }) {
+  /*
+   * Above-table search — narrows the catalog visible inside the
+   * per-row SearchSelect. The per-row SearchSelect already has its
+   * own typeahead, but operators looking for a service first want to
+   * see the available set BEFORE clicking a dropdown. The query
+   * filters `options` against type / category / rate-card name
+   * (everything the operator sees in the option label).
+   */
+  const [serviceQuery, setServiceQuery] = useState<string>('');
+  const q = serviceQuery.trim().toLowerCase();
   // SearchSelect options — label packs type + category + rate so ops can
   // disambiguate when the same service type appears on multiple rate cards.
-  const options = (services ?? []).map((s) => {
-    const rate = toRate(s.total_amount);
-    const rateStr = rate === null ? 'no rate' : `₹${rate.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
-    const catType = [s.service_catg_name, s.service_type_name].filter(Boolean).join(' › ') || 'Service';
-    return {
-      value: String(s.client_service_id),
-      label: `${catType} · ${rateStr}${s.crc_ratecard_name ? ` · ${s.crc_ratecard_name}` : ''}`,
-    };
-  });
+  const options = (services ?? [])
+    .filter((s) => {
+      if (!q) return true;
+      const hay = [s.service_catg_name, s.service_type_name, s.crc_ratecard_name]
+        .filter(Boolean).join(' ').toLowerCase();
+      return hay.includes(q);
+    })
+    .map((s) => {
+      const rate = toRate(s.total_amount);
+      const rateStr = rate === null ? 'no rate' : `₹${rate.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+      const catType = [s.service_catg_name, s.service_type_name].filter(Boolean).join(' › ') || 'Service';
+      return {
+        value: String(s.client_service_id),
+        label: `${catType} · ${rateStr}${s.crc_ratecard_name ? ` · ${s.crc_ratecard_name}` : ''}`,
+      };
+    });
 
   /*
    * Progressive disclosure — always keep exactly ONE trailing empty row so
@@ -3938,6 +4119,25 @@ function ServicesBasket({
 
   return (
     <div className="space-y-3">
+      {/* Above-table service search. Filters the available options
+          in each row's SearchSelect by category / type / rate-card
+          name. Empty query = full catalog. The match count below the
+          input helps operators see whether their search is too
+          narrow before opening a row's picker. */}
+      <div className="flex items-center gap-3">
+        <div className="relative flex-1">
+          <Input
+            placeholder="Search services (type, category, rate card)…"
+            value={serviceQuery}
+            onChange={(e) => setServiceQuery(e.target.value)}
+          />
+        </div>
+        <div className="text-xs text-muted-foreground whitespace-nowrap">
+          {q
+            ? `${options.length} of ${(services ?? []).length} services`
+            : `${(services ?? []).length} services`}
+        </div>
+      </div>
       {rows.map((row, idx) => {
         const isGhost = !row.client_service_id;
         const isLast = idx === rows.length - 1;
@@ -3951,7 +4151,23 @@ function ServicesBasket({
         const pickedElsewhere = new Set(
           rows.filter((_, i) => i !== idx).map((r) => r.client_service_id).filter(Boolean)
         );
-        const filteredOptions = options.filter((o) => !pickedElsewhere.has(o.value) || o.value === row.client_service_id);
+        // Filter exposes the search-narrowed catalog AND keeps the
+        // currently-selected option visible (so the operator's existing
+        // pick isn't accidentally hidden by an unrelated search filter).
+        const selectedMeta = (services ?? []).find((s) => String(s.client_service_id) === row.client_service_id);
+        let filteredOptions = options.filter((o) => !pickedElsewhere.has(o.value) || o.value === row.client_service_id);
+        if (row.client_service_id && !filteredOptions.some((o) => o.value === row.client_service_id) && selectedMeta) {
+          // Search query has hidden the row's currently-picked
+          // option — append it back so the operator's selection
+          // doesn't disappear on them mid-search.
+          const rate2 = toRate(selectedMeta.total_amount);
+          const rateStr2 = rate2 === null ? 'no rate' : `₹${rate2.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+          const catType2 = [selectedMeta.service_catg_name, selectedMeta.service_type_name].filter(Boolean).join(' › ') || 'Service';
+          filteredOptions = [
+            ...filteredOptions,
+            { value: String(selectedMeta.client_service_id), label: `${catType2} · ${rateStr2}${selectedMeta.crc_ratecard_name ? ` · ${selectedMeta.crc_ratecard_name}` : ''}` },
+          ];
+        }
         return (
           <div key={row.tempId} className="grid grid-cols-12 gap-2 items-end">
             <div className="col-span-12 md:col-span-6">
@@ -4056,6 +4272,17 @@ function AutoServicesTable({
   rows: ServiceRow[];
   setRows: React.Dispatch<React.SetStateAction<ServiceRow[]>>;
 }) {
+  /*
+   * Above-table service search — narrows the candidate list by
+   * rate-card / category / type substring. Visible ONLY when the
+   * candidate table is being rendered (gated by the early-returns
+   * below — "search appears once the list appears" per ops spec).
+   * Hooks ALWAYS run at the top of the function, before any early
+   * return, so this state is declared up here even though it's only
+   * read inside the table render block.
+   */
+  const [serviceSearch, setServiceSearch] = useState<string>('');
+
   if (loading) {
     return <div className="text-sm text-muted-foreground">Loading rate-carded services…</div>;
   }
@@ -4076,6 +4303,11 @@ function AutoServicesTable({
       </div>
     );
   }
+
+  // Lookup needed by the search filter (to keep already-added rows
+  // visible regardless of the query). Declared early so the filter
+  // logic below can read it without forward references.
+  const rowByCsIdEarly = new Map(rows.map((r) => [r.client_service_id, r] as const));
 
   /*
    * Two-tier display: every client_service matching the picked Service
@@ -4098,9 +4330,26 @@ function AutoServicesTable({
     );
   }
 
-  // Build a lookup from client_service_id → its row in `rows` so each
-  // candidate can render its qty/amount in O(1).
-  const rowByCsId = new Map(rows.map((r) => [r.client_service_id, r] as const));
+  // Above-table search — narrows the candidate set by service /
+  // category / type / rate-card name. The search bar only shows
+  // when there's actually a list to filter (gated by the
+  // `candidates.length === 0` early-return above), matching the
+  // operator's expectation: "the search appears once the list
+  // appears". Already-added rows always stay visible regardless of
+  // the search so the operator's basket doesn't disappear on them.
+  const q = serviceSearch.trim().toLowerCase();
+  const filteredCandidates = q
+    ? candidates.filter((s) => {
+        const hay = [s.crc_ratecard_name, s.service_catg_name, s.service_type_name]
+          .filter(Boolean).join(' ').toLowerCase();
+        if (hay.includes(q)) return true;
+        // Always keep added rows visible — see comment above.
+        return rowByCsIdEarly.has(String(s.client_service_id));
+      })
+    : candidates;
+
+  // Reuse the early-declared lookup (same Map, just an alias).
+  const rowByCsId = rowByCsIdEarly;
 
   /*
    * Rate resolution per row. Legacy semantics:
@@ -4160,7 +4409,26 @@ function AutoServicesTable({
   }
 
   return (
-    <div className="rounded-md border overflow-hidden">
+    <div className="space-y-2">
+      {/* Above-table search — visible whenever the candidate list is
+          rendered (early-returns above gate on no-client / no-rate-card
+          / no-type-picked). Filters by service / category / type /
+          rate-card name. Already-added rows stay visible regardless
+          of the query so the operator's basket never disappears. */}
+      <div className="flex items-center gap-3">
+        <Input
+          placeholder="Search services (name, category, type)…"
+          value={serviceSearch}
+          onChange={(e) => setServiceSearch(e.target.value)}
+          className="flex-1"
+        />
+        <span className="text-xs text-muted-foreground whitespace-nowrap">
+          {q
+            ? `${filteredCandidates.length} of ${candidates.length} matches`
+            : `${candidates.length} available`}
+        </span>
+      </div>
+      <div className="rounded-md border overflow-hidden">
       <table className="w-full text-sm">
         <thead className="bg-muted/50 text-xs">
           <tr>
@@ -4174,7 +4442,14 @@ function AutoServicesTable({
           </tr>
         </thead>
         <tbody>
-          {candidates.map((s) => {
+          {filteredCandidates.length === 0 && (
+            <tr>
+              <td colSpan={7} className="px-3 py-4 text-center text-xs text-muted-foreground italic">
+                No services match &quot;{serviceSearch}&quot;.
+              </td>
+            </tr>
+          )}
+          {filteredCandidates.map((s) => {
             const csId = String(s.client_service_id);
             const row = rowByCsId.get(csId);
             const added = !!row;
@@ -4283,6 +4558,7 @@ function AutoServicesTable({
           </tr>
         </tfoot>
       </table>
+      </div>
     </div>
   );
 }
@@ -4801,10 +5077,14 @@ function toFormShape(j: Job | null) {
     material_req: Boolean(j?.material_req),
     collected_by: pick('collected_by') || 'Easyfix',
     fk_service_catg_id: pick('fk_service_catg_id'),
-    // CSV of category IDs for the Book-New-Call multi-select. Empty
-    // string on edit (each tbl_job carries one category — multi-pick
-    // only exists at booking time to fan out into multiple jobs).
-    fk_service_catg_ids: '',
+    // CSV of category IDs. In CREATE flow, multi-pick fans out into
+    // N jobs at submit. In EDIT/CONFIRM flow, seed from the row's
+    // existing single category so the Confirm modal's Service Type
+    // picker (which keys its allowed-options off this CSV) actually
+    // filters correctly. Without this seed, Section 3 saw an empty
+    // multi CSV + bulk-uploaded jobs with no `fk_service_catg_id`
+    // → Service Type dropdown stayed unfiltered.
+    fk_service_catg_ids: pick('fk_service_catg_id') ? String(pick('fk_service_catg_id')) : '',
     fk_service_type_id: pick('fk_service_type_id'),
     // Multi-select used in create flow's "Select Products" section.
     // Picking one or more Service Types auto-fans them out into the
