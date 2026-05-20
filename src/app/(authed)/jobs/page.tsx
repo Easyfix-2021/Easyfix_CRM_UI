@@ -1,7 +1,8 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
+import { useJobActionParams, useJobActionNav } from '@/lib/job-action-url';
 import {
   Plus, Upload, Search, Filter,
   // Row-level quick-action icons (mirror the legacy Manage Jobs action column)
@@ -191,19 +192,25 @@ export default function JobsPage() {
   useEffect(() => { setPage(0); load(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ },
     [filters.clientId, filters.cityId, filters.ownerId, filters.easyfixerId, filters.startDate, filters.endDate]);
 
-  // Modal state + URL-driven deep-link support (matches Easyfixer pattern).
-  const router = useRouter();
+  // Modal state is derived from the URL — every row-level action
+  // (View / Confirm / Book New Call / Assign / Reassign) pushes its
+  // intent into `?jobId=&action=` so the URL is shareable. Direct
+  // navigation to a deep-link URL lands the recipient straight on the
+  // matching dialog. Legacy `?view=N` / `?new=1` URLs are auto-promoted
+  // by `useJobActionParams` so old shared links keep working.
   const searchParams = useSearchParams();
-  const [modal, setModal] = useState<{ open: boolean; mode: JobModalMode; id?: number }>({ open: false, mode: 'create' });
-
-  useEffect(() => {
-    if (searchParams.get('new') === '1') {
-      setModal({ open: true, mode: 'create' });
-    } else {
-      const v = searchParams.get('view');
-      if (v && /^\d+$/.test(v)) setModal({ open: true, mode: 'view', id: Number(v) });
+  const { jobId: urlJobId, action: urlAction } = useJobActionParams();
+  const { openJobAction, closeJobAction } = useJobActionNav();
+  const modal = useMemo<{ open: boolean; mode: JobModalMode; id?: number }>(() => {
+    if (!urlAction || urlAction === 'assign' || urlAction === 'reassign') {
+      // Assign / reassign open a different dialog (AssignTechDialog),
+      // not JobModal — handled separately below. Hide JobModal here.
+      return { open: false, mode: 'create' };
     }
-  }, [searchParams]);
+    if (urlAction === 'create') return { open: true, mode: 'create' };
+    if (urlJobId == null)        return { open: false, mode: 'create' };
+    return { open: true, mode: urlAction as JobModalMode, id: urlJobId };
+  }, [urlAction, urlJobId]);
 
   /*
    * Deep-link tab support: /jobs?tab=<value> preselects that tab on mount.
@@ -220,13 +227,10 @@ export default function JobsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
-  function closeModal() {
-    setModal((m) => ({ ...m, open: false }));
-    if (searchParams.get('new') || searchParams.get('view')) router.replace('/jobs');
-  }
-  function openCreate() { setModal({ open: true, mode: 'create' }); }
-  function openView(id: number) { setModal({ open: true, mode: 'view', id }); }
-  function openConfirm(id: number) { setModal({ open: true, mode: 'confirm', id }); }
+  function closeModal() { closeJobAction(); }
+  function openCreate() { openJobAction('create'); }
+  function openView(id: number)    { openJobAction('view',    id); }
+  function openConfirm(id: number) { openJobAction('confirm', id); }
 
   /*
    * Quick status transition from the row action column — lets ops advance

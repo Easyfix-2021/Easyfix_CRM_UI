@@ -1,6 +1,7 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { useJobActionParams, useJobActionNav } from '@/lib/job-action-url';
 import {
   Search, Eye,
   CalendarClock, PlayCircle, CheckCircle2, CalendarCheck,
@@ -169,7 +170,6 @@ export default function MyOrdersPage() {
   // to /my-orders?tab=<slug>. Initial hydration happens in useState above; this
   // effect handles SUBSEQUENT URL changes (sidebar click while already on
   // /my-orders) so switching between My Orders sub-items updates the filter.
-  const router = useRouter();
   useEffect(() => {
     const t = searchParams.get('tab');
     const resolved = t && TABS.some((x) => x.value === t) ? t : 'all';
@@ -180,27 +180,45 @@ export default function MyOrdersPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
-  // Assign / Reassign Technician modal — driven by row icon clicks. Shared
-  // component (components/job/AssignTechnicianModal.tsx); same backend
-  // pipeline as on-create auto-assign.
-  const [assignModal, setAssignModal] = useState<{ open: boolean; jobId: number | null; mode: AssignMode }>({
-    open: false, jobId: null, mode: 'assign',
-  });
+  /*
+   * Modal state is derived from the URL — every row-level action
+   * (View / Confirm / Assign / Reassign) pushes its intent into
+   * `?jobId=&action=` so teammates can share the URL and land
+   * directly on the dialog. Legacy `?view=N` URLs are promoted to
+   * the canonical schema by `useJobActionParams`. Other params
+   * (e.g. `?tab=scheduled`) are preserved across pushes.
+   */
+  const { jobId: urlJobId, action: urlAction } = useJobActionParams();
+  const { openJobAction, closeJobAction } = useJobActionNav();
 
-  // Modal state + URL deep-link for ?view=<id>.
-  const [modal, setModal] = useState<{ open: boolean; mode: JobModalMode; id?: number }>({ open: false, mode: 'create' });
-  useEffect(() => {
-    const v = searchParams.get('view');
-    if (v && /^\d+$/.test(v)) setModal({ open: true, mode: 'view', id: Number(v) });
-  }, [searchParams]);
-  function closeModal() {
-    setModal((m) => ({ ...m, open: false }));
-    if (searchParams.get('view')) router.replace('/my-orders');
-  }
-  function openView(id: number) { setModal({ open: true, mode: 'view', id }); }
-  // Unconfirmed orders open the dedicated confirm form (edit layout + services
-  // basket + "Confirm & Schedule" footer), mirroring the legacy addEditJob flow.
-  function openConfirm(id: number) { setModal({ open: true, mode: 'confirm', id }); }
+  // JobModal opens for view / edit / confirm / create. Assign &
+  // Reassign open AssignTechDialog instead — derived separately
+  // from the same URL state below.
+  const modal = useMemo<{ open: boolean; mode: JobModalMode; id?: number }>(() => {
+    if (!urlAction || urlAction === 'assign' || urlAction === 'reassign') {
+      return { open: false, mode: 'create' };
+    }
+    if (urlAction === 'create') return { open: true, mode: 'create' };
+    if (urlJobId == null)        return { open: false, mode: 'create' };
+    return { open: true, mode: urlAction as JobModalMode, id: urlJobId };
+  }, [urlAction, urlJobId]);
+
+  // AssignTechDialog state — derived from `?action=assign|reassign`.
+  const assignModal = useMemo<{ open: boolean; jobId: number | null; mode: AssignMode }>(() => {
+    if ((urlAction === 'assign' || urlAction === 'reassign') && urlJobId != null) {
+      return { open: true, jobId: urlJobId, mode: urlAction === 'reassign' ? 'reassign' : 'assign' };
+    }
+    return { open: false, jobId: null, mode: 'assign' };
+  }, [urlAction, urlJobId]);
+
+  function closeModal()                { closeJobAction(); }
+  function openView(id: number)        { openJobAction('view',     id); }
+  // Unconfirmed orders open the dedicated confirm form (edit layout +
+  // services basket + "Confirm & Schedule" footer), mirroring the
+  // legacy addEditJob flow.
+  function openConfirm(id: number)     { openJobAction('confirm',  id); }
+  function openAssign(id: number)      { openJobAction('assign',   id); }
+  function openReassign(id: number)    { openJobAction('reassign', id); }
 
   // Row-level quick action — same pattern as /jobs. Confirms, PATCHes status,
   // busts cache, refetches list + counts so badges stay coherent.
@@ -399,7 +417,7 @@ export default function MyOrdersPage() {
                             */}
                           <button
                             type="button"
-                            onClick={() => setAssignModal({ open: true, jobId: j.job_id, mode: 'assign' })}
+                            onClick={() => openAssign(j.job_id)}
                             className="inline-flex items-center gap-1 text-indigo-700 text-xs hover:underline"
                             title="Assign Technician — pick from ranked list"
                           >
@@ -428,7 +446,7 @@ export default function MyOrdersPage() {
                           {canJob.isJobReassign && (
                             <button
                               type="button"
-                              onClick={() => setAssignModal({ open: true, jobId: j.job_id, mode: 'reassign' })}
+                              onClick={() => openReassign(j.job_id)}
                               className="inline-flex items-center gap-1 text-indigo-700 text-xs hover:underline"
                               title="Reassign Technician — pick a different tech from the ranked list"
                             >
@@ -470,7 +488,7 @@ export default function MyOrdersPage() {
         open={assignModal.open}
         jobId={assignModal.jobId}
         mode={assignModal.mode}
-        onClose={() => setAssignModal((m) => ({ ...m, open: false }))}
+        onClose={() => closeJobAction()}
         onAssigned={() => { cacheRef.current.clear(); load(false, true); }}
       />
 
