@@ -43,6 +43,9 @@ type Lookups = {
   states:    Array<{ id: number; name: string }>;
   cities:    Array<{ id: number; name: string; stateId?: number | null }>;
   users:     Array<{ id: number; name: string; official_email?: string | null; role_name?: string | null }>;
+  // Admin-group roles only — the BE filters via ROLE_ID_TO_GROUP so we
+  // never surface Default User / Technician / Client roles in this picker.
+  roles:     Array<{ id: number; name: string }>;
 };
 
 type UserRow = {
@@ -180,6 +183,7 @@ function ApplyTab({
   const verticalsTouched = verticals !== '' || verticalsAll;
   const clientsTouched   = clients   !== '' || clientsAll;
 
+  const [role,          setRole]          = useState<string>('');
   const [reportingHead, setReportingHead] = useState<string>('');
   const [homeCity,      setHomeCity]      = useState<string>('');
 
@@ -270,6 +274,7 @@ function ApplyTab({
     else if (states) fields.manage_states = states;
     if (citiesAll) fields.manage_cities = ALL_TOKEN;
     else if (cities) fields.manage_cities = cities;
+    if (role)          fields.user_role        = Number(role);
     if (reportingHead) fields.reporting_manager = Number(reportingHead);
     if (homeCity)      fields.city_id          = Number(homeCity);
 
@@ -422,6 +427,18 @@ function ApplyTab({
                   : `Filtered to ${cityOptions.length} city(s) in the picked states.`
               }
             />
+            {/* Role — single-pick from admin-group roles only. The BE
+                rejects non-admin roles with a 400 from updateUser, so
+                we only ever offer values the backend will accept. */}
+            <div>
+              <Label className="!mb-0.5 text-xs">Role</Label>
+              <SearchSelect
+                value={role}
+                onChange={setRole}
+                placeholder="— No change —"
+                options={lookups.roles.map((r) => ({ value: String(r.id), label: r.name }))}
+              />
+            </div>
             <div>
               <Label className="!mb-0.5 text-xs">Reporting Head</Label>
               <SearchSelect
