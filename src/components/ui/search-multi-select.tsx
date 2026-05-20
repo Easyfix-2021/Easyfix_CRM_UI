@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, ChevronDown, Search, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -276,34 +276,55 @@ export function SearchMultiSelect({
             {filtered.length === 0 && (
               <li className="px-3 py-2 text-muted-foreground">{emptyText}</li>
             )}
-            {filtered.map((opt) => {
-              const key = String(opt.value);
-              const isSel = selectedSet.has(key);
-              return (
-                <li
-                  key={key}
-                  role="option"
-                  aria-selected={isSel}
-                  onClick={() => toggle(opt)}
-                  className={cn(
-                    'flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-muted',
-                    isSel && 'bg-muted/40',
-                  )}
-                >
-                  {/* Checkbox-style left indicator. Click target is the
-                      whole row, not just the box. */}
-                  <span
+            {/* Group-aware rendering — when options carry a `group`
+                field, insert a non-clickable section header above the
+                first option of each new group. Caller must sort by
+                group; the renderer just detects group transitions. */}
+            {(() => {
+              const out: ReactNode[] = [];
+              let lastGroup: string | undefined;
+              filtered.forEach((opt) => {
+                if (opt.group && opt.group !== lastGroup) {
+                  out.push(
+                    <li
+                      key={`__group:${opt.group}`}
+                      className="px-3 pt-2 pb-1 text-[11px] uppercase tracking-wide font-semibold text-muted-foreground bg-slate-50 border-b sticky top-0"
+                      aria-hidden="true"
+                    >
+                      Service Category — {opt.group}
+                    </li>
+                  );
+                  lastGroup = opt.group;
+                }
+                const key = String(opt.value);
+                const isSel = selectedSet.has(key);
+                out.push(
+                  <li
+                    key={key}
+                    role="option"
+                    aria-selected={isSel}
+                    onClick={() => toggle(opt)}
                     className={cn(
-                      'h-4 w-4 shrink-0 rounded-sm border flex items-center justify-center',
-                      isSel ? 'bg-primary border-primary text-white' : 'border-muted-foreground/40',
+                      'flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-muted',
+                      isSel && 'bg-muted/40',
                     )}
                   >
-                    {isSel && <Check className="h-3 w-3" />}
-                  </span>
-                  <span className="truncate flex-1">{opt.label}</span>
-                </li>
-              );
-            })}
+                    {/* Checkbox-style left indicator. Click target is
+                        the whole row, not just the box. */}
+                    <span
+                      className={cn(
+                        'h-4 w-4 shrink-0 rounded-sm border flex items-center justify-center',
+                        isSel ? 'bg-primary border-primary text-white' : 'border-muted-foreground/40',
+                      )}
+                    >
+                      {isSel && <Check className="h-3 w-3" />}
+                    </span>
+                    <span className="truncate flex-1">{opt.label}</span>
+                  </li>
+                );
+              });
+              return out;
+            })()}
           </ul>
         </div>,
         document.body,

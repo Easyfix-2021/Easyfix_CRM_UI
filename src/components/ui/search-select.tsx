@@ -20,7 +20,17 @@ import { usePopoverPosition } from '@/lib/use-popover-position';
  * drops in wherever a <Select /> was used.
  */
 
-export type SearchOption = { value: string | number; label: string };
+export type SearchOption = {
+  value: string | number;
+  label: string;
+  /*
+   * Optional group label. Consumers that support grouping (currently
+   * SearchMultiSelect) insert a non-clickable section header above
+   * the first option of each new group. Options are rendered in the
+   * order the caller provides — caller sorts by group first.
+   */
+  group?: string;
+};
 
 export function SearchSelect({
   value, onChange, options, placeholder = 'Select…',

@@ -1559,6 +1559,74 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
   const [activeJobTab, setActiveJobTab] = useState(0);
 
   /*
+   * Per-tab field overrides (2026-05-19). When the operator picks
+   * N service categories, each "Job K" tab carries its own values
+   * for the six fields that legacy spec'd as common-across-jobs:
+   *   - Job Image (job_image_file)
+   *   - Special Comments (remarks)
+   *   - Anything Handyman should keep in mind (efr_special_notes)
+   *   - Helper Required (helper_req)
+   *   - Material Required (material_req)
+   *   - Collected By (collected_by)
+   *
+   * Storage shape: { [catId]: { ...override } }. Empty/missing slots
+   * fall back to the top-level `f` values via `getJobField()` so
+   * single-cat and edit flows behave unchanged.
+   *
+   * Reads/writes go through `getJobField()` / `setJobField()` —
+   * which route to `perJobFields[activeCatId]` in multi-tab mode and
+   * to plain `set()` on `f` for single-tab.
+   */
+  type PerJobOverride = {
+    remarks?: string;
+    efr_special_notes?: string;
+    helper_req?: boolean;
+    material_req?: boolean;
+    collected_by?: string;
+    job_image_file?: File | null;
+  };
+  const [perJobFields, setPerJobFields] = useState<Record<string, PerJobOverride>>({});
+
+  /*
+   * Returns the catId of the currently-active Job tab — or empty
+   * string when there's only one (or zero) categories picked, in
+   * which case the per-tab map is bypassed entirely and reads/writes
+   * go straight to `f` as in single-cat / edit flows.
+   */
+  function getActiveCatId(): string {
+    const ids = (f.fk_service_catg_ids || '').split(',').filter(Boolean);
+    if (ids.length < 2) return '';
+    const idx = Math.min(activeJobTab, ids.length - 1);
+    return ids[idx] ?? '';
+  }
+
+  function getJobField<K extends keyof PerJobOverride>(key: K): PerJobOverride[K] {
+    const catId = getActiveCatId();
+    if (catId) {
+      const o = perJobFields[catId];
+      if (o && Object.prototype.hasOwnProperty.call(o, key)) return o[key];
+    }
+    // Fall back to the top-level form state — same value the single-
+    // tab UX has read since day one.
+    return (f as unknown as Record<string, unknown>)[key as string] as PerJobOverride[K];
+  }
+
+  function setJobField<K extends keyof PerJobOverride>(key: K, value: PerJobOverride[K]) {
+    const catId = getActiveCatId();
+    if (catId) {
+      setPerJobFields((prev) => ({
+        ...prev,
+        [catId]: { ...(prev[catId] || {}), [key]: value },
+      }));
+    } else {
+      // Single-tab / single-cat: write straight to `f` so the
+      // existing submit + edit-mode code paths (which read f.remarks
+      // etc.) keep working without change.
+      set(key as keyof typeof f, value as never);
+    }
+  }
+
+  /*
    * Client contacts — loaded when the Client dropdown changes. Drives
    * the "Reporting Contact" picker AND the SPOC auto-fill (mobile,
    * name, email). Mirrors legacy `getClientContacts(clientId)` which
@@ -2065,14 +2133,48 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
           const filteredServices = catId > 0
             ? servicesPayload.filter((s) => Number(s.service_category_id) === catId)
             : servicesPayload;
+          /*
+           * Per-tab field overrides — when 2+ categories are picked,
+           * each Job tab has its own values for Job Image / Special
+           * Comments / EFR Notes / Helper / Material / Collected By.
+           * The override map is keyed by stringified catId. Missing
+           * slots fall back to the top-level `f` values (so a tab
+           * the operator never touched still inherits the form's
+           * default values rather than going blank).
+           */
+          const override = (perJobFields[String(catId)] || {}) as PerJobOverride;
           const payload = {
             ...basePayload,
+            // Per-tab overrides take precedence over basePayload's
+            // common values. `??` falls back to f-derived values.
+            remarks:           (override.remarks ?? f.remarks) || undefined,
+            efr_special_notes: (override.efr_special_notes ?? f.efr_special_notes) || undefined,
+            helper_req:        override.helper_req ?? Boolean(f.helper_req),
+            material_req:      override.material_req ?? Boolean(f.material_req),
+            collected_by:      override.collected_by ?? f.collected_by,
             services: filteredServices.length > 0 ? filteredServices : undefined,
             ...(catId > 0 ? { fk_service_catg_id: catId } : {}),
           };
           try {
             const saved = await api.post<Job>('/admin/jobs', payload);
             created.push(saved);
+            /*
+             * Per-tab Job Image upload — each tab's image is uploaded
+             * to its own job. Falls back to the top-level `imageFile`
+             * for the FIRST job (legacy single-tab behaviour) when
+             * the override slot has no image.
+             */
+            const tabImage = override.job_image_file ?? (created.length === 1 ? imageFile : null);
+            if (tabImage instanceof File && saved?.job_id) {
+              try {
+                const fd = new FormData();
+                fd.append('file', tabImage);
+                await api.post(`/admin/jobs/${saved.job_id}/images`, fd);
+              } catch (upErr) {
+                // eslint-disable-next-line no-console
+                console.warn(`Image upload failed for job ${saved.job_id}:`, upErr);
+              }
+            }
           } catch (err) {
             const msg = err instanceof ApiError ? err.message : 'create failed';
             failures.push(`category ${catId}: ${msg}`);
@@ -2084,20 +2186,15 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
           return;
         }
 
-        // Upload the image (if any) to the first successful job.
+        // Per-tab image uploads happened inside the loop above —
+        // each created job got its tab's image (or the top-level
+        // `imageFile` for single-tab / first-tab fallback). No
+        // additional upload needed here.
         const firstSaved = created[0];
-        let uploadedImage = false;
-        if (imageFile instanceof File && firstSaved?.job_id) {
-          try {
-            const fd = new FormData();
-            fd.append('file', imageFile);
-            await api.post(`/admin/jobs/${firstSaved.job_id}/images`, fd);
-            uploadedImage = true;
-          } catch (upErr) {
-            // eslint-disable-next-line no-console
-            console.warn('Job created but image upload failed:', upErr);
-          }
-        }
+        const uploadedImage = created.length > 0 && (
+          imageFile instanceof File ||
+          Object.values(perJobFields).some((o) => o?.job_image_file instanceof File)
+        );
 
         // Surface any partial-failure to the operator without
         // discarding the successful jobs. Common cause: one category
@@ -2416,18 +2513,71 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
               <SearchMultiSelect
                 value={(f.fk_service_catg_ids || '').split(',').filter(Boolean)}
                 onChange={(next) => {
-                  const ids = (next as Array<string | number>).map(String);
-                  set('fk_service_catg_ids' as keyof typeof f, ids.join(',') as never);
-                  // Keep the single-select field in sync with the
-                  // FIRST selected category so the rate-card basket
-                  // / service-type filter (which still uses the
-                  // single field) shows something sensible.
-                  set('fk_service_catg_id', ids[0] || '');
-                  // Clear dependent type selections so a stale
-                  // type from a previously-picked category doesn't
-                  // hang around when the operator switches.
-                  set('fk_service_type_id', '');
-                  set('fk_service_type_ids' as keyof typeof f, [] as never);
+                  /*
+                   * Service Category add/remove handling (2026-05-19):
+                   *   - ADD a category → leave existing selections alone.
+                   *     Previously we cleared `fk_service_type_id*`,
+                   *     which wiped the basket the operator had already
+                   *     built. Now we only diff for removals.
+                   *   - REMOVE a category → prune service types whose
+                   *     catg matches the removed one, AND drop that
+                   *     cat's per-tab override slot. Basket rows are
+                   *     pruned downstream by the existing useEffect on
+                   *     `fk_service_type_ids`.
+                   */
+                  const oldIds = (f.fk_service_catg_ids || '')
+                    .split(',').filter(Boolean);
+                  const newIds = (next as Array<string | number>).map(String);
+                  const removedIds = new Set(oldIds.filter((id) => !newIds.includes(id)));
+                  set('fk_service_catg_ids' as keyof typeof f, newIds.join(',') as never);
+                  set('fk_service_catg_id', newIds[0] || '');
+                  if (removedIds.size > 0) {
+                    // Prune types belonging to removed cats only.
+                    const catOfType = new Map(
+                      (lk.serviceTypes || []).map((t) => [String(t.service_type_id), String(t.service_catg_id)] as const),
+                    );
+                    const filteredTypeIds = (f.fk_service_type_ids || [])
+                      .filter((tid) => !removedIds.has(catOfType.get(String(tid)) || ''));
+                    set('fk_service_type_ids' as keyof typeof f, filteredTypeIds as never);
+                    set('fk_service_type_id', filteredTypeIds[0] ? String(filteredTypeIds[0]) : '');
+                    // Drop per-tab field slots for the removed cats so
+                    // re-adding starts fresh (rather than resurrecting
+                    // stale values).
+                    setPerJobFields((prev) => {
+                      const out = { ...prev };
+                      removedIds.forEach((id) => delete out[id]);
+                      return out;
+                    });
+                  }
+                  // Seed per-tab field slots for any NEWLY-added cats —
+                  // copy the most-recently-edited tab's values so the
+                  // new tab opens with sensible defaults instead of
+                  // blank inputs.
+                  const newlyAdded = newIds.filter((id) => !oldIds.includes(id));
+                  if (newlyAdded.length > 0) {
+                    setPerJobFields((prev) => {
+                      const out = { ...prev };
+                      // Pick a donor: prefer the currently-active tab's
+                      // slot, else any non-empty slot, else top-level f.
+                      const activeId = oldIds[Math.min(activeJobTab, oldIds.length - 1)] || '';
+                      const donor: PerJobOverride = (activeId && prev[activeId])
+                        || Object.values(prev).find((o) => o && Object.keys(o).length > 0)
+                        || {
+                          remarks: f.remarks,
+                          efr_special_notes: f.efr_special_notes,
+                          helper_req: Boolean(f.helper_req),
+                          material_req: Boolean(f.material_req),
+                          collected_by: f.collected_by,
+                          // Image is intentionally NOT carried over —
+                          // each job should have its own image, not a
+                          // shared copy.
+                        };
+                      newlyAdded.forEach((id) => {
+                        if (!out[id]) out[id] = { ...donor, job_image_file: undefined };
+                      });
+                      return out;
+                    });
+                  }
                 }}
                 placeholder="— Select one or more —"
                 selectedLabel="categories"
@@ -2471,18 +2621,36 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                   const pickedCats = new Set(
                     (f.fk_service_catg_ids || '').split(',').filter(Boolean),
                   );
-                  // Fall back to the single field if multi is empty
-                  // (extra safety net — confirm form init now seeds
-                  // multi from single, but the guard handles the
-                  // race where the operator opens Section 3 mid-
-                  // hydration).
                   if (pickedCats.size === 0 && f.fk_service_catg_id) {
                     pickedCats.add(String(f.fk_service_catg_id));
                   }
+                  // Lookup catId → catName for group headers.
+                  const catNameById = new Map(
+                    (lk.serviceCategories || []).map((c) => [String(c.service_catg_id), c.service_catg_name]),
+                  );
                   return (lk.serviceTypes || [])
                     .filter((t) => pickedCats.size === 0 || pickedCats.has(String(t.service_catg_id)))
                     .filter((t) => inRateCard.size === 0 || inRateCard.has(String(t.service_type_id)))
-                    .map((t) => ({ value: String(t.service_type_id), label: t.service_type_name }));
+                    // Group-sort: types within the same category cluster
+                    // together so the SearchMultiSelect can render
+                    // "Service Category — X" headers between groups.
+                    .slice()
+                    .sort((a, b) => {
+                      const an = catNameById.get(String(a.service_catg_id)) || '';
+                      const bn = catNameById.get(String(b.service_catg_id)) || '';
+                      return an.localeCompare(bn) || a.service_type_name.localeCompare(b.service_type_name);
+                    })
+                    .map((t) => ({
+                      value: String(t.service_type_id),
+                      label: t.service_type_name,
+                      // Header text shows only when 2+ categories are
+                      // picked (single-cat groups have no visible
+                      // separator). Multi-cat → header carries the
+                      // category name; single-cat → omit `group`.
+                      group: pickedCats.size > 1
+                        ? (catNameById.get(String(t.service_catg_id)) || `Category ${t.service_catg_id}`)
+                        : undefined,
+                    }));
                 })()}
               />
             </Field>
@@ -2517,6 +2685,44 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
             </Field>
           </div>
 
+          {/* Per-Job tab bar — appears whenever the operator picks
+              2+ Service Categories. Each tab carries its own
+              services + Job Image + Special Comments + EFR notes +
+              Helper/Material toggles + Collected By (the six fields
+              now backed by `perJobFields`). With 0 or 1 category
+              picked the bar is hidden and reads/writes pass through
+              to the top-level `f` state as before. */}
+          {(() => {
+            const pickedCatIds = (f.fk_service_catg_ids || '').split(',').filter(Boolean);
+            if (pickedCatIds.length < 2) return null;
+            const tabIdx = Math.min(activeJobTab, pickedCatIds.length - 1);
+            return (
+              <div className="flex gap-1 mb-3 border-b">
+                {pickedCatIds.map((cid, i) => {
+                  const cat = (lk.serviceCategories || []).find(
+                    (c) => String(c.service_catg_id) === String(cid),
+                  );
+                  const label = cat?.service_catg_name || `Category ${cid}`;
+                  const active = i === tabIdx;
+                  return (
+                    <button
+                      key={cid}
+                      type="button"
+                      onClick={() => setActiveJobTab(i)}
+                      className={
+                        'px-3 py-1.5 text-sm -mb-px border-b-2 transition-colors ' +
+                        (active
+                          ? 'border-sky-600 text-sky-700 font-medium'
+                          : 'border-transparent text-muted-foreground hover:text-foreground')
+                      }
+                    >
+                      Job {i + 1} — {label}
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })()}
           <div className="mb-4">
             <Label className="mb-2 block">Products from client rate card</Label>
             {/* Confirm mode now uses AutoServicesTable (same as create
@@ -2549,37 +2755,38 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
               <Input
                 type="file"
                 accept="image/*,.pdf"
-                onChange={(e) => set('job_image_file' as keyof typeof f, (e.target.files?.[0] || null) as never)}
+                onChange={(e) => setJobField('job_image_file', e.target.files?.[0] || null)}
               />
             </Field>
             <Field label="Helper Required">
+              {/* Reverted from checkbox → toggle (Switch) on 2026-05-19
+                  to match the create-mode pattern + the legacy CRM
+                  visual. Ops preferred the toggle affordance. */}
               <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 accent-sky-600"
-                  checked={Boolean(f.helper_req)}
-                  onChange={(e) => set('helper_req', e.target.checked)}
+                <Switch
+                  checked={Boolean(getJobField('helper_req'))}
+                  onCheckedChange={(v: boolean) => setJobField('helper_req', v)}
+                  ariaLabel="Helper required"
                 />
-                <span>{f.helper_req ? 'Yes' : 'No'}</span>
+                <span>{getJobField('helper_req') ? 'Yes' : 'No'}</span>
               </label>
             </Field>
             <Field label="Material Required">
               <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 accent-sky-600"
-                  checked={Boolean(f.material_req)}
-                  onChange={(e) => set('material_req', e.target.checked)}
+                <Switch
+                  checked={Boolean(getJobField('material_req'))}
+                  onCheckedChange={(v: boolean) => setJobField('material_req', v)}
+                  ariaLabel="Material required"
                 />
-                <span>{f.material_req ? 'Yes' : 'No'}</span>
+                <span>{getJobField('material_req') ? 'Yes' : 'No'}</span>
               </label>
             </Field>
             <Field label="Special Comments *" full>
               <textarea
                 required
                 rows={2}
-                value={f.remarks}
-                onChange={(e) => set('remarks', e.target.value)}
+                value={getJobField('remarks') ?? ''}
+                onChange={(e) => setJobField('remarks', e.target.value)}
                 className="flex w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
                 placeholder="Any special notes visible to ops"
               />
@@ -2588,8 +2795,8 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
               <textarea
                 required
                 rows={2}
-                value={f.efr_special_notes}
-                onChange={(e) => set('efr_special_notes', e.target.value)}
+                value={getJobField('efr_special_notes') ?? ''}
+                onChange={(e) => setJobField('efr_special_notes', e.target.value)}
                 className="flex w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
                 placeholder="Notes for the technician"
               />
@@ -2608,8 +2815,8 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
               */}
             <Field label="Collected By *">
               <SearchSelect
-                value={collectedByPref ?? f.collected_by}
-                onChange={(v) => { if (!collectedByPref) set('collected_by', v); }}
+                value={collectedByPref ?? (getJobField('collected_by') ?? '')}
+                onChange={(v) => { if (!collectedByPref) setJobField('collected_by', v); }}
                 disabled={!!collectedByPref}
                 options={
                   collectedByPref
@@ -3571,13 +3778,49 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                 <SearchMultiSelect
                   value={(f.fk_service_catg_ids || '').split(',').filter(Boolean)}
                   onChange={(next) => {
-                    const ids = (next as Array<string | number>).map(String);
-                    set('fk_service_catg_ids' as keyof typeof f, ids.join(',') as never);
-                    set('fk_service_catg_id', ids[0] || '');
-                    // Clear dependent fields on category change so we
-                    // don't carry stale type selections across categories.
-                    set('fk_service_type_id', '');
-                    set('fk_service_type_ids' as keyof typeof f, [] as never);
+                    /* Same add-preserves / remove-prunes handling as
+                       Confirm-mode Section 3 above. See that block for
+                       the rationale. */
+                    const oldIds = (f.fk_service_catg_ids || '')
+                      .split(',').filter(Boolean);
+                    const newIds = (next as Array<string | number>).map(String);
+                    const removedIds = new Set(oldIds.filter((id) => !newIds.includes(id)));
+                    set('fk_service_catg_ids' as keyof typeof f, newIds.join(',') as never);
+                    set('fk_service_catg_id', newIds[0] || '');
+                    if (removedIds.size > 0) {
+                      const catOfType = new Map(
+                        (lk.serviceTypes || []).map((t) => [String(t.service_type_id), String(t.service_catg_id)] as const),
+                      );
+                      const filteredTypeIds = (f.fk_service_type_ids || [])
+                        .filter((tid) => !removedIds.has(catOfType.get(String(tid)) || ''));
+                      set('fk_service_type_ids' as keyof typeof f, filteredTypeIds as never);
+                      set('fk_service_type_id', filteredTypeIds[0] ? String(filteredTypeIds[0]) : '');
+                      setPerJobFields((prev) => {
+                        const out = { ...prev };
+                        removedIds.forEach((id) => delete out[id]);
+                        return out;
+                      });
+                    }
+                    const newlyAdded = newIds.filter((id) => !oldIds.includes(id));
+                    if (newlyAdded.length > 0) {
+                      setPerJobFields((prev) => {
+                        const out = { ...prev };
+                        const activeId = oldIds[Math.min(activeJobTab, oldIds.length - 1)] || '';
+                        const donor: PerJobOverride = (activeId && prev[activeId])
+                          || Object.values(prev).find((o) => o && Object.keys(o).length > 0)
+                          || {
+                            remarks: f.remarks,
+                            efr_special_notes: f.efr_special_notes,
+                            helper_req: Boolean(f.helper_req),
+                            material_req: Boolean(f.material_req),
+                            collected_by: f.collected_by,
+                          };
+                        newlyAdded.forEach((id) => {
+                          if (!out[id]) out[id] = { ...donor, job_image_file: undefined };
+                        });
+                        return out;
+                      });
+                    }
                   }}
                   placeholder="— Select one or more —"
                   selectedLabel="categories"
@@ -3618,14 +3861,31 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                     const pickedCats = new Set(
                       (f.fk_service_catg_ids || '').split(',').filter(Boolean),
                     );
-                    // Fall back to the single field if multi is empty (edit/confirm flows).
                     if (pickedCats.size === 0 && f.fk_service_catg_id) {
                       pickedCats.add(String(f.fk_service_catg_id));
                     }
+                    const catNameById = new Map(
+                      (lk.serviceCategories || []).map((c) => [String(c.service_catg_id), c.service_catg_name]),
+                    );
                     return (lk.serviceTypes || [])
                       .filter((t) => pickedCats.size === 0 || pickedCats.has(String(t.service_catg_id)))
                       .filter((t) => inRateCard.has(String(t.service_type_id)))
-                      .map((t) => ({ value: String(t.service_type_id), label: t.service_type_name }));
+                      // Group-sort so SearchMultiSelect can render
+                      // "Service Category — X" headers between groups
+                      // when 2+ categories are picked.
+                      .slice()
+                      .sort((a, b) => {
+                        const an = catNameById.get(String(a.service_catg_id)) || '';
+                        const bn = catNameById.get(String(b.service_catg_id)) || '';
+                        return an.localeCompare(bn) || a.service_type_name.localeCompare(b.service_type_name);
+                      })
+                      .map((t) => ({
+                        value: String(t.service_type_id),
+                        label: t.service_type_name,
+                        group: pickedCats.size > 1
+                          ? (catNameById.get(String(t.service_catg_id)) || `Category ${t.service_catg_id}`)
+                          : undefined,
+                      }));
                   })()}
                 />
               </Field>
@@ -3753,22 +4013,22 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                   <Input
                     type="file"
                     accept="image/*"
-                    onChange={(e) => set('job_image_file' as keyof typeof f, (e.target.files?.[0] || null) as never)}
+                    onChange={(e) => setJobField('job_image_file', e.target.files?.[0] || null)}
                   />
                 </Field>
                 <div className="flex items-center gap-6 pt-6">
                   <label className="flex items-center gap-2 text-sm">
                     <Switch
-                      checked={!!f.helper_req}
-                      onCheckedChange={(v: boolean) => set('helper_req' as keyof typeof f, v as never)}
+                      checked={!!getJobField('helper_req')}
+                      onCheckedChange={(v: boolean) => setJobField('helper_req', v)}
                       ariaLabel="Helper required"
                     />
                     Helper Required
                   </label>
                   <label className="flex items-center gap-2 text-sm">
                     <Switch
-                      checked={!!f.material_req}
-                      onCheckedChange={(v: boolean) => set('material_req' as keyof typeof f, v as never)}
+                      checked={!!getJobField('material_req')}
+                      onCheckedChange={(v: boolean) => setJobField('material_req', v)}
                       ariaLabel="Material required"
                     />
                     Material Required
@@ -3784,8 +4044,8 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                   <textarea
                     required
                     rows={3}
-                    value={f.remarks}
-                    onChange={(e) => set('remarks', e.target.value)}
+                    value={getJobField('remarks') ?? ''}
+                    onChange={(e) => setJobField('remarks', e.target.value)}
                     className="w-full border rounded px-3 py-2 text-sm bg-white resize-y"
                     placeholder="Internal notes for ops"
                   />
@@ -3794,8 +4054,8 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                   <textarea
                     required
                     rows={3}
-                    value={f.efr_special_notes}
-                    onChange={(e) => set('efr_special_notes', e.target.value)}
+                    value={getJobField('efr_special_notes') ?? ''}
+                    onChange={(e) => setJobField('efr_special_notes', e.target.value)}
                     className="w-full border rounded px-3 py-2 text-sm bg-white resize-y"
                     placeholder="Notes for the technician"
                   />
@@ -3821,8 +4081,8 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                     */}
                   <SearchSelect
                     required
-                    value={collectedByPref ?? (f.collected_by || 'Easyfix')}
-                    onChange={(v) => { if (!collectedByPref) set('collected_by', v); }}
+                    value={collectedByPref ?? (getJobField('collected_by') || 'Easyfix')}
+                    onChange={(v) => { if (!collectedByPref) setJobField('collected_by', v); }}
                     disabled={!!collectedByPref}
                     options={
                       collectedByPref
