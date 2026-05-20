@@ -23,6 +23,7 @@ import { DownloadButton } from '@/components/ui/download-button';
 import { Input } from '@/components/ui/input';
 import { SearchSelect } from '@/components/ui/search-select';
 import { api, ApiError } from '@/lib/api';
+import { downloadXlsx as sharedDownloadXlsx } from '@/lib/download-xlsx';
 import { statusLabel, statusColorClass } from '@/lib/utils';
 import { useSort, SortHeader } from '@/lib/use-sort';
 
@@ -281,34 +282,12 @@ export function EscalatedJobsModal({
     setDownloading(true);
     setError(null);
     try {
-      const base = process.env.NEXT_PUBLIC_API_URL || '/api';
       const qs = new URLSearchParams({ status });
-      const url = `${base}/admin/jobs/escalated/export.xlsx?${qs.toString()}`;
-      const token = typeof window !== 'undefined' ? localStorage.getItem('crm_auth_token') : null;
-      const resp = await fetch(url, {
-        method: 'GET',
-        credentials: 'include',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        cache: 'no-store',
-      });
-      if (!resp.ok) {
-        let msg = `HTTP ${resp.status}`;
-        try {
-          const j = await resp.json();
-          if (j?.error) msg = String(j.error);
-        } catch { /* not JSON, ignore */ }
-        throw new Error(msg);
-      }
-      const blob = await resp.blob();
-      const objectUrl = URL.createObjectURL(blob);
-      const a = document.createElement('a');
       const today = new Date().toISOString().slice(0, 10);
-      a.href = objectUrl;
-      a.download = `escalated-jobs_${status}_${today}.xlsx`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(objectUrl), 500);
+      await sharedDownloadXlsx({
+        url: `/admin/jobs/escalated/export.xlsx?${qs.toString()}`,
+        filename: `escalated-jobs_${status}_${today}.xlsx`,
+      });
     } catch (e) {
       setError(e instanceof Error ? `Download failed: ${e.message}` : 'Download failed');
     } finally {

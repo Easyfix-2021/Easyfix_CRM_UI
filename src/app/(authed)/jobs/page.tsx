@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { useJobActionParams, useJobActionNav } from '@/lib/job-action-url';
 import {
-  Plus, Upload, Search, Filter,
+  Plus, Upload, ChevronDown, ChevronUp, Repeat,
   // Row-level quick-action icons (mirror the legacy Manage Jobs action column)
   Eye, CalendarClock, PlayCircle, CheckCircle2, CalendarCheck,
 } from 'lucide-react';
@@ -12,11 +12,14 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
 import { SearchSelect } from '@/components/ui/search-select';
+import { DownloadButton } from '@/components/ui/download-button';
+import { downloadXlsx } from '@/lib/download-xlsx';
 import { api } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
-import { cn, formatDate, formatEasyfixerName, statusColorClass, statusLabel } from '@/lib/utils';
-import { TABS, type TabDef, type CountsResp, countFor } from '@/lib/job-tabs';
+import { formatDate, formatEasyfixerName, statusColorClass, statusLabel } from '@/lib/utils';
+import { TABS, type CountsResp, countFor } from '@/lib/job-tabs';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
+import { TransferJobOwnershipDialog } from '@/components/job/TransferJobOwnershipDialog';
 import { UnconfirmedJobsTable } from '@/components/job/UnconfirmedJobsTable';
 import { useSort, SortHeader } from '@/lib/use-sort';
 import { useMe } from '@/lib/auth-context';
@@ -52,7 +55,23 @@ type Resp = { items: JobRow[]; total: number; limit: number; offset: number };
 
 // Default rows-per-page; operator-controlled via the TablePagination
 // footer. "All" maps to JOBS_MAX_LIMIT (the BE Joi cap on /admin/jobs).
-const DEFAULT_PAGE_SIZE: TablePageSize = 50;
+const DEFAULT_PAGE_SIZE: TablePageSize = 10;
+
+/*
+ * Bucket Status mapping — the legacy CRM's 3-way categorical view
+ * over job_status. Wider than the per-status tabs; the rule (verified
+ * 2026-05-19):
+ *   closed    → 3 (COMPLETED), 5 (COMPLETED_ALT)
+ *   cancelled → 6 (CANCELLED), 7 (ENQUIRY)
+ *   open      → everything else valid (0,1,2,9,10,15,20,21)
+ * `open` is the complement, so adding a new active status only
+ * requires adding it here.
+ */
+const BUCKET_STATUS_MAP: Record<string, number[]> = {
+  open:      [0, 1, 2, 9, 10, 15, 20, 21],
+  closed:    [3, 5],
+  cancelled: [6, 7],
+};
 
 export default function JobsPage() {
   const lk = useLookup();
@@ -75,6 +94,11 @@ export default function JobsPage() {
     'isJobConfirm',
     'isJobAssign',
     'isJobStatusChange',
+    // Drives the "Transfer Job Ownership" button gating. The BE
+    // bulk-transfer route is roleByName(['Admin']); we use the
+    // existing permission key so the seed migration controls
+    // visibility.
+    'isTransferJobOwnership',
   ]);
   const [tab, setTab] = useState('all');
   // Counts are fetched once on mount + re-fetched after any save from the
@@ -84,9 +108,40 @@ export default function JobsPage() {
   // firing a backend request per keystroke. Searching feels instant. Fetches
   // still happen on tab switch, filter changes, and pagination.
   const [q, setQ] = useState('');
+  /*
+   * `filters` mirrors the legacy CRM "Filter Job" panel. Every key
+   * round-trips to the backend as a query param of the same name; the
+   * service layer applies them as additive WHERE clauses on top of the
+   * tab-selected status bucket. Empty string = "not set" (stripped
+   * before the fetch via `|| undefined`).
+   *
+   * Filters NOT included (deferred until BE support lands):
+   *   rating, reopen, dueTo, zonal — these need new joins
+   *   (tbl_easyfixer_rating_by_customer, no_of_escalations,
+   *   tbl_job_comments.user_type, tbl_city.zone_id) and were left out
+   *   of this pass to ship the high-value set first.
+   */
   const [filters, setFilters] = useState({
-    clientId: '', cityId: '', ownerId: '', easyfixerId: '',
-    startDate: '', endDate: '',
+    clientId: '', cityId: '', stateId: '',
+    ownerId: '', easyfixerId: '',
+    startDate: '', endDate: '', dateType: '',
+    customerQ: '', clientRef: '', efrMobile: '', pin: '',
+    categoryId: '', verticalId: '',
+    // Job Status — single-code narrowing. `filters.status` now ALWAYS
+    // wins over the tab's status (the load() builder uses it first),
+    // so picking "Booked" while on the "Pending to Start" tab actually
+    // narrows to status=0 instead of silently keeping status=1.
+    status: '',
+    // Bucket Status — the LEGACY 3-way categorical (Open / Closed /
+    // Cancelled). Distinct from Job Status:
+    //   open      → job_status IN (0,1,2,9,10,15,20,21)
+    //   closed    → job_status IN (3,5)        (Completed)
+    //   cancelled → job_status IN (6,7)        (Cancelled + Enquiry)
+    // The mapping lives in BUCKET_STATUS_MAP near load(); the
+    // dropdown options pull from there too.
+    bucketStatus: '',
+    // Phase-2 filters wired 2026-05-19.
+    rating: '', reopen: '', dueTo: '', zonalId: '',
   });
   // page is 0-indexed at the API boundary (offset = page * pageSize),
   // but TablePagination displays it 1-indexed. Switching pageSize
@@ -112,7 +167,14 @@ export default function JobsPage() {
   function filterKey() {
     // `q` intentionally excluded — it's a UI-only filter, doesn't change the
     // backend request, so we cache the same underlying result regardless of query.
-    return [filters.clientId, filters.cityId, filters.ownerId, filters.easyfixerId, filters.startDate, filters.endDate].join('|');
+    return [
+      filters.clientId, filters.cityId, filters.stateId,
+      filters.ownerId, filters.easyfixerId,
+      filters.startDate, filters.endDate, filters.dateType,
+      filters.customerQ, filters.clientRef, filters.efrMobile, filters.pin,
+      filters.categoryId, filters.verticalId, filters.status, filters.bucketStatus,
+      filters.rating, filters.reopen, filters.dueTo, filters.zonalId,
+    ].join('|');
   }
 
   async function load(reset = false, force = false) {
@@ -149,18 +211,65 @@ export default function JobsPage() {
       // flag, not a status bucket. When focus is unset, isEscalated is
       // omitted so the list behaves exactly as before.
       const isEscalated = searchParams.get('focus') === 'escalated' ? 'true' : undefined;
+      // Status precedence (highest → lowest):
+      //   1. filters.bucketStatus (Open/Closed/Cancelled) — sends
+      //      `statuses` as a CSV of the matching IN-set. WINS over
+      //      everything else: an explicit categorical pick should
+      //      never be silently overridden by a tab or a single-status
+      //      dropdown.
+      //   2. filters.status (legacy "Job Status" dropdown) — single
+      //      code, also wins over the tab.
+      //   3. tab.statuses / tab.status — applied when neither
+      //      filter is set.
+      // The BE service prefers `statuses` over `status` when both
+      // arrive, so we deliberately send only one of the two.
+      const bucketStatuses = filters.bucketStatus
+        ? BUCKET_STATUS_MAP[filters.bucketStatus]
+        : null;
+      const explicitStatus = filters.status ? Number(filters.status) : undefined;
       const r = await api.get<Resp>('/admin/jobs', {
-        status:    tabDef?.statuses ? undefined : tabDef?.status,
-        statuses:  tabDef?.statuses ? tabDef.statuses.join(',') : undefined,
-        assigned:  tabDef?.assigned === undefined ? undefined : String(tabDef.assigned),
+        status:    bucketStatuses
+          ? undefined
+          : (explicitStatus
+              ?? (tabDef?.statuses ? undefined : tabDef?.status)),
+        statuses:  bucketStatuses
+          ? bucketStatuses.join(',')
+          : (explicitStatus != null
+              ? undefined
+              : (tabDef?.statuses ? tabDef.statuses.join(',') : undefined)),
+        // `assigned` is a per-tab refinement (assigned/unassigned
+        // split of BOOKED). Bucket Status doesn't address it, so we
+        // keep the tab's assigned flag UNLESS the operator overrode
+        // status via bucket/job dropdowns — in those cases the tab's
+        // assigned hint is no longer semantically aligned.
+        assigned:  (bucketStatuses || explicitStatus != null)
+          ? undefined
+          : (tabDef?.assigned === undefined ? undefined : String(tabDef.assigned)),
         isEscalated,
         limit, offset: off,
         clientId: filters.clientId || undefined,
         cityId: filters.cityId || undefined,
+        stateId: filters.stateId || undefined,
         ownerId: filters.ownerId || undefined,
         easyfixerId: filters.easyfixerId || undefined,
         startDate: filters.startDate || undefined,
         endDate: filters.endDate || undefined,
+        // dateType is meaningless without a date range; only ship it
+        // when at least one of from/to is present. Saves a no-op
+        // refetch when the operator toggles Date Type with no dates.
+        dateType: (filters.dateType && (filters.startDate || filters.endDate))
+          ? filters.dateType
+          : undefined,
+        customerQ: filters.customerQ || undefined,
+        clientRef: filters.clientRef || undefined,
+        efrMobile: filters.efrMobile || undefined,
+        pin: filters.pin || undefined,
+        categoryId: filters.categoryId || undefined,
+        verticalId: filters.verticalId || undefined,
+        rating: filters.rating || undefined,
+        reopen: filters.reopen || undefined,
+        dueTo:  filters.dueTo  || undefined,
+        zonalId: filters.zonalId || undefined,
       });
       setData(r);
       cacheRef.current.set(key, { at: Date.now(), data: r });
@@ -189,8 +298,49 @@ export default function JobsPage() {
   }
   useEffect(() => { refreshCounts(); }, []);
   // Filter changes refetch (backend-driven); the search box doesn't — see below.
+  /*
+   * Refetch trigger. `filters.dateType` is included in the deps so
+   * that changing OR clearing Date Type while a date range is set
+   * triggers a fresh load (the previous "manual setTimeout in
+   * onChange" approach race'd against React's stale-closure
+   * semantics — see 2026-05-19 bug report).
+   *
+   * The trade-off: changing Date Type while BOTH dates are empty
+   * fires one no-op refetch (the BE drops the dateType param when
+   * no dates are present, returning the same rows). One wasted
+   * query per dropdown change beats a broken filter.
+   */
   useEffect(() => { setPage(0); load(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ },
-    [filters.clientId, filters.cityId, filters.ownerId, filters.easyfixerId, filters.startDate, filters.endDate]);
+    [
+      filters.clientId, filters.cityId, filters.stateId,
+      filters.ownerId, filters.easyfixerId,
+      filters.startDate, filters.endDate, filters.dateType,
+      filters.customerQ, filters.clientRef, filters.efrMobile, filters.pin,
+      filters.categoryId, filters.verticalId, filters.status, filters.bucketStatus,
+      filters.rating, filters.reopen, filters.dueTo, filters.zonalId,
+    ]);
+
+  /*
+   * Auto-clear the Transfer Job Ownership alert whenever ANY filter
+   * changes. Operators dismissing the cue by adjusting the form
+   * shouldn't have to wait the full 3s for it to fade. Same dep
+   * shape as the refetch effect; we just discard the page reload.
+   */
+  useEffect(() => {
+    setTransferAlert(null);
+    if (transferAlertTimerRef.current != null) {
+      window.clearTimeout(transferAlertTimerRef.current);
+      transferAlertTimerRef.current = null;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    filters.clientId, filters.cityId, filters.stateId,
+    filters.ownerId, filters.easyfixerId,
+    filters.startDate, filters.endDate, filters.dateType,
+    filters.customerQ, filters.clientRef, filters.efrMobile, filters.pin,
+    filters.categoryId, filters.verticalId, filters.status, filters.bucketStatus,
+    filters.rating, filters.reopen, filters.dueTo, filters.zonalId,
+  ]);
 
   // Modal state is derived from the URL — every row-level action
   // (View / Confirm / Book New Call / Assign / Reassign) pushes its
@@ -231,6 +381,76 @@ export default function JobsPage() {
   function openCreate() { openJobAction('create'); }
   function openView(id: number)    { openJobAction('view',    id); }
   function openConfirm(id: number) { openJobAction('confirm', id); }
+
+  /*
+   * Filter-respecting XLSX export. Mirrors the EscalatedJobsModal
+   * download recipe: build the same query string the LIST endpoint
+   * sees, then fetch with the Bearer header, blob-download. Reuses the
+   * `DownloadButton` shared component for the green CTA styling and
+   * loading state.
+   */
+  const [downloading, setDownloading] = useState(false);
+  // Transfer Job Ownership dialog (admin-only). Gated by
+  // `isTransferJobOwnership`. The dialog reads `currentFilters` so
+  // "Apply to filtered jobs" mode targets exactly what's on screen.
+  const [transferOpen, setTransferOpen] = useState(false);
+  /*
+   * Local "pick a Job Owner first" alert for the Transfer Job
+   * Ownership button. Kept INLINE next to the button (rather than the
+   * page-level errorMsg banner) so the cue is right at the action
+   * site. Auto-clears after 3s + on any filter change. The timer ref
+   * is kept on a useRef so we can cancel the pending clear when the
+   * operator dismisses early via filter interaction.
+   */
+  const [transferAlert, setTransferAlert] = useState<string | null>(null);
+  const transferAlertTimerRef = useRef<number | null>(null);
+  async function exportXlsx() {
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      const qs = new URLSearchParams();
+      // Re-emit every active filter — keep this list in sync with the
+      // load() call so the export is a true mirror of what's on screen.
+      const tabDef = TABS.find((t) => t.value === tab);
+      // Status precedence — same rule as load(): bucket-status >
+      // job-status > tab.
+      const bucketStatuses = filters.bucketStatus
+        ? BUCKET_STATUS_MAP[filters.bucketStatus]
+        : null;
+      if (bucketStatuses) qs.set('statuses', bucketStatuses.join(','));
+      else if (filters.status) qs.set('status', filters.status);
+      else if (tabDef?.statuses) qs.set('statuses', tabDef.statuses.join(','));
+      else if (tabDef?.status != null) qs.set('status', String(tabDef.status));
+      if (!bucketStatuses && !filters.status && tabDef?.assigned !== undefined) {
+        qs.set('assigned', String(tabDef.assigned));
+      }
+      const isEscalated = searchParams.get('focus') === 'escalated' ? 'true' : null;
+      if (isEscalated) qs.set('isEscalated', 'true');
+      // Mirror the same `dateType` gate as load() so the export
+      // reflects exactly what's on screen.
+      const effectiveDateType = (filters.dateType && (filters.startDate || filters.endDate))
+        ? filters.dateType : '';
+      Object.entries({
+        clientId: filters.clientId, cityId: filters.cityId, stateId: filters.stateId,
+        ownerId: filters.ownerId, easyfixerId: filters.easyfixerId,
+        startDate: filters.startDate, endDate: filters.endDate, dateType: effectiveDateType,
+        customerQ: filters.customerQ, clientRef: filters.clientRef,
+        efrMobile: filters.efrMobile, pin: filters.pin,
+        categoryId: filters.categoryId, verticalId: filters.verticalId,
+        rating: filters.rating, reopen: filters.reopen, dueTo: filters.dueTo,
+        zonalId: filters.zonalId,
+      }).forEach(([k, v]) => { if (v) qs.set(k, String(v)); });
+      const today = new Date().toISOString().slice(0, 10);
+      try {
+        await downloadXlsx({
+          url: `/admin/jobs/export.xlsx?${qs.toString()}`,
+          filename: `jobs_${today}.xlsx`,
+        });
+      } catch (e) {
+        setErrorMsg(`Export failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    } finally { setDownloading(false); }
+  }
 
   /*
    * Quick status transition from the row action column — lets ops advance
@@ -322,77 +542,335 @@ export default function JobsPage() {
         </div>
       </div>
 
-      {/*
-        * Pill-bar tab layout with inline count badges + horizontal scroll.
-        * Replaces the previous `<Tabs flex-wrap>` which broke into two rows
-        * at 10+ tabs. Single-row keeps the visual rhythm tight; the right
-        * edge fades to signal "more to scroll" when overflow happens.
-        * `scrollbar-none` hides the bar itself (webkit + firefox); `snap-x`
-        * gives ops a gentle detent when they scroll by trackpad.
-        */}
-      <div className="relative">
-        <div className="overflow-x-auto snap-x -mx-1 px-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          <div className="flex items-center gap-1.5 min-w-max py-1">
-            {TABS.map((t) => {
-              const active = t.value === tab;
-              const n = countFor(t, counts);
-              return (
-                <button
-                  key={t.value}
-                  type="button"
-                  onClick={() => setTab(t.value)}
-                  className={cn(
-                    'shrink-0 snap-start inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors whitespace-nowrap',
-                    active
-                      ? 'bg-primary text-primary-foreground border-primary shadow-sm'
-                      : 'bg-background hover:bg-muted/60 border-input text-foreground/80 hover:text-foreground'
-                  )}
-                >
-                  <span>{t.label}</span>
-                  {n !== null && (
-                    <span className={cn(
-                      'inline-flex items-center justify-center rounded-full text-[11px] font-medium tabular-nums px-1.5 min-w-[1.4rem] h-[1.25rem]',
-                      active ? 'bg-white/25' : 'bg-muted text-muted-foreground'
-                    )}>
-                      {n.toLocaleString('en-IN')}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-        {/* Right-edge gradient fade — subtle cue that there's more content when
-            the bar overflows. Pointer-events off so it doesn't block clicks. */}
-        <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-background to-transparent" aria-hidden="true" />
-      </div>
+      {/* Tab-pills row removed 2026-05-19 — the Bucket Status dropdown
+          inside the Filter Job card now drives the same `tab` state.
+          Counts are still tracked (refreshCounts() on mount + after
+          modal saves) and exposed inline alongside the dropdown option
+          so operators retain the per-bucket scan-affordance without
+          the double-row chrome. */}
 
+      {/* Filter Job — placement faithful to the legacy CRM panel.
+          Rows 1 + 2 are always visible (10 filters); "Show More
+          Filters" reveals rows 3 + 4 (10 more). Action row at the
+          bottom mirrors legacy: Search + Reset + Show/Hide-Filters
+          link on the LEFT, DownloadButton on the RIGHT.
+          A separate top quick-search bar above the card keeps the
+          in-memory `q` UX for narrowing the currently-loaded page;
+          the panel below is the BE-driven filter set. */}
       <Card>
         <CardContent className="p-3 space-y-3">
-          {/* Search + filters are realtime — typing debounces 350ms, filter
-              changes refetch immediately. No "Search" button needed. */}
-          <div className="flex gap-2">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input placeholder="Search job ref / client ref / customer name or mobile…" value={q} onChange={(e) => setQ(e.target.value)} className="pl-9" />
-            </div>
-            <Button type="button" variant="outline" onClick={() => setShowFilters((s) => !s)}>
-              <Filter className="h-4 w-4 mr-1" /> Filters
-            </Button>
-          </div>
-          {showFilters && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 border-t">
-              <SearchSelect placeholder="Any client" value={filters.clientId} onChange={(v) => setFilters({ ...filters, clientId: v })} options={lk.toOpts.clients.map((o) => ({ value: o.value, label: String(o.label) }))} />
-              <SearchSelect placeholder="Any city"   value={filters.cityId}   onChange={(v) => setFilters({ ...filters, cityId: v })} options={lk.toOpts.cities.map((o) => ({ value: o.value, label: String(o.label) }))} />
-              <SearchSelect placeholder="Any owner"  value={filters.ownerId}  onChange={(v) => setFilters({ ...filters, ownerId: v })} options={lk.toOpts.adminUsers.map((o) => ({ value: o.value, label: String(o.label) }))} />
-              <Input placeholder="Easyfixer ID" type="number" min={1} value={filters.easyfixerId} onChange={(e) => setFilters({ ...filters, easyfixerId: e.target.value.replace(/[^0-9]/g, '') })} />
-              <Input type="date" value={filters.startDate} onChange={(e) => setFilters({ ...filters, startDate: e.target.value })} />
-              <Input type="date" value={filters.endDate} onChange={(e) => setFilters({ ...filters, endDate: e.target.value })} />
-              <div className="md:col-span-3 flex justify-end">
-                <Button type="button" variant="outline" onClick={() => setFilters({ clientId: '', cityId: '', ownerId: '', easyfixerId: '', startDate: '', endDate: '' })}>Clear filters</Button>
+          <div className="space-y-3">
+            {/* Row 1 — Job ID / Customer / Client / Bucket / Job Status.
+                `q` is the in-memory page-narrower (client-side filter
+                over the rows already loaded for this tab + filter
+                combo). The Job ID / RefID input is the ONLY writer to
+                `q` — the legacy global search bar was dropped to
+                eliminate the dual-input confusion. */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">
+              <div>
+                <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Job ID / RefID</label>
+                <Input placeholder="-- All --" value={q} onChange={(e) => setQ(e.target.value)} />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Customer Name / No.</label>
+                <Input placeholder="-- All --" value={filters.customerQ} onChange={(e) => setFilters({ ...filters, customerQ: e.target.value })} />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Client</label>
+                <SearchSelect placeholder="All" value={filters.clientId} onChange={(v) => setFilters({ ...filters, clientId: v })} options={lk.toOpts.clients.map((o) => ({ value: o.value, label: String(o.label) }))} />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Bucket Status</label>
+                {/* Bucket Status — legacy categorical view over
+                    job_status (Open / Closed / Cancelled). Distinct
+                    from Job Status (single-code dropdown to the
+                    right). The 3 values map to multi-status IN-sets
+                    in load() via BUCKET_STATUS_MAP — picking "Closed"
+                    sends statuses=3,5 to the BE. Wins over Job Status
+                    + tab when set. */}
+                <SearchSelect
+                  placeholder="--All--"
+                  value={filters.bucketStatus}
+                  onChange={(v) => setFilters({ ...filters, bucketStatus: v })}
+                  options={[
+                    { value: 'open',      label: 'Open' },
+                    { value: 'closed',    label: 'Closed / Completed' },
+                    { value: 'cancelled', label: 'Cancelled' },
+                  ]}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Job Status</label>
+                {/* Single-code status — narrows within the current
+                    bucket. When the tab already enforces a status, this
+                    is a no-op; when tab='all' it sends `status=N` to BE. */}
+                <SearchSelect
+                  placeholder="-- All --"
+                  value={filters.status ?? ''}
+                  onChange={(v) => setFilters({ ...filters, status: v })}
+                  options={[
+                    { value: '0',  label: 'Booked' },
+                    { value: '1',  label: 'Scheduled' },
+                    { value: '2',  label: 'In Progress' },
+                    { value: '3',  label: 'Completed' },
+                    { value: '6',  label: 'Cancelled' },
+                    { value: '7',  label: 'Enquiry' },
+                    { value: '9',  label: 'Unconfirmed' },
+                    { value: '10', label: 'Revisit' },
+                    { value: '15', label: 'Estimate Pending' },
+                    { value: '20', label: 'Pending to Close' },
+                    { value: '21', label: 'Followup' },
+                  ]}
+                />
               </div>
             </div>
-          )}
+            {/* Row 2 — Client Ref / EFR ID / Job Owner / Date Type / Date Range. */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">
+              <div>
+                <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Client Ref</label>
+                <Input placeholder="-- All --" value={filters.clientRef} onChange={(e) => setFilters({ ...filters, clientRef: e.target.value })} />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide" title="EasyFixer ID — technician identifier from tbl_easyfixer">EFR ID</label>
+                <Input
+                  placeholder="EasyFixer (Technician) ID"
+                  type="number"
+                  min={1}
+                  value={filters.easyfixerId}
+                  onChange={(e) => setFilters({ ...filters, easyfixerId: e.target.value.replace(/[^0-9]/g, '') })}
+                  // Mouse-wheel on a focused number input would otherwise
+                  // increment/decrement the value — common UX trap when
+                  // operators scroll the filter card. blur() on wheel
+                  // is the standard de-armer.
+                  onWheel={(e) => (e.currentTarget as HTMLInputElement).blur()}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Job Owner</label>
+                <SearchSelect placeholder="Select Job Owner" value={filters.ownerId} onChange={(v) => setFilters({ ...filters, ownerId: v })} options={lk.toOpts.adminUsers.map((o) => ({ value: o.value, label: String(o.label) }))} />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Date Type</label>
+                <SearchSelect
+                  placeholder="All"
+                  value={filters.dateType}
+                  onChange={(v) => setFilters({ ...filters, dateType: v })}
+                  options={[
+                    { value: 'booked',    label: 'Booked Date' },
+                    { value: 'scheduled', label: 'Scheduled Date' },
+                    { value: 'completed', label: 'Completed Date' },
+                    { value: 'requested', label: 'Appointment Date' },
+                    { value: 'ticket',    label: 'Ticket Created' },
+                  ]}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Date Range</label>
+                <div className="flex gap-1">
+                  <Input type="date" value={filters.startDate} onChange={(e) => setFilters({ ...filters, startDate: e.target.value })} className="min-w-0" />
+                  <Input type="date" value={filters.endDate}   onChange={(e) => setFilters({ ...filters, endDate: e.target.value })}   className="min-w-0" />
+                </div>
+              </div>
+            </div>
+            {/* Show More Filters reveal — rows 3 + 4. */}
+            {showFilters && (
+              <>
+                {/* Row 3 — State / City / Category / Vertical / EFR Mobile. */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">State</label>
+                    <SearchSelect placeholder="All" value={filters.stateId} onChange={(v) => setFilters({ ...filters, stateId: v })} options={lk.toOpts.states.map((o) => ({ value: o.value, label: String(o.label) }))} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">City</label>
+                    <SearchSelect placeholder="All" value={filters.cityId} onChange={(v) => setFilters({ ...filters, cityId: v })} options={lk.toOpts.cities.map((o) => ({ value: o.value, label: String(o.label) }))} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Category</label>
+                    <SearchSelect placeholder="All" value={filters.categoryId} onChange={(v) => setFilters({ ...filters, categoryId: v })} options={lk.toOpts.serviceCategories.map((o) => ({ value: o.value, label: String(o.label) }))} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Vertical</label>
+                    <SearchSelect
+                      placeholder="All"
+                      value={filters.verticalId}
+                      onChange={(v) => setFilters({ ...filters, verticalId: v })}
+                      options={lk.verticals.map((v) => ({ value: v.vertical_id, label: v.vertical_name }))}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">EFR Mobile</label>
+                    <Input placeholder="-- All --" value={filters.efrMobile} onChange={(e) => setFilters({ ...filters, efrMobile: e.target.value.replace(/[^0-9]/g, '') })} className="font-mono" />
+                  </div>
+                </div>
+                {/* Row 4 — Rating / Reopen / Open Due To / PIN / Zonal.
+                    All four are now wired to backend filters:
+                      rating  → tbl_easyfixer_rating_by_customer.customer_rating
+                      reopen  → tbl_job.job_reopen_flag
+                      dueTo   → LIKE on j.remarks structured prefix
+                      zonalId → JOIN tbl_zone_city_mapping */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Rating</label>
+                    <SearchSelect
+                      placeholder="-- All --"
+                      value={filters.rating}
+                      onChange={(v) => setFilters({ ...filters, rating: v })}
+                      options={[
+                        { value: '5', label: '★★★★★ (5)' },
+                        { value: '4', label: '★★★★ (4)' },
+                        { value: '3', label: '★★★ (3)' },
+                        { value: '2', label: '★★ (2)' },
+                        { value: '1', label: '★ (1)' },
+                      ]}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Reopen</label>
+                    <SearchSelect
+                      placeholder="All"
+                      value={filters.reopen}
+                      onChange={(v) => setFilters({ ...filters, reopen: v })}
+                      options={[
+                        { value: 'true',  label: 'Reopened' },
+                        { value: 'false', label: 'Not Reopened' },
+                      ]}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Open Due To</label>
+                    <SearchSelect
+                      placeholder="All"
+                      value={filters.dueTo}
+                      onChange={(v) => setFilters({ ...filters, dueTo: v })}
+                      options={[
+                        { value: 'customer',   label: 'Customer' },
+                        { value: 'client',     label: 'Client' },
+                        { value: 'easyfix',    label: 'EasyFix' },
+                        { value: 'technician', label: 'Technician' },
+                      ]}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">PIN</label>
+                    <Input placeholder="-- All --" value={filters.pin} onChange={(e) => setFilters({ ...filters, pin: e.target.value.replace(/[^0-9]/g, '') })} className="font-mono" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Zonal</label>
+                    <SearchSelect
+                      placeholder="All"
+                      value={filters.zonalId}
+                      onChange={(v) => setFilters({ ...filters, zonalId: v })}
+                      options={lk.zones.map((z) => ({ value: z.zone_id, label: z.zone_name }))}
+                    />
+                  </div>
+                </div>
+              </>
+            )}
+            {/* Action row — legacy layout: Search + Reset + Show/Hide
+                Filters link on the LEFT, Export on the RIGHT. The
+                Search button is largely cosmetic in the new CRM
+                (filters auto-refetch on change) but kept for legacy
+                parity — clicking it triggers a fresh load. */}
+            <div className="flex items-center justify-between pt-2 border-t">
+              <div className="flex items-center gap-2">
+                {/* Search button intentionally removed — every filter
+                    change already triggers a real-time refetch via the
+                    useEffect dep array. A redundant button only invites
+                    duplicate fetches without changing the result. */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setQ('');
+                    setFilters({
+                      clientId: '', cityId: '', stateId: '',
+                      ownerId: '', easyfixerId: '',
+                      startDate: '', endDate: '', dateType: '',
+                      customerQ: '', clientRef: '', efrMobile: '', pin: '',
+                      categoryId: '', verticalId: '',
+                      status: '', bucketStatus: '',
+                      rating: '', reopen: '', dueTo: '', zonalId: '',
+                    });
+                  }}
+                >
+                  Reset
+                </Button>
+                {/* Transfer Job Ownership — admin-only bulk reassign
+                    of job_owner across the current filter set OR an
+                    explicit list of Job IDs. BE re-enforces the
+                    admin-role gate, this is just the UI affordance.
+                    Uses the default Button variant so the colour
+                    inherits from the theme's primary palette —
+                    matches every other primary CTA in the CRM (Add
+                    New Job, Save, Apply, etc.) for visual
+                    consistency. The outline Reset to its left + the
+                    emerald Export on the right give it a clear
+                    visual shelf without a custom hue. */}
+                {canJob.isTransferJobOwnership && (
+                  <>
+                    <Button
+                      type="button"
+                      onClick={() => {
+                        // Job Owner filter is mandatory — the dialog
+                        // locks From Owner to this value. Without it
+                        // the operator could accidentally bulk-transfer
+                        // jobs they didn't intend.
+                        if (!filters.ownerId) {
+                          setTransferAlert('Pick a Job Owner in the filter card first — that becomes the source owner for the transfer.');
+                          // Auto-hide after 3s. Cancel any prior
+                          // pending clear so a second click before
+                          // the first 3s elapses doesn't get a
+                          // half-life dismissal.
+                          if (transferAlertTimerRef.current != null) {
+                            window.clearTimeout(transferAlertTimerRef.current);
+                          }
+                          transferAlertTimerRef.current = window.setTimeout(() => {
+                            setTransferAlert(null);
+                            transferAlertTimerRef.current = null;
+                          }, 3000);
+                          return;
+                        }
+                        setTransferAlert(null);
+                        setTransferOpen(true);
+                      }}
+                    >
+                      <Repeat className="h-4 w-4 mr-1" /> Transfer Job Ownership
+                    </Button>
+                    {/* Inline alert sits right next to the button so
+                        the eye lands on the cue without a viewport
+                        scan. Amber (warning-ish, not error-red) keeps
+                        it non-alarming — this is a missing
+                        precondition, not a failure. */}
+                    {transferAlert && (
+                      <span className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1 max-w-md">
+                        {transferAlert}
+                      </span>
+                    )}
+                  </>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowFilters((s) => !s)}
+                  className="inline-flex items-center gap-1 text-sm text-sky-700 hover:text-sky-900"
+                >
+                  {showFilters
+                    ? <><ChevronUp className="h-4 w-4" /> Hide Filters</>
+                    : <><ChevronDown className="h-4 w-4" /> Show More Filters</>}
+                </button>
+              </div>
+              <DownloadButton
+                onClick={exportXlsx}
+                downloading={downloading}
+                disabled={!data || data.total === 0}
+                label="Export"
+                loadingLabel="Exporting…"
+                title={!data || data.total === 0
+                  ? 'No rows to export — narrow your filters.'
+                  : `Export ${data.total.toLocaleString('en-IN')} matching job(s)`}
+              />
+            </div>
+          </div>
         </CardContent>
       </Card>
 
@@ -538,6 +1016,46 @@ export default function JobsPage() {
         onClose={closeModal}
         onSaved={() => { cacheRef.current.clear(); load(false, true); refreshCounts(); }}
       />
+
+      {canJob.isTransferJobOwnership && (
+        <TransferJobOwnershipDialog
+          open={transferOpen}
+          onClose={() => setTransferOpen(false)}
+          // The Manage Jobs button gates the open on filters.ownerId
+          // being set, so this is guaranteed non-empty when the
+          // dialog is showing. Dialog locks From Owner to this value.
+          lockedFromOwnerId={filters.ownerId || null}
+          currentFilters={{
+            // Mirrors load()'s param shape so the BE filters mode
+            // sees exactly what the operator sees on screen. Bucket
+            // Status is exploded into the equivalent `statuses` CSV
+            // so the BE applies the same IN-set the list endpoint
+            // used to populate the operator's view.
+            clientId: filters.clientId,
+            cityId: filters.cityId,
+            stateId: filters.stateId,
+            easyfixerId: filters.easyfixerId,
+            startDate: filters.startDate,
+            endDate: filters.endDate,
+            dateType: (filters.dateType && (filters.startDate || filters.endDate)) ? filters.dateType : undefined,
+            customerQ: filters.customerQ,
+            clientRef: filters.clientRef,
+            efrMobile: filters.efrMobile,
+            pin: filters.pin,
+            categoryId: filters.categoryId,
+            verticalId: filters.verticalId,
+            status: filters.bucketStatus ? undefined : filters.status,
+            statuses: filters.bucketStatus
+              ? BUCKET_STATUS_MAP[filters.bucketStatus].join(',')
+              : undefined,
+            rating: filters.rating,
+            reopen: filters.reopen,
+            dueTo: filters.dueTo,
+            zonalId: filters.zonalId,
+          }}
+          onApplied={() => { cacheRef.current.clear(); load(true); refreshCounts(); }}
+        />
+      )}
 
       {data && (
         <TablePagination

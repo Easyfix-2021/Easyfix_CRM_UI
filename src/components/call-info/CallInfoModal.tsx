@@ -31,6 +31,7 @@ import { Label } from '@/components/ui/label';
 import { DateRangePopover } from '@/components/ui/date-range-popover';
 import { JobModal } from '@/components/job/JobModal';
 import { api, ApiError } from '@/lib/api';
+import { downloadXlsx as sharedDownloadXlsx } from '@/lib/download-xlsx';
 import { statusLabel, statusColorClass } from '@/lib/utils';
 
 /*
@@ -179,37 +180,11 @@ export function CallInfoModal({ open, onClose }: { open: boolean; onClose: () =>
     setDownloading(true);
     setErr(null);
     try {
-      const base = process.env.NEXT_PUBLIC_API_URL || '/api';
       const qs = new URLSearchParams({ fromDate: from, toDate: to });
-      const url = `${base}/admin/call-info/export.xlsx?${qs.toString()}`;
-      const token = typeof window !== 'undefined' ? localStorage.getItem('crm_auth_token') : null;
-      const resp = await fetch(url, {
-        method: 'GET',
-        credentials: 'include',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        cache: 'no-store',
+      await sharedDownloadXlsx({
+        url: `/admin/call-info/export.xlsx?${qs.toString()}`,
+        filename: `call-history_${from}_to_${to}.xlsx`,
       });
-      if (!resp.ok) {
-        // Try to surface a meaningful error message from a JSON error
-        // payload; fall back to the HTTP status.
-        let msg = `HTTP ${resp.status}`;
-        try {
-          const j = await resp.json();
-          if (j?.error) msg = String(j.error);
-        } catch { /* not JSON, ignore */ }
-        throw new Error(msg);
-      }
-      const blob = await resp.blob();
-      const objectUrl = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = objectUrl;
-      a.download = `call-history_${from}_to_${to}.xlsx`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      // Release the blob URL after a brief tick so the click can
-      // resolve into a download in all browsers.
-      setTimeout(() => URL.revokeObjectURL(objectUrl), 500);
     } catch (e) {
       setErr(e instanceof Error ? `Download failed: ${e.message}` : 'Download failed');
     } finally {

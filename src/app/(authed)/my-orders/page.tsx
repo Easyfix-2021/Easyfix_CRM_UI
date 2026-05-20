@@ -76,7 +76,7 @@ type Resp = { items: JobRow[]; total: number; limit: number; offset: number };
 
 // Operator-controlled via the TablePagination footer. "All" maps to
 // JOBS_MAX_LIMIT (the BE Joi cap on /admin/jobs).
-const DEFAULT_PAGE_SIZE: TablePageSize = 50;
+const DEFAULT_PAGE_SIZE: TablePageSize = 10;
 
 export default function MyOrdersPage() {
   const { me } = useMe();

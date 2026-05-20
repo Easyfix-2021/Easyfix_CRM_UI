@@ -29,6 +29,7 @@ type Reason = { id: number; reason: string };
 type Bank = { id: number; bank_name: string };
 type DocumentType = { document_type_id: number; document_name: string };
 type Vertical = { vertical_id: number; vertical_name: string };
+type Zone     = { zone_id: number;     zone_name: string };
 
 /*
  * Three-tier cache:
@@ -92,12 +93,14 @@ export function useLookup() {
   const [rescheduleReasons, setRescheduleReasons] = useState<Reason[]>([]);
   const [documentTypes, setDocumentTypes] = useState<DocumentType[]>([]);
   const [verticals, setVerticals] = useState<Vertical[]>([]);
+  const [zones,     setZones]     = useState<Zone[]>([]);
 
   useEffect(() => {
     (async () => {
       try { setCities(await fetchOnce('cities', () => api.get<City[]>('/shared/lookup/cities', { limit: 1000 }))); } catch {}
       try { setVerticals(await fetchOnce('verticals', () => api.get<Vertical[]>('/shared/lookup/verticals'))); } catch {}
       try { setStates(await fetchOnce('states', () => api.get<State[]>('/shared/lookup/states'))); } catch {}
+      try { setZones(await fetchOnce('zones', () => api.get<Zone[]>('/shared/lookup/zones'))); } catch {}
       try {
         // Many legacy tbl_service_catg rows carry a stray trailing
         // apostrophe ("Electrician Services'"). Strip on load so every
@@ -127,7 +130,7 @@ export function useLookup() {
 
   return {
     cities, states, serviceCategories, serviceTypes, clients, adminUsers, roles, easyfixers, banks,
-    cancelReasons, rescheduleReasons, documentTypes, verticals,
+    cancelReasons, rescheduleReasons, documentTypes, verticals, zones,
     toOpts: {
       cities: cities.map<SelectOption>((c) => ({ value: c.city_id, label: c.city_name })),
       states: states.map<SelectOption>((s) => ({ value: s.state_id, label: s.state_name })),

@@ -29,36 +29,22 @@ import { Button } from '@/components/ui/button';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { useLookup } from '@/lib/use-lookup';
+import { downloadXlsx as sharedDownloadXlsx } from '@/lib/download-xlsx';
 
 /*
- * Build a download URL with API base, JWT (from localStorage), and the
- * requested query. We can't use a normal <a download> because the auth
- * header is required. Instead fetch the response, blob it, and synthesize
- * an anchor click — same UX as a real download, no auth bypass.
+ * Reports-specific wrapper around the shared xlsx download helper
+ * (src/lib/download-xlsx.ts). Adds the `format=xlsx` query flag the
+ * /admin/reports endpoints require, picks a sensible filename from
+ * the path, and delegates the fetch/blob/anchor mechanics.
  */
 async function downloadXlsx(path: string, query: Record<string, string | undefined>) {
   const params = new URLSearchParams();
   for (const [k, v] of Object.entries(query)) if (v) params.set(k, v);
   params.set('format', 'xlsx');
-  const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5100/api';
-  const token = typeof window !== 'undefined' ? localStorage.getItem('crm_auth_token') : null;
-  const res = await fetch(`${base}/admin/reports${path}?${params}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-    credentials: 'include',
+  await sharedDownloadXlsx({
+    url: `/admin/reports${path}?${params.toString()}`,
+    filename: (path.replace(/^\//, '') || 'report') + '.xlsx',
   });
-  if (!res.ok) {
-    const t = await res.text().catch(() => '');
-    throw new Error(`Download failed (${res.status}): ${t.slice(0, 200)}`);
-  }
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = (path.replace(/^\//, '') || 'report') + '.xlsx';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
 }
 
 // Default the date range to "last 30 days" so cards aren't blank on first load.
