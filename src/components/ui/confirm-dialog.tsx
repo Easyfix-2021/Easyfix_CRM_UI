@@ -145,10 +145,17 @@ export function ConfirmDialogProvider({ children }: { children: React.ReactNode 
               spacing; same horizontal inset as the header so the title
               and description align flush vertically. `text-[0.95rem]
               leading-relaxed` gives operators a comfortable read at a
-              glance. `whitespace-pre-line` preserves \n in caller text. */}
+              glance. `whitespace-pre-line` preserves \n in caller text.
+              `asChild` merges DialogDescription's aria-describedby onto
+              the <div> instead of rendering Radix's default <p>. Without
+              it, a caller passing JSX with block-level children (e.g. a
+              <div> verification chip) triggers an HTML invalid-nesting
+              hydration error. */}
           {state.description && (
-            <DialogDescription className="px-6 pt-5 pb-6 text-[0.95rem] leading-relaxed text-foreground whitespace-pre-line">
-              {state.description}
+            <DialogDescription asChild>
+              <div className="px-6 pt-5 pb-6 text-[0.95rem] leading-relaxed text-foreground">
+                {state.description}
+              </div>
             </DialogDescription>
           )}
           {/* FOOTER — subtle top border + faintly-tinted background so the

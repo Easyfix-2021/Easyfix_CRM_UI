@@ -16,7 +16,11 @@ import { api } from './api';
  */
 
 export type Me = {
-  user: { user_id: number; user_name: string; official_email: string };
+  // `mobile_no` carries the operator's profile mobile number — already
+  // returned by GET /auth/me via findUserById (services/auth.service.js
+  // SELECTs it). Surfaced in the type so click-to-call's QA-mode dialog
+  // can pre-fill the Call From field; safe to read elsewhere too.
+  user: { user_id: number; user_name: string; official_email: string; mobile_no?: string | null };
   role?: { role_id: number; role_name: string; group: string };
   /*
    * Effective permissions resolved server-side from tbl_role.menu_ids +
