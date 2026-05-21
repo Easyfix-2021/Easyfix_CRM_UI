@@ -153,7 +153,14 @@ export function ConfirmDialogProvider({ children }: { children: React.ReactNode 
               hydration error. */}
           {state.description && (
             <DialogDescription asChild>
-              <div className="px-6 pt-5 pb-6 text-[0.95rem] leading-relaxed text-foreground">
+              {/* Tailwind `!` modifiers force-override the shared
+                  DialogDescription wrapper's defaults (text-[12px] +
+                  text-slate-300/85) which are tuned for the dark
+                  header band, not the white body. Without `!`, Radix
+                  Slot concatenates classNames without tailwind-merge
+                  and the wrapper's styles win via CSS source order,
+                  leaving body text barely visible. */}
+              <div className="px-6 pt-5 pb-6 !text-[0.95rem] leading-relaxed !text-foreground">
                 {state.description}
               </div>
             </DialogDescription>
