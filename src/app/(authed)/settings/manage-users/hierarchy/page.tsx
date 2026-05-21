@@ -16,7 +16,8 @@
  */
 
 import { useState, useCallback } from 'react';
-import { Users, Search, ChevronRight, ChevronDown, AlertTriangle, ArrowUp } from 'lucide-react';
+import Link from 'next/link';
+import { Users, Search, ChevronRight, ChevronDown, ChevronLeft, AlertTriangle, ArrowUp } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -84,6 +85,17 @@ export default function HierarchyPage() {
 
   return (
     <div className="space-y-4">
+      {/* Back link — mirrors the pattern used on settings/zones/[zoneId].
+          Explicit Link rather than router.back() so the destination is
+          predictable (back-stack could contain a non-manage-users page). */}
+      <div className="flex items-center gap-2">
+        <Link
+          href="/settings/manage-users"
+          className="text-sm text-muted-foreground hover:underline inline-flex items-center"
+        >
+          <ChevronLeft className="h-4 w-4" /> Back to Manage Users
+        </Link>
+      </div>
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
