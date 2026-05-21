@@ -17,6 +17,7 @@ import * as React from 'react';
 import { Phone, Search, PlayCircle } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { api, ApiError } from '@/lib/api';
+import { maskMobile } from '@/lib/format';
 
 type CallRow = {
   id: number;
@@ -53,14 +54,10 @@ function fmtDateTime(v: string | null | undefined): string {
   });
 }
 
-function maskMobile(s: string | null): string {
-  if (!s) return '—';
-  // Last 6 digits hidden, first 4 visible — mirrors the masking
-  // convention used elsewhere in the CRM ("first 4 digits only").
-  const d = s.replace(/\D/g, '');
-  if (d.length <= 4) return d;
-  return d.slice(0, 4) + '•'.repeat(d.length - 4);
-}
+// maskMobile lives in '@/lib/format' — see import block above. The
+// idempotency check in the shared helper means it composes safely with
+// the /admin/* BE masking middleware (which already masked `receiver`
+// on this endpoint before it reached us).
 
 function fmtDuration(sec: number | null): string {
   if (sec == null || !Number.isFinite(sec)) return '—';

@@ -1,7 +1,8 @@
 'use client';
 import * as React from 'react';
-import { Eye, CalendarCheck, Phone } from 'lucide-react';
+import { Eye, CalendarCheck } from 'lucide-react';
 import { formatDate, statusColorClass, statusLabel } from '@/lib/utils';
+import { CallableMobile } from '@/components/calls/CallButton';
 
 /*
  * UnconfirmedJobsTable — the focused column set ops requested for the
@@ -127,7 +128,13 @@ export function UnconfirmedJobsTable({
               </td>
               <td className="text-xs whitespace-nowrap">
                 <div>{j.customer_name ?? '—'}</div>
-                <CustomerMobile mobile={j.customer_mob_no} />
+                {/* Same click-to-call surface every other job-list page uses
+                    (jobs/page, my-orders/page). Permission-gated on
+                    isClickToCall and renders null when the operator lacks
+                    it (falls back to a non-clickable masked string). The
+                    customer's unmasked mobile is resolved server-side from
+                    jobId — never sent over the wire from this row. */}
+                <CallableMobile jobId={j.job_id} mobile={j.customer_mob_no} />
               </td>
               <td className="text-xs text-muted-foreground">{j.source_type ?? '—'}</td>
               <td className="stick-col stick-right text-right whitespace-nowrap">
@@ -160,30 +167,14 @@ export function UnconfirmedJobsTable({
   );
 }
 
-/*
- * Masked-mobile renderer. Per ops spec: show first 4 digits, mask the
- * rest with •, and offer a `tel:` click-to-call so the operator can
- * still dial without exposing the number on-screen. Strips any non-
- * digit characters before masking so country-codes/spaces don't throw
- * the prefix-4 count.
+/* Local CustomerMobile component removed — superseded by the shared
+ * <CallableMobile> which routes through the Kaleyra click-to-call flow
+ * (confirmation dialog → POST /admin/calls/click-to-call → bridged
+ * voice call). The old `tel:` link punted to the OS dialer and didn't
+ * write to tbl_job_caller_info, so calls placed from this surface
+ * weren't auditable. The new component fixes that and matches the
+ * pattern used on Manage Jobs / My Orders / Customer popup / dashboard.
  */
-function CustomerMobile({ mobile }: { mobile: string | null }) {
-  if (!mobile) return <span className="text-muted-foreground">—</span>;
-  const digits = String(mobile).replace(/\D/g, '');
-  if (!digits) return <span className="text-muted-foreground">—</span>;
-  const shown = digits.slice(0, 4);
-  const masked = '•'.repeat(Math.max(0, digits.length - 4));
-  return (
-    <a
-      href={`tel:${digits}`}
-      className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground hover:underline"
-      title={`Call ${shown}${masked}`}
-    >
-      <Phone className="h-3 w-3" />
-      <span className="tabular-nums">{shown}{masked}</span>
-    </a>
-  );
-}
 
 /*
  * Structured-remarks parser. The JobOutcomeDialog (Unreachable /

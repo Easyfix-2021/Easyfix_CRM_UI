@@ -19,6 +19,7 @@ import { ArrowLeft, AlertTriangle, User, Phone, Mail, MapPin, Briefcase } from '
 import { Card, CardContent } from '@/components/ui/card';
 import { api, ApiError } from '@/lib/api';
 import { formatDate, statusLabel } from '@/lib/utils';
+import { CallableMobile } from '@/components/calls/CallButton';
 
 type Address = {
   address_id: number;
@@ -140,7 +141,11 @@ export default function CustomerDetailPage() {
             </span>
           </div>
           <dl className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm pt-3 mt-3 border-t">
-            <Field icon={<Phone className="size-3.5" />} label="Mobile" value={cust.customer_mob_no} />
+            <Field
+              icon={<Phone className="size-3.5" />}
+              label="Mobile"
+              value={<CallableMobile customerId={cust.customer_id} mobile={cust.customer_mob_no} />}
+            />
             <Field icon={<Mail className="size-3.5" />}  label="Email"  value={cust.customer_email} />
             <Field label="Registered" value={formatDate(cust.insert_date)} />
             <Field label="Last Updated" value={formatDate(cust.update_date)} />
@@ -211,11 +216,16 @@ export default function CustomerDetailPage() {
   );
 }
 
-function Field({ icon, label, value }: { icon?: React.ReactNode; label: string; value: string | null }) {
+function Field({ icon, label, value }: { icon?: React.ReactNode; label: string; value: React.ReactNode }) {
+  // `value` widened to ReactNode so callers can pass JSX (e.g. a
+  // <CallableMobile/>) for live-interactive fields, while still
+  // accepting plain strings/nulls for static fields. Empty-string and
+  // null fallback to the em-dash placeholder.
+  const empty = value == null || value === '' || value === false;
   return (
     <div>
       <dt className="text-xs text-muted-foreground flex items-center gap-1">{icon}{label}</dt>
-      <dd className="font-medium">{value || '—'}</dd>
+      <dd className="font-medium">{empty ? '—' : value}</dd>
     </div>
   );
 }

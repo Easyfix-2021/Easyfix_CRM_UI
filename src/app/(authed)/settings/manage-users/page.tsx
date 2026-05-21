@@ -481,7 +481,30 @@ export default function ManageUsersPage() {
                       {can.isUserEdit && (
                         <button
                           type="button"
-                          onClick={() => { setEditing(u); setModalOpen(true); }}
+                          onClick={async () => {
+                            // The list row's `alternate_no` is BE-masked
+                            // ("9876••••••"). Pre-filling the edit form
+                            // with that would either show bullets in an
+                            // input (confusing) or corrupt the record on
+                            // save (Joi rejects). Refetch the user with
+                            // ?unmasked=true so the edit modal pre-fills
+                            // with the actual digits. Same pattern as
+                            // JobModal / EasyfixerModal use for their
+                            // edit modes.
+                            try {
+                              const fresh = await api.get<typeof u>(
+                                `/admin/users/${u.user_id}`,
+                                { unmasked: 'true' },
+                              );
+                              setEditing(fresh);
+                            } catch {
+                              // Fallback to the list row if the unmasked
+                              // fetch fails — operator can still save by
+                              // clearing the mobile field manually.
+                              setEditing(u);
+                            }
+                            setModalOpen(true);
+                          }}
                           className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors"
                           aria-label="Edit user"
                           title="Edit user"

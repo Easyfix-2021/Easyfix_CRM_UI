@@ -101,9 +101,14 @@ export function CallCustomNumbersDialog({
 
         {/* asChild here for symmetry with the ConfirmDialog primitive
             (same HTML-validity reasoning — keeps aria-describedby wiring
-            intact while allowing block-level children if ever added). */}
+            intact while allowing block-level children if ever added).
+            `!` modifiers force-override the shared DialogDescription
+            wrapper's dark-band defaults (text-[12px] + text-slate-300/85)
+            so body text reads on the white surface. Same rationale as
+            confirm-dialog.tsx — Radix Slot doesn't tailwind-merge, so
+            same-property utilities collide on CSS source order. */}
         <DialogDescription asChild>
-          <div className="px-6 pt-5 text-[0.95rem] leading-relaxed text-foreground">
+          <div className="px-6 pt-5 !text-[0.95rem] leading-relaxed !text-foreground">
             Specify the Call From and Call To numbers for this call. Both legs will be
             dialled by Kaleyra and bridged.
           </div>

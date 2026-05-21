@@ -141,7 +141,12 @@ export default function CustomersPage() {
                 <tr key={c.customer_id}>
                   <td className="!text-center font-mono text-xs">{c.customer_id}</td>
                   <td className="!text-left font-medium">{c.customer_name ?? <span className="text-muted-foreground">—</span>}</td>
-                  <td className="!text-left font-mono text-xs">{c.customer_mob_no ?? <span className="text-muted-foreground">—</span>}</td>
+                  <td className="!text-left font-mono text-xs">
+                    {/* Click-to-call via Kaleyra; permission-gated, falls
+                        back to non-clickable masked string if the operator
+                        lacks isClickToCall. */}
+                    <CallableMobile customerId={c.customer_id} mobile={c.customer_mob_no} />
+                  </td>
                   <td className="!text-left text-xs">{c.customer_email ?? <span className="text-muted-foreground">—</span>}</td>
                   <td className="!text-center font-mono text-xs">{c.job_count}</td>
                   <td className="!text-center">

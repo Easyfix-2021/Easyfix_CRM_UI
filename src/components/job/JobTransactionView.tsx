@@ -4,6 +4,8 @@ import * as React from 'react';
 import { Phone } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
 import { formatDate, statusColorClass, statusLabel } from '@/lib/utils';
+import { maskMobile } from '@/lib/format';
+import { CallableMobile } from '@/components/calls/CallButton';
 
 /*
  * JobTransactionView — read-only, single-page replica of the legacy
@@ -73,12 +75,9 @@ type TransactionResp = {
   scheduling_history: HistoryRow[];
 };
 
-function maskMobile(mob: unknown): string {
-  if (mob == null || mob === '') return '—';
-  const digits = String(mob).replace(/\D/g, '');
-  if (!digits) return '—';
-  return digits.slice(0, 4) + '•'.repeat(Math.max(0, digits.length - 4));
-}
+// maskMobile lives in '@/lib/format' — see import block above. Local copy
+// removed; the shared helper is idempotent so it composes safely with the
+// /admin/* BE masking middleware.
 
 function fmt(v: unknown): string {
   if (v == null || v === '') return '—';
@@ -180,9 +179,12 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
             <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Customer Details</div>
             <DLRow label="Name:">{fmt(j.job_customer_name || j.customer_name)}</DLRow>
             <DLRow label="Contact No.:">
-              <a href={`tel:${j.customer_mob_no ?? ''}`} className="inline-flex items-center gap-1 text-sky-700 hover:underline tabular-nums">
-                <Phone className="h-3 w-3" /> {maskMobile(j.customer_mob_no)}
-              </a>
+              {/* CallableMobile routes through the Kaleyra click-to-call
+                  flow (confirmation + audit row) instead of the OS
+                  dialer. The BE resolves the customer's real digits from
+                  jobId server-side; the masked `mobile` prop is purely
+                  presentational. */}
+              <CallableMobile jobId={Number(j.job_id)} mobile={j.customer_mob_no} />
             </DLRow>
             <DLRow label="Collected By:">{fmt(j.collected_by)}</DLRow>
           </div>
@@ -301,9 +303,7 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
           <div className="text-sm font-semibold text-slate-700 mb-2">Customer Details</div>
           <DLRow label="Name:">{fmt(j.customer_name)}</DLRow>
           <DLRow label="Number:">
-            <a href={`tel:${j.customer_mob_no ?? ''}`} className="inline-flex items-center gap-1 text-sky-700 hover:underline tabular-nums">
-              <Phone className="h-3 w-3" /> {maskMobile(j.customer_mob_no)}
-            </a>
+            <CallableMobile jobId={Number(j.job_id)} mobile={j.customer_mob_no} />
           </DLRow>
           <DLRow label="Address:">{fmt(j.address)}</DLRow>
           <DLRow label="Location:">{fmt(j.city_name)}</DLRow>

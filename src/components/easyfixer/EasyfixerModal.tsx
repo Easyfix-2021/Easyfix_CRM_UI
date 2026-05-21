@@ -92,16 +92,22 @@ export function EasyfixerModal({
     setForm(emptyForm);
     setError(null);
     setLoading(true);
+    // Edit modes opt out of the /admin/* mobile-masking middleware so
+    // the form pre-fill round-trips cleanly — saving an unchanged
+    // "9310••••••" would otherwise fail the Joi mobile-pattern validator.
+    // See JobModal for the same pattern + rationale.
+    const fetchQuery = (mode === 'edit') ? { unmasked: 'true' } : undefined;
     (async () => {
       try {
-        const data = await api.get<EfRecord>(`/admin/easyfixers/${easyfixerId}`);
+        const data = await api.get<EfRecord>(`/admin/easyfixers/${easyfixerId}`, fetchQuery);
         setRecord(data);
         setForm(recordToForm(data));
       } catch {
         setError('Could not load easyfixer details');
       } finally { setLoading(false); }
     })();
-  }, [open, easyfixerId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, easyfixerId, mode]);
 
   function set<K extends keyof FormShape>(k: K, v: FormShape[K]) {
     setForm((s) => ({ ...s, [k]: v }));
@@ -205,35 +211,35 @@ export function EasyfixerModal({
           )}
         </div>
 
-        {/* Footer — single source of truth for all actions.
-            Left: Close (and any secondary "back out" controls).
-            Right: primary actions (Save / Edit / Activate-Deactivate),
-            ordered left-to-right by ascending prominence. */}
-        <div className="px-6 py-3 border-t bg-muted/30 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={onClose}>Close</Button>
-          </div>
-          <div className="flex items-center gap-2">
-            {/* View mode — lifecycle controls relocated from the header. */}
-            {mode === 'view' && record && can.isEasyfixerEdit && (
-              <>
-                <Button size="sm" variant="outline" onClick={() => setMode('edit')}>Edit</Button>
-                <Button size="sm" variant={Number(record.efr_status) ? 'destructive' : 'default'} onClick={toggleStatus}>
-                  {Number(record.efr_status) ? 'Deactivate' : 'Activate'}
-                </Button>
-              </>
-            )}
-            {mode === 'create' && can.isEasyfixerAddNew && (
-              <Button type="submit" form="efr-form" disabled={saving || loading}>
-                {saving ? 'Saving…' : 'Create Easyfixer'}
+        {/* Footer — single right-aligned cluster. Per ops 2026-05-21:
+            Close is no longer pinned to the far-left edge. It sits
+            immediately left of the primary action(s) so the entire
+            action group reads as one cluster from less-used (Close) to
+            most-used (Save / Edit / Activate). No left-cluster controls
+            exist for Easyfixers (Add Remarks is a Job-only affordance).
+            `flex-wrap` lets the cluster degrade onto a second line on
+            narrow viewports without overlapping. */}
+        <div className="px-6 py-3 border-t bg-muted/30 flex items-center justify-end gap-2 flex-wrap">
+          <Button variant="outline" onClick={onClose}>Close</Button>
+          {/* View mode — lifecycle controls relocated from the header. */}
+          {mode === 'view' && record && can.isEasyfixerEdit && (
+            <>
+              <Button size="sm" variant="outline" onClick={() => setMode('edit')}>Edit</Button>
+              <Button size="sm" variant={Number(record.efr_status) ? 'destructive' : 'default'} onClick={toggleStatus}>
+                {Number(record.efr_status) ? 'Deactivate' : 'Activate'}
               </Button>
-            )}
-            {mode === 'edit' && can.isEasyfixerEdit && (
-              <Button type="submit" form="efr-form" disabled={saving || loading}>
-                {saving ? 'Saving…' : 'Save changes'}
-              </Button>
-            )}
-          </div>
+            </>
+          )}
+          {mode === 'create' && can.isEasyfixerAddNew && (
+            <Button type="submit" form="efr-form" disabled={saving || loading}>
+              {saving ? 'Saving…' : 'Create Easyfixer'}
+            </Button>
+          )}
+          {mode === 'edit' && can.isEasyfixerEdit && (
+            <Button type="submit" form="efr-form" disabled={saving || loading}>
+              {saving ? 'Saving…' : 'Save changes'}
+            </Button>
+          )}
         </div>
       </DialogContent>
     </Dialog>

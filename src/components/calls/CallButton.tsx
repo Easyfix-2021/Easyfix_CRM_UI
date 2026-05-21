@@ -109,8 +109,24 @@ type CallPreview = {
   dialTo: string | null;
 };
 
+/* Receiver-identifier shapes accepted by the hook + components. The BE
+ * resolves the unmasked mobile from whichever ONE of these is supplied
+ * — never trusts a FE-supplied mobile string. */
+type CallTarget = {
+  jobId?: number;
+  customerId?: number;
+  efrId?: number;             // call a technician
+  reportingContactId?: number; // call a client SPOC
+};
+
+function pickTargetKey(t: CallTarget): keyof CallTarget | null {
+  const keys: Array<keyof CallTarget> = ['jobId', 'customerId', 'efrId', 'reportingContactId'];
+  const present = keys.filter((k) => t[k] != null);
+  return present.length === 1 ? present[0] : null;
+}
+
 // ─── Shared hook — owns the confirm, POST, busy state, and toast lifecycle
-function useClickToCall(jobId: number | undefined, customerId: number | undefined) {
+function useClickToCall(target: CallTarget) {
   const { me } = useMe();
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ variant: ToastVariant; message: string } | null>(null);
@@ -134,18 +150,26 @@ function useClickToCall(jobId: number | undefined, customerId: number | undefine
   }, [toast]);
 
   /*
+   * Resolve the single supplied identifier into a query/body object the
+   * BE understands. Returns null if zero or more-than-one identifiers
+   * are present (programming error).
+   */
+  const targetKey = pickTargetKey(target);
+  const targetBody: Record<string, number> | null = targetKey
+    ? { [targetKey]: target[targetKey]! }
+    : null;
+
+  /*
    * The actual POST. Factored out so both confirmation paths (simple
    * confirm + QA-mode custom-numbers dialog) can share it. callFrom /
    * callTo are sent ONLY in QA mode; the BE rejects them otherwise (see
    * routes/admin/calls.js for the anti-spoofing guard).
    */
   const performCall = useCallback(async (callFrom?: string, callTo?: string) => {
-    if (busy) return;
+    if (busy || !targetBody) return;
     setBusy(true); setToast(null);
     try {
-      const body: Record<string, number | string> = jobId != null
-        ? { jobId }
-        : { customerId: customerId! };
+      const body: Record<string, number | string> = { ...targetBody };
       if (callFrom) body.callFrom = callFrom;
       if (callTo)   body.callTo   = callTo;
       await api.post<{ delivered: boolean; message?: string }>('/admin/calls/click-to-call', body);
@@ -156,14 +180,12 @@ function useClickToCall(jobId: number | undefined, customerId: number | undefine
     } finally {
       setBusy(false);
     }
-  }, [busy, jobId, customerId]);
+  }, [busy, targetBody]);
 
   const placeCall = useCallback(async (e?: React.MouseEvent) => {
     // Stop propagation in case the surface is inside a clickable row.
     if (e) { e.stopPropagation(); e.preventDefault(); }
-    if (busy) return;
-    const idCount = (jobId != null ? 1 : 0) + (customerId != null ? 1 : 0);
-    if (idCount !== 1) return; // programming error, fail silently
+    if (busy || !targetBody) return; // missing or ambiguous target → fail silently
 
     // ── Branch on environment mode ──
     // QA prompt mode → custom-numbers dialog with two text inputs.
@@ -180,8 +202,7 @@ function useClickToCall(jobId: number | undefined, customerId: number | undefine
     setBusy(true);
     let preview: CallPreview | null = null;
     try {
-      const q: Record<string, number> = jobId != null ? { jobId } : { customerId: customerId! };
-      preview = await api.get<CallPreview>('/admin/calls/preview', q);
+      preview = await api.get<CallPreview>('/admin/calls/preview', targetBody);
     } catch {
       // swallow — confirm still opens, just without preview line
     } finally {
@@ -255,7 +276,7 @@ function useClickToCall(jobId: number | undefined, customerId: number | undefine
     });
     if (!ok) return;
     await performCall();
-  }, [busy, jobId, customerId, confirm, promptForNumbers, performCall]);
+  }, [busy, targetBody, confirm, promptForNumbers, performCall]);
 
   // The custom-numbers dialog (QA mode only) lives as a sibling node
   // returned by the hook. Pre-fill precedence:
@@ -283,22 +304,21 @@ function useClickToCall(jobId: number | undefined, customerId: number | undefine
 }
 
 // ─── <CallButton> — labelled CTA (currently unused but exported) ──────
-type ButtonProps = {
-  jobId?: number;
-  customerId?: number;
+type ButtonProps = CallTarget & {
   size?: 'sm' | 'md';
   label?: string;
   className?: string;
 };
 
 export function CallButton({
-  jobId, customerId, size = 'md', label = 'Call Customer', className,
+  jobId, customerId, efrId, reportingContactId,
+  size = 'md', label = 'Call Customer', className,
 }: ButtonProps) {
   const { me } = useMe();
-  const { busy, placeCall, toastNode, customNode } = useClickToCall(jobId, customerId);
+  const target: CallTarget = { jobId, customerId, efrId, reportingContactId };
+  const { busy, placeCall, toastNode, customNode } = useClickToCall(target);
   if (!hasAction(me, 'isClickToCall')) return null;
-  const idCount = (jobId != null ? 1 : 0) + (customerId != null ? 1 : 0);
-  if (idCount !== 1) return null;
+  if (pickTargetKey(target) == null) return null;
 
   const iconSize = size === 'sm' ? 'h-3.5 w-3.5' : 'h-4 w-4';
   return (
@@ -327,24 +347,23 @@ export function CallButton({
 }
 
 // ─── <CallableMobile> — clickable mobile display ──────────────────────
-type MobileProps = {
-  jobId?: number;
-  customerId?: number;
+type MobileProps = CallTarget & {
   mobile: string | null | undefined;
   className?: string;
   hideWhenUnauthorized?: boolean;
 };
 
 export function CallableMobile({
-  jobId, customerId, mobile, className, hideWhenUnauthorized = false,
+  jobId, customerId, efrId, reportingContactId,
+  mobile, className, hideWhenUnauthorized = false,
 }: MobileProps) {
   const { me } = useMe();
-  const { busy, placeCall, toastNode, customNode } = useClickToCall(jobId, customerId);
+  const target: CallTarget = { jobId, customerId, efrId, reportingContactId };
+  const { busy, placeCall, toastNode, customNode } = useClickToCall(target);
 
   const display = mobile && String(mobile).trim() !== '' ? mobile : '—';
   const can = hasAction(me, 'isClickToCall');
-  const idCount = (jobId != null ? 1 : 0) + (customerId != null ? 1 : 0);
-  const clickable = can && idCount === 1 && display !== '—';
+  const clickable = can && pickTargetKey(target) != null && display !== '—';
 
   if (!clickable) {
     if (hideWhenUnauthorized && !can) return null;

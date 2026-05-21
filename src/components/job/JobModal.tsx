@@ -18,6 +18,8 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { api, ApiError } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
 import { formatDate, formatEasyfixerName, statusColorClass, statusLabel } from '@/lib/utils';
+import { maskMobile } from '@/lib/format';
+import { CallableMobile } from '@/components/calls/CallButton';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 
@@ -48,12 +50,10 @@ const ST = { BOOKED: 0, SCHEDULED: 1, IN_PROGRESS: 2, COMPLETED: 3, COMPLETED_AL
  * Non-digits are stripped before masking so country codes / spaces /
  * dashes don't throw the prefix-4 count off.
  */
-function maskMobile(mob: unknown): string {
-  if (mob == null || mob === '') return '—';
-  const digits = String(mob).replace(/\D/g, '');
-  if (!digits) return '—';
-  return digits.slice(0, 4) + '•'.repeat(Math.max(0, digits.length - 4));
-}
+// Mobile masking is shared via src/lib/format.ts (import at top of file).
+// The helper is idempotent so it's safe even though the /admin/* response
+// middleware also masks every mobile-bearing field before it crosses the
+// wire.
 // Unconfirmed (CALL_LATER = 9) is intentionally excluded from canAssign
 // and canCancel: ops should drive those orders through the dedicated
 // Confirm-and-Schedule flow (purple CalendarCheck on the row), not
@@ -124,6 +124,20 @@ export function JobModal({
   // operator saw last-modal's customer name flash on every re-open. With
   // `job` cleared up front, the header falls through to the "Loading…"
   // branch (see render below) until the new payload arrives.
+  /*
+   * Mode-aware fetch. The /admin/* response middleware masks mobile
+   * fields by default; edit/confirm modes need the unmasked values so
+   * the form pre-fill round-trips cleanly (saving without changing the
+   * mobile would otherwise send "9310••••••" back and fail Joi's
+   * digits-only validator). The `?unmasked=true` query opts out of the
+   * masking middleware. View mode keeps masking on so the network-tab
+   * payload doesn't leak full digits during read-only browsing.
+   *
+   * `mode` is in the deps so flipping View → Edit triggers a refetch.
+   * Brief loading state when the operator clicks Edit; acceptable
+   * latency for the privacy-vs-edit trade-off.
+   */
+  const fetchQuery = (mode === 'edit' || mode === 'confirm') ? { unmasked: 'true' } : undefined;
   useEffect(() => {
     if (!open) return;
     if (!jobId) { setJob(null); return; }
@@ -131,15 +145,16 @@ export function JobModal({
     setError(null);
     setLoading(true);
     (async () => {
-      try { setJob(await api.get<Job>(`/admin/jobs/${jobId}`)); }
+      try { setJob(await api.get<Job>(`/admin/jobs/${jobId}`, fetchQuery)); }
       catch { setError('Could not load job details'); }
       finally { setLoading(false); }
     })();
-  }, [open, jobId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, jobId, mode]);
 
   async function refresh() {
     if (!jobId) return;
-    try { setJob(await api.get<Job>(`/admin/jobs/${jobId}`)); }
+    try { setJob(await api.get<Job>(`/admin/jobs/${jobId}`, fetchQuery)); }
     catch { /* swallow — outer error state is set by action handlers */ }
   }
 
@@ -295,15 +310,15 @@ export function JobModal({
 
         {mode === 'view' && (
           <div className="px-6 py-3 border-t bg-muted/30 flex items-center justify-between gap-2 flex-wrap">
-            {/* LEFT cluster — less-used "back out" / auxiliary controls.
-                Close first (the universal exit), then Add Remarks for
-                Unconfirmed (status=9) jobs. The Add Remarks affordance
-                mirrors the legacy "Job Transaction → Add Remarks" and
-                writes to tbl_job_comment with comment_on=1 via
-                POST /admin/jobs/:id/comments. Rendered only once `job`
-                loads so it doesn't flash during the initial fetch. */}
+            {/* LEFT cluster — only Add Remarks lives here per ops 2026-05-21.
+                Mirrors the legacy "Job Transaction → Add Remarks" affordance
+                and writes to tbl_job_comment with comment_on=1 via
+                POST /admin/jobs/:id/comments. Rendered only once `job` loads
+                so it doesn't flash during the initial fetch. When the job
+                isn't Unconfirmed (status≠9) this cluster is an empty
+                placeholder div so the flex layout keeps the right cluster
+                anchored to the right edge. */}
             <div className="flex items-center gap-2">
-              <Button variant="outline" onClick={onClose}>Close</Button>
               {!loading && job && Number(job.job_status) === 9 && (
                 <Button
                   variant="outline"
@@ -314,19 +329,25 @@ export function JobModal({
                 </Button>
               )}
             </div>
-            {/* RIGHT cluster — primary lifecycle actions, formerly housed
-                in the header. ActionBar internally renders only the
-                buttons valid for the job's current status (Edit / Assign
-                / Start / Complete / Cancel / Reschedule / etc.), so the
-                footer width is bounded by the live action set. */}
-            {!loading && job && (
-              <ActionBar
-                job={job}
-                jobId={Number(jobId)}
-                onChanged={() => { refresh(); onSaved?.(); }}
-                onEdit={() => setMode('edit')}
-              />
-            )}
+            {/* RIGHT cluster — Close sits IMMEDIATELY LEFT of the primary
+                lifecycle actions, not at the far left of the footer. The
+                ordering preserves the "less-used → more-used" reading
+                direction inside the cluster: Close (exit) on the left,
+                then ActionBar's status-aware buttons (Edit, Assign, Start,
+                Complete, Cancel, …) on the right. ActionBar already
+                applies its own flex-wrap, so this composed cluster
+                degrades gracefully on narrow viewports. */}
+            <div className="flex items-center gap-2 flex-wrap justify-end">
+              <Button variant="outline" onClick={onClose}>Close</Button>
+              {!loading && job && (
+                <ActionBar
+                  job={job}
+                  jobId={Number(jobId)}
+                  onChanged={() => { refresh(); onSaved?.(); }}
+                  onEdit={() => setMode('edit')}
+                />
+              )}
+            </div>
           </div>
         )}
       </DialogContent>
@@ -513,7 +534,12 @@ function ViewBody({ job }: { job: Job }) {
       <TabsContent value="summary">
         <div className="grid md:grid-cols-2 gap-5">
           <DlCard title="Customer" rows={[
-            ['Name', job.customer_name], ['Mobile', maskMobile(job.customer_mob_no)], ['Email', job.customer_email],
+            ['Name', job.customer_name],
+            // Customer mobile is callable via the Kaleyra flow. BE
+            // resolves the unmasked number from jobId server-side;
+            // we just pass the masked string for display.
+            ['Mobile', <CallableMobile key="cust-mob" jobId={Number(job.job_id)} mobile={job.customer_mob_no as string | null} />],
+            ['Email', job.customer_email],
           ]}/>
           <DlCard title="Address" rows={[
             ['Address', job.address], ['Building', job.building], ['Landmark', job.landmark],
@@ -521,7 +547,18 @@ function ViewBody({ job }: { job: Job }) {
           ]}/>
           <DlCard title="Client" rows={[
             ['Client', job.client_name], ['Ref ID', job.client_ref_id], ['SPOC', job.client_spoc_name],
-            ['SPOC email', job.client_spoc_email], ['SPOC phone', job.client_spoc],
+            ['SPOC email', job.client_spoc_email],
+            // SPOC phone calls dial through tbl_client_contacts.contact_no
+            // when reporting_contact_id is set; falls back to a static
+            // masked display when there's no FK (legacy jobs that store
+            // SPOC as plain text in tbl_job.client_spoc only).
+            ['SPOC phone', job.reporting_contact_id
+              ? <CallableMobile
+                  key="spoc-mob"
+                  reportingContactId={Number(job.reporting_contact_id)}
+                  mobile={job.client_spoc as string | null}
+                />
+              : (job.client_spoc as string | null)],
           ]}/>
           <DlCard title="Job meta" rows={[
             ['Job ID', job.job_id], ['Reference', job.job_reference_id],
@@ -569,7 +606,17 @@ function ViewBody({ job }: { job: Job }) {
           ]}/>
           <DlCard title="Assignment" rows={[
             ['Technician',   job.easyfixer_name ? formatEasyfixerName(String(job.easyfixer_name)) : null],
-            ['Tech mobile',  job.easyfixer_mobile],
+            // Tech mobile calls dial through tbl_easyfixer.efr_no.
+            // fk_easyfixter_id is the FK column (typo preserved per
+            // backend CLAUDE.md). When unassigned, the cell shows a
+            // static dash via the falsy fallback inside DlCard.
+            ['Tech mobile', job.fk_easyfixter_id
+              ? <CallableMobile
+                  key="tech-mob"
+                  efrId={Number(job.fk_easyfixter_id)}
+                  mobile={job.easyfixer_mobile as string | null}
+                />
+              : (job.easyfixer_mobile as string | null)],
             ['Helper req',   job.helper_req ? 'Yes' : 'No'],
             ['Time slot',    job.time_slot],
           ]}/>
@@ -2290,12 +2337,20 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
         <div className="rounded-lg border bg-sky-50/60 px-4 py-3 text-sm">
           <div className="flex items-center justify-between gap-3 mb-2">
             <div className="text-xs font-semibold text-sky-900 uppercase tracking-wide">Job Summary</div>
-            {/* Mobile is masked (first-4 + bullets) for PII — the
-                `tel:` href still uses the full number so click-to-call
-                works seamlessly. */}
-            <a href={`tel:${initial.customer_mob_no}`} className="text-sky-800 hover:underline font-semibold tabular-nums">
-              ☎ {maskMobile(initial.customer_mob_no)}
-            </a>
+            {/* Click-to-call via Kaleyra rather than the OS dialer:
+                the `tel:` href used to feed the dialer the raw digits,
+                but with BE-side masking those digits arrive as
+                "9310••••••" — the dialer can't parse that. CallableMobile
+                resolves the unmasked number server-side from jobId and
+                routes through the audited bridge flow. */}
+            {/* The `initial` payload has loose typing (unknown) on most
+                fields because it covers create/edit/view modes uniformly.
+                Cast the mobile to a string-or-nullish at the call site
+                rather than widening CallableMobile's prop. */}
+            <CallableMobile
+              jobId={Number(initial.job_id)}
+              mobile={(initial.customer_mob_no as string | null | undefined) ?? null}
+            />
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1">
             <div><span className="text-xs text-muted-foreground mr-2">Special Comments:</span>{String(initial.remarks ?? '—')}</div>
@@ -6200,11 +6255,30 @@ function DlCard({ title, rows }: { title: string; rows: [string, unknown][] }) {
           {rows.map(([k, v]) => (
             <div key={k} className="flex justify-between gap-4 border-b last:border-0 pb-1.5 last:pb-0">
               <dt className="text-muted-foreground">{k}</dt>
-              <dd className="font-medium text-right break-all max-w-[60%]">{v == null || v === '' ? '—' : String(v)}</dd>
+              <dd className="font-medium text-right break-all max-w-[60%]">
+                {renderDlValue(v)}
+              </dd>
             </div>
           ))}
         </dl>
       </div>
     </div>
   );
+}
+
+/*
+ * Render helper for DlCard values. The legacy implementation always
+ * called String(v) which collapses React elements to "[object Object]".
+ * Three cases now:
+ *   1. null / undefined / empty string → em-dash placeholder.
+ *   2. React element (object with $$typeof) → render verbatim so
+ *      composite cells like <CallableMobile/> work.
+ *   3. Everything else (primitives) → String() it.
+ */
+function renderDlValue(v: unknown): React.ReactNode {
+  if (v == null || v === '') return '—';
+  if (typeof v === 'object' && v !== null && '$$typeof' in (v as Record<string, unknown>)) {
+    return v as React.ReactElement;
+  }
+  return String(v);
 }
