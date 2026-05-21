@@ -167,19 +167,14 @@ export function EasyfixerModal({
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent hideClose className="max-w-5xl w-[min(95vw,1100px)] h-[85vh] overflow-hidden p-0 flex flex-col">
         <DialogHeader className="px-6 pt-6 pb-3 border-b">
+          {/* Header carries title + subtitle only. Edit / Activate-Deactivate
+              and any other action buttons live in the footer below, with
+              the established left=less-usable / right=primary ordering. */}
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <DialogTitle className="truncate">{title}</DialogTitle>
               {subtitle && <DialogDescription className="mt-1">{subtitle}</DialogDescription>}
             </div>
-            {mode === 'view' && record && can.isEasyfixerEdit && (
-              <div className="flex items-center gap-2 shrink-0">
-                <Button size="sm" variant="outline" onClick={() => setMode('edit')}>Edit</Button>
-                <Button size="sm" variant={Number(record.efr_status) ? 'destructive' : 'default'} onClick={toggleStatus}>
-                  {Number(record.efr_status) ? 'Deactivate' : 'Activate'}
-                </Button>
-              </div>
-            )}
             {mode === 'view' && record && !can.isEasyfixerEdit && (
               <span className="text-xs text-muted-foreground italic shrink-0">view-only</span>
             )}
@@ -210,18 +205,35 @@ export function EasyfixerModal({
           )}
         </div>
 
-        <div className="px-6 py-3 border-t bg-muted/30 flex justify-end gap-2">
-          <Button variant="outline" onClick={onClose}>Close</Button>
-          {mode === 'create' && can.isEasyfixerAddNew && (
-            <Button type="submit" form="efr-form" disabled={saving || loading}>
-              {saving ? 'Saving…' : 'Create Easyfixer'}
-            </Button>
-          )}
-          {mode === 'edit' && can.isEasyfixerEdit && (
-            <Button type="submit" form="efr-form" disabled={saving || loading}>
-              {saving ? 'Saving…' : 'Save changes'}
-            </Button>
-          )}
+        {/* Footer — single source of truth for all actions.
+            Left: Close (and any secondary "back out" controls).
+            Right: primary actions (Save / Edit / Activate-Deactivate),
+            ordered left-to-right by ascending prominence. */}
+        <div className="px-6 py-3 border-t bg-muted/30 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={onClose}>Close</Button>
+          </div>
+          <div className="flex items-center gap-2">
+            {/* View mode — lifecycle controls relocated from the header. */}
+            {mode === 'view' && record && can.isEasyfixerEdit && (
+              <>
+                <Button size="sm" variant="outline" onClick={() => setMode('edit')}>Edit</Button>
+                <Button size="sm" variant={Number(record.efr_status) ? 'destructive' : 'default'} onClick={toggleStatus}>
+                  {Number(record.efr_status) ? 'Deactivate' : 'Activate'}
+                </Button>
+              </>
+            )}
+            {mode === 'create' && can.isEasyfixerAddNew && (
+              <Button type="submit" form="efr-form" disabled={saving || loading}>
+                {saving ? 'Saving…' : 'Create Easyfixer'}
+              </Button>
+            )}
+            {mode === 'edit' && can.isEasyfixerEdit && (
+              <Button type="submit" form="efr-form" disabled={saving || loading}>
+                {saving ? 'Saving…' : 'Save changes'}
+              </Button>
+            )}
+          </div>
         </div>
       </DialogContent>
     </Dialog>

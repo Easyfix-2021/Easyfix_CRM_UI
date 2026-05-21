@@ -218,17 +218,10 @@ export function JobModal({
                 )}
               </div>
             </div>
-            {/* ActionBar's buttons depend on the loaded job (status drives
-                which actions are valid), so we wait until loading clears
-                and `job` is populated. */}
-            {mode === 'view' && !loading && job && (
-              <ActionBar
-                job={job}
-                jobId={Number(jobId)}
-                onChanged={() => { refresh(); onSaved?.(); }}
-                onEdit={() => setMode('edit')}
-              />
-            )}
+            {/* ActionBar relocated to the footer (see below). Header now
+                carries title + status badge ONLY — single visual lane for
+                identity, while every interactive control lives in the
+                footer cluster. */}
           </div>
         </DialogHeader>
 
@@ -301,16 +294,16 @@ export function JobModal({
         </div>
 
         {mode === 'view' && (
-          <div className="px-6 py-3 border-t bg-muted/30 flex items-center justify-between gap-2">
-            {/* Left side: "Add Remarks" for Unconfirmed (status=9) jobs.
-                Mirrors the legacy "Job Transaction → Add Remarks"
-                affordance ops uses to log follow-up notes on orders
-                that aren't yet booked. Writes to tbl_job_comment (the
-                same store legacy uses) via POST /admin/jobs/:id/comments
-                with comment_on=1 (the "created" stage code from the
-                Joi schema). Rendered only when we have a job loaded so
-                it doesn't flash during the initial fetch. */}
-            <div>
+          <div className="px-6 py-3 border-t bg-muted/30 flex items-center justify-between gap-2 flex-wrap">
+            {/* LEFT cluster — less-used "back out" / auxiliary controls.
+                Close first (the universal exit), then Add Remarks for
+                Unconfirmed (status=9) jobs. The Add Remarks affordance
+                mirrors the legacy "Job Transaction → Add Remarks" and
+                writes to tbl_job_comment with comment_on=1 via
+                POST /admin/jobs/:id/comments. Rendered only once `job`
+                loads so it doesn't flash during the initial fetch. */}
+            <div className="flex items-center gap-2">
+              <Button variant="outline" onClick={onClose}>Close</Button>
               {!loading && job && Number(job.job_status) === 9 && (
                 <Button
                   variant="outline"
@@ -321,7 +314,19 @@ export function JobModal({
                 </Button>
               )}
             </div>
-            <Button variant="outline" onClick={onClose}>Close</Button>
+            {/* RIGHT cluster — primary lifecycle actions, formerly housed
+                in the header. ActionBar internally renders only the
+                buttons valid for the job's current status (Edit / Assign
+                / Start / Complete / Cancel / Reschedule / etc.), so the
+                footer width is bounded by the live action set. */}
+            {!loading && job && (
+              <ActionBar
+                job={job}
+                jobId={Number(jobId)}
+                onChanged={() => { refresh(); onSaved?.(); }}
+                onEdit={() => setMode('edit')}
+              />
+            )}
           </div>
         )}
       </DialogContent>
@@ -388,6 +393,12 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
 
   return (
     <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+      {/* Outbound calling is consolidated onto the customer mobile cell
+          itself across the CRM (see <CallableMobile> in
+          src/components/calls/CallButton.tsx). The action bar deliberately
+          carries no Call button — keeps the lifecycle controls
+          (Edit / Assign / Start / Complete / Cancel) visually distinct
+          from the contact-the-customer action. */}
       {can.isJobEdit && <Button size="sm" variant="outline" onClick={onEdit}>Edit</Button>}
       {/* Confirm & Schedule for Unconfirmed orders is exposed as a dedicated
           modal mode launched from the list row (purple CalendarCheck icon),

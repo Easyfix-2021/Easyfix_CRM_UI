@@ -29,6 +29,19 @@ export type ConfirmOptions = {
   confirmLabel?: string;
   cancelLabel?: string;
   variant?: 'default' | 'destructive';
+  /*
+   * Optional lucide-icon ReactNode rendered next to the title inside the
+   * header band. Gives the operator instant visual context (a phone icon
+   * for a call confirm, a warn icon for a destructive action) instead of
+   * forcing them to parse the title text. Caller supplies the element
+   * with whatever sizing they want; the dialog wraps it in a circular
+   * tinted plate for visual weight.
+   */
+  icon?: React.ReactNode;
+  /* Optional accent for the icon plate. Defaults to sky (matches the
+   * portal's sidebar accent line). Pass 'emerald' for positive-action
+   * confirms (place call, send notification), 'rose' for destructive. */
+  iconAccent?: 'sky' | 'emerald' | 'rose' | 'amber';
 };
 
 type ConfirmState = ConfirmOptions & {
@@ -46,6 +59,23 @@ const DEFAULTS: Required<Pick<ConfirmOptions, 'title' | 'confirmLabel' | 'cancel
 type ConfirmFn = (opts?: ConfirmOptions) => Promise<boolean>;
 
 const ConfirmContext = React.createContext<ConfirmFn | null>(null);
+
+/*
+ * Accent palettes for the optional icon plate. Tailwind classes are
+ * spelled out so the JIT compiler picks them up at build time —
+ * dynamic class composition with template strings doesn't survive
+ * the purge pass. Each tone uses a translucent backplate over the
+ * dark header band so the icon glow reads against the slate gradient.
+ */
+function accentPlateClass(accent?: 'sky' | 'emerald' | 'rose' | 'amber'): string {
+  switch (accent) {
+    case 'emerald': return 'bg-emerald-500/20 ring-1 ring-emerald-400/40 text-emerald-200';
+    case 'rose':    return 'bg-rose-500/20 ring-1 ring-rose-400/40 text-rose-200';
+    case 'amber':   return 'bg-amber-500/20 ring-1 ring-amber-400/40 text-amber-200';
+    case 'sky':
+    default:        return 'bg-sky-500/20 ring-1 ring-sky-400/40 text-sky-200';
+  }
+}
 
 /*
  * Provider — renders a single hidden dialog instance and wires the imperative
@@ -82,16 +112,50 @@ export function ConfirmDialogProvider({ children }: { children: React.ReactNode 
     <ConfirmContext.Provider value={confirm}>
       {children}
       <Dialog open={state.open} onOpenChange={(o) => { if (!o) settle(false); }}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>{title}</DialogTitle>
-            {state.description && (
-              <DialogDescription className="whitespace-pre-line pt-1">
-                {state.description}
-              </DialogDescription>
-            )}
+        {/* `!p-0 !gap-0` opts out of DialogContent's default 24px padding +
+            16px grid gap so we have explicit control of every section's
+            spacing. Without this opt-out, every child accumulates 24px of
+            outer padding AND 16px of inter-section gap, which is what made
+            the original confirm dialog look airy and empty. */}
+        <DialogContent className="sm:max-w-md !p-0 !gap-0 overflow-hidden">
+          {/* HEADER — dark slate band, edge-to-edge.
+              `!mx-0 !mt-0` cancels the negative margins DialogHeader uses
+              to extend itself past DialogContent's default p-6 (we set
+              p-0 above, so the negative margins would have pushed the
+              header outside the dialog body). `!mb-0` removes the 20px
+              bottom margin DialogHeader adds — the body's own pt-5 owns
+              that spacing now. `!py-4` keeps the header band compact. */}
+          <DialogHeader className="!mx-0 !mt-0 !mb-0 !py-4">
+            <div className="flex items-center gap-3">
+              {state.icon && (
+                <span
+                  className={
+                    'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full ' +
+                    accentPlateClass(state.iconAccent)
+                  }
+                >
+                  {state.icon}
+                </span>
+              )}
+              <DialogTitle className="flex-1 leading-tight">{title}</DialogTitle>
+            </div>
           </DialogHeader>
-          <div className="flex justify-end gap-2 pt-2">
+          {/* BODY — description sits here with proper reading width and
+              clean type colour. `pt-5 pb-6 px-6` is the intentional
+              spacing; same horizontal inset as the header so the title
+              and description align flush vertically. `text-[0.95rem]
+              leading-relaxed` gives operators a comfortable read at a
+              glance. `whitespace-pre-line` preserves \n in caller text. */}
+          {state.description && (
+            <DialogDescription className="px-6 pt-5 pb-6 text-[0.95rem] leading-relaxed text-foreground whitespace-pre-line">
+              {state.description}
+            </DialogDescription>
+          )}
+          {/* FOOTER — subtle top border + faintly-tinted background so the
+              action zone reads as a distinct surface. The order is
+              Cancel-on-left / primary-on-right per the portal-wide
+              modal-footer convention. */}
+          <div className="flex items-center justify-end gap-2 px-6 py-3 border-t bg-muted/30">
             <Button type="button" variant="outline" onClick={() => settle(false)}>
               {cancelLabel}
             </Button>

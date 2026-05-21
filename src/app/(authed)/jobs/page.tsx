@@ -21,6 +21,7 @@ import { TABS, type CountsResp, countFor } from '@/lib/job-tabs';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { TransferJobOwnershipDialog } from '@/components/job/TransferJobOwnershipDialog';
 import { UnconfirmedJobsTable } from '@/components/job/UnconfirmedJobsTable';
+import { CallableMobile } from '@/components/calls/CallButton';
 import { useSort, SortHeader } from '@/lib/use-sort';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
@@ -974,7 +975,12 @@ export default function JobsPage() {
                   <td className="text-xs">{j.client_ref_id ?? '—'}</td>
                   <td className="whitespace-nowrap">{j.client_name ?? '—'}</td>
                   <td className="whitespace-nowrap">{j.customer_name ?? '—'}</td>
-                  <td className="text-xs">{j.customer_mob_no ?? '—'}</td>
+                  <td className="text-xs">
+                    {/* Click-to-call lives on the mobile cell itself. The
+                        component never receives unmasked digits — only the
+                        jobId. BE resolves customer mobile server-side. */}
+                    <CallableMobile jobId={j.job_id} mobile={j.customer_mob_no} />
+                  </td>
                   <td>{j.city_name ?? '—'}</td>
                   <td className="text-xs">{j.job_type}</td>
                   <td className="text-xs text-muted-foreground">{j.source_type ?? '—'}</td>
@@ -1005,6 +1011,9 @@ export default function JobsPage() {
                       >
                         <Eye className="h-3.5 w-3.5" />
                       </button>
+                      {/* Outbound call now lives on the customer mobile cell
+                          itself (see the Mobile column above). Operator's
+                          stated mental model: "click the number to dial". */}
                       {/* Unconfirmed (status=9) → opens JobModal which exposes
                           the "Confirm & Schedule" action that moves the job
                           to BOOKED, mirroring legacy `addEditJob → Book Call`.

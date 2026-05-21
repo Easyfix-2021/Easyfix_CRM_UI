@@ -18,6 +18,7 @@ import { TABS } from '@/lib/job-tabs';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { UnconfirmedJobsTable } from '@/components/job/UnconfirmedJobsTable';
 import { AssignTechnicianModal, type AssignMode } from '@/components/job/AssignTechnicianModal';
+import { CallableMobile } from '@/components/calls/CallButton';
 import { useSort, SortHeader } from '@/lib/use-sort';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
@@ -389,7 +390,10 @@ export default function MyOrdersPage() {
                   <td className="stick-col stick-left font-medium">#{j.job_id}</td>
                   <td>{j.client_name ?? '—'}</td>
                   <td>{j.customer_name ?? '—'}</td>
-                  <td className="text-xs text-muted-foreground">{j.customer_mob_no ?? '—'}</td>
+                  <td className="text-xs text-muted-foreground">
+                    {/* Click-to-call lives on the mobile cell itself. */}
+                    <CallableMobile jobId={j.job_id} mobile={j.customer_mob_no} />
+                  </td>
                   <td>{j.city_name ?? '—'}</td>
                   <td>{j.easyfixer_name ? formatEasyfixerName(j.easyfixer_name) : <span className="text-muted-foreground">unassigned</span>}</td>
                   <td className="text-xs whitespace-nowrap">{j.requested_date_time ? formatDate(j.requested_date_time) : '—'}</td>
@@ -409,6 +413,9 @@ export default function MyOrdersPage() {
                       >
                         <Eye className="h-3.5 w-3.5" />
                       </button>
+                      {/* Outbound call now lives on the customer mobile cell
+                          (see Mobile column above) — clicking the number
+                          dials it. */}
                       {/* Unconfirmed (status=9): legacy flow was "open addEditJob
                           modal, complete details, click Book Call → status 0".
                           We mirror that: click the icon → JobModal opens; the

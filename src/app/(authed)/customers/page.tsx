@@ -22,6 +22,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { api, ApiError } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
+import { CallableMobile } from '@/components/calls/CallButton';
 
 type CustomerRow = {
   customer_id: number;
@@ -183,7 +184,13 @@ export default function CustomersPage() {
           {viewing && (
             <div className="space-y-3 text-sm">
               <div className="grid grid-cols-2 gap-2">
-                <div><span className="text-muted-foreground">Mobile:</span> <span className="font-mono">{viewing.customer_mob_no ?? '—'}</span></div>
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground">Mobile:</span>
+                  {/* Mobile itself is the call trigger. Component never
+                      receives the raw digits as an action target — only the
+                      customer_id. BE looks up customer_mob_no server-side. */}
+                  <CallableMobile customerId={viewing.customer_id} mobile={viewing.customer_mob_no} />
+                </div>
                 <div><span className="text-muted-foreground">Email:</span> {viewing.customer_email ?? '—'}</div>
                 <div><span className="text-muted-foreground">Jobs:</span> <span className="font-mono">{viewing.job_count}</span></div>
                 <div><span className="text-muted-foreground">Inserted:</span> {viewing.insert_date ? formatDate(viewing.insert_date) : '—'}</div>

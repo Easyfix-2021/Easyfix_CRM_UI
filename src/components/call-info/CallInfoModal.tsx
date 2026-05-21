@@ -33,6 +33,7 @@ import { JobModal } from '@/components/job/JobModal';
 import { api, ApiError } from '@/lib/api';
 import { downloadXlsx as sharedDownloadXlsx } from '@/lib/download-xlsx';
 import { statusLabel, statusColorClass } from '@/lib/utils';
+import { ClickToCallTab } from './ClickToCallTab';
 
 /*
  * Row shape mirrors `tbl_easyfixer_call_record` plus joined display
@@ -79,6 +80,11 @@ function formatCallTime(v: string | null | undefined): string {
 
 export function CallInfoModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const today = todayIso();
+  // Two views inside one modal — historical Easyfixer-side records (the
+  // existing flow) and the new CRM-initiated Click-to-Call records. Tabs
+  // share the date range so flipping between them keeps the operator's
+  // chosen window. Default to 'efr' to preserve existing muscle memory.
+  const [tab, setTab] = React.useState<'efr' | 'click'>('efr');
   const [from, setFrom] = React.useState<string>(today);
   const [to, setTo]     = React.useState<string>(today);
   const [rows, setRows] = React.useState<CallRow[] | null>(null);
@@ -300,6 +306,51 @@ export function CallInfoModal({ open, onClose }: { open: boolean; onClose: () =>
             </span>
           </DialogTitle>
         </DialogHeader>
+
+        {/* Tab bar — two record sources sitting side-by-side under one
+            modal so ops have a single place to inspect anything voice-
+            related. Plain buttons styled as tabs (no Radix Tabs primitive
+            here — keeps the existing DialogContent flex-column layout
+            intact without nesting another container that would compete
+            with the scrollable region's flex-1 min-h-0 sizing). */}
+        <div className="px-6 pt-3 pb-0 border-b bg-muted/10 flex items-center gap-1">
+          {([
+            { key: 'efr',   label: 'Easyfixer Calls' },
+            { key: 'click', label: 'Click-to-Call' },
+          ] as const).map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setTab(t.key)}
+              className={
+                'px-3 py-1.5 text-xs font-medium rounded-t-md border border-b-0 transition-colors ' +
+                (tab === t.key
+                  ? 'bg-white border-slate-300 text-foreground'
+                  : 'bg-transparent border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/40')
+              }
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {tab === 'click' && (
+          <>
+            {/* The click-to-call tab owns its own date range above the
+                table. It reuses the parent's from/to so flipping back to
+                the Easyfixer tab keeps the operator's window. The
+                ClickToCallTab component itself doesn't expose date
+                controls — those still live in the form below for the
+                Easyfixer tab — but it auto-fetches whenever from/to
+                changes, so a date change on the Easyfixer tab cascades.
+                For now, the click tab inherits whatever the Easyfixer
+                tab last picked; switching tabs is enough to refetch. */}
+            <ClickToCallTab from={from} to={to} />
+          </>
+        )}
+
+        {tab === 'efr' && (
+          <>
 
         {/* Tight top padding (`pt-2`) — earlier `pt-4` left a visibly
             empty band between the header border and the Date Range
@@ -547,6 +598,8 @@ export function CallInfoModal({ open, onClose }: { open: boolean; onClose: () =>
                 </table>
           )}
         </div>
+          </>
+        )}
 
         {/* Plain <div> footer instead of the shared <DialogFooter>.
             DialogFooter ships with default `-mx-6 -mb-6` negative
