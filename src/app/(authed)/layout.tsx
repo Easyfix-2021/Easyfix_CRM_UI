@@ -6,6 +6,7 @@ import { Sidebar } from '@/components/layout/Sidebar';
 import { Navbar } from '@/components/layout/Navbar';
 import { AuthProvider } from '@/lib/auth-context';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog';
+import { ToastHost } from '@/components/ui/toast';
 
 /*
  * Client-side auth gate.
@@ -60,6 +61,10 @@ export default function AuthedLayout({ children }: { children: React.ReactNode }
             <main className="flex-1 overflow-y-auto px-4 py-3">{children}</main>
           </div>
         </div>
+        {/* ToastHost subscribes to the custom-event bus from
+            components/ui/toast.tsx. Mounted once at the authed root so
+            any descendant can fire showToast() without prop-drilling. */}
+        <ToastHost />
       </ConfirmDialogProvider>
     </AuthProvider>
   );

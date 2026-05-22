@@ -20,6 +20,7 @@ import { useLookup } from '@/lib/use-lookup';
 import { formatDate, formatEasyfixerName, statusColorClass, statusLabel } from '@/lib/utils';
 import { maskMobile } from '@/lib/format';
 import { CallableMobile } from '@/components/calls/CallButton';
+import { showToast, dismissToast } from '@/components/ui/toast';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 
@@ -301,7 +302,20 @@ export function JobModal({
               mode={mode}
               initial={job}
               onCancel={onClose}
-              onSaved={(saved) => {
+              onSaved={(saved, opts) => {
+                // Outcome-only path (Unreachable / Enquiry): close the
+                // modal immediately and notify the parent to refresh
+                // its list. Skips the setMode('view') + refetch cycle
+                // that previously caused a ~2-3s blank-modal flash.
+                if (opts?.closeAfter) {
+                  onSaved?.();
+                  onClose();
+                  return;
+                }
+                // Book / Confirm path: stay open, switch to view mode,
+                // notify parent. The mode-dep useEffect still fires a
+                // refetch — that's intentional here so the view-mode
+                // payload comes through the masking middleware.
                 setJob(saved); setMode('view'); onSaved?.();
               }}
             />
@@ -1549,11 +1563,27 @@ function CreateJobMobileGate({
   );
 }
 
+/*
+ * `onSaved` carries an optional `opts.closeAfter` flag so the parent
+ * JobModal can decide whether to close the modal immediately or refresh
+ * in-place. For outcome-only submits (Unreachable / Enquiry) the
+ * operator's intent is "log and move on" — the modal should close right
+ * away rather than flicker through a refetch. For Book / Confirm the
+ * operator typically wants to see the updated view so we stay open.
+ *
+ * Without `closeAfter`, the previous flow was: setJob(saved) →
+ * setMode('view') → mode-dep useEffect re-fires → setJob(null) +
+ * setLoading(true) + fetch → operator sees blank/loading modal for
+ * 2-3 seconds. That blank state was perceived as "the modal closed and
+ * nothing happened" — the explicit-close path skips it entirely for
+ * outcome-only flows.
+ */
+type JobFormSavedOpts = { closeAfter?: boolean; variant?: 'book' | 'enquiry' | 'unreachable' };
 function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
   mode: 'create' | 'edit' | 'confirm';
   initial: Job | null;
   onCancel: () => void;
-  onSaved: (saved: Job) => void;
+  onSaved: (saved: Job, opts?: JobFormSavedOpts) => void;
   prefillCustomer?: PrefillCustomer;
 }) {
   const lk = useLookup();
@@ -2008,19 +2038,105 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null); setSubmitting(true);
+
+    /*
+     * Outcome-only flows (Unreachable / Enquiry) display a global toast
+     * for in-flight feedback:
+     *   - Loading toast appears immediately so the operator sees the
+     *     submission is in progress (previously the modal sat silent
+     *     for the 2-3s the PATCH + PATCH /status round-trip took).
+     *   - On success → loading toast dismissed, success toast shown.
+     *     Modal closes via the closeAfter path.
+     *   - On error → loading toast dismissed, error toast shown.
+     *     Modal stays open so the operator can retry without losing
+     *     their dialog inputs.
+     *
+     * Book / Confirm flows keep their existing inline feedback (the
+     * modal stays open and refreshes); no toast spam there.
+     */
+    const isOutcomeSubmit = isEditShape
+      && (submitVariant === 'unreachable' || submitVariant === 'enquiry');
+    const outcomeLabel = submitVariant === 'unreachable' ? 'Unreachable' : 'Enquiry';
+    let loadingToastId: number | null = null;
+    if (isOutcomeSubmit) {
+      loadingToastId = showToast({
+        variant: 'loading',
+        message: `Marking as ${outcomeLabel}…`,
+      });
+    }
+
     try {
       if (isEditShape && initial) {
         const patch: Record<string, unknown> = {};
-        if (f.job_type)             patch.job_type = f.job_type;
-        if (f.source_type)          patch.source_type = f.source_type;
-        if (f.requested_date_time)  patch.requested_date_time = new Date(f.requested_date_time).toISOString();
-        if (f.time_slot)            patch.time_slot = f.time_slot;
-        if (f.job_desc !== undefined) patch.job_desc = f.job_desc;
-        if (f.client_ref_id !== undefined) patch.client_ref_id = f.client_ref_id;
+
+        /*
+         * Single source-of-truth for "should this field be in the patch?":
+         *
+         *   - `null` / `undefined`     → omit (BE treats as "no change")
+         *   - empty string `""`        → omit (BE Joi rejects empty strings
+         *                                with "X is not allowed to be empty")
+         *   - everything else          → include verbatim (numbers, booleans
+         *                                including `false`, non-empty strings,
+         *                                arrays, nested objects)
+         *
+         * Centralising the rule prevents the silent-bug class where one
+         * field uses `!== undefined` (sends "") and another uses truthy
+         * (omits ""). All edit-mode field inclusions now route through
+         * this helper.
+         */
+        const setIf = (key: string, value: unknown) => {
+          if (value === undefined || value === null || value === '') return;
+          patch[key] = value;
+        };
+        /*
+         * Sub-object variant — builds an object containing ONLY the
+         * non-empty entries. Used for `address` and `customer` sub-payloads
+         * where every empty field would otherwise hit the same Joi-empty
+         * rejection. Returns null if nothing survives so the caller can
+         * conditionally include the sub-object at all.
+         */
+        const pickIf = (obj: Record<string, unknown>): Record<string, unknown> | null => {
+          const out: Record<string, unknown> = {};
+          for (const [k, v] of Object.entries(obj)) {
+            if (v === undefined || v === null || v === '') continue;
+            out[k] = v;
+          }
+          return Object.keys(out).length > 0 ? out : null;
+        };
+
+        /*
+         * Outcome-only variants ('unreachable' / 'enquiry') deliberately
+         * SKIP the address/customer/services payload that the full
+         * Confirm flow sends. Reason: an Unconfirmed order typically
+         * hasn't had address/services filled in yet — sending empty
+         * pin_code (or any other partial field) trips the BE Joi
+         * validator even though the operator isn't trying to actually
+         * book the order. They're just logging the outcome of a call
+         * attempt.
+         *
+         * For these variants we only patch:
+         *   - remarks   (carries the structured prefix
+         *               `[Unreachable · Due To: X · Reason: Y] free text`)
+         *   - efr_special_notes (if the operator added any)
+         * Then the status transition fires below (→ 7 Enquiry / → 9
+         * Unconfirmed). Address/customer stay untouched.
+         */
+        const isOutcomeOnly = submitVariant === 'unreachable' || submitVariant === 'enquiry';
+
+        if (!isOutcomeOnly) {
+          setIf('job_type', f.job_type);
+          setIf('source_type', f.source_type);
+          setIf('requested_date_time', f.requested_date_time ? new Date(f.requested_date_time).toISOString() : null);
+          setIf('time_slot', f.time_slot);
+          setIf('job_desc', f.job_desc);
+          setIf('client_ref_id', f.client_ref_id);
+        }
+
         // Confirm flow always sends services (even empty array == "no services"),
         // since ops may have removed rows they'd previously picked. Plain edit
-        // skips services to preserve historical rows untouched.
-        if (isConfirm) {
+        // skips services to preserve historical rows untouched. Outcome-only
+        // also skips services — the operator hasn't built a basket yet.
+        if (isConfirm && !isOutcomeOnly) {
           patch.services = buildServicesPayload();
           // Customer name is written to tbl_job.job_customer_name
           // (the per-job copy) — NOT the master tbl_customer row.
@@ -2028,29 +2144,43 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
           // display name without mutating the customer master.
           // Email still updates the master record because it's a
           // contact channel, not a per-job alias.
-          patch.job_customer_name = f.customer_name;
-          patch.customer = {
-            customer_email: f.customer_email,
-          };
-          patch.address = {
+          setIf('job_customer_name', f.customer_name);
+          const customer = pickIf({ customer_email: f.customer_email });
+          if (customer) patch.customer = customer;
+          const address = pickIf({
             address:      f.address,
             building:     f.building,
             landmark:     f.landmark,
             city_id:      Number(f.city_id) || undefined,
             pin_code:     f.pin_code,
             gps_location: f.gps_location,
-          };
+          });
+          if (address) patch.address = address;
           // Products-section fields from legacy addEditJob. We reuse `remarks`
           // for Special Comments and `efr_special_notes` for the
           // "Anything Handyman should keep in mind?" prompt (both are already
           // in MUTABLE_COLUMNS). `fk_service_type_id` / `fk_service_catg_id`
           // carry the active filter selection.
-          if (f.remarks !== undefined) patch.remarks = f.remarks;
-          if (f.efr_special_notes !== undefined) patch.efr_special_notes = f.efr_special_notes;
+          setIf('remarks', f.remarks);
+          setIf('efr_special_notes', f.efr_special_notes);
+          // helper_req is a boolean — `false` is a meaningful value the BE
+          // must accept, so setIf (which omits `null`/`undefined`/`""` but
+          // keeps `false`) handles it correctly. Type-check still here for
+          // legacy state shapes where the field might transiently be a string.
           if (typeof f.helper_req === 'boolean') patch.helper_req = f.helper_req;
           if (f.fk_service_catg_id) patch.fk_service_catg_id = Number(f.fk_service_catg_id);
           if (f.fk_service_type_id) patch.fk_service_type_id = Number(f.fk_service_type_id);
         }
+
+        // Outcome-only path: just the remarks (structured prefix from the
+        // JobOutcomeDialog) + any free-text notes the operator added.
+        // setIf drops empty strings so the BE Joi "not allowed to be empty"
+        // validators don't fire on fields the operator didn't touch.
+        if (isOutcomeOnly) {
+          setIf('remarks', f.remarks);
+          setIf('efr_special_notes', f.efr_special_notes);
+        }
+
         const saved = await api.patch<Job>(`/admin/jobs/${initial.job_id}`, patch);
         // Confirm flow → status promotion depends on which footer
         // variant the operator picked (revised 2026-05-19):
@@ -2069,7 +2199,24 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
               : 0;
           await api.patch(`/admin/jobs/${initial.job_id}/status`, { status: targetStatus });
         }
-        onSaved(saved);
+        // Success-path toast for outcome-only flows. Transition the
+        // loading toast to a green success toast at the same bottom-
+        // centre slot. The toast component auto-dismisses success
+        // after 4s.
+        if (isOutcomeOnly) {
+          if (loadingToastId != null) dismissToast(loadingToastId);
+          loadingToastId = null;
+          showToast({
+            variant: 'success',
+            message: `Marked as ${outcomeLabel} successfully`,
+          });
+        }
+        // Tell the parent how to behave after this save. Outcome-only
+        // flows (Unreachable / Enquiry) want the modal closed
+        // immediately — no flash of "loading…" while the modal refetches
+        // into view mode. Book stays open so the operator can see the
+        // updated booking.
+        onSaved(saved, { closeAfter: isOutcomeOnly, variant: submitVariant });
       } else {
         // Create flow — full payload including customer + address + services.
         const servicesPayload = buildServicesPayload();
@@ -2283,9 +2430,24 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
         onSaved(toSave);
       }
     } catch (err) {
-      setError(err instanceof ApiError
+      const msg = err instanceof ApiError
         ? err.message + (err.details ? ` — ${JSON.stringify(err.details)}` : '')
-        : 'Failed to save');
+        : 'Failed to save';
+      setError(msg);
+      // Outcome-only failure feedback: the modal stays open (operator
+      // can retry with the same dialog inputs) AND we surface a sticky
+      // error toast so the failure is impossible to miss. Without the
+      // toast, the error was only visible inside the JobForm — which
+      // the operator might have stopped looking at after the outcome
+      // dialog closed.
+      if (isOutcomeSubmit) {
+        if (loadingToastId != null) dismissToast(loadingToastId);
+        loadingToastId = null;
+        showToast({
+          variant: 'error',
+          message: `Failed to mark as ${outcomeLabel}: ${msg}`,
+        });
+      }
     } finally { setSubmitting(false); }
   }
 
