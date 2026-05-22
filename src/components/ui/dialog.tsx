@@ -64,11 +64,28 @@ export const DialogOverlay = React.forwardRef<
       // Strong dim (75%) + 4px blur so busy backgrounds (dashboard
       // cards, data tables) clearly recede when a modal opens.
       'fixed inset-0 z-50 bg-slate-900/75 backdrop-blur-[4px]',
+      // Force pointer-events ON regardless of Radix's modal mode.
+      // Our Dialog defaults to `modal={false}` (so SearchSelect popovers
+      // inside dialogs work — see Dialog wrapper above). Radix would
+      // normally set `pointer-events: none` on the overlay when modal is
+      // false, letting background clicks pass through. We do NOT want
+      // that: nested dialogs (e.g. JobOutcomeDialog opened from inside
+      // JobModal) MUST block clicks on the parent's buttons. The `!`
+      // Tailwind important modifier overrides Radix's inline style.
+      // Popovers portalled at higher z-index still receive their own
+      // clicks, so this doesn't break the search-select popover trick
+      // that motivated `modal={false}` in the first place.
+      '!pointer-events-auto',
       'data-[state=open]:animate-in data-[state=open]:fade-in-0',
       'data-[state=closed]:animate-out data-[state=closed]:fade-out-0',
       'duration-200',
       className,
     )}
+    // Note: no manual `onPointerDown` handler here — Radix's own
+    // outside-click detection (via Content's onInteractOutside) needs
+    // the pointer event to bubble naturally so click-outside-to-close
+    // still works. The CSS class alone is sufficient to block clicks
+    // reaching background content.
     {...props}
   />
 ));
@@ -89,6 +106,62 @@ export const DialogContent = React.forwardRef<
 >(({ className, children, hideClose, onInteractOutside, onPointerDownOutside, ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay />
+    {/*
+     * Manual click-blocking overlay — separate from Radix's
+     * DialogOverlay above. We render it as a sibling of DialogContent
+     * so it ALWAYS exists in the DOM regardless of Radix's modal-mode
+     * decisions. With `modal={false}` Radix tends to omit / disable
+     * its own overlay (`pointer-events: none` or skipped entirely),
+     * which is why a CSS `!pointer-events-auto` override on
+     * DialogOverlay isn't reliable. This sibling guarantees a real
+     * fullscreen click-absorber exists.
+     *
+     * Layered z-index:
+     *   z-50 = Radix's DialogOverlay (visual dim; behavior toggled by
+     *          modal prop)
+     *   z-50 = this manual blocker (always click-capturing)
+     *   z-50 = DialogContent (above both, accepts user interaction)
+     *
+     * All three share z-50 so DOM source order decides stacking.
+     * Source order is overlay → blocker → content → blocker stacks
+     * above the dim layer but below the modal content. Background
+     * page surfaces (z<50) lose to all three. Nested dialogs render
+     * their own portal trio at the same z-50 but later in source
+     * order, so each new dialog visually + interactively layers on
+     * top of the previous.
+     *
+     * Outside-click semantics: a click on this blocker should still
+     * close the dialog (like Radix's overlay normally does). We
+     * dispatch a click on the data-radix-dismissable surface via
+     * Radix's own outside-click detection — actually simpler than
+     * that, just call the onPointerDownOutside callback. But for
+     * safety/composition with `onInteractOutside`'s nested-dialog
+     * guards above, we let the click on this blocker do nothing —
+     * the operator dismisses via the modal's own X / Cancel button.
+     * That's the safer default; "click outside to close" can be a
+     * footgun for forms-with-unsaved-changes anyway.
+     */}
+    <div
+      data-radix-manual-overlay-blocker=""
+      className={cn(
+        'fixed inset-0 z-50 pointer-events-auto',
+        // Visual dim — Radix's DialogOverlay sibling above renders but
+        // typically doesn't paint when modal=false (its bg + blur classes
+        // don't apply reliably). The manual blocker becomes the SOLE
+        // reliable surface for both click-capture and visual dim of the
+        // background. Same `bg-slate-900/75 backdrop-blur-[4px]` as the
+        // intended DialogOverlay styling so the look matches what was
+        // designed for modal=true dialogs.
+        'bg-slate-900/75 backdrop-blur-[4px]',
+        // Match DialogOverlay's open/close fade so the manual blocker
+        // animates in tandem with the dialog content instead of popping
+        // in/out abruptly.
+        'data-[state=open]:animate-in data-[state=open]:fade-in-0',
+        'data-[state=closed]:animate-out data-[state=closed]:fade-out-0',
+        'duration-200',
+      )}
+      aria-hidden="true"
+    />
     <DialogPrimitive.Content
       ref={ref}
       /*

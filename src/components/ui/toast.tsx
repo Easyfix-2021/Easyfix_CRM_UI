@@ -108,19 +108,44 @@ export function ToastHost() {
 
   if (typeof document === 'undefined' || toasts.length === 0) return null;
 
+  // Interaction-blocking overlay activates whenever a `loading` toast is
+  // present. Sits z-[9998] — below the toast itself (z-[9999]) so the
+  // toast remains visible and clickable, but above every modal / page
+  // surface so background clicks are absorbed during in-flight work.
+  // `cursor: wait` gives a second visual signal that the page is busy.
+  // Transparent (no backdrop tint) so the dialog underneath stays
+  // readable — the toast carries the explicit "we're processing"
+  // message.
+  const isBlocking = toasts.some((t) => t.variant === 'loading');
+
   return createPortal(
-    <div
-      className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[9999] flex flex-col items-center gap-2 pointer-events-none"
-      aria-live="polite"
-    >
-      {toasts.map((t) => (
-        <ToastItem
-          key={t.id}
-          toast={t}
-          onDismiss={() => dismissToast(t.id)}
+    <>
+      {isBlocking && (
+        <div
+          className="fixed inset-0 z-[9998] cursor-wait"
+          // aria-hidden because the toast itself carries the operative
+          // message; screen readers shouldn't announce an empty overlay.
+          aria-hidden="true"
+          // Capture every kind of pointer event so even keyboard-driven
+          // activations of focused elements are stopped while busy.
+          onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
+          onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+          onKeyDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
         />
-      ))}
-    </div>,
+      )}
+      <div
+        className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[9999] flex flex-col items-center gap-2 pointer-events-none"
+        aria-live="polite"
+      >
+        {toasts.map((t) => (
+          <ToastItem
+            key={t.id}
+            toast={t}
+            onDismiss={() => dismissToast(t.id)}
+          />
+        ))}
+      </div>
+    </>,
     document.body,
   );
 }

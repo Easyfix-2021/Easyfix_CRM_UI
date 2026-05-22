@@ -2040,6 +2040,34 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
     setError(null); setSubmitting(true);
 
     /*
+     * Pre-submit mandatory-field guard for the BOOK variant of the
+     * Confirm flow. Defence in depth — the Book Call button is
+     * already `disabled` when `confirmSection2Complete` is false, but
+     * Enter-key submits / programmatic requestSubmit() / any future
+     * code path that bypasses the visible button would still reach
+     * here. Reject loudly with an explicit list of missing fields so
+     * the operator sees what to fix.
+     *
+     * Outcome variants (unreachable / enquiry) and non-confirm modes
+     * (create / edit) are NOT subject to this gate — they have their
+     * own minimal validation rules expressed elsewhere.
+     */
+    if (isConfirm && submitVariant === 'book' && !confirmSection2Complete) {
+      const missing: string[] = [];
+      if (!f.client_ref_id || !String(f.client_ref_id).trim()) missing.push('Client Reference ID');
+      if (!f.reporting_contact_id) missing.push('Reporting Contact');
+      if (!f.customer_name) missing.push('Customer Name');
+      if (!f.address) missing.push('Address');
+      if (!String(f.city_id || '').trim()) missing.push('City');
+      if (!/^[0-9]{6}$/.test(String(f.pin_code || ''))) missing.push('PIN (6 digits)');
+      if (!f.requested_date_time) missing.push('Requested Date & Time');
+      if (!f.time_slot) missing.push('Time Slot');
+      setError(`Missing required field(s): ${missing.join(', ')}`);
+      setSubmitting(false);
+      return;
+    }
+
+    /*
      * Outcome-only flows (Unreachable / Enquiry) display a global toast
      * for in-flight feedback:
      *   - Loading toast appears immediately so the operator sees the
@@ -3103,6 +3131,18 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
             type="submit"
             loading={submitting && submitVariant === 'book'}
             onClick={() => setSubmitVariant('book')}
+            // Book Call is now gated on the same completeness rule that
+            // gates Section 3's expand (confirmSection2Complete). Without
+            // this, the button was clickable even with Client Reference
+            // ID / Reporting Contact / customer name / address / city /
+            // PIN / date-time / time-slot missing — the BE would reject
+            // with a Joi 400 per-field, but the FE should refuse to
+            // submit upfront. Unreachable + Enquiry remain enabled (they
+            // skip the full payload — see the outcome-only submit path).
+            disabled={!confirmSection2Complete}
+            title={confirmSection2Complete
+              ? ''
+              : 'Fill all mandatory fields (Client Ref ID, Reporting Contact, Customer Name, Address, City, PIN, Date & Time) before booking.'}
             className="bg-purple-600 hover:bg-purple-700 text-white"
           >
             Book Call
