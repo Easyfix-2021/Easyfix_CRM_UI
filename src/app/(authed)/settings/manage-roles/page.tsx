@@ -21,7 +21,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ShieldCheck, Search, Plus, Pencil, Trash2,
-  AlertTriangle, ChevronDown, ChevronRight, Info,
+  AlertTriangle, ChevronDown, ChevronRight, Info, X,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -667,6 +667,18 @@ function RoleFormModal({
   const [selectedMenus, setSelectedMenus] = useState<Set<number>>(new Set());
   const [selectedActions, setSelectedActions] = useState<Set<number>>(new Set());
 
+  // Inline search over the menu + action tree (2026-05-22). With 65
+  // menus + 49 actions visible at once, an operator looking for
+  // "isJobAssign" has to scroll past everything else to find it.
+  // Query is matched case-insensitively against:
+  //   - menu_name        (every menu row, parent or child)
+  //   - action.name      (human label, e.g. "Edit User")
+  //   - action.action_name (permission key, e.g. "isUserEdit")
+  // A menu row is visible when it matches OR any of its children/
+  // actions match — so parents auto-stay-open while filtering. Empty
+  // query reverts to the full tree.
+  const [treeSearch, setTreeSearch] = useState('');
+
   // Fetch catalogues on first open. They rarely change within a session;
   // we don't refetch on subsequent opens.
   useEffect(() => {
@@ -728,6 +740,38 @@ function RoleFormModal({
     }
     return map;
   }, [allActions]);
+
+  /*
+   * Per-menu match decision used by the rendered tree. Returns:
+   *   selfMatch  — does this menu's own name match the query?
+   *   actionMatch — does any action attached to this menu match?
+   * The parent visibility rule (below in JSX) treats EITHER as sufficient
+   * for the parent to render; child visibility is computed the same way
+   * per child. A query like "isJobAssign" surfaces the parent + leaf
+   * automatically without the operator having to know the menu name.
+   */
+  const treeQuery = treeSearch.trim().toLowerCase();
+  function menuMatchesQuery(menu: MenuRow): { selfMatch: boolean; actionMatch: boolean } {
+    if (!treeQuery) return { selfMatch: true, actionMatch: true };
+    const selfMatch = (menu.menu_name || '').toLowerCase().includes(treeQuery);
+    const actions = actionsByMenu.get(menu.menu_id) ?? [];
+    const actionMatch = actions.some(
+      (a) =>
+        (a.name || '').toLowerCase().includes(treeQuery) ||
+        (a.action_name || '').toLowerCase().includes(treeQuery),
+    );
+    return { selfMatch, actionMatch };
+  }
+  function menuOrChildrenMatch(parent: MenuRow): boolean {
+    if (!treeQuery) return true;
+    const { selfMatch, actionMatch } = menuMatchesQuery(parent);
+    if (selfMatch || actionMatch) return true;
+    const kids = tree.childrenByParent.get(parent.menu_id) ?? [];
+    return kids.some((k) => {
+      const m = menuMatchesQuery(k);
+      return m.selfMatch || m.actionMatch;
+    });
+  }
 
   function toggleMenu(menuId: number) {
     setSelectedMenus((prev) => {
@@ -911,13 +955,44 @@ function RoleFormModal({
                 {hydrating && ' · loading…'}
               </span>
             </div>
+            {/* Inline search — case-insensitive substring match across
+                menu names + action labels + action permission keys.
+                Empty query reverts to the full tree. Selection state
+                is preserved across query changes — filtering only
+                affects visibility, not which boxes are ticked. */}
+            <div className="relative mb-2">
+              <Search className="size-4 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+              <Input
+                value={treeSearch}
+                onChange={(e) => setTreeSearch(e.target.value)}
+                placeholder="Search menus or actions… (e.g. “isJobAssign”, “Manage Jobs”)"
+                className="pl-8 pr-8"
+              />
+              {treeSearch && (
+                <button
+                  type="button"
+                  onClick={() => setTreeSearch('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  aria-label="Clear search"
+                >
+                  <X className="size-3.5" />
+                </button>
+              )}
+            </div>
             <div className="border rounded divide-y">
               {tree.roots.length === 0 && (
                 <div className="px-3 py-4 text-sm text-muted-foreground text-center">
                   {menus.length === 0 ? 'Loading menus…' : 'No top-level menus found.'}
                 </div>
               )}
-              {tree.roots.map((parent) => {
+              {/* Empty-search-results state — only fires when there are
+                  roots but the query filtered every one out. */}
+              {tree.roots.length > 0 && treeQuery && !tree.roots.some(menuOrChildrenMatch) && (
+                <div className="px-3 py-4 text-sm text-muted-foreground text-center">
+                  No menus or actions match &ldquo;{treeSearch}&rdquo;.
+                </div>
+              )}
+              {tree.roots.filter(menuOrChildrenMatch).map((parent) => {
                 const children = tree.childrenByParent.get(parent.menu_id) ?? [];
                 const parentChecked = selectedMenus.has(parent.menu_id);
                 const allKidsChecked = children.length > 0 && children.every((c) => selectedMenus.has(c.menu_id));
@@ -949,7 +1024,17 @@ function RoleFormModal({
                       selected={selectedActions}
                       onToggle={toggleAction}
                     />
-                    {children.map((child) => {
+                    {children
+                      // When searching, only render the children whose own
+                      // name or whose action's name/key matches. Parent
+                      // is already known to match (via menuOrChildrenMatch
+                      // above), so the parent row still shows for context.
+                      .filter((child) => {
+                        if (!treeQuery) return true;
+                        const m = menuMatchesQuery(child);
+                        return m.selfMatch || m.actionMatch;
+                      })
+                      .map((child) => {
                       const childChecked = selectedMenus.has(child.menu_id);
                       return (
                         <div key={child.menu_id} className="border-t border-slate-100">

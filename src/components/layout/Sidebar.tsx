@@ -7,6 +7,7 @@ import { usePathname, useSearchParams } from 'next/navigation';
 import {
   Home, Briefcase, UserCircle2, Users, Building2,
   BarChart3, Settings, Coins, ShoppingBag, Wallet, User, MapPin,
+  Megaphone,
   ChevronRight, ChevronDown, Circle, type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -76,6 +77,10 @@ type TreeNode = MenuRow & { children: TreeNode[] };
  */
 const URL_MAP: Record<string, string> = {
   'home':                  '/dashboard',
+  // Notice Board — broadcast-messages management surface added 2026-05-22.
+  // Tbl_menu row seeded with url='noticeBoard'; the page lives at
+  // /notice-board and gates Compose/Publish/Archive on isNoticeManage.
+  'noticeBoard':           '/notice-board',
   'job':                   '/jobs',
   'uploadJobByExcel':      '/jobs/upload',
   // Distinct ?focus param so isRouteActive() can tell Manage Jobs and
@@ -216,6 +221,7 @@ const URL_MAP: Record<string, string> = {
 // without a custom icon (falls back to a circle bullet).
 const PARENT_META: Record<string, { icon: LucideIcon }> = {
   'Home':              { icon: Home },
+  'Notice Board':      { icon: Megaphone },
   'Jobs':              { icon: Briefcase },
   'My Orders':         { icon: ShoppingBag },
   'Customers':         { icon: Users },

@@ -307,6 +307,11 @@ export default function JobsPage() {
         reopen: filters.reopen || undefined,
         dueTo:  filters.dueTo  || undefined,
         zonalId: filters.zonalId || undefined,
+        // Dashboard AttentionSummary drill-down tabs carry these.
+        // BE list endpoint clamps the result to "still actionable"
+        // for the chosen quotation status (see service.list()).
+        quotationStatus: tabDef?.quotationStatus,
+        requestedBefore: tabDef?.requestedBefore,
       });
       inflightRef.current.set(key, reqPromise);
       const r = await reqPromise;

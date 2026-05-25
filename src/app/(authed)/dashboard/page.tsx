@@ -8,10 +8,11 @@ import {
   Play, CheckCircle2, ShieldCheck, MessageSquare,
   type LucideIcon,
 } from 'lucide-react';
-import { Card, CardContent } from '@/components/ui/card';
 import { useFetchOnce } from '@/lib/hooks';
-import { formatEasyfixerName, statusColorClass, statusLabel } from '@/lib/utils';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
+import { NoticeStrip } from '@/components/notice/NoticeStrip';
+import { UpcomingEvents } from '@/components/dashboard/UpcomingEvents';
+import { AttentionSummary } from '@/components/dashboard/AttentionSummary';
 
 /*
  * Dashboard fetches now go through `useFetchOnce` (lib/hooks.ts) —
@@ -48,12 +49,10 @@ import { JobModal, type JobModalMode } from '@/components/job/JobModal';
  * straight into the filtered list.
  */
 
-type JobRow = {
-  job_id: number; job_status: number; job_type: string; customer_name: string;
-  client_name: string; city_name: string; easyfixer_name: string | null;
-  created_date_time: string; requested_date_time: string;
-};
-type ListResp = { items: JobRow[]; total: number };
+// JobRow / ListResp removed 2026-05-22: Recent Jobs is no longer
+// rendered on the dashboard; the AttentionSummary card replaces it.
+// If a future surface needs the recent-jobs query, restore both the
+// type and the recentFetch/state from git history.
 
 // Card config — order mirrors the funnel. Tint uses the legacy palette vibe
 // (warm orange → amber → slate-blue → sky → teal → green) so the flow reads
@@ -268,9 +267,7 @@ export default function DashboardPage() {
     followup: 0, unconfirmed: 0, pendingScheduling: 0, pendingAppAck: 0,
     pendingToStart: 0, pendingToClose: 0, auditComplete: 0, pendingFeedback: 0,
   });
-  const [recent, setRecent] = useState<JobRow[]>([]);
   const [loadingStats, setLoadingStats] = useState(true);
-  const [loadingRecent, setLoadingRecent] = useState(true);
 
   /*
    * Book New Call deep-link handler — the Navbar's button pushes
@@ -295,14 +292,14 @@ export default function DashboardPage() {
   }
 
   /*
-   * Both fetches now go through `useFetchOnce`. The hook keys by the
-   * exact URL string, so:
-   *   - `/admin/jobs/counts` here SHARES its cache entry with the
-   *     identical key in the Navbar — one round-trip serves both.
-   *   - `/admin/jobs?limit=8` is dashboard-exclusive but still
-   *     benefits from Strict-Mode dedup + 30s TTL on remount.
-   * The `setStats` / `setRecent` derived-state translation happens
-   * in two useEffects below that watch the hook output.
+   * /admin/jobs/counts goes through `useFetchOnce` (lib/hooks.ts) — the
+   * hook keys by URL so this SHARES its cache entry with the Navbar's
+   * identical call. One round-trip serves both. The setStats translation
+   * happens in the useEffect below.
+   *
+   * /admin/jobs?limit=8 (Recent Jobs) was retired 2026-05-22 in favour
+   * of the AttentionSummary card, which has its own /attention-summary
+   * fetch wired internally.
    */
   const countsFetch = useFetchOnce<{
     total: number;
@@ -310,7 +307,6 @@ export default function DashboardPage() {
     bookedUnassigned: number;
     bookedAssigned: number;
   }>('/admin/jobs/counts');
-  const recentFetch = useFetchOnce<ListResp>('/admin/jobs?limit=8');
 
   useEffect(() => {
     if (countsFetch.loading) return;
@@ -342,86 +338,61 @@ export default function DashboardPage() {
     setLoadingStats(false);
   }, [countsFetch.loading, countsFetch.data]);
 
-  useEffect(() => {
-    if (recentFetch.loading) return;
-    if (recentFetch.data) setRecent(recentFetch.data.items);
-    setLoadingRecent(false);
-  }, [recentFetch.loading, recentFetch.data]);
-
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Dashboard</h1>
-        <p className="text-sm text-muted-foreground">Operations snapshot — click any card to open the filtered job list</p>
-      </div>
+    <div className="space-y-4">
+      {/* Dashboard title removed per UI ops 2026-05-22 — the route is already
+          named "Home" in the sidebar and the funnel cards make the operational
+          context obvious. Recovering vertical space lets the Notice Board
+          strip + cards + Recent Jobs all sit above the fold on a 1080p monitor. */}
+
+      {/* Notice Board strip — full-width band at the very top. Collapsed
+          by default per spec; expand surfaces active notices targeted to
+          the CRM surface. Visibility is universal (any admin user reads
+          notices); the "+ New Notice" / "View All" affordances inside
+          gate themselves on the isNoticeManage action key. */}
+      <NoticeStrip />
 
       {/*
-        * Data-flow funnel — 8 cards in a single horizontal row at all
-        * viewports above mobile. Each card is uniform `h-32` (set on
-        * the tile component) and `grid-cols-8` divides the row equally
-        * so the widths match too. On very narrow viewports the grid
-        * falls back to `grid-cols-2` then `grid-cols-4` so the row
-        * remains usable on tablets/phones, but at desktop widths the
-        * operator gets the full funnel at a glance.
-        *
-        * Overflowing titles/sub-text now use MarqueeOnHover (see the
-        * FlowCardTile helper above) — hover scrolls the long string
-        * horizontally instead of truncating it behind an ellipsis.
+        * Two-column layout below the strip:
+        *   - Left column (flex-1): the 8 status funnel cards reflowed to
+        *     2×4 + Recent Jobs underneath.
+        *   - Right column (lg:w-72): Upcoming Events rail driven by the
+        *     /admin/holidays/upcoming endpoint (Nager.Date-backed).
+        * On md and below the right column stacks underneath so the
+        * dashboard stays readable on tablets/phones.
         */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
-        {FLOW.map((card) => (
-          <FlowCardTile key={card.title} card={card} value={stats[card.statKey]} loading={loadingStats} />
-        ))}
-      </div>
-
-      <Card>
-        <CardContent className="p-0">
-          <div className="flex items-center justify-between p-5 pb-3">
-            <div>
-              <h2 className="text-base font-semibold">Recent Jobs</h2>
-              <p className="text-xs text-muted-foreground">Latest 8 jobs across the platform</p>
-            </div>
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_18rem] gap-4 items-start">
+        <div className="space-y-4 min-w-0">
+          {/*
+            * Funnel cards — now reflowed from a 1-row 8-up to a 2-row 4-up
+            * grid (`md:grid-cols-4`). Cards become slightly wider since
+            * the right rail steals horizontal space; existing marquee-on-
+            * overflow behaviour handles the new dimensions gracefully.
+            */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 gap-3">
+            {FLOW.map((card) => (
+              <FlowCardTile key={card.title} card={card} value={stats[card.statKey]} loading={loadingStats} />
+            ))}
           </div>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Job #</th><th>Client</th><th>Customer</th><th>City</th>
-                <th>Tech</th><th>Status</th><th>Created</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loadingRecent && Array.from({ length: 5 }).map((_, i) => (
-                <tr key={`sk-${i}`}>
-                  {Array.from({ length: 7 }).map((_, c) => (
-                    <td key={c}><div className="h-3 w-24 rounded bg-muted animate-pulse" /></td>
-                  ))}
-                </tr>
-              ))}
-              {!loadingRecent && recent.length === 0 && (
-                <tr><td colSpan={7} className="text-center text-muted-foreground py-8">No jobs yet</td></tr>
-              )}
-              {!loadingRecent && recent.map((j) => (
-                <tr key={j.job_id}>
-                  <td className="font-medium">#{j.job_id}</td>
-                  <td>{j.client_name ?? '—'}</td>
-                  <td>{j.customer_name ?? '—'}</td>
-                  <td>{j.city_name ?? '—'}</td>
-                  <td>{j.easyfixer_name ? formatEasyfixerName(j.easyfixer_name) : <span className="text-muted-foreground">unassigned</span>}</td>
-                  <td>
-                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${statusColorClass(j.job_status)}`}>
-                      {/* Use easyfixer_name presence as a proxy for tech assignment — the
-                          dashboard row doesn't carry fk_easyfixter_id directly, but the name
-                          comes from a LEFT JOIN on that FK, so null ⇔ no tech. */}
-                      {statusLabel(j.job_status, { assigned: !!j.easyfixer_name })}
-                    </span>
-                  </td>
-                  <td className="text-muted-foreground text-xs">{new Date(j.created_date_time).toLocaleDateString('en-IN')}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </CardContent>
-      </Card>
+
+          {/*
+           * Recent Jobs replaced with AttentionSummary (2026-05-22) per
+           * ops review: operators don't need a chronological activity
+           * list, they need "what action is mine right now?". The 5
+           * tiles each click through to a filtered job queue. The old
+           * Recent Jobs query (`/admin/jobs?limit=8`) is no longer fired
+           * from the dashboard; if a future surface needs it, restore
+           * the recentFetch+table block from git history.
+           */}
+          <AttentionSummary />
+        </div>
+
+        {/* Right rail — Upcoming Events. Fixed width on lg+; full-width
+            stacked below on md and smaller. */}
+        <div className="min-w-0">
+          <UpcomingEvents days={7} />
+        </div>
+      </div>
 
       {/* Book New Call modal — mounted here (not on /jobs) so the
           booking flow keeps the dashboard context behind it. Saving a
