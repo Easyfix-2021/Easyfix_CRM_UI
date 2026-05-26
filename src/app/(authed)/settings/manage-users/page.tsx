@@ -35,6 +35,7 @@ import { Switch } from '@/components/ui/switch';
 import { useCancelConfirm } from '@/lib/use-cancel-confirm';
 import { api, ApiError } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { showToast } from '@/components/ui/toast';
 import { useLookup } from '@/lib/use-lookup';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
@@ -1022,17 +1023,27 @@ function UserFormModal({
     }
 
     // Serialise the Sets back to CSV — matches legacy tbl_user storage.
-    // Sort by id so the persisted value is deterministic. The "All"
-    // toggles override the Set entirely and emit '0' as the sentinel.
-    const csvOrAll = (all: boolean, set: Set<number>) => {
+    // Sort by id so the persisted value is deterministic.
+    //
+    // "All" sentinel rules (per ops direction 2026-05-25):
+    //   1. The explicit "All" toggle emits '0' (existing behaviour).
+    //   2. If the operator picks every option ONE-BY-ONE without
+    //      toggling "All", we ALSO collapse to '0' so the stored
+    //      value matches semantic intent. Saves storage churn on
+    //      lookups that grow (e.g. a new city added later would
+    //      otherwise leave that user "behind"; with '0' they
+    //      inherit the new option automatically).
+    const csvOrAll = (all: boolean, set: Set<number>, total: number) => {
       if (all) return '0';
+      // Auto-collapse: full set === All
+      if (total > 0 && set.size >= total) return '0';
       const csv = Array.from(set).sort((a, b) => a - b).join(',');
       return csv || null;
     };
-    const manageCitiesCsv    = csvOrAll(citiesAll,    manageCities);
-    const manageClientsCsv   = csvOrAll(clientsAll,   manageClients);
-    const manageStatesCsv    = csvOrAll(statesAll,    manageStates);
-    const manageVerticalsCsv = csvOrAll(verticalsAll, manageVerticals);
+    const manageCitiesCsv    = csvOrAll(citiesAll,    manageCities,    cities.length);
+    const manageClientsCsv   = csvOrAll(clientsAll,   manageClients,   clients.length);
+    const manageStatesCsv    = csvOrAll(statesAll,    manageStates,    states.length);
+    const manageVerticalsCsv = csvOrAll(verticalsAll, manageVerticals, verticals.length);
 
     setSubmitting(true);
     try {
@@ -1064,6 +1075,16 @@ function UserFormModal({
           reporting_manager: reportingManager ? Number(reportingManager) : null,
         });
       }
+      // Success feedback via the shared bottom-centre toast — matches
+      // the convention used across the CRM (Notice Board, Manage Roles,
+      // Manage Clients). Inline `setError` stays for FAILURES so the
+      // operator sees them within the still-open modal.
+      // Title Case + no trailing period — matches the project-wide UI
+      // label-casing rule (memory `feedback_easyfix_label_casing`).
+      showToast({
+        variant: 'success',
+        message: isEdit ? 'User Updated' : 'User Created',
+      });
       onSaved();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Save failed');

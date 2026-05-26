@@ -190,13 +190,17 @@ function ApplyTab({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Filtered user list for the picker (free-text by name / email).
+  // Filtered user list for the picker — free-text matches against
+  // name / email / **role name**. Role search was requested by ops
+  // (2026-05-25) so an Admin can quickly bulk-edit "all Project
+  // Managers" without having to scroll the table.
   const filteredUsers = useMemo(() => {
     const q = userFilter.trim().toLowerCase();
     if (!q) return allUsers;
     return allUsers.filter((u) =>
       String(u.user_name || '').toLowerCase().includes(q)
-      || String(u.official_email || '').toLowerCase().includes(q),
+      || String(u.official_email || '').toLowerCase().includes(q)
+      || String(u.role_name || '').toLowerCase().includes(q),
     );
   }, [allUsers, userFilter]);
 
@@ -265,14 +269,28 @@ function ApplyTab({
       return;
     }
 
+    /*
+     * Auto-collapse "all selected one-by-one" → ALL_TOKEN.
+     * Matches the same rule in the per-user form (manage-users/page.tsx).
+     * `lookups.<x>` is the total set the operator could have picked
+     * from — comparing the CSV's id count to that total catches the
+     * case where they ticked every box without using the "All" toggle.
+     */
+    const countCsv = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean).length;
+    const totalVerticals = lookups?.verticals.length ?? 0;
+    const totalClients   = lookups?.clients.length   ?? 0;
+    const totalStates    = lookups?.states.length    ?? 0;
+    const totalCities    = lookups?.cities.length    ?? 0;
+    const isFull = (csv: string, total: number) => total > 0 && countCsv(csv) >= total;
+
     const fields: Record<string, unknown> = {};
-    if (verticalsAll) fields.manage_verticals = ALL_TOKEN;
+    if (verticalsAll || isFull(verticals, totalVerticals)) fields.manage_verticals = ALL_TOKEN;
     else if (verticals) fields.manage_verticals = verticals;
-    if (clientsAll) fields.manage_clients = ALL_TOKEN;
+    if (clientsAll || isFull(clients, totalClients)) fields.manage_clients = ALL_TOKEN;
     else if (clients) fields.manage_clients = clients;
-    if (statesAll) fields.manage_states = ALL_TOKEN;
+    if (statesAll || isFull(states, totalStates)) fields.manage_states = ALL_TOKEN;
     else if (states) fields.manage_states = states;
-    if (citiesAll) fields.manage_cities = ALL_TOKEN;
+    if (citiesAll || isFull(cities, totalCities)) fields.manage_cities = ALL_TOKEN;
     else if (cities) fields.manage_cities = cities;
     if (role)          fields.user_role        = Number(role);
     if (reportingHead) fields.reporting_manager = Number(reportingHead);
