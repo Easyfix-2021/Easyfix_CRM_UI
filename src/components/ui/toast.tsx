@@ -26,8 +26,12 @@ import { cn } from '@/lib/utils';
  *    - `loading`  — persists until explicitly dismissed or replaced.
  *                   Use for in-flight operations (>500ms).
  *    - `success`  — auto-dismisses after 4s.
- *    - `error`    — sticky until manually dismissed (operator must
- *                   acknowledge failures).
+ *    - `error`    — auto-dismisses after 6s (long enough to read, short
+ *                   enough that stacked failures don't block the page).
+ *                   Operator can still dismiss earlier via the close
+ *                   button. Was sticky until 2026-05-25 — ops feedback
+ *                   was that 403s/transient API errors piled up and
+ *                   covered the action buttons.
  *
  * 4. `showToast()` returns the toast id so the caller can dismiss
  *    or replace it explicitly. Common pattern for loading → success
@@ -87,11 +91,16 @@ export function ToastHost() {
         return [...filtered, t];
       });
       if (t.variant === 'success') {
-        // Auto-dismiss success after 4s. Loading + error stay until the
-        // caller dismisses (or until error close button is clicked).
+        // Auto-dismiss success after 4s. Loading still stays until the
+        // caller dismisses; error stacks were too aggressive at "sticky"
+        // (see header comment) so they auto-dismiss after 6s now.
         window.setTimeout(() => {
           setToasts((prev) => prev.filter((p) => p.id !== t.id));
         }, 4000);
+      } else if (t.variant === 'error') {
+        window.setTimeout(() => {
+          setToasts((prev) => prev.filter((p) => p.id !== t.id));
+        }, 6000);
       }
     };
     const onDismiss = (e: Event) => {
