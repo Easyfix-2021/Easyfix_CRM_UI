@@ -14,7 +14,7 @@
  * a UI picker once the tools lookup endpoint exists.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Hash, Search, Plus, Pencil, Trash2,
   AlertTriangle, ChevronDown, ChevronRight, Info,
@@ -25,7 +25,9 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { SearchMultiSelect } from '@/components/ui/search-multi-select';
 import { api, ApiError } from '@/lib/api';
+import { useFetch, useDebouncedValue } from '@/lib/hooks';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useLookup } from '@/lib/use-lookup';
 import { useMe } from '@/lib/auth-context';
@@ -54,14 +56,10 @@ export default function ManageServiceTypePage() {
   const { me } = useMe();
   const can = actionFlags(me, ['isServiceTypeAddNew', 'isServiceTypeEdit', 'isServiceTypeDelete']);
 
-  const [items, setItems] = useState<ServiceType[]>([]);
-  const [total, setTotal] = useState(0);
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<number | ''>('');
   const [includeInactive, setIncludeInactive] = useState(false);
   const [page, setPage] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<ServiceType | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [sortBy, setSortBy] = useState<SortKey>('service_type_name');
@@ -73,30 +71,26 @@ export default function ManageServiceTypePage() {
     setPage(0);
   }
 
-  const tRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    if (tRef.current) clearTimeout(tRef.current);
-    tRef.current = setTimeout(() => { setPage(0); void fetchList(); }, 300);
-    return () => { if (tRef.current) clearTimeout(tRef.current); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, categoryFilter, includeInactive]);
-  useEffect(() => { void fetchList(); /* eslint-disable-next-line */ }, [page, sortBy, sortDir]);
+  // Debounced search — replaces the hand-rolled setTimeout/clearTimeout
+  // pattern. Mandatory per memory `feedback_crm_ui_fetch_hooks`.
+  const debouncedSearch = useDebouncedValue(search, 300);
+  // Reset page to 0 whenever filters change (debouncedSearch handles its own delay).
+  useEffect(() => { setPage(0); }, [debouncedSearch, categoryFilter, includeInactive]);
 
-  async function fetchList() {
-    setLoading(true); setError(null);
-    try {
-      const p = new URLSearchParams();
-      if (search.trim()) p.set('q', search.trim());
-      if (categoryFilter) p.set('categoryId', String(categoryFilter));
-      if (includeInactive) p.set('includeInactive', 'true');
-      p.set('limit', String(PAGE_SIZE)); p.set('offset', String(page * PAGE_SIZE));
-      p.set('sortBy', sortBy); p.set('sortDir', sortDir);
-      const data = await api.get<ListResponse>(`/admin/service-types?${p}`);
-      setItems(data.items); setTotal(data.total);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Failed to load service types');
-    } finally { setLoading(false); }
-  }
+  const urlParams = new URLSearchParams();
+  if (debouncedSearch.trim()) urlParams.set('q', debouncedSearch.trim());
+  if (categoryFilter) urlParams.set('categoryId', String(categoryFilter));
+  if (includeInactive) urlParams.set('includeInactive', 'true');
+  urlParams.set('limit', String(PAGE_SIZE));
+  urlParams.set('offset', String(page * PAGE_SIZE));
+  urlParams.set('sortBy', sortBy);
+  urlParams.set('sortDir', sortDir);
+  const listUrl = `/admin/service-types?${urlParams.toString()}`;
+  const { data: listData, loading, error: fetchError, refetch } = useFetch<ListResponse>(listUrl);
+  const items: ServiceType[] = listData?.items ?? [];
+  const total = listData?.total ?? 0;
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { setError(fetchError); }, [fetchError]);
 
   async function handleDeactivate(t: ServiceType) {
     const ok = await confirm({
@@ -105,9 +99,11 @@ export default function ManageServiceTypePage() {
       confirmLabel: 'Deactivate', variant: 'destructive',
     });
     if (!ok) return;
-    try { await api.delete(`/admin/service-types/${t.service_type_id}`); void fetchList(); }
+    try { await api.delete(`/admin/service-types/${t.service_type_id}`); refetch(); }
     catch (e) { setError(e instanceof ApiError ? e.message : 'Deactivate failed'); }
   }
+  // Alias so the existing TypeFormModal `onSaved` prop continues to work.
+  const fetchList = refetch;
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
@@ -282,6 +278,29 @@ function TypeFormModal({ open, onClose, editing, categories, onSaved }: {
   const [active, setActive] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /* Tools multi-select (2026-05-26) — closes the deferred field. The
+     selection is stored as a CSV of tool_ids; on save we also build
+     `service_type_tool_names` (CSV of tool names) so the legacy
+     display column stays in sync. */
+  type Tool = { tool_id: number; tool_name: string };
+  const [tools, setTools] = useState<Tool[]>([]);
+  const [selectedToolIds, setSelectedToolIds] = useState<number[]>([]);
+
+  // Tools list — migrated to the mandatory shared `useFetch` (per memory
+  // `feedback_crm_ui_fetch_hooks`). `enabled` ties the request to modal
+  // visibility so it only fires when the operator actually opens the
+  // editor. Defensively tolerates either an array or `{ items, total }`
+  // envelope shape (the BE returns the envelope but old deployments
+  // returned raw arrays).
+  const { data: toolsData } = useFetch<Tool[] | { items?: Tool[] }>(
+    '/admin/tools?limit=500',
+    { enabled: open },
+  );
+  useEffect(() => {
+    if (!toolsData) return;
+    const arr: Tool[] = Array.isArray(toolsData) ? toolsData : (toolsData.items ?? []);
+    setTools(arr.map((t) => ({ tool_id: Number(t.tool_id), tool_name: String(t.tool_name) })));
+  }, [toolsData]);
 
   useEffect(() => {
     if (open) {
@@ -290,6 +309,8 @@ function TypeFormModal({ open, onClose, editing, categories, onSaved }: {
       setCatgId(editing?.service_catg_id ?? '');
       setDisplay(editing?.display ?? 1);
       setActive(editing ? editing.service_type_status === 1 : true);
+      const csv = (editing?.service_type_tools ?? '').split(',').map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0);
+      setSelectedToolIds(csv);
       setError(null);
     }
   }, [open, editing]);
@@ -301,11 +322,21 @@ function TypeFormModal({ open, onClose, editing, categories, onSaved }: {
     if (!catgId)      { setError('Service Category is required'); return; }
     setSubmitting(true);
     try {
+      // Build the tools CSV pair: ids + display names. Empty selection
+      // sends explicit empty strings so the BE clears any prior CSV
+      // rather than silently keeping it (the Joi schema accepts both).
+      const toolIdsCsv = selectedToolIds.join(',');
+      const toolNamesCsv = selectedToolIds
+        .map((id) => tools.find((t) => t.tool_id === id)?.tool_name)
+        .filter(Boolean)
+        .join(',');
       const body = {
         service_type_name: name.trim(),
         service_type_desc: desc.trim() || null,
         service_catg_id:   Number(catgId),
         display:           display === 1 ? 1 : 0,
+        service_type_tools: toolIdsCsv,
+        service_type_tool_names: toolNamesCsv,
         ...(isEdit ? { is_active: active } : {}),
       };
       if (isEdit) await api.patch(`/admin/service-types/${editing!.service_type_id}`, body);
@@ -357,6 +388,20 @@ function TypeFormModal({ open, onClose, editing, categories, onSaved }: {
               <option value={1}>Display To All</option>
               <option value={0}>Display Only To CRM</option>
             </select>
+          </div>
+          {/* Tools — multi-select sourced from /admin/tools. Stored as CSV
+              of tool_ids in `service_type_tools`; the legacy display
+              column `service_type_tool_names` is rebuilt at save time
+              from the picked rows so reports stay readable. */}
+          <div>
+            <label className="text-sm font-medium block mb-1">Tools</label>
+            <SearchMultiSelect
+              value={selectedToolIds.map(String)}
+              onChange={(next) => setSelectedToolIds((next as Array<string | number>).map(Number).filter((n) => Number.isFinite(n) && n > 0))}
+              placeholder="— Select tools —"
+              selectedLabel="tools"
+              options={tools.map((t) => ({ value: String(t.tool_id), label: t.tool_name }))}
+            />
           </div>
           {isEdit && (
             <label className="flex items-center gap-2 text-sm">

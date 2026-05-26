@@ -12,12 +12,22 @@
  */
 
 import Link from 'next/link';
+import { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import {
-  ShieldCheck, Webhook, FileSpreadsheet, ShieldAlert, Workflow, Database,
+  ShieldCheck, Webhook, FileSpreadsheet, ShieldAlert, Workflow, Database, FileText,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { SearchSelect } from '@/components/ui/search-select';
 import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
+import { useLookup } from '@/lib/use-lookup';
+import { api } from '@/lib/api';
+import { showToast } from '@/components/ui/toast';
 
 const ACTIONS = [
   {
@@ -65,6 +75,31 @@ const ACTIONS = [
 export default function AdminActionsPage() {
   const { me } = useMe();
   const visible = ACTIONS.filter((a) => !a.actionKey || hasAction(me, a.actionKey));
+  // RBAC for Generate Invoice — gated on either the read-side
+  // (`isFinanceView`) or the dedicated write flag (`isInvoiceGenerate`).
+  // No `|| true` short-circuit — users without either flag don't see
+  // the card AND, even if they deep-link via ?focus=generate-invoice,
+  // the dialog auto-open below short-circuits to a no-op because the
+  // card isn't rendered.
+  const canFinance = hasAction(me, 'isFinanceView') || hasAction(me, 'isInvoiceGenerate');
+  // Legacy sidebar URL_MAP routes generateClientInvoice → /admin-actions?focus=generate-invoice
+  // — auto-open the dialog when that param is present.
+  const sp = useSearchParams();
+  const wantsInvoice = sp.get('focus') === 'generate-invoice';
+  const [invoiceOpen, setInvoiceOpen] = useState(false);
+  const invoiceCardRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    // Only auto-open the dialog when the user actually has the permission.
+    // Otherwise deep-linking ?focus=generate-invoice would silently open
+    // a modal the user can't submit through.
+    if (wantsInvoice && canFinance) {
+      setInvoiceOpen(true);
+      const t = setTimeout(() => {
+        invoiceCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 100);
+      return () => clearTimeout(t);
+    }
+  }, [wantsInvoice, canFinance]);
   return (
     <div className="space-y-4">
       <div>
@@ -104,7 +139,122 @@ export default function AdminActionsPage() {
             </Link>
           );
         })}
+        {/* Generate Client Invoice — closes legacy URL_MAP gap. Opens
+            a dialog that POSTs to /admin/finance/invoices/generate
+            with { clientId, from, to }. Sidebar deep-link supported
+            via ?focus=generate-invoice (auto-opens the dialog). */}
+        {canFinance && (
+          <div ref={invoiceCardRef}>
+            <button
+              type="button"
+              onClick={() => setInvoiceOpen(true)}
+              className="w-full text-left"
+            >
+              <Card className={
+                'hover:border-primary hover:shadow-sm transition-colors h-full '
+                + (wantsInvoice ? 'ring-2 ring-sky-400' : '')
+              }>
+                <CardContent className="p-4 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <div className="h-8 w-8 rounded-md bg-primary/10 text-primary grid place-items-center">
+                      <FileText className="h-4 w-4" />
+                    </div>
+                    <h2 className="font-medium flex-1">Generate Client Invoice</h2>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Roll up completed jobs for a client between two dates into a new invoice draft. Calls
+                    <code className="mx-1">/admin/finance/invoices/generate</code> and returns the new invoice id.
+                  </p>
+                </CardContent>
+              </Card>
+            </button>
+          </div>
+        )}
       </div>
+      {canFinance && <GenerateInvoiceDialog open={invoiceOpen} onClose={() => setInvoiceOpen(false)} />}
     </div>
+  );
+}
+
+/*
+ * GenerateInvoiceDialog — three-field form (client + date range) that
+ * posts to /admin/finance/invoices/generate. On success, surfaces the
+ * new invoice id + a deep link to /finance for follow-up actions
+ * (PDF/Excel/payment recording). Failures bubble through showToast.
+ */
+function GenerateInvoiceDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const lookup = useLookup();
+  const [clientId, setClientId] = useState('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ invoiceId: number; jobCount: number; totalAmount: number } | null>(null);
+
+  async function submit() {
+    if (!clientId || !from || !to) {
+      showToast({ variant: 'error', message: 'Please select Client + From + To dates' });
+      return;
+    }
+    setBusy(true); setResult(null);
+    try {
+      const r = await api.post<{ data: { invoiceId: number; jobCount: number; totalAmount: number } }>(
+        '/admin/finance/invoices/generate',
+        { clientId: Number(clientId), from, to },
+      );
+      const data = (r as unknown as { data?: typeof result; invoiceId?: number; jobCount?: number; totalAmount?: number });
+      // Service returns either modernOk envelope `{ data: {...} }` or
+      // the flat row — handle both shapes defensively.
+      const payload = data?.data ?? (data as { invoiceId: number; jobCount: number; totalAmount: number });
+      setResult(payload);
+      showToast({ variant: 'success', message: 'Invoice Generated' });
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Failed' });
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) { onClose(); setResult(null); } }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Generate Client Invoice</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 p-4">
+          <div className="space-y-1">
+            <Label>Client *</Label>
+            <SearchSelect
+              value={clientId}
+              onChange={(v) => setClientId(String(v))}
+              options={lookup.clients.map((c) => ({ value: String(c.client_id), label: c.client_name }))}
+              placeholder="— Select a client —"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
+              <Label>From *</Label>
+              <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label>To *</Label>
+              <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+            </div>
+          </div>
+          {result && (
+            <div className="rounded border bg-emerald-50 border-emerald-200 p-3 text-sm space-y-1">
+              <div><strong>Invoice #{result.invoiceId}</strong> created.</div>
+              <div className="text-xs">{result.jobCount} jobs · ₹{Number(result.totalAmount || 0).toFixed(2)} total.</div>
+              <div className="text-xs mt-1">
+                <Link href="/finance" className="text-sky-700 underline">Open Finance section</Link> to download PDF or record payment.
+              </div>
+            </div>
+          )}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => onClose()}>Close</Button>
+            <Button onClick={submit} disabled={busy || !clientId || !from || !to}>
+              {busy ? 'Generating…' : 'Generate Invoice'}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

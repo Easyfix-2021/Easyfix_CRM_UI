@@ -18,6 +18,8 @@ import { useLookup } from '@/lib/use-lookup';
 import { cn } from '@/lib/utils';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
+import { useConfirm } from '@/components/ui/confirm-dialog';
+import { showToast } from '@/components/ui/toast';
 
 /*
  * Manage Deep Skills — Service Category → Service Type → Deep Skill → Options.
@@ -61,6 +63,7 @@ const PRESET_OPTIONS = ['Installation', 'Repair', 'Product Servicing'] as const;
 export default function DeepSkillsSettingsPage() {
   const lk = useLookup();
   const { me } = useMe();
+  const confirm = useConfirm();
   // Permission gating — `is{Entity}{Verb}` convention. Needs corresponding
   // menu_action rows seeded + assigned to Admin via Manage Roles.
   const can = actionFlags(me, ['isDeepSkillAddNew', 'isDeepSkillEdit']);
@@ -162,12 +165,19 @@ export default function DeepSkillsSettingsPage() {
   function openEdit(s: DeepSkill) { setEditorRecord(s); setEditorOpen(true); }
 
   async function deactivate(s: DeepSkill) {
-    if (!confirm(`Deactivate "${s.deepskill_name}"? Technicians already mapped to it keep their assignment; new selections won't offer it.`)) return;
+    const ok = await confirm({
+      title: `Deactivate "${s.deepskill_name}"?`,
+      description: 'Technicians already mapped to it keep their assignment; new selections won\'t offer it.',
+      confirmLabel: 'Deactivate',
+      variant: 'destructive',
+    });
+    if (!ok) return;
     try {
       await api.delete(`/admin/deep-skills/${s.deepskill_id}`);
+      showToast({ variant: 'success', message: 'Deep Skill Deactivated' });
       loadSkills();
     } catch (e) {
-      alert(e instanceof ApiError ? e.message : 'Deactivation failed');
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Deactivation failed' });
     }
   }
 

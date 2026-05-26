@@ -1,11 +1,15 @@
 'use client';
 
 import * as React from 'react';
-import { Phone } from 'lucide-react';
+import { Phone, Pencil } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
 import { formatDate, statusColorClass, statusLabel } from '@/lib/utils';
 import { maskMobile } from '@/lib/format';
 import { CallableMobile } from '@/components/calls/CallButton';
+import { Button } from '@/components/ui/button';
+import { useMe } from '@/lib/auth-context';
+import { actionFlags } from '@/lib/permissions';
+import { JobAddressEditDialog } from './JobModal';
 
 /*
  * JobTransactionView — read-only, single-page replica of the legacy
@@ -125,6 +129,11 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
   const [data, setData] = React.useState<TransactionResp | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
+  // Local refetch counter — bumped by the Edit Address dialog on Save so
+  // the page reflects the new address without forcing the operator to
+  // close + reopen the modal.
+  const [bump, setBump] = React.useState(0);
+  const refreshFn = React.useCallback(() => setBump((b) => b + 1), []);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -134,7 +143,7 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
       .catch((e) => { if (!cancelled) setError(e instanceof ApiError ? e.message : 'Failed to load'); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [jobId]);
+  }, [jobId, bump]);
 
   if (loading) {
     return <div className="p-8 text-center text-sm text-muted-foreground">Loading job transaction…</div>;
@@ -300,7 +309,13 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
         </Card>
 
         <Card>
-          <div className="text-sm font-semibold text-slate-700 mb-2">Customer Details</div>
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-sm font-semibold text-slate-700">Customer Details</div>
+            {/* Edit Address — gated by isJobEdit. Available on the
+                Unconfirmed view too (status=9) so admins can fix the
+                address before promoting to BOOKED. */}
+            <EditAddressInTransaction jobRow={j} onSaved={refreshFn} />
+          </div>
           <DLRow label="Name:">{fmt(j.customer_name)}</DLRow>
           <DLRow label="Number:">
             <CallableMobile jobId={Number(j.job_id)} mobile={j.customer_mob_no} />
@@ -477,6 +492,39 @@ function ImageCount({ count }: { count: number | undefined }) {
     <span className="inline-flex items-center rounded bg-sky-100 text-sky-800 px-2 py-0.5 text-xs">
       📷 {count}
     </span>
+  );
+}
+
+/*
+ * EditAddressInTransaction — gated Edit Address affordance for the
+ * Unconfirmed (status=9) job transaction view. Same shape as the
+ * JobModal Summary tab — Pencil icon button that opens the shared
+ * JobAddressEditDialog. Gated by `isJobEdit` (seed migration
+ * 2026-05-26-add-job-edit-action.sql adds the action key).
+ */
+function EditAddressInTransaction({ jobRow, onSaved }: {
+  jobRow: Record<string, unknown>; onSaved: () => void;
+}) {
+  const { me } = useMe();
+  const can = actionFlags(me, ['isJobEdit']);
+  const [open, setOpen] = React.useState(false);
+  if (!can.isJobEdit) return null;
+  return (
+    <>
+      <Button size="sm" variant="outline" onClick={() => setOpen(true)} className="!h-7 !px-2 text-xs">
+        <Pencil className="size-3 mr-1" /> Edit Address
+      </Button>
+      {open && (
+        // Cast through `unknown` — JobAddressEditDialog only reads a
+        // handful of address-shape fields off the job object, so the
+        // partial type used here is sufficient.
+        <JobAddressEditDialog
+          job={jobRow as unknown as Parameters<typeof JobAddressEditDialog>[0]['job']}
+          onClose={() => setOpen(false)}
+          onSaved={() => { setOpen(false); onSaved(); }}
+        />
+      )}
+    </>
   );
 }
 

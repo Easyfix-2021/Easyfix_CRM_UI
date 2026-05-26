@@ -12,6 +12,7 @@ import { useLookup } from '@/lib/use-lookup';
 import { cn } from '@/lib/utils';
 import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 /*
  * Manage Auto Allocations
@@ -45,6 +46,7 @@ type ClientLite = { client_id: number; client_name: string };
 
 export default function AutoAllocationPage() {
   const lk = useLookup();
+  const confirm = useConfirm();
   const [scope, setScope] = useState<'global' | number>('global');
   const [overridden, setOverridden] = useState<ClientLite[]>([]);
   const [settings, setSettings] = useState<Setting[] | null>(null);
@@ -185,7 +187,13 @@ export default function AutoAllocationPage() {
 
   async function clearOverride(s: Setting) {
     if (scope === 'global') return;
-    if (!confirm(`Remove this override? "${titleCase(s.key)}" will revert to the global default.`)) return;
+    const ok = await confirm({
+      title: 'Remove This Override?',
+      description: `"${titleCase(s.key)}" will revert to the global default.`,
+      confirmLabel: 'Remove',
+      variant: 'destructive',
+    });
+    if (!ok) return;
     setSaving(s.id); setError(null); setToast(null);
     try {
       await api.delete(`/admin/auto-allocation/override?clientId=${scope}&settingId=${s.id}`);

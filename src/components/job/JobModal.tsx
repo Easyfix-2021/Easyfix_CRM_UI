@@ -1,8 +1,9 @@
 'use client';
 
 import * as React from 'react';
-import { useEffect, useState } from 'react';
-import { Sparkles, Search, CalendarCheck, History, Eye, Plus, X, Pencil, CalendarPlus, CheckCircle2 } from 'lucide-react';
+import { useEffect, useMemo, useState, Fragment } from 'react';
+import { useFetch } from '@/lib/hooks';
+import { Sparkles, Search, CalendarCheck, History, Eye, Plus, X, Pencil, CalendarPlus, CheckCircle2, BarChart3, Trash2, RotateCcw } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
@@ -12,6 +13,7 @@ import { SearchSelect } from '@/components/ui/search-select';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
 import { Switch } from '@/components/ui/switch';
 import { AddressAutocomplete } from '@/components/ui/address-autocomplete';
+import { AddressPickerWithMap, type AddressValue } from '@/components/ui/address-picker-with-map';
 import { AddressEditDialog, type EditableAddress } from './AddressEditDialog';
 import { JobTransactionView } from './JobTransactionView';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
@@ -21,6 +23,7 @@ import { formatDate, formatEasyfixerName, statusColorClass, statusLabel } from '
 import { maskMobile } from '@/lib/format';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { showToast, dismissToast } from '@/components/ui/toast';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 
@@ -61,6 +64,14 @@ const ST = { BOOKED: 0, SCHEDULED: 1, IN_PROGRESS: 2, COMPLETED: 3, COMPLETED_AL
 // directly assign/cancel from the View modal. Legacy CRM behaviour.
 const canAssign         = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.ENQUIRY, ST.REVISIT].includes(s as never);
 const canChangeOwner    = (s: number) => ![ST.COMPLETED, ST.COMPLETED_ALT, ST.CANCELLED].includes(s as never);
+/*
+ * isJobClosed — true when the job has reached a terminal-completion
+ * state. Operators may still VIEW closed jobs but cannot edit their
+ * services or materials. CANCELLED is intentionally NOT considered
+ * "closed" here because ops sometimes recover cancelled orders by
+ * editing them back to a workable state.
+ */
+const isJobClosed = (s: number) => [ST.COMPLETED, ST.COMPLETED_ALT].includes(s as never);
 const canStart          = (s: number) => [ST.SCHEDULED, ST.REVISIT].includes(s as never);
 const canComplete       = (s: number) => s === ST.IN_PROGRESS;
 const canCancel         = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.IN_PROGRESS, ST.ENQUIRY, ST.REVISIT].includes(s as never);
@@ -141,12 +152,29 @@ export function JobModal({
   const fetchQuery = (mode === 'edit' || mode === 'confirm') ? { unmasked: 'true' } : undefined;
   useEffect(() => {
     if (!open) return;
-    if (!jobId) { setJob(null); return; }
-    setJob(null);            // hide stale header immediately
+    /*
+     * Create-flow post-save symptom (2026-05-25 fix): when the user
+     * books a new call, `onSaved(saved)` sets `job` to the freshly-
+     * created row and flips `mode` to 'view'. The mode flip re-runs
+     * this effect, but `jobId` (a prop) is still undefined because
+     * the parent hasn't re-mounted with the new id yet — which used
+     * to hit the `setJob(null)` line and leave the modal blank.
+     *
+     * Fix: if we already have an in-memory `job` (set by the save
+     * callback) AND the prop `jobId` is missing, use that job's id
+     * to drive the refetch instead. Falls back to the prop when
+     * present so plain Edit-flow re-fetches still work.
+     */
+    const effectiveJobId = jobId ?? (job?.job_id != null ? Number(job.job_id) : undefined);
+    if (!effectiveJobId) { setJob(null); return; }
+    // Hide stale header immediately ONLY when we're navigating to a
+    // genuinely different job. If we just got `saved` from the create
+    // callback, keep it visible while the fresh GET resolves.
+    if (jobId && jobId !== job?.job_id) setJob(null);
     setError(null);
     setLoading(true);
     (async () => {
-      try { setJob(await api.get<Job>(`/admin/jobs/${jobId}`, fetchQuery)); }
+      try { setJob(await api.get<Job>(`/admin/jobs/${effectiveJobId}`, fetchQuery)); }
       catch { setError('Could not load job details'); }
       finally { setLoading(false); }
     })();
@@ -263,7 +291,7 @@ export function JobModal({
             // Images/etc. view that ops uses for active jobs.
             Number(job.job_status) === 9
               ? <JobTransactionView jobId={Number(job.job_id)} />
-              : <ViewBody job={job} />
+              : <ViewBody job={job} onRefresh={refresh} />
           )}
           {/* Mobile-first gate for the CREATE flow. Mirrors legacy
               `addEditJob.vm` which opened with a single mobile-number
@@ -301,7 +329,21 @@ export function JobModal({
             <JobForm
               mode={mode}
               initial={job}
-              onCancel={onClose}
+              /*
+               * Cancel returns the operator to the View modal (where
+               * they came from) instead of closing the whole drawer.
+               * The previous `onClose` handler dismissed both the Edit
+               * form AND the parent View, forcing the operator to
+               * navigate back through the list. Edit-mode reverts to
+               * View; Confirm-mode (which is opened standalone from
+               * the Unconfirmed list) keeps the original close-on-
+               * cancel since there's no underlying view to fall back
+               * to.
+               */
+              onCancel={() => {
+                if (mode === 'edit') setMode('view');
+                else onClose();
+              }}
               onSaved={(saved, opts) => {
                 // Outcome-only path (Unreachable / Enquiry): close the
                 // modal immediately and notify the parent to refresh
@@ -385,6 +427,29 @@ export function JobModal({
 
 type BusyKey = 'start' | 'complete' | 'cancel' | 'incomplete' | 'assign' | 'owner' | 'confirm' | null;
 
+/*
+ * collectedByCode — coerce the form's `collected_by` field (a
+ * human-readable label like "Easyfix" / "Easyfixer" / "Client", per
+ * the legacy default at line 5610) into the integer enum tbl_job
+ * expects. Returns `undefined` for unknown values so the BE falls
+ * back to whatever default it prefers.
+ *
+ *   1 = Easyfixer (technician collects)
+ *   2 = Easyfix   (operator/CRM collects)
+ *   3 = Client    (client collects)
+ */
+function collectedByCode(label: unknown): number | undefined {
+  if (label == null || label === '') return undefined;
+  if (typeof label === 'number') return label;
+  const s = String(label).trim().toLowerCase();
+  if (s === 'easyfixer') return 1;
+  if (s === 'easyfix')   return 2;
+  if (s === 'client')    return 3;
+  // Allow numeric strings too (e.g. "2") for forward-compat.
+  const n = Number(s);
+  return Number.isFinite(n) ? n : undefined;
+}
+
 function ActionBar({ job, jobId, onChanged, onEdit }: {
   job: Job; jobId: number; onChanged: () => void; onEdit: () => void;
 }) {
@@ -434,7 +499,14 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
           carries no Call button — keeps the lifecycle controls
           (Edit / Assign / Start / Complete / Cancel) visually distinct
           from the contact-the-customer action. */}
-      {can.isJobEdit && <Button size="sm" variant="outline" onClick={onEdit}>Edit</Button>}
+      {/*
+        * Edit button — kept visible until the job is CLOSED
+        * (status 3/5 COMPLETED). The Edit modal carries the
+        * services + materials affordances; gating it here is the
+        * single source of truth for "can the operator edit
+        * services / materials" until-closed.
+        */}
+      {can.isJobEdit && !isJobClosed(s) && <Button size="sm" variant="outline" onClick={onEdit}>Edit</Button>}
       {/* Confirm & Schedule for Unconfirmed orders is exposed as a dedicated
           modal mode launched from the list row (purple CalendarCheck icon),
           not a button in this action bar. That matches the legacy flow where
@@ -459,9 +531,22 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
         </Button>
       )}
       {canChangeOwner(s)    && can.isJobEdit && <Button size="sm" variant="outline" onClick={() => setOwnerOpen(true)}>Change Owner</Button>}
-      {can.isJobEdit && <Button size="sm" variant="outline" onClick={() => setRescheduleOpen(true)}>Reschedule</Button>}
+      {/* Reschedule only makes sense AFTER the job has been assigned a
+          slot (SCHEDULED, status=1) and BEFORE the technician starts
+          (status >= IN_PROGRESS would conflict with the in-flight job).
+          Reduced from "any non-closed status" to status===SCHEDULED
+          per 2026-05-26 ops feedback. Each reschedule writes a row to
+          tbl_job_comment with appointment_on set (the existing comment
+          POST already does this), which the JobRescheduleHistory
+          component surfaces in the Summary tab. */}
+      {can.isJobEdit && s === ST.SCHEDULED && <Button size="sm" variant="outline" onClick={() => setRescheduleOpen(true)}>Reschedule</Button>}
       {can.isJobEdit && <Button size="sm" variant="outline" onClick={() => setDescOpen(true)}>Edit Description</Button>}
-      {can.isJobEdit && <Button size="sm" variant="outline" onClick={() => setFeedbackOpen(true)}>Feedback</Button>}
+      {/* Feedback is only relevant after the job has reached a terminal
+          state — COMPLETED (3 or 5) or CANCELLED (6). Logging customer
+          feedback against an in-progress job lets ops capture sentiment
+          before the work is done, which legacy operators flagged as
+          mistake-prone. */}
+      {can.isJobEdit && (isJobClosed(s) || s === ST.CANCELLED) && <Button size="sm" variant="outline" onClick={() => setFeedbackOpen(true)}>Feedback</Button>}
       {canStart(s)          && can.isJobStatusChange && <LoadBtn size="sm" variant="outline" loading={busy === 'start'}      onClick={() => doStatus('start', ST.IN_PROGRESS)}>Start</LoadBtn>}
       {canComplete(s)       && can.isJobStatusChange && <LoadBtn size="sm" variant="outline" loading={busy === 'complete'}   onClick={() => doStatus('complete', ST.COMPLETED)}>Complete</LoadBtn>}
       {canCancel(s)         && can.isJobCancel       && <Button size="sm" variant="destructive" onClick={() => setCancelOpen(true)}>Cancel</Button>}
@@ -493,10 +578,36 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
         initialDate={String(job.requested_date_time ?? '')}
         initialSlot={String(job.time_slot ?? '')}
         onSubmit={async (date, slot) => {
+          // Two writes per reschedule:
+          //   1. PATCH the job's scheduled date + slot.
+          //   2. POST a tbl_job_comment row with appointment_on=new
+          //      date and comment_on=2 (the "Reschedule" code; same
+          //      shape the legacy CRM used). The Summary tab's
+          //      JobRescheduleHistory component filters tbl_job_comment
+          //      rows where appointment_on IS NOT NULL — without this
+          //      POST the rescheduling trail stays empty even though
+          //      the requested_date_time updates.
           await api.patch(`/admin/jobs/${jobId}`, {
             requested_date_time: date,
             time_slot: slot || null,
           });
+          try {
+            await api.post(`/admin/jobs/${jobId}/comments`, {
+              comments: `Rescheduled to ${date}${slot ? ` (${slot})` : ''}`,
+              comment_on: 2,                 // legacy "reschedule" comment code
+              appointment_on: date,          // anchors the trail row
+            });
+          } catch (e) {
+            // Non-fatal — the PATCH already succeeded. Surface a soft
+            // warning so the operator knows the history won't show
+            // this entry, but don't roll back the reschedule itself.
+            showToast({
+              variant: 'error',
+              message: e instanceof Error
+                ? `Rescheduled, but history entry failed: ${e.message}`
+                : 'Rescheduled, but history entry failed',
+            });
+          }
           setRescheduleOpen(false); onChanged();
         }}
       />
@@ -528,7 +639,7 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
 
 // ─── View body (tabbed read-only display) ────────────────────────────────────
 
-function ViewBody({ job }: { job: Job }) {
+function ViewBody({ job, onRefresh }: { job: Job; onRefresh?: () => void }) {
   const images = Array.isArray((job as Record<string, unknown>).images)
     ? ((job as Record<string, unknown>).images as Array<Record<string, unknown>>)
     : [];
@@ -546,27 +657,25 @@ function ViewBody({ job }: { job: Job }) {
       </TabsList>
 
       <TabsContent value="summary">
-        <div className="grid md:grid-cols-2 gap-5">
+        {/* 3-column layout (2026-05-26 per ops): packs the four short
+            DlCards (Customer / Client / Job meta / Audit & History) into
+            a denser grid so the page doesn't read as half-empty. Address
+            spans the full second row since its values are long. On
+            narrower screens the grid collapses gracefully (lg→md→sm). */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           <DlCard title="Customer" rows={[
             ['Name', job.customer_name],
-            // Customer mobile is callable via the Kaleyra flow. BE
-            // resolves the unmasked number from jobId server-side;
-            // we just pass the masked string for display.
             ['Mobile', <CallableMobile key="cust-mob" jobId={Number(job.job_id)} mobile={job.customer_mob_no as string | null} />],
             ['Email', job.customer_email],
-          ]}/>
-          <DlCard title="Address" rows={[
-            ['Address', job.address], ['Building', job.building], ['Landmark', job.landmark],
-            ['City', job.city_name], ['PIN', job.pin_code], ['GPS', job.gps_location],
+            ['Alt Name', (job as Record<string, unknown>).additional_name as string],
+            ['Alt Number', (job as Record<string, unknown>).additional_number as string],
           ]}/>
           <DlCard title="Client" rows={[
-            ['Client', job.client_name], ['Ref ID', job.client_ref_id], ['SPOC', job.client_spoc_name],
-            ['SPOC email', job.client_spoc_email],
-            // SPOC phone calls dial through tbl_client_contacts.contact_no
-            // when reporting_contact_id is set; falls back to a static
-            // masked display when there's no FK (legacy jobs that store
-            // SPOC as plain text in tbl_job.client_spoc only).
-            ['SPOC phone', job.reporting_contact_id
+            ['Client', job.client_name],
+            ['Ref ID', job.client_ref_id],
+            ['SPOC', job.client_spoc_name],
+            ['SPOC Email', job.client_spoc_email],
+            ['SPOC Phone', job.reporting_contact_id
               ? <CallableMobile
                   key="spoc-mob"
                   reportingContactId={Number(job.reporting_contact_id)}
@@ -574,38 +683,41 @@ function ViewBody({ job }: { job: Job }) {
                 />
               : (job.client_spoc as string | null)],
           ]}/>
-          <DlCard title="Job meta" rows={[
-            ['Job ID', job.job_id], ['Reference', job.job_reference_id],
-            ['Type', job.job_type], ['Source', job.source_type],
-            ['Owner', job.owner_name], ['Created by', job.created_by_name],
+          <DlCard title="Job Meta" rows={[
+            ['Job ID', job.job_id],
+            ['Reference', job.job_reference_id],
+            ['Type', job.job_type],
+            ['Source', job.source_type],
+            ['Owner', job.owner_name],
             ['Description', job.job_desc],
           ]}/>
+          {/* Address — full-width because the address line is long and
+              wraps awkwardly inside a one-third column. Includes an
+              Edit Address button (gated by isJobEdit + status < IN_PROGRESS)
+              that opens the AddressPickerWithMap in dialog form. The
+              same status guard the BE PATCH would enforce — we don't
+              let an operator open the editor for a job that's already
+              started/completed because the technician is on the move. */}
+          <div className="md:col-span-2 lg:col-span-2">
+            <JobAddressCard job={job} onSaved={onRefresh} />
+          </div>
+          {/* Audit & History — one-third on lg, full-width below. */}
+          <DlCard title="Audit & History" rows={[
+            ['Created By', job.created_by_name],
+            ['Created On', formatDate(job.created_date_time as string)],
+            ['Approval Sent', formatDate((job as Record<string, unknown>).approval_sent_on_date_time as string)],
+            ['Approved On', formatDate((job as Record<string, unknown>).approved_on_date_time as string)],
+            ['Approved By', (job as Record<string, unknown>).approved_by_client_contact as string],
+            ['Rejected On', formatDate((job as Record<string, unknown>).approval_reject_date_time as string)],
+            ['Last Updated', formatDate((job as Record<string, unknown>).last_update_time as string)],
+          ]}/>
         </div>
+        <JobRescheduleHistory jobId={Number(job.job_id)} />
+        <JobCallHistory jobId={Number(job.job_id)} />
       </TabsContent>
 
       <TabsContent value="services">
-        <div className="rounded-lg border bg-card overflow-hidden">
-          <table className="data-table">
-            <thead><tr><th>#</th><th>Service type</th><th>Category</th><th>Qty</th><th>Status</th></tr></thead>
-            <tbody>
-              {(Array.isArray(job.services) ? job.services : []).length === 0 && (
-                <tr><td colSpan={5} className="text-center text-muted-foreground py-8">No services on this job</td></tr>
-              )}
-              {(Array.isArray(job.services) ? job.services : []).map((s, i) => {
-                const sr = s as Record<string, unknown>;
-                return (
-                  <tr key={i}>
-                    <td className="text-xs text-muted-foreground">{String(sr.job_service_id ?? '')}</td>
-                    <td>{String(sr.service_type_name ?? '—')}</td>
-                    <td>{String(sr.service_catg_name ?? '—')}</td>
-                    <td>{String(sr.quantity ?? '')}</td>
-                    <td>{sr.job_service_status ? 'Active' : 'Inactive'}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <ServicesTabBody job={job} onMutated={onRefresh} />
       </TabsContent>
 
       <TabsContent value="schedule">
@@ -667,7 +779,7 @@ function ViewBody({ job }: { job: Job }) {
           Backend: GET /admin/aux/materials/job/:jobId, POST /admin/aux/materials,
           DELETE /admin/aux/materials/:id (job_material table). */}
       <TabsContent value="materials">
-        <JobMaterialsTab jobId={job.job_id as number} />
+        <JobMaterialsTab jobId={job.job_id as number} jobStatus={Number(job.job_status)} />
       </TabsContent>
 
       {/* Quotations tab — read-only list of product+material quotations against
@@ -693,31 +805,336 @@ type QuotationRow = Record<string, unknown> & {
   material_name?: string | null;
   quantity?: number | string | null;
   unit_price?: number | string | null;
+  client_charge?: number | string | null;
   total_price?: number | string | null;
-  status?: string | null;
+  status?: string | null | number;
   insert_date?: string | null;
 };
 
-function JobQuotationsTab({ jobId }: { jobId: number }) {
-  const [rows, setRows] = useState<QuotationRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+/*
+ * JobAddressCard — read-only Address summary + an Edit button gated
+ * by (isJobEdit OR Admin role) AND status < IN_PROGRESS. Clicking the
+ * button opens a modal that hosts the shared AddressPickerWithMap;
+ * on submit it PATCHes /admin/jobs/:id with the address payload. The
+ * BE validator already accepts the full address block (see earlier
+ * extension for address_instruction).
+ *
+ * Status gating mirrors what ops asked for (2026-05-26): once the
+ * technician has started the job (status >= 2) the destination is
+ * effectively locked because the tech is already en route or on-site.
+ */
+function JobAddressCard({ job, onSaved }: { job: Job; onSaved?: () => void }) {
+  const { me } = useMe();
+  const can = actionFlags(me, ['isJobEdit']);
+  const status = Number(job.job_status);
+  // Editable status set: BOOKED(0), SCHEDULED(1), ENQUIRY(7),
+  // CALL_LATER(9), REVISIT(10). Block IN_PROGRESS(2), COMPLETED(3,5),
+  // CANCELLED(6).
+  const editableStatuses = new Set([
+    ST.BOOKED, ST.SCHEDULED, ST.ENQUIRY, ST.CALL_LATER, ST.REVISIT,
+  ]);
+  const canEditAddress = can.isJobEdit && editableStatuses.has(status as never);
+  const [open, setOpen] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setLoading(true); setError(null);
-      try {
-        const data = await api.get<QuotationRow[]>(`/admin/quotations?jobId=${jobId}`);
-        if (!cancelled) setRows(Array.isArray(data) ? data : []);
-      } catch (e) {
-        if (!cancelled) setError(e instanceof ApiError ? e.message : 'Failed to load quotations');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [jobId]);
+  return (
+    <>
+      <div className="rounded-lg border bg-card p-3 h-full">
+        <div className="flex items-center justify-between mb-2">
+          <div className="font-medium">Address</div>
+          {canEditAddress && (
+            <Button size="sm" variant="outline" onClick={() => setOpen(true)} className="!h-7 !px-2 text-xs">
+              <Pencil className="size-3 mr-1" /> Edit Address
+            </Button>
+          )}
+        </div>
+        <dl className="text-sm divide-y divide-border">
+          <DlRow label="Address" value={job.address} />
+          <DlRow label="Building" value={job.building} />
+          <DlRow label="Landmark" value={job.landmark} />
+          <DlRow label="City" value={job.city_name} />
+          <DlRow label="PIN" value={job.pin_code} />
+          <DlRow label="GPS" value={job.gps_location} />
+        </dl>
+      </div>
+      {open && (
+        <JobAddressEditDialog
+          job={job}
+          onClose={() => setOpen(false)}
+          onSaved={() => { setOpen(false); onSaved?.(); }}
+        />
+      )}
+    </>
+  );
+}
+
+/*
+ * DlRow — single description-list row matching the look-and-feel of
+ * the legacy DlCard rows (label left, value right). Used only inside
+ * JobAddressCard so it doesn't need to be exported.
+ */
+function DlRow({ label, value }: { label: string; value: unknown }) {
+  const display = value == null || value === '' ? '—' : String(value);
+  return (
+    <div className="grid grid-cols-[120px_1fr] gap-2 py-1.5">
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="text-sm break-words">{display}</dd>
+    </div>
+  );
+}
+
+/*
+ * JobAddressEditDialog — wraps the shared AddressPickerWithMap in a
+ * modal so the same UI ops uses on Book New Call is available for
+ * post-creation edits. PATCH body shape matches the existing
+ * address-edit branch in services/job.service.js#update.
+ *
+ * Exported so JobTransactionView (the Unconfirmed-job single-page
+ * view) can reuse it without duplicating the picker + submit logic.
+ */
+export function JobAddressEditDialog({ job, onClose, onSaved }: {
+  job: Job; onClose: () => void; onSaved: () => void;
+}) {
+  const lk = useLookup();
+  const [busy, setBusy] = useState(false);
+  const [draft, setDraft] = useState({
+    address: String(job.address ?? ''),
+    building: String(job.building ?? ''),
+    landmark: String(job.landmark ?? ''),
+    city_id: String((job as Record<string, unknown>).city_id ?? ''),
+    pin_code: String(job.pin_code ?? ''),
+    gps_location: String(job.gps_location ?? ''),
+    address_instruction: String((job as Record<string, unknown>).address_instruction ?? ''),
+  });
+  async function submit() {
+    if (!draft.address || !draft.city_id || !draft.pin_code) {
+      showToast({ variant: 'error', message: 'Address, City and PIN are required' });
+      return;
+    }
+    if (!/^[0-9]{6}$/.test(draft.pin_code)) {
+      showToast({ variant: 'error', message: 'PIN must be exactly 6 digits' });
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.patch(`/admin/jobs/${job.job_id}`, {
+        address: {
+          address: draft.address,
+          building: draft.building || undefined,
+          landmark: draft.landmark || undefined,
+          city_id: Number(draft.city_id) || undefined,
+          pin_code: draft.pin_code,
+          gps_location: draft.gps_location || undefined,
+          address_instruction: draft.address_instruction || undefined,
+        },
+      });
+      showToast({ variant: 'success', message: 'Address Updated' });
+      onSaved();
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Failed to update address' });
+    } finally { setBusy(false); }
+  }
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="!max-w-5xl !max-h-[calc(100vh-48px)] !h-[calc(100vh-48px)] flex flex-col !p-0 gap-0 overflow-hidden">
+        <DialogHeader className="!mx-0 !mt-0 !mb-0 px-6 py-4 shrink-0">
+          <DialogTitle>Edit Address · Job #{job.job_id}</DialogTitle>
+        </DialogHeader>
+        <div className="p-4 flex-1 overflow-y-auto">
+          <AddressPickerWithMap
+            value={draft}
+            onChange={(next) => setDraft({
+              address: next.address,
+              building: next.building || '',
+              landmark: next.landmark || '',
+              city_id: String(next.city_id || ''),
+              pin_code: next.pin_code,
+              gps_location: next.gps_location,
+              address_instruction: next.address_instruction || '',
+            })}
+            cities={lk.toOpts.cities.map((o) => ({ value: String(o.value), label: String(o.label) }))}
+          />
+        </div>
+        <div className="px-4 py-3 border-t flex justify-end gap-2 shrink-0">
+          <Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button onClick={submit} disabled={busy}>{busy ? 'Saving…' : 'Save Address'}</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/*
+ * JobRescheduleHistory — surfaces every entry on tbl_job_comment that
+ * carries an `appointment_on` value, which is the canonical reschedule
+ * trail (the legacy CRM wrote one row per reschedule). Falls back to
+ * empty list when no rows or the endpoint isn't reachable.
+ */
+function JobRescheduleHistory({ jobId }: { jobId: number }) {
+  type JobComment = Record<string, unknown> & {
+    comment_id?: number;
+    appointment_on?: string | null;
+    comments?: string | null;
+    commented_by_name?: string | null;
+    created_on?: string | null;
+  };
+  const { data } = useFetch<JobComment[] | { items?: JobComment[] }>(`/admin/jobs/${jobId}/comments`);
+  const rows: JobComment[] = useMemo(() => {
+    const arr = Array.isArray(data) ? data : (data?.items ?? []);
+    return arr.filter((r) => r.appointment_on);
+  }, [data]);
+  return (
+    <div className="mt-5">
+      <div className="font-medium text-sm mb-1">Rescheduling History</div>
+      {rows.length === 0 ? (
+        <div className="text-xs text-muted-foreground rounded border border-dashed px-3 py-2">
+          No reschedules recorded.
+        </div>
+      ) : (
+        <div className="rounded-lg border bg-card overflow-hidden">
+          <table className="data-table w-full">
+            <thead>
+              <tr>
+                <th className="!text-left">Rescheduled To</th>
+                <th className="!text-left">By</th>
+                <th className="!text-left">On</th>
+                <th className="!text-left">Note</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={r.comment_id ?? i}>
+                  <td className="text-xs">{formatDate(r.appointment_on as string)}</td>
+                  <td className="text-xs">{r.commented_by_name ?? '—'}</td>
+                  <td className="text-xs">{formatDate(r.created_on as string)}</td>
+                  <td className="text-xs">{r.comments ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/*
+ * JobCallHistory — Kaleyra call log scoped to this job. Uses the
+ * existing /admin/calls/preview endpoint with `jobId=` filter. Empty
+ * list when no calls; gracefully falls back if the operator lacks
+ * click-to-call permission (the endpoint 403s and we just hide).
+ */
+function JobCallHistory({ jobId }: { jobId: number }) {
+  type CallRow = Record<string, unknown> & {
+    id?: number;
+    call_date?: string | null;
+    call_status?: string | null;
+    call_duration?: number | null;
+    call_from?: string | null;
+    call_to?: string | null;
+    initiated_by_name?: string | null;
+  };
+  const { data, error } = useFetch<CallRow[] | { items?: CallRow[] }>(`/admin/calls/preview?jobId=${jobId}&limit=50`);
+  if (error) return null; // operator without isClickToCall permission — hide section
+  const rows: CallRow[] = Array.isArray(data) ? data : (data?.items ?? []);
+  return (
+    <div className="mt-5">
+      <div className="font-medium text-sm mb-1">Calling History</div>
+      {rows.length === 0 ? (
+        <div className="text-xs text-muted-foreground rounded border border-dashed px-3 py-2">
+          No calls recorded for this job.
+        </div>
+      ) : (
+        <div className="rounded-lg border bg-card overflow-hidden">
+          <table className="data-table w-full">
+            <thead>
+              <tr>
+                <th className="!text-left">When</th>
+                <th className="!text-left">By</th>
+                <th className="!text-left">From → To</th>
+                <th className="!text-center">Duration</th>
+                <th className="!text-center">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={r.id ?? i}>
+                  <td className="text-xs">{formatDate(r.call_date as string)}</td>
+                  <td className="text-xs">{r.initiated_by_name ?? '—'}</td>
+                  <td className="text-xs font-mono">
+                    {String(r.call_from ?? '—')} → {String(r.call_to ?? '—')}
+                  </td>
+                  <td className="text-xs !text-center">
+                    {r.call_duration != null ? `${r.call_duration}s` : '—'}
+                  </td>
+                  <td className="text-xs !text-center">{r.call_status ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function JobQuotationsTab({ jobId }: { jobId: number }) {
+  // Migrated to the mandatory shared `useFetch` hook (per memory
+  // `feedback_crm_ui_fetch_hooks`). The hook handles dedup, cleanup
+  // and StrictMode double-fire. `refetch` is renamed to `reload` for
+  // call-site clarity inside the approve/reject handlers below.
+  const { data, loading, error, refetch } = useFetch<QuotationRow[]>(`/admin/quotations?jobId=${jobId}`);
+  const rows: QuotationRow[] = Array.isArray(data) ? data : [];
+  const reload = refetch;
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const confirm = useConfirm();
+  // RBAC — Approve/Reject is a new admin write surface (legacy CRM had
+  // only the client-side approval flow). Gated by `isQuotationApprove`,
+  // seeded by 2026-05-26-add-finance-quotation-write-actions.sql.
+  const { me } = useMe();
+  const can = actionFlags(me, ['isQuotationApprove']);
+
+  // Approve flow — BE expects { approvedCharge: number }. We surface
+  // the proposed amount in the QuotationApproveDialog so ops can edit
+  // it before submitting. State for the dialog lives on the tab so
+  // multiple rows can re-use it.
+  const [approvingRow, setApprovingRow] = useState<QuotationRow | null>(null);
+  async function submitApproval(approvedCharge: number) {
+    if (!approvingRow) return;
+    if (!Number.isFinite(approvedCharge) || approvedCharge < 0) {
+      showToast({ variant: 'error', message: 'Invalid amount' });
+      return;
+    }
+    setBusyId(Number(approvingRow.id));
+    try {
+      await api.patch(`/admin/quotations/${approvingRow.id}/approve`, { approvedCharge });
+      showToast({ variant: 'success', message: 'Quotation Approved' });
+      setApprovingRow(null);
+      await reload();
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Failed' });
+    } finally { setBusyId(null); }
+  }
+  function approveRow(r: QuotationRow) {
+    setApprovingRow(r);
+  }
+
+  async function rejectRow(r: QuotationRow) {
+    const ok = await confirm({
+      title: 'Reject Quotation?',
+      description: 'The technician will be notified and asked to resubmit if needed.',
+      confirmLabel: 'Reject',
+      variant: 'destructive',
+    });
+    if (!ok) return;
+    setBusyId(Number(r.id));
+    try {
+      await api.patch(`/admin/quotations/${r.id}/reject`, {});
+      showToast({ variant: 'success', message: 'Quotation Rejected' });
+      await reload();
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Failed' });
+    } finally { setBusyId(null); }
+  }
 
   if (loading) return <div className="text-sm text-muted-foreground py-6 text-center">Loading…</div>;
   if (error)   return <div className="text-sm text-red-600 py-3">{error}</div>;
@@ -747,12 +1164,21 @@ function JobQuotationsTab({ jobId }: { jobId: number }) {
               <th className="!text-right">Unit ₹</th>
               <th className="!text-right">Total ₹</th>
               <th className="!text-center">Status</th>
+              <th className="!text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r, i) => {
               const type = String(r.quotation_type ?? '—');
               const name = String(r.product_name ?? r.material_name ?? '—');
+              // BE status code map (legacy):
+              //   0 = Pending Approval, 1 = Approved, 2 = Rejected.
+              // Buttons only show on pending rows.
+              const status = Number(r.status ?? 0);
+              const isPending = status === 0;
+              const isApproved = status === 1;
+              const isRejected = status === 2;
+              const busy = busyId === Number(r.id);
               return (
                 <tr key={r.id}>
                   <td className="!text-center text-xs text-muted-foreground">{i + 1}</td>
@@ -763,14 +1189,89 @@ function JobQuotationsTab({ jobId }: { jobId: number }) {
                   <td className="!text-right font-mono text-xs">{String(r.quantity ?? '')}</td>
                   <td className="!text-right font-mono text-xs">{r.unit_price != null ? Number(r.unit_price).toFixed(2) : '—'}</td>
                   <td className="!text-right font-mono">{r.total_price != null ? Number(r.total_price).toFixed(2) : '—'}</td>
-                  <td className="!text-center text-xs">{String(r.status ?? '—')}</td>
+                  <td className="!text-center text-xs">
+                    {isApproved && <span className="inline-block bg-emerald-50 text-emerald-700 rounded px-1.5 py-0.5">Approved</span>}
+                    {isRejected && <span className="inline-block bg-rose-50 text-rose-700 rounded px-1.5 py-0.5">Rejected</span>}
+                    {isPending  && <span className="inline-block bg-amber-50 text-amber-700 rounded px-1.5 py-0.5">Pending</span>}
+                  </td>
+                  <td className="!text-right">
+                    {isPending && can.isQuotationApprove ? (
+                      <div className="inline-flex gap-1 justify-end">
+                        <button
+                          type="button"
+                          className="text-xs px-2 py-1 rounded border bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                          onClick={() => approveRow(r)}
+                          disabled={busy}
+                        >
+                          {busy ? '…' : 'Approve'}
+                        </button>
+                        <button
+                          type="button"
+                          className="text-xs px-2 py-1 rounded border bg-rose-50 border-rose-200 text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+                          onClick={() => rejectRow(r)}
+                          disabled={busy}
+                        >
+                          {busy ? '…' : 'Reject'}
+                        </button>
+                      </div>
+                    ) : <span className="text-xs text-muted-foreground">—</span>}
+                  </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
+      <QuotationApproveDialog
+        row={approvingRow}
+        onClose={() => setApprovingRow(null)}
+        onSubmit={submitApproval}
+      />
     </div>
+  );
+}
+
+/*
+ * QuotationApproveDialog — modal alternative to a native window.prompt
+ * for capturing the final agreed amount. Number input with min=0 +
+ * step=0.01 + autofocus; submits on Enter.
+ */
+function QuotationApproveDialog({ row, onClose, onSubmit }: {
+  row: QuotationRow | null; onClose: () => void; onSubmit: (n: number) => Promise<void>;
+}) {
+  const [value, setValue] = useState('');
+  useEffect(() => {
+    if (row) {
+      const proposed = Number(row.client_charge ?? row.unit_price ?? 0);
+      setValue(proposed > 0 ? proposed.toFixed(2) : '');
+    }
+  }, [row]);
+  if (!row) return null;
+  return (
+    <Dialog open={!!row} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader><DialogTitle>Approve Quotation #{row.id}</DialogTitle></DialogHeader>
+        <div className="p-4 space-y-3">
+          <div className="text-xs text-muted-foreground">
+            Set the final agreed charge (₹). The technician will be notified.
+          </div>
+          <Input
+            type="number"
+            min="0"
+            step="0.01"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            autoFocus
+            onKeyDown={(e) => { if (e.key === 'Enter') onSubmit(Number(value)); }}
+            className="font-mono"
+          />
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button onClick={() => onSubmit(Number(value))} disabled={!value}>Approve</Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -786,11 +1287,766 @@ type JobMaterial = {
   total_price: number | null;
 };
 
-function JobMaterialsTab({ jobId }: { jobId: number }) {
+/*
+ * Per-service charge breakdown — fetched lazily on tab open from
+ * GET /admin/jobs/:id/service-breakdown. The Show Breakdown control
+ * on each service row reveals an inline cascade summary (per-unit +
+ * line total). One network call covers all rows on the job.
+ */
+type ServiceBreakdownLayer = { variableAmt: number; fixedAmt: number; total: number };
+type ServiceBreakdownLine = {
+  job_service_id: number;
+  service_type_name: string | null;
+  service_category_name: string | null;
+  quantity: number;
+  perUnit: {
+    totalCharge: number;
+    easyfixDirect: ServiceBreakdownLayer;
+    overhead:      ServiceBreakdownLayer;
+    clientShare:   ServiceBreakdownLayer;
+    remainder: number;
+  };
+  lineTotal: {
+    totalCharge: number;
+    easyfixDirect: ServiceBreakdownLayer;
+    overhead:      ServiceBreakdownLayer;
+    clientShare:   ServiceBreakdownLayer;
+    remainder: number;
+  };
+};
+type ServiceBreakdownResponse = {
+  job_id: number;
+  lineItems: ServiceBreakdownLine[];
+  totals: { totalCharge: number; easyfixDirect: number; overhead: number; clientShare: number; remainder: number };
+};
+
+/*
+ * Module-level breakdown cache (2026-05-26). The Services tab opens
+ * with whatever is in cache (instant render); when the operator
+ * performs an action that could mutate cost (Remove / Restore /
+ * material change) we explicitly invalidate so the next Show
+ * Breakdown click refetches. Soft TTL = 60s as a safety net for
+ * cross-job staleness.
+ */
+const SERVICE_BREAKDOWN_CACHE = new Map<number, { at: number; data: ServiceBreakdownResponse }>();
+const SERVICE_BREAKDOWN_TTL_MS = 60_000;
+function readBreakdownCache(jobId: number): ServiceBreakdownResponse | null {
+  const hit = SERVICE_BREAKDOWN_CACHE.get(jobId);
+  if (!hit) return null;
+  if (Date.now() - hit.at > SERVICE_BREAKDOWN_TTL_MS) {
+    SERVICE_BREAKDOWN_CACHE.delete(jobId);
+    return null;
+  }
+  return hit.data;
+}
+function writeBreakdownCache(jobId: number, data: ServiceBreakdownResponse) {
+  SERVICE_BREAKDOWN_CACHE.set(jobId, { at: Date.now(), data });
+}
+function invalidateBreakdownCache(jobId: number) {
+  SERVICE_BREAKDOWN_CACHE.delete(jobId);
+}
+
+function ServicesTabBody({ job, onMutated }: { job: Job; onMutated?: () => void }) {
+  const services = Array.isArray(job.services) ? job.services : [];
+  // Active vs. inactive split — operators get a "Show Inactive" toggle
+  // so the soft-deleted rows can be inspected (and restored when we
+  // add that affordance).
+  const [showInactive, setShowInactive] = useState(false);
+  const visible = useMemo(() => {
+    const arr = (services as Array<Record<string, unknown>>);
+    return showInactive ? arr : arr.filter((s) => Number(s.job_service_status) !== 0);
+  }, [services, showInactive]);
+
+  // Lazy fetch of breakdown — opens instantly from module cache if
+  // present, otherwise one round-trip on first Show Breakdown click.
+  // Cache is shared across all JobModal instances within the session
+  // (~60s TTL); any mutating action below explicitly invalidates so
+  // the next open refetches.
+  const [breakdown, setBreakdown] = useState<ServiceBreakdownResponse | null>(
+    () => readBreakdownCache(Number(job.job_id)),
+  );
+  const [bdLoading, setBdLoading] = useState(false);
+  const [openLineId, setOpenLineId] = useState<number | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const confirm = useConfirm();
+  async function ensureBreakdown(force = false) {
+    if (!force && breakdown) return;
+    if (bdLoading) return;
+    setBdLoading(true);
+    try {
+      const r = await api.get<ServiceBreakdownResponse>(`/admin/jobs/${job.job_id}/service-breakdown`);
+      writeBreakdownCache(Number(job.job_id), r);
+      setBreakdown(r);
+    } catch {
+      // Silent fallback — tooltip just shows "—" if breakdown unavailable.
+    } finally { setBdLoading(false); }
+  }
+
+  function breakdownFor(jobServiceId: unknown): ServiceBreakdownLine | null {
+    if (!breakdown) return null;
+    return breakdown.lineItems.find((l) => l.job_service_id === Number(jobServiceId)) ?? null;
+  }
+
+  // Mutating helpers — Remove (soft-delete) and Restore (undelete).
+  // Both invalidate the module cache so the next breakdown refetches.
+  async function removeService(jobServiceId: number) {
+    const ok = await confirm({
+      title: 'Remove Service?',
+      description: 'This will mark the service as inactive. You can restore it later from the "Show Inactive" view.',
+      confirmLabel: 'Remove',
+      variant: 'destructive',
+    });
+    if (!ok) return;
+    setBusyId(jobServiceId);
+    try {
+      await api.delete(`/admin/jobs/${job.job_id}/services/${jobServiceId}`);
+      invalidateBreakdownCache(Number(job.job_id));
+      setBreakdown(null);
+      setOpenLineId(null);
+      showToast({ variant: 'success', message: 'Service Removed' });
+      onMutated?.();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to remove service';
+      showToast({ variant: 'error', message: msg });
+    } finally { setBusyId(null); }
+  }
+
+  async function restoreService(jobServiceId: number) {
+    setBusyId(jobServiceId);
+    try {
+      await api.post(`/admin/jobs/${job.job_id}/services/${jobServiceId}/restore`, {});
+      invalidateBreakdownCache(Number(job.job_id));
+      setBreakdown(null);
+      showToast({ variant: 'success', message: 'Service Restored' });
+      onMutated?.();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to restore service';
+      showToast({ variant: 'error', message: msg });
+    } finally { setBusyId(null); }
+  }
+
+  const inactiveCount = (services as Array<Record<string, unknown>>).filter((s) => Number(s.job_service_status) === 0).length;
+  const canEdit = !isJobClosed(Number(job.job_status));
+  const [addOpen, setAddOpen] = useState(false);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        {/* Show Inactive toggle stays on the right; Add Service sits
+            beside it. Both only render when the job is still editable
+            (status ∉ {COMPLETED, COMPLETED_ALT}). */}
+        <div>
+          {canEdit && (
+            <Button size="sm" onClick={() => setAddOpen(true)}>
+              <Plus className="size-3.5 mr-1" /> Add Service
+            </Button>
+          )}
+        </div>
+        {inactiveCount > 0 && (
+          <label className="text-xs text-muted-foreground flex items-center gap-1">
+            <input
+              type="checkbox"
+              checked={showInactive}
+              onChange={(e) => setShowInactive(e.target.checked)}
+            />
+            Show Inactive ({inactiveCount})
+          </label>
+        )}
+      </div>
+      <div className="rounded-lg border bg-card overflow-hidden">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Service Type</th>
+              <th>Category</th>
+              <th>Qty</th>
+              <th>Status</th>
+              <th className="!text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visible.length === 0 && (
+              <tr><td colSpan={6} className="text-center text-muted-foreground py-8">No services on this job</td></tr>
+            )}
+            {visible.map((s, i) => {
+              const sr = s as Record<string, unknown>;
+              const id = Number(sr.job_service_id);
+              const isActive = Number(sr.job_service_status) !== 0;
+              const isOpen = openLineId === id;
+              const line = breakdownFor(id);
+              const busy = busyId === id;
+              return (
+                <Fragment key={i}>
+                  <tr className={isActive ? '' : 'opacity-60'}>
+                    <td className="text-xs text-muted-foreground">{String(sr.job_service_id ?? '')}</td>
+                    <td>{String(sr.service_type_name ?? '—')}</td>
+                    <td>{String(sr.service_catg_name ?? '—')}</td>
+                    <td>{String(sr.quantity ?? '')}</td>
+                    <td>{isActive ? 'Active' : 'Inactive'}</td>
+                    <td className="!text-right">
+                      {/* Icon action cluster — Show/Hide Breakdown is always
+                          available; Remove (active rows) and Restore (inactive
+                          rows) are gated by `canEdit` (job not yet closed). */}
+                      <div className="inline-flex items-center gap-1 justify-end">
+                        <button
+                          type="button"
+                          title={isOpen ? 'Hide Breakdown' : 'Show Breakdown'}
+                          aria-label={isOpen ? 'Hide Breakdown' : 'Show Breakdown'}
+                          className={
+                            'inline-flex items-center justify-center w-7 h-7 rounded border ' +
+                            (isOpen
+                              ? 'bg-sky-50 border-sky-300 text-sky-700'
+                              : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50')
+                          }
+                          onClick={async () => {
+                            await ensureBreakdown();
+                            setOpenLineId(isOpen ? null : id);
+                          }}
+                          disabled={bdLoading}
+                        >
+                          <BarChart3 className="h-3.5 w-3.5" />
+                        </button>
+                        {isActive && canEdit && (
+                          <button
+                            type="button"
+                            title="Remove Service"
+                            aria-label="Remove Service"
+                            className="inline-flex items-center justify-center w-7 h-7 rounded border bg-white border-rose-200 text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                            onClick={() => removeService(id)}
+                            disabled={busy}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                        {!isActive && canEdit && (
+                          <button
+                            type="button"
+                            title="Restore Service"
+                            aria-label="Restore Service"
+                            className="inline-flex items-center justify-center w-7 h-7 rounded border bg-white border-emerald-200 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                            onClick={() => restoreService(id)}
+                            disabled={busy}
+                          >
+                            <RotateCcw className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                  {isOpen && line && (
+                    <tr>
+                      <td colSpan={6} className="bg-slate-50 p-3">
+                        <BreakdownTable line={line} />
+                      </td>
+                    </tr>
+                  )}
+                  {isOpen && !line && breakdown && (
+                    <tr>
+                      <td colSpan={6} className="bg-slate-50 p-3 text-xs text-muted-foreground italic">
+                        No rate-card cost data available for this service.
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {/* Job Totals only appears alongside an OPEN breakdown row — closing
+          the breakdown also collapses the totals strip so the Services tab
+          returns to its clean read-only state (2026-05-26 ops feedback). */}
+      {openLineId !== null && breakdown && breakdown.lineItems.length > 0 && (
+        <div className="rounded-lg border bg-slate-50 p-3 text-xs">
+          <div className="font-medium mb-1">Job Totals</div>
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+            <Stat label="Total Charge"   value={breakdown.totals.totalCharge} />
+            <Stat label="Easyfix Direct" value={breakdown.totals.easyfixDirect} />
+            <Stat label="Overhead"       value={breakdown.totals.overhead} />
+            <Stat label="Client Share"   value={breakdown.totals.clientShare} />
+            {/* "Remainder" in the BE response IS what flows to the
+                Easyfixer technician after every platform / overhead
+                deduction (see services/client-rate-cards.service.js
+                comment around line 250). Label renamed for clarity. */}
+            <Stat label="Easyfixer Share" value={breakdown.totals.remainder} highlight />
+          </div>
+        </div>
+      )}
+      <AddJobServiceDialog
+        open={addOpen}
+        job={job}
+        onClose={() => setAddOpen(false)}
+        onSaved={() => {
+          setAddOpen(false);
+          invalidateBreakdownCache(Number(job.job_id));
+          setBreakdown(null);
+          onMutated?.();
+        }}
+      />
+    </div>
+  );
+}
+
+/*
+ * AddJobServiceDialog — Service Category → Service Type → Services
+ * cascade (mirrors the "Select Products" panel in Book New Call). The
+ * operator picks ONE Category to narrow the catalog (since N×M would
+ * blow the picker out), then 1+ Service Types within it, then adds each
+ * matching service row to the basket with a quantity, then submits the
+ * whole basket as N parallel POSTs to /admin/jobs/:id/services.
+ *
+ * Catalog source: /shared/lookup/client-services?clientId=X — same
+ * endpoint Book New Call hits. The response is { items: [ClientServiceLite] }
+ * carrying service_type_name + service_catg_name + total_amount, which we
+ * group on the fly into a Category list and Type list.
+ *
+ * BE side: POST /admin/jobs/:id/services reactivates a soft-deleted row
+ * for the same {job_id, service_id} instead of inserting a duplicate,
+ * so adding back a previously-removed service is a no-cost retry.
+ */
+type ClientServiceLite = {
+  client_service_id: number;
+  service_type_id: number | null;
+  service_catg_id: number | null;
+  service_type_name: string | null;
+  service_catg_name: string | null;
+  total_amount?: number | null;
+  // Rate-card name lets us disambiguate when a single Service Type is
+  // mapped to multiple rate-card variants (different SKUs / pricing
+  // tiers). Without it the picker shows "Modular Packed Furniture"
+  // five times with no visible difference between rows.
+  crc_ratecard_name?: string | null;
+  charge_type?: string | null;
+};
+type BasketRow = { client_service_id: number; quantity: number };
+function AddJobServiceDialog({ open, job, onClose, onSaved }: {
+  open: boolean; job: Job; onClose: () => void; onSaved: () => void;
+}) {
+  const clientId = Number((job as Record<string, unknown>).fk_client_id);
+  const url = open && clientId > 0
+    ? `/shared/lookup/client-services?clientId=${clientId}`
+    : null;
+  const { data: catalogRaw } = useFetch<ClientServiceLite[] | { items?: ClientServiceLite[] }>(url);
+  const catalog: ClientServiceLite[] = useMemo(() => (
+    Array.isArray(catalogRaw) ? catalogRaw : ((catalogRaw as { items?: ClientServiceLite[] } | null)?.items ?? [])
+  ), [catalogRaw]);
+
+  // Cascade state — picked category narrows the type picker; picked
+  // types narrow the visible service list. Basket holds the rows the
+  // operator has ticked, keyed by client_service_id for stable qty edits.
+  // Job Type is a separate multi-select that mirrors the per-job
+  // job_type CSV; if the operator changes it we PATCH the job along
+  // with the service inserts.
+  const [pickedCatgId, setPickedCatgId] = useState<string>('');
+  const [pickedTypeIds, setPickedTypeIds] = useState<string[]>([]);
+  const [pickedJobTypes, setPickedJobTypes] = useState<string[]>([]);
+  const initialJobTypesRef = useMemo(() => {
+    const csv = String((job as Record<string, unknown>).job_type ?? '');
+    return csv.split(',').map((s) => s.trim()).filter(Boolean);
+  }, [job]);
+  const [basket, setBasket] = useState<Map<number, BasketRow>>(new Map());
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setPickedCatgId('');
+      setPickedTypeIds([]);
+      setPickedJobTypes(initialJobTypesRef);
+      setBasket(new Map());
+    }
+  }, [open, initialJobTypesRef]);
+  // When the category changes, clear the dependent picks so stale
+  // Service Type selections from another category don't bleed through.
+  useEffect(() => { setPickedTypeIds([]); }, [pickedCatgId]);
+
+  // Distinct categories present in the client's rate card.
+  const categories = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const c of catalog) {
+      if (c.service_catg_id != null && c.service_catg_name) {
+        m.set(String(c.service_catg_id), c.service_catg_name);
+      }
+    }
+    return Array.from(m.entries()).map(([value, label]) => ({ value, label }));
+  }, [catalog]);
+
+  // Distinct types under the picked category.
+  const types = useMemo(() => {
+    if (!pickedCatgId) return [];
+    const m = new Map<string, string>();
+    for (const c of catalog) {
+      if (String(c.service_catg_id) === pickedCatgId && c.service_type_id != null && c.service_type_name) {
+        m.set(String(c.service_type_id), c.service_type_name);
+      }
+    }
+    return Array.from(m.entries()).map(([value, label]) => ({ value, label }));
+  }, [catalog, pickedCatgId]);
+
+  // Visible service rows for the picked types within the picked category.
+  const visible = useMemo(() => {
+    if (!pickedCatgId || pickedTypeIds.length === 0) return [];
+    const typeSet = new Set(pickedTypeIds.map(String));
+    return catalog.filter((c) => (
+      String(c.service_catg_id) === pickedCatgId
+      && c.service_type_id != null
+      && typeSet.has(String(c.service_type_id))
+    ));
+  }, [catalog, pickedCatgId, pickedTypeIds]);
+
+  function toggleService(c: ClientServiceLite) {
+    setBasket((prev) => {
+      const next = new Map(prev);
+      const id = c.client_service_id;
+      if (next.has(id)) next.delete(id);
+      else next.set(id, { client_service_id: id, quantity: 1 });
+      return next;
+    });
+  }
+  function setQty(clientServiceId: number, qty: number) {
+    setBasket((prev) => {
+      const next = new Map(prev);
+      const existing = next.get(clientServiceId);
+      if (existing) next.set(clientServiceId, { ...existing, quantity: Math.max(1, qty || 1) });
+      return next;
+    });
+  }
+
+  async function submit() {
+    if (basket.size === 0) {
+      showToast({ variant: 'error', message: 'Tick at least one service to add' });
+      return;
+    }
+    setBusy(true);
+    try {
+      // Sequential POSTs (Promise.allSettled) so a single 4xx on one
+      // row doesn't abort the rest. We surface a single toast at the
+      // end summarising successes + failures.
+      const results = await Promise.allSettled(
+        Array.from(basket.values()).map((row) => {
+          const meta = catalog.find((c) => c.client_service_id === row.client_service_id);
+          return api.post(`/admin/jobs/${job.job_id}/services`, {
+            service_id: row.client_service_id,
+            service_type_id: meta?.service_type_id ?? null,
+            service_category_id: meta?.service_catg_id ?? null,
+            quantity: row.quantity,
+          });
+        }),
+      );
+      // If Job Type changed, PATCH the job alongside (job_type lives on
+      // tbl_job as a CSV — same column the create flow writes). We skip
+      // the PATCH when the selection is identical to the initial set.
+      const newJobTypeCsv = pickedJobTypes.join(',');
+      const initialJobTypeCsv = initialJobTypesRef.join(',');
+      if (newJobTypeCsv !== initialJobTypeCsv) {
+        try {
+          await api.patch(`/admin/jobs/${job.job_id}`, { job_type: newJobTypeCsv });
+        } catch (e) {
+          showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Failed to update job type' });
+        }
+      }
+      const ok = results.filter((r) => r.status === 'fulfilled').length;
+      const fail = results.length - ok;
+      if (fail === 0) {
+        showToast({ variant: 'success', message: `${ok} Service${ok === 1 ? '' : 's'} Added` });
+      } else {
+        showToast({
+          variant: 'error',
+          message: `${ok} added, ${fail} failed`,
+        });
+      }
+      onSaved();
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Failed to add services' });
+    } finally { setBusy(false); }
+  }
+
+  // Basket grand-total — sum of (rate × qty) for every ticked row.
+  // Re-computes whenever basket / catalog mutate.
+  const basketTotal = useMemo(() => {
+    let sum = 0;
+    for (const row of basket.values()) {
+      const meta = catalog.find((c) => c.client_service_id === row.client_service_id);
+      sum += (Number(meta?.total_amount || 0)) * row.quantity;
+    }
+    return sum;
+  }, [basket, catalog]);
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      {/* Full-screen dialog: max-w widened to 5xl so the services table
+          fits on a single horizontal line (Service Type / Rate Card /
+          Rate / Qty / Amount). DialogHeader uses the standard `!mx-0
+          !mt-0 !mb-0` overrides per the dialog.tsx call-site contract
+          when DialogContent has `!p-0`. */}
+      <DialogContent className="!max-w-5xl !max-h-[calc(100vh-48px)] !h-[calc(100vh-48px)] flex flex-col !p-0 gap-0 overflow-hidden">
+        <DialogHeader className="!mx-0 !mt-0 !mb-0 px-6 py-4 shrink-0">
+          <DialogTitle>Add Service To Job #{job.job_id}</DialogTitle>
+        </DialogHeader>
+        <div className="p-4 space-y-3 flex-1 overflow-y-auto">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <Label>Service Category *</Label>
+              <SearchSelect
+                value={pickedCatgId}
+                onChange={(v) => setPickedCatgId(String(v))}
+                options={categories}
+                placeholder={categories.length ? '— Select a category —' : 'No categories on rate card'}
+              />
+            </div>
+            <div>
+              <Label>Service Type(s) *</Label>
+              <SearchMultiSelect
+                value={pickedTypeIds}
+                onChange={(next) => setPickedTypeIds((next as Array<string | number>).map(String))}
+                options={types}
+                placeholder={pickedCatgId ? (types.length ? '— Select service type(s) —' : 'No types in this category') : 'Pick a category first'}
+                selectedLabel="types"
+              />
+            </div>
+            <div>
+              {/* Job Type mirrors the per-job CSV (tbl_job.job_type).
+                  Editing here PATCHes the job alongside the service
+                  inserts so the operator can correct it without a
+                  separate dialog. Vocabulary trimmed to the 3 ops-
+                  supported values (matches Book New Call). */}
+              <Label>Job Type</Label>
+              <SearchMultiSelect
+                value={pickedJobTypes}
+                onChange={(next) => setPickedJobTypes((next as Array<string | number>).map(String))}
+                placeholder="— Select job type(s) —"
+                selectedLabel="types"
+                options={[
+                  { value: 'Installation',   label: 'Installation' },
+                  { value: 'Repair',         label: 'Repair' },
+                  { value: 'Uninstallation', label: 'Uninstallation' },
+                ]}
+              />
+            </div>
+          </div>
+          <div>
+            <Label>Services</Label>
+            {visible.length === 0 ? (
+              <div className="text-sm text-muted-foreground rounded border border-dashed px-3 py-3 text-center">
+                {pickedCatgId && pickedTypeIds.length > 0
+                  ? 'No services on this client\'s rate card for the picked Service Type(s).'
+                  : 'Pick Service Category + Service Type(s) above to see matching services.'}
+              </div>
+            ) : (
+              // Columns:
+              //   - Service / Product = crc_ratecard_name (the SKU
+              //     label — what the operator actually picks). This is
+              //     the differentiating column when one Service Type
+              //     is mapped to multiple rate-card variants. The BE
+              //     already filters service_status=0 (inactive) rows.
+              //   - Service Type = service_type_name (parent category).
+              //   - Rate / Qty / Amount as before.
+              <div className="rounded-lg border bg-card overflow-hidden">
+                <table className="data-table w-full">
+                  <thead>
+                    <tr>
+                      <th className="!text-center w-10"></th>
+                      <th className="!text-left">Service / Product</th>
+                      <th className="!text-left">Service Type</th>
+                      <th className="!text-right">Rate ₹</th>
+                      <th className="!text-right w-24">Qty</th>
+                      <th className="!text-right">Amount ₹</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visible.map((c) => {
+                      const added = basket.get(c.client_service_id);
+                      const rate = Number(c.total_amount || 0);
+                      const amount = added ? rate * added.quantity : 0;
+                      return (
+                        <tr key={c.client_service_id} className={added ? 'bg-emerald-50/40' : ''}>
+                          <td className="!text-center">
+                            <button
+                              type="button"
+                              className={
+                                'inline-flex items-center justify-center w-7 h-7 rounded border ' +
+                                (added
+                                  ? 'bg-rose-50 border-rose-200 text-rose-600'
+                                  : 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100')
+                              }
+                              onClick={() => toggleService(c)}
+                              title={added ? 'Remove from basket' : 'Add to basket'}
+                            >
+                              {added ? <X className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
+                            </button>
+                          </td>
+                          {/* Primary label: rate-card name (the SKU).
+                              `charge_type` (e.g. fixed/variable) shown
+                              inline so the operator knows the pricing
+                              model at a glance. */}
+                          <td className="font-medium">
+                            {c.crc_ratecard_name ?? c.service_type_name ?? '—'}
+                            {c.charge_type ? (
+                              <span className="ml-1 text-[10px] text-muted-foreground">({c.charge_type})</span>
+                            ) : null}
+                          </td>
+                          {/* Secondary label: the parent Service Type. */}
+                          <td className="text-xs text-muted-foreground">
+                            {c.service_type_name ?? '—'}
+                          </td>
+                          <td className="!text-right font-mono">{rate.toFixed(2)}</td>
+                          <td className="!text-right">
+                            {added ? (
+                              <Input
+                                type="number"
+                                min="1"
+                                value={String(added.quantity)}
+                                onChange={(e) => setQty(c.client_service_id, Number(e.target.value))}
+                                className="font-mono h-8 text-right"
+                              />
+                            ) : <span className="text-muted-foreground text-xs">—</span>}
+                          </td>
+                          <td className="!text-right font-mono">{added ? amount.toFixed(2) : '—'}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+          {basket.size > 0 && (
+            <div className="flex items-center justify-between rounded border bg-emerald-50/40 px-3 py-2 text-xs">
+              <span className="text-muted-foreground">
+                {basket.size} service{basket.size === 1 ? '' : 's'} in basket
+              </span>
+              <span className="font-medium text-emerald-800">
+                Total · ₹{basketTotal.toFixed(2)}
+              </span>
+            </div>
+          )}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button onClick={submit} disabled={busy || basket.size === 0}>
+              {busy ? 'Adding…' : basket.size > 1 ? `Add ${basket.size} Services` : 'Add Service'}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function BreakdownTable({ line }: { line: ServiceBreakdownLine }) {
+  // Center-aligned amount columns (2026-05-26 per ops). `!text-center`
+  // beats `.data-table` ancestor CSS specificity in all nesting depths.
+  //
+  // Each rate-card layer (Easyfix Direct, Overhead, Client Share) has
+  // BOTH a Variable percent AND a Fixed amount component. We show both
+  // explicitly so the operator can tell at a glance which lever is
+  // driving the deduction.
+  //
+  // Easyfixer Share is the residual after every layer above has been
+  // deducted, so there isn't a clean "variable vs fixed" split for it.
+  // We surface (a) the amount itself, (b) the % of total it represents,
+  // and (c) a tooltip explaining the cascade formula so the operator can
+  // audit the math.
+  const Row = ({ label, layer }: { label: string; layer: ServiceBreakdownLayer }) => (
+    <tr>
+      <td className="px-2 py-1 text-muted-foreground">{label}</td>
+      <td className="px-2 py-1 font-mono !text-center">{layer.variableAmt.toFixed(2)}</td>
+      <td className="px-2 py-1 font-mono !text-center">{layer.fixedAmt.toFixed(2)}</td>
+      <td className="px-2 py-1 font-mono !text-center font-medium">{layer.total.toFixed(2)}</td>
+    </tr>
+  );
+  // Cascade-formula tooltip — identical text for both per-unit and
+  // line-total tables since the formula is the same shape; only the
+  // running total differs.
+  const formulaTooltip =
+    'Cascade formula:\n'
+    + 'Start with Total Charge\n'
+    + '− Easyfix Direct Variable (% of running total)\n'
+    + '− Easyfix Direct Fixed (flat ₹)\n'
+    + '− Overhead Variable (% of running total)\n'
+    + '− Overhead Fixed (flat ₹)\n'
+    + '− Client Share Variable (% of running total)\n'
+    + '− Client Share Fixed (flat ₹)\n'
+    + '= Easyfixer Share (what flows to the technician)';
+  const EasyfixerShareRow = ({ amount, total }: { amount: number; total: number }) => {
+    const pct = total > 0 ? (amount / total) * 100 : 0;
+    return (
+      <tr className="bg-emerald-50/50" title={formulaTooltip}>
+        <td className="px-2 py-1 font-medium">
+          Easyfixer Share
+          <span className="ml-1 text-[10px] text-muted-foreground cursor-help">ⓘ</span>
+        </td>
+        <td className="px-2 py-1 font-mono !text-center text-muted-foreground" colSpan={2}>
+          residual
+        </td>
+        <td className="px-2 py-1 font-mono !text-center font-medium">
+          {amount.toFixed(2)}
+          <span className="ml-1 text-[10px] text-muted-foreground">({pct.toFixed(1)}%)</span>
+        </td>
+      </tr>
+    );
+  };
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+      <div>
+        <div className="font-medium mb-1">Per Unit · Total ₹{line.perUnit.totalCharge.toFixed(2)}</div>
+        <table className="w-full border">
+          <thead className="bg-slate-100">
+            <tr>
+              <th className="text-left px-2 py-1">Layer</th>
+              <th className="!text-center px-2 py-1">Variable</th>
+              <th className="!text-center px-2 py-1">Fixed</th>
+              <th className="!text-center px-2 py-1">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            <Row label="Easyfix Direct" layer={line.perUnit.easyfixDirect} />
+            <Row label="Overhead"       layer={line.perUnit.overhead} />
+            <Row label="Client Share"   layer={line.perUnit.clientShare} />
+            <EasyfixerShareRow amount={line.perUnit.remainder} total={line.perUnit.totalCharge} />
+          </tbody>
+        </table>
+      </div>
+      <div>
+        <div className="font-medium mb-1">Line Total · qty {line.quantity} · ₹{line.lineTotal.totalCharge.toFixed(2)}</div>
+        <table className="w-full border">
+          <thead className="bg-slate-100">
+            <tr>
+              <th className="text-left px-2 py-1">Layer</th>
+              <th className="!text-center px-2 py-1">Variable</th>
+              <th className="!text-center px-2 py-1">Fixed</th>
+              <th className="!text-center px-2 py-1">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            <Row label="Easyfix Direct" layer={line.lineTotal.easyfixDirect} />
+            <Row label="Overhead"       layer={line.lineTotal.overhead} />
+            <Row label="Client Share"   layer={line.lineTotal.clientShare} />
+            <EasyfixerShareRow amount={line.lineTotal.remainder} total={line.lineTotal.totalCharge} />
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function Stat({ label, value, highlight }: { label: string; value: number; highlight?: boolean }) {
+  return (
+    <div className={`rounded border px-2 py-1 ${highlight ? 'bg-emerald-50 border-emerald-200' : 'bg-white'}`}>
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="font-mono text-sm font-medium">₹{Number(value).toFixed(2)}</div>
+    </div>
+  );
+}
+
+function JobMaterialsTab({ jobId, jobStatus }: { jobId: number; jobStatus: number }) {
+  // Until-closed gate (2026-05-25 per ops): once the job is in a
+  // terminal completed state (3 or 5), no more material edits.
+  const canEdit = !isJobClosed(jobStatus);
   const [items, setItems] = useState<JobMaterial[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const confirmDialog = useConfirm();
 
   async function load() {
     setLoading(true); setError(null);
@@ -804,12 +2060,23 @@ function JobMaterialsTab({ jobId }: { jobId: number }) {
   useEffect(() => { void load(); /* eslint-disable-next-line */ }, [jobId]);
 
   async function deleteItem(id: number) {
-    if (!window.confirm('Remove this material line item?')) return;
+    // Migrated from native window.confirm to the shared useConfirm()
+    // dialog (per modal-header convention + UX consistency rule).
+    const ok = await confirmDialog({
+      title: 'Remove Material Line Item?',
+      description: 'The line item will be deleted from this job. This cannot be undone.',
+      confirmLabel: 'Remove',
+      variant: 'destructive',
+    });
+    if (!ok) return;
     try {
       await api.delete(`/admin/aux/materials/${id}`);
       await load();
+      showToast({ variant: 'success', message: 'Material Removed' });
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Delete failed');
+      const msg = e instanceof ApiError ? e.message : 'Delete failed';
+      setError(msg);
+      showToast({ variant: 'error', message: msg });
     }
   }
 
@@ -821,7 +2088,7 @@ function JobMaterialsTab({ jobId }: { jobId: number }) {
         <div className="text-sm text-muted-foreground">
           {items.length} line item{items.length === 1 ? '' : 's'} · Total: ₹{totalCost.toFixed(2)}
         </div>
-        <Button size="sm" onClick={() => setAddOpen(true)}>Add Material</Button>
+        {canEdit && <Button size="sm" onClick={() => setAddOpen(true)}>Add Material</Button>}
       </div>
       {error && <div className="text-sm text-red-600">{error}</div>}
       {loading && <div className="text-sm text-muted-foreground py-6 text-center">Loading…</div>}
@@ -857,7 +2124,9 @@ function JobMaterialsTab({ jobId }: { jobId: number }) {
                   <td className="!text-right font-mono text-xs">{m.unit_price != null ? Number(m.unit_price).toFixed(2) : '—'}</td>
                   <td className="!text-right font-mono">{m.total_price != null ? Number(m.total_price).toFixed(2) : '—'}</td>
                   <td className="!text-right">
-                    <button onClick={() => deleteItem(m.id)} className="text-xs text-red-600 hover:underline">Delete</button>
+                    {canEdit && (
+                      <button onClick={() => deleteItem(m.id)} className="text-xs text-red-600 hover:underline">Delete</button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -1587,6 +2856,7 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
   prefillCustomer?: PrefillCustomer;
 }) {
   const lk = useLookup();
+  const confirmDialog = useConfirm();
   const isEdit    = mode === 'edit';
   const isConfirm = mode === 'confirm';
   // "Edit-shaped" modes share the compact layout (no client re-pick, no
@@ -1672,6 +2942,11 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
     material_req?: boolean;
     collected_by?: string;
     job_image_file?: File | null;
+    /* Multi-file companion to job_image_file (2026-05-25). When the
+       operator picks multiple files we store them here; the post-create
+       upload loop iterates this array, falling back to job_image_file
+       for legacy single-file paths. */
+    job_image_files?: File[];
   };
   const [perJobFields, setPerJobFields] = useState<Record<string, PerJobOverride>>({});
 
@@ -2158,6 +3433,26 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
           setIf('time_slot', f.time_slot);
           setIf('job_desc', f.job_desc);
           setIf('client_ref_id', f.client_ref_id);
+          /*
+           * Confirm-mode PATCH parity (2026-05-25 fix). These were
+           * collected in the form but NEVER sent in the PATCH
+           * payload, so the persisted row would lose them after the
+           * operator confirmed an order. Each lands on a real tbl_job
+           * column with a corresponding key on updateBody:
+           *   collected_by                 (per-job preference enum)
+           *   booking_cut_off_time_slot    (free-text slot label)
+           *   job_client_owner             (internal CRM user — separate
+           *                                  from `job_owner`)
+           *   additional_name / number     (alternate customer contact)
+           *   original_appointment_*       (snapshot of the original
+           *                                  promise; BE also derives
+           *                                  from requested_date_time
+           *                                  on create if absent)
+           */
+          setIf('collected_by', collectedByCode(f.collected_by));
+          setIf('booking_cut_off_time_slot', f.time_slot); // legacy populated same value here
+          setIf('additional_name',   f.additional_name);
+          setIf('additional_number', f.additional_number);
         }
 
         // Confirm flow always sends services (even empty array == "no services"),
@@ -2176,12 +3471,15 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
           const customer = pickIf({ customer_email: f.customer_email });
           if (customer) patch.customer = customer;
           const address = pickIf({
-            address:      f.address,
-            building:     f.building,
-            landmark:     f.landmark,
-            city_id:      Number(f.city_id) || undefined,
-            pin_code:     f.pin_code,
-            gps_location: f.gps_location,
+            address:             f.address,
+            building:            f.building,
+            landmark:            f.landmark,
+            city_id:             Number(f.city_id) || undefined,
+            pin_code:            f.pin_code,
+            gps_location:        f.gps_location,
+            // Free-text landing notes for the technician — persists on
+            // tbl_address.address_instruction.
+            address_instruction: (f as Record<string, unknown>).address_instruction as string | undefined,
           });
           if (address) patch.address = address;
           // Products-section fields from legacy addEditJob. We reuse `remarks`
@@ -2280,6 +3578,33 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
          * is preferable to silently throwing away successfully-
          * created bookings.
          */
+        /*
+         * Book-Call confirmation popup (extended 2026-05-26). The
+         * operator confirms before we fan-out N create POSTs across
+         * multi-category — AND before promoting an Unconfirmed job to
+         * BOOKED via the Confirm & Schedule modal. Cancellation short-
+         * circuits the entire submit with `setSubmitting(false)`.
+         */
+        if (submitVariant === 'book' && (mode === 'create' || mode === 'confirm')) {
+          const previewCount = (f.fk_service_catg_ids || '').split(',').filter(Boolean).length || 1;
+          const isConfirmMode = mode === 'confirm';
+          const okToBook = await confirmDialog({
+            title: isConfirmMode ? 'Confirm & Schedule?' : 'Confirm Booking',
+            description: isConfirmMode
+              ? `Promote this enquiry to a BOOKED job for "${f.customer_name}" on ${new Date(f.requested_date_time).toLocaleString()}? The technician will be assignable after this step.`
+              : previewCount > 1
+                ? `Create ${previewCount} jobs (one per selected service category) for "${f.customer_name}"?`
+                : `Create a new job for "${f.customer_name}" on ${new Date(f.requested_date_time).toLocaleString()}?`,
+            confirmLabel: isConfirmMode ? 'Book Call' : (previewCount > 1 ? `Book ${previewCount} Calls` : 'Book Call'),
+            cancelLabel: 'Review',
+            variant: 'default',
+          });
+          if (!okToBook) {
+            setSubmitting(false);
+            return;
+          }
+        }
+
         const categoryIds = (f.fk_service_catg_ids || '')
           .split(',')
           .filter(Boolean)
@@ -2311,9 +3636,12 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
           address: {
             address: f.address,
             building: f.building || undefined,
+            landmark: f.landmark || undefined,
             city_id: Number(f.city_id),
             pin_code: f.pin_code,
             gps_location: f.gps_location || undefined,
+            // Persisted to tbl_address.address_instruction by the BE.
+            address_instruction: ((f as Record<string, unknown>).address_instruction as string | undefined) || undefined,
           },
           services: servicesPayload.length > 0 ? servicesPayload : undefined,
           // Legacy parity: book (default), enquiry, or unreachable.
@@ -2334,6 +3662,25 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
           client_spoc: f.client_spoc || undefined,
           client_spoc_name: f.client_spoc_name || undefined,
           client_spoc_email: f.client_spoc_email || undefined,
+          /*
+           * Customer-alternate contact — captured via the new inputs
+           * in the Customer Details section. Maps to tbl_job columns
+           * additional_name / additional_number.
+           */
+          additional_name:   f.additional_name   || undefined,
+          additional_number: f.additional_number || undefined,
+          /*
+           * Per-job commercial fields previously dropped on the floor:
+           *   - collected_by    : preference (1=Easyfixer/2=Easyfix/3=Client).
+           *                        Form default is "Easyfix" → coerced to 2.
+           *   - job_owner       : already supported, mapped from f.job_owner if present.
+           *   - service_type_ids: CSV passed through for multi-pick.
+           * The BE service derives `requested_time`,
+           * `original_appointment_date_time`, and
+           * `original_appointment_time` from `requested_date_time` if
+           * the FE doesn't pass them explicitly.
+           */
+          collected_by: collectedByCode(f.collected_by),
           // Questionnaire FK (tbl_questionaire.c_questionaire_id). The
           // backend create() can stash this on tbl_job's reporting
           // metadata if a column exists; otherwise it surfaces in the
@@ -2397,15 +3744,34 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
              * for the FIRST job (legacy single-tab behaviour) when
              * the override slot has no image.
              */
-            const tabImage = override.job_image_file ?? (created.length === 1 ? imageFile : null);
-            if (tabImage instanceof File && saved?.job_id) {
-              try {
-                const fd = new FormData();
-                fd.append('file', tabImage);
-                await api.post(`/admin/jobs/${saved.job_id}/images`, fd);
-              } catch (upErr) {
-                // eslint-disable-next-line no-console
-                console.warn(`Image upload failed for job ${saved.job_id}:`, upErr);
+            /*
+             * Multi-file upload (2026-05-25): take all picked files
+             * from `job_image_files` (array). Falls back to the legacy
+             * single `job_image_file` field for backwards-compat. Each
+             * file POSTs sequentially so the BE generates distinct
+             * `_<seq>` keys; parallel would race on the seq counter.
+             */
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const tabImageFiles: File[] = (
+              (override.job_image_files as File[] | undefined)
+              ?? ((f as unknown as { job_image_files?: File[] }).job_image_files)
+              ?? []
+            ).filter((x) => x instanceof File);
+            const tabSingleFallback = override.job_image_file ?? (created.length === 1 ? imageFile : null);
+            const filesToUpload: File[] =
+              tabImageFiles.length > 0
+                ? tabImageFiles
+                : (tabSingleFallback instanceof File ? [tabSingleFallback] : []);
+            if (saved?.job_id && filesToUpload.length > 0) {
+              for (const f of filesToUpload) {
+                try {
+                  const fd = new FormData();
+                  fd.append('file', f);
+                  await api.post(`/admin/jobs/${saved.job_id}/images`, fd);
+                } catch (upErr) {
+                  // eslint-disable-next-line no-console
+                  console.warn(`Image upload failed for job ${saved.job_id}:`, upErr);
+                }
               }
             }
           } catch (err) {
@@ -2638,13 +4004,42 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
               <Input required value={f.customer_name} onChange={(e) => set('customer_name', e.target.value)} />
             </Field>
             <Field label="Mobile Number">
-              {/* Read-only in confirm — operators can't edit the
-                  customer's mobile after the order was created. Masked
-                  for PII. */}
-              <Input value={maskMobile(f.customer_mob_no)} readOnly disabled className="tabular-nums" />
+              {/* Mobile Number RESTORED but rendered through CallableMobile
+                  so the bulk of the digits is masked (only last 4 visible).
+                  Operators can still click-to-call without seeing the
+                  cleartext mobile — same UX as the Summary tab. */}
+              <div className="h-10 px-2 flex items-center border rounded bg-muted/30">
+                <CallableMobile
+                  jobId={Number(initial.job_id)}
+                  mobile={f.customer_mob_no as string | null}
+                />
+              </div>
             </Field>
             <Field label="Customer Email">
               <Input type="email" value={f.customer_email} onChange={(e) => set('customer_email', e.target.value)} />
+            </Field>
+            {/*
+              * Alternate customer contact — stored on tbl_job columns
+              * `additional_name` + `additional_number`. Used by the
+              * technician when the primary customer is unreachable.
+              * Both optional; phone validated as a 10-digit string.
+              */}
+            <Field label="Customer Alternate Name">
+              <Input
+                value={f.additional_name || ''}
+                onChange={(e) => set('additional_name', e.target.value)}
+                maxLength={200}
+                placeholder="Alternate contact name"
+              />
+            </Field>
+            <Field label="Customer Alternate Number">
+              <Input
+                value={f.additional_number || ''}
+                onChange={(e) => set('additional_number', e.target.value.replace(/\D/g, '').slice(0, 10))}
+                inputMode="numeric"
+                placeholder="10 digits"
+                className="tabular-nums"
+              />
             </Field>
             {/*
               * Layout: Booking Time Slot on LEFT, Requested Date/Time on
@@ -2702,21 +4097,36 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                 )}
               </div>
             </div>
-            <Field label="Complete Address *" full>
-              <Input required value={f.address} onChange={(e) => set('address', e.target.value)} placeholder="House/flat, street, area" />
-            </Field>
-            <Field label="Landmark">
-              <Input value={f.landmark} onChange={(e) => set('landmark', e.target.value)} />
-            </Field>
-            <Field label="Pincode *">
-              <Input required pattern="[0-9]{6}" value={f.pin_code} onChange={(e) => set('pin_code', e.target.value.replace(/\D/g, ''))} />
-            </Field>
-            <Field label="City *">
-              <SearchSelect required value={f.city_id} onChange={(v) => set('city_id', v)} placeholder="— Select city —" options={lk.toOpts.cities.map((o) => ({ value: o.value, label: String(o.label) }))} />
-            </Field>
-            <Field label="GPS Coordinates">
-              <Input value={f.gps_location} onChange={(e) => set('gps_location', e.target.value)} placeholder="28.6139,77.2090" />
-            </Field>
+            {/* Address section — uses the shared AddressPickerWithMap
+                (split-pane form left, draggable Google Map right). The
+                map's reverse-geocode keeps PIN + city + GPS in sync
+                with the marker; the autocomplete pre-fills them on
+                suggestion pick. Same component on the create-flow so
+                Confirm & Schedule and Book New Call are byte-identical
+                in behaviour. */}
+            <div className="col-span-1 md:col-span-3">
+              <AddressPickerWithMap
+                value={{
+                  address: f.address || '',
+                  building: f.building || '',
+                  landmark: f.landmark || '',
+                  city_id: f.city_id || '',
+                  pin_code: f.pin_code || '',
+                  gps_location: f.gps_location || '',
+                  address_instruction: ((f as Record<string, unknown>).address_instruction as string) || '',
+                }}
+                onChange={(next: AddressValue) => {
+                  set('address', next.address);
+                  set('building', next.building || '');
+                  set('landmark', next.landmark || '');
+                  set('city_id', String(next.city_id || ''));
+                  set('pin_code', next.pin_code);
+                  set('gps_location', next.gps_location);
+                  set('address_instruction' as keyof typeof f, (next.address_instruction || '') as never);
+                }}
+                cities={lk.toOpts.cities.map((o) => ({ value: String(o.value), label: String(o.label) }))}
+              />
+            </div>
           </div>
           <div className="mt-4 flex justify-between">
             <Button type="button" variant="outline" onClick={() => setConfirmOpenSection(1)}>← Back</Button>
@@ -3008,11 +4418,50 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                 * job is already saved, operator can retry from the
                 * detail view.
                 */}
-              <Input
-                type="file"
-                accept="image/*,.pdf"
-                onChange={(e) => setJobField('job_image_file', e.target.files?.[0] || null)}
-              />
+              {/*
+                * Multi-file Job Image upload (2026-05-25). Each picked
+                * file uploads sequentially after the job is created;
+                * legacy single-file callers still work because the post-
+                * create handler accepts BOTH `job_image_file` (single)
+                * AND `job_image_files` (File[]).
+                *
+                * Per-tab DOM remount (2026-05-26): when 2+ service
+                * categories are selected, each "Job K" tab owns its own
+                * `perJobFields[catId].job_image_files`. The browser's
+                * native file input keeps the LAST-CHOSEN file list in
+                * its DOM state across React re-renders, which made
+                * switching tabs visually leak the wrong files. Keying
+                * the input by the active catId forces a remount when
+                * the tab changes, clearing the native input back to "No
+                * file chosen" while the underlying per-tab state
+                * remains intact. The small helper line below the input
+                * surfaces the count that's actually stored for the
+                * active tab so the operator can confirm at a glance.
+                */}
+              {(() => {
+                const stashed = (getJobField('job_image_files') as File[] | undefined) || [];
+                const tabKey = getActiveCatId() || 'single';
+                return (
+                  <div>
+                    <Input
+                      key={`job-img-${tabKey}`}
+                      type="file"
+                      accept="image/*,.pdf"
+                      multiple
+                      onChange={(e) => {
+                        const files = e.target.files ? Array.from(e.target.files) : [];
+                        setJobField('job_image_files', files as never);
+                        setJobField('job_image_file', (files[0] ?? null) as never);
+                      }}
+                    />
+                    {stashed.length > 0 && (
+                      <p className="text-[11px] text-muted-foreground mt-1">
+                        {stashed.length} file{stashed.length === 1 ? '' : 's'} ready for this job tab.
+                      </p>
+                    )}
+                  </div>
+                );
+              })()}
             </Field>
             <Field label="Helper Required">
               {/* Reverted from checkbox → toggle (Switch) on 2026-05-19
@@ -3037,26 +4486,33 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                 <span>{getJobField('material_req') ? 'Yes' : 'No'}</span>
               </label>
             </Field>
-            <Field label="Special Comments *" full>
-              <textarea
-                required
-                rows={2}
-                value={getJobField('remarks') ?? ''}
-                onChange={(e) => setJobField('remarks', e.target.value)}
-                className="flex w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
-                placeholder="Any special notes visible to ops"
-              />
-            </Field>
-            <Field label="Anything Handyman should keep in mind? *" full>
-              <textarea
-                required
-                rows={2}
-                value={getJobField('efr_special_notes') ?? ''}
-                onChange={(e) => setJobField('efr_special_notes', e.target.value)}
-                className="flex w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
-                placeholder="Notes for the technician"
-              />
-            </Field>
+            {/* Special Comments + Anything Handyman — placed in a nested
+                2-col grid spanning all 3 outer columns. Ops asked for these
+                two textareas to sit half-half on the same row (2026-05-26),
+                matching the create-mode visual. resize-y locks horizontal
+                growth so the modal width stays predictable. */}
+            <div className="md:col-span-3 grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Field label="Special Comments *">
+                <textarea
+                  required
+                  rows={3}
+                  value={getJobField('remarks') ?? ''}
+                  onChange={(e) => setJobField('remarks', e.target.value)}
+                  className="flex w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 resize-y"
+                  placeholder="Any special notes visible to ops"
+                />
+              </Field>
+              <Field label="Anything Handyman should keep in mind? *">
+                <textarea
+                  required
+                  rows={3}
+                  value={getJobField('efr_special_notes') ?? ''}
+                  onChange={(e) => setJobField('efr_special_notes', e.target.value)}
+                  className="flex w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 resize-y"
+                  placeholder="Notes for the technician"
+                />
+              </Field>
+            </div>
             {/*
               * Collected By — gated by the client's profile preference
               * (tbl_client_custom_properties; see BE endpoint
@@ -3685,6 +5141,32 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                 />
               </Field>
               <Field label="Email"><Input type="email" value={f.customer_email} onChange={(e) => set('customer_email', e.target.value)} /></Field>
+              {/*
+                * Alternate customer contact — captured at Book Call so
+                * the technician has a fallback when the primary is
+                * unreachable. Stored on tbl_job.additional_name /
+                * additional_number. Wrapped in a 2-col sub-grid so each
+                * field reads at 50% width (more breathing room than 33%).
+                */}
+              <div className="md:col-span-3 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Field label="Customer Alternate Name">
+                  <Input
+                    value={f.additional_name || ''}
+                    onChange={(e) => set('additional_name', e.target.value)}
+                    maxLength={200}
+                    placeholder="Alternate contact name"
+                  />
+                </Field>
+                <Field label="Customer Alternate Number">
+                  <Input
+                    value={f.additional_number || ''}
+                    onChange={(e) => set('additional_number', e.target.value.replace(/\D/g, '').slice(0, 10))}
+                    inputMode="numeric"
+                    placeholder="10 digits"
+                    className="font-mono"
+                  />
+                </Field>
+              </div>
               {/* Schedule sub-block — Date / Time / Booking Slot.
                   Legacy layout placed these inside Customer Details
                   (the screenshot shows "Requested Date / Requested
@@ -3692,37 +5174,45 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                   picker is hourly with min-time-for-today gating;
                   Booking Slot auto-derives from the picked hour but
                   remains operator-editable. */}
-              <Field label="Requested Date *">
-                <Input
-                  required
-                  type="date"
-                  min={todayIso}
-                  value={requestedDate}
-                  onChange={(e) => {
-                    set('requested_date', e.target.value);
-                    // If the new date is in the future, allow any
-                    // previously-picked time (no past-today gate);
-                    // if it's today and the existing time is now past,
-                    // clear so the operator must re-pick a valid one.
-                    if (e.target.value === todayIso && requestedTime) {
-                      const h = Number(requestedTime.split(':')[0]);
-                      if (Number.isFinite(h) && h < minHourToday) {
-                        set('requested_time', '');
+              {/*
+                * Requested Date + Requested Time live on the SAME row
+                * (per ops 2026-05-25). Wrapped in a 2-col sub-grid
+                * spanning the full 3-col parent so they pair cleanly
+                * regardless of where Alt Name/Number landed before.
+                */}
+              <div className="md:col-span-3 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Field label="Requested Date *">
+                  <Input
+                    required
+                    type="date"
+                    min={todayIso}
+                    value={requestedDate}
+                    onChange={(e) => {
+                      set('requested_date', e.target.value);
+                      // If the new date is in the future, allow any
+                      // previously-picked time (no past-today gate);
+                      // if it's today and the existing time is now past,
+                      // clear so the operator must re-pick a valid one.
+                      if (e.target.value === todayIso && requestedTime) {
+                        const h = Number(requestedTime.split(':')[0]);
+                        if (Number.isFinite(h) && h < minHourToday) {
+                          set('requested_time', '');
+                        }
                       }
-                    }
-                  }}
-                />
-              </Field>
-              <Field label="Requested Time *">
-                <SearchSelect
-                  required
-                  value={requestedTime}
-                  onChange={(v) => set('requested_time', v)}
-                  placeholder={requestedDate ? '— Pick an hour —' : 'Pick a date first'}
-                  disabled={!requestedDate}
-                  options={hourOptions}
-                />
-              </Field>
+                    }}
+                  />
+                </Field>
+                <Field label="Requested Time *">
+                  <SearchSelect
+                    required
+                    value={requestedTime}
+                    onChange={(v) => set('requested_time', v)}
+                    placeholder={requestedDate ? '— Pick an hour —' : 'Pick a date first'}
+                    disabled={!requestedDate}
+                    options={hourOptions}
+                  />
+                </Field>
+              </div>
               {/* Booking Slot chip row moved out of the 3-col grid —
                   rendered as its own full-width row below the date+
                   time pickers per operator request. See block after
@@ -3861,7 +5351,16 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                           onClick={async (e) => {
                             e.preventDefault();
                             if (!prefillCustomer.customer?.customer_id) return;
-                            if (!confirm('Delete this saved address?')) return;
+                            // Migrated from native confirm + alert to the
+                            // shared useConfirm + showToast pattern (UX
+                            // consistency rule).
+                            const okDelete = await confirmDialog({
+                              title: 'Delete Saved Address?',
+                              description: 'Backend FK-guards so a job-linked address cannot be removed.',
+                              confirmLabel: 'Delete',
+                              variant: 'destructive',
+                            });
+                            if (!okDelete) return;
                             try {
                               await api.delete(`/admin/customers/${prefillCustomer.customer.customer_id}/addresses/${a.address_id}`);
                               // Mutating the prefill prop isn't ideal,
@@ -3880,8 +5379,9 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                                 (prefillCustomer.addresses || []).filter((x) => x.address_id !== a.address_id);
                               // Force a re-render by setting a benign field on itself.
                               setF((s) => ({ ...s }));
+                              showToast({ variant: 'success', message: 'Address Deleted' });
                             } catch (err) {
-                              alert(err instanceof ApiError ? err.message : 'Delete failed');
+                              showToast({ variant: 'error', message: err instanceof ApiError ? err.message : 'Delete failed' });
                             }
                           }}
                         >
@@ -3933,62 +5433,36 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
               </div>
               );
             })()}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {/* Google Places-backed autosuggest. Operator types →
-                  debounced backend proxy hits Google → suggestions
-                  drop. Picking a suggestion auto-fills GPS + tries
-                  to match City + PIN from the geocoded components.
-                  Free-typing a custom address still works (no
-                  Google match → just persists the typed string). */}
-              <Field label="Address *" full>
-                <AddressAutocomplete
-                  required
-                  value={f.address}
-                  onChange={(v) => set('address', v)}
-                  onPick={(p) => {
-                    setF((s) => ({
-                      ...s,
-                      address: p.description,
-                      // GPS is "<lat>,<lng>" — matches the legacy
-                      // tbl_address.gps_location format.
-                      gps_location: p.lat != null && p.lng != null
-                        ? `${p.lat},${p.lng}`
-                        : s.gps_location,
-                      // Auto-fill PIN if Google returned one.
-                      pin_code: p.components.postal_code || s.pin_code,
-                      // City matching: look up the picked city name in
-                      // the lookup options and snap to its city_id.
-                      // If no match, leave the operator to pick
-                      // manually (won't blank a previous selection).
-                      city_id: (() => {
-                        const wanted = (p.components.city || '').toLowerCase();
-                        if (!wanted) return s.city_id;
-                        const hit = lk.toOpts.cities.find(
-                          (o) => String(o.label).toLowerCase() === wanted
-                        );
-                        return hit ? String(hit.value) : s.city_id;
-                      })(),
-                    }));
-                  }}
-                  placeholder="Start typing — Google will suggest matches"
-                />
-              </Field>
-              <Field label="Building"><Input value={f.building} onChange={(e) => set('building', e.target.value)} /></Field>
-              <Field label="City *"><SearchSelect required value={f.city_id} onChange={(v) => set('city_id', v)} placeholder="— Select city —" options={lk.toOpts.cities.map((o) => ({ value: o.value, label: String(o.label) }))} /></Field>
-              <Field label="PIN *"><Input required pattern="[0-9]{6}" value={f.pin_code} onChange={(e) => set('pin_code', e.target.value.replace(/\D/g, ''))} /></Field>
-              {/* GPS field: auto-populated by the address autosuggest
-                  pick. Disabled — operators don't hand-edit lat/lng;
-                  if it's wrong, picking a different address fixes
-                  it (or re-geocoding via the address edit flow). */}
-              <Field label="GPS (auto-detected)">
-                <Input
-                  value={f.gps_location}
-                  readOnly
-                  disabled
-                  placeholder="Auto-filled from address selection"
-                />
-              </Field>
-            </div>
+            {/* Address section — uses the shared AddressPickerWithMap
+                (split-pane: form left, draggable Google Map right).
+                Identical component to the one used in Confirm &
+                Schedule below, so both flows behave the same way:
+                autocomplete pick repositions the marker, marker drag
+                reverse-geocodes back to PIN + city + address. */}
+            <AddressPickerWithMap
+              value={{
+                address: f.address || '',
+                building: f.building || '',
+                landmark: f.landmark || '',
+                city_id: f.city_id || '',
+                pin_code: f.pin_code || '',
+                gps_location: f.gps_location || '',
+                address_instruction: ((f as Record<string, unknown>).address_instruction as string) || '',
+              }}
+              onChange={(next: AddressValue) => {
+                setF((s) => ({
+                  ...s,
+                  address: next.address,
+                  building: next.building || '',
+                  landmark: next.landmark || '',
+                  city_id: String(next.city_id || ''),
+                  pin_code: next.pin_code,
+                  gps_location: next.gps_location,
+                  address_instruction: next.address_instruction || '',
+                }));
+              }}
+              cities={lk.toOpts.cities.map((o) => ({ value: String(o.value), label: String(o.label) }))}
+            />
             </div>
             <div className="mt-4 flex justify-between">
               <Button type="button" variant="outline" onClick={() => setOpenSection(1)}>← Back</Button>
@@ -4278,11 +5752,33 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
             <div className="mt-5 pt-4 border-t space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <Field label="Job Image">
-                  <Input
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => setJobField('job_image_file', e.target.files?.[0] || null)}
-                  />
+                  {/* Per-tab DOM remount — see the longer comment on the
+                      Confirm-mode mirror of this input (~line 3520) for
+                      why the native input has to be keyed by catId. */}
+                  {(() => {
+                    const stashed = (getJobField('job_image_files') as File[] | undefined) || [];
+                    const tabKey = getActiveCatId() || 'single';
+                    return (
+                      <div>
+                        <Input
+                          key={`job-img-${tabKey}`}
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          onChange={(e) => {
+                            const files = e.target.files ? Array.from(e.target.files) : [];
+                            setJobField('job_image_files', files as never);
+                            setJobField('job_image_file', (files[0] ?? null) as never);
+                          }}
+                        />
+                        {stashed.length > 0 && (
+                          <p className="text-[11px] text-muted-foreground mt-1">
+                            {stashed.length} file{stashed.length === 1 ? '' : 's'} ready for this job tab.
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </Field>
                 <div className="flex items-center gap-6 pt-6">
                   <label className="flex items-center gap-2 text-sm">
@@ -5574,6 +7070,11 @@ function toFormShape(j: Job | null) {
     // typical case for jobs created directly via Book New Call.
     customer_name: pick('job_customer_name') || pick('customer_name'),
     customer_mob_no: pick('customer_mob_no'), customer_email: pick('customer_email'),
+    // Alternate customer contact — stored on tbl_job.additional_name /
+    // .additional_number. Captured at Book Call time so the technician
+    // can reach a fallback person if the primary is unreachable.
+    additional_name: pick('additional_name'),
+    additional_number: pick('additional_number'),
     // Split form fields for the Section 2 Schedule sub-block.
     // `requested_date_time` (ISO) is what the backend ultimately
     // consumes; we maintain it via a useEffect when either of these

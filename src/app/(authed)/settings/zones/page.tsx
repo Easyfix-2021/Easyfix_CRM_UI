@@ -28,6 +28,7 @@ import { api, ApiError } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
+import { showToast } from '@/components/ui/toast';
 
 type Zone = {
   zone_id: number;
@@ -84,7 +85,7 @@ export default function ManageZonesPage() {
       credentials: 'include',
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
-    if (!res.ok) { alert('Template download failed: HTTP ' + res.status); return; }
+    if (!res.ok) { showToast({ variant: 'error', message: `Template download failed: HTTP ${res.status}` }); return; }
     const blob = await res.blob();
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
@@ -451,7 +452,7 @@ function ZoneUploadDialog({ open, onClose, onApplied }: {
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Bulk upload zone-pincode mapping</DialogTitle>
+          <DialogTitle>Bulk Upload Zone-Pincode Mapping</DialogTitle>
         </DialogHeader>
 
         <form onSubmit={submit} className="space-y-3 pt-2">

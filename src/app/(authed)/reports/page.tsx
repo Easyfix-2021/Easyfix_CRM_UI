@@ -18,10 +18,11 @@
  *   /user-hours         (from?, to?, userId?)
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import {
   BarChart3, Building2, ScrollText, Wallet, Users, Clock, Activity, FileDown,
-  AlertTriangle,
+  AlertTriangle, Flame, Banknote,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -59,6 +60,21 @@ export default function ReportsLandingPage() {
   const { me } = useMe();
   const can = actionFlags(me, ['isReportView', 'isReportDownload']);
 
+  // Sidebar legacy URL_MAP routes manageFinanceReport → /reports?focus=finance
+  // and manageEscalationReport → /reports?focus=escalation. We honour the
+  // query param by scrolling the matching card into view + briefly
+  // highlighting it. Falls through to the default landing when absent.
+  const sp = useSearchParams();
+  const focus = sp.get('focus');
+  const focusRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!focus) return;
+    const t = setTimeout(() => {
+      focusRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 100);
+    return () => clearTimeout(t);
+  }, [focus]);
+
   return (
     <div className="space-y-4">
       <div>
@@ -84,6 +100,15 @@ export default function ReportsLandingPage() {
         <UserProductivityCard />
         <CityAnalysisCard />
         <UserHoursCard />
+        {/* Escalation + Finance cards close the legacy sidebar links
+            (manageEscalationReport / manageFinanceReport). The focus
+            query param scrolls the matching card into view. */}
+        <div ref={focus === 'escalation' ? focusRef : null} className={focus === 'escalation' ? 'ring-2 ring-sky-400 rounded-lg' : undefined}>
+          <EscalationReportCard />
+        </div>
+        <div ref={focus === 'finance' ? focusRef : null} className={focus === 'finance' ? 'ring-2 ring-sky-400 rounded-lg' : undefined}>
+          <FinanceReportCard />
+        </div>
       </div>
     </div>
   );
@@ -249,6 +274,9 @@ function UserHoursCard() {
   const [userId, setUserId] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Inline preview list — replaces the native window.alert that was here
+  // previously (UX regression vs. shipped pattern).
+  const [preview, setPreview] = useState<Array<{ user_id: number; date: string; actions: number }>>([]);
   async function run() {
     setBusy(true); setErr(null);
     try {
@@ -266,7 +294,9 @@ function UserHoursCard() {
       });
       const data = await res.json();
       const rows = data?.data ?? [];
-      alert(`User Hours rows: ${rows.length}\n${rows.slice(0, 10).map((r: { user_id: number; date: string; actions: number }) => `${r.date} · user ${r.user_id} · ${r.actions} actions`).join('\n')}`);
+      // Replaced native alert (UX regression vs. shipped pattern) with
+      // a stored preview that renders below the button.
+      setPreview(rows);
     } catch (e) { setErr(e instanceof Error ? e.message : 'Failed'); }
     finally { setBusy(false); }
   }
@@ -281,6 +311,105 @@ function UserHoursCard() {
       <Button size="sm" onClick={run} disabled={busy}>
         <Activity className="size-3.5 mr-1" /> {busy ? 'Loading…' : 'Preview'}
       </Button>
+      {preview.length > 0 && (
+        <div className="rounded border bg-slate-50 p-2 text-xs max-h-40 overflow-auto">
+          <div className="font-medium mb-1">{preview.length} rows · showing top 10:</div>
+          <ul className="space-y-0.5 font-mono">
+            {preview.slice(0, 10).map((r, i) => (
+              <li key={i}>{r.date} · user {r.user_id} · {r.actions} actions</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </ReportCard>
+  );
+}
+
+/*
+ * EscalationReportCard — wraps the existing /admin/jobs/escalated/export.xlsx
+ * endpoint (already used by the Escalated Jobs modal on /admin-actions).
+ * Closes the broken sidebar link manageEscalationReport → /reports?focus=escalation.
+ * Filters mirror what the escalated list page supports: date range +
+ * optional client.
+ */
+function EscalationReportCard() {
+  const lookup = useLookup();
+  const [{ from, to }, setRange] = useState(defaultRange());
+  const [clientId, setClientId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  async function run() {
+    setBusy(true); setErr(null);
+    try {
+      const params = new URLSearchParams();
+      if (from) params.set('from', from);
+      if (to)   params.set('to',   to);
+      if (clientId) params.set('clientId', clientId);
+      await sharedDownloadXlsx({
+        url: `/admin/jobs/escalated/export.xlsx?${params.toString()}`,
+        filename: 'escalation-report.xlsx',
+      });
+    } catch (e) { setErr(e instanceof Error ? e.message : 'Failed'); }
+    finally { setBusy(false); }
+  }
+  return (
+    <ReportCard title="Escalation Report" blurb="All escalated jobs in the date range with reasons and current SLA status." Icon={Flame}>
+      <div className="grid grid-cols-2 gap-2">
+        <Input type="date" value={from} onChange={(e) => setRange((r) => ({ ...r, from: e.target.value }))} />
+        <Input type="date" value={to}   onChange={(e) => setRange((r) => ({ ...r, to:   e.target.value }))} />
+      </div>
+      <select value={clientId} onChange={(e) => setClientId(e.target.value)} className="border rounded h-9 px-2 text-sm bg-background w-full">
+        <option value="">All clients</option>
+        {lookup.clients.map((c) => <option key={c.client_id} value={c.client_id}>{c.client_name}</option>)}
+      </select>
+      {err && <div className="text-xs text-red-600 flex items-center gap-1"><AlertTriangle className="size-3.5" /> {err}</div>}
+      <Button size="sm" onClick={run} disabled={busy || !from || !to}>
+        <FileDown className="size-3.5 mr-1" /> {busy ? 'Downloading…' : 'Download XLSX'}
+      </Button>
+    </ReportCard>
+  );
+}
+
+/*
+ * FinanceReportCard — landing for the /finance section (which hosts
+ * invoices, EFR ledger, payouts, NDM). Sidebar legacy URL focus=finance
+ * routes here; we surface a "Go to Finance" CTA + direct downloads of
+ * the EFR transactions ledger as XLSX. The Finance hub itself houses
+ * the full write-op flows (invoices, POs, payouts).
+ */
+function FinanceReportCard() {
+  const [{ from, to }, setRange] = useState(defaultRange());
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  async function run() {
+    setBusy(true); setErr(null);
+    try {
+      const params = new URLSearchParams();
+      if (from) params.set('from', from);
+      if (to)   params.set('to',   to);
+      params.set('format', 'xlsx');
+      await sharedDownloadXlsx({
+        url: `/admin/finance/efr-transactions?${params.toString()}`,
+        filename: 'finance-efr-transactions.xlsx',
+      });
+    } catch (e) { setErr(e instanceof Error ? e.message : 'Failed'); }
+    finally { setBusy(false); }
+  }
+  return (
+    <ReportCard title="Finance Report" blurb="Easyfixer ledger (deposits, payouts, recharges) for the period. For invoices and PO listings, open the Finance section." Icon={Banknote}>
+      <div className="grid grid-cols-2 gap-2">
+        <Input type="date" value={from} onChange={(e) => setRange((r) => ({ ...r, from: e.target.value }))} />
+        <Input type="date" value={to}   onChange={(e) => setRange((r) => ({ ...r, to:   e.target.value }))} />
+      </div>
+      {err && <div className="text-xs text-red-600 flex items-center gap-1"><AlertTriangle className="size-3.5" /> {err}</div>}
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" onClick={run} disabled={busy || !from || !to}>
+          <FileDown className="size-3.5 mr-1" /> {busy ? 'Downloading…' : 'Download EFR Ledger'}
+        </Button>
+        <Button size="sm" variant="outline" asChild>
+          <a href="/finance">Open Finance Section</a>
+        </Button>
+      </div>
     </ReportCard>
   );
 }

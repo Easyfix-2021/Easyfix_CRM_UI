@@ -9,6 +9,7 @@ import { SearchSelect } from '@/components/ui/search-select';
 import { api, ApiError } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
 import { statusColorClass } from '@/lib/utils';
+import { showToast } from '@/components/ui/toast';
 
 /*
  * Bulk job upload (rev. 2026-05-19) — every uploaded row creates an
@@ -42,7 +43,7 @@ async function downloadTemplate() {
     credentials: 'include',
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
-  if (!res.ok) { alert(`Template download failed: HTTP ${res.status}`); return; }
+  if (!res.ok) { showToast({ variant: 'error', message: `Template download failed: HTTP ${res.status}` }); return; }
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

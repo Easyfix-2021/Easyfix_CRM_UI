@@ -157,9 +157,15 @@ export default function NoticeBoardListPage() {
             Broadcast messages to CRM staff, clients, and technicians. Pinned + newest first.
           </p>
         </div>
-        <Button onClick={() => setComposeMode('new')}>
-          <Plus className="size-4 mr-1" /> New Notice
-        </Button>
+        {/* New Notice button is gated by isNoticeManage. Without the
+            permission, hide the button entirely (rather than show it
+            and toast-reject on click) — operators who only consume
+            notices shouldn't see the author affordance. */}
+        {canManage && (
+          <Button onClick={() => setComposeMode('new')}>
+            <Plus className="size-4 mr-1" /> New Notice
+          </Button>
+        )}
       </div>
 
       {/* Filters */}

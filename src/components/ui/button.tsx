@@ -11,6 +11,13 @@ const buttonVariants = cva(
   // utility is gone. Buttons still have a clear hover state via the
   // variant-specific `hover:bg-*` classes; keyboard users still see the
   // disabled / hover affordances on Tab navigation through those.
+  //
+  // Typography is fixed at `text-sm font-medium` on the BASE class and
+  // intentionally not overridden by any size variant — earlier the `sm`
+  // size dropped to `text-xs`, which made rows that mix default-sized
+  // and small-sized buttons (e.g. the JobModal footer with Close +
+  // Edit + Cancel + Reschedule …) look mismatched. Sizes now only
+  // differ by height + horizontal padding; typography stays consistent.
   'inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus:outline-none focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50',
   {
     variants: {
@@ -28,7 +35,10 @@ const buttonVariants = cva(
       },
       size: {
         default: 'h-9 px-4 py-2',
-        sm: 'h-8 rounded-md px-3 text-xs',
+        // Same `text-sm` as default (no `text-xs` override). `h-8`
+        // keeps the button compact for rows of secondary actions; the
+        // height differential is what reads "smaller", not the font.
+        sm: 'h-8 rounded-md px-3',
         lg: 'h-10 rounded-md px-6',
         icon: 'h-9 w-9',
       },

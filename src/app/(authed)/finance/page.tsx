@@ -26,12 +26,20 @@
 
 import { useEffect, useState } from 'react';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
-import { Coins, AlertTriangle, FileSpreadsheet, FileText, Mail, CheckCircle2, XCircle } from 'lucide-react';
+import { Coins, AlertTriangle, FileSpreadsheet, FileText, Mail, CheckCircle2, XCircle, Plus, Pencil } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Label } from '@/components/ui/label';
 import { api, ApiError } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
+import { showToast } from '@/components/ui/toast';
+import { useMe } from '@/lib/auth-context';
+import { actionFlags } from '@/lib/permissions';
+import { useConfirm } from '@/components/ui/confirm-dialog';
+import { useFetch as useSharedFetch } from '@/lib/hooks';
 
 const TABS = ['invoices', 'transactions', 'purchase-orders', 'payouts', 'ndm-collection', 'efr-ledger'] as const;
 type TabKey = typeof TABS[number];
@@ -44,7 +52,12 @@ export default function FinanceLandingPage() {
   const [tab, setTab] = useState<TabKey>(TABS.includes(initialTab) ? initialTab : 'invoices');
   const [clientId, setClientId] = useState('');
 
-  // Keep URL in sync so the Finance child menus light up the right tab
+  // Keep URL in sync so the Finance child menus light up the right tab.
+  // Two-way sync (2026-05-26 fix):
+  //   tab → URL   (when the operator clicks a TabsTrigger)
+  //   URL → tab   (when a sidebar sub-menu link changes ?tab= while the
+  //                page is already mounted; without this the page froze on
+  //                the FIRST clicked sub-menu and ignored subsequent ones)
   useEffect(() => {
     const params = new URLSearchParams(sp.toString());
     if (params.get('tab') !== tab) {
@@ -52,6 +65,13 @@ export default function FinanceLandingPage() {
       router.replace(`${pathname}?${params.toString()}`);
     }
   }, [tab, sp, router, pathname]);
+  useEffect(() => {
+    const urlTab = sp.get('tab');
+    if (urlTab && TABS.includes(urlTab as TabKey) && urlTab !== tab) {
+      setTab(urlTab as TabKey);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sp]);
 
   return (
     <div className="space-y-4">
@@ -96,29 +116,19 @@ export default function FinanceLandingPage() {
   );
 }
 
-function useFetch<T>(url: string | null, deps: unknown[] = []): { data: T[]; loading: boolean; error: string | null; reload: () => void } {
-  const [data, setData] = useState<T[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [bump, setBump] = useState(0);
-  useEffect(() => {
-    if (!url) return;
-    let cancelled = false;
-    (async () => {
-      setLoading(true); setError(null);
-      try {
-        const d = await api.get<T[]>(url);
-        if (!cancelled) setData(Array.isArray(d) ? d : []);
-      } catch (e) {
-        if (!cancelled) setError(e instanceof ApiError ? e.message : 'Load failed');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [url, bump, ...deps]);
-  return { data, loading, error, reload: () => setBump((b) => b + 1) };
+/*
+ * Adapter over the mandatory `@/lib/hooks` useFetch (per memory
+ * `feedback_crm_ui_fetch_hooks`). The shared hook returns the raw
+ * payload; finance tabs all consume list endpoints, so we normalise
+ * to an array here. `reload` is the shared hook's `refetch` renamed
+ * for backwards-compat with the call-sites. The `deps` arg from the
+ * old local hook is now folded into the `url` key (every call-site
+ * already builds a URL that captures its own state).
+ */
+function useFetch<T>(url: string | null): { data: T[]; loading: boolean; error: string | null; reload: () => void } {
+  const { data, loading, error, refetch } = useSharedFetch<T[] | { items?: T[] }>(url);
+  const arr: T[] = Array.isArray(data) ? data : ((data as { items?: T[] } | null)?.items ?? []);
+  return { data: arr, loading, error, reload: refetch };
 }
 
 type Invoice = {
@@ -129,12 +139,17 @@ type Invoice = {
 };
 function InvoicesTab({ clientId }: { clientId: string }) {
   const url = `/admin/finance/invoices?${clientId ? `clientId=${clientId}&` : ''}limit=200`;
-  const { data, loading, error } = useFetch<Invoice>(url);
-  if (loading) return <Loading />;
-  if (error) return <Err msg={error} />;
-  if (data.length === 0) return <Empty msg="No invoices match the filter." />;
+  const { data, loading, error, reload } = useFetch<Invoice>(url);
+  const { me } = useMe();
+  const can = actionFlags(me, ['isInvoicePay', 'isInvoiceStatusChange']);
+  // Dialog state lives on the tab — a single dialog is reused across
+  // rows for both Record Payment and Change Status.
+  const [paying, setPaying] = useState<Invoice | null>(null);
+  const [statusing, setStatusing] = useState<Invoice | null>(null);
   return (
-    <div className="rounded-lg border bg-card overflow-hidden mt-2">
+    <div className="space-y-2 mt-2">
+      {loading ? <Loading /> : error ? <Err msg={error} /> : data.length === 0 ? <Empty msg="No invoices match the filter." /> : (
+    <div className="rounded-lg border bg-card overflow-hidden">
       <table className="data-table w-full">
         <thead>
           <tr>
@@ -157,6 +172,16 @@ function InvoicesTab({ clientId }: { clientId: string }) {
                 {inv.is_paid ? <span className="badge bg-emerald-50 text-emerald-700">Paid</span> : <span className="badge bg-amber-50 text-amber-700">Unpaid</span>}
               </td>
               <td className="!text-right whitespace-nowrap">
+                {can.isInvoicePay && !inv.is_paid && (
+                  <button onClick={() => setPaying(inv)} className="inline-flex items-center gap-1 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50 rounded">
+                    <CheckCircle2 className="size-3.5" /> Record Payment
+                  </button>
+                )}
+                {can.isInvoiceStatusChange && (
+                  <button onClick={() => setStatusing(inv)} className="inline-flex items-center gap-1 px-2 py-1 text-xs text-primary hover:bg-primary/10 rounded">
+                    <Pencil className="size-3.5" /> Status
+                  </button>
+                )}
                 <DownloadLink href={`/api/admin/finance/invoices/${inv.id}/excel`} label="Excel" icon={<FileSpreadsheet className="size-3.5" />} />
                 <DownloadLink href={`/api/admin/finance/invoices/${inv.id}/pdf`} label="PDF" icon={<FileText className="size-3.5" />} />
                 <EmailButton invoiceId={inv.id} />
@@ -166,6 +191,126 @@ function InvoicesTab({ clientId }: { clientId: string }) {
         </tbody>
       </table>
     </div>
+      )}
+      <RecordPaymentDialog invoice={paying} onClose={() => setPaying(null)} onSaved={() => { setPaying(null); reload(); }} />
+      <ChangeInvoiceStatusDialog invoice={statusing} onClose={() => setStatusing(null)} onSaved={() => { setStatusing(null); reload(); }} />
+    </div>
+  );
+}
+
+/*
+ * RecordPaymentDialog — POST /admin/finance/invoices/:id/payment.
+ * Joi: { amount (positive), paid_date, paid_by, comments?, upload_documents? }.
+ * Captures the minimal happy path; comments/document upload are optional.
+ */
+function RecordPaymentDialog({ invoice, onClose, onSaved }: { invoice: Invoice | null; onClose: () => void; onSaved: () => void }) {
+  const [amount, setAmount] = useState('');
+  const [paidDate, setPaidDate] = useState(new Date().toISOString().slice(0, 10));
+  const [paidBy, setPaidBy] = useState('');
+  const [comments, setComments] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (invoice) {
+      const remaining = Math.max(0, Number(invoice.total_invoice_amount ?? 0) - Number(invoice.total_paid_amount ?? 0));
+      setAmount(remaining > 0 ? remaining.toFixed(2) : '');
+      setComments('');
+      setPaidBy('');
+    }
+  }, [invoice]);
+  if (!invoice) return null;
+  async function submit() {
+    if (!amount || !paidDate || !paidBy) {
+      showToast({ variant: 'error', message: 'Amount, Paid Date, Paid By are required' });
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.post(`/admin/finance/invoices/${invoice!.id}/payment`, {
+        amount: Number(amount),
+        paid_date: paidDate,
+        paid_by: paidBy,
+        comments: comments || undefined,
+      });
+      showToast({ variant: 'success', message: 'Payment Recorded' });
+      onSaved();
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Failed' });
+    } finally { setBusy(false); }
+  }
+  return (
+    <Dialog open={!!invoice} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Record Payment · Invoice #{invoice.id}</DialogTitle></DialogHeader>
+        <div className="p-4 space-y-3">
+          <div className="text-xs text-muted-foreground">
+            Total ₹{Number(invoice.total_invoice_amount ?? 0).toFixed(2)} · Paid ₹{Number(invoice.total_paid_amount ?? 0).toFixed(2)}
+          </div>
+          <div><Label>Amount ₹ *</Label><Input value={amount} onChange={(e) => setAmount(e.target.value)} className="font-mono" /></div>
+          <div><Label>Paid Date *</Label><Input type="date" value={paidDate} onChange={(e) => setPaidDate(e.target.value)} /></div>
+          <div><Label>Paid By *</Label><Input value={paidBy} onChange={(e) => setPaidBy(e.target.value)} placeholder="UTR / cheque # / contact name" /></div>
+          <div><Label>Comments</Label>
+            <textarea value={comments} onChange={(e) => setComments(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" rows={2} />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button onClick={submit} disabled={busy}>{busy ? 'Saving…' : 'Save'}</Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/*
+ * ChangeInvoiceStatusDialog — PATCH /admin/finance/invoices/:id/status.
+ * Joi: { is_paid (0|1), is_raised (0|1)?, updated_comments? }. Mirror of
+ * legacy /pages/invoice/changeInvoiceStatus.vm.
+ */
+function ChangeInvoiceStatusDialog({ invoice, onClose, onSaved }: { invoice: Invoice | null; onClose: () => void; onSaved: () => void }) {
+  const [isPaid, setIsPaid] = useState(0);
+  const [comments, setComments] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (invoice) {
+      setIsPaid(invoice.is_paid ?? 0);
+      setComments('');
+    }
+  }, [invoice]);
+  if (!invoice) return null;
+  async function submit() {
+    setBusy(true);
+    try {
+      await api.patch(`/admin/finance/invoices/${invoice!.id}/status`, {
+        is_paid: Number(isPaid),
+        updated_comments: comments || undefined,
+      });
+      showToast({ variant: 'success', message: 'Invoice Status Updated' });
+      onSaved();
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Failed' });
+    } finally { setBusy(false); }
+  }
+  return (
+    <Dialog open={!!invoice} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Change Status · Invoice #{invoice.id}</DialogTitle></DialogHeader>
+        <div className="p-4 space-y-3">
+          <div><Label>Paid Status</Label>
+            <select value={isPaid} onChange={(e) => setIsPaid(Number(e.target.value))} className="border rounded h-9 px-2 text-sm bg-background w-full">
+              <option value={0}>Unpaid</option>
+              <option value={1}>Paid</option>
+            </select>
+          </div>
+          <div><Label>Comments</Label>
+            <textarea value={comments} onChange={(e) => setComments(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" rows={2} placeholder="Reason for the status change" />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button onClick={submit} disabled={busy}>{busy ? 'Saving…' : 'Save'}</Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -205,12 +350,22 @@ type Transaction = {
 };
 function TransactionsTab({ clientId }: { clientId: string }) {
   const url = `/admin/finance/transactions?${clientId ? `clientId=${clientId}&` : ''}limit=200`;
-  const { data, loading, error } = useFetch<Transaction>(url);
-  if (loading) return <Loading />;
-  if (error) return <Err msg={error} />;
-  if (data.length === 0) return <Empty msg="No transactions match the filter." />;
+  const { data, loading, error, reload } = useFetch<Transaction>(url);
+  const [showCreate, setShowCreate] = useState(false);
+  // RBAC gate — Add Transaction is now a separately-seeded action.
+  const { me } = useMe();
+  const can = actionFlags(me, ['isTransactionAdd']);
   return (
-    <div className="rounded-lg border bg-card overflow-hidden mt-2">
+    <div className="space-y-2 mt-2">
+      <div className="flex justify-end">
+        {can.isTransactionAdd && (
+          <Button size="sm" onClick={() => setShowCreate(true)}>
+            <Plus className="size-3.5 mr-1" /> Add Transaction
+          </Button>
+        )}
+      </div>
+      {loading ? <Loading /> : error ? <Err msg={error} /> : data.length === 0 ? <Empty msg="No transactions match the filter." /> : (
+    <div className="rounded-lg border bg-card overflow-hidden">
       <table className="data-table w-full">
         <thead>
           <tr>
@@ -235,6 +390,79 @@ function TransactionsTab({ clientId }: { clientId: string }) {
         </tbody>
       </table>
     </div>
+      )}
+      <CreateTransactionDialog
+        open={showCreate}
+        defaultClientId={clientId}
+        onClose={() => setShowCreate(false)}
+        onSaved={() => { setShowCreate(false); reload(); }}
+      />
+    </div>
+  );
+}
+
+/*
+ * CreateTransactionDialog — minimal form mapped to POST /admin/finance/transactions.
+ * Joi schema requires { clientId, transactionType, amount }; description + jobId
+ * optional. transactionType is a legacy code (1=Credit, 2=Debit, etc.); we expose
+ * the most common 2 codes + leave others passable via the raw number input.
+ */
+function CreateTransactionDialog({ open, defaultClientId, onClose, onSaved }: {
+  open: boolean; defaultClientId: string; onClose: () => void; onSaved: () => void;
+}) {
+  const [clientId, setClientId] = useState(defaultClientId || '');
+  const [jobId, setJobId] = useState('');
+  const [transactionType, setTransactionType] = useState('1');
+  const [amount, setAmount] = useState('');
+  const [description, setDescription] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { if (open) setClientId(defaultClientId || ''); }, [open, defaultClientId]);
+
+  async function submit() {
+    if (!clientId || !amount) {
+      showToast({ variant: 'error', message: 'Client ID + Amount are required' });
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.post('/admin/finance/transactions', {
+        clientId: Number(clientId),
+        jobId: jobId ? Number(jobId) : undefined,
+        transactionType: Number(transactionType),
+        amount: Number(amount),
+        description: description || undefined,
+      });
+      showToast({ variant: 'success', message: 'Transaction Added' });
+      onSaved();
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Failed' });
+    } finally { setBusy(false); }
+  }
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Add Transaction</DialogTitle></DialogHeader>
+        <div className="p-4 space-y-3">
+          <div><Label>Client ID *</Label><Input value={clientId} onChange={(e) => setClientId(e.target.value.replace(/\D/g, ''))} className="font-mono" /></div>
+          <div><Label>Job ID</Label><Input value={jobId} onChange={(e) => setJobId(e.target.value.replace(/\D/g, ''))} className="font-mono" placeholder="optional" /></div>
+          <div><Label>Type</Label>
+            <select value={transactionType} onChange={(e) => setTransactionType(e.target.value)} className="border rounded h-9 px-2 text-sm bg-background w-full">
+              <option value="1">1 — Credit</option>
+              <option value="2">2 — Debit</option>
+              <option value="3">3 — Adjustment</option>
+            </select>
+          </div>
+          <div><Label>Amount ₹ *</Label><Input value={amount} onChange={(e) => setAmount(e.target.value)} className="font-mono" /></div>
+          <div><Label>Description</Label>
+            <textarea value={description} onChange={(e) => setDescription(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" rows={2} />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button onClick={submit} disabled={busy || !clientId || !amount}>{busy ? 'Saving…' : 'Save'}</Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -246,12 +474,21 @@ type PurchaseOrder = {
 };
 function PurchaseOrdersTab({ clientId }: { clientId: string }) {
   const url = `/admin/finance/purchase-orders${clientId ? `?clientId=${clientId}` : ''}`;
-  const { data, loading, error } = useFetch<PurchaseOrder>(url);
-  if (loading) return <Loading />;
-  if (error) return <Err msg={error} />;
-  if (data.length === 0) return <Empty msg="No purchase orders match the filter." />;
+  const { data, loading, error, reload } = useFetch<PurchaseOrder>(url);
+  const [showCreate, setShowCreate] = useState(false);
+  const { me } = useMe();
+  const can = actionFlags(me, ['isPurchaseOrderAdd']);
   return (
-    <div className="rounded-lg border bg-card overflow-hidden mt-2">
+    <div className="space-y-2 mt-2">
+      <div className="flex justify-end">
+        {can.isPurchaseOrderAdd && (
+          <Button size="sm" onClick={() => setShowCreate(true)}>
+            <Plus className="size-3.5 mr-1" /> Add Purchase Order
+          </Button>
+        )}
+      </div>
+      {loading ? <Loading /> : error ? <Err msg={error} /> : data.length === 0 ? <Empty msg="No purchase orders match the filter." /> : (
+    <div className="rounded-lg border bg-card overflow-hidden">
       <table className="data-table w-full">
         <thead>
           <tr>
@@ -276,6 +513,69 @@ function PurchaseOrdersTab({ clientId }: { clientId: string }) {
         </tbody>
       </table>
     </div>
+      )}
+      <CreatePurchaseOrderDialog
+        open={showCreate}
+        defaultClientId={clientId}
+        onClose={() => setShowCreate(false)}
+        onSaved={() => { setShowCreate(false); reload(); }}
+      />
+    </div>
+  );
+}
+
+/* CreatePurchaseOrderDialog — calls POST /admin/finance/purchase-orders. */
+function CreatePurchaseOrderDialog({ open, defaultClientId, onClose, onSaved }: {
+  open: boolean; defaultClientId: string; onClose: () => void; onSaved: () => void;
+}) {
+  const [clientId, setClientId] = useState(defaultClientId || '');
+  const [poNumber, setPoNumber] = useState('');
+  const [description, setDescription] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [totalAmount, setTotalAmount] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { if (open) setClientId(defaultClientId || ''); }, [open, defaultClientId]);
+
+  async function submit() {
+    if (!clientId || !poNumber || !startDate || !endDate || !totalAmount) {
+      showToast({ variant: 'error', message: 'Client + PO Number + Dates + Total are required' });
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.post('/admin/finance/purchase-orders', {
+        clientId: Number(clientId), poNumber, description: description || undefined,
+        startDate, endDate, totalAmount: Number(totalAmount),
+      });
+      showToast({ variant: 'success', message: 'Purchase Order Added' });
+      onSaved();
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Failed' });
+    } finally { setBusy(false); }
+  }
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Add Purchase Order</DialogTitle></DialogHeader>
+        <div className="p-4 space-y-3">
+          <div><Label>Client ID *</Label><Input value={clientId} onChange={(e) => setClientId(e.target.value.replace(/\D/g, ''))} className="font-mono" /></div>
+          <div><Label>PO Number *</Label><Input value={poNumber} onChange={(e) => setPoNumber(e.target.value)} /></div>
+          <div className="grid grid-cols-2 gap-2">
+            <div><Label>Start Date *</Label><Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></div>
+            <div><Label>End Date *</Label><Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} /></div>
+          </div>
+          <div><Label>Total Amount ₹ *</Label><Input value={totalAmount} onChange={(e) => setTotalAmount(e.target.value)} className="font-mono" /></div>
+          <div><Label>Description</Label>
+            <textarea value={description} onChange={(e) => setDescription(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" rows={2} />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button onClick={submit} disabled={busy}>{busy ? 'Saving…' : 'Save'}</Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -287,8 +587,25 @@ type Payout = {
 function PayoutsTab() {
   const [statusFilter, setStatusFilter] = useState<string>('');
   const url = `/admin/finance/payouts${statusFilter ? `?status=${statusFilter}` : ''}`;
-  const { data, loading, error, reload } = useFetch<Payout>(url, [statusFilter]);
+  const { data, loading, error, reload } = useFetch<Payout>(url);
+  const [showCreate, setShowCreate] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const { me } = useMe();
+  const can = actionFlags(me, ['isPayoutCreate', 'isPayoutBulkApprove']);
   const STATUS_LABEL: Record<number, string> = { 0: 'Pending', 1: 'Ops Approved', 2: 'Finance Approved', 3: 'Rejected' };
+  // Bulk Ops-Approve handler — surfaces the existing
+  // POST /admin/finance/payouts/bulk-ops-approve endpoint.
+  async function bulkOpsApprove() {
+    if (selectedIds.size === 0) return;
+    try {
+      await api.post('/admin/finance/payouts/bulk-ops-approve', { payoutIds: Array.from(selectedIds) });
+      showToast({ variant: 'success', message: 'Bulk Ops Approval Submitted' });
+      setSelectedIds(new Set());
+      reload();
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Failed' });
+    }
+  }
   async function act(p: Payout, action: 'ops-approve' | 'fin-approve' | 'fin-reject') {
     try {
       if (action === 'ops-approve') {
@@ -303,19 +620,33 @@ function PayoutsTab() {
         await api.post(`/admin/finance/payouts/${p.payout_id}/fin-reject`, { efrId: p.efr_id });
       }
       reload();
-    } catch (e) { alert(e instanceof ApiError ? e.message : 'Failed'); }
+    } catch (e) { showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Failed' }); }
   }
   return (
     <div className="space-y-2 mt-2">
-      <div className="flex items-center gap-2">
-        <span className="text-xs text-muted-foreground">Status:</span>
-        {['', '0', '1', '2', '3'].map((s) => (
-          <button key={s || 'all'}
-            onClick={() => setStatusFilter(s)}
-            className={`px-2 py-0.5 rounded text-xs ${statusFilter === s ? 'bg-primary text-white' : 'bg-slate-200 text-slate-700'}`}>
-            {s === '' ? 'All' : STATUS_LABEL[Number(s)]}
-          </button>
-        ))}
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">Status:</span>
+          {['', '0', '1', '2', '3'].map((s) => (
+            <button key={s || 'all'}
+              onClick={() => setStatusFilter(s)}
+              className={`px-2 py-0.5 rounded text-xs ${statusFilter === s ? 'bg-primary text-white' : 'bg-slate-200 text-slate-700'}`}>
+              {s === '' ? 'All' : STATUS_LABEL[Number(s)]}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-2">
+          {can.isPayoutBulkApprove && selectedIds.size > 0 && (
+            <Button size="sm" variant="outline" onClick={bulkOpsApprove}>
+              <CheckCircle2 className="size-3.5 mr-1" /> Bulk Ops-Approve ({selectedIds.size})
+            </Button>
+          )}
+          {can.isPayoutCreate && (
+            <Button size="sm" onClick={() => setShowCreate(true)}>
+              <Plus className="size-3.5 mr-1" /> Create Payout
+            </Button>
+          )}
+        </div>
       </div>
       {loading && <Loading />}
       {error && <Err msg={error} />}
@@ -325,6 +656,7 @@ function PayoutsTab() {
           <table className="data-table w-full">
             <thead>
               <tr>
+                {can.isPayoutBulkApprove && <th className="!text-center w-8"></th>}
                 <th className="!text-center">ID</th><th>Easyfixer</th>
                 <th className="!text-right">Balance</th><th className="!text-right">PM Req</th>
                 <th className="!text-right">Ops Approved</th><th className="!text-right">Fin Approved</th>
@@ -334,6 +666,21 @@ function PayoutsTab() {
             <tbody>
               {data.map((p) => (
                 <tr key={p.payout_id} className="hover:bg-slate-50">
+                  {can.isPayoutBulkApprove && (
+                    <td className="!text-center">
+                      {p.is_approved_by_fin === 0 && (
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(p.payout_id)}
+                          onChange={(e) => {
+                            const next = new Set(selectedIds);
+                            if (e.target.checked) next.add(p.payout_id); else next.delete(p.payout_id);
+                            setSelectedIds(next);
+                          }}
+                        />
+                      )}
+                    </td>
+                  )}
                   <td className="!text-center font-mono text-xs">{p.payout_id}</td>
                   <td>{p.efr_name || '—'}<br/><span className="text-xs text-muted-foreground font-mono">#{p.efr_id} · {p.efr_no || '—'}</span></td>
                   <td className="!text-right font-mono">{p.efr_balance != null ? Number(p.efr_balance).toFixed(2) : '—'}</td>
@@ -358,7 +705,55 @@ function PayoutsTab() {
           </table>
         </div>
       )}
+      <CreatePayoutDialog open={showCreate} onClose={() => setShowCreate(false)} onSaved={() => { setShowCreate(false); reload(); }} />
     </div>
+  );
+}
+
+/*
+ * CreatePayoutDialog — POST /admin/finance/payouts. Body Joi:
+ *   { efrId, efrBalance, opsAmount, pmRequestAmount } all >= 0 / positive.
+ * Easyfixer scoping is enforced by `assertEfrInScope`.
+ */
+function CreatePayoutDialog({ open, onClose, onSaved }: { open: boolean; onClose: () => void; onSaved: () => void }) {
+  const [efrId, setEfrId] = useState('');
+  const [efrBalance, setEfrBalance] = useState('');
+  const [opsAmount, setOpsAmount] = useState('');
+  const [pmRequestAmount, setPmRequestAmount] = useState('');
+  const [busy, setBusy] = useState(false);
+  async function submit() {
+    if (!efrId || !efrBalance || !opsAmount || !pmRequestAmount) {
+      showToast({ variant: 'error', message: 'All four fields are required' });
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.post('/admin/finance/payouts', {
+        efrId: Number(efrId), efrBalance: Number(efrBalance),
+        opsAmount: Number(opsAmount), pmRequestAmount: Number(pmRequestAmount),
+      });
+      showToast({ variant: 'success', message: 'Payout Created' });
+      onSaved();
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Failed' });
+    } finally { setBusy(false); }
+  }
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Create Payout</DialogTitle></DialogHeader>
+        <div className="p-4 space-y-3">
+          <div><Label>Easyfixer ID *</Label><Input value={efrId} onChange={(e) => setEfrId(e.target.value.replace(/\D/g, ''))} className="font-mono" /></div>
+          <div><Label>EFR Current Balance *</Label><Input value={efrBalance} onChange={(e) => setEfrBalance(e.target.value)} className="font-mono" /></div>
+          <div><Label>Ops Amount *</Label><Input value={opsAmount} onChange={(e) => setOpsAmount(e.target.value)} className="font-mono" /></div>
+          <div><Label>PM Request Amount *</Label><Input value={pmRequestAmount} onChange={(e) => setPmRequestAmount(e.target.value)} className="font-mono" /></div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button onClick={submit} disabled={busy}>{busy ? 'Saving…' : 'Save'}</Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -371,26 +766,45 @@ type NdmRecharge = {
 function NdmCollectionTab() {
   const [flag, setFlag] = useState('4'); // 4 = pending-approval (default)
   const url = `/admin/finance/ndm-recharges?flag=${flag}`;
-  const { data, loading, error, reload } = useFetch<NdmRecharge>(url, [flag]);
+  const { data, loading, error, reload } = useFetch<NdmRecharge>(url);
+  const [showCreate, setShowCreate] = useState(false);
+  const { me } = useMe();
+  const can = actionFlags(me, ['isNdmRechargeAdd']);
+  const confirm = useConfirm();
   async function approve(r: NdmRecharge) {
     try {
       await api.post(`/admin/finance/ndm-recharges/${r.recharge_id}/approve`, {});
+      showToast({ variant: 'success', message: 'NDM Recharge Approved' });
       reload();
-    } catch (e) { alert(e instanceof ApiError ? e.message : 'Approve failed'); }
+    } catch (e) { showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Approve failed' }); }
   }
   async function reject(r: NdmRecharge) {
-    if (!confirm(`Reject recharge #${r.recharge_id}? This DELETES the row.`)) return;
+    const ok = await confirm({
+      title: `Reject recharge #${r.recharge_id}?`,
+      description: 'This deletes the row permanently. Continue?',
+      confirmLabel: 'Reject',
+      variant: 'destructive',
+    });
+    if (!ok) return;
     try {
       await api.post(`/admin/finance/ndm-recharges/${r.recharge_id}/reject`, {});
+      showToast({ variant: 'success', message: 'NDM Recharge Rejected' });
       reload();
-    } catch (e) { alert(e instanceof ApiError ? e.message : 'Reject failed'); }
+    } catch (e) { showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Reject failed' }); }
   }
   return (
     <div className="space-y-2 mt-2">
-      <div className="flex items-center gap-2">
-        <span className="text-xs text-muted-foreground">Filter:</span>
-        <button onClick={() => setFlag('4')} className={`px-2 py-0.5 rounded text-xs ${flag === '4' ? 'bg-primary text-white' : 'bg-slate-200'}`}>Pending Approval</button>
-        <button onClick={() => setFlag('2')} className={`px-2 py-0.5 rounded text-xs ${flag === '2' ? 'bg-primary text-white' : 'bg-slate-200'}`}>By NDM</button>
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">Filter:</span>
+          <button onClick={() => setFlag('4')} className={`px-2 py-0.5 rounded text-xs ${flag === '4' ? 'bg-primary text-white' : 'bg-slate-200'}`}>Pending Approval</button>
+          <button onClick={() => setFlag('2')} className={`px-2 py-0.5 rounded text-xs ${flag === '2' ? 'bg-primary text-white' : 'bg-slate-200'}`}>By NDM</button>
+        </div>
+        {can.isNdmRechargeAdd && (
+          <Button size="sm" onClick={() => setShowCreate(true)}>
+            <Plus className="size-3.5 mr-1" /> Submit NDM Recharge
+          </Button>
+        )}
       </div>
       {loading && <Loading />}
       {error && <Err msg={error} />}
@@ -432,7 +846,69 @@ function NdmCollectionTab() {
           </table>
         </div>
       )}
+      <CreateNdmRechargeDialog open={showCreate} onClose={() => setShowCreate(false)} onSaved={() => { setShowCreate(false); reload(); }} />
     </div>
+  );
+}
+
+/*
+ * CreateNdmRechargeDialog — POST /admin/finance/ndm-recharges. Body Joi:
+ *   { efrId (positive), rechargeAmount (positive), rechargeType?, comments?,
+ *     documentPath?, paymentMode?, referenceId? }.
+ */
+function CreateNdmRechargeDialog({ open, onClose, onSaved }: { open: boolean; onClose: () => void; onSaved: () => void }) {
+  const [efrId, setEfrId] = useState('');
+  const [rechargeAmount, setRechargeAmount] = useState('');
+  const [paymentMode, setPaymentMode] = useState('Cash');
+  const [referenceId, setReferenceId] = useState('');
+  const [comments, setComments] = useState('');
+  const [busy, setBusy] = useState(false);
+  async function submit() {
+    if (!efrId || !rechargeAmount) {
+      showToast({ variant: 'error', message: 'Easyfixer ID + Amount are required' });
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.post('/admin/finance/ndm-recharges', {
+        efrId: Number(efrId),
+        rechargeAmount: Number(rechargeAmount),
+        paymentMode: paymentMode || undefined,
+        referenceId: referenceId || undefined,
+        comments: comments || undefined,
+      });
+      showToast({ variant: 'success', message: 'NDM Recharge Submitted' });
+      onSaved();
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Failed' });
+    } finally { setBusy(false); }
+  }
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Submit NDM Recharge</DialogTitle></DialogHeader>
+        <div className="p-4 space-y-3">
+          <div><Label>Easyfixer ID *</Label><Input value={efrId} onChange={(e) => setEfrId(e.target.value.replace(/\D/g, ''))} className="font-mono" /></div>
+          <div><Label>Recharge Amount ₹ *</Label><Input value={rechargeAmount} onChange={(e) => setRechargeAmount(e.target.value)} className="font-mono" /></div>
+          <div><Label>Payment Mode</Label>
+            <select value={paymentMode} onChange={(e) => setPaymentMode(e.target.value)} className="border rounded h-9 px-2 text-sm bg-background w-full">
+              <option value="Cash">Cash</option>
+              <option value="UPI">UPI</option>
+              <option value="Bank Transfer">Bank Transfer</option>
+              <option value="Cheque">Cheque</option>
+            </select>
+          </div>
+          <div><Label>Reference ID</Label><Input value={referenceId} onChange={(e) => setReferenceId(e.target.value)} className="font-mono" placeholder="UTR / cheque #" /></div>
+          <div><Label>Comments</Label>
+            <textarea value={comments} onChange={(e) => setComments(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" rows={2} />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button onClick={submit} disabled={busy}>{busy ? 'Saving…' : 'Save'}</Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -471,7 +947,7 @@ function EfrLedgerTab() {
   if (efrId) qs.set('efrId', efrId);
   qs.set('limit', '200');
   const url = `/admin/finance/efr-transactions?${qs.toString()}`;
-  const { data, loading, error } = useFetch<EfrTxn>(url, [type, efrId]);
+  const { data, loading, error } = useFetch<EfrTxn>(url);
 
   return (
     <div className="space-y-2 mt-2">

@@ -22,6 +22,12 @@ import { Coins, AlertTriangle, CheckCircle2, XCircle } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { api, ApiError } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
+import { showToast } from '@/components/ui/toast';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { useFetch as useSharedFetch } from '@/lib/hooks';
 
 type Advance = {
   advance_id: number;
@@ -51,52 +57,53 @@ const STATUS_LABEL: Record<number, string> = {
   3: 'Rejected',
 };
 
-function useFetch<T>(url: string | null, deps: unknown[] = []): {
-  data: T[]; loading: boolean; error: string | null; reload: () => void;
-} {
-  const [data, setData] = useState<T[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [bump, setBump] = useState(0);
-  useEffect(() => {
-    if (!url) return;
-    let cancelled = false;
-    (async () => {
-      setLoading(true); setError(null);
-      try {
-        const d = await api.get<T[]>(url);
-        if (!cancelled) setData(Array.isArray(d) ? d : []);
-      } catch (e) {
-        if (!cancelled) setError(e instanceof ApiError ? e.message : 'Load failed');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [url, bump, ...deps]);
-  return { data, loading, error, reload: () => setBump((b) => b + 1) };
+/*
+ * Adapter over the mandatory shared `@/lib/hooks` useFetch (per memory
+ * `feedback_crm_ui_fetch_hooks`). The shared hook returns the raw
+ * payload; this page consumes a list endpoint, so we normalise to
+ * array semantics + `reload` naming to keep the call-site terse.
+ */
+function useFetch<T>(url: string | null): { data: T[]; loading: boolean; error: string | null; reload: () => void } {
+  const { data, loading, error, refetch } = useSharedFetch<T[] | { items?: T[] }>(url);
+  const arr: T[] = Array.isArray(data) ? data : ((data as { items?: T[] } | null)?.items ?? []);
+  return { data: arr, loading, error, reload: refetch };
 }
 
 export default function AdvancesPage() {
   const [statusFilter, setStatusFilter] = useState<string>('');
   const url = `/admin/advances${statusFilter ? `?status=${statusFilter}` : ''}`;
-  const { data, loading, error, reload } = useFetch<Advance>(url, [statusFilter]);
+  const { data, loading, error, reload } = useFetch<Advance>(url);
 
+  // Reject flow now uses a dedicated dialog instead of window.prompt.
+  // Approve flows remain inline POST calls — no input needed.
+  const [rejecting, setRejecting] = useState<Advance | null>(null);
   async function act(a: Advance, action: 'ops-approve' | 'fin-approve' | 'reject') {
+    if (action === 'reject') {
+      setRejecting(a);
+      return;
+    }
     try {
-      if (action === 'reject') {
-        const remarks = prompt(`Reject advance #${a.advance_id}? Enter remarks (optional):`);
-        if (remarks === null) return; // user cancelled the prompt
-        await api.post(`/admin/advances/${a.advance_id}/reject`, { remarks });
-      } else if (action === 'ops-approve') {
+      if (action === 'ops-approve') {
         await api.post(`/admin/advances/${a.advance_id}/ops-approve`, {});
+        showToast({ variant: 'success', message: 'Advance Approved By Ops' });
       } else {
         await api.post(`/admin/advances/${a.advance_id}/fin-approve`, {});
+        showToast({ variant: 'success', message: 'Advance Approved By Finance' });
       }
       reload();
     } catch (e) {
-      alert(e instanceof ApiError ? e.message : 'Action failed');
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Action failed' });
+    }
+  }
+  async function submitReject(remarks: string) {
+    if (!rejecting) return;
+    try {
+      await api.post(`/admin/advances/${rejecting.advance_id}/reject`, { remarks });
+      showToast({ variant: 'success', message: 'Advance Rejected' });
+      setRejecting(null);
+      reload();
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Reject failed' });
     }
   }
 
@@ -222,6 +229,42 @@ export default function AdvancesPage() {
           </table>
         </div>
       )}
+      <RejectAdvanceDialog advance={rejecting} onClose={() => setRejecting(null)} onSubmit={submitReject} />
     </div>
+  );
+}
+
+/*
+ * RejectAdvanceDialog — replaces the legacy window.prompt with a real
+ * modal capturing the optional rejection remarks. Submits with empty
+ * remarks if the operator just clicks Reject.
+ */
+function RejectAdvanceDialog({ advance, onClose, onSubmit }: {
+  advance: { advance_id: number } | null; onClose: () => void; onSubmit: (remarks: string) => Promise<void>;
+}) {
+  const [remarks, setRemarks] = useState('');
+  useEffect(() => { if (advance) setRemarks(''); }, [advance]);
+  if (!advance) return null;
+  return (
+    <Dialog open={!!advance} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Reject Advance #{advance.advance_id}</DialogTitle></DialogHeader>
+        <div className="p-4 space-y-3">
+          <div>
+            <Label>Remarks</Label>
+            <Input
+              value={remarks}
+              onChange={(e) => setRemarks(e.target.value)}
+              placeholder="Optional rejection reason"
+              autoFocus
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button onClick={() => onSubmit(remarks)}>Reject</Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
