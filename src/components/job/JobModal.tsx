@@ -3285,6 +3285,24 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
    * the context without needing new columns on tbl_job.
    */
   const [outcomeDialog, setOutcomeDialog] = useState<null | { mode: 'unreachable' | 'enquiry' }>(null);
+  /*
+   * Outcome submission payload — captured at dialog-submit time and
+   * read by submit() once the status PATCH fires. The structured fields
+   * (reasonId, comment) are needed AFTER setStatus to (a) stamp
+   * enquiry_reason_id / enquiry_comment / enquiry_date_time on tbl_job
+   * and (b) POST a tbl_job_comment row with comment_on=17 so the
+   * Rescheduling/History sections on the Summary tab can render the
+   * trail. Stays in state across the requestSubmit() defer so the
+   * submit() function (which runs after the next render) can read it.
+   */
+  const [outcomePayload, setOutcomePayload] = useState<null | {
+    mode: 'unreachable' | 'enquiry';
+    dueTo: string;
+    reason: string;
+    reasonId: number | null;
+    remarks: string;
+    comment: string;     // the merged structured prefix (sent as enquiry_comment + tbl_job_comment.comments)
+  }>(null);
 
   /*
    * Permission gate for Unreachable / Enquiry buttons.
@@ -3523,7 +3541,42 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
             submitVariant === 'enquiry' ? 7
               : submitVariant === 'unreachable' ? 9
               : 0;
-          await api.patch(`/admin/jobs/${initial.job_id}/status`, { status: targetStatus });
+          // Pass reasonId + structured comment when transitioning into
+          // an outcome status. BE setStatus stamps these into:
+          //   - tbl_job.enquiry_reason_id / enquiry_comment /
+          //     enquiry_date_time / cancel_by  (when status=7)
+          //   - tbl_job.cancel_reason_id / cancel_comment /
+          //     cancel_date_time / cancel_by  (when status=6, untouched
+          //     here; kept for parity reference)
+          const statusBody: Record<string, unknown> = { status: targetStatus };
+          if (isOutcomeOnly && outcomePayload) {
+            if (outcomePayload.reasonId) statusBody.reasonId = outcomePayload.reasonId;
+            if (outcomePayload.comment)   statusBody.comment   = outcomePayload.comment;
+          }
+          await api.patch(`/admin/jobs/${initial.job_id}/status`, statusBody);
+          // After the status PATCH, also drop a tbl_job_comment row so
+          // the Rescheduling/Calling-style trail on the Summary tab can
+          // surface the Enquiry/Unreachable outcome alongside everything
+          // else the operator has done on the job. comment_on=17 is the
+          // legacy "Enquiry" comment code; we reuse the same code for
+          // Unreachable since it shares the same row shape and the
+          // structured prefix already encodes which variant fired it.
+          if (isOutcomeOnly && outcomePayload) {
+            try {
+              await api.post(`/admin/jobs/${initial.job_id}/comments`, {
+                comments:        outcomePayload.comment,
+                comment_on:      17,
+                enum_reason_id:  outcomePayload.reasonId || undefined,
+              });
+            } catch (commentErr) {
+              // Non-fatal: the status transition already landed. Surface
+              // a soft warning in the console; the operator's success
+              // toast for the outcome itself remains.
+              try { require('../../lib/logger'); } catch { /* no shared logger; swallow */ }
+              // eslint-disable-next-line no-console
+              console.warn('Failed to write outcome comment row', commentErr);
+            }
+          }
         }
         // Success-path toast for outcome-only flows. Transition the
         // loading toast to a green success toast at the same bottom-
@@ -4612,13 +4665,17 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
           open={outcomeDialog !== null}
           mode={outcomeDialog?.mode ?? 'unreachable'}
           onClose={() => setOutcomeDialog(null)}
-          onSubmit={({ dueTo, reason, remarks }) => {
+          onSubmit={({ dueTo, reason, reasonId, remarks }) => {
             const mode = outcomeDialog?.mode ?? 'unreachable';
             const tag = mode === 'unreachable' ? 'Unreachable' : 'Enquiry';
             const dueLabel = mode === 'unreachable' ? 'Pending Due To' : 'Open Due To';
             const prefix = `[${tag} · ${dueLabel}: ${dueTo} · Reason: ${reason}]`;
             const merged = remarks ? `${prefix} ${remarks}` : prefix;
             setF((s) => ({ ...s, remarks: merged }));
+            // Stash the structured payload for submit() to use AFTER
+            // the status PATCH lands — see the Enquiry persistence
+            // path in submit().
+            setOutcomePayload({ mode, dueTo, reason, reasonId, remarks, comment: merged });
             setSubmitVariant(mode);
             setOutcomeDialog(null);
             // requestSubmit on the closest form ancestor — defer one
@@ -5950,7 +6007,7 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
         open={outcomeDialog !== null}
         mode={outcomeDialog?.mode ?? 'unreachable'}
         onClose={() => setOutcomeDialog(null)}
-        onSubmit={({ dueTo, reason, remarks }) => {
+        onSubmit={({ dueTo, reason, reasonId, remarks }) => {
           const mode = outcomeDialog?.mode ?? 'unreachable';
           const tag = mode === 'unreachable' ? 'Unreachable' : 'Enquiry';
           const dueLabel = mode === 'unreachable' ? 'Pending Due To' : 'Open Due To';
@@ -5959,6 +6016,10 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
           // the structured prefix.
           const merged = remarks ? `${prefix} ${remarks}` : prefix;
           setF((s) => ({ ...s, remarks: merged }));
+          // Stash the structured payload so submit() can stamp
+          // enquiry_reason_id / enquiry_comment / cancel_by + post a
+          // tbl_job_comment row (comment_on=17) after the status PATCH.
+          setOutcomePayload({ mode, dueTo, reason, reasonId, remarks, comment: merged });
           setSubmitVariant(mode);
           setOutcomeDialog(null);
           // Programmatic submit — defer one tick so the state updates
@@ -7268,7 +7329,12 @@ function JobOutcomeDialog({
   open: boolean;
   mode: 'unreachable' | 'enquiry';
   onClose: () => void;
-  onSubmit: (payload: { dueTo: string; reason: string; remarks: string }) => void;
+  // `reasonId` exposed so the parent can persist the canonical
+  // action_taken_reason.id into tbl_job.enquiry_reason_id / cancel_reason_id
+  // (the BE setStatus stamp path). Falls back to `null` when the picked
+  // label couldn't be matched back to an id (defensive — shouldn't
+  // happen with the controlled dropdown but keeps the contract safe).
+  onSubmit: (payload: { dueTo: string; reason: string; reasonId: number | null; remarks: string }) => void;
 }) {
   const [dueTo, setDueTo] = useState<string>('Customer');
   const [reason, setReason] = useState<string>('');
@@ -7308,7 +7374,17 @@ function JobOutcomeDialog({
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!reason || !remarks.trim()) return; // required-field guard
-    onSubmit({ dueTo, reason, remarks: remarks.trim() });
+    // Re-resolve the picked label back to its id. Dialog state stores
+    // the label as the SearchSelect value (legacy storage shape for
+    // tbl_job.remarks prefix), so the lookup here is just for the
+    // structured persistence path on the parent.
+    const matched = reasons.find((r) => r.label === reason);
+    onSubmit({
+      dueTo,
+      reason,
+      reasonId: matched ? Number(matched.id) || null : null,
+      remarks: remarks.trim(),
+    });
   }
 
   // SearchSelect needs unique string values; reasons are sourced by label
