@@ -3554,25 +3554,29 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
             if (outcomePayload.comment)   statusBody.comment   = outcomePayload.comment;
           }
           await api.patch(`/admin/jobs/${initial.job_id}/status`, statusBody);
-          // After the status PATCH, also drop a tbl_job_comment row so
-          // the Rescheduling/Calling-style trail on the Summary tab can
-          // surface the Enquiry/Unreachable outcome alongside everything
-          // else the operator has done on the job. comment_on=17 is the
-          // legacy "Enquiry" comment code; we reuse the same code for
-          // Unreachable since it shares the same row shape and the
-          // structured prefix already encodes which variant fired it.
+          // After the status PATCH, drop a tbl_job_comment row so the
+          // Rescheduling/Calling-style trail on the Summary tab can
+          // surface the outcome alongside everything else the operator
+          // has done on the job. Legacy comment_on codes (verified
+          // 2026-05-26):
+          //   16 = call_later (Unreachable)
+          //   17 = enquiry    (Enquiry)
+          // `job_stage` is the human label, persisted alongside the
+          // numeric code on deploys that carry the column.
           if (isOutcomeOnly && outcomePayload) {
+            const commentOnCode = outcomePayload.mode === 'unreachable' ? 16 : 17;
+            const jobStageLabel = outcomePayload.mode === 'unreachable' ? 'call_later' : 'enquiry';
             try {
               await api.post(`/admin/jobs/${initial.job_id}/comments`, {
                 comments:        outcomePayload.comment,
-                comment_on:      17,
+                comment_on:      commentOnCode,
                 enum_reason_id:  outcomePayload.reasonId || undefined,
+                job_stage:       jobStageLabel,
               });
             } catch (commentErr) {
               // Non-fatal: the status transition already landed. Surface
               // a soft warning in the console; the operator's success
               // toast for the outcome itself remains.
-              try { require('../../lib/logger'); } catch { /* no shared logger; swallow */ }
               // eslint-disable-next-line no-console
               console.warn('Failed to write outcome comment row', commentErr);
             }
@@ -3935,7 +3939,15 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
 
   if (isConfirm && initial) {
     return (
-      <form onSubmit={submit} className="space-y-4">
+      // `noValidate` flips ON when the operator is submitting an
+      // Unreachable / Enquiry outcome — those flows are pure outcome
+      // logging and must NOT block on required-field gates that only
+      // apply to the happy Book Call path (e.g. service rows, slot,
+      // address completeness). HTML5 required attributes stay on the
+      // inputs so the Book path still validates; noValidate only
+      // suppresses the browser-level submit-time check when the
+      // outcome path fired requestSubmit().
+      <form onSubmit={submit} noValidate={outcomePayload !== null} className="space-y-4">
         {/*
           * Job Summary strip — legacy parity. Four fields: Special Comments,
           * Job Description, Product Quantity, Job Type. Mobile is a prominent
@@ -4887,7 +4899,11 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
   }, [f.fk_client_id, isEditShape]);
 
   return (
-    <form onSubmit={submit} className="space-y-5">
+    // Same noValidate gate as the confirm-mode form above — see comment
+    // there for rationale. Outcome paths (Unreachable / Enquiry) need
+    // to bypass HTML5 required-field gates on the Book Call form so the
+    // operator can log an outcome on an incomplete booking.
+    <form onSubmit={submit} noValidate={outcomePayload !== null} className="space-y-5">
       {/* Form-level header bar — shows the customer the operator is
           booking for and (when matched) a View History shortcut to a
           modal listing every prior job for that customer_id. Lives
