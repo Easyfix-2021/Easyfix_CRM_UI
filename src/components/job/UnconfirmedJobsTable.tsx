@@ -37,6 +37,11 @@ export type UnconfirmedJobRow = {
   client_ref_id: string | null;
   ticket_created_date_time?: string | null;
   created_date_time: string;
+  // Surfaces the row's last write time — the BE LIST projection adds
+  // this so we can flag Save-Draft-edited rows with a "Draft" pill
+  // next to the status badge. Optional so older API responses (during
+  // staging rollouts) don't break the type narrow.
+  last_update_time?: string | null;
   requested_date_time: string;
   time_slot?: string | null;
   remarks?: string | null;
@@ -49,6 +54,22 @@ export type UnconfirmedJobRow = {
   city_name: string | null;
   source_type: string | null;
 };
+
+/*
+ * Detects whether a job row has been touched since creation (i.e. has
+ * Save Draft progress on it). 60-second buffer protects against the
+ * unavoidable microsecond skew between the INSERT-time created_date_time
+ * and last_update_time columns — both get NOW() on the original create
+ * but their wall-clock values can differ by a few ms within the same
+ * INSERT. Anything past 60s is unambiguously a real edit.
+ */
+function hasDraftEdit(row: UnconfirmedJobRow): boolean {
+  if (!row.last_update_time || !row.created_date_time) return false;
+  const created = new Date(row.created_date_time).getTime();
+  const updated = new Date(row.last_update_time).getTime();
+  if (!Number.isFinite(created) || !Number.isFinite(updated)) return false;
+  return updated - created > 60_000;
+}
 
 export function UnconfirmedJobsTable({
   rows,
@@ -105,6 +126,22 @@ export function UnconfirmedJobsTable({
                 <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${statusColorClass(j.job_status)}`}>
                   {statusLabel(j.job_status, { assigned: j.fk_easyfixter_id != null })}
                 </span>
+                {/*
+                  Draft indicator — added 2026-05-28. Visible only when an
+                  Unconfirmed row has been edited since creation (Save Draft
+                  was clicked on the Confirm modal). Derived from
+                  last_update_time vs created_date_time; no extra column.
+                  Tooltip on hover spells out what it means so operators
+                  scanning the list don't have to guess.
+                */}
+                {hasDraftEdit(j) && (
+                  <span
+                    className="ml-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold whitespace-nowrap bg-amber-100 text-amber-800 border border-amber-300"
+                    title="Save Draft progress exists on this job. Open Confirm & Schedule to continue."
+                  >
+                    Draft
+                  </span>
+                )}
               </td>
               <td className="text-xs">{reason || <span className="text-muted-foreground">—</span>}</td>
               <td className="text-xs max-w-[220px]">

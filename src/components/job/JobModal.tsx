@@ -2847,7 +2847,7 @@ function CreateJobMobileGate({
  * nothing happened" — the explicit-close path skips it entirely for
  * outcome-only flows.
  */
-type JobFormSavedOpts = { closeAfter?: boolean; variant?: 'book' | 'enquiry' | 'unreachable' };
+type JobFormSavedOpts = { closeAfter?: boolean; variant?: 'book' | 'enquiry' | 'unreachable' | 'draft' };
 function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
   mode: 'create' | 'edit' | 'confirm';
   initial: Job | null;
@@ -3270,7 +3270,7 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
    * For edit/confirm modes the variant has no effect — the existing
    * promote-to-BOOKED flow runs as before.
    */
-  const [submitVariant, setSubmitVariant] = useState<'book' | 'enquiry' | 'unreachable'>('book');
+  const [submitVariant, setSubmitVariant] = useState<'book' | 'enquiry' | 'unreachable' | 'draft'>('book');
 
   /*
    * Job-outcome dialog (Unreachable / Enquiry) — added 2026-05-18 to
@@ -3345,6 +3345,9 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
      * (create / edit) are NOT subject to this gate — they have their
      * own minimal validation rules expressed elsewhere.
      */
+    // Save Draft (submitVariant === 'draft') intentionally bypasses this
+    // mandatory-fields gate — the whole point of draft is to persist
+    // partial progress. Only the 'book' variant is gated.
     if (isConfirm && submitVariant === 'book' && !confirmSection2Complete) {
       const missing: string[] = [];
       if (!f.client_ref_id || !String(f.client_ref_id).trim()) missing.push('Client Reference ID');
@@ -3533,10 +3536,16 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
         //   'unreachable' → 9 (CALL_LATER) — already 9; re-stamp is a no-op
         //                   but ensures consistency if the row was edited
         //                   to a different status in between.
+        //   'draft'       → NO STATUS CHANGE. Save Draft path (added
+        //                   2026-05-28) writes the field PATCH above but
+        //                   skips the status transition entirely. The
+        //                   job stays in its current bucket (typically
+        //                   status 9 / Unconfirmed) and reopening the
+        //                   modal next time prefills from the saved row.
         // For non-'book' variants we intentionally do NOT re-trigger
         // the BE's "auto status bumps on first assign" path; ops wants
         // the order to STAY in its bucket until they explicitly book it.
-        if (isConfirm) {
+        if (isConfirm && submitVariant !== 'draft') {
           const targetStatus =
             submitVariant === 'enquiry' ? 7
               : submitVariant === 'unreachable' ? 9
@@ -3594,12 +3603,24 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
             message: `Marked as ${outcomeLabel} successfully`,
           });
         }
+        // Save Draft path — same loading→success transition. The
+        // operator gets explicit confirmation that the in-progress fields
+        // are persisted on tbl_job and will prefill on next reopen, plus
+        // a hint that status hasn't changed.
+        if (submitVariant === 'draft') {
+          if (loadingToastId != null) dismissToast(loadingToastId);
+          loadingToastId = null;
+          showToast({
+            variant: 'success',
+            message: 'Draft Saved',
+          });
+        }
         // Tell the parent how to behave after this save. Outcome-only
-        // flows (Unreachable / Enquiry) want the modal closed
-        // immediately — no flash of "loading…" while the modal refetches
-        // into view mode. Book stays open so the operator can see the
-        // updated booking.
-        onSaved(saved, { closeAfter: isOutcomeOnly, variant: submitVariant });
+        // flows (Unreachable / Enquiry) AND Save Draft want the modal
+        // closed immediately — no flash of "loading…" while the modal
+        // refetches into view mode. Book stays open so the operator can
+        // see the updated booking.
+        onSaved(saved, { closeAfter: isOutcomeOnly || submitVariant === 'draft', variant: submitVariant });
       } else {
         // Create flow — full payload including customer + address + services.
         const servicesPayload = buildServicesPayload();
@@ -3947,7 +3968,7 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
       // inputs so the Book path still validates; noValidate only
       // suppresses the browser-level submit-time check when the
       // outcome path fired requestSubmit().
-      <form onSubmit={submit} noValidate={outcomePayload !== null} className="space-y-4">
+      <form onSubmit={submit} noValidate={outcomePayload !== null || submitVariant === 'draft'} className="space-y-4">
         {/*
           * Job Summary strip — legacy parity. Four fields: Special Comments,
           * Job Description, Product Quantity, Job Type. Mobile is a prominent
@@ -4648,6 +4669,44 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
               Enquiry
             </Button>
           )}
+          {/*
+            Save Draft (added 2026-05-28). Saves all currently-filled fields
+            to tbl_job via the same PATCH the Book Call button uses, but
+            SKIPS the status transition — job stays in its current bucket
+            (typically Unconfirmed/9). Reopening the modal prefills the
+            saved values via the normal GET /admin/jobs/:id fetch (no
+            separate draft table needed — the field PATCH lands directly
+            on the live row).
+
+            Click pattern mirrors the outcome buttons: type="button" +
+            setSubmitVariant('draft') + setTimeout(form.requestSubmit, 0).
+            The setTimeout is critical — React state batching means a
+            type="submit" click would let submit() run with the OLD
+            submitVariant value, triggering the status PATCH path we want
+            to skip. Deferring one tick guarantees the new variant value
+            is in scope when submit() reads it.
+
+            Validation gate: the mandatory-fields check at the top of
+            submit() and the HTML5 form-level required attributes are
+            both bypassed for the 'draft' variant — partial saves are
+            the whole point of this button.
+          */}
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              setSubmitVariant('draft');
+              setTimeout(() => {
+                const form = document.querySelector('form');
+                if (form) form.requestSubmit();
+              }, 0);
+            }}
+            disabled={submitting}
+            title="Save current details to DB without changing status. Reopen this job later to continue."
+            className="border-amber-400 text-amber-700 hover:bg-amber-50"
+          >
+            {submitting && submitVariant === 'draft' ? 'Saving Draft…' : 'Save Draft'}
+          </Button>
           <LoadBtn
             type="submit"
             loading={submitting && submitVariant === 'book'}
@@ -4903,7 +4962,7 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
     // there for rationale. Outcome paths (Unreachable / Enquiry) need
     // to bypass HTML5 required-field gates on the Book Call form so the
     // operator can log an outcome on an incomplete booking.
-    <form onSubmit={submit} noValidate={outcomePayload !== null} className="space-y-5">
+    <form onSubmit={submit} noValidate={outcomePayload !== null || submitVariant === 'draft'} className="space-y-5">
       {/* Form-level header bar — shows the customer the operator is
           booking for and (when matched) a View History shortcut to a
           modal listing every prior job for that customer_id. Lives
