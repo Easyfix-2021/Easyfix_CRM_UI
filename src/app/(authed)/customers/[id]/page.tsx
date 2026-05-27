@@ -53,6 +53,11 @@ type JobRow = {
   requested_date_time: string | null;
   scheduled_date_time: string | null;
   city_name: string | null;
+  // service_count comes from the LIST projection (correlated subquery
+  // counts only job_service_status = 1). Used here to render the
+  // shared "No Services" pill on BOOKED rows with zero active services
+  // — same anomaly indicator as /jobs and /my-orders.
+  service_count?: number;
 };
 
 export default function CustomerDetailPage() {
@@ -200,7 +205,32 @@ export default function CustomerDetailPage() {
                         </Link>
                       </td>
                       <td className="font-mono text-xs">{j.job_reference_id || j.client_ref_id || '—'}</td>
-                      <td><span className="badge bg-slate-100 text-slate-700">{statusLabel(j.job_status)}</span></td>
+                      <td>
+                        <span className="badge bg-slate-100 text-slate-700">{statusLabel(j.job_status)}</span>
+                        {/* "No Services" pill — same shape as /jobs +
+                            /my-orders. Surfaces the legacy data-quality
+                            gap where a BOOKED job has zero active
+                            tbl_job_services rows (ref Job #482453). */}
+                        {j.job_status === 0 && (j.service_count ?? 0) === 0 && (
+                          /*
+                           * Clickable deep-link to the job's Services tab.
+                           * This page doesn't host JobModal, so we route
+                           * to /jobs?... — the jobs page reads action=view
+                           * + viewTab=services on mount and opens the
+                           * modal pre-tabbed. Plain anchor (not Link) is
+                           * fine here; nav is a full client-side push so
+                           * the modal's `useFetchOnce` for getById gets
+                           * to fire on the new page.
+                           */
+                          <Link
+                            href={`/jobs?jobId=${j.job_id}&action=view&viewTab=services`}
+                            className="ml-1 inline-flex items-center rounded-full bg-amber-100 hover:bg-amber-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800 whitespace-nowrap cursor-pointer transition-colors"
+                            title="Booked but no services attached. Click to open the Services tab."
+                          >
+                            No Services
+                          </Link>
+                        )}
+                      </td>
                       <td className="text-xs">{j.client_name || '—'}</td>
                       <td className="text-xs">{j.easyfixer_name || '—'}</td>
                       <td className="text-xs">{formatDate(j.scheduled_date_time)}</td>

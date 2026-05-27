@@ -86,19 +86,44 @@ export function useJobActionNav() {
   const pathname  = usePathname();
   const sp        = useSearchParams();
 
-  /** Build the URL with only `jobId` + `action` mutated; other params kept. */
+  /** Build the URL with only `jobId` + `action` + optional `extras` mutated; other params kept. */
   const buildUrl = useCallback(
-    (next: { action: JobAction | null; jobId?: number | null }) => {
+    (next: {
+      action: JobAction | null;
+      jobId?: number | null;
+      /*
+       * Extra query params layered on top of the canonical action/jobId
+       * pair (2026-05-28). Used to deep-link the modal to a specific
+       * sub-state — currently `viewTab=<TabValue>` so a list-row pill
+       * can land the operator straight on e.g. the Services tab.
+       *
+       * URL key is `viewTab` deliberately — the bare `tab` key is owned
+       * by /jobs + /my-orders for their LIST status-tab selector and
+       * collides if reused here. Keys passed with `null` values are
+       * deleted so a previous deep-link's viewTab is cleared when the
+       * new push doesn't carry one.
+       */
+      extras?: Record<string, string | null>;
+    }) => {
       const p = new URLSearchParams(sp);
       // Strip the canonical keys + legacy aliases so the URL never
-      // carries both shapes at once.
+      // carries both shapes at once. Also strip `viewTab` so a previous
+      // tab-deep-link doesn't leak into the next modal open without
+      // an explicit tab pick.
       p.delete('action');
       p.delete('jobId');
       p.delete('view');
       p.delete('new');
+      p.delete('viewTab');
       if (next.action) {
         p.set('action', next.action);
         if (next.jobId != null) p.set('jobId', String(next.jobId));
+      }
+      if (next.extras) {
+        for (const [k, v] of Object.entries(next.extras)) {
+          if (v == null) p.delete(k);
+          else           p.set(k, v);
+        }
       }
       const q = p.toString();
       return q ? `${pathname}?${q}` : pathname;
@@ -107,12 +132,28 @@ export function useJobActionNav() {
   );
 
   const openJobAction = useCallback(
-    (action: JobAction, jobId?: number | null) => {
+    (
+      action: JobAction,
+      jobId?: number | null,
+      /*
+       * Optional sub-state for the action. Today only `tab` is read by
+       * the modal's ViewBody — see JobModal.tsx where the list page
+       * reads `viewTab` from the URL and threads to <Tabs defaultValue>.
+       * The caller still passes `{ tab: 'services' }` here for
+       * readability; we map it to the `viewTab` URL key internally to
+       * avoid collision with the list's existing `?tab=` selector.
+       */
+      opts?: { tab?: string },
+    ) => {
       // First open from a clean URL → push so Back closes the modal.
       // Re-targeting an already-open modal (e.g. view → confirm on
       // the same row) → replace to avoid history pollution.
       const currentAction = sp.get('action') || (sp.get('view') ? 'view' : sp.get('new') === '1' ? 'create' : null);
-      const url = buildUrl({ action, jobId: jobId ?? null });
+      const url = buildUrl({
+        action,
+        jobId: jobId ?? null,
+        extras: opts?.tab ? { viewTab: opts.tab } : undefined,
+      });
       if (currentAction) router.replace(url, { scroll: false });
       else                router.push(url,    { scroll: false });
     },
@@ -120,6 +161,8 @@ export function useJobActionNav() {
   );
 
   const closeJobAction = useCallback(() => {
+    // buildUrl already strips `tab` along with the action/jobId keys
+    // so the URL returns to its pre-modal state cleanly.
     const url = buildUrl({ action: null });
     router.replace(url, { scroll: false });
   }, [router, buildUrl]);

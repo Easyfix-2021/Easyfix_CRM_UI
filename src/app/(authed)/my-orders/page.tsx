@@ -72,6 +72,11 @@ type JobRow = {
   fk_easyfixter_id: number | null; easyfixer_name: string | null;
   job_owner: number | null; owner_name: string | null;
   fk_address_id: number; city_name: string | null;
+  // service_count surfaced on the LIST projection — counts only
+  // job_service_status = 1 so soft-deleted services don't mask the
+  // "Booked with no active services" anomaly. Same usage pattern as
+  // /jobs and /customers/[id].
+  service_count?: number;
 };
 type Resp = { items: JobRow[]; total: number; limit: number; offset: number };
 
@@ -401,6 +406,30 @@ export default function MyOrdersPage() {
                     <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${statusColorClass(j.job_status)}`}>
                       {statusLabel(j.job_status, { assigned: j.fk_easyfixter_id != null })}
                     </span>
+                    {/*
+                     * "No Services" pill — shared anomaly indicator for
+                     * BOOKED jobs with zero active services (counts only
+                     * job_service_status=1 server-side). Same chip
+                     * pattern as /jobs and /customers/[id]. Helps techs
+                     * spot scheduling slots that need ops attention
+                     * before they start travelling.
+                     */}
+                    {j.job_status === 0 && (j.service_count ?? 0) === 0 && (
+                      <button
+                        type="button"
+                        // Clickable deep-link to the Services tab — same
+                        // pattern as /jobs. stopPropagation guards
+                        // against any future row-level click handlers.
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openJobAction('view', j.job_id, { tab: 'services' });
+                        }}
+                        className="ml-1 inline-flex items-center rounded-full bg-amber-100 hover:bg-amber-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800 whitespace-nowrap cursor-pointer transition-colors"
+                        title="Booked but no services attached. Click to open the Services tab."
+                      >
+                        No Services
+                      </button>
+                    )}
                   </td>
                   <td className="stick-col stick-right text-right whitespace-nowrap">
                     {/* Row actions follow legacy Manage Jobs + our /jobs page convention */}
@@ -513,6 +542,9 @@ export default function MyOrdersPage() {
         jobId={modal.id}
         onClose={closeModal}
         onSaved={() => { cacheRef.current.clear(); load(false, true); }}
+        // Same `?viewTab=` deep-link plumbing as /jobs. Powers the
+        // clickable "No Services" pill on each row.
+        initialTab={searchParams.get('viewTab') || undefined}
       />
 
       <AssignTechnicianModal

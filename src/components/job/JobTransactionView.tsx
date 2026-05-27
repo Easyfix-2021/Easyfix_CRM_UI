@@ -329,96 +329,25 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
         </Card>
       </div>
 
-      {/* ─── Technician Rating + Comments ─────────────────────────── */}
-      <Card>
-        <div className="grid md:grid-cols-2 gap-6">
-          <div>
-            <div className="text-sm font-semibold text-slate-700 mb-2">Technician Rating:</div>
-            <span className="inline-flex items-center gap-1 bg-sky-100 text-sky-800 rounded px-3 py-1 text-base font-semibold">
-              ★ {data.feedback?.easyfixer_rating ?? 0}
-            </span>
-          </div>
-          <div>
-            <div className="text-sm font-semibold text-slate-700 mb-2">Comments:</div>
-            <div className="text-sm text-slate-700 whitespace-pre-wrap min-h-[2.5em]">
-              {fmt(data.feedback?.happy_with_service)}
-            </div>
-          </div>
-        </div>
-      </Card>
-
-      {/* ─── App Status ───────────────────────────────────────────── */}
-      <Card dense>
-        <SectionHeading>App Status</SectionHeading>
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50/60">
-            <tr className="text-left text-xs text-muted-foreground">
-              <th className="px-3 py-2">Confirmation</th>
-              <th className="px-3 py-2">Allocation</th>
-              <th className="px-3 py-2">ETA</th>
-              <th className="px-3 py-2">OTA</th>
-              <th className="px-3 py-2">App Stage</th>
-              <th className="px-3 py-2">1st visit closing TAT</th>
-              <th className="px-3 py-2">Job closing TAT</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr className="border-t border-slate-100">
-              <td className="px-3 py-2">{fmt((j as Record<string, unknown>).app_confirmation_time as string) }</td>
-              <td className="px-3 py-2 text-xs">{j.scheduled_date_time ? formatDate(j.scheduled_date_time) : '—'}</td>
-              <td className="px-3 py-2">{fmt((j as Record<string, unknown>).eta_requested_time as string)}</td>
-              <td className="px-3 py-2">{fmt((j as Record<string, unknown>).app_checkout_date_time as string)}</td>
-              <td className="px-3 py-2">{statusLabel(Number(j.job_status), { assigned: j.fk_easyfixter_id != null })}</td>
-              <td className="px-3 py-2">{tat(j.checkin_date_time, j.checkout_date_time)}</td>
-              <td className="px-3 py-2">{tat(j.created_date_time, j.checkout_date_time)}</td>
-            </tr>
-          </tbody>
-        </table>
-      </Card>
-
-      {/* ─── App Details Data ─────────────────────────────────────── */}
-      <Card dense>
-        <SectionHeading>App Details Data</SectionHeading>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm min-w-[1200px]">
-            <thead className="bg-slate-50/60">
-              <tr className="text-left text-xs text-muted-foreground">
-                <th className="px-3 py-2">Start Job Pictures</th>
-                <th className="px-3 py-2">Site Inspection</th>
-                <th className="px-3 py-2">Job close starts</th>
-                <th className="px-3 py-2">2nd visit</th>
-                <th className="px-3 py-2">Drop down reason</th>
-                <th className="px-3 py-2">Remarks</th>
-                <th className="px-3 py-2">Date time for revisit</th>
-                <th className="px-3 py-2">CO Amount</th>
-                <th className="px-3 py-2">Job Sheet & Material Used pic</th>
-                <th className="px-3 py-2">CX sign</th>
-                <th className="px-3 py-2">Feedback</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr className="border-t border-slate-100 align-top">
-                <td className="px-3 py-2"><ImageCount count={data.images_by_stage.start_job?.length} /></td>
-                <td className="px-3 py-2">{data.images_by_stage.site_inspection?.length ? <ImageCount count={data.images_by_stage.site_inspection.length} /> : <span className="text-muted-foreground">None<br />Available</span>}</td>
-                <td className="px-3 py-2">{j.checkout_date_time ? formatDate(j.checkout_date_time) : '—'}</td>
-                <td className="px-3 py-2 font-semibold text-rose-600">{(j as Record<string, unknown>).revisit_date ? 'YES' : 'NO'}</td>
-                <td className="px-3 py-2">{fmt(data.revisit_reason)}</td>
-                <td className="px-3 py-2 max-w-[200px]"><span className="text-xs">{fmt(j.remarks)}</span></td>
-                <td className="px-3 py-2 text-xs">
-                  {(j as Record<string, unknown>).revisit_date ? formatDate(String((j as Record<string, unknown>).revisit_date)) : '—'}
-                  {j.revisit_time_slot ? <div className="text-muted-foreground">{j.revisit_time_slot}</div> : null}
-                </td>
-                <td className="px-3 py-2 tabular-nums">{Number((j as Record<string, unknown>).collected_cash || 0)}/-</td>
-                <td className="px-3 py-2">
-                  <ImageCount count={(data.images_by_stage.job_sheet?.length || 0) + (data.images_by_stage.material_used?.length || 0)} />
-                </td>
-                <td className="px-3 py-2"><ImageCount count={data.images_by_stage.signature?.length} /></td>
-                <td className="px-3 py-2 text-xs">{fmt(data.feedback?.happy_with_service)}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </Card>
+      {/*
+       * Technician Rating + Comments / App Status / App Details Data
+       * sections REMOVED on the Unconfirmed view (2026-05-28 per ops).
+       *
+       * Rationale: this view renders for status=9 (CALL_LATER /
+       * Unconfirmed) jobs — i.e. the order hasn't been confirmed yet,
+       * so by definition there's no technician feedback to display, no
+       * app-stage telemetry, and no per-stage image buckets. The three
+       * cards always rendered empty / zero-state widgets and added
+       * visual noise without informing the operator's next action
+       * (Confirm & Schedule).
+       *
+       * These will return when job_stages lands — the post-confirmation
+       * lifecycle that actually populates the underlying columns. See
+       * the planned per-stage view (BOOKED → SCHEDULED → IN_PROGRESS →
+       * COMPLETED). Until then, the Customer Details + Open / Tools +
+       * Quotation + Remarks History + Job History cards below carry
+       * enough context for ops to confirm the order.
+       */}
 
       {/* ─── Remarks History ──────────────────────────────────────── */}
       <Card dense>
@@ -482,20 +411,6 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
 }
 
 /*
- * Image-count pill used by the App-Details-Data row. The actual image
- * preview lives behind a click — kept compact here so all 11 columns
- * fit on one row at typical viewport widths.
- */
-function ImageCount({ count }: { count: number | undefined }) {
-  if (!count) return <span className="text-muted-foreground">—</span>;
-  return (
-    <span className="inline-flex items-center rounded bg-sky-100 text-sky-800 px-2 py-0.5 text-xs">
-      📷 {count}
-    </span>
-  );
-}
-
-/*
  * EditAddressInTransaction — gated Edit Address affordance for the
  * Unconfirmed (status=9) job transaction view. Same shape as the
  * JobModal Summary tab — Pencil icon button that opens the shared
@@ -529,16 +444,9 @@ function EditAddressInTransaction({ jobRow, onSaved }: {
 }
 
 /*
- * TAT diff helper — legacy shows "N days N hours" between two
- * timestamps. Both args may be missing; render "—" in that case.
+ * `tat()` (days-hours diff) and `ImageCount` (image-tile pill) were
+ * removed alongside the App Status / App Details Data sections on
+ * 2026-05-28 — both were only used inside those tables. Will return
+ * with the job_stages view that reuses the same per-stage telemetry
+ * but on rows where it's actually populated.
  */
-function tat(start: string | null | undefined, end: string | null | undefined): string {
-  if (!start || !end) return '—';
-  const a = new Date(start).getTime();
-  const b = new Date(end).getTime();
-  if (!Number.isFinite(a) || !Number.isFinite(b) || b < a) return '—';
-  const ms = b - a;
-  const hrs = Math.floor(ms / (1000 * 60 * 60));
-  const days = Math.floor(hrs / 24);
-  return `${days} days ${hrs % 24} hours`;
-}

@@ -131,6 +131,19 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true 
     return { lat: parts[0], lng: parts[1] };
   }, [value.gps_location]);
 
+  /*
+   * `lastGeocodedAddrRef` records the address string we most recently
+   * reconciled with the map (via reverse-geocode, autocomplete pick,
+   * or successful forward-geocode). The debounced typed-address watcher
+   * below skips work when `value.address` matches this ref so we don't:
+   *   (a) re-fire a forward-geocode right after a pick already
+   *       supplied lat/lng, OR
+   *   (b) re-fire after a reverse-geocode supplied the address.
+   * Updated by `reverseGeocode`, `onPick`, and the debounced effect
+   * itself on a successful response.
+   */
+  const lastGeocodedAddrRef = React.useRef<string>(String(value.address || ''));
+
   // Reverse-geocode the marker position and patch dependent fields.
   // Called from the marker's `dragend` handler. Errors are logged but
   // non-fatal — the marker still moves even if reverse-geocode fails.
@@ -143,7 +156,13 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true 
       const next: Partial<AddressValue> = {
         gps_location: `${lat.toFixed(6)},${lng.toFixed(6)}`,
       };
-      if (r.formatted_address) next.address = r.formatted_address;
+      if (r.formatted_address) {
+        next.address = r.formatted_address;
+        // Reverse-geocoded address is now the canonical "synced" one;
+        // record so the typed-address debounce doesn't immediately
+        // re-fire a forward-geocode for the same string.
+        lastGeocodedAddrRef.current = r.formatted_address;
+      }
       const comps = r.address_components || {};
       if (comps.postal_code) next.pin_code = comps.postal_code;
       if (comps.city) {
@@ -158,6 +177,64 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true 
       patch({ gps_location: `${lat.toFixed(6)},${lng.toFixed(6)}` });
     }
   }
+
+  /*
+   * Typed-address → forward-geocode debounce (2026-05-28).
+   *
+   * Covers the gap where an operator TYPES a full address but never
+   * picks an autocomplete suggestion — without this, the pin wouldn't
+   * move and the GPS field would stay stale. Fires 1s after the last
+   * keystroke, only when:
+   *   - the typed string differs from what we last reconciled,
+   *   - it's at least 8 chars (avoids burning Google credits on
+   *     half-typed garbage),
+   *   - the editor is editable (skip in read-only view modes).
+   *
+   * Cheap on Google credits because (a) the BE /admin/maps/geocode
+   * endpoint already LRU-caches identical queries for 10 minutes,
+   * and (b) we de-dupe against `lastGeocodedAddrRef` here so an
+   * autocomplete pick that already set both address + gps doesn't
+   * trigger a redundant geocode.
+   *
+   * Stale-response guard: a flag flipped in the cleanup return suppresses
+   * patches from a debounced timer that resolves after the operator
+   * has typed more — prevents the pin from snapping to a previous
+   * partial address.
+   */
+  React.useEffect(() => {
+    if (!editable) return;
+    const typed = String(value.address || '').trim();
+    if (typed.length < 8) return;
+    if (typed === lastGeocodedAddrRef.current) return;
+    let cancelled = false;
+    const handle = setTimeout(async () => {
+      try {
+        const r = await api.get<{
+          lat?: number; lng?: number;
+          formatted_address?: string;
+          address_components?: { postal_code?: string; city?: string };
+        }>('/admin/maps/geocode', { address: typed });
+        if (cancelled) return;
+        if (r.lat == null || r.lng == null) return;
+        lastGeocodedAddrRef.current = typed;
+        const next: Partial<AddressValue> = {
+          gps_location: `${r.lat.toFixed(6)},${r.lng.toFixed(6)}`,
+        };
+        const comps = r.address_components || {};
+        if (comps.postal_code) next.pin_code = comps.postal_code;
+        if (comps.city) {
+          const match = cityByName.get(comps.city.toLowerCase());
+          if (match) next.city_id = match;
+        }
+        patch(next);
+      } catch {
+        // Silent fail — the operator can keep typing / pick a
+        // suggestion / drag the pin manually.
+      }
+    }, 1000);
+    return () => { cancelled = true; clearTimeout(handle); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value.address, editable]);
 
   // Map bootstrap — loads JS API + instantiates map + marker on first
   // mount. Re-uses the existing marker instance on rerenders.
@@ -226,7 +303,8 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true 
             value={value.address}
             onChange={(v) => patch({ address: v })}
             onPick={(p) => {
-              const next: Partial<AddressValue> = { address: p.formatted_address || p.description };
+              const pickedAddress = p.formatted_address || p.description;
+              const next: Partial<AddressValue> = { address: pickedAddress };
               if (p.lat != null && p.lng != null) {
                 next.gps_location = `${p.lat.toFixed(6)},${p.lng.toFixed(6)}`;
               }
@@ -235,6 +313,10 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true 
                 const match = cityByName.get(p.components.city.toLowerCase());
                 if (match) next.city_id = match;
               }
+              // Pick already supplied lat/lng — record so the typed-
+              // address debounce skips this exact string and we don't
+              // burn a redundant /geocode call.
+              lastGeocodedAddrRef.current = pickedAddress;
               patch(next);
             }}
             placeholder="Start typing — Google will suggest matches"

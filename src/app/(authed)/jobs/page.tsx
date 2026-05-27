@@ -47,6 +47,15 @@ type JobRow = {
   fk_easyfixter_id: number | null; easyfixer_name: string | null;
   job_owner: number | null; owner_name: string | null;
   fk_address_id: number; city_name: string | null;
+  // service_count surfaced on the LIST projection (2026-05-28) so the FE
+  // can flag rows that landed in BOOKED with no services attached — a
+  // legacy gap (Job #482453 etc.) where ops promoted a job before
+  // adding service rows. Renders as a small "No Services" pill in the
+  // Status cell, mirroring the Draft-pill pattern.
+  service_count?: number;
+  // last_update_time already used by the Unconfirmed Draft pill — keep
+  // here for the row type completeness in case other indicators need it.
+  last_update_time?: string | null;
 };
 type Resp = { items: JobRow[]; total: number; limit: number; offset: number };
 
@@ -996,7 +1005,43 @@ export default function JobsPage() {
                   <td className="text-xs whitespace-nowrap">{j.scheduled_date_time ? formatDate(j.scheduled_date_time) : '—'}</td>
                   <td className="text-xs whitespace-nowrap">{j.checkin_date_time ? formatDate(j.checkin_date_time) : '—'}</td>
                   <td className="text-xs whitespace-nowrap">{j.checkout_date_time ? formatDate(j.checkout_date_time) : '—'}</td>
-                  <td><span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${statusColorClass(j.job_status)}`}>{statusLabel(j.job_status, { assigned: j.fk_easyfixter_id != null })}</span></td>
+                  <td>
+                    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${statusColorClass(j.job_status)}`}>
+                      {statusLabel(j.job_status, { assigned: j.fk_easyfixter_id != null })}
+                    </span>
+                    {/*
+                     * "No Services" pill (added 2026-05-28). Surfaces the
+                     * legacy data-quality gap where a BOOKED job has zero
+                     * active tbl_job_services rows — typically caused by
+                     * ops promoting an Unconfirmed job before adding any
+                     * service line items (see ref Job #482453). Mirrors
+                     * the amber Draft-pill pattern from
+                     * UnconfirmedJobsTable so operators can spot stragglers
+                     * at a glance and click into the Services tab to fix.
+                     *
+                     * Showing it ONLY on status=0 keeps the signal high —
+                     * a CALL_LATER / Unconfirmed row with no services is
+                     * expected; a BOOKED one is the anomaly.
+                     */}
+                    {j.job_status === 0 && (j.service_count ?? 0) === 0 && (
+                      <button
+                        type="button"
+                        // Clickable pill (2026-05-28). Opens the job's
+                        // Services tab directly — saves the operator
+                        // from row→modal→tab click chains. stopPropagation
+                        // so this doesn't fire any parent row click
+                        // handler that might exist now or later.
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openJobAction('view', j.job_id, { tab: 'services' });
+                        }}
+                        className="ml-1 inline-flex items-center rounded-full bg-amber-100 hover:bg-amber-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800 whitespace-nowrap cursor-pointer transition-colors"
+                        title="Booked but no services attached. Click to open the Services tab and add line items."
+                      >
+                        No Services
+                      </button>
+                    )}
+                  </td>
                   <td className="stick-col stick-right text-right whitespace-nowrap">
                     {/*
                       * Status-driven row actions — mirrors legacy jobList.vm:
@@ -1086,6 +1131,10 @@ export default function JobsPage() {
         jobId={modal.id}
         onClose={closeModal}
         onSaved={() => { cacheRef.current.clear(); load(false, true); refreshCounts(); }}
+        // Honour `?viewTab=` so the "No Services" pill (and any future
+        // deep-link) can land the operator straight on a specific tab.
+        // See useJobActionNav.openJobAction(_, _, { tab }).
+        initialTab={searchParams.get('viewTab') || undefined}
       />
 
       {canJob.isTransferJobOwnership && (

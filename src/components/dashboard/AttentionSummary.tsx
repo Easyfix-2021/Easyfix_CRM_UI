@@ -4,6 +4,10 @@ import * as React from 'react';
 import Link from 'next/link';
 import {
   Clock, CheckCircle2, XCircle, BellRing, PhoneOff,
+  // PackageX — visual cue for "Booked but no services attached"
+  // (line-items missing). Reads like a half-empty parcel; pairs with
+  // the amber tint that mirrors the row-level No-Services pill.
+  PackageX,
   type LucideIcon,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
@@ -33,6 +37,10 @@ type Resp = {
   estimateRejected: number;
   pendingTechAccept: number;
   customerUnreachable: number;
+  // BOOKED jobs with zero ACTIVE rows in tbl_job_services (added
+  // 2026-05-28). Surfaced as the 6th tile; click lands on the BOOKED
+  // tab where the row-level No-Services pill is visible per row.
+  bookedNoServices: number;
 };
 
 type Tile = {
@@ -112,6 +120,27 @@ const TILES: Tile[] = [
     iconFg: 'text-violet-700',
     href: '/jobs?tab=call-later',
   },
+  /*
+   * Booked-No-Services (added 2026-05-28). Counts BOOKED jobs with
+   * zero ACTIVE service rows — the data-quality gap that prompted the
+   * row-level No-Services pill on /jobs + /my-orders + /customers/[id].
+   * Click deep-links to the BOOKED tab where each anomalous row shows
+   * its own clickable pill; from there ops can hop straight to the
+   * Services tab to add line items.
+   *
+   * Tint = amber, matching the row pill, so an operator scanning the
+   * dashboard recognises the same "needs Services line items"
+   * signal at both levels.
+   */
+  {
+    key: 'bookedNoServices',
+    title: 'Booked With No Services',
+    sub: 'Add Line Items',
+    icon: PackageX,
+    iconBg: 'bg-amber-100',
+    iconFg: 'text-amber-700',
+    href: '/jobs?tab=booked',
+  },
 ];
 
 export function AttentionSummary() {
@@ -122,6 +151,7 @@ export function AttentionSummary() {
     estimateRejected: 0,
     pendingTechAccept: 0,
     customerUnreachable: 0,
+    bookedNoServices: 0,
   };
 
   return (
@@ -134,7 +164,11 @@ export function AttentionSummary() {
           </p>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 p-4">
+        {/* 6 tiles now (Booked-No-Services added 2026-05-28). lg:6 keeps
+            them on one row at desktop; sm:3 keeps the 2-row 3-col layout
+            stable at tablet widths so the new tile slots into the
+            existing rhythm without reflow. */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 p-4">
           {TILES.map((t) => {
             const Icon = t.icon;
             const value = data[t.key];

@@ -21,6 +21,24 @@ import { api, ApiError } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
 import { formatDate, formatEasyfixerName, statusColorClass, statusLabel } from '@/lib/utils';
 import { maskMobile } from '@/lib/format';
+
+/*
+ * safeMobile(v) — defends against round-tripping a masked display value
+ * back into a save payload. If the string still contains a bullet (•),
+ * the source fetch wasn't `?unmasked=true` and we'd corrupt the DB by
+ * sending it back; return undefined so the field gets omitted from the
+ * PATCH payload entirely (leaves the existing DB value untouched).
+ * The BE also rejects bullets at the wire via reject-masked-mobile.js,
+ * but stopping the leak FE-side avoids the 400 round-trip + makes the
+ * partial save succeed for non-mobile fields. Idempotent + null-safe.
+ */
+function safeMobile(v: string | null | undefined): string | undefined {
+  if (v == null) return undefined;
+  const s = String(v).trim();
+  if (!s) return undefined;
+  if (s.includes('•')) return undefined;
+  return s;
+}
 import { CallableMobile } from '@/components/calls/CallButton';
 import { showToast, dismissToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -98,13 +116,25 @@ type Job = Record<string, unknown> & {
 };
 
 export function JobModal({
-  open, onClose, mode: initialMode, jobId, onSaved,
+  open, onClose, mode: initialMode, jobId, onSaved, initialTab,
 }: {
   open: boolean;
   onClose: () => void;
   mode: JobModalMode;
   jobId?: number;
   onSaved?: () => void;
+  /*
+   * Optional initial Tabs value for view-mode (2026-05-28). Threaded
+   * from URL `?tab=` by the list page so deep-links like
+   *   /jobs?jobId=482453&action=view&tab=services
+   * land directly on the Services tab instead of the default Summary.
+   * Ignored in non-view modes (JobForm has no tabs).
+   *
+   * Known values match the TabsTrigger values rendered by ViewBody:
+   *   'summary' | 'services' | 'schedule' | 'images' |
+   *   'questionnaire' | 'comments' | 'materials' | 'quotations'
+   */
+  initialTab?: string;
 }) {
   const [mode, setMode] = useState<JobModalMode>(initialMode);
   const [job, setJob] = useState<Job | null>(null);
@@ -291,7 +321,7 @@ export function JobModal({
             // Images/etc. view that ops uses for active jobs.
             Number(job.job_status) === 9
               ? <JobTransactionView jobId={Number(job.job_id)} />
-              : <ViewBody job={job} onRefresh={refresh} />
+              : <ViewBody job={job} onRefresh={refresh} initialTab={initialTab} />
           )}
           {/* Mobile-first gate for the CREATE flow. Mirrors legacy
               `addEditJob.vm` which opened with a single mobile-number
@@ -639,12 +669,19 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
 
 // ─── View body (tabbed read-only display) ────────────────────────────────────
 
-function ViewBody({ job, onRefresh }: { job: Job; onRefresh?: () => void }) {
+function ViewBody({ job, onRefresh, initialTab }: { job: Job; onRefresh?: () => void; initialTab?: string }) {
   const images = Array.isArray((job as Record<string, unknown>).images)
     ? ((job as Record<string, unknown>).images as Array<Record<string, unknown>>)
     : [];
+  /*
+   * Whitelist of recognised tab values so a malformed `?tab=` URL can't
+   * leave the Tabs widget in an unrenderable state (no panel matches).
+   * Anything not in this set falls back to 'summary'.
+   */
+  const KNOWN_TABS = new Set(['summary', 'services', 'schedule', 'images', 'questionnaire', 'comments', 'materials', 'quotations']);
+  const startingTab = initialTab && KNOWN_TABS.has(initialTab) ? initialTab : 'summary';
   return (
-    <Tabs defaultValue="summary">
+    <Tabs defaultValue={startingTab}>
       <TabsList>
         <TabsTrigger value="summary">Summary</TabsTrigger>
         <TabsTrigger value="services">Services ({Array.isArray(job.services) ? job.services.length : 0})</TabsTrigger>
@@ -757,7 +794,25 @@ function ViewBody({ job, onRefresh }: { job: Job; onRefresh?: () => void }) {
         * file-storage table.
         */}
       <TabsContent value="images">
-        <JobImagesTab images={images} />
+        {/*
+         * onChanged is forwarded so the X-delete on each tile can ask the
+         * parent to re-fetch the job after a successful DELETE — making
+         * the deleted tile disappear without a manual page refresh.
+         *
+         * Gating (2026-05-28): once a job is in a terminal state — 3
+         * COMPLETED, 5 COMPLETED_ALT, 6 CANCELLED, 7 ENQUIRY — image
+         * removals would rewrite audit history that finance/clients
+         * may already be looking at. We hide the X by not passing
+         * onChanged in those states; JobImagesTab interprets the absence
+         * as "read-only" and skips the overlay entirely. Active states
+         * (BOOKED/SCHEDULED/IN_PROGRESS) plus pre-confirm states
+         * (CALL_LATER, REVISIT) keep the X — operators may still need
+         * to clean up wrong attachments during confirmation/revisit.
+         */}
+        <JobImagesTab
+          images={images}
+          onChanged={[3, 5, 6, 7].includes(Number(job.job_status)) ? undefined : onRefresh}
+        />
       </TabsContent>
 
       {/*
@@ -2445,7 +2500,20 @@ function JobCommentsTab({ jobId }: { jobId: number }) {
  * `onError` flips to the "Image not found" empty state when the BE
  * responds 404 (image lost from S3 AND local disk, or imageId stale).
  */
-function JobImageTile({ id, url, label, tooltip }: { id: string; url: string; label: string; tooltip: string }) {
+function JobImageTile({ id, url, label, tooltip, onDelete, deleting }: {
+  id: string;
+  url: string;
+  label: string;
+  tooltip: string;
+  /* When provided, renders a top-right X overlay that calls this on
+   * click (with stopPropagation so the tile's "open in new tab"
+   * behaviour is preserved for clicks elsewhere on the tile). */
+  onDelete?: () => void;
+  /* While true, the tile dims + shows a small "Deleting…" badge and
+   * the X is disabled — prevents double-clicks during the network
+   * round-trip. */
+  deleting?: boolean;
+}) {
   const [broken, setBroken] = useState(false);
 
   const authedUrl = React.useMemo(() => {
@@ -2456,38 +2524,69 @@ function JobImageTile({ id, url, label, tooltip }: { id: string; url: string; la
   }, [url]);
 
   return (
-    <a
-      key={id}
-      href={authedUrl}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="block border rounded-md overflow-hidden hover:shadow-sm transition-shadow"
-      title={tooltip}
-    >
-      {broken ? (
-        <div className="flex h-32 w-full flex-col items-center justify-center gap-1 bg-muted text-[11px] text-muted-foreground">
-          <span className="text-base">⚠️</span>
-          <span>Image not found</span>
-          <span className="text-[10px]">Re-upload to restore</span>
+    <div className={`relative ${deleting ? 'opacity-50 pointer-events-none' : ''}`}>
+      <a
+        key={id}
+        href={authedUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="block border rounded-md overflow-hidden hover:shadow-sm transition-shadow"
+        title={tooltip}
+      >
+        {broken ? (
+          <div className="flex h-32 w-full flex-col items-center justify-center gap-1 bg-muted text-[11px] text-muted-foreground">
+            <span className="text-base">⚠️</span>
+            <span>Image not found</span>
+            <span className="text-[10px]">Re-upload to restore</span>
+          </div>
+        ) : (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={authedUrl}
+            alt={label}
+            className="w-full h-32 object-cover bg-muted"
+            loading="lazy"
+            onError={() => setBroken(true)}
+          />
+        )}
+        <div className="px-2 py-1 text-[10px] text-muted-foreground truncate">
+          {label}
         </div>
-      ) : (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={authedUrl}
-          alt={label}
-          className="w-full h-32 object-cover bg-muted"
-          loading="lazy"
-          onError={() => setBroken(true)}
-        />
+      </a>
+      {/*
+       * Delete affordance (2026-05-28). Rendered ABOVE the anchor (not
+       * inside it) so the click handler can stopPropagation cleanly
+       * without browsers treating "click on a button inside an anchor"
+       * inconsistently. Absolute-positioned top-right to mirror the
+       * staging-tile X in the Confirm-mode picker.
+       */}
+      {onDelete && (
+        <button
+          type="button"
+          aria-label={`Delete ${label}`}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onDelete();
+          }}
+          disabled={deleting}
+          className="absolute top-1 right-1 bg-black/65 hover:bg-black/90 text-white rounded w-6 h-6 flex items-center justify-center text-sm font-bold leading-none disabled:opacity-60"
+          title="Delete image"
+        >
+          ×
+        </button>
       )}
-      <div className="px-2 py-1 text-[10px] text-muted-foreground truncate">
-        {label}
-      </div>
-    </a>
+    </div>
   );
 }
 
-function JobImagesTab({ images }: { images: Array<Record<string, unknown>> }) {
+function JobImagesTab({ images, onChanged }: {
+  images: Array<Record<string, unknown>>;
+  /* Called after a successful image delete so the parent can refetch
+   * `job.images`. Optional — if not provided, the tile X is hidden
+   * (read-only view). */
+  onChanged?: () => void;
+}) {
   /*
    * Image URL resolution (2026-05-14 ops update):
    *
@@ -2510,6 +2609,45 @@ function JobImagesTab({ images }: { images: Array<Record<string, unknown>> }) {
    */
   const apiBase = process.env.NEXT_PUBLIC_API_URL || '/api';
   const fileUrl = (imageId: string | number) => `${apiBase}/admin/jobs/images/${imageId}/file`;
+
+  /*
+   * Delete affordance (2026-05-28). Mirrors the staging-tile X in the
+   * Confirm-mode picker. Uses the same useConfirm/showToast pattern as
+   * the rest of JobModal so the affirmative-double-tap UX is consistent.
+   * Tracks "currently-deleting" image IDs in a Set so the tile can dim
+   * and disable its X while the round-trip is in flight.
+   */
+  const confirm = useConfirm();
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
+
+  async function handleDelete(imageId: string, label: string) {
+    const ok = await confirm({
+      title: 'Delete Image?',
+      description: `Remove "${label}" from this job? This also removes the file from storage and cannot be undone.`,
+      confirmLabel: 'Delete',
+      variant: 'destructive',
+    });
+    if (!ok) return;
+    setDeletingIds((prev) => {
+      const next = new Set(prev);
+      next.add(imageId);
+      return next;
+    });
+    try {
+      await api.delete(`/admin/jobs/images/${imageId}`);
+      showToast({ variant: 'success', message: 'Image Deleted' });
+      onChanged?.();
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : 'Failed to delete image';
+      showToast({ variant: 'error', message: msg });
+    } finally {
+      setDeletingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(imageId);
+        return next;
+      });
+    }
+  }
 
   if (images.length === 0) {
     return (
@@ -2541,6 +2679,8 @@ function JobImagesTab({ images }: { images: Array<Record<string, unknown>> }) {
             url={url}
             label={friendly}
             tooltip={`${friendly}${stored ? ` · ${stored}` : ''}`}
+            onDelete={onChanged ? () => handleDelete(id, friendly) : undefined}
+            deleting={deletingIds.has(id)}
           />
         );
       })}
@@ -2896,6 +3036,25 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
   });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  /*
+   * Per-file upload status map (2026-05-28). Keyed by the same
+   * `${name}|${size}|${lastModified}` triple used for picker dedupe so
+   * the lookup from a preview tile is O(1). Values:
+   *   - 'uploading' → spinner overlay
+   *   - 'done'      → green check overlay (briefly visible before the
+   *                    submit handler clears the staging array)
+   *   - 'error'     → red X overlay; the X button on the tile still
+   *                    lets the operator retry by deleting + reselecting
+   *
+   * Read-only here in the parent; mutators are inlined into the submit
+   * flow + cleared on next picker change.
+   */
+  const [uploadStatuses, setUploadStatuses] = useState<Record<string, 'uploading' | 'done' | 'error'>>({});
+  const fileKey = (file: File) => `${file.name}|${file.size}|${file.lastModified}`;
+  const setUploadStatus = (file: File, status: 'uploading' | 'done' | 'error') => {
+    setUploadStatuses((prev) => ({ ...prev, [fileKey(file)]: status }));
+  };
 
   // ─── Services basket (create flow only) ───────────────────────────────
   // `clientServices` is the catalog for the currently-picked client (null = not
@@ -3271,6 +3430,16 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
    * promote-to-BOOKED flow runs as before.
    */
   const [submitVariant, setSubmitVariant] = useState<'book' | 'enquiry' | 'unreachable' | 'draft'>('book');
+  /*
+   * Add Remarks dialog mounted inside JobForm so it's available from
+   * BOTH footers (the confirm-mode three-button block at ~line 4673
+   * AND the shared edit/create footer at ~line 6045). Disabled when
+   * no `initial.job_id` exists — Add Remarks POSTs to
+   * /admin/jobs/:id/comments and needs a real job. In create mode the
+   * button is rendered as disabled-with-tooltip so the affordance is
+   * discoverable but obviously not usable until save.
+   */
+  const [addRemarksFormOpen, setAddRemarksFormOpen] = useState(false);
 
   /*
    * Job-outcome dialog (Unreachable / Enquiry) — added 2026-05-18 to
@@ -3348,7 +3517,7 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
     // Save Draft (submitVariant === 'draft') intentionally bypasses this
     // mandatory-fields gate — the whole point of draft is to persist
     // partial progress. Only the 'book' variant is gated.
-    if (isConfirm && submitVariant === 'book' && !confirmSection2Complete) {
+    if (isConfirm && submitVariant === 'book' && (!confirmSection2Complete || !hasAtLeastOneService)) {
       const missing: string[] = [];
       if (!f.client_ref_id || !String(f.client_ref_id).trim()) missing.push('Client Reference ID');
       if (!f.reporting_contact_id) missing.push('Reporting Contact');
@@ -3358,6 +3527,10 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
       if (!/^[0-9]{6}$/.test(String(f.pin_code || ''))) missing.push('PIN (6 digits)');
       if (!f.requested_date_time) missing.push('Requested Date & Time');
       if (!f.time_slot) missing.push('Time Slot');
+      // Services check — added 2026-05-28 after Job #482453 was booked
+      // with zero services. The BE Joi schema now also rejects this so
+      // a future FE bug can't repeat the silent-empty-create.
+      if (!hasAtLeastOneService) missing.push('At least one Service in Products');
       setError(`Missing required field(s): ${missing.join(', ')}`);
       setSubmitting(false);
       return;
@@ -3591,6 +3764,52 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
             }
           }
         }
+        /*
+         * Confirm-mode image upload (2026-05-28). Save Draft AND Book Call
+         * both upload any staged Job Images to /admin/jobs/:id/images.
+         * Outcome-only paths (Unreachable / Enquiry) skip the upload — the
+         * operator hasn't filled service/product detail yet, so there are
+         * typically no relevant images. Drafts WILL upload so reopening
+         * the modal shows the previously-staged images via the existing
+         * Images tab in view mode.
+         *
+         * Failure semantics: each upload is independent + wrapped in its
+         * own try/catch. A failed upload logs a warn and continues with
+         * the rest. The overall flow's success toast still fires — partial
+         * upload is preferable to losing the entire save.
+         */
+        if (!isOutcomeOnly && initial?.job_id) {
+          const staged = ((f as unknown as { job_image_files?: File[] }).job_image_files ?? [])
+            .filter((x) => x instanceof File);
+          if (staged.length > 0) {
+            for (const file of staged) {
+              // Mark BEFORE the POST so the tile shows the spinner
+              // overlay immediately. The tile reads `uploadStatuses` by
+              // file dedupe-key (see preview render block).
+              setUploadStatus(file, 'uploading');
+              try {
+                const fd = new FormData();
+                fd.append('file', file);
+                await api.post(`/admin/jobs/${initial.job_id}/images`, fd);
+                setUploadStatus(file, 'done');
+              } catch (upErr) {
+                setUploadStatus(file, 'error');
+                // eslint-disable-next-line no-console
+                console.warn(`Image upload failed during ${submitVariant} for job ${initial.job_id}:`, upErr);
+              }
+            }
+            // Clear the staging array after the loop ends so a second
+            // click (e.g. an extra Save Draft after one already landed)
+            // doesn't re-upload the same files. Errored files are
+            // ALSO cleared — operator can re-pick them if needed; we
+            // don't want to leave half-failed state on the modal.
+            //
+            // Also clear the per-file status map — next picker cycle
+            // starts fresh; no stale 'done'/'error' chrome leaks across.
+            setF((s) => ({ ...s, job_image_files: [] as never, job_image_file: null as never }));
+            setUploadStatuses({});
+          }
+        }
         // Success-path toast for outcome-only flows. Transition the
         // loading toast to a green success toast at the same bottom-
         // centre slot. The toast component auto-dismisses success
@@ -3736,9 +3955,14 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
           building_name: f.building_name || undefined,
           // SPOC tags. Backend already accepts these directly on
           // tbl_job (verified in MUTABLE_COLUMNS + the INSERT column list).
+          // safeMobile() strips any value that still contains a bullet —
+          // defends against round-tripping the masked display string into
+          // the DB if the source fetch wasn't `?unmasked=true`. The BE
+          // also enforces this via middleware/reject-masked-mobile.js, so
+          // it's belt-and-braces.
           reporting_contact_id: f.reporting_contact_id ? Number(f.reporting_contact_id) : undefined,
-          client_spoc: f.client_spoc || undefined,
-          client_spoc_name: f.client_spoc_name || undefined,
+          client_spoc:       safeMobile(f.client_spoc),
+          client_spoc_name:  f.client_spoc_name || undefined,
           client_spoc_email: f.client_spoc_email || undefined,
           /*
            * Customer-alternate contact — captured via the new inputs
@@ -3746,7 +3970,7 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
            * additional_name / additional_number.
            */
           additional_name:   f.additional_name   || undefined,
-          additional_number: f.additional_number || undefined,
+          additional_number: safeMobile(f.additional_number),
           /*
            * Per-job commercial fields previously dropped on the floor:
            *   - collected_by    : preference (1=Easyfixer/2=Easyfix/3=Client).
@@ -3957,6 +4181,26 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
     !!f.address &&
     !!String(f.city_id || '').trim() &&
     /^[0-9]{6}$/.test(String(f.pin_code || ''));
+
+  /*
+   * Section 3 (Products / Services) — at least one row with both a
+   * client_service_id selected AND quantity > 0. Mirrors
+   * buildServicesPayload()'s filter so the gate matches what would
+   * actually be sent on submit. Added 2026-05-28 after Job #482453 was
+   * booked with zero services — the FE Book-Call button only checked
+   * Section 2 completeness, so an empty services basket slipped through.
+   * The BE Joi validator now also enforces this (see services/
+   * job.service.js create flow) so a future FE bug can't repeat the
+   * silent-empty-create.
+   */
+  const hasAtLeastOneService = serviceRows.some(
+    (r) => r.client_service_id && Number(r.quantity) > 0,
+  );
+
+  // Composite gate the Book Call button reads. Both sections must be
+  // complete AND services must be non-empty. Outcome variants
+  // (Unreachable / Enquiry) and Save Draft intentionally bypass this.
+  const confirmBookReady = confirmSection2Complete && hasAtLeastOneService;
 
   if (isConfirm && initial) {
     return (
@@ -4527,6 +4771,43 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
               {(() => {
                 const stashed = (getJobField('job_image_files') as File[] | undefined) || [];
                 const tabKey = getActiveCatId() || 'single';
+                /*
+                 * Accumulating multi-select (2026-05-28). The previous
+                 * handler did `setJobField('job_image_files', files)` which
+                 * REPLACED the array — so picking 2 from folder A then 1
+                 * from folder B left only the second pick. Now we MERGE
+                 * new picks into the existing stash with a name+size+
+                 * lastModified dedupe key. After write, we clear the
+                 * native input's `value` so re-picking the SAME folder
+                 * (a) doesn't trigger duplicate-detect noise and (b)
+                 * lets the operator pick again from the same source
+                 * without first picking elsewhere.
+                 *
+                 * Persistence: the stash lives on `f` (form state) via
+                 * setJobField, so section navigation doesn't drop it.
+                 * The input's `key` only causes a remount when the
+                 * active CATEGORY TAB changes (multi-category mode);
+                 * within a tab the data persists across re-renders.
+                 */
+                const appendFiles = (newly: File[]) => {
+                  if (newly.length === 0) return;
+                  const seen = new Set(stashed.map((f) => `${f.name}|${f.size}|${f.lastModified}`));
+                  const merged: File[] = [...stashed];
+                  for (const file of newly) {
+                    const key = `${file.name}|${file.size}|${file.lastModified}`;
+                    if (!seen.has(key)) {
+                      merged.push(file);
+                      seen.add(key);
+                    }
+                  }
+                  setJobField('job_image_files', merged as never);
+                  setJobField('job_image_file', (merged[0] ?? null) as never);
+                };
+                const removeAt = (idx: number) => {
+                  const next = stashed.filter((_, i) => i !== idx);
+                  setJobField('job_image_files', next as never);
+                  setJobField('job_image_file', (next[0] ?? null) as never);
+                };
                 return (
                   <div>
                     <Input
@@ -4535,15 +4816,103 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                       accept="image/*,.pdf"
                       multiple
                       onChange={(e) => {
-                        const files = e.target.files ? Array.from(e.target.files) : [];
-                        setJobField('job_image_files', files as never);
-                        setJobField('job_image_file', (files[0] ?? null) as never);
+                        const newly = e.target.files ? Array.from(e.target.files) : [];
+                        appendFiles(newly);
+                        // Clear native input so re-picking from the same
+                        // folder works on the next click.
+                        e.target.value = '';
                       }}
                     />
                     {stashed.length > 0 && (
-                      <p className="text-[11px] text-muted-foreground mt-1">
-                        {stashed.length} file{stashed.length === 1 ? '' : 's'} ready for this job tab.
-                      </p>
+                      <>
+                        <p className="text-[11px] text-muted-foreground mt-1">
+                          {stashed.length} file{stashed.length === 1 ? '' : 's'} staged. Will upload on Save Draft / Book Call.
+                        </p>
+                        {/*
+                         * Preview tiles with X delete. Image files render
+                         * as thumbnails via URL.createObjectURL; non-image
+                         * (PDF) files render as a generic file icon block.
+                         * The X removes the file from the stash; if it
+                         * was already uploaded (Save Draft fired earlier
+                         * this session), it's still staged for re-upload
+                         * — we don't DELETE from S3 since the operator
+                         * may still Book the call with it. To remove a
+                         * already-uploaded image, use the post-save
+                         * Images tab in view mode.
+                         */}
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {stashed.map((file, i) => {
+                            const isImg = (file.type || '').startsWith('image/');
+                            const url = isImg ? URL.createObjectURL(file) : null;
+                            /*
+                             * Per-tile upload status overlay (2026-05-28).
+                             * Reads from the parent's uploadStatuses map;
+                             * 'uploading' renders a centred spinner,
+                             * 'done' a green check, 'error' a red X. The
+                             * regular X delete button is hidden while
+                             * 'uploading' so the operator can't pull a
+                             * file out from under the in-flight POST.
+                             */
+                            const status = uploadStatuses[fileKey(file)];
+                            return (
+                              <div
+                                key={`${file.name}-${file.size}-${i}`}
+                                className="relative border rounded-md bg-muted/40 overflow-hidden"
+                                style={{ width: 72, height: 72 }}
+                                title={file.name}
+                              >
+                                {url ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img
+                                    src={url}
+                                    alt={file.name}
+                                    className="w-full h-full object-cover"
+                                    onLoad={() => URL.revokeObjectURL(url)}
+                                  />
+                                ) : (
+                                  <div className="w-full h-full flex flex-col items-center justify-center text-[9px] text-muted-foreground text-center p-1 break-all">
+                                    <span className="font-bold text-xs">PDF</span>
+                                    <span className="line-clamp-2">{file.name}</span>
+                                  </div>
+                                )}
+                                {/* Status overlay: covers the whole tile
+                                    so the per-state visual is unmissable
+                                    even on dark thumbnails. */}
+                                {status === 'uploading' && (
+                                  <div className="absolute inset-0 bg-black/55 flex items-center justify-center">
+                                    {/* Inline SVG spinner — avoids pulling
+                                        in a new icon dep for one tile. */}
+                                    <svg className="animate-spin h-5 w-5 text-white" viewBox="0 0 24 24" fill="none">
+                                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                      <path className="opacity-90" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                                    </svg>
+                                  </div>
+                                )}
+                                {status === 'done' && (
+                                  <div className="absolute inset-0 bg-emerald-500/70 flex items-center justify-center text-white text-2xl font-bold">
+                                    ✓
+                                  </div>
+                                )}
+                                {status === 'error' && (
+                                  <div className="absolute inset-0 bg-rose-600/75 flex items-center justify-center text-white text-2xl font-bold">
+                                    !
+                                  </div>
+                                )}
+                                {status !== 'uploading' && (
+                                  <button
+                                    type="button"
+                                    aria-label={`Remove ${file.name}`}
+                                    onClick={() => removeAt(i)}
+                                    className="absolute top-0 right-0 bg-black/65 hover:bg-black/90 text-white rounded-bl-md w-5 h-5 flex items-center justify-center text-xs font-bold leading-none"
+                                  >
+                                    ×
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </>
                     )}
                   </div>
                 );
@@ -4647,7 +5016,28 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
             popup first to capture Pending Due To + Reason + Remarks
             and fold them into the remarks column as a structured
             prefix. See JobOutcomeDialog block below. */}
-        <div className="flex justify-end gap-2 pt-2 flex-wrap">
+        <div className="flex justify-between gap-2 pt-2 flex-wrap items-center">
+          {/* LEFT cluster — Add Remarks (mirrors view-mode footer layout
+              per ops 2026-05-21). Disabled when there's no initial.job_id
+              (create flow) since the dialog POSTs to /admin/jobs/:id/comments.
+              In confirm/edit modes the button opens AddRemarksDialog
+              which we mount inside JobForm. */}
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              className="bg-teal-500 hover:bg-teal-600 text-white border-teal-500 hover:text-white"
+              onClick={() => setAddRemarksFormOpen(true)}
+              disabled={!initial?.job_id}
+              title={initial?.job_id ? 'Add a remark / note to this job' : 'Save the job first, then add remarks'}
+            >
+              Add Remarks
+            </Button>
+          </div>
+          {/* RIGHT cluster — Cancel + outcome/book buttons. Same order
+              and styling as before; only the wrapping flex direction
+              changed from justify-end to justify-between. */}
+          <div className="flex items-center gap-2 flex-wrap justify-end">
           <CancelButton onCancel={onCancel} />
           {canOutcomeButtons && (
             <Button
@@ -4719,14 +5109,19 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
             // with a Joi 400 per-field, but the FE should refuse to
             // submit upfront. Unreachable + Enquiry remain enabled (they
             // skip the full payload — see the outcome-only submit path).
-            disabled={!confirmSection2Complete}
-            title={confirmSection2Complete
-              ? ''
-              : 'Fill all mandatory fields (Client Ref ID, Reporting Contact, Customer Name, Address, City, PIN, Date & Time) before booking.'}
+            disabled={!confirmBookReady}
+            title={
+              !confirmSection2Complete
+                ? 'Fill all mandatory fields (Client Ref ID, Reporting Contact, Customer Name, Address, City, PIN, Date & Time) before booking.'
+                : !hasAtLeastOneService
+                  ? 'Add at least one service in the Products section before booking.'
+                  : ''
+            }
             className="bg-purple-600 hover:bg-purple-700 text-white"
           >
             Book Call
           </LoadBtn>
+          </div>
         </div>
         {/* Outcome popup — identical to the one wired on the create
             form below. Inlined here because confirm-mode early-returns
@@ -6019,7 +6414,23 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
           - create mode : Book Call only
           - confirm mode: Unreachable / Enquiry / Confirm & Schedule
           - edit mode   : Save changes (unchanged) */}
-      <div className="flex justify-end gap-2 pt-2 flex-wrap">
+      <div className="flex justify-between gap-2 pt-2 flex-wrap items-center">
+        {/* LEFT cluster — Add Remarks. Disabled in create mode (no job_id
+            yet). The button is rendered for ALL JobForm-driven modes
+            (edit / confirm / create) per ops 2026-05-28 ask. */}
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            className="bg-teal-500 hover:bg-teal-600 text-white border-teal-500 hover:text-white"
+            onClick={() => setAddRemarksFormOpen(true)}
+            disabled={!initial?.job_id}
+            title={initial?.job_id ? 'Add a remark / note to this job' : 'Save the job first, then add remarks'}
+          >
+            Add Remarks
+          </Button>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap justify-end">
         <CancelButton onCancel={onCancel} />
         {isConfirm ? (
           <>
@@ -6065,7 +6476,20 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
             Book Call
           </LoadBtn>
         )}
+        </div>
       </div>
+      {/* Add Remarks dialog — wired to the same /admin/jobs/:id/comments
+          endpoint as the view-mode footer's button. Only renders the
+          dialog itself when there's a real job_id (defence-in-depth on
+          top of the button's disabled state). */}
+      {initial?.job_id && (
+        <AddRemarksDialog
+          open={addRemarksFormOpen}
+          jobId={initial.job_id}
+          onClose={() => setAddRemarksFormOpen(false)}
+          onSaved={() => { setAddRemarksFormOpen(false); }}
+        />
+      )}
       {/*
         * JobOutcomeDialog — legacy "Job Unreachable" / "Job Enquiry"
         * popup that gathers Pending Due To + Reason + Remarks before
