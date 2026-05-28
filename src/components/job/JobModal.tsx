@@ -7331,24 +7331,39 @@ function AutoServicesTable({
   const rowByCsId = rowByCsIdEarly;
 
   /*
-   * Rate resolution per row. Legacy semantics:
-   *   - charge_type === 1 (Fixed)    → total_amount is the bookable
-   *     rate. Fall back to "—" if total_amount is 0/null (misconfigured).
-   *   - charge_type === 0 (Variable) → computed at invoice time. The
-   *     basket can't show a number; display "Variable" and exclude
-   *     from grandTotal (legacy behaviour).
+   * Rate resolution per row — legacy-parity rewrite (2026-05-28).
    *
-   * `resolveRate` returns `{ rate, kind }`:
-   *   - kind 'fixed'    → rate is a number > 0; counts toward total
-   *   - kind 'variable' → no rate to show; doesn't count toward total
-   *   - kind 'missing'  → looks fixed but no price configured;
-   *                       flagged but doesn't count.
+   * Legacy CRM renders the stored `total_amount` column verbatim
+   * regardless of `charge_type`. A service with `total_amount = 0`
+   * shows "₹0.00", not a "Variable" badge. Ops configure 0
+   * deliberately for free / negotiated / collected-on-site services
+   * and expect to see ₹0.00.
+   *
+   * The earlier branches were a new-app addition that diverged from
+   * legacy:
+   *   - `charge_type === 0` was treated as "Variable" (badge, excluded
+   *     from total). But `charge_type` is an opaque legacy enum whose
+   *     0/1 semantics aren't documented per-deploy — using it as a
+   *     "show numeric value vs not" gate produced false positives
+   *     like Travel allowance (charge_type=0, total_amount=0) being
+   *     flagged Variable when the admin page showed ₹0.
+   *   - `total_amount === 0` was treated as "missing". That collapsed
+   *     legitimate "free" rates into the misconfigured bucket.
+   *
+   * New semantics:
+   *   - `total_amount` is a finite number (incl. 0) → kind 'fixed',
+   *     rate counts toward grandTotal (qty × rate).
+   *   - `total_amount` is null/undefined/NaN → kind 'missing',
+   *     rate is "Not set", excluded from grandTotal. Genuinely
+   *     misconfigured rows still surface.
+   *
+   * `charge_type` is no longer read here. If we ever need to revive
+   * a real "Variable" flag (per-booking-quote services), it should be
+   * a dedicated explicit column, not the overloaded `charge_type`.
    */
-  function resolveRate(s: ClientService): { rate: number | null; kind: 'fixed' | 'variable' | 'missing' } {
-    const ct = Number(s.charge_type);
-    if (ct === 0) return { rate: null, kind: 'variable' };
+  function resolveRate(s: ClientService): { rate: number | null; kind: 'fixed' | 'missing' } {
     const r = toRate(s.total_amount);
-    if (r === null || r === 0) return { rate: null, kind: 'missing' };
+    if (r === null) return { rate: null, kind: 'missing' };
     return { rate: r, kind: 'fixed' };
   }
 
@@ -7493,26 +7508,26 @@ function AutoServicesTable({
                   )}
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums">
-                  {/* Rate display per charge_type:
-                        fixed    → ₹X.XX
-                        variable → "Variable" pill (invoice-time price)
-                        missing  → "Not set" in amber (misconfigured rate card)
-                      This replaces the previous ₹0.00 display that was
-                      misleading operators into thinking the booking
-                      would invoice at zero. */}
+                  {/* Rate display (legacy-parity rewrite 2026-05-28):
+                        fixed   → ₹X.XX (including ₹0.00 for free /
+                                  negotiated services — matches what
+                                  the Manage Client Services admin page
+                                  shows for the same row).
+                        missing → "Not set" in amber (total_amount
+                                  literally NULL/undefined on the BE —
+                                  ops needs to configure a value).
+                      The previous "Variable" badge branch was dropped:
+                      the FE no longer interprets `charge_type === 0`
+                      as "variable" — see `resolveRate` docblock. */}
                   {kind === 'fixed' && rate !== null
                     ? `₹${rate.toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`
-                    : kind === 'variable'
-                      ? <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-medium bg-sky-50 text-sky-700 border border-sky-200">Variable</span>
-                      : <span className="text-[11px] text-amber-700" title="Rate not configured on this client's rate card">Not set</span>}
+                    : <span className="text-[11px] text-amber-700" title="Rate not configured on this client's rate card">Not set</span>}
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums">
                   {!added ? <span className="text-muted-foreground">—</span>
-                    : kind === 'variable'
-                      ? <span className="text-[11px] text-sky-700">Computed</span>
-                      : lineAmount === null
-                        ? <span className="text-[11px] text-amber-700">—</span>
-                        : `₹${lineAmount.toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`}
+                    : lineAmount === null
+                      ? <span className="text-[11px] text-amber-700">—</span>
+                      : `₹${lineAmount.toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`}
                 </td>
               </tr>
             );
@@ -7530,7 +7545,7 @@ function AutoServicesTable({
               ₹{grandTotal.toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })}
               {anyAddedMissingRate && (
                 <div className="text-[10px] text-amber-700 font-normal">
-                  (some services are Variable or missing a rate — excluded from total)
+                  (some services have no rate configured — excluded from total)
                 </div>
               )}
             </td>
