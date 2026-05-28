@@ -13,6 +13,7 @@ import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { NoticeStrip } from '@/components/notice/NoticeStrip';
 import { UpcomingEvents } from '@/components/dashboard/UpcomingEvents';
 import { AttentionSummary } from '@/components/dashboard/AttentionSummary';
+import { MarqueeOnHover } from '@/components/dashboard/MarqueeOnHover';
 
 /*
  * Dashboard fetches now go through `useFetchOnce` (lib/hooks.ts) —
@@ -138,7 +139,22 @@ function FlowCardTile({ card, value, loading }: { card: FlowCard; value: number;
   // together.
   const [titleOverflows, setTitleOverflows] = React.useState(false);
   const [subOverflows, setSubOverflows] = React.useState(false);
+  /*
+   * Track each line's inner scrollWidth so we can pin both to a
+   * shared duration (2026-05-28). The max of the two becomes the
+   * common `durationOverride` for both children — title and sub
+   * complete each scroll cycle at exactly the same moment regardless
+   * of their individual text lengths. Without this, the shorter line
+   * loops faster and the two visually desync after a few iterations.
+   */
+  const [titleExit, setTitleExit] = React.useState(0);
+  const [subExit,   setSubExit]   = React.useState(0);
   const animateBoth = titleOverflows || subOverflows;
+  const PX_PER_SEC = 80;
+  const sharedDurationMs = Math.max(
+    3000,
+    Math.round((Math.max(titleExit, subExit) / PX_PER_SEC) * 1000),
+  );
   return (
     <Link href={card.href} className="block h-full group/card">
       <div className={`rounded-lg bg-gradient-to-br ${card.tint} text-white shadow-sm hover:shadow-md hover:scale-[1.02] transition-all p-3 h-32 flex flex-col gap-2 overflow-hidden`}>
@@ -156,14 +172,16 @@ function FlowCardTile({ card, value, loading }: { card: FlowCard; value: number;
           <MarqueeOnHover
             className="text-[13px] font-semibold leading-snug"
             animateOverride={animateBoth}
-            onMeasure={setTitleOverflows}
+            durationOverride={sharedDurationMs}
+            onMeasure={(ov, dist) => { setTitleOverflows(ov); setTitleExit(dist); }}
           >
             {card.title}
           </MarqueeOnHover>
           <MarqueeOnHover
             className="text-[11px] opacity-80 leading-snug"
             animateOverride={animateBoth}
-            onMeasure={setSubOverflows}
+            durationOverride={sharedDurationMs}
+            onMeasure={(ov, dist) => { setSubOverflows(ov); setSubExit(dist); }}
           >
             {card.sub}
           </MarqueeOnHover>
@@ -174,93 +192,13 @@ function FlowCardTile({ card, value, loading }: { card: FlowCard; value: number;
 }
 
 /*
- * MarqueeOnHover — single-line text that scrolls horizontally on hover
- * if (and only if) the content overflows its container. Uses a measure-
- * pass on mount + resize to decide whether to animate; the actual
- * animation is CSS keyframes driven so we don't run a JS-side rAF loop
- * just to animate marquees on idle cards.
- *
- * Implementation notes:
- *   - The inner span gets `whitespace-nowrap` so it can grow past the
- *     wrapper's width.
- *   - The wrapper is `overflow-hidden`, so the non-overflowing case
- *     simply renders as a clipped single-line string (no ellipsis —
- *     overflowing text just hides off the right edge until hover).
- *   - Animation distance = (innerWidth - wrapperWidth). We set the
- *     `--marquee-distance` CSS variable so the same keyframe works
- *     across all card widths.
- *   - Duration is proportional to distance (1 px ≈ 30ms) so short
- *     overflows scroll quickly and long ones don't rush.
- *   - We only animate on `:hover` so idle cards are visually quiet.
+ * MarqueeOnHover was extracted on 2026-05-28 to
+ * `src/components/dashboard/MarqueeOnHover.tsx` so AttentionSummary
+ * could reuse the same pattern. The CSS keyframe + trigger
+ * (`marquee-scroll` / `.group-hover-marquee`) live in
+ * `app/globals.css`. This file imports the component from the shared
+ * module above.
  */
-function MarqueeOnHover({
-  children,
-  className,
-  animateOverride,
-  onMeasure,
-}: {
-  children: React.ReactNode;
-  className?: string;
-  /* When set by the parent (e.g. FlowCardTile decides "if either line
-   * overflows, both animate"), this overrides the local overflow check.
-   * Lets two side-by-side marquees stay synchronised. */
-  animateOverride?: boolean;
-  /* Reports the local overflow status back to the parent so a card
-   * can union the per-line states into one shared decision. */
-  onMeasure?: (overflows: boolean) => void;
-}) {
-  const wrapRef = React.useRef<HTMLDivElement>(null);
-  const innerRef = React.useRef<HTMLSpanElement>(null);
-  const [overflow, setOverflow] = React.useState(0);
-  const [exitDist, setExitDist] = React.useState(0);
-
-  React.useEffect(() => {
-    const measure = () => {
-      const w = wrapRef.current?.clientWidth ?? 0;
-      const i = innerRef.current?.scrollWidth ?? 0;
-      const ov = Math.max(0, i - w);
-      setOverflow(ov);
-      setExitDist(i);
-      onMeasure?.(ov > 0);
-    };
-    measure();
-    window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
-  }, [children, onMeasure]);
-
-  // animate if EITHER our own line overflows OR the parent told us to
-  // (because a sibling line on the same card overflows). Keeps both
-  // lines moving in unison even when one of them fits.
-  const animates = (animateOverride ?? false) || overflow > 0;
-  const PX_PER_SEC = 80;
-  const durationMs = Math.max(3000, Math.round((exitDist / PX_PER_SEC) * 1000));
-
-  return (
-    <div ref={wrapRef} className={`${className ?? ''} overflow-hidden`}>
-      <span
-        ref={innerRef}
-        // `group-hover-marquee` is paused by default; the
-        // `a:hover .group-hover-marquee` rule in globals.css starts it.
-        // When hover ends, animation-play-state goes back to `paused`.
-        // Critically, the CSS now also resets `animation` (name+timing)
-        // so the next hover replays the keyframes from 0% — matches the
-        // operator request "Marquee Should Reset from Start when cursor
-        // moves out from card".
-        className={`inline-block whitespace-nowrap ${animates ? 'group-hover-marquee' : ''}`}
-        style={
-          animates
-            ? ({
-                ['--marquee-distance' as string]: `-${exitDist + 16}px`,
-                ['--marquee-duration' as string]: `${durationMs}ms`,
-              } as React.CSSProperties)
-            : undefined
-        }
-      >
-        {children}
-      </span>
-    </div>
-  );
-}
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<Stats>({
@@ -353,46 +291,61 @@ export default function DashboardPage() {
       <NoticeStrip />
 
       {/*
-        * Two-column layout below the strip:
-        *   - Left column (flex-1): the 8 status funnel cards reflowed to
-        *     2×4 + Recent Jobs underneath.
-        *   - Right column (lg:w-72): Upcoming Events rail driven by the
-        *     /admin/holidays/upcoming endpoint (Nager.Date-backed).
-        * On md and below the right column stacks underneath so the
-        * dashboard stays readable on tablets/phones.
+        * Two-column layout below the strip (2026-05-28 refactor):
+        *   - Left column (flex-1): the 8 status funnel cards
+        *     reflowed to 2×4.
+        *   - Right column (lg:w-72): Upcoming Events rail driven by
+        *     the /admin/holidays/upcoming endpoint (Nager.Date-backed).
+        *
+        * `items-stretch` (default — explicit comment for clarity) so
+        * the right rail Card grows to exactly the 2×4 cards' height.
+        * UpcomingEvents is laid out as a flex column with the events
+        * `ul` taking `flex-1 min-h-0 overflow-y-auto`, so a long
+        * holiday list scrolls inside the cell rather than pushing the
+        * AttentionSummary down. On md and below the columns stack so
+        * the dashboard stays readable on tablets/phones.
+        *
+        * AttentionSummary was previously nested inside the left
+        * column — that constrained its width to the left cell, which
+        * truncated tile copy ("Estimat...", "Pending..."). Lifting it
+        * out as a sibling underneath lets it use the full page width.
         */}
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_18rem] gap-4 items-start">
-        <div className="space-y-4 min-w-0">
-          {/*
-            * Funnel cards — now reflowed from a 1-row 8-up to a 2-row 4-up
-            * grid (`md:grid-cols-4`). Cards become slightly wider since
-            * the right rail steals horizontal space; existing marquee-on-
-            * overflow behaviour handles the new dimensions gracefully.
-            */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 gap-3">
-            {FLOW.map((card) => (
-              <FlowCardTile key={card.title} card={card} value={stats[card.statKey]} loading={loadingStats} />
-            ))}
-          </div>
-
-          {/*
-           * Recent Jobs replaced with AttentionSummary (2026-05-22) per
-           * ops review: operators don't need a chronological activity
-           * list, they need "what action is mine right now?". The 5
-           * tiles each click through to a filtered job queue. The old
-           * Recent Jobs query (`/admin/jobs?limit=8`) is no longer fired
-           * from the dashboard; if a future surface needs it, restore
-           * the recentFetch+table block from git history.
-           */}
-          <AttentionSummary />
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_18rem] gap-4">
+        {/*
+          * Funnel cards — 2-row 4-up grid (`md:grid-cols-4`). The
+          * marquee-on-overflow behaviour inside each card handles the
+          * card dimensions gracefully as the available width shifts.
+          */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 gap-3 min-w-0">
+          {FLOW.map((card) => (
+            <FlowCardTile key={card.title} card={card} value={stats[card.statKey]} loading={loadingStats} />
+          ))}
         </div>
 
         {/* Right rail — Upcoming Events. Fixed width on lg+; full-width
-            stacked below on md and smaller. */}
+            stacked below on md and smaller. The wrapper `min-w-0`
+            allows the inner Card to shrink if needed (otherwise grid
+            items refuse to go below their content's intrinsic size
+            and force horizontal overflow). */}
         <div className="min-w-0">
           <UpcomingEvents days={7} />
         </div>
       </div>
+
+      {/*
+       * AttentionSummary moved here (2026-05-28) so it spans the full
+       * page width instead of being constrained to the left column.
+       * The 6 attention tiles need horizontal room to render their
+       * full titles ("Booked With No Services", "Customer Unreachable")
+       * without truncating to "Booked W…" / "Custom…". Sits below the
+       * cards + rail row, full-bleed.
+       *
+       * Recent Jobs replaced with AttentionSummary (2026-05-22) per
+       * ops review: operators don't need a chronological activity
+       * list, they need "what action is mine right now?". The 6
+       * tiles each click through to a filtered job queue.
+       */}
+      <AttentionSummary />
 
       {/* Book New Call modal — mounted here (not on /jobs) so the
           booking flow keeps the dashboard context behind it. Saving a

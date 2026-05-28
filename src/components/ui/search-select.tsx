@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom';
 import { Check, ChevronDown, Search, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { usePopoverPosition } from '@/lib/use-popover-position';
+import { PORTAL_POPOVER_ATTR } from '@/lib/portal-markers';
 
 /*
  * Typeahead/combobox replacement for <select> when the option list is long
@@ -226,16 +227,17 @@ export function SearchSelect({
        * just fit. The wheel-trap useEffect above intercepts wheels
        * inside the popover unconditionally.
        *
-       * `data-portal-popover` is the marker `dialog.tsx`'s
-       * `onInteractOutside` looks for to keep the dialog open when
-       * a click lands inside this popover (clicks on body-level
-       * portal siblings are "outside" by Radix's accounting).
+       * `PORTAL_POPOVER_ATTR` spreads `data-portal-popover=""` — the
+       * marker `dialog.tsx`'s outside-click guards look for to keep
+       * the dialog open when a click lands inside this popover (body-
+       * level portal siblings are "outside" by Radix's accounting).
+       * Source of truth is `src/lib/portal-markers.ts`.
        */}
       {open && typeof document !== 'undefined' && createPortal(
         <div
           ref={popoverRef}
           style={popStyle}
-          data-portal-popover=""
+          {...PORTAL_POPOVER_ATTR}
           /*
            * Flex column so the inner ul fills whatever vertical
            * space the hook's `maxHeight` allocates minus the filter

@@ -3,6 +3,7 @@ import * as React from 'react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { DIALOG_IGNORED_PORTAL_SELECTORS } from '@/lib/portal-markers';
 
 /*
  * Dialog wrapper — defaults `modal={false}` so Radix's `FocusScope`
@@ -198,7 +199,11 @@ export const DialogContent = React.forwardRef<
         //      own content — without this guard, clicking a button
         //      in a nested confirm dialog would close the parent.
         if (
-          original?.closest?.('[data-portal-popover]') ||
+          // Sibling portals we explicitly want to ignore: SearchSelect
+          // option lists, toast surfaces, etc. Source of truth lives in
+          // src/lib/portal-markers.ts so the producer + consumer
+          // cannot drift apart on a rename.
+          DIALOG_IGNORED_PORTAL_SELECTORS.some((sel) => original?.closest?.(sel)) ||
           original?.closest?.('[role="dialog"]') ||
           original?.closest?.('[role="alertdialog"]')
         ) {
@@ -211,7 +216,11 @@ export const DialogContent = React.forwardRef<
         const original = (e as unknown as { detail?: { originalEvent?: Event } })
           .detail?.originalEvent?.target as Element | null;
         if (
-          original?.closest?.('[data-portal-popover]') ||
+          // Sibling portals we explicitly want to ignore: SearchSelect
+          // option lists, toast surfaces, etc. Source of truth lives in
+          // src/lib/portal-markers.ts so the producer + consumer
+          // cannot drift apart on a rename.
+          DIALOG_IGNORED_PORTAL_SELECTORS.some((sel) => original?.closest?.(sel)) ||
           original?.closest?.('[role="dialog"]') ||
           original?.closest?.('[role="alertdialog"]')
         ) {

@@ -390,6 +390,11 @@ export function JobModal({
                 // payload comes through the masking middleware.
                 setJob(saved); setMode('view'); onSaved?.();
               }}
+              // Re-fetch the parent modal's job state. Used by the
+              // inline already-uploaded images grid in Confirm mode
+              // after the X-delete on a thumbnail — without this the
+              // tile stays visible and a retry click 404s.
+              onRefresh={refresh}
             />
           )}
         </div>
@@ -2500,7 +2505,7 @@ function JobCommentsTab({ jobId }: { jobId: number }) {
  * `onError` flips to the "Image not found" empty state when the BE
  * responds 404 (image lost from S3 AND local disk, or imageId stale).
  */
-function JobImageTile({ id, url, label, tooltip, onDelete, deleting }: {
+function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pendingDelete }: {
   id: string;
   url: string;
   label: string;
@@ -2513,6 +2518,24 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting }: {
    * the X is disabled — prevents double-clicks during the network
    * round-trip. */
   deleting?: boolean;
+  /*
+   * Compact 72×72 variant (2026-05-28) — used inside the Confirm-mode
+   * Job Image section to match the staged-tile size so already-
+   * uploaded thumbnails sit alongside locally-staged previews in the
+   * same visual rhythm. The default (full-size, ~128px tall with
+   * caption row) is what the read-only Images tab uses.
+   */
+  compact?: boolean;
+  /*
+   * Pending-delete treatment (2026-05-28). When true, the tile renders
+   * with a red overlay + strikethrough label + the corner X turns into
+   * an undo arrow (↺). Clicking the corner still routes to `onDelete`
+   * — the parent decides whether the call mark-or-unmark based on the
+   * current set membership. Visible signal that the operator has
+   * staged this removal but hasn't committed; undoing brings the tile
+   * back to normal styling without any BE round-trip.
+   */
+  pendingDelete?: boolean;
 }) {
   const [broken, setBroken] = useState(false);
 
@@ -2522,6 +2545,94 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting }: {
     const sep = url.includes('?') ? '&' : '?';
     return `${url}${sep}token=${encodeURIComponent(token)}`;
   }, [url]);
+
+  /*
+   * Compact tile dimensions match the Confirm-mode staged-file preview
+   * (72×72 with a tiny caption row beneath). Default tile is the
+   * larger ~128px variant used on the read-only Images tab where
+   * thumbnails get more breathing room.
+   */
+  if (compact) {
+    return (
+      <div
+        className={`relative border rounded-md overflow-hidden ${pendingDelete ? 'border-rose-400 ring-1 ring-rose-300' : 'bg-muted/40'} ${deleting ? 'opacity-50 pointer-events-none' : ''}`}
+        style={{ width: 72, height: 72 }}
+        title={pendingDelete ? `${tooltip} — marked for deletion (click ↺ to undo)` : tooltip}
+      >
+        <a
+          href={authedUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block w-full h-full"
+        >
+          {broken ? (
+            <div className="w-full h-full flex flex-col items-center justify-center text-[9px] text-muted-foreground p-1 text-center">
+              <span className="text-base leading-none">⚠️</span>
+              <span className="mt-0.5">Lost</span>
+            </div>
+          ) : (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={authedUrl}
+              alt={label}
+              /*
+               * Pending-delete visual treatment (2026-05-28). Drops
+               * opacity + adds a grayscale tint so the tile clearly
+               * reads as "scheduled for removal" without hiding the
+               * thumbnail — the operator can still see what they're
+               * about to lose. The diagonal strikethrough below
+               * reinforces the intent.
+               */
+              className={`w-full h-full object-cover ${pendingDelete ? 'opacity-50 grayscale' : ''}`}
+              loading="lazy"
+              onError={() => setBroken(true)}
+            />
+          )}
+        </a>
+        {/* Diagonal strikethrough ribbon — pure CSS, pointer-events
+            none so the X / undo button below stays clickable. The
+            absolute red bar visually "crosses out" the image when
+            marked for deletion. */}
+        {pendingDelete && (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 flex items-center justify-center"
+          >
+            <div className="w-[110%] h-[2px] bg-rose-500 rotate-[-25deg] origin-center shadow-[0_0_0_1px_rgba(255,255,255,0.6)]" />
+          </div>
+        )}
+        {/* Caption row removed in compact mode — the 72px footprint
+            doesn't have room for both the thumbnail and a legible
+            label. The full label remains accessible via the title
+            tooltip on hover. */}
+        {onDelete && (
+          <button
+            type="button"
+            /*
+             * Dual-purpose corner button (2026-05-28):
+             *   - default state → × (delete / mark for delete)
+             *   - pendingDelete state → ↺ (undo the mark)
+             * Same click handler, parent decides what to do based on
+             * current set membership. Colour shifts to amber when
+             * marked so the affordance reads as "restore" rather than
+             * "destroy".
+             */
+            aria-label={pendingDelete ? `Undo delete ${label}` : `Delete ${label}`}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onDelete();
+            }}
+            disabled={deleting}
+            className={`absolute top-0 right-0 text-white rounded-bl-md w-5 h-5 flex items-center justify-center text-xs font-bold leading-none disabled:opacity-60 ${pendingDelete ? 'bg-amber-600 hover:bg-amber-700' : 'bg-black/65 hover:bg-black/90'}`}
+            title={pendingDelete ? 'Undo — keep this image' : 'Mark for deletion'}
+          >
+            {pendingDelete ? '↺' : '×'}
+          </button>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className={`relative ${deleting ? 'opacity-50 pointer-events-none' : ''}`}>
@@ -2580,12 +2691,48 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting }: {
   );
 }
 
-function JobImagesTab({ images, onChanged }: {
+function JobImagesTab({ images, onChanged, compact, onImageDeleted, deferDelete, pendingDeleteIds }: {
   images: Array<Record<string, unknown>>;
   /* Called after a successful image delete so the parent can refetch
    * `job.images`. Optional — if not provided, the tile X is hidden
    * (read-only view). */
   onChanged?: () => void;
+  /*
+   * Compact mode (2026-05-28) — switches the grid container to a
+   * flex-wrap row of 72×72 tiles. Used inside the Confirm-mode Job
+   * Image section to size already-uploaded thumbnails the same as the
+   * staged-file previews directly beneath. Default (false) keeps the
+   * spacious responsive grid for the read-only Images tab.
+   */
+  compact?: boolean;
+  /*
+   * Per-delete callback (2026-05-28). In NON-defer mode: fires AFTER
+   * the BE DELETE succeeds (BEFORE `onChanged`). In defer mode: fires
+   * INSTEAD of the BE DELETE — the X is a staging gesture, parent
+   * accumulates intent and flushes on submit.
+   */
+  onImageDeleted?: (imageId: string) => void;
+  /*
+   * Deferred delete (2026-05-28) — when true, the X button does NOT
+   * call the BE DELETE or fire the success toast. It simply notifies
+   * the parent via `onImageDeleted(id)`. Used by Confirm-mode so a
+   * tile removal can be undone by clicking Cancel on the modal —
+   * matches the symmetry of the staged-file upload pattern
+   * (uploads also only happen on submit). The destructive confirm
+   * dialog is suppressed because there's nothing destructive yet —
+   * the operator can still bail out before any BE write lands.
+   */
+  deferDelete?: boolean;
+  /*
+   * IDs the parent has staged for deletion but hasn't committed yet
+   * (2026-05-28). Tiles whose `image_id` is in this set render with
+   * the strikethrough/red-tinted treatment + an undo arrow corner
+   * button. Empty/undefined → all tiles render normally. Used only
+   * with `deferDelete`; if you set this without `deferDelete` the
+   * tile mark would be visually marked but the X would also fire the
+   * BE call immediately, which is incoherent.
+   */
+  pendingDeleteIds?: Set<string>;
 }) {
   /*
    * Image URL resolution (2026-05-14 ops update):
@@ -2621,6 +2768,18 @@ function JobImagesTab({ images, onChanged }: {
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
 
   async function handleDelete(imageId: string, label: string) {
+    /*
+     * Deferred mode (Confirm-mode usage): skip the confirm dialog and
+     * the BE call entirely — the X is a staging gesture, parent
+     * accumulates intent and flushes on submit. Symmetric with the
+     * staged-file upload pattern: uploads happen only on Save Draft /
+     * Book Call, so removals should too. The operator can recover
+     * from an accidental X by clicking Cancel on the modal.
+     */
+    if (deferDelete) {
+      onImageDeleted?.(imageId);
+      return;
+    }
     const ok = await confirm({
       title: 'Delete Image?',
       description: `Remove "${label}" from this job? This also removes the file from storage and cannot be undone.`,
@@ -2636,6 +2795,10 @@ function JobImagesTab({ images, onChanged }: {
     try {
       await api.delete(`/admin/jobs/images/${imageId}`);
       showToast({ variant: 'success', message: 'Image Deleted' });
+      // Optimistic hide BEFORE the parent refetch lands. Prevents a
+      // race where the operator double-clicks the same tile and the
+      // second click 404s on a row that's already gone.
+      onImageDeleted?.(imageId);
       onChanged?.();
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : 'Failed to delete image';
@@ -2656,8 +2819,18 @@ function JobImagesTab({ images, onChanged }: {
       </div>
     );
   }
+  /*
+   * Two layouts: spacious responsive grid for the read-only Images tab,
+   * compact flex-wrap of 72×72 thumbnails for the Confirm-mode inline
+   * usage. The compact rhythm sits alongside the staged-file previews
+   * (also 72×72) without a size jump between "already uploaded" and
+   * "about to upload" tiles.
+   */
+  const containerClass = compact
+    ? 'flex flex-wrap gap-2'
+    : 'grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3';
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+    <div className={containerClass}>
       {images.map((img) => {
         const id       = String(img.image_id ?? '');
         const stored   = String(img.image ?? '');
@@ -2681,6 +2854,11 @@ function JobImagesTab({ images, onChanged }: {
             tooltip={`${friendly}${stored ? ` · ${stored}` : ''}`}
             onDelete={onChanged ? () => handleDelete(id, friendly) : undefined}
             deleting={deletingIds.has(id)}
+            compact={compact}
+            // Visual mark when id is in the parent's pending-delete
+            // set. Drives the strikethrough overlay + undo arrow on
+            // the corner button.
+            pendingDelete={pendingDeleteIds?.has(id) ?? false}
           />
         );
       })}
@@ -2988,11 +3166,22 @@ function CreateJobMobileGate({
  * outcome-only flows.
  */
 type JobFormSavedOpts = { closeAfter?: boolean; variant?: 'book' | 'enquiry' | 'unreachable' | 'draft' };
-function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
+function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer }: {
   mode: 'create' | 'edit' | 'confirm';
   initial: Job | null;
   onCancel: () => void;
   onSaved: (saved: Job, opts?: JobFormSavedOpts) => void;
+  /*
+   * `onRefresh` (2026-05-28) — re-fetches the parent modal's `job`
+   * state from `/admin/jobs/:id`. Used by the inline already-uploaded
+   * images grid in Confirm mode so deleting a thumbnail (which hits
+   * DELETE /admin/jobs/images/:id) immediately refreshes the displayed
+   * grid. Without this, the tile stayed visible after delete and a
+   * second click 404'd because the BE row was already gone.
+   * Edit/Confirm modes pass it; create mode doesn't have a job yet so
+   * the prop is optional.
+   */
+  onRefresh?: () => void;
   prefillCustomer?: PrefillCustomer;
 }) {
   const lk = useLookup();
@@ -3055,6 +3244,60 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
   const setUploadStatus = (file: File, status: 'uploading' | 'done' | 'error') => {
     setUploadStatuses((prev) => ({ ...prev, [fileKey(file)]: status }));
   };
+
+  /*
+   * Section-only image state (2026-05-28). Mirrors the canonical
+   * `initial.images` array on mount and is mutated locally on
+   * delete. The inline Confirm-mode Job Image section reads from
+   * THIS state instead of `initial.images`, so:
+   *   - the tile vanishes the instant the BE DELETE returns 200,
+   *   - the rest of the modal (JOB SUMMARY, Client Details,
+   *     Customer Details, Map, etc.) does NOT re-render — we don't
+   *     fire the heavy `/admin/jobs/:id` refetch just for one
+   *     thumbnail removal,
+   *   - a double-click on the same tile is harmless because the
+   *     second click sees the tile already gone.
+   *
+   * Lifecycle: JobForm remounts when the operator closes/reopens
+   * the modal or switches between view/edit/confirm modes (the
+   * outer JobModal conditionally renders different forms). At that
+   * point useState's initializer reseeds from `initial.images` —
+   * which by then has the canonical post-delete shape because the
+   * parent fetched fresh. So divergence between localImages and
+   * initial.images is a per-session UX optimisation, never a
+   * correctness gap.
+   *
+   * Why this replaced the earlier hide-set + onRefresh combo:
+   * refetching the full job for an image delete (a) flickered every
+   * unrelated card while initial reset → re-applied, and (b) wasted
+   * an 8-table-join SELECT that returns ~50KB just to drop one row.
+   */
+  const initialImages = Array.isArray((initial as Record<string, unknown>)?.images)
+    ? ((initial as Record<string, unknown>).images as Array<Record<string, unknown>>)
+    : [];
+  const [localImages, setLocalImages] = useState<Array<Record<string, unknown>>>(initialImages);
+  /*
+   * Pending-delete IDs (2026-05-28) — image_ids the operator has X'd
+   * but whose BE DELETE we haven't fired yet. The submit handler
+   * (Save Draft / Book Call) iterates these and flushes them before
+   * declaring success; the Cancel path simply discards the set,
+   * leaving the BE untouched.
+   *
+   * Lifecycle matches `localImages` — both reset when the form
+   * remounts for a different job. The two state shapes are kept in
+   * sync: clicking X removes from `localImages` AND adds to
+   * `pendingDeleteIds`.
+   */
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(new Set());
+  // Reseed when the modal swaps to a different job (job_id changes).
+  // Image arrays themselves don't need to re-sync — they're owned by
+  // this local state for the lifetime of the form.
+  const initialJobId = (initial as Record<string, unknown>)?.job_id;
+  useEffect(() => {
+    setLocalImages(initialImages);
+    setPendingDeleteIds(new Set());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialJobId]);
 
   // ─── Services basket (create flow only) ───────────────────────────────
   // `clientServices` is the catalog for the currently-picked client (null = not
@@ -3499,7 +3742,42 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
   const canOutcomeButtons = true;
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    setError(null); setSubmitting(true);
+    setSubmitting(true);
+
+    /*
+     * Pending-delete confirmation gate (2026-05-28). When the operator
+     * has staged image removals via the Confirm-mode "mark for
+     * deletion" affordance, the submit handler will flush a real BE
+     * DELETE for each id. That's a permanent storage change; confirm
+     * before proceeding so a routine Save-Draft / Book-Call doesn't
+     * silently commit removals the operator may have forgotten
+     * about. Outcome variants (Unreachable / Enquiry) skip the gate
+     * because they don't run the pending-delete flush.
+     *
+     * Placed BEFORE the mandatory-fields gate so a confirm-cancel
+     * doesn't leave half-validated state behind. `setSubmitting(true)`
+     * happens first to immediately disable the submit buttons
+     * (prevents double-clicks during the confirm dialog's await).
+     */
+    if (
+      isConfirm
+      && pendingDeleteIds.size > 0
+      && (submitVariant === 'book' || submitVariant === 'draft')
+    ) {
+      const ok = await confirmDialog({
+        title: 'Confirm Image Deletions',
+        description: `${pendingDeleteIds.size} image${pendingDeleteIds.size === 1 ? '' : 's'} marked for deletion will be permanently removed from storage when this save completes. This cannot be undone after Save.`,
+        confirmLabel: 'Delete and Save',
+        cancelLabel: 'Review',
+        variant: 'destructive',
+      });
+      if (!ok) {
+        setSubmitting(false);
+        return;
+      }
+    }
+
+    setError(null);
 
     /*
      * Pre-submit mandatory-field guard for the BOOK variant of the
@@ -3779,6 +4057,28 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
          * upload is preferable to losing the entire save.
          */
         if (!isOutcomeOnly && initial?.job_id) {
+          /*
+           * Flush pending IMAGE DELETIONS first (2026-05-28). These
+           * are tiles the operator X'd in the inline Job Image
+           * section — the X gesture stages them, this loop commits.
+           * Done BEFORE the uploads so a same-session sequence of
+           * "delete old, upload new" stays in order on the server's
+           * audit log. Each DELETE is independent + soft-fails so a
+           * stale id (already gone) doesn't block the rest of the
+           * save.
+           */
+          if (pendingDeleteIds.size > 0) {
+            for (const id of pendingDeleteIds) {
+              try {
+                await api.delete(`/admin/jobs/images/${id}`);
+              } catch (delErr) {
+                // eslint-disable-next-line no-console
+                console.warn(`Image delete failed during ${submitVariant} for image ${id}:`, delErr);
+              }
+            }
+            setPendingDeleteIds(new Set());
+          }
+
           const staged = ((f as unknown as { job_image_files?: File[] }).job_image_files ?? [])
             .filter((x) => x instanceof File);
           if (staged.length > 0) {
@@ -4235,7 +4535,18 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                 rather than widening CallableMobile's prop. */}
             <CallableMobile
               jobId={Number(initial.job_id)}
-              mobile={(initial.customer_mob_no as string | null | undefined) ?? null}
+              /*
+               * Mask the displayed digits client-side (2026-05-28).
+               * Confirm-mode fetches `?unmasked=true` so the FORM
+               * can edit the mobile without bullet corruption, but
+               * the Job Summary top-right is a READ-ONLY display
+               * surface — it should still respect the standard
+               * mask. CallableMobile still routes the click-to-call
+               * through Kaleyra using jobId, so the bridge dial
+               * works on the unmasked value server-side; only the
+               * visible label is bulleted here.
+               */
+              mobile={maskMobile((initial.customer_mob_no as string | null | undefined) ?? null)}
             />
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1">
@@ -4337,11 +4648,17 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
               {/* Mobile Number RESTORED but rendered through CallableMobile
                   so the bulk of the digits is masked (only last 4 visible).
                   Operators can still click-to-call without seeing the
-                  cleartext mobile — same UX as the Summary tab. */}
+                  cleartext mobile — same UX as the Summary tab.
+                  Mask wrap (2026-05-28): the confirm-mode fetch uses
+                  `?unmasked=true` so the FORM can submit without bullet
+                  corruption, but this READ-ONLY display surface should
+                  still mask. Click-to-call resolves the unmasked
+                  number server-side from jobId, so the bridge dial
+                  still works. */}
               <div className="h-10 px-2 flex items-center border rounded bg-muted/30">
                 <CallableMobile
                   jobId={Number(initial.job_id)}
-                  mobile={f.customer_mob_no as string | null}
+                  mobile={maskMobile(f.customer_mob_no as string | null)}
                 />
               </div>
             </Field>
@@ -4808,8 +5125,81 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
                   setJobField('job_image_files', next as never);
                   setJobField('job_image_file', (next[0] ?? null) as never);
                 };
+                /*
+                 * Already-uploaded images (2026-05-28). After "Save Draft"
+                 * uploads files and closes the modal, reopening the same
+                 * Unconfirmed job lands back in Confirm & Schedule. The
+                 * legacy view showed only the empty file picker, so ops
+                 * thought their drafts had vanished. Surface the rows
+                 * persisted on tbl_job_image as compact preview tiles
+                 * above the picker — same component as the Images tab
+                 * in view mode (X delete handler hits
+                 * DELETE /admin/jobs/images/:id, then refreshes the
+                 * modal). Falls back to `[]` when initial.images is
+                 * missing (legacy callers, freshly-created jobs).
+                 */
+                /*
+                 * Read from local section state — NOT initial.images.
+                 * Tiles stay rendered even after the operator X's
+                 * them (2026-05-28); they receive a strikethrough +
+                 * undo-arrow treatment so the operator can recover
+                 * individual mistakes without cancelling the whole
+                 * modal. The submit handler flushes the BE DELETE for
+                 * every id still in `pendingDeleteIds` at submit time.
+                 */
                 return (
                   <div>
+                    {localImages.length > 0 && (
+                      <div className="mb-3">
+                        <p className="text-[11px] text-muted-foreground mb-1">
+                          {localImages.length} image{localImages.length === 1 ? '' : 's'} already uploaded
+                          {pendingDeleteIds.size > 0 ? ` (${pendingDeleteIds.size} marked for deletion)` : ''}:
+                        </p>
+                        <JobImagesTab
+                          images={localImages}
+                          compact
+                          deferDelete
+                          // The X visibility check in JobImagesTab
+                          // gates on `onChanged` truthiness; we pass a
+                          // no-op so the X renders. State mutation
+                          // happens inside onImageDeleted.
+                          onChanged={() => { /* deferred — flush on submit */ }}
+                          // Drive the strikethrough/undo visual on
+                          // marked tiles. The set is owned by JobForm
+                          // and toggled below.
+                          pendingDeleteIds={pendingDeleteIds}
+                          onImageDeleted={(id) => {
+                            /*
+                             * Toggle membership in the pending-delete
+                             * set. Click an unmarked tile → adds id
+                             * (tile renders with strikethrough +
+                             * undo button). Click the SAME tile again
+                             * → removes id (tile returns to normal).
+                             * localImages stays untouched so the
+                             * thumbnail never disappears; the visual
+                             * treatment is the only signal.
+                             */
+                            setPendingDeleteIds((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(id)) next.delete(id);
+                              else              next.add(id);
+                              return next;
+                            });
+                          }}
+                        />
+                      </div>
+                    )}
+                    {/*
+                     * Pending-delete hint (2026-05-28, refined). Now
+                     * mentions the undo affordance so operators
+                     * understand the strikethrough is reversible
+                     * tile-by-tile, not all-or-nothing.
+                     */}
+                    {pendingDeleteIds.size > 0 && (
+                      <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-2 inline-block">
+                        {pendingDeleteIds.size} image{pendingDeleteIds.size === 1 ? '' : 's'} marked for deletion. Click the ↺ on a tile to undo, Cancel to discard all, or Save Draft / Book Call to confirm.
+                      </p>
+                    )}
                     <Input
                       key={`job-img-${tabKey}`}
                       type="file"
@@ -6415,20 +6805,25 @@ function JobForm({ mode, initial, onCancel, onSaved, prefillCustomer }: {
           - confirm mode: Unreachable / Enquiry / Confirm & Schedule
           - edit mode   : Save changes (unchanged) */}
       <div className="flex justify-between gap-2 pt-2 flex-wrap items-center">
-        {/* LEFT cluster — Add Remarks. Disabled in create mode (no job_id
-            yet). The button is rendered for ALL JobForm-driven modes
-            (edit / confirm / create) per ops 2026-05-28 ask. */}
+        {/* LEFT cluster — Add Remarks. Rendered ONLY when there's a
+            real job_id to attach the remark to — i.e. edit/confirm
+            modes. Create mode (Book New Call) hides this entirely
+            per ops 2026-05-28 ask: a "disabled with tooltip" state was
+            still drawing the operator's eye for an action they cannot
+            take pre-save. The button reappears the next time the same
+            job is opened in view/confirm/edit mode. */}
         <div className="flex items-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            className="bg-teal-500 hover:bg-teal-600 text-white border-teal-500 hover:text-white"
-            onClick={() => setAddRemarksFormOpen(true)}
-            disabled={!initial?.job_id}
-            title={initial?.job_id ? 'Add a remark / note to this job' : 'Save the job first, then add remarks'}
-          >
-            Add Remarks
-          </Button>
+          {initial?.job_id ? (
+            <Button
+              type="button"
+              variant="outline"
+              className="bg-teal-500 hover:bg-teal-600 text-white border-teal-500 hover:text-white"
+              onClick={() => setAddRemarksFormOpen(true)}
+              title="Add a remark / note to this job"
+            >
+              Add Remarks
+            </Button>
+          ) : null}
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
         <CancelButton onCancel={onCancel} />

@@ -31,7 +31,8 @@ import { Input } from './input';
 import { Label } from './label';
 import { SearchSelect } from './search-select';
 import { AddressAutocomplete } from './address-autocomplete';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
+import { showToast } from './toast';
 
 export type AddressValue = {
   address: string;
@@ -74,25 +75,52 @@ type GMaps = {
 };
 type GMapsWindow = { google?: { maps: GMaps } };
 let mapsLoader: Promise<GMaps> | null = null;
+/*
+ * Resolve the Google Maps JS API key. Next.js bakes
+ * NEXT_PUBLIC_* env vars at BUILD time — so a QA deploy that shipped
+ * before the key was provisioned can't pick it up via a runtime env
+ * change. Fall back to `/admin/maps/config` (BE-owned) which reads
+ * GOOGLE_MAPS_API_KEY_PUBLIC || GOOGLE_MAPS_API_KEY at request time.
+ * This lets ops fix QA without a FE rebuild.
+ *
+ * Cache the resolved key on the module so the API call only happens
+ * once per page load even if multiple AddressPickerWithMap instances
+ * mount (Book New Call + Confirm & Schedule on the same operator
+ * session).
+ */
+let _cachedRuntimeKey: string | null | undefined = undefined;
+async function resolveApiKey(): Promise<string | null> {
+  const baked = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
+  if (baked) return baked;
+  if (_cachedRuntimeKey !== undefined) return _cachedRuntimeKey;
+  try {
+    const r = await api.get<{ apiKey: string | null }>('/admin/maps/config');
+    _cachedRuntimeKey = r.apiKey || null;
+  } catch {
+    _cachedRuntimeKey = null;
+  }
+  return _cachedRuntimeKey;
+}
 function loadGoogleMaps(): Promise<GMaps> {
   if (mapsLoader) return mapsLoader;
   mapsLoader = new Promise((resolve, reject) => {
     if (typeof window === 'undefined') { reject(new Error('No window')); return; }
     const w = window as unknown as GMapsWindow;
     if (w.google?.maps) { resolve(w.google.maps); return; }
-    const key = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
-    if (!key) { reject(new Error('NEXT_PUBLIC_GOOGLE_MAPS_API_KEY not set')); return; }
-    const script = document.createElement('script');
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${key}&libraries=places&v=weekly`;
-    script.async = true;
-    script.defer = true;
-    script.onerror = () => reject(new Error('Failed to load Google Maps JS API'));
-    script.onload = () => {
-      const ww = window as unknown as GMapsWindow;
-      if (ww.google?.maps) resolve(ww.google.maps);
-      else reject(new Error('Maps loaded but namespace missing'));
-    };
-    document.head.appendChild(script);
+    resolveApiKey().then((key) => {
+      if (!key) { reject(new Error('Google Maps API key not configured (set NEXT_PUBLIC_GOOGLE_MAPS_API_KEY at build, or GOOGLE_MAPS_API_KEY on the backend for the /admin/maps/config fallback)')); return; }
+      const script = document.createElement('script');
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${key}&libraries=places&v=weekly`;
+      script.async = true;
+      script.defer = true;
+      script.onerror = () => reject(new Error('Failed to load Google Maps JS API'));
+      script.onload = () => {
+        const ww = window as unknown as GMapsWindow;
+        if (ww.google?.maps) resolve(ww.google.maps);
+        else reject(new Error('Maps loaded but namespace missing'));
+      };
+      document.head.appendChild(script);
+    });
   });
   return mapsLoader;
 }
@@ -170,11 +198,21 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true 
         if (match) next.city_id = match;
       }
       patch(next);
-    } catch (_e) {
-      // Reverse-geocode failed (out of quota, no result, etc.). Keep
-      // the marker where it is and only update GPS — the operator can
-      // still hand-correct city / PIN.
+    } catch (e) {
+      // Reverse-geocode failed (out of quota, no result, missing
+      // Geocoding API enablement on the key, etc.). Keep the marker
+      // where it is and only update GPS — the operator can still
+      // hand-correct address / city / PIN.
+      //
+      // Surface a one-shot toast so the operator understands why the
+      // address didn't auto-fill on the drag. The BE returns an
+      // actionable message for REQUEST_DENIED (e.g. "enable Geocoding
+      // API on the GCP key") — pass it through verbatim.
       patch({ gps_location: `${lat.toFixed(6)},${lng.toFixed(6)}` });
+      const msg = e instanceof ApiError && e.message
+        ? e.message
+        : 'Address auto-fill failed — keep dragging the pin or hand-edit the address field.';
+      showToast({ variant: 'error', message: msg });
     }
   }
 
@@ -420,9 +458,19 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true 
           {mapsError ? (
             <div className="absolute inset-0 grid place-items-center text-xs text-muted-foreground p-4 text-center">
               <div>
-                <div className="font-medium">Map unavailable</div>
+                <div className="font-medium">Map Unavailable</div>
                 <div className="mt-1">{mapsError}</div>
-                <div className="mt-2 text-[10px]">Address fields on the left still work — operators can hand-edit values.</div>
+                {/* Explicit reassurance (2026-05-28): operators were
+                    blocking on Book New Call because the missing map
+                    visually suggested the address step couldn't be
+                    completed. The form does NOT require GPS — picking
+                    a saved address or typing fields manually is
+                    sufficient to enable Next + Book Call. */}
+                <div className="mt-2 text-[10px] leading-snug">
+                  You can still proceed — pick a saved address or hand-edit
+                  the fields on the left. GPS is optional; Book Call works
+                  without it.
+                </div>
               </div>
             </div>
           ) : (

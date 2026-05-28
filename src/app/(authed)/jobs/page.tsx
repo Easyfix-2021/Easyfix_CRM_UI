@@ -254,6 +254,12 @@ export default function JobsPage() {
       // flag, not a status bucket. When focus is unset, isEscalated is
       // omitted so the list behaves exactly as before.
       const isEscalated = searchParams.get('focus') === 'escalated' ? 'true' : undefined;
+      // `noServices=true` (2026-05-28) is the deep-link from the
+      // AttentionSummary "Booked With No Services" tile. The BE list
+      // pins status=0 + anti-joins tbl_job_services internally — we
+      // just forward the param. URL drives the request directly so
+      // ops can share/bookmark the filtered view.
+      const noServices = searchParams.get('noServices') === 'true' ? 'true' : undefined;
       // Status precedence (highest → lowest):
       //   1. filters.bucketStatus (Open/Closed/Cancelled) — sends
       //      `statuses` as a CSV of the matching IN-set. WINS over
@@ -292,6 +298,7 @@ export default function JobsPage() {
           ? undefined
           : (tabDef?.assigned === undefined ? undefined : String(tabDef.assigned)),
         isEscalated,
+        noServices,
         limit, offset: off,
         clientId: filters.clientId || undefined,
         cityId: filters.cityId || undefined,

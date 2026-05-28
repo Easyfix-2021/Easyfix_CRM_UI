@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom';
 import { Check, ChevronDown, Search, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { usePopoverPosition } from '@/lib/use-popover-position';
+import { PORTAL_POPOVER_ATTR } from '@/lib/portal-markers';
 import type { SearchOption } from './search-select';
 
 /*
@@ -209,14 +210,15 @@ export function SearchMultiSelect({
        * block layout — popover root has no max-height; the inner
        * `<ul max-h-72>` owns the scroll region. The wheel-trap
        * useEffect intercepts wheels inside the popover unconditionally
-       * so the modal never scrolls. `data-portal-popover` marker
-       * keeps the dialog open when clicking inside (see dialog.tsx).
+       * so the modal never scrolls. `PORTAL_POPOVER_ATTR` spreads the
+       * `data-portal-popover` marker that keeps the dialog open when
+       * clicking inside (see dialog.tsx + src/lib/portal-markers.ts).
        */}
       {open && typeof document !== 'undefined' && createPortal(
         <div
           ref={popoverRef}
           style={popStyle}
-          data-portal-popover=""
+          {...PORTAL_POPOVER_ATTR}
           /*
            * Flex column. The hook's `maxHeight` caps the popover;
            * `overflow-hidden` enforces the cap; filter + footer are

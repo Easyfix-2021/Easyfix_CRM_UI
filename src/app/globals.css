@@ -82,21 +82,23 @@
    * past the left edge of the card before the cycle restarts —
    * matches the legacy newsticker feel the operator asked for.
    *
-   * Lifecycle of one cycle:
+   * Lifecycle of one cycle (2026-05-28 — hold phase removed):
    *   - 0%   text fully visible at left (translateX = 0)
-   *   - 8%   still at 0 — brief hold so the reader registers the
-   *          first chars before motion starts
    *   - 100% text fully off-screen left (translateX = -innerWidth)
-   *          → animation completes, snaps back to 0, re-enters
-   *            the hold phase
+   *          → animation completes, snaps back to 0, immediately
+   *            replays — no pause at the loop point.
    *
-   * The `linear` timing function keeps the scroll speed constant
-   * (an ease-in-out felt jerky once the distance grew).
-   * `paused` by default → only runs when the parent matches :hover.
+   * Earlier this keyframe had an `8% hold` that paused the text at
+   * its start for a fraction of each loop. The hold created a
+   * visible stutter on hover ("read a bit, then move") that ops
+   * disliked. With the hold removed, motion is continuous: the text
+   * scrolls left until fully clipped, snaps back to start, and
+   * immediately scrolls again. The `linear` timing keeps the speed
+   * constant; the 80 px/sec calibration in `MarqueeOnHover` is what
+   * makes long titles feel readable rather than rushed.
    */
   @keyframes marquee-scroll {
     0%   { transform: translateX(0); }
-    8%   { transform: translateX(0); }
     100% { transform: translateX(var(--marquee-distance, 0)); }
   }
   /*
@@ -117,8 +119,22 @@
   .group-hover-marquee {
     /* no animation by default — transform stays at translateX(0) */
   }
-  a:hover .group-hover-marquee {
-    animation: marquee-scroll var(--marquee-duration, 4s) linear infinite;
+  /*
+   * Gated by `prefers-reduced-motion: no-preference` (2026-05-28). The
+   * marquee is a visual flourish, not a content carrier — operators
+   * with the OS-level motion-reduction preference see static clipped
+   * text instead. They lose nothing the truncated string didn't
+   * already convey (hover-tooltip still surfaces the full label).
+   *
+   * The CSS Working Group's reduced-motion guidance: prefer NOT
+   * declaring the animation rather than overriding scale to 1, so
+   * the browser doesn't even start the keyframe machinery on
+   * reduced-motion clients.
+   */
+  @media (prefers-reduced-motion: no-preference) {
+    a:hover .group-hover-marquee {
+      animation: marquee-scroll var(--marquee-duration, 4s) linear infinite;
+    }
   }
 
   /* Legacy-style data table: dense rows, subtle borders */

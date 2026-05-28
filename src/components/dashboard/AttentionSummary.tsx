@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { useFetch } from '@/lib/hooks';
+import { MarqueeOnHover } from '@/components/dashboard/MarqueeOnHover';
 
 /*
  * AttentionSummary — replaces the older "Recent Jobs" card on the
@@ -139,7 +140,10 @@ const TILES: Tile[] = [
     icon: PackageX,
     iconBg: 'bg-amber-100',
     iconFg: 'text-amber-700',
-    href: '/jobs?tab=booked',
+    // `noServices=true` is the BE list filter (2026-05-28) that pins
+    // status=0 + anti-joins tbl_job_services on job_service_status=1.
+    // The list page narrows to the exact rows this tile counted.
+    href: '/jobs?noServices=true',
   },
 ];
 
@@ -169,41 +173,95 @@ export function AttentionSummary() {
             stable at tablet widths so the new tile slots into the
             existing rhythm without reflow. */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 p-4">
-          {TILES.map((t) => {
-            const Icon = t.icon;
-            const value = data[t.key];
-            return (
-              <Link
-                key={t.key}
-                href={t.href}
-                // Removing the link decoration so the tile reads as a
-                // tile, not as a hyperlink — hover-only shadow conveys
-                // it's clickable.
-                className="block rounded-lg border bg-card hover:shadow-md hover:border-foreground/20 transition-all p-3"
-              >
-                <div className="flex items-start gap-3 min-w-0">
-                  <div className={`h-9 w-9 shrink-0 rounded-md grid place-items-center ${t.iconBg}`}>
-                    <Icon className={`h-5 w-5 ${t.iconFg}`} />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-2xl font-semibold tabular-nums leading-none">
-                      {fetched.loading
-                        ? <span className="inline-block h-6 w-10 rounded bg-muted animate-pulse" />
-                        : (value ?? 0).toLocaleString('en-IN')}
-                    </div>
-                    <div className="text-[13px] font-medium mt-1 leading-snug truncate">
-                      {t.title}
-                    </div>
-                    <div className="text-[11px] text-muted-foreground leading-snug truncate">
-                      {t.sub}
-                    </div>
-                  </div>
-                </div>
-              </Link>
-            );
-          })}
+          {TILES.map((t) => (
+            <AttentionTile
+              key={t.key}
+              tile={t}
+              value={data[t.key]}
+              loading={fetched.loading}
+            />
+          ))}
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+/*
+ * AttentionTile (2026-05-28) — extracted from the inline map so each
+ * tile can own its own per-line marquee state. Mirrors the FlowCardTile
+ * sync pattern:
+ *   1. each `MarqueeOnHover` reports `(overflows, exitDist)` via
+ *      `onMeasure`,
+ *   2. the tile unions both overflow flags into `animateBoth` so
+ *      either-or-both triggers the visual on hover,
+ *   3. the tile computes a shared `durationMs` from the MAX exitDist
+ *      so the title and sub complete each scroll cycle in lockstep,
+ *      eliminating loop-by-loop desync.
+ *
+ * Idle tiles (neither line overflows) stay still — no JS rAF cost.
+ * MarqueeOnHover gates the CSS animation behind the parent <a>:hover
+ * rule, so even animating tiles cost nothing until the operator
+ * hovers them.
+ */
+function AttentionTile({ tile, value, loading }: {
+  tile: Tile;
+  value: number | undefined;
+  loading: boolean;
+}) {
+  const Icon = tile.icon;
+  const [titleOverflows, setTitleOverflows] = React.useState(false);
+  const [subOverflows,   setSubOverflows]   = React.useState(false);
+  const [titleExit, setTitleExit] = React.useState(0);
+  const [subExit,   setSubExit]   = React.useState(0);
+  const animateBoth = titleOverflows || subOverflows;
+  const PX_PER_SEC = 80;
+  const sharedDurationMs = Math.max(
+    3000,
+    Math.round((Math.max(titleExit, subExit) / PX_PER_SEC) * 1000),
+  );
+  return (
+    <Link
+      href={tile.href}
+      // Removing the link decoration so the tile reads as a tile, not
+      // as a hyperlink — hover-only shadow conveys it's clickable.
+      className="block rounded-lg border bg-card hover:shadow-md hover:border-foreground/20 transition-all p-3"
+    >
+      <div className="flex items-start gap-3 min-w-0">
+        <div className={`h-9 w-9 shrink-0 rounded-md grid place-items-center ${tile.iconBg}`}>
+          <Icon className={`h-5 w-5 ${tile.iconFg}`} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-2xl font-semibold tabular-nums leading-none">
+            {loading
+              ? <span className="inline-block h-6 w-10 rounded bg-muted animate-pulse" />
+              : (value ?? 0).toLocaleString('en-IN')}
+          </div>
+          {/*
+           * Title + sub share `animateBoth` (overflow union) and
+           * `sharedDurationMs` (duration union) so they move in
+           * perfect lockstep on hover. Marquee replaces the previous
+           * `truncate` ellipsis — long titles like "Booked With No
+           * Services" stay readable rather than getting clipped.
+           */}
+          <MarqueeOnHover
+            className="text-[13px] font-medium mt-1 leading-snug"
+            animateOverride={animateBoth}
+            durationOverride={sharedDurationMs}
+            onMeasure={(ov, dist) => { setTitleOverflows(ov); setTitleExit(dist); }}
+          >
+            {tile.title}
+          </MarqueeOnHover>
+          <MarqueeOnHover
+            className="text-[11px] text-muted-foreground leading-snug"
+            animateOverride={animateBoth}
+            durationOverride={sharedDurationMs}
+            onMeasure={(ov, dist) => { setSubOverflows(ov); setSubExit(dist); }}
+          >
+            {tile.sub}
+          </MarqueeOnHover>
+        </div>
+      </div>
+    </Link>
   );
 }

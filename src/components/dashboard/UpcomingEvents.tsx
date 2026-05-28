@@ -63,9 +63,20 @@ export function UpcomingEvents({ days = 7 }: { days?: number }) {
   const groups = groupByDate(items);
 
   return (
-    <Card className="h-full">
-      <CardContent className="p-0">
-        <div className="px-4 py-3 border-b flex items-center gap-2">
+    /*
+     * Flex-column layout so the scrollable event list claims the
+     * vertical space left after the title bar — matching whatever
+     * height the parent grid cell allocates. The dashboard pairs this
+     * card with the 2×4 funnel-card grid on the left; with the
+     * grid's default `items-stretch`, the parent cell now matches
+     * the funnel grid's height and the list scrolls when events
+     * exceed it. Removing the old `max-h-[500px]` cap on the inner
+     * `ul` keeps the cap responsive to the actual cell height instead
+     * of a fixed pixel number.
+     */
+    <Card className="h-full flex flex-col">
+      <CardContent className="p-0 flex-1 min-h-0 flex flex-col">
+        <div className="px-4 py-3 border-b flex items-center gap-2 shrink-0">
           <Calendar className="h-4 w-4 text-muted-foreground" />
           <h2 className="text-sm font-semibold">Upcoming Events</h2>
         </div>
@@ -91,7 +102,7 @@ export function UpcomingEvents({ days = 7 }: { days?: number }) {
         )}
 
         {!fetched.loading && groups.length > 0 && (
-          <ul className="p-3 space-y-3 max-h-[500px] overflow-y-auto">
+          <ul className="p-3 space-y-3 flex-1 min-h-0 overflow-y-auto">
             {groups.map((g) => (
               <li key={g.date} className="flex items-start gap-3">
                 <DatePill date={g.date} />

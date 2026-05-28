@@ -4,6 +4,7 @@ import * as React from 'react';
 import { createPortal } from 'react-dom';
 import { CheckCircle2, AlertTriangle, Loader2, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { TOAST_HOST_ATTR } from '@/lib/portal-markers';
 
 /*
  * App-wide toast system. Imperative API so non-React code paths
@@ -59,6 +60,22 @@ let toastIdCounter = 0;
 const TOAST_EVENT   = 'easyfix:toast:show';
 const DISMISS_EVENT = 'easyfix:toast:dismiss';
 
+/*
+ * Maximum simultaneous toasts (2026-05-28). When a 4th toast is
+ * queued, the oldest VISIBLE toast is evicted to keep the stack at
+ * MAX_TOAST_STACK. Picked 3 because:
+ *   - one operation in progress + one warning + one transient hint
+ *     is the realistic upper bound for a single user gesture;
+ *   - more than that and the bottom toast obscures call-to-action
+ *     buttons on shorter viewports (1080p Chrome at 100% zoom).
+ *
+ * Loading toasts are NEVER evicted automatically — they represent
+ * in-flight work and disappearing one mid-request would leave the
+ * operator unsure whether the work is still happening. Eviction
+ * scans for the oldest NON-loading entry first.
+ */
+const MAX_TOAST_STACK = 3;
+
 /* Imperative show. Returns the assigned id so callers can dismiss
  * or replace this specific toast. */
 export function showToast(opts: { variant: ToastVariant; message: string }): number {
@@ -80,6 +97,26 @@ export function dismissToast(id: number): void {
  * the custom events and renders the toast stack into document.body. */
 export function ToastHost() {
   const [toasts, setToasts] = React.useState<Toast[]>([]);
+  /*
+   * `hiddenCount` (2026-05-28) — number of toasts that were dropped by
+   * the MAX_TOAST_STACK eviction since the visible queue was last
+   * empty. Surfaces as a small "+N earlier hidden" pill above the
+   * stack so a burst of errors doesn't silently swallow the older
+   * ones.
+   *
+   * Reset semantics: when `toasts.length` drops to 0 (every visible
+   * toast has dismissed naturally or been clicked away), we consider
+   * the burst "over" and clear the counter. The pill therefore tracks
+   * eviction count PER-BURST, not the lifetime of the app — matching
+   * the operator's expectation that "the loud period just ended, the
+   * board is clear again."
+   */
+  const [hiddenCount, setHiddenCount] = React.useState(0);
+  // Sync ref of hiddenCount so the timer-driven dismiss callbacks (which
+  // close over their original render snapshot) can read the current
+  // count without needing to be re-bound on every state change.
+  const hiddenCountRef = React.useRef(hiddenCount);
+  React.useEffect(() => { hiddenCountRef.current = hiddenCount; }, [hiddenCount]);
 
   React.useEffect(() => {
     const onShow = (e: Event) => {
@@ -88,8 +125,32 @@ export function ToastHost() {
         // Replace any toast with the same id (rare but possible if a
         // caller re-fires with the same id) and append the new entry.
         const filtered = prev.filter((p) => p.id !== t.id);
-        return [...filtered, t];
+        const next = [...filtered, t];
+        // Stack cap (2026-05-28). When over MAX_TOAST_STACK, evict the
+        // oldest non-loading entry first; only fall back to evicting a
+        // loading toast if literally every visible toast is a loader
+        // (extremely rare — would mean N concurrent in-flight calls).
+        let evicted = 0;
+        while (next.length > MAX_TOAST_STACK) {
+          const evictIdx = next.findIndex((p) => p.variant !== 'loading');
+          // -1 → no non-loading entries; remove oldest entry regardless
+          // to keep the cap honest. Otherwise drop the oldest non-loader.
+          next.splice(evictIdx === -1 ? 0 : evictIdx, 1);
+          evicted += 1;
+        }
+        if (evicted > 0) {
+          // Increment hidden-count by what we actually evicted in this
+          // pass. Done inside the setter to keep render-state and ref
+          // in lockstep — calling setHiddenCount here would batch but
+          // a state-setter inside a state-setter is React's standard
+          // way of staying within one transaction.
+          setHiddenCount((h) => h + evicted);
+        }
+        return next;
       });
+      // Note: setting timers below doesn't need to touch hiddenCount.
+      // The natural-dismiss path empties `toasts` eventually, and the
+      // reset-on-empty effect below clears the counter at that point.
       if (t.variant === 'success') {
         // Auto-dismiss success after 4s. Loading still stays until the
         // caller dismisses; error stacks were too aggressive at "sticky"
@@ -115,7 +176,36 @@ export function ToastHost() {
     };
   }, []);
 
-  if (typeof document === 'undefined' || toasts.length === 0) return null;
+  // Reset hiddenCount whenever the visible queue empties — the burst is
+  // considered over and the next eviction starts a fresh counter.
+  React.useEffect(() => {
+    if (toasts.length === 0 && hiddenCountRef.current !== 0) {
+      setHiddenCount(0);
+    }
+  }, [toasts.length]);
+
+  /*
+   * One-shot pulse on hiddenCount increment (2026-05-28). Drives a
+   * brief scale-up of the indicator pill so a fresh eviction is
+   * visible even when the operator was looking at a toast rather
+   * than the pill. The transition uses `transition-transform` so the
+   * scale-down animates back smoothly — no jump. Rapid bursts
+   * cancel the previous timer (via the cleanup) so the pill stays
+   * elevated until the burst ends, then settles.
+   *
+   * 350ms is short enough to feel like a "tick", long enough that
+   * the eye registers it. Matches the dashboard count-card pulse
+   * cadence elsewhere in the app.
+   */
+  const [pulse, setPulse] = React.useState(false);
+  React.useEffect(() => {
+    if (hiddenCount === 0) { setPulse(false); return; }
+    setPulse(true);
+    const t = window.setTimeout(() => setPulse(false), 350);
+    return () => clearTimeout(t);
+  }, [hiddenCount]);
+
+  if (typeof document === 'undefined' || (toasts.length === 0 && hiddenCount === 0)) return null;
 
   // Interaction-blocking overlay activates whenever a `loading` toast is
   // present. Sits z-[9998] — below the toast itself (z-[9999]) so the
@@ -143,9 +233,48 @@ export function ToastHost() {
         />
       )}
       <div
+        /*
+         * Toast-host marker (2026-05-28) — read by Dialog's
+         * outside-click guards so a click on the toast surface
+         * doesn't dismiss the open modal. Attribute name + selector
+         * live in `@/lib/portal-markers` so the producer (here) and
+         * the consumer (Dialog) cannot drift on a rename.
+         */
+        {...TOAST_HOST_ATTR}
         className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[9999] flex flex-col items-center gap-2 pointer-events-none"
         aria-live="polite"
       >
+        {/*
+         * Overflow indicator (2026-05-28). Surfaces above the stack
+         * when MAX_TOAST_STACK has evicted older toasts. Compact
+         * (single-line, no icon, smaller text) so it never competes
+         * with the actual toasts for the operator's attention — its
+         * job is to admit "more happened than is visible", not to
+         * deliver content. `pointer-events-none` keeps the badge
+         * non-interactive; clicking through hits whatever sits under
+         * the portal as usual.
+         */}
+        {hiddenCount > 0 && (
+          <div
+            /*
+             * Pulse animation is gated by Tailwind's `motion-safe:`
+             * variant — it only applies the scale-up/scale-down when
+             * `prefers-reduced-motion: no-preference` is set on the
+             * user's OS. Operators with the reduced-motion preference
+             * see only the count update (which is the actual signal);
+             * the bump-and-settle is purely a visual flourish.
+             * `motion-reduce:scale-100` forces the static state for
+             * extra safety on browsers that interpret motion-safe
+             * differently.
+             */
+            className={`pointer-events-none rounded-full bg-slate-800/85 text-white text-[11px] font-medium px-2.5 py-0.5 shadow-md motion-safe:transition-transform motion-safe:duration-300 motion-safe:ease-out motion-reduce:scale-100 ${pulse ? 'motion-safe:scale-110' : 'scale-100'}`}
+            role="status"
+            aria-label={`${hiddenCount} earlier toast${hiddenCount === 1 ? '' : 's'} hidden by stack cap`}
+            title="Older toasts were hidden to keep the stack readable. Stack resets when current toasts clear."
+          >
+            +{hiddenCount} earlier hidden
+          </div>
+        )}
         {toasts.map((t) => (
           <ToastItem
             key={t.id}
