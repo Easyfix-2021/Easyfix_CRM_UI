@@ -307,27 +307,39 @@ export default function JobCompletionMagicLinkPage() {
 
       <form onSubmit={handleSubmit} className="space-y-6">
         <Section title="Customer Details">
+          {/* Mobile-keyboard hints (autoComplete + inputMode) on every
+              field with a clear semantic match — pops the right keyboard
+              and triggers browser autofill where the customer has saved
+              contact info. autoComplete="name" / "email" / "tel"
+              correspond to the WHATWG autofill tokens. */}
           <Field label="Name" required>
             <input type="text" required value={form.customer_name}
+              autoComplete="name"
               onChange={(e) => patch({ customer_name: e.target.value })} className={inputClass} />
           </Field>
           <Field label="Mobile">
             {/* Read-only — mobile is the identity field on the magic-link JWT
-                and changing it would break the link's binding to the job. */}
-            <div className="px-3 py-2 rounded-md bg-slate-100 text-slate-700 text-sm font-mono">
+                and changing it would break the link's binding to the job.
+                Promoted to text-base (16px) for legibility on small screens;
+                the slate-100 background distinguishes "not editable" from
+                the white-bg editable inputs above/below. */}
+            <div className="px-3 py-2 rounded-md bg-slate-100 text-slate-700 text-base font-mono">
               {data.customer.mobile}
             </div>
           </Field>
           <Field label="Email">
             <input type="email" value={form.customer_email}
+              autoComplete="email" inputMode="email"
               onChange={(e) => patch({ customer_email: e.target.value })} className={inputClass} placeholder="you@example.com" />
           </Field>
           <Field label="Alternate Contact Name">
             <input type="text" value={form.additional_name}
+              autoComplete="name"
               onChange={(e) => patch({ additional_name: e.target.value })} className={inputClass} placeholder="Optional" />
           </Field>
           <Field label="Alternate Contact Number">
             <input type="tel" value={form.additional_number}
+              autoComplete="tel" inputMode="numeric"
               onChange={(e) => patch({ additional_number: e.target.value.replace(/\D/g, '').slice(0, 10) })}
               className={inputClass} pattern="[0-9]{10}" placeholder="10 digits" />
           </Field>
@@ -410,8 +422,17 @@ export default function JobCompletionMagicLinkPage() {
   );
 }
 
+// Mobile-first input styling.
+//   text-base (16px) — Critical for iOS Safari: any input below 16px
+//     triggers an auto-zoom on focus that doesn't reverse when the user
+//     looks away, leaving the page mis-scaled. 16px sidesteps the zoom
+//     entirely. The desktop look is slightly less dense as a result;
+//     acceptable for a customer-facing public form (single-task page).
+//   px-3 py-2 — gives ~44px tap height with text-base, meeting the
+//     iOS HIG / WCAG touch-target minimum without needing explicit
+//     height classes.
 const inputClass =
-  'flex w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500';
+  'flex w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-base focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500';
 
 function Header({ clientName }: { clientName: string }) {
   return (
@@ -623,9 +644,13 @@ function AddressMapWidget({
           )}
         </div>
       </Field>
-      <div className="grid grid-cols-2 gap-3">
+      {/* grid-cols-1 on mobile (no horizontal cram of two placeholders
+          at 320-400px widths), sm:grid-cols-2 at 640px+ where a phone
+          in landscape or a tablet portrait has the room. */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Field label="Building / Floor">
           <input type="text" value={form.building}
+            autoComplete="address-line2"
             onChange={(e) => patch({ building: e.target.value })} className={inputClass} placeholder="House / flat / floor" />
         </Field>
         <Field label="Landmark">
@@ -633,7 +658,7 @@ function AddressMapWidget({
             onChange={(e) => patch({ landmark: e.target.value })} className={inputClass} placeholder="Optional" />
         </Field>
       </div>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Field label="City" required>
           <select value={form.city_id} required
             onChange={(e) => patch({ city_id: e.target.value })} className={inputClass}>
@@ -642,7 +667,11 @@ function AddressMapWidget({
           </select>
         </Field>
         <Field label="PIN Code" required>
+          {/* inputMode="numeric" pops the numeric keyboard on iOS/Android
+              without the JS keyboard symbol row. autoComplete hints at
+              browser address-autofill. */}
           <input type="text" required value={form.pin_code}
+            inputMode="numeric" autoComplete="postal-code"
             onChange={(e) => patch({ pin_code: e.target.value.replace(/\D/g, '').slice(0, 6) })}
             className={inputClass} pattern="[0-9]{6}" maxLength={6} placeholder="6 digits" />
         </Field>
