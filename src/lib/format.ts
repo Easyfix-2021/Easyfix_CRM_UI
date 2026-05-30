@@ -41,3 +41,55 @@ export function maskMobile(s: unknown, visible = 4): string {
   if (digits.length <= visible) return digits;
   return digits.slice(0, visible) + '•'.repeat(digits.length - visible);
 }
+
+/*
+ * Title-case a display label coming from a DB key that may arrive as
+ * lower-snake ("store_name"), lower-space ("store name"), or already
+ * Title Case ("Store Name"). Normalises separators (_ / - / spaces) to
+ * single spaces, then capitalises each word.
+ *
+ * Articles, prepositions, and "and" / "or" / "of" / "the" stay lowercase
+ * when mid-phrase (per the project's Title Case convention referenced in
+ * MEMORY.md / feedback_easyfix_label_casing) — except the FIRST word
+ * which is always capitalised.
+ *
+ * Letter clusters that are clearly acronyms (all-uppercase 2+ chars in
+ * the source, e.g. "GSTIN/UIN", "SKU", "AGL", "QR") are preserved as-is.
+ * Hyphens inside words (e.g. "Magic-Link") are also preserved.
+ *
+ * Examples:
+ *   titleCaseLabel('store_name')           → 'Store Name'
+ *   titleCaseLabel('Pin Code')             → 'Pin Code'   (idempotent)
+ *   titleCaseLabel('ask property and building name')
+ *                                          → 'Ask Property and Building Name'
+ *   titleCaseLabel('issue panel qr code')  → 'Issue Panel QR Code'  (QR lower-input falls back to Title-cased; preserved if already upper)
+ *   titleCaseLabel('GSTIN/UIN')            → 'GSTIN/UIN' (acronyms preserved)
+ */
+const LOWERCASE_WORDS = new Set([
+  'a', 'an', 'and', 'as', 'at', 'but', 'by', 'for', 'in', 'nor',
+  'of', 'on', 'or', 'the', 'to', 'with',
+]);
+
+export function titleCaseLabel(input: unknown): string {
+  if (input == null) return '';
+  const raw = String(input).trim();
+  if (!raw) return '';
+  // Normalise separators (underscores AND hyphens-between-words become
+  // spaces; in-word hyphens like "Magic-Link" survive because we split
+  // on whitespace, not on hyphens).
+  const spaced = raw.replace(/_+/g, ' ').replace(/\s+/g, ' ');
+  const words = spaced.split(' ');
+  return words.map((word, idx) => {
+    if (!word) return word;
+    // Acronym pass-through: 2+ uppercase letters preserved verbatim.
+    // Also handles slash-joined acronyms ("GSTIN/UIN") and mixed
+    // alphanumeric ("QR" inside larger tokens).
+    if (/^[A-Z0-9/]+$/.test(word) && word.length >= 2) return word;
+    // First word always capitalised; otherwise respect the small-words
+    // lowercase list.
+    const lower = word.toLowerCase();
+    if (idx > 0 && LOWERCASE_WORDS.has(lower)) return lower;
+    // Capitalise after each in-word hyphen too ("magic-link" → "Magic-Link").
+    return lower.split('-').map((seg) => seg ? seg[0].toUpperCase() + seg.slice(1) : seg).join('-');
+  }).join(' ');
+}

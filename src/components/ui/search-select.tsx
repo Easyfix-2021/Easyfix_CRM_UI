@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, ChevronDown, Search, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -36,6 +36,7 @@ export type SearchOption = {
 export function SearchSelect({
   value, onChange, options, placeholder = 'Select…',
   disabled, required, className, emptyText = 'No matches',
+  groupLabelPrefix,
 }: {
   value: string | number | '';
   onChange: (v: string) => void;
@@ -45,6 +46,13 @@ export function SearchSelect({
   required?: boolean;
   className?: string;
   emptyText?: string;
+  /*
+   * Optional prefix prepended to each rendered group header. e.g.
+   * passing 'Section: ' renders "Section: Known". When omitted, the
+   * raw group label is shown. Caller MUST sort options by group field
+   * first — the renderer just detects group transitions.
+   */
+  groupLabelPrefix?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -265,27 +273,52 @@ export function SearchSelect({
             {filtered.length === 0 && (
               <li className="px-3 py-2 text-muted-foreground">{emptyText}</li>
             )}
-            {filtered.map((opt, i) => {
-              const isSel = String(opt.value) === String(value);
-              const isActive = i === activeIdx;
-              return (
-                <li
-                  key={opt.value}
-                  role="option"
-                  aria-selected={isSel}
-                  onMouseEnter={() => setActiveIdx(i)}
-                  onClick={() => pick(opt)}
-                  className={cn(
-                    'flex items-center justify-between px-3 py-1.5 cursor-pointer',
-                    isActive ? 'bg-muted' : '',
-                    isSel ? 'text-foreground font-medium' : 'text-foreground/90'
-                  )}
-                >
-                  <span className="truncate">{opt.label}</span>
-                  {isSel && <Check className="h-3.5 w-3.5 text-primary shrink-0" />}
-                </li>
-              );
-            })}
+            {/*
+              Group-aware rendering. When `opt.group` transitions between
+              consecutive filtered options, insert a non-clickable
+              section header above the new group. Keyboard nav still
+              indexes by option position in `filtered`, so headers
+              don't break ↑/↓/Enter behaviour. Caller must sort options
+              by group; this renderer just detects transitions.
+            */}
+            {(() => {
+              const out: ReactNode[] = [];
+              let lastGroup: string | undefined;
+              filtered.forEach((opt, i) => {
+                if (opt.group && opt.group !== lastGroup) {
+                  out.push(
+                    <li
+                      key={`__group:${opt.group}`}
+                      className="px-3 pt-2 pb-1 text-[11px] uppercase tracking-wide font-semibold text-muted-foreground bg-slate-50 border-b sticky top-0"
+                      aria-hidden="true"
+                    >
+                      {groupLabelPrefix ? `${groupLabelPrefix}${opt.group}` : opt.group}
+                    </li>
+                  );
+                  lastGroup = opt.group;
+                }
+                const isSel = String(opt.value) === String(value);
+                const isActive = i === activeIdx;
+                out.push(
+                  <li
+                    key={opt.value}
+                    role="option"
+                    aria-selected={isSel}
+                    onMouseEnter={() => setActiveIdx(i)}
+                    onClick={() => pick(opt)}
+                    className={cn(
+                      'flex items-center justify-between px-3 py-1.5 cursor-pointer',
+                      isActive ? 'bg-muted' : '',
+                      isSel ? 'text-foreground font-medium' : 'text-foreground/90'
+                    )}
+                  >
+                    <span className="truncate">{opt.label}</span>
+                    {isSel && <Check className="h-3.5 w-3.5 text-primary shrink-0" />}
+                  </li>
+                );
+              });
+              return out;
+            })()}
           </ul>
         </div>,
         document.body,

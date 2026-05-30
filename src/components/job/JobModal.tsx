@@ -4518,16 +4518,80 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer 
    * Rules of Hooks are satisfied regardless of which branch renders.
    */
   const [confirmOpenSection, setConfirmOpenSection] = React.useState<1 | 2 | 3>(1);
+
+  /*
+   * Client custom-properties (loaded when a client is picked).
+   * Map of `propertyName → { mandatory: boolean }`. Drives:
+   *   - Visibility of "Branch Details", "Property / Building Name",
+   *     "Product Code" inputs in Section 1. A field shows ONLY when
+   *     its property name appears in this map. If the client has no
+   *     row for `building_name`, the input is hidden.
+   *   - Required state + visual `*` on each field, driven by the
+   *     property's `mandatory` flag in the DB.
+   *
+   * Property name conventions (must match the FE labels below):
+   *   - `branch_details` (or `branch`) → Branch Details
+   *   - `building_name`  (or `property_name` / `building`) → Property / Building Name
+   *   - `product_code`   (or `sku`) → Product Code
+   *
+   * Anything else in the response is captured but currently unused.
+   *
+   * Declared here (above the confirm-mode early-return) so both the
+   * Book New Call flow and the Confirm & Schedule flow can read the
+   * same derived flags — Confirm gates Section 1 on the same
+   * mandatory custom props the Book flow already enforces.
+   */
+  type CustomProp = { name: string; mandatory: boolean; label: string | null; value: string | null };
+  const [clientCustomProps, setClientCustomProps] = useState<Map<string, CustomProp>>(new Map());
+  useEffect(() => {
+    const clientId = Number(f.fk_client_id) || Number(initial?.fk_client_id);
+    if (!clientId) { setClientCustomProps(new Map()); return; }
+    let cancelled = false;
+    api.get<CustomProp[]>(`/admin/clients/${clientId}/custom-properties`)
+      .then((rows) => {
+        if (cancelled) return;
+        const map = new Map<string, CustomProp>();
+        for (const p of (rows || [])) {
+          // Normalise common name variants to canonical FE keys.
+          const n = String(p.name || '').toLowerCase().trim();
+          const canonical = (() => {
+            if (n === 'branch' || n === 'branch_details') return 'branch_details';
+            if (n === 'building' || n === 'building_name' || n === 'property_name' || n === 'property') return 'building_name';
+            if (n === 'sku' || n === 'product_code') return 'product_code';
+            return n;
+          })();
+          map.set(canonical, { ...p, name: canonical });
+        }
+        setClientCustomProps(map);
+      })
+      .catch(() => { if (!cancelled) setClientCustomProps(new Map()); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [f.fk_client_id, initial?.fk_client_id]);
+
+  // Convenience flags — present + mandatory derived from the map.
+  const branchProp     = clientCustomProps.get('branch_details');
+  const buildingProp   = clientCustomProps.get('building_name');
+  const productProp    = clientCustomProps.get('product_code');
+  const branchIsMandatory = !!branchProp?.mandatory;
+
   // Section 1 (Client Details) is complete once BOTH Client Reference
   // ID is non-empty AND a Reporting Contact has been picked. Client
   // itself is read-only in confirm; SPOC trio auto-fills from the
   // contact. Bulk-uploaded orders arrive with no SPOC info, so the
   // Reporting Contact pick is the only way ops attaches a SPOC
   // before booking — making it mandatory matches that intent.
+  // ALSO gates on the 3 canonical client custom properties when the
+  // client has them marked mandatory — mirrors `section1Complete` in
+  // the Book New Call flow so a confirmed order can't bypass the
+  // branch/building/product-code requirement.
   const confirmSection1Complete = !!(
     f.client_ref_id && String(f.client_ref_id).trim()
     && f.reporting_contact_id && String(f.reporting_contact_id).trim()
-  );
+  ) &&
+    (!branchProp   || !branchProp.mandatory   || !!(f.branch_details && String(f.branch_details).trim())) &&
+    (!buildingProp || !buildingProp.mandatory || !!(f.building_name  && String(f.building_name).trim())) &&
+    (!productProp  || !productProp.mandatory  || !!(f.product_code   && String(f.product_code).trim()));
   // Section 2 (Customer Details) requires the full set of legacy
   // mandatory fields: name + slot + datetime + address + city + 6-digit
   // pincode. Customer mobile is read-only in confirm so it's not gated.
@@ -4686,13 +4750,48 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer 
                 readOnly disabled
               />
             </Field>
+            {/*
+              * Client custom-property trio — mirrors the Book New Call
+              * Section 1. A field renders ONLY when the client has a
+              * matching row in tbl_client_custom_properties; the `*`
+              * + required attribute track the row's `mandatory` flag.
+              * Gating is wired through `confirmSection1Complete`.
+              */}
+            {branchProp && (
+              <Field label={branchProp.mandatory ? 'Branch Details *' : 'Branch Details'}>
+                <Input
+                  required={branchProp.mandatory}
+                  value={f.branch_details || ''}
+                  onChange={(e) => set('branch_details', e.target.value)}
+                  placeholder={branchProp.mandatory ? 'Required for this client' : 'e.g. Bengaluru — Indiranagar'}
+                />
+              </Field>
+            )}
+            {buildingProp && (
+              <Field label={buildingProp.mandatory ? 'Property / Building Name *' : 'Property / Building Name'}>
+                <Input
+                  required={buildingProp.mandatory}
+                  value={f.building_name || ''}
+                  onChange={(e) => set('building_name', e.target.value)}
+                />
+              </Field>
+            )}
+            {productProp && (
+              <Field label={productProp.mandatory ? 'Product Code *' : 'Product Code'}>
+                <Input
+                  required={productProp.mandatory}
+                  value={f.product_code || ''}
+                  onChange={(e) => set('product_code', e.target.value)}
+                />
+              </Field>
+            )}
           </div>
           <div className="mt-4 flex justify-end">
             <Button
               type="button"
               onClick={() => setConfirmOpenSection(2)}
               disabled={!confirmSection1Complete}
-              title={confirmSection1Complete ? '' : 'Fill Client Reference ID and pick a Reporting Contact to proceed'}
+              title={confirmSection1Complete ? '' : 'Fill Client Reference ID, Reporting Contact, and any required custom properties to proceed'}
             >
               Next →
             </Button>
@@ -5647,59 +5746,9 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer 
    * mandatory + visibility flags now come from
    * `tbl_client_custom_properties` via the BE endpoint
    * `/admin/clients/:clientId/custom-properties`. See
-   * `clientCustomProps` below.
+   * `clientCustomProps` declared above the confirm-mode early-return
+   * (both Book and Confirm flows read the same derived flags).
    */
-
-  /*
-   * Client custom-properties (loaded when a client is picked).
-   * Map of `propertyName → { mandatory: boolean }`. Drives:
-   *   - Visibility of "Branch Details", "Property / Building Name",
-   *     "Product Code" inputs in Section 1. A field shows ONLY when
-   *     its property name appears in this map. If the client has no
-   *     row for `building_name`, the input is hidden.
-   *   - Required state + visual `*` on each field, driven by the
-   *     property's `mandatory` flag in the DB.
-   *
-   * Property name conventions (must match the FE labels below):
-   *   - `branch_details` (or `branch`) → Branch Details
-   *   - `building_name`  (or `property_name` / `building`) → Property / Building Name
-   *   - `product_code`   (or `sku`) → Product Code
-   *
-   * Anything else in the response is captured but currently unused.
-   */
-  type CustomProp = { name: string; mandatory: boolean; label: string | null; value: string | null };
-  const [clientCustomProps, setClientCustomProps] = useState<Map<string, CustomProp>>(new Map());
-  useEffect(() => {
-    const clientId = Number(f.fk_client_id) || Number(initial?.fk_client_id);
-    if (!clientId) { setClientCustomProps(new Map()); return; }
-    let cancelled = false;
-    api.get<CustomProp[]>(`/admin/clients/${clientId}/custom-properties`)
-      .then((rows) => {
-        if (cancelled) return;
-        const map = new Map<string, CustomProp>();
-        for (const p of (rows || [])) {
-          // Normalise common name variants to canonical FE keys.
-          const n = String(p.name || '').toLowerCase().trim();
-          const canonical = (() => {
-            if (n === 'branch' || n === 'branch_details') return 'branch_details';
-            if (n === 'building' || n === 'building_name' || n === 'property_name' || n === 'property') return 'building_name';
-            if (n === 'sku' || n === 'product_code') return 'product_code';
-            return n;
-          })();
-          map.set(canonical, { ...p, name: canonical });
-        }
-        setClientCustomProps(map);
-      })
-      .catch(() => { if (!cancelled) setClientCustomProps(new Map()); });
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [f.fk_client_id, initial?.fk_client_id]);
-
-  // Convenience flags — present + mandatory derived from the map.
-  const branchProp     = clientCustomProps.get('branch_details');
-  const buildingProp   = clientCustomProps.get('building_name');
-  const productProp    = clientCustomProps.get('product_code');
-  const branchIsMandatory = !!branchProp?.mandatory;
 
   const section1Complete =
     !!f.fk_client_id &&

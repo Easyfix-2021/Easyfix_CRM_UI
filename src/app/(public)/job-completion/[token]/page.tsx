@@ -76,8 +76,46 @@ type FormState = {
   additional_name: string;
   additional_number: string;
   job_desc: string;
+  branch_details: string;
+  building_name: string;
+  product_code: string;
   services: Map<number, number>;
 };
+
+/*
+ * Per-client custom-property descriptor surfaced by the BE prefill.
+ * Mirrors the shape the CRM Book-New-Call modal already consumes from
+ * /admin/clients/:clientId/custom-properties. We keep a Map keyed by
+ * canonical name so the 3 render branches below can look up directly
+ * (branchProp / buildingProp / productProp).
+ */
+type CustomProp = { name: string; mandatory: boolean; label: string | null; value: string | null };
+
+function canonicaliseCustomProps(
+  rows: PrefillResponse['custom_properties']
+): Map<string, CustomProp> {
+  // Same canonicalisation rules as JobModal.tsx (CRM Book-New-Call flow):
+  //   branch | branch_details            → branch_details
+  //   building | building_name | property | property_name
+  //                                     → building_name
+  //   sku | product_code                  → product_code
+  // Everything else passes through under its lower-cased name (the BE
+  // already lower-cases on its side, but we belt-and-braces here in case
+  // the FE ever talks to a deploy that doesn't).
+  const map = new Map<string, CustomProp>();
+  for (const p of rows || []) {
+    const n = String(p.name || '').toLowerCase().trim();
+    if (!n) continue;
+    const canonical = (() => {
+      if (n === 'branch' || n === 'branch_details') return 'branch_details';
+      if (n === 'building' || n === 'building_name' || n === 'property_name' || n === 'property') return 'building_name';
+      if (n === 'sku' || n === 'product_code') return 'product_code';
+      return n;
+    })();
+    map.set(canonical, { ...p, name: canonical });
+  }
+  return map;
+}
 
 type ImageRow = { image_id: number; key: string };
 
@@ -135,6 +173,7 @@ export default function JobCompletionMagicLinkPage() {
   const [images, setImages] = React.useState<ImageRow[]>([]);
   const [submitError, setSubmitError] = React.useState<string | null>(null);
   const [missingFields, setMissingFields] = React.useState<string[]>([]);
+  const [customProps, setCustomProps] = React.useState<Map<string, CustomProp>>(new Map());
 
   React.useEffect(() => {
     if (!token) { setState({ kind: 'invalid_token' }); return; }
@@ -151,6 +190,11 @@ export default function JobCompletionMagicLinkPage() {
         for (const sel of data.selectedServices ?? []) {
           seededServices.set(sel.client_service_id, sel.quantity ?? 1);
         }
+        const props = canonicaliseCustomProps(data.custom_properties);
+        // Seed inputs from any pre-existing custom-property values returned
+        // by the BE (`value` on the descriptor). Falls back to '' so the
+        // input remains controlled.
+        const seedFromProp = (key: string) => props.get(key)?.value ?? '';
         setForm({
           customer_name: data.customer.name || '',
           customer_email: data.customer.email || '',
@@ -166,8 +210,12 @@ export default function JobCompletionMagicLinkPage() {
           additional_name: data.additional.name || '',
           additional_number: data.additional.number || '',
           job_desc: data.jobDesc || '',
+          branch_details: seedFromProp('branch_details'),
+          building_name:  seedFromProp('building_name'),
+          product_code:   seedFromProp('product_code'),
           services: seededServices,
         });
+        setCustomProps(props);
         setImages(data.images.map((i) => ({ image_id: i.image_id, key: i.key })));
         setState({ kind: 'ready', data });
       } catch (err) {
@@ -207,6 +255,24 @@ export default function JobCompletionMagicLinkPage() {
   const isSubmitting = state.kind === 'submitting';
   if (!form) return null;
 
+  // Per-client custom-prop convenience flags. `branchProp`/etc. are present
+  // only when the client has the matching row in tbl_client_custom_properties;
+  // when absent we skip rendering the input AND skip gating on it.
+  const branchProp   = customProps.get('branch_details');
+  const buildingProp = customProps.get('building_name');
+  const productProp  = customProps.get('product_code');
+
+  // Submit-button gate mirror of `section1Complete` in JobModal.tsx
+  // (CRM Book-New-Call). Disables Submit when ANY mandatory custom-prop
+  // input is empty so the customer can't bypass the requirement by
+  // clicking through; the missing-fields banner above still catches the
+  // case where they manage to submit anyway (e.g. older browser
+  // ignoring `required`).
+  const mandatoryCustomPropsComplete =
+    (!branchProp   || !branchProp.mandatory   || !!form.branch_details.trim()) &&
+    (!buildingProp || !buildingProp.mandatory || !!form.building_name.trim()) &&
+    (!productProp  || !productProp.mandatory  || !!form.product_code.trim());
+
   const patch = (p: Partial<FormState>) => setForm((f) => (f ? { ...f, ...p } : f));
 
   const toggleService = (id: number) => {
@@ -236,6 +302,19 @@ export default function JobCompletionMagicLinkPage() {
     if (!/^\d{6}$/.test(form.pin_code)) missing.push('PIN Code (6 digits)');
     if (!form.time_slot) missing.push('Time Slot');
     if (!form.requested_date_time) missing.push('Requested Date & Time');
+    // Mirror JobModal `section1Complete`: only enforce when the client has
+    // the prop AND it's marked mandatory. Reuse the BE-provided label when
+    // present so the missing-fields banner reads in the client's own
+    // wording where they've customised it.
+    if (branchProp?.mandatory && !form.branch_details.trim()) {
+      missing.push(branchProp.label || 'Branch Details');
+    }
+    if (buildingProp?.mandatory && !form.building_name.trim()) {
+      missing.push(buildingProp.label || 'Property / Building Name');
+    }
+    if (productProp?.mandatory && !form.product_code.trim()) {
+      missing.push(productProp.label || 'Product Code');
+    }
     if (missing.length) {
       setMissingFields(missing);
       setSubmitError(null);
@@ -268,6 +347,17 @@ export default function JobCompletionMagicLinkPage() {
       additional_name: form.additional_name.trim() || undefined,
       additional_number: form.additional_number.trim() || undefined,
       job_desc: form.job_desc.trim() || undefined,
+      // Per-client custom-property values. Only included when the client
+      // has the matching descriptor AND the customer typed something —
+      // sending `undefined` when absent keeps the BE's COALESCE-preserves
+      // semantics intact (existing column value is not overwritten with
+      // an empty string).
+      branch_details: branchProp && form.branch_details.trim()
+        ? form.branch_details.trim() : undefined,
+      building_name: buildingProp && form.building_name.trim()
+        ? form.building_name.trim() : undefined,
+      product_code: productProp && form.product_code.trim()
+        ? form.product_code.trim() : undefined,
       services: Array.from(form.services.entries()).map(([id, qty]) => ({
         client_service_id: id, quantity: qty,
       })),
@@ -349,6 +439,67 @@ export default function JobCompletionMagicLinkPage() {
           <AddressMapWidget token={token} cityOptions={data.cityOptions} form={form} patch={patch} />
         </Section>
 
+        {/* Per-client custom-property inputs. Mirrors the CRM Book-New-Call
+            flow (JobModal.tsx → Branch Details / Property or Building Name /
+            Product Code). Renders ONLY the inputs the client has configured
+            in tbl_client_custom_properties; mandatory flag drives both the
+            red asterisk + native `required` attribute + the Submit-button
+            gate above. Placed adjacent to Address since these fields are
+            typically address-context (which branch / which property / which
+            product line is the service for). */}
+        {(branchProp || buildingProp || productProp) && (
+          <Section title="Additional Details">
+            {branchProp && (
+              <Field
+                label={branchProp.label || 'Branch Details'}
+                required={branchProp.mandatory}
+              >
+                <input
+                  type="text"
+                  required={branchProp.mandatory}
+                  value={form.branch_details}
+                  onChange={(e) => patch({ branch_details: e.target.value })}
+                  className={inputClass}
+                  placeholder={branchProp.mandatory ? 'Required for this client' : 'Optional'}
+                  maxLength={200}
+                />
+              </Field>
+            )}
+            {buildingProp && (
+              <Field
+                label={buildingProp.label || 'Property / Building Name'}
+                required={buildingProp.mandatory}
+              >
+                <input
+                  type="text"
+                  required={buildingProp.mandatory}
+                  value={form.building_name}
+                  onChange={(e) => patch({ building_name: e.target.value })}
+                  className={inputClass}
+                  placeholder={buildingProp.mandatory ? 'Required for this client' : 'Optional'}
+                  maxLength={200}
+                />
+              </Field>
+            )}
+            {productProp && (
+              <Field
+                label={productProp.label || 'Product Code'}
+                required={productProp.mandatory}
+              >
+                <input
+                  type="text"
+                  required={productProp.mandatory}
+                  value={form.product_code}
+                  onChange={(e) => patch({ product_code: e.target.value })}
+                  className={inputClass}
+                  placeholder={productProp.mandatory ? 'Required for this client' : 'Optional'}
+                  maxLength={200}
+                />
+              </Field>
+            )}
+          </Section>
+        )}
+
         <Section title="Schedule">
           <Field label="Requested Date & Time" required>
             <input type="datetime-local" required value={form.requested_date_time}
@@ -413,7 +564,7 @@ export default function JobCompletionMagicLinkPage() {
           </Field>
         </Section>
 
-        <button type="submit" disabled={isSubmitting}
+        <button type="submit" disabled={isSubmitting || !mandatoryCustomPropsComplete}
           className="w-full bg-sky-600 hover:bg-sky-700 disabled:bg-sky-400 text-white font-semibold text-base py-3 rounded-lg transition">
           {isSubmitting ? 'Submitting…' : 'Submit Booking Details'}
         </button>

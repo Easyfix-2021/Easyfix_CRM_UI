@@ -46,6 +46,13 @@ export type PrefillResponse = {
   // re-ticking their previous picks. Optional for backward compatibility with
   // older BE deployments; FE defaults to [] when absent.
   selectedServices?: { client_service_id: number; quantity: number }[];
+  // Per-client custom-property descriptors (sourced from
+  // tbl_client_custom_properties; same shape the CRM Book-New-Call modal
+  // already consumes). `name` is lower-cased by the BE for stable matching;
+  // the FE then canonicalises common variants (branch / branch_details →
+  // branch_details, etc.). Optional for backward compatibility with older
+  // BE deployments; FE defaults to [] when absent.
+  custom_properties?: { name: string; mandatory: boolean; label: string | null; value: string | null }[];
 };
 
 export type SubmitPayload = {
@@ -64,6 +71,13 @@ export type SubmitPayload = {
   additional_number?: string;
   job_desc?: string;
   services?: { client_service_id: number; quantity: number }[];
+  // Per-client custom-property values. Surfaced by the BE prefill when the
+  // client has the matching tbl_client_custom_properties row(s); the FE
+  // only renders the input when the descriptor is present, and gates the
+  // Submit button when `mandatory=true`.
+  branch_details?: string;
+  building_name?: string;
+  product_code?: string;
 };
 
 // Convenience aliases — easier-to-read names at call sites. The canonical

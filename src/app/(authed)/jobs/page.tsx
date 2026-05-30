@@ -966,6 +966,12 @@ export default function JobsPage() {
               loading={loading}
               canConfirm={!!canJob.isJobConfirm}
               canSendMagicLink={!!canJob.isJobMagicLinkSend}
+              // Force Send (Override) is keyed on the literal role_name
+              // = 'Admin' (matches the BE override gate). `me.role.group`
+              // is broader (admin-class roles) so we use `role_name`
+              // here for exact parity. Case-insensitive guards against
+              // any future seed-data inconsistency.
+              userIsAdmin={me?.role?.role_name?.toLowerCase() === 'admin'}
               openView={openView}
               openConfirm={openConfirm}
               // Force-refetch (skip TAB_CACHE) so the "Link Sent" pill

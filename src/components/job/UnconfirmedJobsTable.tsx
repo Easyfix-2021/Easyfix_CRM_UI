@@ -62,6 +62,10 @@ export type UnconfirmedJobRow = {
   customer_submitted_at?: string | null;
   magic_link_sent_at?: string | null;
   magic_link_send_count?: number;
+  // Per-client cap surfaced on the LIST projection (defaults to 3 when
+  // no `magic_link_max_send_count` custom property is configured). Drives
+  // the popup's disable-reason text + the Force Send (Override) branch.
+  magic_link_max_send_count?: number | null;
   magic_link_last_action?: 'first' | 'reminder' | 'resend' | null;
   // Derived server-side from tbl_client_custom_properties
   // (auto_process_unconfirmed_order='true'). When false the client has
@@ -91,6 +95,7 @@ export function UnconfirmedJobsTable({
   loading,
   canConfirm,
   canSendMagicLink = false,
+  userIsAdmin = false,
   openView,
   openConfirm,
   onMagicLinkSent,
@@ -104,6 +109,10 @@ export function UnconfirmedJobsTable({
   // evaluated per-row below. Defaults to false so legacy callers that
   // don't yet wire this prop stay safe (button hidden).
   canSendMagicLink?: boolean;
+  // True only when the logged-in operator carries role_name='Admin'
+  // (literal). Surfaces the popup's Force Send (Override) button when
+  // the per-client cap is hit. BE re-enforces the check.
+  userIsAdmin?: boolean;
   openView: (jobId: number) => void;
   openConfirm: (jobId: number) => void;
   // Fired after the popup successfully POSTs to send-magic-link. Parent
@@ -308,10 +317,12 @@ export function UnconfirmedJobsTable({
         jobId={magicLinkRow.job_id}
         magicLinkSentAt={magicLinkRow.magic_link_sent_at ?? null}
         magicLinkSendCount={magicLinkRow.magic_link_send_count ?? 0}
+        magicLinkMaxSendCount={magicLinkRow.magic_link_max_send_count ?? 3}
         magicLinkLastAction={magicLinkRow.magic_link_last_action ?? null}
         customerSubmittedAt={magicLinkRow.customer_submitted_at ?? null}
         customerName={magicLinkRow.customer_name}
         customerMobileMasked={magicLinkRow.customer_mob_no ?? '—'}
+        userIsAdmin={userIsAdmin}
         onSent={() => {
           onMagicLinkSent?.();
         }}

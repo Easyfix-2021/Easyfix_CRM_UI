@@ -4,30 +4,36 @@
  * Technician Mapping tab — assign technicians to (client × service_type).
  *
  * Backed by:
- *   GET /admin/clients/:clientId/tech-mapping            (current set)
- *   GET /admin/clients/:clientId/tech-mapping/eligible   (picker)
- *   PUT /admin/clients/:clientId/tech-mapping            (replace-set per service_type)
+ *   GET /admin/clients/:clientId/tech-mapping/summary
+ *        → per-service-type counts + top-6 city breakdown (cheap; mount cost)
+ *   GET /admin/clients/:clientId/tech-mapping/by-service-type/:stId
+ *        → full chip list for ONE row (lazy, fires on expand)
+ *   GET /admin/clients/:clientId/tech-mapping/eligible      (picker)
+ *   PUT /admin/clients/:clientId/tech-mapping               (replace-set per service_type)
  *
- * Perf design:
- *   - Single GET to list current set; grouped client-side by service_type
- *     in a useMemo (no extra query for grouping).
- *   - Eligibility picker is on-demand: only fetches when the user opens
- *     the edit dialog (not on tab mount).
- *   - PUT replaces the whole tech set for ONE service_type — small,
- *     atomic, scopes cache invalidation tightly.
- *   - useFetchOnce on /service-types for the "Add new mapping" picker.
+ * Perf design (why summary + lazy expand):
+ *   - Old flow returned every (mapping × tech) row up front. On a big
+ *     client (~163 service types × hundreds of techs) the payload hit
+ *     10K+ rows and the tab took ~4.3s to mount.
+ *   - New flow mounts with a single GROUP BY query (one row per
+ *     service-type), so the wall-of-chips DOM cost and the BE row-blow-up
+ *     both disappear from the critical path.
+ *   - Chip detail is fetched on demand when the operator expands a row.
  *
  * UX design:
- *   - Group by service_type → card per group. Compact, scannable.
- *   - Each group's "Edit Techs" opens a dialog scoped to that group.
- *   - "Add Service-Type Mapping" button opens a separate dialog that
- *     picks the service_type first, then loads eligibility, then techs.
- *   - Eligibility picker shows verification badges so the operator
- *     sees who they're choosing at a glance.
+ *   - Intro banner up top explaining what this tab does — operators
+ *     kept asking "what's this for?".
+ *   - Each service-type renders as a collapsed disclosure row showing
+ *     count + top cities. Click to expand → chips group by city.
+ *   - Text search filters service-types by name (client-side).
+ *   - Editing happens via the per-row "Edit Techs" button (unchanged).
  */
 
-import { useMemo, useState } from 'react';
-import { Plus, Pencil, AlertCircle, Users, CheckCircle2, ShieldQuestion } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  Plus, Pencil, AlertCircle, Users, CheckCircle2, ShieldQuestion,
+  ChevronRight, ChevronDown, Info, Search,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -35,7 +41,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { SearchSelect } from '@/components/ui/search-select';
 import { showToast } from '@/components/ui/toast';
 import { api, ApiError } from '@/lib/api';
-import { useFetch, useFetchOnce, invalidateFetch } from '@/lib/hooks';
+import { useFetch, useFetchOnce, invalidateFetch, useDebouncedValue } from '@/lib/hooks';
 
 type Mapping = {
   mapping_id: number;
@@ -48,6 +54,14 @@ type Mapping = {
   city_name: string | null;
   is_technician_verified: boolean;
   mapping_status: number | null;
+};
+
+type SummaryRow = {
+  service_type_id: number;
+  service_type_name: string | null;
+  tech_count: number;
+  city_breakdown: { city_name: string; count: number }[];
+  other_cities_count: number;
 };
 
 type EligibleTech = {
@@ -66,53 +80,100 @@ type Props = {
 };
 
 export function TechMappingTab({ clientId, canEdit }: Props) {
-  const listKey = `/admin/clients/${clientId}/tech-mapping`;
-  const { data, loading, error, refetch } = useFetch<Mapping[]>(listKey);
+  const summaryKey = `/admin/clients/${clientId}/tech-mapping/summary`;
+  const { data: summary, loading, error, refetch } = useFetch<SummaryRow[]>(summaryKey);
   const { data: types } = useFetchOnce<ServiceType[]>(`/shared/lookup/service-types`);
-
-  // Group client-side by service_type — no extra fetch.
-  const grouped = useMemo(() => {
-    const byType = new Map<number, { service_type_id: number; service_type_name: string | null; rows: Mapping[] }>();
-    for (const m of data ?? []) {
-      const key = m.service_type_id;
-      const bucket = byType.get(key) ?? {
-        service_type_id: key,
-        service_type_name: m.service_type_name,
-        rows: [],
-      };
-      bucket.rows.push(m);
-      byType.set(key, bucket);
-    }
-    // Stable sort by service_type_name.
-    return Array.from(byType.values()).sort((a, b) =>
-      (a.service_type_name ?? '').localeCompare(b.service_type_name ?? ''),
-    );
-  }, [data]);
 
   const [editingTypeId, setEditingTypeId] = useState<number | null>(null);
   const [addingNew, setAddingNew] = useState(false);
+  const [expanded, setExpanded] = useState<Set<number>>(() => new Set());
 
-  const editingGroup = editingTypeId ? grouped.find((g) => g.service_type_id === editingTypeId) : null;
+  // Search filter (debounced) over service-type name.
+  const [query, setQuery] = useState('');
+  const debouncedQuery = useDebouncedValue(query, 200);
+  const filtered = useMemo(() => {
+    const q = debouncedQuery.trim().toLowerCase();
+    if (!q) return summary ?? [];
+    return (summary ?? []).filter((s) =>
+      (s.service_type_name ?? `#${s.service_type_id}`).toLowerCase().includes(q),
+    );
+  }, [summary, debouncedQuery]);
 
-  // Service-types not yet mapped — used as options for "Add new" picker.
-  const usedTypeIds = useMemo(() => new Set(grouped.map((g) => g.service_type_id)), [grouped]);
+  const editingRow = editingTypeId
+    ? (summary ?? []).find((s) => s.service_type_id === editingTypeId)
+    : null;
+
+  // Service-types not yet mapped — for the "Add Mapping" picker.
+  const usedTypeIds = useMemo(
+    () => new Set((summary ?? []).map((s) => s.service_type_id)),
+    [summary],
+  );
   const availableTypes = useMemo(
     () => (types ?? []).filter((t) => !usedTypeIds.has(t.service_type_id)),
     [types, usedTypeIds],
   );
 
+  function toggleExpand(id: number) {
+    setExpanded((s) => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  function onSavedFromDialog() {
+    invalidateFetch((k) =>
+      k === summaryKey
+      || k.startsWith(`/admin/clients/${clientId}/tech-mapping/by-service-type/`),
+    );
+    refetch();
+  }
+
+  const totalTypes = summary?.length ?? 0;
+  const totalTechs = useMemo(
+    () => (summary ?? []).reduce((sum, s) => sum + s.tech_count, 0),
+    [summary],
+  );
+
   return (
-    <div className="pt-2 space-y-2">
-      <div className="flex items-center justify-between">
+    <div className="pt-2 space-y-3">
+      {/* Intro banner — operators kept asking what this tab does */}
+      <div className="rounded border border-sky-200 bg-sky-50 p-2.5 text-xs text-sky-900 flex gap-2">
+        <Info className="size-4 shrink-0 mt-0.5 text-sky-700" />
+        <div className="space-y-0.5">
+          <div className="font-medium">What is Tech Mapping?</div>
+          <div className="text-sky-800/90">
+            This list controls which Easyfixer technicians are approved to take jobs
+            for each service type this client has subscribed to. The auto-allocation
+            engine uses this list as the eligibility pool when assigning a tech to a
+            new job. Click a row to see the technicians; use <span className="font-medium">Edit Techs</span> to change the set.
+          </div>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="text-xs text-muted-foreground flex items-center gap-2">
           <Users className="size-3.5" />
-          {loading ? 'Loading…' : `${grouped.length} service-type${grouped.length === 1 ? '' : 's'} mapped`}
+          {loading
+            ? 'Loading…'
+            : `${totalTypes} service-type${totalTypes === 1 ? '' : 's'} mapped · ${totalTechs} tech assignment${totalTechs === 1 ? '' : 's'}`}
         </div>
-        {canEdit && (
-          <Button size="sm" onClick={() => setAddingNew(true)} disabled={!types || availableTypes.length === 0}>
-            <Plus className="size-3.5 mr-1" /> Add Mapping
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <Search className="size-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Filter service types…"
+              className="h-8 pl-7 w-56 text-xs"
+            />
+          </div>
+          {canEdit && (
+            <Button size="sm" onClick={() => setAddingNew(true)} disabled={!types || availableTypes.length === 0}>
+              <Plus className="size-3.5 mr-1" /> Add Mapping
+            </Button>
+          )}
+        </div>
       </div>
 
       {error && (
@@ -121,62 +182,45 @@ export function TechMappingTab({ clientId, canEdit }: Props) {
         </div>
       )}
 
-      {loading && grouped.length === 0 && (
+      {loading && totalTypes === 0 && (
         <div className="space-y-1">
-          {[0, 1].map((i) => <div key={i} className="rounded border bg-card animate-pulse h-20" />)}
+          {[0, 1, 2].map((i) => <div key={i} className="rounded border bg-card animate-pulse h-12" />)}
         </div>
       )}
 
-      {!loading && grouped.length === 0 && (
+      {!loading && totalTypes === 0 && (
         <div className="text-sm text-muted-foreground italic">
           No technicians mapped. {canEdit ? 'Click "Add Mapping" to assign technicians per service type.' : ''}
         </div>
       )}
 
-      <div className="space-y-2">
-        {grouped.map((g) => (
-          <div key={g.service_type_id} className="rounded border bg-card p-3">
-            <div className="flex items-center justify-between gap-2 mb-2">
-              <div className="font-medium">
-                {g.service_type_name ?? `Service Type #${g.service_type_id}`}
-                <span className="text-muted-foreground text-xs ml-2">· {g.rows.length} tech{g.rows.length === 1 ? '' : 's'}</span>
-              </div>
-              {canEdit && (
-                <Button size="sm" variant="secondary" onClick={() => setEditingTypeId(g.service_type_id)}>
-                  <Pencil className="size-3.5 mr-1" /> Edit Techs
-                </Button>
-              )}
-            </div>
-            <div className="flex flex-wrap gap-1">
-              {g.rows.map((m) => (
-                <span
-                  key={m.mapping_id}
-                  className="text-[11px] bg-sky-50 text-sky-800 border border-sky-200 rounded px-1.5 py-0.5 inline-flex items-center gap-1"
-                  title={`${m.efr_no ?? ''} · ${m.city_name ?? '—'}`}
-                >
-                  {m.is_technician_verified
-                    ? <CheckCircle2 className="size-2.5 text-emerald-600" />
-                    : <ShieldQuestion className="size-2.5 text-amber-600" />}
-                  {m.efr_name ?? `#${m.efr_id}`}
-                  {m.city_name && <span className="text-muted-foreground/70">· {m.city_name}</span>}
-                </span>
-              ))}
-            </div>
-          </div>
+      {!loading && totalTypes > 0 && filtered.length === 0 && (
+        <div className="text-xs text-muted-foreground italic">
+          No service types match "{debouncedQuery}".
+        </div>
+      )}
+
+      <div className="space-y-1.5">
+        {filtered.map((row) => (
+          <SummaryRowCard
+            key={row.service_type_id}
+            row={row}
+            clientId={clientId}
+            isExpanded={expanded.has(row.service_type_id)}
+            canEdit={canEdit}
+            onToggle={() => toggleExpand(row.service_type_id)}
+            onEdit={() => setEditingTypeId(row.service_type_id)}
+          />
         ))}
       </div>
 
-      {editingGroup && (
+      {editingRow && (
         <TechPickerDialog
           clientId={clientId}
-          serviceTypeId={editingGroup.service_type_id}
-          serviceTypeName={editingGroup.service_type_name}
-          currentEfrIds={editingGroup.rows.map((r) => r.efr_id)}
+          serviceTypeId={editingRow.service_type_id}
+          serviceTypeName={editingRow.service_type_name}
           onClose={() => setEditingTypeId(null)}
-          onSaved={() => {
-            invalidateFetch((k) => k === listKey);
-            refetch();
-          }}
+          onSaved={onSavedFromDialog}
         />
       )}
 
@@ -185,12 +229,156 @@ export function TechMappingTab({ clientId, canEdit }: Props) {
           clientId={clientId}
           availableTypes={availableTypes}
           onClose={() => setAddingNew(false)}
-          onSaved={() => {
-            invalidateFetch((k) => k === listKey);
-            refetch();
-          }}
+          onSaved={onSavedFromDialog}
         />
       )}
+    </div>
+  );
+}
+
+/* ─── Collapsed row (counts + city breakdown chip, expand to load) ── */
+
+function SummaryRowCard({
+  row, clientId, isExpanded, canEdit, onToggle, onEdit,
+}: {
+  row: SummaryRow;
+  clientId: number;
+  isExpanded: boolean;
+  canEdit: boolean;
+  onToggle: () => void;
+  onEdit: () => void;
+}) {
+  return (
+    <div className="rounded border bg-card">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left hover:bg-muted/30"
+      >
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          {isExpanded
+            ? <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+            : <ChevronRight className="size-4 shrink-0 text-muted-foreground" />}
+          {/*
+            Always show the `service_type_id` as a chip alongside the
+            name. Two different service_type_id rows in tbl_service_type
+            can share the same `service_type_name` (e.g. multiple
+            "1 - Furniture Unpack & Install/Assembly" rows differ only
+            by id), which would otherwise render as visually-identical
+            duplicate rows. The id chip disambiguates them so operators
+            know they're editing distinct mapping sets.
+          */}
+          <span className="font-medium truncate">
+            {row.service_type_name ?? `Service Type #${row.service_type_id}`}
+          </span>
+          <span className="text-[10px] font-mono shrink-0 px-1.5 py-0.5 rounded bg-muted/50 text-muted-foreground">
+            #{row.service_type_id}
+          </span>
+          <span className="text-muted-foreground text-xs shrink-0">
+            · {row.tech_count} tech{row.tech_count === 1 ? '' : 's'}
+          </span>
+        </div>
+        <div className="hidden sm:flex items-center gap-1 flex-wrap justify-end max-w-[55%]">
+          {row.city_breakdown.slice(0, 4).map((c) => (
+            <span
+              key={c.city_name}
+              className="text-[10px] bg-slate-100 text-slate-700 border border-slate-200 rounded px-1.5 py-0.5"
+            >
+              {c.city_name} <span className="text-slate-500">· {c.count}</span>
+            </span>
+          ))}
+          {(row.city_breakdown.length > 4 || row.other_cities_count > 0) && (
+            <span className="text-[10px] text-muted-foreground">
+              +{(row.city_breakdown.length - 4 > 0 ? row.city_breakdown.length - 4 : 0) + row.other_cities_count} more
+            </span>
+          )}
+        </div>
+        {canEdit && (
+          <span
+            role="button"
+            tabIndex={0}
+            onClick={(e) => { e.stopPropagation(); onEdit(); }}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); onEdit(); } }}
+            className="inline-flex items-center text-xs px-2 py-1 rounded border bg-background hover:bg-muted shrink-0 cursor-pointer"
+          >
+            <Pencil className="size-3.5 mr-1" /> Edit Techs
+          </span>
+        )}
+      </button>
+      {isExpanded && (
+        <ExpandedChips clientId={clientId} serviceTypeId={row.service_type_id} totalCount={row.tech_count} />
+      )}
+    </div>
+  );
+}
+
+function ExpandedChips({
+  clientId, serviceTypeId, totalCount,
+}: {
+  clientId: number;
+  serviceTypeId: number;
+  totalCount: number;
+}) {
+  const key = `/admin/clients/${clientId}/tech-mapping/by-service-type/${serviceTypeId}`;
+  const { data, loading, error } = useFetch<Mapping[]>(key);
+
+  // Group chips by city for scannability.
+  const byCity = useMemo(() => {
+    const m = new Map<string, Mapping[]>();
+    for (const r of data ?? []) {
+      const k = r.city_name || '— No City —';
+      const bucket = m.get(k) ?? [];
+      bucket.push(r);
+      m.set(k, bucket);
+    }
+    return Array.from(m.entries())
+      .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+  }, [data]);
+
+  if (loading && !data) {
+    return (
+      <div className="border-t px-3 py-2 text-xs text-muted-foreground">
+        Loading {totalCount} technician{totalCount === 1 ? '' : 's'}…
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="border-t px-3 py-2 text-xs text-red-600 flex items-center gap-1">
+        <AlertCircle className="size-3.5" /> {error}
+      </div>
+    );
+  }
+  if ((data?.length ?? 0) === 0) {
+    return (
+      <div className="border-t px-3 py-2 text-xs text-muted-foreground italic">
+        No technicians assigned.
+      </div>
+    );
+  }
+  return (
+    <div className="border-t px-3 py-2 space-y-2">
+      {byCity.map(([city, rows]) => (
+        <div key={city}>
+          <div className="text-[11px] font-medium text-muted-foreground mb-1">
+            {city} <span className="text-muted-foreground/70">· {rows.length}</span>
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {rows.map((m) => (
+              <span
+                key={m.mapping_id}
+                className="text-[11px] bg-sky-50 text-sky-800 border border-sky-200 rounded px-1.5 py-0.5 inline-flex items-center gap-1"
+                title={`${m.efr_no ?? ''} · ${m.city_name ?? '—'}`}
+              >
+                {m.is_technician_verified
+                  ? <CheckCircle2 className="size-2.5 text-emerald-600" />
+                  : <ShieldQuestion className="size-2.5 text-amber-600" />}
+                {m.efr_name ?? `#${m.efr_id}`}
+              </span>
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -198,24 +386,35 @@ export function TechMappingTab({ clientId, canEdit }: Props) {
 /* ─── Per-service-type picker (edit existing mapping) ─────────────── */
 
 function TechPickerDialog({
-  clientId, serviceTypeId, serviceTypeName, currentEfrIds, onClose, onSaved,
+  clientId, serviceTypeId, serviceTypeName, onClose, onSaved,
 }: {
   clientId: number;
   serviceTypeId: number;
   serviceTypeName: string | null;
-  currentEfrIds: number[];
   onClose: () => void;
   onSaved: () => void;
 }) {
+  // Load the current mapping set lazily — uses the same per-service-type
+  // endpoint that powers the expand-row. Keeps the dialog open small.
+  const currentKey = `/admin/clients/${clientId}/tech-mapping/by-service-type/${serviceTypeId}`;
+  const { data: current } = useFetch<Mapping[]>(currentKey);
+
   const [city, setCity] = useState('');
   const [query, setQuery] = useState('');
   const [includeUnverified, setIncludeUnverified] = useState(false);
-  const [selected, setSelected] = useState<Set<number>>(() => new Set(currentEfrIds));
+  const [selected, setSelected] = useState<Set<number>>(() => new Set());
+  const [seeded, setSeeded] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  // Eligibility request only fires when the dialog mounts (and on
-  // filter changes). useFetch's key change triggers a refetch — but
-  // we debounce the city/query at the call site via 250ms timeout.
+  // Seed `selected` once the current set arrives. Runs in an effect so
+  // we never set state during render.
+  useEffect(() => {
+    if (!seeded && current) {
+      setSelected(new Set(current.map((m) => m.efr_id)));
+      setSeeded(true);
+    }
+  }, [seeded, current]);
+
   const eligibleKey = useMemo(() => {
     const p = new URLSearchParams();
     p.set('serviceTypeId', String(serviceTypeId));
@@ -259,7 +458,7 @@ function TechPickerDialog({
         <div className="space-y-2 pt-1">
           <div className="grid grid-cols-3 gap-2">
             <div>
-              <Label className="text-xs">Search by name/code</Label>
+              <Label className="text-xs">Search By Name/Code</Label>
               <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="e.g. EFR-001 or name" />
             </div>
             <div>
@@ -268,7 +467,7 @@ function TechPickerDialog({
             </div>
             <label className="flex items-end gap-1 text-xs pb-1.5">
               <input type="checkbox" checked={includeUnverified} onChange={(e) => setIncludeUnverified(e.target.checked)} />
-              Include unverified
+              Include Unverified
             </label>
           </div>
           <div className="text-[11px] text-muted-foreground">
@@ -336,7 +535,6 @@ function AddMappingDialog({
         clientId={clientId}
         serviceTypeId={serviceTypeId}
         serviceTypeName={stName}
-        currentEfrIds={[]}
         onClose={onClose}
         onSaved={onSaved}
       />

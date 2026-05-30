@@ -28,7 +28,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { Plus, Trash2, Save, AlertCircle, Calculator, Download } from 'lucide-react';
+import { Plus, Trash2, Save, AlertCircle, Calculator, Download, Building2, Layers, User } from 'lucide-react';
 import { downloadXlsx } from '@/lib/download-xlsx';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -242,38 +242,65 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
           <table className="data-table w-full text-xs">
             <thead>
               <tr>
-                <th className="!text-left sticky left-0 bg-muted/40 z-10" rowSpan={2}>Service Type</th>
-                <th className="!text-center bg-sky-50/50" colSpan={2}>Easyfix Direct</th>
-                <th className="!text-center bg-amber-50/50" colSpan={2}>Overhead</th>
-                <th className="!text-center bg-emerald-50/50" colSpan={2}>Client</th>
+                <th className="!text-left sticky left-0 bg-muted/40 z-10 border-r border-border" rowSpan={2}>Service Type</th>
+                <th className="!text-center bg-sky-50 text-sky-900 text-xs uppercase font-semibold tracking-wide border-b border-sky-200 border-r border-border" colSpan={2}>
+                  <span className="inline-flex items-center gap-1.5 justify-center">
+                    <Building2 className="size-3.5" /> Easyfix Direct
+                  </span>
+                </th>
+                <th className="!text-center bg-amber-50 text-amber-900 text-xs uppercase font-semibold tracking-wide border-b border-amber-200 border-r border-border" colSpan={2}>
+                  <span className="inline-flex items-center gap-1.5 justify-center">
+                    <Layers className="size-3.5" /> Overhead
+                  </span>
+                </th>
+                <th className="!text-center bg-emerald-50 text-emerald-900 text-xs uppercase font-semibold tracking-wide border-b border-emerald-200 border-r border-border" colSpan={2}>
+                  <span className="inline-flex items-center gap-1.5 justify-center">
+                    <User className="size-3.5" /> Client
+                  </span>
+                </th>
                 {canEdit && <th rowSpan={2}></th>}
               </tr>
               <tr>
-                {COST_LABELS.map((c) => (
-                  <th key={c.key as string} className="!text-right">{c.label}</th>
-                ))}
+                {COST_LABELS.map((c, i) => {
+                  const isGroupEnd = i % 2 === 1;
+                  const tint =
+                    c.group === 'easyfix'  ? 'bg-sky-50/40'
+                    : c.group === 'overhead' ? 'bg-amber-50/40'
+                    : 'bg-emerald-50/40';
+                  return (
+                    <th
+                      key={c.key as string}
+                      className={`!text-right text-[11px] font-normal text-muted-foreground ${tint} ${isGroupEnd ? 'border-r border-border' : ''}`}
+                    >
+                      {c.label}
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
-                <tr key={r.service_type_id}>
-                  <td className="!text-left sticky left-0 bg-card z-10 font-medium">
+              {rows.map((r, idx) => (
+                <tr key={r.rate_card_id ?? `new-${r.service_type_id}-${idx}`}>
+                  <td className="!text-left sticky left-0 bg-card z-10 font-medium border-r border-border">
                     {r.service_type_name ?? `#${r.service_type_id}`}
                   </td>
-                  {COST_LABELS.map((c) => (
-                    <td key={c.key as string} className="!text-right">
-                      {canEdit ? (
-                        <Input
-                          type="number" min={0} step="0.01"
-                          value={Number(r[c.key as keyof RateCardRow] ?? 0)}
-                          onChange={(e) => updateCell(r.service_type_id, c.key, Number(e.target.value) || 0)}
-                          className="h-7 text-right font-mono text-xs"
-                        />
-                      ) : (
-                        <span className="font-mono">{Number(r[c.key as keyof RateCardRow] ?? 0).toFixed(2)}</span>
-                      )}
-                    </td>
-                  ))}
+                  {COST_LABELS.map((c, i) => {
+                    const isGroupEnd = i % 2 === 1;
+                    return (
+                      <td key={c.key as string} className={`!text-right ${isGroupEnd ? 'border-r border-border' : ''}`}>
+                        {canEdit ? (
+                          <Input
+                            type="number" min={0} step="0.01"
+                            value={Number(r[c.key as keyof RateCardRow] ?? 0)}
+                            onChange={(e) => updateCell(r.service_type_id, c.key, Number(e.target.value) || 0)}
+                            className="h-7 text-right font-mono text-xs"
+                          />
+                        ) : (
+                          <span className="font-mono">{Number(r[c.key as keyof RateCardRow] ?? 0).toFixed(2)}</span>
+                        )}
+                      </td>
+                    );
+                  })}
                   {canEdit && (
                     <td className="!text-right">
                       <Button size="sm" variant="ghost" onClick={() => removeRow(r)} className="text-red-600 hover:text-red-700">
