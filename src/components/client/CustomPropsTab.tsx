@@ -22,12 +22,18 @@ import { Plus, Pencil, Trash2, AlertCircle, Tag } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { showToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { api, ApiError } from '@/lib/api';
 import { useFetch, invalidateFetch } from '@/lib/hooks';
 import type { ClientCustomProperty, CustomPropertyFormPayload } from '@/lib/client-types';
+
+// Well-known custom property keys that have dedicated UI affordances. The
+// generic key-value list still renders them so power-users see the raw row,
+// but the toggle above drives the canonical state.
+const AUTO_PROCESS_KEY = 'auto_process_unconfirmed_order';
 
 type Props = {
   clientId: number;
@@ -42,6 +48,34 @@ export function CustomPropsTab({ clientId, canEdit }: Props) {
   const confirm = useConfirm();
 
   const items = data ?? [];
+  const autoProcessProp = items.find((p) => (p.name ?? '').toLowerCase() === AUTO_PROCESS_KEY) ?? null;
+  const autoProcessOn = (autoProcessProp?.value ?? '').toLowerCase() === 'true';
+  const [autoProcessSaving, setAutoProcessSaving] = useState(false);
+
+  async function onToggleAutoProcess(next: boolean) {
+    if (autoProcessSaving) return;
+    setAutoProcessSaving(true);
+    try {
+      const payload = {
+        name: AUTO_PROCESS_KEY,
+        label: autoProcessProp?.label ?? 'Auto-process Unconfirmed Orders',
+        value: next ? 'true' : 'false',
+        mandatory: !!autoProcessProp?.mandatory,
+      };
+      if (autoProcessProp?.id) {
+        await api.put<{ updated: boolean }>(`/admin/clients/custom-properties/${autoProcessProp.id}`, payload as never);
+      } else {
+        await api.post<{ id: number }>(`/admin/clients/${clientId}/custom-properties`, payload as never);
+      }
+      invalidateFetch((k) => k.startsWith(`/admin/clients/${clientId}/custom-properties`));
+      refetch();
+      showToast({ variant: 'success', message: next ? 'Auto-process turned ON.' : 'Auto-process turned OFF.' });
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Save failed.' });
+    } finally {
+      setAutoProcessSaving(false);
+    }
+  }
 
   async function onDelete(p: ClientCustomProperty) {
     const ok = await confirm({
@@ -63,6 +97,22 @@ export function CustomPropsTab({ clientId, canEdit }: Props) {
 
   return (
     <div className="pt-2 space-y-2">
+      <div className="rounded border bg-card px-3 py-2.5 flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-medium">Auto-process Unconfirmed Orders</div>
+          <div className="text-xs text-muted-foreground mt-0.5">
+            When ON, EasyFix automatically sends each new Unconfirmed Order&rsquo;s customer a WhatsApp link to complete their details. Also enables the manual Trigger / Retrigger action on the Unconfirmed Orders list.
+          </div>
+        </div>
+        <div className="shrink-0 pt-0.5">
+          <Switch
+            checked={autoProcessOn}
+            onCheckedChange={onToggleAutoProcess}
+            disabled={!canEdit || autoProcessSaving || loading}
+            ariaLabel="Auto-process Unconfirmed Orders"
+          />
+        </div>
+      </div>
       <div className="flex items-center justify-between">
         <div className="text-xs text-muted-foreground">
           {loading ? 'Loading…' : `${items.length} propert${items.length === 1 ? 'y' : 'ies'}`}

@@ -109,6 +109,11 @@ export default function JobsPage() {
     // existing permission key so the seed migration controls
     // visibility.
     'isTransferJobOwnership',
+    // Gates the per-row Trigger/Retrigger button on the Unconfirmed
+    // tab — seeded by the 2026-05-28 magic-link migration for Admin
+    // (role 2) + Executive Supply (role 3). Combines with the row's
+    // `client_opted_in` flag inside UnconfirmedJobsTable.
+    'isJobMagicLinkSend',
   ]);
   const [tab, setTab] = useState('all');
   // Counts are fetched once on mount + re-fetched after any save from the
@@ -960,8 +965,12 @@ export default function JobsPage() {
               rows={sorted}
               loading={loading}
               canConfirm={!!canJob.isJobConfirm}
+              canSendMagicLink={!!canJob.isJobMagicLinkSend}
               openView={openView}
               openConfirm={openConfirm}
+              // Force-refetch (skip TAB_CACHE) so the "Link Sent" pill
+              // appears immediately after the popup closes successfully.
+              onMagicLinkSent={() => load(false, true)}
             />
           ) : (
               <table className="data-table">

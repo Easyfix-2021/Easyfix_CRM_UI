@@ -96,6 +96,9 @@ export default function MyOrdersPage() {
     'isJobAssign',        // Assign / Schedule (status 0 → 1)
     'isJobReassign',      // Reassign already-scheduled (status 1)
     'isJobStatusChange',  // Check-In / Check-Out / Completion
+    // Gates the Trigger/Retrigger button on the Unconfirmed tab — see
+    // the parallel block in (authed)/jobs/page.tsx for the rationale.
+    'isJobMagicLinkSend',
   ]);
   // Read the URL's ?tab=<slug> synchronously so the FIRST load fires with the
   // right filter. Previously tab initialised to 'all', and a follow-up
@@ -359,8 +362,12 @@ export default function MyOrdersPage() {
               rows={sorted}
               loading={loading}
               canConfirm={!!canJob.isJobConfirm}
+              canSendMagicLink={!!canJob.isJobMagicLinkSend}
               openView={openView}
               openConfirm={openConfirm}
+              // Force-refetch (skip TAB_CACHE) so the "Link Sent" pill
+              // appears immediately after the popup closes successfully.
+              onMagicLinkSent={() => load(false, true)}
             />
           ) : (
           <table className="data-table">

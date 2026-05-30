@@ -101,3 +101,35 @@ export function statusColorClass(code: number): string {
   };
   return map[code] ?? 'bg-muted text-muted-foreground';
 }
+
+/*
+ * statusTone — parallel helper to `statusColorClass`, returns a
+ * `StatusChipTone` token consumable by the shared `<StatusChip />` primitive
+ * at `src/components/ui/StatusChip.tsx`. Use this when rendering a status
+ * via `<StatusChip tone={statusTone(code)} />` so every consumer reaches
+ * the same one-component-one-shape pill (added 2026-05-30 to retire the
+ * copy-pasted `<span className="rounded-full ...">` snippets across tables).
+ *
+ * Visual mapping mirrors `statusColorClass` as closely as the StatusChip
+ * palette allows — see StatusChip.tsx for the tone palette.
+ */
+export type StatusTone =
+  | 'red' | 'amber' | 'sky' | 'emerald' | 'slate' | 'violet' | 'rose' | 'orange';
+
+export function statusTone(code: number): StatusTone {
+  const map: Record<number, StatusTone> = {
+    0:  'sky',     // Booked
+    1:  'sky',     // Scheduled
+    2:  'amber',   // In Progress
+    3:  'emerald', // Completed
+    5:  'emerald', // Completed (alt)
+    6:  'red',     // Cancelled
+    7:  'slate',   // Enquiry
+    9:  'rose',    // Unconfirmed — attention colour
+    10: 'violet',  // Revisit
+    15: 'violet',  // Estimate pending
+    20: 'amber',   // In progress (alt — same visual as 2)
+    21: 'orange',  // On hold — warm warning
+  };
+  return map[code] ?? 'slate';
+}

@@ -16,6 +16,7 @@ import { AddressAutocomplete } from '@/components/ui/address-autocomplete';
 import { AddressPickerWithMap, type AddressValue } from '@/components/ui/address-picker-with-map';
 import { AddressEditDialog, type EditableAddress } from './AddressEditDialog';
 import { JobTransactionView } from './JobTransactionView';
+import { CustomerSubmissionPanel } from './CustomerSubmissionPanel';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { api, ApiError } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
@@ -3490,7 +3491,64 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer 
    */
   useEffect(() => {
     if (mode === 'create') return;
-    setF(toFormShape(initial));
+    const base = toFormShape(initial);
+    /*
+     * Magic-link customer submission prefill (2026-05-28).
+     * When the customer self-submitted the magic-link form, the BE has
+     * already COALESCE-merged the values onto tbl_job/tbl_address — so
+     * toFormShape above already reflects them. But for fields the BE
+     * does NOT mirror (e.g. customer_email lives on tbl_customer, address
+     * sub-fields live nested in payload.address), we layer the raw
+     * payload on top so ops sees the customer's intent as the default.
+     * Ops can still override any field before submitting.
+     */
+    const rawPayload = (initial as Record<string, unknown> | null | undefined)?.customer_submitted_payload;
+    let payload: Record<string, unknown> | null = null;
+    if (rawPayload && typeof rawPayload === 'string') {
+      try { payload = JSON.parse(rawPayload) as Record<string, unknown>; } catch { payload = null; }
+    } else if (rawPayload && typeof rawPayload === 'object') {
+      payload = rawPayload as Record<string, unknown>;
+    }
+    if (mode === 'confirm' && payload) {
+      /*
+       * Payload is FLAT (matches BE validator + magic-link-types.ts
+       * `SubmitPayload`): `address` is the address-line string and the
+       * remaining address fields (`building`, `landmark`, `city_id`,
+       * `pin_code`, `gps_location`, `address_instruction`) are sibling
+       * top-level keys, NOT nested under `address`. Earlier code here
+       * destructured `payload.address` as an object — that silently
+       * yielded `undefined` for every sub-field so the spread was a
+       * no-op for address. Read flat keys directly.
+       */
+      const pickStr = (v: unknown) => (v == null || v === '' ? '' : String(v));
+      const overlay: Partial<typeof base> & Record<string, unknown> = {};
+      if (pickStr(payload.customer_name))      overlay.customer_name = pickStr(payload.customer_name);
+      if (pickStr(payload.customer_email))     overlay.customer_email = pickStr(payload.customer_email);
+      if (pickStr(payload.time_slot))          overlay.time_slot = pickStr(payload.time_slot);
+      // INTENTIONAL: do NOT overlay `requested_date_time` from the payload.
+      // The customer's submitted value is an ISO string with a `+05:30`
+      // suffix (FE-anchored — see (public)/job-completion submit handler);
+      // `<input type="datetime-local">` only accepts `YYYY-MM-DDTHH:mm` and
+      // silently shows blank for anything else. The same value was already
+      // written by `acceptSubmission` to `tbl_job.requested_date_time` as a
+      // proper DATETIME, and `toFormShape(initial)` already produced the
+      // datetime-local-friendly form for `base`. So `base.requested_date_time`
+      // is the canonical, render-correct copy — overlaying the payload would
+      // stomp it with an unrenderable string. Leave it alone.
+      if (pickStr(payload.additional_name))    overlay.additional_name = pickStr(payload.additional_name);
+      if (pickStr(payload.additional_number))  overlay.additional_number = pickStr(payload.additional_number);
+      if (pickStr(payload.job_desc))           overlay.job_desc = pickStr(payload.job_desc);
+      if (pickStr(payload.address))            overlay.address = pickStr(payload.address);
+      if (pickStr(payload.building))           overlay.building = pickStr(payload.building);
+      if (pickStr(payload.landmark))           overlay.landmark = pickStr(payload.landmark);
+      if (payload.city_id != null && payload.city_id !== '') overlay.city_id = String(payload.city_id);
+      if (pickStr(payload.pin_code))           overlay.pin_code = pickStr(payload.pin_code);
+      if (pickStr(payload.gps_location))       overlay.gps_location = pickStr(payload.gps_location);
+      if (pickStr(payload.address_instruction))overlay.address_instruction = pickStr(payload.address_instruction);
+      setF({ ...base, ...(overlay as Partial<typeof base>) });
+      return;
+    }
+    setF(base);
   }, [initial, mode]);
 
   /*
@@ -4513,6 +4571,15 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer 
       // suppresses the browser-level submit-time check when the
       // outcome path fired requestSubmit().
       <form onSubmit={submit} noValidate={outcomePayload !== null || submitVariant === 'draft'} className="space-y-4">
+        {/* Customer magic-link submission banner — shown above Section 1
+            only when the customer self-submitted the form. Read-only;
+            ops can expand to inspect the raw submitted payload. */}
+        {(initial as Record<string, unknown>)?.customer_submitted_at ? (
+          <CustomerSubmissionPanel
+            submittedAt={(initial as Record<string, unknown>).customer_submitted_at as string}
+            payload={(initial as Record<string, unknown>).customer_submitted_payload as Parameters<typeof CustomerSubmissionPanel>[0]['payload']}
+          />
+        ) : null}
         {/*
           * Job Summary strip — legacy parity. Four fields: Special Comments,
           * Job Description, Product Quantity, Job Type. Mobile is a prominent

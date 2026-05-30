@@ -1,8 +1,10 @@
 'use client';
 import * as React from 'react';
-import { Eye, CalendarCheck } from 'lucide-react';
-import { formatDate, statusColorClass, statusLabel } from '@/lib/utils';
+import { Eye, CalendarCheck, Send } from 'lucide-react';
+import { formatDate, statusLabel, statusTone } from '@/lib/utils';
 import { CallableMobile } from '@/components/calls/CallButton';
+import { MagicLinkActionPopup } from '@/components/job/MagicLinkActionPopup';
+import { StatusChip } from '@/components/ui/StatusChip';
 
 /*
  * UnconfirmedJobsTable — the focused column set ops requested for the
@@ -53,6 +55,19 @@ export type UnconfirmedJobRow = {
   client_name: string | null;
   city_name: string | null;
   source_type: string | null;
+  // Magic-Link surface (added 2026-05-28). BE list() projection exposes
+  // these so the Unconfirmed table can render the "Customer Submitted"
+  // / "Link Sent" pill and gate the Send Magic Link action. Optional so
+  // older API responses during staging rollouts don't break the type.
+  customer_submitted_at?: string | null;
+  magic_link_sent_at?: string | null;
+  magic_link_send_count?: number;
+  magic_link_last_action?: 'first' | 'reminder' | 'resend' | null;
+  // Derived server-side from tbl_client_custom_properties
+  // (auto_process_unconfirmed_order='true'). When false the client has
+  // not opted into the magic-link flow and the action is hidden even
+  // for operators carrying `isJobMagicLinkSend`.
+  client_opted_in?: boolean | 0 | 1;
 };
 
 /*
@@ -75,16 +90,32 @@ export function UnconfirmedJobsTable({
   rows,
   loading,
   canConfirm,
+  canSendMagicLink = false,
   openView,
   openConfirm,
+  onMagicLinkSent,
 }: {
   rows: UnconfirmedJobRow[];
   loading: boolean;
   canConfirm: boolean;
+  // Mirrors `canConfirm`: parent passes
+  // `actionFlags(me, ['isJobMagicLinkSend']).isJobMagicLinkSend`. The
+  // `client_opted_in` half of the gate lives on the row itself and is
+  // evaluated per-row below. Defaults to false so legacy callers that
+  // don't yet wire this prop stay safe (button hidden).
+  canSendMagicLink?: boolean;
   openView: (jobId: number) => void;
   openConfirm: (jobId: number) => void;
+  // Fired after the popup successfully POSTs to send-magic-link. Parent
+  // should refetch the Unconfirmed list (via its useFetch / invalidate
+  // mechanism) so the new sent_at / send_count flow back into the row.
+  onMagicLinkSent?: () => void;
 }) {
+  // Track which row's Magic-Link popup is open. Single state because the
+  // dialog is modal and at most one row's popup is mounted at a time.
+  const [magicLinkRow, setMagicLinkRow] = React.useState<UnconfirmedJobRow | null>(null);
   return (
+    <>
     <table className="data-table">
       <thead>
         <tr>
@@ -122,26 +153,68 @@ export function UnconfirmedJobsTable({
                 {j.client_ref_id && <div className="text-[10px] text-muted-foreground">{j.client_ref_id}</div>}
               </td>
               <td className="text-xs">{j.city_name ?? '—'}</td>
-              <td>
-                <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${statusColorClass(j.job_status)}`}>
-                  {statusLabel(j.job_status, { assigned: j.fk_easyfixter_id != null })}
-                </span>
-                {/*
-                  Draft indicator — added 2026-05-28. Visible only when an
-                  Unconfirmed row has been edited since creation (Save Draft
-                  was clicked on the Confirm modal). Derived from
-                  last_update_time vs created_date_time; no extra column.
-                  Tooltip on hover spells out what it means so operators
-                  scanning the list don't have to guess.
-                */}
-                {hasDraftEdit(j) && (
-                  <span
-                    className="ml-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold whitespace-nowrap bg-amber-100 text-amber-800 border border-amber-300"
-                    title="Save Draft progress exists on this job. Open Confirm & Schedule to continue."
-                  >
-                    Draft
-                  </span>
-                )}
+              {/*
+                Status cell — two-row layout (2026-05-30 redesign):
+                  Row 1: primary job_status chip (Unconfirmed / Booked / …)
+                  Row 2: zero or more sub-status chips (Draft, Link Sent,
+                         Customer Submitted) wrapped in a flex row so they
+                         fall to a third visual line only if 3+ stack — but
+                         in practice Link Sent and Customer Submitted are
+                         mutually exclusive, so it's at most Draft + 1 here.
+                Width: min-w-[160px] reserves enough horizontal space for
+                "Customer Submitted" (the longest sub-status label) to fit
+                on a single line without clipping. All chips share the
+                shared <StatusChip /> primitive — one source of truth for
+                shape, padding, border-radius, font-weight, border colour.
+
+                Tone mapping:
+                  - statusTone(code) from @/lib/utils picks the StatusChip
+                    tone for the primary job_status (parallels the existing
+                    statusColorClass mapping).
+                  - Draft = amber, Link Sent = sky, Customer Submitted =
+                    emerald — matches the prior copy-pasted classes.
+              */}
+              <td className="min-w-[160px]">
+                <div className="flex flex-col gap-1">
+                  <div>
+                    <StatusChip
+                      tone={statusTone(j.job_status)}
+                      size="md"
+                    >
+                      {statusLabel(j.job_status, { assigned: j.fk_easyfixter_id != null })}
+                    </StatusChip>
+                  </div>
+                  {(hasDraftEdit(j) || j.customer_submitted_at || j.magic_link_sent_at) && (
+                    <div className="flex flex-wrap gap-1">
+                      {hasDraftEdit(j) && (
+                        <StatusChip
+                          tone="amber"
+                          size="sm"
+                          title="Save Draft progress exists on this job. Open Confirm & Schedule to continue."
+                        >
+                          Draft
+                        </StatusChip>
+                      )}
+                      {j.customer_submitted_at ? (
+                        <StatusChip
+                          tone="emerald"
+                          size="sm"
+                          title={`Customer submitted on ${formatDate(j.customer_submitted_at)}`}
+                        >
+                          Customer Submitted
+                        </StatusChip>
+                      ) : j.magic_link_sent_at ? (
+                        <StatusChip
+                          tone="sky"
+                          size="sm"
+                          title={`Sent ${relativeAge(j.magic_link_sent_at)} ago via ${j.magic_link_last_action ?? '—'} · ×${j.magic_link_send_count ?? 0}`}
+                        >
+                          Link Sent
+                        </StatusChip>
+                      ) : null}
+                    </div>
+                  )}
+                </div>
               </td>
               <td className="text-xs">{reason || <span className="text-muted-foreground">—</span>}</td>
               <td className="text-xs max-w-[220px]">
@@ -194,6 +267,26 @@ export function UnconfirmedJobsTable({
                       <CalendarCheck className="h-3.5 w-3.5" />
                     </button>
                   )}
+                  {/*
+                    Send / Re-send Magic Link. Double-gated: operator
+                    permission (`isJobMagicLinkSend`, passed through as
+                    `canSendMagicLink`) AND the client's opt-in flag
+                    (`client_opted_in` — derived BE-side from the
+                    auto_process_unconfirmed_order custom property). Both
+                    must be true; otherwise the button is absent (no
+                    disabled state). Label flips first-send vs re-send;
+                    the popup itself owns the action-choice branching.
+                  */}
+                  {canSendMagicLink && (j.client_opted_in === true || j.client_opted_in === 1) && (
+                    <button
+                      type="button"
+                      onClick={() => setMagicLinkRow(j)}
+                      className="inline-flex items-center gap-1 text-sky-700 text-xs hover:underline"
+                      title={j.magic_link_sent_at ? 'Re-send' : 'Send Magic Link'}
+                    >
+                      <Send className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                 </div>
               </td>
             </tr>
@@ -201,7 +294,49 @@ export function UnconfirmedJobsTable({
         })}
       </tbody>
     </table>
+    {/*
+      Magic-Link popup is mounted once at the table level and driven by
+      the currently-selected row's state. Closing nulls the row state so
+      next open re-mounts with fresh props. `onSent` invokes the parent's
+      refetch hook so the row's sent_at / send_count / last_action flow
+      back in without a manual page refresh.
+    */}
+    {magicLinkRow && (
+      <MagicLinkActionPopup
+        open={true}
+        onClose={() => setMagicLinkRow(null)}
+        jobId={magicLinkRow.job_id}
+        magicLinkSentAt={magicLinkRow.magic_link_sent_at ?? null}
+        magicLinkSendCount={magicLinkRow.magic_link_send_count ?? 0}
+        magicLinkLastAction={magicLinkRow.magic_link_last_action ?? null}
+        customerSubmittedAt={magicLinkRow.customer_submitted_at ?? null}
+        customerName={magicLinkRow.customer_name}
+        customerMobileMasked={magicLinkRow.customer_mob_no ?? '—'}
+        onSent={() => {
+          onMagicLinkSent?.();
+        }}
+      />
+    )}
+    </>
   );
+}
+
+/*
+ * Compact relative-age formatter for the "Link Sent" pill tooltip.
+ * Mirrors the popup's `relativeTime` shape ("5 min", "2 hr", "3 days")
+ * without re-importing it (kept local since this file already owns the
+ * sibling `jobAge` helper for the same kind of inline read).
+ */
+function relativeAge(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return 'just now';
+  const mins = Math.floor(ms / 60_000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs} hr`;
+  const days = Math.floor(hrs / 24);
+  return `${days} day${days === 1 ? '' : 's'}`;
 }
 
 /* Local CustomerMobile component removed — superseded by the shared
