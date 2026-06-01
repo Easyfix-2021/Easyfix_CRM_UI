@@ -18,6 +18,7 @@ import { AddressEditDialog, type EditableAddress } from './AddressEditDialog';
 import { JobTransactionView } from './JobTransactionView';
 import { CustomerSubmissionPanel } from './CustomerSubmissionPanel';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { StatusChip } from '@/components/ui/StatusChip';
 import { api, ApiError } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
 import { formatDate, formatEasyfixerName, statusColorClass, statusLabel } from '@/lib/utils';
@@ -1888,9 +1889,10 @@ function ServicesTabBody({ job, onMutated, onDirtyChange }: { job: Job; onMutate
         <table className="data-table">
           <thead>
             <tr>
-              <th>#</th>
+              <th>Job#</th>
+              <th>Service Name</th>
               <th>Service Type</th>
-              <th>Category</th>
+              <th>Service Category</th>
               <th>Qty</th>
               <th>Status</th>
               <th className="!text-right">Actions</th>
@@ -1898,7 +1900,7 @@ function ServicesTabBody({ job, onMutated, onDirtyChange }: { job: Job; onMutate
           </thead>
           <tbody>
             {visible.length === 0 && (
-              <tr><td colSpan={6} className="text-center text-muted-foreground py-8">No services on this job</td></tr>
+              <tr><td colSpan={7} className="text-center text-muted-foreground py-8">No services on this job</td></tr>
             )}
             {visible.map((s, i) => {
               const sr = s as Record<string, unknown>;
@@ -1921,7 +1923,9 @@ function ServicesTabBody({ job, onMutated, onDirtyChange }: { job: Job; onMutate
                     (isActive ? '' : 'opacity-60')
                     + (isDirty ? ' bg-amber-50' : '')
                   }>
+                    {/* Column order: Job# · Service Name · Service Type · Service Category */}
                     <td className="text-xs text-muted-foreground">{String(sr.job_service_id ?? '')}</td>
+                    <td>{sr.service_name ? String(sr.service_name) : '—'}</td>
                     <td>{String(sr.service_type_name ?? '—')}</td>
                     <td>{String(sr.service_catg_name ?? '—')}</td>
                     <td>
@@ -1973,11 +1977,24 @@ function ServicesTabBody({ job, onMutated, onDirtyChange }: { job: Job; onMutate
                         </div>
                       ) : (
                         // Inactive (soft-deleted) services stay read-only.
-                        // Restore first, then edit.
-                        <span>{String(sr.quantity ?? '')}</span>
+                        // Restore first, then edit. Mirror the active input's
+                        // h-7 w-16 footprint with centered content so the
+                        // read-only qty lines up in the same column position
+                        // as the editable inputs above it (no left-stuck text).
+                        <span className="inline-flex h-7 w-16 items-center justify-center font-mono text-muted-foreground">
+                          {String(sr.quantity ?? '')}
+                        </span>
                       )}
                     </td>
-                    <td>{isActive ? 'Active' : 'Inactive'}</td>
+                    <td>
+                      {/* Colored chip instead of plain text — emerald =
+                          active/live, slate = soft-deleted/inactive.
+                          Uses the shared StatusChip primitive for parity
+                          with the rest of the app's status badges. */}
+                      <StatusChip tone={isActive ? 'emerald' : 'slate'} size="sm">
+                        {isActive ? 'Active' : 'Inactive'}
+                      </StatusChip>
+                    </td>
                     <td className="!text-right">
                       {/* Icon action cluster — Show/Hide Breakdown is always
                           available; Remove (active rows) and Restore (inactive
