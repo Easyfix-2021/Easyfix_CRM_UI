@@ -72,6 +72,14 @@ export type UnconfirmedJobRow = {
   // not opted into the magic-link flow and the action is hidden even
   // for operators carrying `isJobMagicLinkSend`.
   client_opted_in?: boolean | 0 | 1;
+  // Latest PENDING customer cancel/reschedule request on this job, surfaced
+  // by the BE LIST projection (correlated subquery on tbl_job_customer_request,
+  // gated by a table-existence probe so un-migrated deploys return NULL).
+  // Drives the "Customer Request" column AND hides the Send Magic Link
+  // action once the customer has acted via the link. Optional so older API
+  // responses during staging rollouts don't break the type narrow.
+  pending_request_type?: 'cancel' | 'reschedule' | null;
+  pending_request_reason?: string | null;
 };
 
 /*
@@ -133,6 +141,7 @@ export function UnconfirmedJobsTable({
           <th>Client / Unique Code</th>
           <th>City</th>
           <th>Status</th>
+          <th>Customer Request</th>
           <th>Action Taken Reason</th>
           <th>Remarks</th>
           <th>Client SPOC</th>
@@ -143,9 +152,9 @@ export function UnconfirmedJobsTable({
         </tr>
       </thead>
       <tbody>
-        {loading && <tr><td colSpan={12} className="text-center py-8 text-muted-foreground">Loading…</td></tr>}
+        {loading && <tr><td colSpan={13} className="text-center py-8 text-muted-foreground">Loading…</td></tr>}
         {!loading && rows.length === 0 && (
-          <tr><td colSpan={12} className="text-center py-8 text-muted-foreground">No unconfirmed orders.</td></tr>
+          <tr><td colSpan={13} className="text-center py-8 text-muted-foreground">No unconfirmed orders.</td></tr>
         )}
         {!loading && rows.map((j) => {
           const { reason, freeText } = splitRemarks(j.remarks ?? '');
@@ -225,6 +234,40 @@ export function UnconfirmedJobsTable({
                   )}
                 </div>
               </td>
+              {/*
+                Customer Request cell — shows the latest PENDING cancel /
+                reschedule request raised by the customer via the magic-link
+                page. Cancel = rose chip, Reschedule = amber chip, with the
+                reason as muted sub-text + a title tooltip. None → em-dash.
+                The presence of a request also hides the Send action below.
+              */}
+              <td className="text-xs whitespace-nowrap">
+                {j.pending_request_type === 'cancel' ? (
+                  <div className="flex flex-col gap-0.5">
+                    <StatusChip tone="rose" size="sm" title={j.pending_request_reason ?? undefined}>
+                      Cancel Requested
+                    </StatusChip>
+                    {j.pending_request_reason && (
+                      <div className="text-[10px] text-muted-foreground max-w-[160px] truncate" title={j.pending_request_reason}>
+                        {j.pending_request_reason}
+                      </div>
+                    )}
+                  </div>
+                ) : j.pending_request_type === 'reschedule' ? (
+                  <div className="flex flex-col gap-0.5">
+                    <StatusChip tone="amber" size="sm" title={j.pending_request_reason ?? undefined}>
+                      Reschedule Requested
+                    </StatusChip>
+                    {j.pending_request_reason && (
+                      <div className="text-[10px] text-muted-foreground max-w-[160px] truncate" title={j.pending_request_reason}>
+                        {j.pending_request_reason}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+              </td>
               <td className="text-xs">{reason || <span className="text-muted-foreground">—</span>}</td>
               <td className="text-xs max-w-[220px]">
                 <div className="truncate" title={freeText}>{freeText || <span className="text-muted-foreground">—</span>}</div>
@@ -285,8 +328,18 @@ export function UnconfirmedJobsTable({
                     must be true; otherwise the button is absent (no
                     disabled state). Label flips first-send vs re-send;
                     the popup itself owns the action-choice branching.
+
+                    Additionally hidden once the customer has acted via the
+                    link — either submitted details (`customer_submitted_at`)
+                    or raised a pending cancel/reschedule request
+                    (`pending_request_type`). Re-sending after the customer
+                    has engaged would be noise, so we drop the trigger
+                    entirely (other actions in the cell stay).
                   */}
-                  {canSendMagicLink && (j.client_opted_in === true || j.client_opted_in === 1) && (
+                  {canSendMagicLink
+                    && (j.client_opted_in === true || j.client_opted_in === 1)
+                    && !j.customer_submitted_at
+                    && j.pending_request_type == null && (
                     <button
                       type="button"
                       onClick={() => setMagicLinkRow(j)}

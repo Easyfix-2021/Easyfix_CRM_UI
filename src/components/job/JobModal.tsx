@@ -743,6 +743,10 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange }: { job: Job; onR
       </TabsList>
 
       <TabsContent value="summary">
+        {/* Customer Cancel/Reschedule requests — attention banner pinned
+            to the top of the Summary tab so ops action pending asks
+            before anything else. Renders nothing when there are none. */}
+        <JobCustomerRequests jobId={Number(job.job_id)} jobStatus={Number(job.job_status)} />
         {/* 3-column layout (2026-05-26 per ops): packs the four short
             DlCards (Customer / Client / Job meta / Audit & History) into
             a denser grid so the page doesn't read as half-empty. Address
@@ -1073,6 +1077,141 @@ export function JobAddressEditDialog({ job, onClose, onSaved }: {
  * trail (the legacy CRM wrote one row per reschedule). Falls back to
  * empty list when no rows or the endpoint isn't reachable.
  */
+/*
+ * JobCustomerRequests — attention banner for customer-initiated Cancel /
+ * Reschedule requests on this job. The customer (via the public/client
+ * surface) can ask ops to cancel or reschedule a booked job; the BE
+ * records each as a row in tbl_job customer-request store and exposes
+ * them at GET /admin/jobs/:id/customer-requests (newest first).
+ *
+ * This component renders a prominent banner at the TOP of the Summary
+ * tab so ops can't miss a pending ask — amber for reschedule, rose for
+ * cancel. Each pending request gets Mark Actioned / Dismiss buttons that
+ * PATCH /admin/customer-requests/:id then refetch. Non-pending requests
+ * collapse into a subtle one-line history. If there are no requests at
+ * all the component renders nothing (no empty box).
+ *
+ * Action buttons are gated by the same edit capability the modal uses
+ * elsewhere (isJobEdit + job-not-closed) — view-only users still see the
+ * banner but without the action controls.
+ */
+type CustomerRequest = {
+  request_id: number;
+  request_type: 'cancel' | 'reschedule';
+  reason?: string | null;
+  remarks?: string | null;
+  preferred_datetime?: string | null;
+  request_status: 'pending' | 'actioned' | 'dismissed';
+  created_at?: string | null;
+};
+
+function JobCustomerRequests({ jobId, jobStatus }: { jobId: number; jobStatus: number }) {
+  const { data, error, refetch } = useFetch<CustomerRequest[] | { items?: CustomerRequest[] }>(
+    `/admin/jobs/${jobId}/customer-requests`,
+  );
+  const { me } = useMe();
+  const can = actionFlags(me, ['isJobEdit']);
+  // Same gate the modal's other write surfaces use: edit capability AND
+  // the job is not in a terminal-completion state.
+  const canAct = can.isJobEdit && !isJobClosed(jobStatus);
+  const [busyId, setBusyId] = useState<number | null>(null);
+
+  const rows: CustomerRequest[] = useMemo(
+    () => (Array.isArray(data) ? data : (data?.items ?? [])),
+    [data],
+  );
+  const pending = rows.filter((r) => r.request_status === 'pending');
+  const history = rows.filter((r) => r.request_status !== 'pending');
+
+  // Render nothing when the job has no customer requests at all.
+  if (error || rows.length === 0) return null;
+
+  async function act(id: number, request_status: 'actioned' | 'dismissed') {
+    setBusyId(id);
+    try {
+      await api.patch(`/admin/customer-requests/${id}`, { request_status });
+      await refetch();
+      showToast({
+        variant: 'success',
+        message: request_status === 'actioned' ? 'Request Marked Actioned.' : 'Request Dismissed.',
+      });
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Failed to update request' });
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <div className="mb-4 space-y-2">
+      {pending.map((r) => {
+        const isCancel = r.request_type === 'cancel';
+        const band = isCancel
+          ? 'border-rose-300 bg-rose-50'
+          : 'border-amber-300 bg-amber-50';
+        return (
+          <div key={r.request_id} className={`rounded-lg border px-4 py-3 ${band}`}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <StatusChip tone={isCancel ? 'rose' : 'amber'} size="sm">
+                    {isCancel ? 'Cancellation' : 'Reschedule'}
+                  </StatusChip>
+                  <span className="text-sm font-semibold">
+                    Customer Requested {isCancel ? 'Cancellation' : 'Reschedule'}
+                  </span>
+                </div>
+                <div className="mt-1.5 space-y-0.5 text-xs text-slate-700">
+                  {r.reason ? <div><span className="font-medium">Reason:</span> {r.reason}</div> : null}
+                  {r.remarks ? <div><span className="font-medium">Remarks:</span> {r.remarks}</div> : null}
+                  {!isCancel && r.preferred_datetime ? (
+                    <div><span className="font-medium">Preferred:</span> {formatDate(r.preferred_datetime)}</div>
+                  ) : null}
+                  {r.created_at ? (
+                    <div className="text-slate-500">Requested {formatDate(r.created_at)}</div>
+                  ) : null}
+                </div>
+              </div>
+              {canAct && (
+                <div className="flex shrink-0 gap-2">
+                  <LoadBtn
+                    size="sm"
+                    loading={busyId === r.request_id}
+                    onClick={() => act(r.request_id, 'actioned')}
+                  >
+                    Mark Actioned
+                  </LoadBtn>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={busyId === r.request_id}
+                    onClick={() => act(r.request_id, 'dismissed')}
+                  >
+                    Dismiss
+                  </Button>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+      {/* Resolved requests collapse into a subtle history line so they
+          don't compete with pending asks for attention. */}
+      {history.length > 0 && (
+        <div className="text-xs text-muted-foreground">
+          {history.map((r, i) => (
+            <span key={r.request_id}>
+              {i > 0 ? ' · ' : ''}
+              {r.request_type === 'cancel' ? 'Cancellation' : 'Reschedule'} {r.request_status}
+              {r.created_at ? ` (${formatDate(r.created_at)})` : ''}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function JobRescheduleHistory({ jobId }: { jobId: number }) {
   type JobComment = Record<string, unknown> & {
     comment_id?: number;

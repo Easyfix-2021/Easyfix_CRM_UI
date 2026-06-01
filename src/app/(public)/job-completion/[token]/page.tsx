@@ -29,8 +29,16 @@
  */
 
 import { useParams } from 'next/navigation';
+import Image from 'next/image';
+import { Plus, X, CalendarClock, Ban, CheckCircle2, LifeBuoy, ExternalLink } from 'lucide-react';
 import * as React from 'react';
 import type { PrefillResponse, SubmitPayload } from '@/lib/magic-link-types';
+// Pure presentational chip — no auth dependency, safe on the public page.
+import { StatusChip, type StatusChipTone } from '@/components/ui/StatusChip';
+// Shared presentational Button (cva-based, no auth dependency → safe on the
+// public page). Used for every button on the page so size/font/padding match;
+// colour is differentiated via `variant` + `className`, NOT by `size`.
+import { Button } from '@/components/ui/button';
 
 /*
  * Bare public-fetch helper. Mirrors the success envelope of `@/lib/api`
@@ -164,6 +172,61 @@ function toDatetimeLocal(value: string | null | undefined): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/*
+ * Derive the Time Slot from a picked datetime-local value (YYYY-MM-DDTHH:mm).
+ * The customer picks date+time once and the slot follows automatically — the
+ * 4 slot buttons are display-only indicators, not directly selectable.
+ *
+ * Mapping (mirrors the CRM JobModal bookingSlotFor() banding) — the returned
+ * labels match exactly the strings the BE sends in `timeSlots`
+ * (['9 AM – 12 PM', '12 PM – 3 PM', '3 PM – 7 PM', 'After Hours'], note the
+ * en-dash) so the highlighted button + submitted time_slot stay in sync:
+ *     hour 9–<12  → "9 AM – 12 PM"
+ *     hour 12–<15 → "12 PM – 3 PM"
+ *     hour 15–<19 → "3 PM – 7 PM"
+ *     else        → "After Hours"
+ * Returns '' for an empty/invalid pick so the slot clears until a time is set.
+ */
+function deriveTimeSlot(datetimeLocal: string): string {
+  if (!datetimeLocal) return '';
+  // datetime-local is "YYYY-MM-DDTHH:mm" — read the hour after the "T".
+  const timePart = datetimeLocal.split('T')[1] || '';
+  const h = Number(timePart.split(':')[0]);
+  if (Number.isNaN(h)) return '';
+  if (h >= 9  && h < 12) return '9 AM – 12 PM';
+  if (h >= 12 && h < 15) return '12 PM – 3 PM';
+  if (h >= 15 && h < 19) return '3 PM – 7 PM';
+  return 'After Hours';
+}
+
+/*
+ * Map the legacy numeric job-status code (order_status) to a StatusChip
+ * tone. We key on the human label first (resilient to code drift between
+ * deploys) and fall back to the numeric code, then to slate. Mapping per
+ * the spec: Unconfirmed→amber, Booked/Scheduled→sky, Completed→emerald,
+ * Cancelled→red, else slate.
+ */
+function statusTone(label: string | undefined, code: number | null | undefined): StatusChipTone {
+  const l = (label || '').toLowerCase();
+  if (l.includes('cancel')) return 'red';
+  if (l.includes('complete')) return 'emerald';
+  if (l.includes('book') || l.includes('schedul')) return 'sky';
+  if (l.includes('unconfirm')) return 'amber';
+  // Numeric fallback for deploys that don't send a label: 9=Unconfirmed.
+  if (code === 9) return 'amber';
+  return 'slate';
+}
+
+/* Format the naive datetime-local value (YYYY-MM-DDTHH:mm) the Reschedule
+ * picker emits into the "YYYY-MM-DD HH:mm" string the BE expects. Returns
+ * undefined for an empty pick (preferred_datetime is optional). */
+function toBackendDateTime(value: string): string | undefined {
+  if (!value) return undefined;
+  // datetime-local can emit 16 (no seconds) or 19 (with seconds) chars.
+  const trimmed = value.length > 16 ? value.slice(0, 16) : value;
+  return trimmed.replace('T', ' ');
+}
+
 export default function JobCompletionMagicLinkPage() {
   const params = useParams<{ token: string }>();
   const token = params?.token || '';
@@ -174,6 +237,27 @@ export default function JobCompletionMagicLinkPage() {
   const [submitError, setSubmitError] = React.useState<string | null>(null);
   const [missingFields, setMissingFields] = React.useState<string[]>([]);
   const [customProps, setCustomProps] = React.useState<Map<string, CustomProp>>(new Map());
+
+  // ── Customer-facing order-page additions ────────────────────────────────
+  // Toast: a single ephemeral status line for the click-to-call / request
+  // actions (auto-dismisses). Kept lightweight — no toast library on the
+  // public bundle.
+  const [toast, setToast] = React.useState<{ text: string; tone: 'ok' | 'err' } | null>(null);
+  const toastTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showToast = React.useCallback((text: string, tone: 'ok' | 'err' = 'ok') => {
+    setToast({ text, tone });
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 5000);
+  }, []);
+  React.useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
+
+  // Which secondary action is mid-flight (disables its button + shows a
+  // spinner-ish label). Calling actions hit click-to-call endpoints.
+  const [actionBusy, setActionBusy] = React.useState<null | 'spoc' | 'reschedule' | 'cancel'>(null);
+  // Inline overlay dialogs (no CRM Dialog import — plain styled overlays).
+  // `spoc_confirm` is the "Need Help" → Call EasyFix SPOC confirmation step
+  // (reuses OverlayShell; on confirm it runs handleSpocCall).
+  const [dialog, setDialog] = React.useState<null | 'reschedule' | 'cancel' | 'spoc_confirm'>(null);
 
   React.useEffect(() => {
     if (!token) { setState({ kind: 'invalid_token' }); return; }
@@ -205,7 +289,11 @@ export default function JobCompletionMagicLinkPage() {
           pin_code: data.address.pin_code || '',
           gps_location: data.address.gps_location || '',
           address_instruction: data.address.address_instruction || '',
-          time_slot: data.schedule.time_slot || '',
+          // Time Slot is DERIVED from the requested datetime (auto-selected),
+          // not picked directly. Seed it from the prefilled datetime so the
+          // display indicator matches; fall back to the BE's stored slot when
+          // there's no datetime yet.
+          time_slot: deriveTimeSlot(toDatetimeLocal(data.schedule.requested_date_time)) || data.schedule.time_slot || '',
           requested_date_time: toDatetimeLocal(data.schedule.requested_date_time),
           additional_name: data.additional.name || '',
           additional_number: data.additional.number || '',
@@ -248,7 +336,7 @@ export default function JobCompletionMagicLinkPage() {
     <FullPageMessage title="Something Went Wrong" message={state.message} retry />
   );
   if (state.kind === 'submitted') return (
-    <FullPageMessage title="Thank You" message="We'll confirm your booking shortly. You can close this page." />
+    <FullPageMessage title="Thank You" message="Order Confirmed — Our Team Will Finalise The Schedule Shortly. You Can Close This Page." />
   );
 
   const data = state.data;
@@ -379,9 +467,130 @@ export default function JobCompletionMagicLinkPage() {
     }
   }
 
+  // ── Click-to-call: EasyFix SPOC ─────────────────────────────────────────
+  // POST /spoc-call (no body). The BE places the call server-side; we only
+  // surface delivery status. 422 → no SPOC available.
+  async function handleSpocCall() {
+    if (actionBusy) return;
+    setActionBusy('spoc');
+    try {
+      const r = await publicFetch<{ delivered: boolean }>(
+        `/public/job-completion/${encodeURIComponent(token)}/spoc-call`, { method: 'POST' }
+      );
+      if (r.delivered) showToast('Connecting Your Call — Please Keep Your Phone Handy.', 'ok');
+      else showToast('Calling Is Currently Unavailable, Please Try Again Later.', 'err');
+    } catch (err) {
+      const e = err as { status?: number; message?: string };
+      if (e.status === 422) showToast('No SPOC Is Available To Call Right Now.', 'err');
+      else showToast(e.message || 'Calling Is Currently Unavailable, Please Try Again Later.', 'err');
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
+  // (Contact Support click-to-call removed — the header "Need Help" affordance
+  // now routes through the SPOC-call confirmation flow instead. The BE
+  // /support-call endpoint remains but is no longer invoked from this page.)
+
+  // ── Request: Reschedule ─────────────────────────────────────────────────
+  // POST /reschedule-request { reason, remarks?, preferred_datetime? }.
+  // Reason is required (enforced in the dialog). Closes the dialog + toasts
+  // on success; surfaces errors via toast.
+  async function handleRescheduleSubmit(reason: string, preferred: string, remarks: string) {
+    if (actionBusy) return;
+    setActionBusy('reschedule');
+    try {
+      await publicFetch<{ request_id: number }>(
+        `/public/job-completion/${encodeURIComponent(token)}/reschedule-request`,
+        {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            reason,
+            remarks: remarks.trim() || undefined,
+            preferred_datetime: toBackendDateTime(preferred),
+          }),
+        }
+      );
+      setDialog(null);
+      showToast('Reschedule Requested — Our Team Will Get Back To You.', 'ok');
+    } catch (err) {
+      const e = err as { status?: number; code?: string; message?: string };
+      if (e.status === 410 || e.code === 'JOB_NO_LONGER_PENDING') { setDialog(null); setState({ kind: 'expired_state' }); return; }
+      if (e.status === 401) { setDialog(null); setState({ kind: 'invalid_token' }); return; }
+      showToast(e.message || 'Could Not Submit Reschedule Request. Please Try Again.', 'err');
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
+  // ── Request: Cancel ─────────────────────────────────────────────────────
+  // POST /cancel-request { reason, remarks? }. Reason required.
+  async function handleCancelSubmit(reason: string, remarks: string) {
+    if (actionBusy) return;
+    setActionBusy('cancel');
+    try {
+      await publicFetch<{ request_id: number }>(
+        `/public/job-completion/${encodeURIComponent(token)}/cancel-request`,
+        {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason, remarks: remarks.trim() || undefined }),
+        }
+      );
+      setDialog(null);
+      showToast('Cancellation Requested — Our Team Will Reach Out.', 'ok');
+    } catch (err) {
+      const e = err as { status?: number; code?: string; message?: string };
+      if (e.status === 410 || e.code === 'JOB_NO_LONGER_PENDING') { setDialog(null); setState({ kind: 'expired_state' }); return; }
+      if (e.status === 401) { setDialog(null); setState({ kind: 'invalid_token' }); return; }
+      showToast(e.message || 'Could Not Submit Cancellation Request. Please Try Again.', 'err');
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
+  // Convenience reads of the expanded contract (all optional → safe reads).
+  const orderStatusLabel = data.order_status_label || 'Order';
+  const tone = statusTone(data.order_status_label, data.order_status);
+  const jobId = data.job_id ?? data.jobId;
+  const clientName = data.client_name || data.client.name;
+  const spoc = data.spoc;
+  const mapsLink = data.maps_link || null;
+  const cancelReasons = data.cancel_reasons ?? [];
+  const rescheduleReasons = data.reschedule_reasons ?? [];
+  const customerMob = data.customer_mob || data.customer.mobile;
+
   return (
     <div className="space-y-4">
-      <Header clientName={data.client.name} />
+      {/* Order header: logo + status chip + Job ID + client name, plus the
+          relocated SPOC contact block on the right. The "Need Help?…" line is
+          the clickable affordance that opens the Call-EasyFix-SPOC
+          confirmation flow; the SPOC name + masked number sit beneath it. The
+          old standalone "Your EasyFix Point Of Contact" section was removed —
+          its identity + Need-Help wiring now live entirely in the header. */}
+      <OrderHeader
+        clientName={clientName}
+        jobId={jobId}
+        statusLabel={orderStatusLabel}
+        tone={tone}
+        spocName={spoc?.name || null}
+        spocMobileMasked={spoc?.mobile_masked || null}
+        onNeedHelp={() => setDialog('spoc_confirm')}
+        needHelpBusy={actionBusy === 'spoc'}
+      />
+
+      {/* Ephemeral toast for the click-to-call / request actions. */}
+      {toast && (
+        <div
+          role="status"
+          className={`rounded-md px-4 py-3 text-sm border ${
+            toast.tone === 'ok'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              : 'bg-amber-50 border-amber-200 text-amber-800'
+          }`}
+        >
+          {toast.text}
+        </div>
+      )}
 
       {missingFields.length > 0 && (
         <div className="bg-red-50 border border-red-200 text-red-700 rounded-md px-4 py-3 text-sm">
@@ -395,8 +604,14 @@ export default function JobCompletionMagicLinkPage() {
         <div className="bg-red-50 border border-red-200 text-red-700 rounded-md px-4 py-3 text-sm">{submitError}</div>
       )}
 
-      <form onSubmit={handleSubmit} className="space-y-6">
-        <Section title="Customer Details">
+      {/* (The Reschedule / Cancel cluster that used to sit here near the top
+          order summary was MOVED to the bottom action row, alongside the
+          primary Confirm Order button — see the foot of the form.) */}
+
+      <form id="order-form" onSubmit={handleSubmit} className="space-y-6">
+        {/* Short single-line fields: 1-col mobile → 2-col md → 3-col lg so the
+            wide desktop container fills cleanly; mobile stays single column. */}
+        <Section title="Customer Details" cols={3}>
           {/* Mobile-keyboard hints (autoComplete + inputMode) on every
               field with a clear semantic match — pops the right keyboard
               and triggers browser autofill where the customer has saved
@@ -407,14 +622,15 @@ export default function JobCompletionMagicLinkPage() {
               autoComplete="name"
               onChange={(e) => patch({ customer_name: e.target.value })} className={inputClass} />
           </Field>
-          <Field label="Mobile">
-            {/* Read-only — mobile is the identity field on the magic-link JWT
-                and changing it would break the link's binding to the job.
+          <Field label="Customer Phone">
+            {/* Read-only — the customer's OWN number is the identity field on
+                the magic-link JWT and changing it would break the link's
+                binding to the job. Shown UNMASKED (it's their own number).
                 Promoted to text-base (16px) for legibility on small screens;
                 the slate-100 background distinguishes "not editable" from
                 the white-bg editable inputs above/below. */}
             <div className="px-3 py-2 rounded-md bg-slate-100 text-slate-700 text-base font-mono">
-              {data.customer.mobile}
+              {customerMob}
             </div>
           </Field>
           <Field label="Email">
@@ -435,7 +651,26 @@ export default function JobCompletionMagicLinkPage() {
           </Field>
         </Section>
 
+        {/* The standalone "Your EasyFix Point Of Contact" section was REMOVED —
+            the SPOC identity + Need-Help/Call affordance now live in the page
+            header (see OrderHeader's right-aligned contact block). */}
+
+        {/* Address + map. The address + map are editable inline (autocomplete
+            + draggable marker), so no separate "Update Location" shortcut is
+            needed. Saving location is part of the Confirm/submit flow. */}
         <Section title="Address">
+          {/* "Open In Google Maps" deep link — hidden when no GPS pin set. */}
+          {mapsLink && (
+            <a
+              href={mapsLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 text-sm text-sky-600 hover:text-sky-700 hover:underline mb-1"
+            >
+              <ExternalLink className="h-4 w-4" />
+              Open In Google Maps
+            </a>
+          )}
           <AddressMapWidget token={token} cityOptions={data.cityOptions} form={form} patch={patch} />
         </Section>
 
@@ -448,7 +683,7 @@ export default function JobCompletionMagicLinkPage() {
             typically address-context (which branch / which property / which
             product line is the service for). */}
         {(branchProp || buildingProp || productProp) && (
-          <Section title="Additional Details">
+          <Section title="Additional Details" cols={3}>
             {branchProp && (
               <Field
                 label={branchProp.label || 'Branch Details'}
@@ -500,75 +735,293 @@ export default function JobCompletionMagicLinkPage() {
           </Section>
         )}
 
-        <Section title="Schedule">
+        {/* 2-col on md+: Requested Date & Time on the left, the auto-derived
+            Time Slot indicator on the right. Both stack to full width on
+            mobile. The customer picks date+time ONCE via the single
+            datetime-local control; the slot is computed from that pick. */}
+        <Section title="Appointment Date & Time" cols={2}>
           <Field label="Requested Date & Time" required>
+            {/* Single datetime picker — the only control here. Picking a value
+                also AUTO-derives the Time Slot (deriveTimeSlot), so the slot
+                indicator on the right and the submitted time_slot always
+                follow the picked time. The old read-only echo line was
+                removed (the picker itself shows the value). */}
             <input type="datetime-local" required value={form.requested_date_time}
-              onChange={(e) => patch({ requested_date_time: e.target.value })} className={inputClass} />
+              onChange={(e) => patch({
+                requested_date_time: e.target.value,
+                time_slot: deriveTimeSlot(e.target.value),
+              })} className={inputClass} />
           </Field>
           <Field label="Time Slot" required>
+            {/* DISPLAY-ONLY slot indicators — the derived slot is highlighted;
+                the buttons are disabled (no onClick), so the customer cannot
+                pick a slot directly. The slot is set purely from the picked
+                date+time above. */}
             <div className="flex flex-wrap gap-2">
               {data.timeSlots.length === 0 ? (
                 <div className="text-xs text-slate-500">No time slots available. Please contact support.</div>
               ) : data.timeSlots.map((slot) => (
-                <label key={slot} className={`cursor-pointer px-3 py-2 rounded-md border text-sm transition ${
+                <span key={slot} className={`px-3 py-2 rounded-md border text-sm select-none ${
                   form.time_slot === slot
                     ? 'bg-sky-600 text-white border-sky-600'
-                    : 'bg-white text-slate-700 border-slate-300 hover:border-sky-400'
+                    : 'bg-slate-50 text-slate-400 border-slate-200'
                 }`}>
-                  <input type="radio" name="time_slot" value={slot}
-                    checked={form.time_slot === slot}
-                    onChange={() => patch({ time_slot: slot })} className="sr-only" />
                   {slot}
-                </label>
+                </span>
               ))}
             </div>
+            <p className="text-[10px] text-slate-500 mt-1">
+              Auto-Selected From The Date &amp; Time You Pick.
+            </p>
           </Field>
         </Section>
 
         <Section title="Services">
+          {/* Customer-facing service picker, rendered as a proper TABLE with
+              distinct columns (Action | Service Name | Category | Type | Qty)
+              rather than cards with the qty + Free/Paid tag inline after the
+              name. Form-state wiring is unchanged: `form.services` is a
+              Map<client_service_id, qty>; toggleService adds/removes,
+              setServiceQty updates. The submit-payload mapping is untouched —
+              only the LAYOUT changed.
+
+              Columns:
+                - Action: green "+" to add; once added, a rose "×" to remove.
+                - Service Name: service_name ?? service_type_name ?? "Service #<id>".
+                - Category: service_catg_name.
+                - Type: the Free/Paid value as a small chip (billing_label).
+                - Qty: numeric input ONLY when added (else "—"); min 1, max 100.
+
+              The table is wrapped in an overflow-x-auto container so it stays
+              usable on narrow phones (horizontal scroll fallback) while
+              reading as a clean compact table on wider screens. */}
           {data.services.length === 0 ? (
-            <div className="text-xs text-slate-500">No services available for this client.</div>
+            <div className="text-xs text-slate-500">No Services Available For This Client.</div>
           ) : (
-            <div className="divide-y border rounded-md">
-              {data.services.map((s) => {
-                const selected = form.services.has(s.client_service_id);
-                const qty = form.services.get(s.client_service_id) ?? 1;
-                return (
-                  <div key={s.client_service_id} className="flex items-center gap-3 px-3 py-2">
-                    <input type="checkbox" checked={selected}
-                      onChange={() => toggleService(s.client_service_id)} className="h-4 w-4" />
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium text-sm truncate">{s.service_type_name}</div>
-                      <div className="text-xs text-slate-500 truncate">{s.service_catg_name}</div>
-                    </div>
-                    <input type="number" min={1} max={99} value={qty} disabled={!selected}
-                      onChange={(e) => setServiceQty(s.client_service_id, Number(e.target.value))}
-                      className={`w-16 ${inputClass} text-center disabled:bg-slate-100 disabled:text-slate-400`} />
-                  </div>
-                );
-              })}
+            <div className="-mx-1 overflow-x-auto">
+              <table className="w-full min-w-[34rem] text-sm">
+                <thead>
+                  <tr className="text-left text-xs font-medium text-slate-500 border-b border-slate-200">
+                    <th className="px-2 py-2 w-10"><span className="sr-only">Add or remove</span></th>
+                    <th className="px-2 py-2">Service Name</th>
+                    <th className="px-2 py-2">Category</th>
+                    <th className="px-2 py-2">Type</th>
+                    <th className="px-2 py-2 w-24">Qty</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.services.map((s) => {
+                    const selected = form.services.has(s.client_service_id);
+                    const qty = form.services.get(s.client_service_id) ?? 1;
+                    // Name resolution: prefer the rate-card label, fall back to
+                    // the service-type name, then never render blank.
+                    const primaryName =
+                      (s.service_name && s.service_name.trim()) ||
+                      (s.service_type_name && s.service_type_name.trim()) ||
+                      `Service #${s.client_service_id}`;
+                    return (
+                      <tr
+                        key={s.client_service_id}
+                        className={`border-b border-slate-100 transition-colors ${
+                          selected ? 'bg-sky-50/60' : 'hover:bg-slate-50'
+                        }`}
+                      >
+                        {/* Action column: green "+" → rose "×" once added. */}
+                        <td className="px-2 py-2 align-middle">
+                          {selected ? (
+                            <button
+                              type="button"
+                              onClick={() => toggleService(s.client_service_id)}
+                              aria-label={`Remove ${primaryName}`}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-rose-600 hover:bg-rose-50 hover:text-rose-700 transition-colors"
+                            >
+                              <X className="h-5 w-5" />
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => toggleService(s.client_service_id)}
+                              aria-label={`Add ${primaryName}`}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-emerald-300 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 transition-colors"
+                            >
+                              <Plus className="h-5 w-5" />
+                            </button>
+                          )}
+                        </td>
+                        {/* Service Name column. */}
+                        <td className="px-2 py-2 align-middle font-medium text-slate-800">
+                          {primaryName}
+                        </td>
+                        {/* Category column. */}
+                        <td className="px-2 py-2 align-middle text-slate-600">
+                          {s.service_catg_name || '—'}
+                        </td>
+                        {/* Type column — Free (emerald) / Paid (amber) chip. */}
+                        <td className="px-2 py-2 align-middle">
+                          {s.billing_label ? (
+                            <StatusChip tone={s.billing_label === 'Free' ? 'emerald' : 'amber'} size="sm">
+                              {s.billing_label}
+                            </StatusChip>
+                          ) : (
+                            <span className="text-slate-400">—</span>
+                          )}
+                        </td>
+                        {/* Qty column — numeric input only when added. */}
+                        <td className="px-2 py-2 align-middle">
+                          {selected ? (
+                            <input
+                              type="number"
+                              min={1}
+                              max={99}
+                              value={qty}
+                              inputMode="numeric"
+                              onChange={(e) => setServiceQty(s.client_service_id, Number(e.target.value))}
+                              className={`w-16 ${inputClass} text-center px-2`}
+                              aria-label={`Quantity for ${primaryName}`}
+                            />
+                          ) : (
+                            <span className="text-slate-400">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
           {/* Intentionally NO prices — public flow per spec. */}
         </Section>
 
-        <Section title="Images" subtitle={`Up to 5 images (${images.length}/5)`}>
-          <ImageUploader token={token} images={images} setImages={setImages} />
+        {/* Product Photos. The inline "+ Add" tile already opens the file
+            picker, so the redundant header-level "Upload Product Photo"
+            trigger has been removed. */}
+        <Section
+          title="Product Photos"
+          subtitle={`Up to 5 images (${images.length}/5)`}
+        >
+          <ImageUploader
+            token={token}
+            images={images}
+            setImages={setImages}
+          />
         </Section>
 
-        <Section title="Notes">
-          <Field label="Job Description / Notes">
+        <Section title="Product Details / Notes">
+          <Field label="Product Details / Description / Remarks">
             <textarea value={form.job_desc} onChange={(e) => patch({ job_desc: e.target.value })}
               rows={3} className={`${inputClass} resize-y`}
               placeholder="Anything else our technician should know?" />
           </Field>
         </Section>
 
-        <button type="submit" disabled={isSubmitting || !mandatoryCustomPropsComplete}
-          className="w-full bg-sky-600 hover:bg-sky-700 disabled:bg-sky-400 text-white font-semibold text-base py-3 rounded-lg transition">
-          {isSubmitting ? 'Submitting…' : 'Submit Booking Details'}
-        </button>
+        {/* Bottom action row — the FOOT-of-form action cluster, restyled into
+            a clear THREE-TIER visual hierarchy (most → least prominent) so the
+            three actions read as distinct weights, no two alike:
+              - Confirm Order   → PRIMARY: solid emerald filled CTA (unchanged).
+              - Reschedule Order → SECONDARY: SOFT-FILLED amber (tinted bg, not
+                a plain white-outline) — a real but lower-weight action.
+              - Cancel Order     → TERTIARY / destructive-exit: a rose GHOST/
+                text button (no solid border) — the rarest, most destructive
+                action, so it invites the least and is visually unlike the
+                amber soft-fill.
+              Desktop (sm+): single right-aligned row, ordered Cancel ·
+                Reschedule · Confirm so the primary emerald button reads last
+                (rightmost / most prominent).
+              Mobile (default): stack full-width with Confirm on TOP (primary
+                first), then Reschedule, then Cancel — achieved via
+                flex-col-reverse over the DOM order (Cancel, Reschedule,
+                Confirm) so desktop keeps Confirm rightmost while mobile puts
+                Confirm topmost. All three keep min ~44px tap height on mobile
+                (py-2.5/py-3) so the ghost Cancel is still obviously tappable. */}
+        {/* All three now use the shared <Button> at size="lg" (same h-10
+            height + text-sm font + padding) so they're dimensionally
+            identical; only COLOUR differs (variant + className), giving a
+            clean three-tier read without size mismatch. DOM order is
+            Cancel · Reschedule · Confirm; flex-col-reverse puts Confirm on
+            TOP on mobile (full-width stack) while desktop keeps it rightmost. */}
+        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end sm:items-center">
+          {/* TERTIARY — rose outline on white (proper border + bg, not bare ghost). */}
+          <Button
+            type="button"
+            size="lg"
+            variant="outline"
+            onClick={() => setDialog('cancel')}
+            className="w-full sm:w-auto gap-2 border-rose-300 text-rose-700 hover:bg-rose-50 hover:text-rose-800"
+          >
+            <Ban className="h-4 w-4" />
+            Cancel Order
+          </Button>
+          {/* SECONDARY — amber outline-tint. */}
+          <Button
+            type="button"
+            size="lg"
+            variant="outline"
+            onClick={() => setDialog('reschedule')}
+            className="w-full sm:w-auto gap-2 border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 hover:text-amber-900"
+          >
+            <CalendarClock className="h-4 w-4" />
+            Reschedule Order
+          </Button>
+          {/* PRIMARY — solid emerald CTA (override the default blue). */}
+          <Button
+            type="submit"
+            size="lg"
+            disabled={isSubmitting || !mandatoryCustomPropsComplete}
+            className="w-full sm:w-auto gap-2 bg-emerald-600 hover:bg-emerald-700 text-white"
+          >
+            <CheckCircle2 className="h-5 w-5" />
+            {isSubmitting ? 'Confirming…' : 'Confirm Order'}
+          </Button>
+        </div>
       </form>
+
+      {/* ── Lightweight inline overlay dialogs (no CRM Dialog import) ────── */}
+      {dialog === 'reschedule' && (
+        <RescheduleDialog
+          reasons={rescheduleReasons}
+          busy={actionBusy === 'reschedule'}
+          onClose={() => { if (actionBusy !== 'reschedule') setDialog(null); }}
+          onSubmit={handleRescheduleSubmit}
+        />
+      )}
+      {dialog === 'cancel' && (
+        <CancelDialog
+          reasons={cancelReasons}
+          busy={actionBusy === 'cancel'}
+          onClose={() => { if (actionBusy !== 'cancel') setDialog(null); }}
+          onSubmit={handleCancelSubmit}
+        />
+      )}
+      {/* "Need Help" → Call EasyFix SPOC confirmation. Reuses OverlayShell
+          (same overlay pattern as Reschedule/Cancel — NOT CRM useConfirm).
+          On confirm we close the dialog and run the existing handleSpocCall
+          (same toasts / busy state). */}
+      {dialog === 'spoc_confirm' && (
+        <OverlayShell
+          title="Call EasyFix SPOC"
+          busy={actionBusy === 'spoc'}
+          onClose={() => { if (actionBusy !== 'spoc') setDialog(null); }}
+        >
+          <p className="text-sm text-slate-600">
+            Call EasyFix SPOC? We&apos;ll Connect You To Your EasyFix Point Of Contact.
+          </p>
+          {/* Shared <Button> at size="lg" so dialog footer matches the rest of
+              the page: dismiss = outline, confirm = solid emerald CTA. */}
+          <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-1">
+            <Button type="button" size="lg" variant="outline" disabled={actionBusy === 'spoc'}
+              onClick={() => { if (actionBusy !== 'spoc') setDialog(null); }}
+              className="w-full sm:w-auto">
+              Close
+            </Button>
+            <Button type="button" size="lg" disabled={actionBusy === 'spoc'}
+              onClick={() => { setDialog(null); void handleSpocCall(); }}
+              className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white">
+              {actionBusy === 'spoc' ? 'Connecting…' : 'Call EasyFix SPOC'}
+            </Button>
+          </div>
+        </OverlayShell>
+      )}
     </div>
   );
 }
@@ -585,26 +1038,267 @@ export default function JobCompletionMagicLinkPage() {
 const inputClass =
   'flex w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-base focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500';
 
-function Header({ clientName }: { clientName: string }) {
+/*
+ * Order header band — dark-slate brand band carrying the EasyFix logo,
+ * order status chip, Job ID and Client Name. The StatusChip tone is computed
+ * by the caller from order_status_label / order_status.
+ *
+ * The logo replaces the old "EASYFIX" wordmark with the same `/logo-full.png`
+ * asset the login screen uses (cyan-on-transparent), giving brand consistency.
+ * The band is itself dark-slate so the logo doesn't need its own pill — it
+ * reads directly on the band (login wraps it in a pill only because that card
+ * is white).
+ *
+ * Right-aligned SPOC contact block: the "Need Help?…" line is the clickable
+ * affordance that opens the Call-EasyFix-SPOC confirmation dialog; the SPOC
+ * name + masked number sit muted/smaller beneath it. The WHOLE block is
+ * hidden when no SPOC is mapped (spocName == null) so we never show a dangling
+ * Need-Help line with no contact. On mobile the block stacks below the
+ * logo/status (flex-col → sm:flex-row) and the text aligns left; on desktop it
+ * right-aligns.
+ */
+function OrderHeader({
+  clientName, jobId, statusLabel, tone, spocName, spocMobileMasked, onNeedHelp, needHelpBusy,
+}: {
+  clientName: string;
+  jobId: number | undefined;
+  statusLabel: string;
+  tone: StatusChipTone;
+  spocName: string | null;
+  spocMobileMasked: string | null;
+  onNeedHelp: () => void;
+  needHelpBusy: boolean;
+}) {
   return (
-    <div className="bg-slate-900 text-white rounded-lg px-4 py-3 flex items-center justify-between">
-      <div>
-        <div className="text-sm text-slate-300">Booking For</div>
-        <div className="font-semibold text-base">{clientName}</div>
+    <div className="bg-slate-900 text-white rounded-lg px-4 py-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex items-center gap-3 min-w-0">
+        {/* Same logo asset as the login screen (next/image, unoptimized). */}
+        <Image
+          src="/logo-full.png" alt="EasyFix"
+          width={139} height={34} priority unoptimized
+          className="h-8 w-auto shrink-0"
+        />
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <StatusChip tone={tone}>{statusLabel}</StatusChip>
+            {jobId != null && (
+              <span className="text-xs text-slate-300">Order #{jobId}</span>
+            )}
+          </div>
+          <div className="font-semibold text-base mt-1 truncate">{clientName}</div>
+        </div>
       </div>
-      <div className="text-xs font-bold tracking-wider text-sky-300">EASYFIX</div>
+      {/* Right-aligned SPOC contact block — relocated from the old standalone
+          section. Hidden entirely when no SPOC is mapped. The "Need Help?…"
+          line opens the Call-EasyFix-SPOC confirmation dialog; the identity
+          line below shows name · masked number. */}
+      {/* Responsive guard: on mobile this block sits full-width below the
+          logo/status and aligns LEFT; on sm+ it shrinks and right-aligns.
+          The long "Need Help?" label wraps (items-start + text-left) instead
+          of overflowing the 360px band, and the SPOC identity line breaks
+          words so a long name/number can't push the layout sideways. */}
+      {spocName && (
+        <div className="w-full sm:w-auto shrink-0 text-left sm:text-right">
+          <button
+            type="button"
+            onClick={onNeedHelp}
+            disabled={needHelpBusy}
+            className="inline-flex items-start sm:items-center gap-1.5 text-sm font-medium text-sky-300 hover:text-sky-200 disabled:opacity-50 text-left"
+          >
+            <LifeBuoy className="h-4 w-4 shrink-0 mt-0.5 sm:mt-0" />
+            <span>{needHelpBusy ? 'Connecting…' : 'Need Help? Connect With Your EasyFix Point Of Contact'}</span>
+          </button>
+          <div className="text-xs text-slate-400 mt-0.5 break-words">
+            {spocName}
+            {spocMobileMasked && (
+              <span className="font-mono"> · {spocMobileMasked}</span>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function Section({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
+/*
+ * Shared overlay shell for the Reschedule / Cancel dialogs. Plain fixed
+ * overlay + centered card — deliberately NOT the CRM `Dialog` (which would
+ * drag in auth-coupled shared code). Mobile-friendly: full-width card with
+ * generous padding, click-outside to dismiss.
+ */
+function OverlayShell({
+  title, onClose, busy, children,
+}: {
+  title: string;
+  onClose: () => void;
+  busy: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-0 sm:p-4"
+      onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}
+    >
+      {/* Responsive card: bottom-sheet on mobile (full-width, rounded top,
+          no side gap because the sheet hugs the screen edge), centered
+          max-w-md card on desktop. max-h-[90vh] + overflow-y-auto keeps it
+          scrollable on short viewports; overflow-x-hidden + the w-full body
+          inputs (inputClass = `flex w-full text-base`) guarantee no
+          horizontal overflow at ~360px. */}
+      <div className="bg-white w-full sm:max-w-md rounded-t-2xl sm:rounded-lg shadow-xl max-h-[90vh] overflow-y-auto overflow-x-hidden">
+        {/* Header band matches the sidebar dark-slate convention. */}
+        <div className="bg-slate-900 text-white px-5 py-3 flex items-center justify-between rounded-t-2xl sm:rounded-t-lg">
+          <h2 className="font-semibold text-base">{title}</h2>
+          <button type="button" onClick={onClose} disabled={busy}
+            className="text-slate-300 hover:text-white disabled:opacity-50" aria-label="Close">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="p-5 space-y-4">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/*
+ * Reschedule dialog — reason (required, from reschedule_reasons), an optional
+ * Preferred Date & Time picker (datetime-local → "YYYY-MM-DD HH:mm"), and an
+ * optional Remarks textarea.
+ */
+function RescheduleDialog({
+  reasons, busy, onClose, onSubmit,
+}: {
+  reasons: string[];
+  busy: boolean;
+  onClose: () => void;
+  onSubmit: (reason: string, preferred: string, remarks: string) => void;
+}) {
+  const [reason, setReason] = React.useState('');
+  const [preferred, setPreferred] = React.useState('');
+  const [remarks, setRemarks] = React.useState('');
+  const [touched, setTouched] = React.useState(false);
+  return (
+    <OverlayShell title="Reschedule Order" onClose={onClose} busy={busy}>
+      <Field label="Reason" required>
+        <select value={reason} required onChange={(e) => setReason(e.target.value)} className={inputClass}>
+          <option value="">— Select A Reason —</option>
+          {reasons.map((r) => <option key={r} value={r}>{r}</option>)}
+        </select>
+        {touched && !reason && <p className="text-xs text-red-600 mt-1">Please Select A Reason.</p>}
+      </Field>
+      <Field label="Preferred Date & Time">
+        <input type="datetime-local" value={preferred}
+          onChange={(e) => setPreferred(e.target.value)} className={inputClass} />
+      </Field>
+      <Field label="Remarks">
+        <textarea value={remarks} onChange={(e) => setRemarks(e.target.value)}
+          rows={3} className={`${inputClass} resize-y`} placeholder="Optional" />
+      </Field>
+      {/* Shared <Button> footer (size="lg") — dismiss = outline, confirm =
+          emerald CTA. Stacks full-width on mobile (flex-col-reverse), inline-
+          right on desktop. */}
+      <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-1">
+        <Button type="button" size="lg" variant="outline" onClick={onClose} disabled={busy}
+          className="w-full sm:w-auto">
+          Close
+        </Button>
+        <Button type="button" size="lg" disabled={busy}
+          onClick={() => { setTouched(true); if (reason) onSubmit(reason, preferred, remarks); }}
+          className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white">
+          {busy ? 'Submitting…' : 'Request Reschedule'}
+        </Button>
+      </div>
+    </OverlayShell>
+  );
+}
+
+/*
+ * Cancel dialog — reason (required, from cancel_reasons) + optional Remarks.
+ * Destructive accent on the confirm button.
+ */
+function CancelDialog({
+  reasons, busy, onClose, onSubmit,
+}: {
+  reasons: string[];
+  busy: boolean;
+  onClose: () => void;
+  onSubmit: (reason: string, remarks: string) => void;
+}) {
+  const [reason, setReason] = React.useState('');
+  const [remarks, setRemarks] = React.useState('');
+  const [touched, setTouched] = React.useState(false);
+  return (
+    <OverlayShell title="Cancel Order" onClose={onClose} busy={busy}>
+      <p className="text-sm text-slate-600">
+        Let Us Know Why You&apos;d Like To Cancel — Our Team Will Reach Out To Confirm.
+      </p>
+      <Field label="Reason" required>
+        <select value={reason} required onChange={(e) => setReason(e.target.value)} className={inputClass}>
+          <option value="">— Select A Reason —</option>
+          {reasons.map((r) => <option key={r} value={r}>{r}</option>)}
+        </select>
+        {touched && !reason && <p className="text-xs text-red-600 mt-1">Please Select A Reason.</p>}
+      </Field>
+      <Field label="Remarks">
+        <textarea value={remarks} onChange={(e) => setRemarks(e.target.value)}
+          rows={3} className={`${inputClass} resize-y`} placeholder="Optional" />
+      </Field>
+      {/* Shared <Button> footer (size="lg") — dismiss = outline ("Keep Order"),
+          confirm = destructive rose. Stacks full-width on mobile, inline-right
+          on desktop. */}
+      <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-1">
+        <Button type="button" size="lg" variant="outline" onClick={onClose} disabled={busy}
+          className="w-full sm:w-auto">
+          Keep Order
+        </Button>
+        <Button type="button" size="lg" variant="destructive" disabled={busy}
+          onClick={() => { setTouched(true); if (reason) onSubmit(reason, remarks); }}
+          className="w-full sm:w-auto bg-rose-600 hover:bg-rose-700 text-white">
+          {busy ? 'Submitting…' : 'Request Cancellation'}
+        </Button>
+      </div>
+    </OverlayShell>
+  );
+}
+
+function Section({
+  title, subtitle, children, cols, action,
+}: {
+  title: string;
+  subtitle?: string;
+  children: React.ReactNode;
+  /* Optional header-aligned action (e.g. the contextual "Update Location" /
+   * "Upload Product Photo" buttons that now sit next to the section they
+   * act on instead of in a shared top action bar). */
+  action?: React.ReactNode;
+  /* Responsive layout for the section body:
+   *   undefined → single column on every breakpoint (default; use for
+   *               full-width sections like Services / Images / Map / Notes).
+   *   2         → 1-col on mobile, 2-col on md+ (640px is too tight for two
+   *               labelled inputs, so the split kicks in at `md`).
+   *   3         → 1-col on mobile, 2-col on md, 3-col on lg+. For sections
+   *               with several short single-line fields (e.g. Customer
+   *               Details); the wide `max-w-7xl` container fills nicely with
+   *               three columns on a desktop while mobile stays a tidy single
+   *               column and the inputs never stretch absurdly wide. */
+  cols?: 2 | 3;
+}) {
+  const bodyClass =
+    cols === 3
+      ? 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-3'
+      : cols === 2
+      ? 'grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-3'
+      : 'space-y-3';
   return (
     <div className="bg-white rounded-lg border p-5 space-y-3">
-      <div className="flex items-baseline justify-between">
-        <h2 className="text-base font-semibold text-slate-700">{title}</h2>
-        {subtitle && <span className="text-xs text-slate-500">{subtitle}</span>}
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-baseline gap-2 min-w-0">
+          <h2 className="text-base font-semibold text-slate-700">{title}</h2>
+          {subtitle && <span className="text-xs text-slate-500 shrink-0">{subtitle}</span>}
+        </div>
+        {action && <div className="shrink-0">{action}</div>}
       </div>
-      <div className="space-y-3">{children}</div>
+      <div className={bodyClass}>{children}</div>
     </div>
   );
 }
@@ -770,7 +1464,14 @@ function AddressMapWidget({
   }
 
   return (
-    <div className="space-y-3">
+    /* Address/map split: 2-column grid at md+ (5/7 — inputs on the LEFT,
+       map on the RIGHT) to shorten the page. On mobile it collapses to a
+       single column and the map stacks BELOW the inputs (DOM order). The
+       left column keeps its own vertical rhythm via space-y-3. */
+    <div className="grid grid-cols-1 md:grid-cols-12 gap-4 md:items-start">
+      {/* LEFT column — all the text inputs (address, building, landmark,
+          city, PIN, GPS, instructions). */}
+      <div className="md:col-span-5 space-y-3">
       <Field label="Complete Address" required>
         <div className="relative">
           <textarea
@@ -838,9 +1539,15 @@ function AddressMapWidget({
           rows={2} className={`${inputClass} resize-y`}
           placeholder="Landing notes for the technician (optional)" />
       </Field>
-      <div>
+      </div>
+      {/* RIGHT column — the map canvas. Taller fixed height (h-72 → grows to
+          fill on md+) so it renders usefully large beside the inputs. The
+          maps init logic + the "Map Unavailable" fallback are UNCHANGED — only
+          the container's grid placement moved. On mobile this column comes
+          AFTER the inputs (single-column stack). */}
+      <div className="md:col-span-7">
         <label className="block text-xs font-medium text-slate-600 mb-1">Location On Map</label>
-        <div className="relative h-[260px] rounded-md border overflow-hidden bg-slate-50">
+        <div className="relative h-72 md:h-[420px] rounded-md border overflow-hidden bg-slate-50">
           {mapsError ? (
             <div className="absolute inset-0 grid place-items-center text-xs text-slate-500 p-4 text-center">
               <div>
@@ -871,7 +1578,11 @@ function AddressMapWidget({
  */
 function ImageUploader({
   token, images, setImages,
-}: { token: string; images: ImageRow[]; setImages: React.Dispatch<React.SetStateAction<ImageRow[]>> }) {
+}: {
+  token: string;
+  images: ImageRow[];
+  setImages: React.Dispatch<React.SetStateAction<ImageRow[]>>;
+}) {
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   const [uploading, setUploading] = React.useState(false);
   const [uploadError, setUploadError] = React.useState<string | null>(null);

@@ -35,8 +35,15 @@ export type PrefillResponse = {
     service_type_id: number;
     service_catg_id: number;
     charge_type: number | null;
+    // Rate-card display label (crc_ratecard_name). Preferred primary name
+    // for the picker; '' when the row has no rate_card_id mapped.
+    service_name: string;
     service_type_name: string;
     service_catg_name: string;
+    // Whether this service is billed to the customer ('Paid') or covered
+    // ('Free'). Rendered as a small tag next to the service name. Optional
+    // for backward compatibility with older BE deployments.
+    billing_label?: 'Free' | 'Paid';
   }[];
   images: { image_id: number; key: string }[];
   // Customer's currently-active service rows on this job. Populated by the BE
@@ -53,6 +60,37 @@ export type PrefillResponse = {
   // branch_details, etc.). Optional for backward compatibility with older
   // BE deployments; FE defaults to [] when absent.
   custom_properties?: { name: string; mandatory: boolean; label: string | null; value: string | null }[];
+
+  // ── Full customer-facing order-page fields ──────────────────────────────
+  // Added when the magic-link page was expanded from a bare completion form
+  // into a full order view with Confirm / Reschedule / Cancel / Call actions.
+  // All optional for backward compatibility with older BE deployments.
+
+  // Job identity surfaced in the page header alongside the status chip.
+  job_id?: number;
+  // Numeric legacy job-status code (tbl_job.job_status) + a human label.
+  // `order_status` drives the StatusChip tone; `order_status_label` is the
+  // text shown inside the chip.
+  order_status?: number | null;
+  order_status_label?: string;
+  // Client display name (duplicate of `client.name` but surfaced flat by the
+  // expanded contract for header convenience).
+  client_name?: string;
+  // Deep link to the pinned location on Google Maps. Null when no GPS pin is
+  // set — the "Open In Google Maps" button is hidden in that case.
+  maps_link?: string | null;
+  // EasyFix-side SPOC (internal CRM owner). `mobile_masked` is partially
+  // masked for display; the actual dial is performed server-side by the
+  // click-to-call endpoint, so the customer never sees the full number.
+  // The whole SPOC block is hidden when `name` is null.
+  spoc?: { name: string | null; mobile_masked: string | null };
+  // Reason option lists for the Cancel / Reschedule dialogs. Customer must
+  // pick one before submitting the respective request.
+  cancel_reasons?: string[];
+  reschedule_reasons?: string[];
+  // Customer's OWN phone number — shown UNMASKED and read-only (it's the
+  // identity field bound to the magic-link JWT; not editable).
+  customer_mob?: string;
 };
 
 export type SubmitPayload = {
