@@ -141,6 +141,43 @@ export function JobModal({
   const [job, setJob] = useState<Job | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /*
+   * Unsaved-quantity guard (2026-06-01, refined 2026-06-02). The Services
+   * tab edits quantity inline with auto-save-on-blur. Clicking Close
+   * blurs the focused input FIRST, which auto-commits any VALID pending
+   * value (→ "Quantity updated." toast) — so a valid edit is already
+   * saved by the time we reach here and must NOT also trigger a warning
+   * (the earlier bug: the alert and the success toast appeared together).
+   *
+   * Therefore ServicesTabBody reports only its "blocking" subset through
+   * `onDirtyChange`: pending values that are INVALID (out of 1..100) and
+   * thus can't be auto-saved. Those are the only edits a close would
+   * genuinely discard, so they're the only ones worth a prompt. A ref
+   * (not state) suffices since the close handlers only READ at click-time.
+   */
+  const hasUnsavedQtyRef = React.useRef(false);
+  const confirm = useConfirm();
+  /*
+   * guardedClose — intercepts every close path (footer Close button,
+   * the Dialog's X / Escape / overlay-click via onOpenChange). Only
+   * prompts when there's an INVALID, uncommittable qty edit that closing
+   * would discard; valid edits auto-save on the close-click's blur, and a
+   * clean close skips the confirm entirely so the common case is one click.
+   */
+  async function guardedClose() {
+    if (hasUnsavedQtyRef.current) {
+      const ok = await confirm({
+        title: 'Discard Invalid Quantity?',
+        description: 'A quantity you entered is invalid and won’t be saved. Close and discard it?',
+        confirmLabel: 'Close Anyway',
+        cancelLabel: 'Keep Editing',
+        variant: 'destructive',
+      });
+      if (!ok) return;
+    }
+    hasUnsavedQtyRef.current = false;
+    onClose();
+  }
   // Add-Remarks popup for the Unconfirmed view-mode footer. Lives at
   // the modal root so it can dismiss without unmounting JobForm/View.
   const [addRemarksOpen, setAddRemarksOpen] = useState(false);
@@ -237,7 +274,7 @@ export function JobModal({
              :                       'Job';
 
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+    <Dialog open={open} onOpenChange={(o) => { if (!o) guardedClose(); }}>
       {/* Fixed-height modal so different tabs (Summary / Services / Schedule)
           don't cause the whole dialog to jump in size as the user switches.
           hideClose drops the top-right X since we have a footer Close button. */}
@@ -322,7 +359,12 @@ export function JobModal({
             // Images/etc. view that ops uses for active jobs.
             Number(job.job_status) === 9
               ? <JobTransactionView jobId={Number(job.job_id)} />
-              : <ViewBody job={job} onRefresh={refresh} initialTab={initialTab} />
+              : <ViewBody
+                  job={job}
+                  onRefresh={refresh}
+                  initialTab={initialTab}
+                  onDirtyChange={(dirty) => { hasUnsavedQtyRef.current = dirty; }}
+                />
           )}
           {/* Mobile-first gate for the CREATE flow. Mirrors legacy
               `addEditJob.vm` which opened with a single mobile-number
@@ -430,7 +472,7 @@ export function JobModal({
                 applies its own flex-wrap, so this composed cluster
                 degrades gracefully on narrow viewports. */}
             <div className="flex items-center gap-2 flex-wrap justify-end">
-              <Button variant="outline" onClick={onClose}>Close</Button>
+              <Button variant="outline" onClick={guardedClose}>Close</Button>
               {!loading && job && (
                 <ActionBar
                   job={job}
@@ -675,7 +717,7 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
 
 // ─── View body (tabbed read-only display) ────────────────────────────────────
 
-function ViewBody({ job, onRefresh, initialTab }: { job: Job; onRefresh?: () => void; initialTab?: string }) {
+function ViewBody({ job, onRefresh, initialTab, onDirtyChange }: { job: Job; onRefresh?: () => void; initialTab?: string; onDirtyChange?: (dirty: boolean) => void }) {
   const images = Array.isArray((job as Record<string, unknown>).images)
     ? ((job as Record<string, unknown>).images as Array<Record<string, unknown>>)
     : [];
@@ -760,7 +802,7 @@ function ViewBody({ job, onRefresh, initialTab }: { job: Job; onRefresh?: () => 
       </TabsContent>
 
       <TabsContent value="services">
-        <ServicesTabBody job={job} onMutated={onRefresh} />
+        <ServicesTabBody job={job} onMutated={onRefresh} onDirtyChange={onDirtyChange} />
       </TabsContent>
 
       <TabsContent value="schedule">
@@ -1407,7 +1449,7 @@ function invalidateBreakdownCache(jobId: number) {
   SERVICE_BREAKDOWN_CACHE.delete(jobId);
 }
 
-function ServicesTabBody({ job, onMutated }: { job: Job; onMutated?: () => void }) {
+function ServicesTabBody({ job, onMutated, onDirtyChange }: { job: Job; onMutated?: () => void; onDirtyChange?: (dirty: boolean) => void }) {
   const services = Array.isArray(job.services) ? job.services : [];
   // Active vs. inactive split — operators get a "Show Inactive" toggle
   // so the soft-deleted rows can be inspected (and restored when we
@@ -1417,6 +1459,190 @@ function ServicesTabBody({ job, onMutated }: { job: Job; onMutated?: () => void 
     const arr = (services as Array<Record<string, unknown>>);
     return showInactive ? arr : arr.filter((s) => Number(s.job_service_status) !== 0);
   }, [services, showInactive]);
+
+  // Inline Add-Service panel state (replaces the old AddJobServiceDialog).
+  // Inline panel chosen over modal because (a) operators told us the
+  // extra click + context switch was friction-heavy, and (b) nesting a
+  // second Dialog on top of JobModal burns Z-index real estate. The
+  // inline panel restores the FULL capability the old modal had:
+  // Category → Service Type(s) cascade and a Job Type multi-select.
+  // The service picker itself now reuses AutoServicesTable for +/×
+  // parity with Book New Call / Confirm & Schedule — the operator picks
+  // Service Type(s), the catalog rows auto-populate as candidates, and
+  // they "+" the ones they want (with a qty + "×" remove) before
+  // committing the batch.
+  const clientIdForCatalog = Number((job as Record<string, unknown>).fk_client_id);
+  const catalogUrl = clientIdForCatalog > 0
+    ? `/shared/lookup/client-services?clientId=${clientIdForCatalog}`
+    : null;
+  // The endpoint returns the FULL ClientService row, so we type the
+  // catalog as ClientService[] — the exact shape AutoServicesTable
+  // consumes (no cast needed at the call site).
+  const { data: catalogRaw } = useFetch<ClientService[] | { items?: ClientService[] }>(catalogUrl);
+  const catalog: ClientService[] = useMemo(() => (
+    Array.isArray(catalogRaw) ? catalogRaw : ((catalogRaw as { items?: ClientService[] } | null)?.items ?? [])
+  ), [catalogRaw]);
+  const [addCatgId, setAddCatgId] = useState<string>('');
+  const [addTypeIds, setAddTypeIds] = useState<string[]>([]);
+  const [addBusy, setAddBusy] = useState(false);
+  // Synchronous re-entrancy guard. `addBusy` is React state, so a fast
+  // double-click can fire submitInlineAdd() twice before the disabled
+  // re-render paints — double-POSTing the whole basket. This ref flips
+  // synchronously on the first call and blocks the second within the
+  // same tick (the disabled+addBusy button covers the slower case).
+  const addInFlightRef = React.useRef(false);
+  // Authoritative basket — the same ServiceRow[] contract AutoServicesTable
+  // owns. AutoServicesTable assigns each row's tempId internally on "+",
+  // so we just hold the array here. Reuses AutoServicesTable for +/×
+  // parity with Book New Call / Confirm & Schedule.
+  const [addRows, setAddRows] = useState<ServiceRow[]>([]);
+  // Job Type mirrors the per-job CSV (tbl_job.job_type), initialised
+  // from the job. On Add, if it changed, we PATCH the job alongside the
+  // service inserts — identical to the old modal's behaviour. Vocabulary
+  // is the same fixed 3-value set the modal used (matches Book New Call).
+  const initialJobTypes = useMemo(() => {
+    const csv = String((job as Record<string, unknown>).job_type ?? '');
+    return csv.split(',').map((s) => s.trim()).filter(Boolean);
+  }, [job]);
+  const [pickedJobTypes, setPickedJobTypes] = useState<string[]>(initialJobTypes);
+  // Reset Type picks AND the basket when Category changes — stale
+  // selections from another category would silently bleed into the add.
+  useEffect(() => { setAddTypeIds([]); setAddRows([]); }, [addCatgId]);
+  // Drop the basket on a Type change so the operator can't accidentally
+  // submit rows for service types that are no longer picked.
+  useEffect(() => { setAddRows([]); }, [addTypeIds]);
+  const addCategories = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const c of catalog) {
+      if (c.service_catg_id != null && c.service_catg_name) {
+        m.set(String(c.service_catg_id), c.service_catg_name);
+      }
+    }
+    return Array.from(m.entries()).map(([value, label]) => ({ value, label }));
+  }, [catalog]);
+  const addTypes = useMemo(() => {
+    if (!addCatgId) return [];
+    const m = new Map<string, string>();
+    for (const c of catalog) {
+      if (String(c.service_catg_id) === addCatgId && c.service_type_id != null && c.service_type_name) {
+        m.set(String(c.service_type_id), c.service_type_name);
+      }
+    }
+    return Array.from(m.entries()).map(([value, label]) => ({ value, label }));
+  }, [catalog, addCatgId]);
+
+  // The committed basket rows — a row "counts" once it has a real
+  // client_service_id (i.e. it was "+"-ed in AutoServicesTable) and a
+  // positive quantity. Used for the Add-button gate and the submit set.
+  const committedAddRows = useMemo(
+    () => addRows.filter((r) => r.client_service_id && Number(r.quantity) > 0),
+    [addRows],
+  );
+
+  async function submitInlineAdd() {
+    // Only rows that were actually "+"-ed (real client_service_id) with a
+    // positive qty are committed — same gate as the Add button.
+    const toAdd = committedAddRows;
+    if (toAdd.length === 0) return;
+    if (addInFlightRef.current) return; // same-tick double-click guard
+    addInFlightRef.current = true;
+    setAddBusy(true);
+    try {
+      // One POST per basket row carrying its chosen quantity.
+      // Promise.allSettled so a single 4xx doesn't abort the rest —
+      // mirrors the old modal's basket commit. Body shape matches the
+      // existing endpoint contract: { service_id, service_type_id,
+      // service_category_id, quantity }. service_type_id /
+      // service_category_id are resolved from the catalog by
+      // client_service_id (same meta-lookup the checklist used).
+      const results = await Promise.allSettled(
+        toAdd.map((r) => {
+          const clientServiceId = Number(r.client_service_id);
+          const meta = catalog.find((c) => c.client_service_id === clientServiceId);
+          return api.post(`/admin/jobs/${job.job_id}/services`, {
+            service_id: clientServiceId,
+            service_type_id: meta?.service_type_id ?? null,
+            service_category_id: meta?.service_catg_id ?? null,
+            quantity: Number(r.quantity),
+          });
+        }),
+      );
+      // Apply Job Type to the job per the old-modal behaviour — only
+      // when it actually changed from the initial set.
+      const newJobTypeCsv = pickedJobTypes.join(',');
+      if (newJobTypeCsv !== initialJobTypes.join(',')) {
+        try {
+          await api.patch(`/admin/jobs/${job.job_id}`, { job_type: newJobTypeCsv });
+        } catch (e) {
+          showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Failed to update job type' });
+        }
+      }
+      const ok = results.filter((r) => r.status === 'fulfilled').length;
+      const fail = results.length - ok;
+      if (ok > 0) {
+        invalidateBreakdownCache(Number(job.job_id));
+        setBreakdown(null);
+        showToast({
+          variant: fail === 0 ? 'success' : 'error',
+          message: fail === 0 ? 'Service(s) added.' : `${ok} added, ${fail} failed`,
+        });
+        // Clear the panel selections only when at least one row landed —
+        // otherwise the operator likely wants to retry the same picks.
+        setAddCatgId('');
+        setAddTypeIds([]);
+        setAddRows([]);
+        onMutated?.();
+      } else {
+        showToast({ variant: 'error', message: 'Failed to add services' });
+      }
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Failed to add services' });
+    } finally { setAddBusy(false); addInFlightRef.current = false; }
+  }
+
+  // ─── Inline qty edit — AUTO-SAVE (no explicit Save button) ───────────
+  // pendingQty holds only rows the operator has touched (input value !=
+  // server value, or a commit in flight). Auto-save fires on BLUR and on
+  // Enter; Escape reverts. We chose auto-save-on-blur over an explicit
+  // Save button because ops edit quantities across many rows in a tight
+  // loop and the per-row Save click added up — blurring the field (Tab,
+  // click elsewhere) is the natural "I'm done with this cell" signal.
+  // The unsaved-changes close guard (lifted to JobModal) covers the one
+  // failure mode of blur-commit: typing a value and then closing the
+  // modal without ever blurring the input.
+  const [pendingQty, setPendingQty] = useState<Record<number, number>>({});
+  const [savingQtyId, setSavingQtyId] = useState<number | null>(null);
+  async function saveQty(jobServiceId: number, qty: number) {
+    if (!Number.isFinite(qty) || qty < 1 || qty > 100) {
+      showToast({ variant: 'error', message: 'Quantity must be between 1 and 100' });
+      return;
+    }
+    setSavingQtyId(jobServiceId);
+    try {
+      await api.patch(`/admin/jobs/${job.job_id}/services/${jobServiceId}`, { quantity: qty });
+      invalidateBreakdownCache(Number(job.job_id));
+      setBreakdown(null);
+      setPendingQty((prev) => {
+        const next = { ...prev };
+        delete next[jobServiceId];
+        return next;
+      });
+      showToast({ variant: 'success', message: 'Quantity updated.' });
+      onMutated?.();
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Failed to update quantity' });
+    } finally { setSavingQtyId(null); }
+  }
+  // commitQty — shared blur/Enter handler. No-ops when the value is
+  // unchanged from the server (avoids a pointless PATCH on a plain Tab
+  // through an untouched field) or out of range.
+  function commitQty(jobServiceId: number, serverQty: number) {
+    const edited = pendingQty[jobServiceId];
+    if (edited === undefined || edited === serverQty) return;
+    if (!Number.isFinite(edited) || edited < 1 || edited > 100) return;
+    if (savingQtyId === jobServiceId) return;
+    saveQty(jobServiceId, edited);
+  }
 
   // Lazy fetch of breakdown — opens instantly from module cache if
   // present, otherwise one round-trip on first Show Breakdown click.
@@ -1486,23 +1712,167 @@ function ServicesTabBody({ job, onMutated }: { job: Job; onMutated?: () => void 
     } finally { setBusyId(null); }
   }
 
+  // dirtyQty — the set of job_service_ids whose input differs from the
+  // server value, plus any row with a save in flight. Drives both the
+  // per-row amber tint and the lifted unsaved-changes close guard. We
+  // compare against the live `services` array each render so a row that
+  // has been committed (pendingQty cleared) immediately drops out.
+  const serverQtyById = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const s of services as Array<Record<string, unknown>>) {
+      m.set(Number(s.job_service_id), Number(s.quantity ?? 0));
+    }
+    return m;
+  }, [services]);
+  const dirtyQty = useMemo(() => {
+    const set = new Set<number>();
+    for (const [idStr, v] of Object.entries(pendingQty)) {
+      const id = Number(idStr);
+      if (v !== (serverQtyById.get(id) ?? 0)) set.add(id);
+    }
+    if (savingQtyId != null) set.add(savingQtyId);
+    return set;
+  }, [pendingQty, serverQtyById, savingQtyId]);
+  // blockingUnsaved — the SUBSET of dirty rows whose pending value is
+  // INVALID (out of 1..100) and therefore will NOT auto-save. This is
+  // what the in-app close guard keys off, NOT `dirtyQty`.
+  //
+  // Why narrower than dirtyQty: clicking the modal's Close button blurs
+  // the focused qty input first, and that blur auto-commits any VALID
+  // pending value (→ "Quantity updated." toast). So a valid edit is
+  // already saved by the time the close handler runs — alerting
+  // "unsaved changes" there is wrong (the bug: alert + success toast
+  // appeared together). Only an INVALID value genuinely can't be saved,
+  // so only that should prompt the guard. `dirtyQty` still drives the
+  // row tint + the beforeunload guard (hard nav can't rely on blur).
+  const blockingUnsaved = useMemo(() => {
+    const set = new Set<number>();
+    for (const [idStr, v] of Object.entries(pendingQty)) {
+      const id = Number(idStr);
+      const changed = v !== (serverQtyById.get(id) ?? 0);
+      const valid = Number.isFinite(v) && v >= 1 && v <= 100;
+      if (changed && !valid) set.add(id);
+    }
+    return set;
+  }, [pendingQty, serverQtyById]);
+  // Lift the boolean up to JobModal's close guard. Reported via effect
+  // (not during render) to avoid a parent setState-during-child-render
+  // warning. Reset to clean on unmount so a stale flag can't outlive the
+  // Services tab.
+  useEffect(() => {
+    onDirtyChange?.(blockingUnsaved.size > 0);
+    return () => onDirtyChange?.(false);
+  }, [blockingUnsaved, onDirtyChange]);
+  // Browser-level exit guard. The in-app modal Close is already protected
+  // by the onDirtyChange → useConfirm path, but that can't intercept a
+  // hard navigation (tab close, refresh, browser Back). While any qty
+  // edit is uncommitted, arm `beforeunload` so the browser shows its
+  // native "Leave site?" prompt; tear it down the moment the rows are
+  // clean so we never nag without reason.
+  useEffect(() => {
+    if (dirtyQty.size === 0) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      // Legacy browsers require returnValue to be set to trigger the prompt.
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [dirtyQty]);
+
   const inactiveCount = (services as Array<Record<string, unknown>>).filter((s) => Number(s.job_service_status) === 0).length;
   const canEdit = !isJobClosed(Number(job.job_status));
-  const [addOpen, setAddOpen] = useState(false);
+  const canAddInline = canEdit && addCategories.length > 0;
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center justify-between gap-2">
-        {/* Show Inactive toggle stays on the right; Add Service sits
-            beside it. Both only render when the job is still editable
-            (status ∉ {COMPLETED, COMPLETED_ALT}). */}
-        <div>
-          {canEdit && (
-            <Button size="sm" onClick={() => setAddOpen(true)}>
-              <Plus className="size-3.5 mr-1" /> Add Service
+      {/* Inline Add-Service panel — always visible (no collapse) when the
+          job is still editable. Restores the full capability the old
+          AddJobServiceDialog had, rendered inline above the table:
+            Row 1 — [Service Category] [Service Type(s)] [Job Type]
+            Section 2 — selectable checklist of matching catalog rows,
+                        each with its own quantity input.
+          Nothing is auto-added: the operator ticks the services they
+          want and sets quantities, then clicks Add. */}
+      {canAddInline && (
+        <div className="rounded-lg border bg-card p-3 space-y-3">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 items-start">
+            <div>
+              <Label className="text-xs">Service Category</Label>
+              <SearchSelect
+                value={addCatgId}
+                onChange={(v) => setAddCatgId(String(v))}
+                options={addCategories}
+                placeholder={addCategories.length ? '— Select a Category —' : 'No Categories on Rate Card'}
+              />
+            </div>
+            <div>
+              <Label className="text-xs">Service Type(s)</Label>
+              <SearchMultiSelect
+                value={addTypeIds}
+                onChange={(next) => setAddTypeIds((next as Array<string | number>).map(String))}
+                options={addTypes}
+                disabled={!addCatgId}
+                placeholder={addCatgId ? (addTypes.length ? '— Select Service Type(s) —' : 'No Types in This Category') : 'Pick a Category First'}
+                selectedLabel="types"
+              />
+            </div>
+            <div>
+              {/* Job Type mirrors the per-job CSV (tbl_job.job_type).
+                  Editing here PATCHes the job alongside the service
+                  inserts so the operator can correct it without a
+                  separate dialog. Same fixed 3-value vocabulary the old
+                  modal used (matches Book New Call). */}
+              <Label className="text-xs">Job Type</Label>
+              <SearchMultiSelect
+                value={pickedJobTypes}
+                onChange={(next) => setPickedJobTypes((next as Array<string | number>).map(String))}
+                placeholder="— Select Job Type(s) —"
+                selectedLabel="types"
+                options={[
+                  { value: 'Installation',   label: 'Installation' },
+                  { value: 'Repair',         label: 'Repair' },
+                  { value: 'Uninstallation', label: 'Uninstallation' },
+                ]}
+              />
+            </div>
+          </div>
+
+          {/* Service picker — reuses AutoServicesTable for +/× parity
+              with Book New Call / Confirm & Schedule. It derives the
+              candidate rows itself from the picked Service Type(s); the
+              operator "+"-adds the rows they want (each with a qty + "×"
+              remove) and the basket lives in addRows. Prices + footer
+              Total are shown here too, matching the other two surfaces. */}
+          <AutoServicesTable
+            services={catalog}
+            loading={!catalogRaw && !!catalogUrl}
+            serviceTypeIds={addTypeIds}
+            rows={addRows}
+            setRows={setAddRows}
+          />
+
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-muted-foreground">
+              {committedAddRows.length > 0
+                ? `${committedAddRows.length} Service${committedAddRows.length === 1 ? '' : 's'} Selected`
+                : 'Add Services to the Basket'}
+            </span>
+            <Button
+              size="sm"
+              onClick={submitInlineAdd}
+              disabled={addBusy || committedAddRows.length === 0}
+            >
+              <Plus className="size-3.5 mr-1" />
+              {addBusy ? 'Adding…' : committedAddRows.length > 1 ? `Add ${committedAddRows.length} Services` : 'Add Service'}
             </Button>
-          )}
+          </div>
         </div>
+      )}
+      <div className="flex items-center justify-end gap-2">
+        {/* Show Inactive toggle remains on the right of the table. The
+            old "+ Add Service" trigger lived here too; it's now in the
+            inline panel above so this row only carries the toggle. */}
         {inactiveCount > 0 && (
           <label className="text-xs text-muted-foreground flex items-center gap-1">
             <input
@@ -1537,13 +1907,76 @@ function ServicesTabBody({ job, onMutated }: { job: Job; onMutated?: () => void 
               const isOpen = openLineId === id;
               const line = breakdownFor(id);
               const busy = busyId === id;
+              const serverQty = Number(sr.quantity ?? 0);
+              const editedQty = pendingQty[id];
+              const currentQty = editedQty ?? serverQty;
+              const isDirty = editedQty !== undefined && editedQty !== serverQty;
+              const isQtyValid = Number.isFinite(currentQty) && currentQty >= 1 && currentQty <= 100;
+              const qtyEditable = isActive && canEdit;
               return (
                 <Fragment key={i}>
-                  <tr className={isActive ? '' : 'opacity-60'}>
+                  {/* Dirty rows get a light amber tint so the operator can
+                      see pending unsaved edits at a glance. */}
+                  <tr className={
+                    (isActive ? '' : 'opacity-60')
+                    + (isDirty ? ' bg-amber-50' : '')
+                  }>
                     <td className="text-xs text-muted-foreground">{String(sr.job_service_id ?? '')}</td>
                     <td>{String(sr.service_type_name ?? '—')}</td>
                     <td>{String(sr.service_catg_name ?? '—')}</td>
-                    <td>{String(sr.quantity ?? '')}</td>
+                    <td>
+                      {qtyEditable ? (
+                        <div className="inline-flex items-center gap-1.5">
+                          <Input
+                            type="number"
+                            min={1}
+                            max={100}
+                            value={String(currentQty)}
+                            onChange={(e) => {
+                              const v = Number(e.target.value);
+                              setPendingQty((prev) => ({ ...prev, [id]: v }));
+                            }}
+                            onBlur={() => {
+                              // Auto-save on blur — the natural "done with
+                              // this cell" signal. No-op if unchanged/invalid.
+                              if (isQtyValid) commitQty(id, serverQty);
+                            }}
+                            onKeyDown={(e) => {
+                              // Enter commits immediately; Escape reverts to
+                              // the server value. Keyboard-driven ops staff
+                              // edit qty in a tight loop, so both shortcuts
+                              // keep hands on the keyboard.
+                              if (e.key === 'Enter' && isDirty && isQtyValid && savingQtyId !== id) {
+                                e.preventDefault();
+                                saveQty(id, currentQty);
+                              } else if (e.key === 'Escape') {
+                                e.preventDefault();
+                                setPendingQty((prev) => {
+                                  const next = { ...prev };
+                                  delete next[id];
+                                  return next;
+                                });
+                              }
+                            }}
+                            className="h-7 w-16 text-right font-mono"
+                            disabled={savingQtyId === id}
+                          />
+                          {/* Status slot — fixed width so it never reflows
+                              the column when content toggles. The "unsaved"
+                              state is conveyed purely by the row's amber tint
+                              (no text tag — the old tag shifted the layout on
+                              every keystroke). Only the in-flight spinner
+                              renders here, briefly, during a commit. */}
+                          <span className="inline-flex w-4 shrink-0 items-center justify-center">
+                            {savingQtyId === id ? <Spinner /> : null}
+                          </span>
+                        </div>
+                      ) : (
+                        // Inactive (soft-deleted) services stay read-only.
+                        // Restore first, then edit.
+                        <span>{String(sr.quantity ?? '')}</span>
+                      )}
+                    </td>
                     <td>{isActive ? 'Active' : 'Inactive'}</td>
                     <td className="!text-right">
                       {/* Icon action cluster — Show/Hide Breakdown is always
@@ -1634,364 +2067,13 @@ function ServicesTabBody({ job, onMutated }: { job: Job; onMutated?: () => void 
           </div>
         </div>
       )}
-      <AddJobServiceDialog
-        open={addOpen}
-        job={job}
-        onClose={() => setAddOpen(false)}
-        onSaved={() => {
-          setAddOpen(false);
-          invalidateBreakdownCache(Number(job.job_id));
-          setBreakdown(null);
-          onMutated?.();
-        }}
-      />
+      {/* AddJobServiceDialog removed 2026-06-01 — its functionality is
+          now served by the inline Add-Service panel rendered above the
+          services table at the top of this component. */}
     </div>
   );
 }
 
-/*
- * AddJobServiceDialog — Service Category → Service Type → Services
- * cascade (mirrors the "Select Products" panel in Book New Call). The
- * operator picks ONE Category to narrow the catalog (since N×M would
- * blow the picker out), then 1+ Service Types within it, then adds each
- * matching service row to the basket with a quantity, then submits the
- * whole basket as N parallel POSTs to /admin/jobs/:id/services.
- *
- * Catalog source: /shared/lookup/client-services?clientId=X — same
- * endpoint Book New Call hits. The response is { items: [ClientServiceLite] }
- * carrying service_type_name + service_catg_name + total_amount, which we
- * group on the fly into a Category list and Type list.
- *
- * BE side: POST /admin/jobs/:id/services reactivates a soft-deleted row
- * for the same {job_id, service_id} instead of inserting a duplicate,
- * so adding back a previously-removed service is a no-cost retry.
- */
-type ClientServiceLite = {
-  client_service_id: number;
-  service_type_id: number | null;
-  service_catg_id: number | null;
-  service_type_name: string | null;
-  service_catg_name: string | null;
-  total_amount?: number | null;
-  // Rate-card name lets us disambiguate when a single Service Type is
-  // mapped to multiple rate-card variants (different SKUs / pricing
-  // tiers). Without it the picker shows "Modular Packed Furniture"
-  // five times with no visible difference between rows.
-  crc_ratecard_name?: string | null;
-  charge_type?: string | null;
-};
-type BasketRow = { client_service_id: number; quantity: number };
-function AddJobServiceDialog({ open, job, onClose, onSaved }: {
-  open: boolean; job: Job; onClose: () => void; onSaved: () => void;
-}) {
-  const clientId = Number((job as Record<string, unknown>).fk_client_id);
-  const url = open && clientId > 0
-    ? `/shared/lookup/client-services?clientId=${clientId}`
-    : null;
-  const { data: catalogRaw } = useFetch<ClientServiceLite[] | { items?: ClientServiceLite[] }>(url);
-  const catalog: ClientServiceLite[] = useMemo(() => (
-    Array.isArray(catalogRaw) ? catalogRaw : ((catalogRaw as { items?: ClientServiceLite[] } | null)?.items ?? [])
-  ), [catalogRaw]);
-
-  // Cascade state — picked category narrows the type picker; picked
-  // types narrow the visible service list. Basket holds the rows the
-  // operator has ticked, keyed by client_service_id for stable qty edits.
-  // Job Type is a separate multi-select that mirrors the per-job
-  // job_type CSV; if the operator changes it we PATCH the job along
-  // with the service inserts.
-  const [pickedCatgId, setPickedCatgId] = useState<string>('');
-  const [pickedTypeIds, setPickedTypeIds] = useState<string[]>([]);
-  const [pickedJobTypes, setPickedJobTypes] = useState<string[]>([]);
-  const initialJobTypesRef = useMemo(() => {
-    const csv = String((job as Record<string, unknown>).job_type ?? '');
-    return csv.split(',').map((s) => s.trim()).filter(Boolean);
-  }, [job]);
-  const [basket, setBasket] = useState<Map<number, BasketRow>>(new Map());
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    if (open) {
-      setPickedCatgId('');
-      setPickedTypeIds([]);
-      setPickedJobTypes(initialJobTypesRef);
-      setBasket(new Map());
-    }
-  }, [open, initialJobTypesRef]);
-  // When the category changes, clear the dependent picks so stale
-  // Service Type selections from another category don't bleed through.
-  useEffect(() => { setPickedTypeIds([]); }, [pickedCatgId]);
-
-  // Distinct categories present in the client's rate card.
-  const categories = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const c of catalog) {
-      if (c.service_catg_id != null && c.service_catg_name) {
-        m.set(String(c.service_catg_id), c.service_catg_name);
-      }
-    }
-    return Array.from(m.entries()).map(([value, label]) => ({ value, label }));
-  }, [catalog]);
-
-  // Distinct types under the picked category.
-  const types = useMemo(() => {
-    if (!pickedCatgId) return [];
-    const m = new Map<string, string>();
-    for (const c of catalog) {
-      if (String(c.service_catg_id) === pickedCatgId && c.service_type_id != null && c.service_type_name) {
-        m.set(String(c.service_type_id), c.service_type_name);
-      }
-    }
-    return Array.from(m.entries()).map(([value, label]) => ({ value, label }));
-  }, [catalog, pickedCatgId]);
-
-  // Visible service rows for the picked types within the picked category.
-  const visible = useMemo(() => {
-    if (!pickedCatgId || pickedTypeIds.length === 0) return [];
-    const typeSet = new Set(pickedTypeIds.map(String));
-    return catalog.filter((c) => (
-      String(c.service_catg_id) === pickedCatgId
-      && c.service_type_id != null
-      && typeSet.has(String(c.service_type_id))
-    ));
-  }, [catalog, pickedCatgId, pickedTypeIds]);
-
-  function toggleService(c: ClientServiceLite) {
-    setBasket((prev) => {
-      const next = new Map(prev);
-      const id = c.client_service_id;
-      if (next.has(id)) next.delete(id);
-      else next.set(id, { client_service_id: id, quantity: 1 });
-      return next;
-    });
-  }
-  function setQty(clientServiceId: number, qty: number) {
-    setBasket((prev) => {
-      const next = new Map(prev);
-      const existing = next.get(clientServiceId);
-      if (existing) next.set(clientServiceId, { ...existing, quantity: Math.max(1, qty || 1) });
-      return next;
-    });
-  }
-
-  async function submit() {
-    if (basket.size === 0) {
-      showToast({ variant: 'error', message: 'Tick at least one service to add' });
-      return;
-    }
-    setBusy(true);
-    try {
-      // Sequential POSTs (Promise.allSettled) so a single 4xx on one
-      // row doesn't abort the rest. We surface a single toast at the
-      // end summarising successes + failures.
-      const results = await Promise.allSettled(
-        Array.from(basket.values()).map((row) => {
-          const meta = catalog.find((c) => c.client_service_id === row.client_service_id);
-          return api.post(`/admin/jobs/${job.job_id}/services`, {
-            service_id: row.client_service_id,
-            service_type_id: meta?.service_type_id ?? null,
-            service_category_id: meta?.service_catg_id ?? null,
-            quantity: row.quantity,
-          });
-        }),
-      );
-      // If Job Type changed, PATCH the job alongside (job_type lives on
-      // tbl_job as a CSV — same column the create flow writes). We skip
-      // the PATCH when the selection is identical to the initial set.
-      const newJobTypeCsv = pickedJobTypes.join(',');
-      const initialJobTypeCsv = initialJobTypesRef.join(',');
-      if (newJobTypeCsv !== initialJobTypeCsv) {
-        try {
-          await api.patch(`/admin/jobs/${job.job_id}`, { job_type: newJobTypeCsv });
-        } catch (e) {
-          showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Failed to update job type' });
-        }
-      }
-      const ok = results.filter((r) => r.status === 'fulfilled').length;
-      const fail = results.length - ok;
-      if (fail === 0) {
-        showToast({ variant: 'success', message: `${ok} Service${ok === 1 ? '' : 's'} Added` });
-      } else {
-        showToast({
-          variant: 'error',
-          message: `${ok} added, ${fail} failed`,
-        });
-      }
-      onSaved();
-    } catch (e) {
-      showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Failed to add services' });
-    } finally { setBusy(false); }
-  }
-
-  // Basket grand-total — sum of (rate × qty) for every ticked row.
-  // Re-computes whenever basket / catalog mutate.
-  const basketTotal = useMemo(() => {
-    let sum = 0;
-    for (const row of basket.values()) {
-      const meta = catalog.find((c) => c.client_service_id === row.client_service_id);
-      sum += (Number(meta?.total_amount || 0)) * row.quantity;
-    }
-    return sum;
-  }, [basket, catalog]);
-
-  return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      {/* Full-screen dialog: max-w widened to 5xl so the services table
-          fits on a single horizontal line (Service Type / Rate Card /
-          Rate / Qty / Amount). DialogHeader uses the standard `!mx-0
-          !mt-0 !mb-0` overrides per the dialog.tsx call-site contract
-          when DialogContent has `!p-0`. */}
-      <DialogContent className="!max-w-5xl !max-h-[calc(100vh-48px)] !h-[calc(100vh-48px)] flex flex-col !p-0 gap-0 overflow-hidden">
-        <DialogHeader className="!mx-0 !mt-0 !mb-0 px-6 py-4 shrink-0">
-          <DialogTitle>Add Service To Job #{job.job_id}</DialogTitle>
-        </DialogHeader>
-        <div className="p-4 space-y-3 flex-1 overflow-y-auto">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div>
-              <Label>Service Category *</Label>
-              <SearchSelect
-                value={pickedCatgId}
-                onChange={(v) => setPickedCatgId(String(v))}
-                options={categories}
-                placeholder={categories.length ? '— Select a category —' : 'No categories on rate card'}
-              />
-            </div>
-            <div>
-              <Label>Service Type(s) *</Label>
-              <SearchMultiSelect
-                value={pickedTypeIds}
-                onChange={(next) => setPickedTypeIds((next as Array<string | number>).map(String))}
-                options={types}
-                placeholder={pickedCatgId ? (types.length ? '— Select service type(s) —' : 'No types in this category') : 'Pick a category first'}
-                selectedLabel="types"
-              />
-            </div>
-            <div>
-              {/* Job Type mirrors the per-job CSV (tbl_job.job_type).
-                  Editing here PATCHes the job alongside the service
-                  inserts so the operator can correct it without a
-                  separate dialog. Vocabulary trimmed to the 3 ops-
-                  supported values (matches Book New Call). */}
-              <Label>Job Type</Label>
-              <SearchMultiSelect
-                value={pickedJobTypes}
-                onChange={(next) => setPickedJobTypes((next as Array<string | number>).map(String))}
-                placeholder="— Select job type(s) —"
-                selectedLabel="types"
-                options={[
-                  { value: 'Installation',   label: 'Installation' },
-                  { value: 'Repair',         label: 'Repair' },
-                  { value: 'Uninstallation', label: 'Uninstallation' },
-                ]}
-              />
-            </div>
-          </div>
-          <div>
-            <Label>Services</Label>
-            {visible.length === 0 ? (
-              <div className="text-sm text-muted-foreground rounded border border-dashed px-3 py-3 text-center">
-                {pickedCatgId && pickedTypeIds.length > 0
-                  ? 'No services on this client\'s rate card for the picked Service Type(s).'
-                  : 'Pick Service Category + Service Type(s) above to see matching services.'}
-              </div>
-            ) : (
-              // Columns:
-              //   - Service / Product = crc_ratecard_name (the SKU
-              //     label — what the operator actually picks). This is
-              //     the differentiating column when one Service Type
-              //     is mapped to multiple rate-card variants. The BE
-              //     already filters service_status=0 (inactive) rows.
-              //   - Service Type = service_type_name (parent category).
-              //   - Rate / Qty / Amount as before.
-              <div className="rounded-lg border bg-card overflow-hidden">
-                <table className="data-table w-full">
-                  <thead>
-                    <tr>
-                      <th className="!text-center w-10"></th>
-                      <th className="!text-left">Service / Product</th>
-                      <th className="!text-left">Service Type</th>
-                      <th className="!text-right">Rate ₹</th>
-                      <th className="!text-right w-24">Qty</th>
-                      <th className="!text-right">Amount ₹</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {visible.map((c) => {
-                      const added = basket.get(c.client_service_id);
-                      const rate = Number(c.total_amount || 0);
-                      const amount = added ? rate * added.quantity : 0;
-                      return (
-                        <tr key={c.client_service_id} className={added ? 'bg-emerald-50/40' : ''}>
-                          <td className="!text-center">
-                            <button
-                              type="button"
-                              className={
-                                'inline-flex items-center justify-center w-7 h-7 rounded border ' +
-                                (added
-                                  ? 'bg-rose-50 border-rose-200 text-rose-600'
-                                  : 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100')
-                              }
-                              onClick={() => toggleService(c)}
-                              title={added ? 'Remove from basket' : 'Add to basket'}
-                            >
-                              {added ? <X className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
-                            </button>
-                          </td>
-                          {/* Primary label: rate-card name (the SKU).
-                              `charge_type` (e.g. fixed/variable) shown
-                              inline so the operator knows the pricing
-                              model at a glance. */}
-                          <td className="font-medium">
-                            {c.crc_ratecard_name ?? c.service_type_name ?? '—'}
-                            {c.charge_type ? (
-                              <span className="ml-1 text-[10px] text-muted-foreground">({c.charge_type})</span>
-                            ) : null}
-                          </td>
-                          {/* Secondary label: the parent Service Type. */}
-                          <td className="text-xs text-muted-foreground">
-                            {c.service_type_name ?? '—'}
-                          </td>
-                          <td className="!text-right font-mono">{rate.toFixed(2)}</td>
-                          <td className="!text-right">
-                            {added ? (
-                              <Input
-                                type="number"
-                                min="1"
-                                value={String(added.quantity)}
-                                onChange={(e) => setQty(c.client_service_id, Number(e.target.value))}
-                                className="font-mono h-8 text-right"
-                              />
-                            ) : <span className="text-muted-foreground text-xs">—</span>}
-                          </td>
-                          <td className="!text-right font-mono">{added ? amount.toFixed(2) : '—'}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-          {basket.size > 0 && (
-            <div className="flex items-center justify-between rounded border bg-emerald-50/40 px-3 py-2 text-xs">
-              <span className="text-muted-foreground">
-                {basket.size} service{basket.size === 1 ? '' : 's'} in basket
-              </span>
-              <span className="font-medium text-emerald-800">
-                Total · ₹{basketTotal.toFixed(2)}
-              </span>
-            </div>
-          )}
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={onClose}>Cancel</Button>
-            <Button onClick={submit} disabled={busy || basket.size === 0}>
-              {busy ? 'Adding…' : basket.size > 1 ? `Add ${basket.size} Services` : 'Add Service'}
-            </Button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 function BreakdownTable({ line }: { line: ServiceBreakdownLine }) {
   // Center-aligned amount columns (2026-05-26 per ops). `!text-center`
