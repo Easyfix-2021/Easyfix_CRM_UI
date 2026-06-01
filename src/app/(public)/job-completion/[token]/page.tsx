@@ -87,6 +87,11 @@ type FormState = {
   branch_details: string;
   building_name: string;
   product_code: string;
+  // Generic per-client custom-property values, keyed by the property's
+  // canonical (lower-cased) name. Holds every customer-facing field that is
+  // NOT one of the three canonical ones above (which keep dedicated keys for
+  // their tbl_job columns).
+  customValues: Record<string, string>;
   services: Map<number, number>;
 };
 
@@ -98,6 +103,45 @@ type FormState = {
  * (branchProp / buildingProp / productProp).
  */
 type CustomProp = { name: string; mandatory: boolean; label: string | null; value: string | null };
+
+// The three canonical keys have dedicated form-state fields + tbl_job columns.
+const CANONICAL_PROP_KEYS = new Set(['branch_details', 'building_name', 'product_code']);
+
+// Operator-config rows in tbl_client_custom_properties are NOT customer-facing.
+// The BE already strips these from the prefill, but we filter defensively in
+// case the FE ever talks to an older deploy that doesn't. Compared after the
+// same a-z0-9→underscore normalisation the BE uses.
+const CONFIG_PROP_KEYS = new Set([
+  'auto_process_unconfirmed_order',
+  'max_magic_link_send_count',
+  'collected_by',
+]);
+const normalizePropKey = (n: string) =>
+  String(n || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+
+// Custom-property names that duplicate a field the form ALREADY collects in a
+// dedicated input (PIN Code, City, Address, Email, Alternate contact, etc.).
+// The BE strips these from the prefill; we filter defensively in case the FE
+// talks to an older deploy. (building/property intentionally NOT here — they
+// map to the canonical building_name custom field, distinct from the address
+// "Building / Floor" input.)
+const BUILTIN_ALIAS_KEYS = new Set([
+  'pin_code', 'pincode', 'pin', 'zip', 'zipcode', 'postal_code', 'postalcode',
+  'city', 'town', 'city_name',
+  'address', 'complete_address', 'full_address',
+  'landmark',
+  'gps', 'gps_location', 'location', 'coordinates', 'lat_lng', 'latlng', 'lat_long', 'gps_coordinates',
+  'email', 'customer_email', 'e_mail', 'mail',
+  'customer_name', 'name', 'full_name', 'cust_name',
+  'alternate_name', 'additional_name', 'alt_name', 'alternate_contact_name',
+  'alternate_number', 'additional_number', 'alt_number', 'secondary_number',
+  'alternate_contact_number', 'alternate_mobile',
+  'address_instruction', 'address_instructions', 'instructions', 'landing_notes', 'delivery_instructions',
+  'mobile', 'phone', 'mobile_no', 'mobile_number', 'phone_number', 'contact', 'contact_number', 'customer_mobile',
+]);
+// "branch_details" → "Branch Details" (fallback label when the client set none).
+const prettyPropName = (n: string) =>
+  String(n || '').replace(/[_-]+/g, ' ').trim().replace(/\b\w/g, (c) => c.toUpperCase());
 
 function canonicaliseCustomProps(
   rows: PrefillResponse['custom_properties']
@@ -114,6 +158,7 @@ function canonicaliseCustomProps(
   for (const p of rows || []) {
     const n = String(p.name || '').toLowerCase().trim();
     if (!n) continue;
+    if (CONFIG_PROP_KEYS.has(normalizePropKey(n))) continue; // never render config flags
     const canonical = (() => {
       if (n === 'branch' || n === 'branch_details') return 'branch_details';
       if (n === 'building' || n === 'building_name' || n === 'property_name' || n === 'property') return 'building_name';
@@ -279,6 +324,12 @@ export default function JobCompletionMagicLinkPage() {
         // by the BE (`value` on the descriptor). Falls back to '' so the
         // input remains controlled.
         const seedFromProp = (key: string) => props.get(key)?.value ?? '';
+        // Seed generic (non-canonical) custom-property inputs from any
+        // pre-existing value the BE returned, keyed by canonical name.
+        const seededCustomValues: Record<string, string> = {};
+        for (const [k, p] of props.entries()) {
+          if (!CANONICAL_PROP_KEYS.has(k)) seededCustomValues[k] = p.value ?? '';
+        }
         setForm({
           customer_name: data.customer.name || '',
           customer_email: data.customer.email || '',
@@ -301,6 +352,7 @@ export default function JobCompletionMagicLinkPage() {
           branch_details: seedFromProp('branch_details'),
           building_name:  seedFromProp('building_name'),
           product_code:   seedFromProp('product_code'),
+          customValues: seededCustomValues,
           services: seededServices,
         });
         setCustomProps(props);
@@ -350,6 +402,12 @@ export default function JobCompletionMagicLinkPage() {
   const buildingProp = customProps.get('building_name');
   const productProp  = customProps.get('product_code');
 
+  // Every OTHER customer-facing client field (beyond the three canonical ones)
+  // — rendered generically and submitted in the `custom_properties` map.
+  const extraProps = Array.from(customProps.values()).filter(
+    (p) => !CANONICAL_PROP_KEYS.has(p.name) && !BUILTIN_ALIAS_KEYS.has(normalizePropKey(p.name)),
+  );
+
   // Submit-button gate mirror of `section1Complete` in JobModal.tsx
   // (CRM Book-New-Call). Disables Submit when ANY mandatory custom-prop
   // input is empty so the customer can't bypass the requirement by
@@ -359,7 +417,8 @@ export default function JobCompletionMagicLinkPage() {
   const mandatoryCustomPropsComplete =
     (!branchProp   || !branchProp.mandatory   || !!form.branch_details.trim()) &&
     (!buildingProp || !buildingProp.mandatory || !!form.building_name.trim()) &&
-    (!productProp  || !productProp.mandatory  || !!form.product_code.trim());
+    (!productProp  || !productProp.mandatory  || !!form.product_code.trim()) &&
+    extraProps.every((p) => !p.mandatory || !!(form.customValues[p.name] || '').trim());
 
   const patch = (p: Partial<FormState>) => setForm((f) => (f ? { ...f, ...p } : f));
 
@@ -402,6 +461,12 @@ export default function JobCompletionMagicLinkPage() {
     }
     if (productProp?.mandatory && !form.product_code.trim()) {
       missing.push(productProp.label || 'Product Code');
+    }
+    // Generic (non-canonical) client custom fields — same mandatory rule.
+    for (const p of extraProps) {
+      if (p.mandatory && !(form.customValues[p.name] || '').trim()) {
+        missing.push(p.label || prettyPropName(p.name));
+      }
     }
     if (missing.length) {
       setMissingFields(missing);
@@ -446,6 +511,15 @@ export default function JobCompletionMagicLinkPage() {
         ? form.building_name.trim() : undefined,
       product_code: productProp && form.product_code.trim()
         ? form.product_code.trim() : undefined,
+      // Generic custom-property values — only the ones the customer filled.
+      custom_properties: (() => {
+        const out: Record<string, string> = {};
+        for (const p of extraProps) {
+          const v = (form.customValues[p.name] || '').trim();
+          if (v) out[p.name] = v;
+        }
+        return Object.keys(out).length ? out : undefined;
+      })(),
       services: Array.from(form.services.entries()).map(([id, qty]) => ({
         client_service_id: id, quantity: qty,
       })),
@@ -682,7 +756,7 @@ export default function JobCompletionMagicLinkPage() {
             gate above. Placed adjacent to Address since these fields are
             typically address-context (which branch / which property / which
             product line is the service for). */}
-        {(branchProp || buildingProp || productProp) && (
+        {(branchProp || buildingProp || productProp || extraProps.length > 0) && (
           <Section title="Additional Details" cols={3}>
             {branchProp && (
               <Field
@@ -732,6 +806,23 @@ export default function JobCompletionMagicLinkPage() {
                 />
               </Field>
             )}
+            {/* Generic client-defined custom fields (anything beyond the three
+                canonical ones). label falls back to a Title-Cased prop name;
+                mandatory drives the red asterisk + native `required` + the
+                Submit-button gate above. */}
+            {extraProps.map((p) => (
+              <Field key={p.name} label={p.label || prettyPropName(p.name)} required={p.mandatory}>
+                <input
+                  type="text"
+                  required={p.mandatory}
+                  value={form.customValues[p.name] || ''}
+                  onChange={(e) => patch({ customValues: { ...form.customValues, [p.name]: e.target.value } })}
+                  className={inputClass}
+                  placeholder={p.mandatory ? 'Required for this client' : 'Optional'}
+                  maxLength={500}
+                />
+              </Field>
+            ))}
           </Section>
         )}
 

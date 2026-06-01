@@ -116,6 +116,11 @@ export type SubmitPayload = {
   branch_details?: string;
   building_name?: string;
   product_code?: string;
+  // Generic per-client custom-property values keyed by the property's
+  // (lower-cased) name — every customer-facing field that ISN'T one of the
+  // three canonical ones above. The BE validates mandatory ones dynamically
+  // per-client and persists these inside customer_submitted_payload JSON.
+  custom_properties?: Record<string, string>;
 };
 
 // Convenience aliases — easier-to-read names at call sites. The canonical
