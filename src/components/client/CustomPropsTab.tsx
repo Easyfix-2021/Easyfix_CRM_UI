@@ -56,6 +56,9 @@ type DistinctPropertyKey = {
  */
 const AUTO_PROCESS_KEY = 'Auto Process Unconfirmed Order';
 const MAX_SEND_COUNT_KEY = 'Max Magic-Link Send Count';
+// Channel for chasing Unconfirmed Orders: 'form' (magic-link web form, default)
+// or 'conversation' (in-chat AI WhatsApp flow). Stored as a custom property.
+const ORDER_MODE_KEY = 'Order Confirmation Mode';
 
 /*
  * Normalise a property name for case-insensitive + underscore-tolerant
@@ -72,6 +75,7 @@ function normalizePropKey(s: string): string {
 const HOISTED_NORMALIZED = new Set([
   normalizePropKey(AUTO_PROCESS_KEY),
   normalizePropKey(MAX_SEND_COUNT_KEY),
+  normalizePropKey(ORDER_MODE_KEY),
 ]);
 
 /*
@@ -132,6 +136,7 @@ export function CustomPropsTab({ clientId, canEdit }: Props) {
   const items = allItems.filter((p) => !HOISTED_NORMALIZED.has(normalizePropKey(p.name)));
   const autoProcessRow = allItems.find((p) => normalizePropKey(p.name) === normalizePropKey(AUTO_PROCESS_KEY)) ?? null;
   const maxSendCountRow = allItems.find((p) => normalizePropKey(p.name) === normalizePropKey(MAX_SEND_COUNT_KEY)) ?? null;
+  const orderModeRow = allItems.find((p) => normalizePropKey(p.name) === normalizePropKey(ORDER_MODE_KEY)) ?? null;
 
   // Invalidating the cross-client keys cache after a save here also
   // invalidates `useFetch`'s memo so a fresh /custom-properties read
@@ -181,6 +186,12 @@ export function CustomPropsTab({ clientId, canEdit }: Props) {
         <MaxSendCountCard
           clientId={clientId}
           existing={maxSendCountRow}
+          canEdit={canEdit}
+          onSaved={invalidateAndRefetch}
+        />
+        <OrderModeCard
+          clientId={clientId}
+          existing={orderModeRow}
           canEdit={canEdit}
           onSaved={invalidateAndRefetch}
         />
@@ -582,6 +593,72 @@ function AutoProcessCard({
           disabled={!canEdit || saving}
           ariaLabel={AUTO_PROCESS_KEY}
         />
+      </div>
+    </div>
+  );
+}
+
+/*
+ * OrderModeCard — dedicated selector for `Order Confirmation Mode`:
+ * how an Unconfirmed Order chases the customer for details.
+ *   - 'form'         → magic-link web form (default; existing behaviour)
+ *   - 'conversation' → guided AI WhatsApp chat (no form link)
+ * Stored value is the lower-case token; absent row defaults to 'form'.
+ */
+function OrderModeCard({
+  clientId, existing, canEdit, onSaved,
+}: {
+  clientId: number;
+  existing: ClientCustomProperty | null;
+  canEdit: boolean;
+  onSaved: () => void;
+}) {
+  const current = (existing?.value ?? 'form').toLowerCase().includes('conversation') ? 'conversation' : 'form';
+  const [saving, setSaving] = useState(false);
+
+  async function onChange(next: string) {
+    if (saving || next === current) return;
+    setSaving(true);
+    try {
+      const payload = {
+        name: existing?.name || ORDER_MODE_KEY,
+        label: existing?.label || ORDER_MODE_KEY,
+        value: next,
+        mandatory: !!existing?.mandatory,
+      };
+      if (existing?.id) {
+        await api.put<{ updated: boolean }>(`/admin/clients/custom-properties/${existing.id}`, payload as never);
+      } else {
+        await api.post<{ id: number }>(`/admin/clients/${clientId}/custom-properties`, payload as never);
+      }
+      onSaved();
+      showToast({ variant: 'success', message: next === 'conversation' ? 'Switched to WhatsApp conversation.' : 'Switched to magic-link form.' });
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Save failed.' });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="rounded border bg-card px-3 py-2.5 flex items-start justify-between gap-3">
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-medium">{ORDER_MODE_KEY}</div>
+        <div className="text-xs text-muted-foreground mt-0.5">
+          How the customer is asked to complete an Unconfirmed Order&rsquo;s details — a magic-link web <b>Form</b>, or a guided <b>WhatsApp Conversation</b> (AI-assisted, in chat). Requires Auto-process / Trigger to be enabled.
+        </div>
+      </div>
+      <div className="shrink-0 pt-0.5">
+        <select
+          value={current}
+          disabled={!canEdit || saving}
+          onChange={(e) => onChange(e.target.value)}
+          className="rounded border border-input bg-background px-2 py-1 text-sm disabled:opacity-60"
+          aria-label={ORDER_MODE_KEY}
+        >
+          <option value="form">Form (link)</option>
+          <option value="conversation">WhatsApp Conversation</option>
+        </select>
       </div>
     </div>
   );

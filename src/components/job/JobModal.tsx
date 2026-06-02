@@ -115,6 +115,12 @@ export type JobModalMode = 'create' | 'edit' | 'view' | 'confirm';
 type Job = Record<string, unknown> & {
   job_id: number; job_status: number;
   services?: unknown[]; images?: unknown[];
+  // Customer-shared videos via the WhatsApp conversational order-confirmation
+  // flow. Lives in tbl_job_media (separate from tbl_job_image because that
+  // table is image-only). Backend includes it in /admin/jobs/:id; absent on
+  // pre-2026-06-03 deploys → treated as []. Rendered next to images in the
+  // Confirm view (see JobVideosStrip).
+  videos?: Array<{ media_id: number; s3_key?: string; content_type?: string | null; source?: string | null; created_at?: string | null }>;
 };
 
 export function JobModal({
@@ -3105,6 +3111,136 @@ function JobImagesTab({ images, onChanged, compact, onImageDeleted, deferDelete,
   );
 }
 
+// Map a tbl_job_media.source value → a short channel badge. WhatsApp chat and
+// the public web form both feed tbl_job_media; the badge tells ops which.
+function videoSourceBadge(source?: string | null): { label: string; cls: string } | null {
+  switch (source) {
+    case 'customer_whatsapp':    return { label: 'Chat', cls: 'bg-emerald-600' };
+    case 'customer_public_form': return { label: 'Form', cls: 'bg-sky-600' };
+    default:                     return null;
+  }
+}
+
+/*
+ * JobVideosStrip — sibling of JobImagesTab for tbl_job_media rows (videos the
+ * customer shared, via the WhatsApp conversational flow OR the public
+ * job-completion form). Distinguished per-tile by `source`.
+ *
+ * Tiles are 72×72 to line up with the compact image strip. Each tile lazy-loads
+ * its POSTER FRAME via IntersectionObserver: the `<video preload="metadata">`
+ * is only mounted once the tile actually enters the viewport (with a 200px
+ * rootMargin so it lands "just in time"). This matters because a job can carry
+ * up to several customer-shared videos and the Confirm-modal scroll area is
+ * tall — kicking off N range-byte metadata fetches on open is wasted bandwidth
+ * for the operator's machine. A play-glyph + source badge always overlay;
+ * clicking opens the full video in a new tab via the redirect endpoint.
+ *
+ * Read-only: no delete affordance here in v1.
+ */
+function JobVideosStrip({ videos, compact = false }: {
+  videos: Array<{ media_id: number; s3_key?: string; content_type?: string | null; source?: string | null }>;
+  compact?: boolean;
+}) {
+  const apiBase = process.env.NEXT_PUBLIC_API_URL || '/api';
+  if (!videos || videos.length === 0) return null;
+  const tileSize = compact ? 'w-[72px] h-[72px]' : 'w-32 h-32';
+  return (
+    <div className={`flex flex-wrap ${compact ? 'gap-1.5' : 'gap-2'}`}>
+      {videos.map((v) => (
+        <LazyVideoPosterTile
+          key={v.media_id}
+          mediaId={v.media_id}
+          url={`${apiBase}/admin/jobs/videos/${v.media_id}/file`}
+          source={v.source}
+          contentType={v.content_type}
+          tileSize={tileSize}
+        />
+      ))}
+    </div>
+  );
+}
+
+/*
+ * LazyVideoPosterTile — single tile inside JobVideosStrip. Mounts the
+ * `<video preload="metadata">` ONLY after the tile is observed entering the
+ * viewport, using IntersectionObserver with a 200px rootMargin. Before that
+ * the tile shows a plain dark background + play-glyph. Once loaded, the video
+ * frame stays mounted (no unmount on scroll-out) — re-mounting on every scroll
+ * would defeat the bandwidth savings.
+ */
+function LazyVideoPosterTile({ mediaId, url, source, contentType, tileSize }: {
+  mediaId: number;
+  url: string;
+  source?: string | null;
+  contentType?: string | null;
+  tileSize: string;
+}) {
+  const ref = React.useRef<HTMLAnchorElement | null>(null);
+  const [visible, setVisible] = React.useState(false);
+  const badge = videoSourceBadge(source);
+
+  React.useEffect(() => {
+    if (visible) return; // already loaded, no need to watch any more
+    const el = ref.current;
+    if (!el) return;
+    // SSR / older browsers without IntersectionObserver → render eagerly so the
+    // tile still works (degraded perf, but no missing thumbnails).
+    if (typeof IntersectionObserver === 'undefined') { setVisible(true); return; }
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            setVisible(true);
+            io.disconnect(); // one-shot — keep poster mounted afterwards
+            break;
+          }
+        }
+      },
+      { root: null, rootMargin: '200px', threshold: 0.01 },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [visible]);
+
+  return (
+    <a
+      ref={ref}
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={`relative ${tileSize} rounded border bg-slate-800 overflow-hidden flex items-center justify-center group`}
+      title={`Customer video #${mediaId}${badge ? ` · via ${badge.label}` : ''}${contentType ? ` · ${contentType}` : ''}`}
+    >
+      {/* Poster frame — only rendered once the tile is visible. `#t=0.1` makes
+          the browser seek to the first 100ms and render that frame from the
+          range-byte response; no autoplay, no full download. */}
+      {visible && (
+        // eslint-disable-next-line jsx-a11y/media-has-caption
+        <video
+          src={`${url}#t=0.1`}
+          preload="metadata"
+          muted
+          playsInline
+          className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+        />
+      )}
+      <span className="relative z-10 inline-flex items-center justify-center w-8 h-8 rounded-full bg-black/45 text-white">
+        <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor" aria-hidden>
+          <path d="M8 5v14l11-7z" />
+        </svg>
+      </span>
+      {badge && (
+        <span className={`absolute z-10 top-0.5 left-0.5 text-[8px] font-semibold text-white px-1 py-px rounded ${badge.cls}`}>
+          {badge.label}
+        </span>
+      )}
+      <span className="absolute z-10 bottom-0 right-0 left-0 text-[9px] text-center bg-black/55 text-white py-0.5">
+        Video #{mediaId}
+      </span>
+    </a>
+  );
+}
+
 // ─── Questionnaire Answers tab ──────────────────────────────────────
 type QAnswer = {
   id: number;
@@ -3515,6 +3651,21 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer 
     ? ((initial as Record<string, unknown>).images as Array<Record<string, unknown>>)
     : [];
   const [localImages, setLocalImages] = useState<Array<Record<string, unknown>>>(initialImages);
+  // Customer-shared videos from the WhatsApp conversational flow (tbl_job_media).
+  // Read-only here — surface alongside the image strip in the Confirm view.
+  const initialVideos: Array<{ media_id: number; s3_key?: string; content_type?: string | null; source?: string | null }>
+    = Array.isArray((initial as Record<string, unknown>)?.videos)
+      ? ((initial as Record<string, unknown>).videos as Array<{ media_id: number; s3_key?: string; content_type?: string | null; source?: string | null }>)
+      : [];
+  // "Collected via WhatsApp Chat" section hint — detected from the
+  // customer-submitted payload's channel marker (the conversation finalize
+  // stamps `channel: 'whatsapp_conversation'`). NOTE: presence of videos is NO
+  // LONGER a sufficient signal — videos can now also arrive via the public web
+  // FORM (source='customer_public_form'), so the per-tile source badge in
+  // JobVideosStrip carries that distinction instead.
+  const submittedPayload = (initial as Record<string, unknown> | null | undefined)?.customer_submitted_payload as Record<string, unknown> | null | undefined;
+  const collectedViaWhatsapp = !!(submittedPayload && typeof submittedPayload === 'object'
+    && (submittedPayload as Record<string, unknown>).channel === 'whatsapp_conversation');
   /*
    * Pending-delete IDs (2026-05-28) — image_ids the operator has X'd
    * but whose BE DELETE we haven't fired yet. The submit handler
@@ -5553,6 +5704,28 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer 
                  */
                 return (
                   <div>
+                    {/* "Collected via WhatsApp Chat" hint — tells ops at a
+                        glance that the media (and other Confirm-mode prefill)
+                        came from the conversational order-confirmation flow
+                        on this job, not from an operator. Doubles as the
+                        cue to look at the customer-submission diff panel
+                        above. Driven by customer_submitted_payload.channel
+                        OR the presence of any tbl_job_media (videos are
+                        currently chat-only). */}
+                    {collectedViaWhatsapp && (
+                      <div className="mb-2 inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-800">
+                        <span aria-hidden>💬</span>
+                        Collected via WhatsApp Chat
+                      </div>
+                    )}
+                    {initialVideos.length > 0 && (
+                      <div className="mb-3">
+                        <p className="text-[11px] text-muted-foreground mb-1">
+                          {initialVideos.length} video{initialVideos.length === 1 ? '' : 's'} shared by the customer:
+                        </p>
+                        <JobVideosStrip videos={initialVideos} compact />
+                      </div>
+                    )}
                     {localImages.length > 0 && (
                       <div className="mb-3">
                         <p className="text-[11px] text-muted-foreground mb-1">

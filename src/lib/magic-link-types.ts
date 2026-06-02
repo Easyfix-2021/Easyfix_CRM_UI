@@ -46,6 +46,10 @@ export type PrefillResponse = {
     billing_label?: 'Free' | 'Paid';
   }[];
   images: { image_id: number; key: string }[];
+  // Customer-uploaded videos via the public Product Photos/Videos picker (or
+  // the conversational chat flow). Probe-gated server-side; absent on older
+  // BE deploys → FE defaults to [].
+  videos?: { media_id: number; key: string }[];
   // Customer's currently-active service rows on this job. Populated by the BE
   // so that re-opening the magic link (token still valid, status still 9)
   // re-seeds the checkboxes — otherwise the bidirectional reconcile on submit

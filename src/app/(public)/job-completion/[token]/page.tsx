@@ -173,6 +173,10 @@ function canonicaliseCustomProps(
 }
 
 type ImageRow = { image_id: number; key: string };
+// `poster` is a client-generated thumbnail data URL (first frame), set only for
+// videos the customer just picked this session — prefilled videos (re-opened
+// link) have no local File so they fall back to the play-glyph tile.
+type VideoRow = { media_id: number; key: string; poster?: string | null };
 
 type GMaps = {
   Map: new (el: HTMLElement, opts: Record<string, unknown>) => unknown;
@@ -281,6 +285,10 @@ export default function JobCompletionMagicLinkPage() {
   const [state, setState] = React.useState<PageState>({ kind: 'loading' });
   const [form, setForm] = React.useState<FormState | null>(null);
   const [images, setImages] = React.useState<ImageRow[]>([]);
+  // Customer-shared videos (tbl_job_media). Same endpoint as images
+  // server-side; the BE branches on MIME and the response's `kind` discriminator
+  // tells us which collection to update.
+  const [videos, setVideos] = React.useState<VideoRow[]>([]);
   const [submitError, setSubmitError] = React.useState<string | null>(null);
   const [missingFields, setMissingFields] = React.useState<string[]>([]);
   const [customProps, setCustomProps] = React.useState<Map<string, CustomProp>>(new Map());
@@ -372,6 +380,7 @@ export default function JobCompletionMagicLinkPage() {
         });
         setCustomProps(props);
         setImages(data.images.map((i) => ({ image_id: i.image_id, key: i.key })));
+        setVideos((data.videos ?? []).map((v) => ({ media_id: v.media_id, key: v.key })));
         setState({ kind: 'ready', data });
       } catch (err) {
         if (cancelled) return;
@@ -1058,17 +1067,21 @@ export default function JobCompletionMagicLinkPage() {
           {/* Intentionally NO prices — public flow per spec. */}
         </Section>
 
-        {/* Product Photos. The inline "+ Add" tile already opens the file
-            picker, so the redundant header-level "Upload Product Photo"
-            trigger has been removed. */}
+        {/* Product Photos & Videos. The picker accepts BOTH images and short
+            videos via the same endpoint (BE branches by MIME). Two separate
+            caps — 5 photos + 2 videos — so a flood of one doesn't lock the
+            other; the picker shows both counts. The inline "+ Add" tile is
+            the only entry point. */}
         <Section
-          title="Product Photos"
-          subtitle={`Up to 5 images (${images.length}/5)`}
+          title="Product Photos & Videos"
+          subtitle={`Up to 5 photos (${images.length}/5)${videos.length || true ? `, 2 videos (${videos.length}/2)` : ''}`}
         >
-          <ImageUploader
+          <MediaUploader
             token={token}
             images={images}
             setImages={setImages}
+            videos={videos}
+            setVideos={setVideos}
           />
         </Section>
 
@@ -1810,12 +1823,78 @@ function AddressMapWidget({
  * auth-gated and would 401 in the customer's browser. The seq stamp +
  * "uploaded" badge is enough confirmation for the customer.
  */
-function ImageUploader({
-  token, images, setImages,
+// Per-kind caps + size ceilings — keep in sync with the BE in
+// routes/public/job-completion.js (MAX_PHOTOS_PER_JOB / MAX_VIDEOS_PER_JOB /
+// MAX_IMAGE_BYTES / MAX_VIDEO_BYTES). Both sides cap independently so neither
+// trusts the other; a mismatch surfaces a clear FE message before the upload.
+const MAX_PHOTOS = 5;
+const MAX_VIDEOS = 2;
+const MAX_IMAGE_MB = 5;
+const MAX_VIDEO_MB = 50;
+const PHOTO_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+const VIDEO_MIMES = new Set(['video/mp4', 'video/quicktime', 'video/3gpp', 'video/webm']);
+const ACCEPT_ATTR = [...PHOTO_MIMES, ...VIDEO_MIMES].join(',');
+
+/*
+ * Extract a poster-frame thumbnail (~first frame) from a picked video File,
+ * entirely client-side — gives the customer instant visual confirmation of
+ * what they uploaded without any BE thumbnailing. Loads the file into an
+ * off-DOM <video>, seeks just past the start (0 can be a black frame on some
+ * encoders), draws to a downscaled canvas, returns a JPEG data URL. Best-effort:
+ * resolves null on any failure (unsupported codec, decode error, timeout) so
+ * the tile falls back to the play-glyph. Never throws.
+ */
+function extractVideoPoster(file: File, maxEdge = 144): Promise<string | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let url: string | null = null;
+    const done = (val: string | null) => {
+      if (settled) return;
+      settled = true;
+      if (url) { try { URL.revokeObjectURL(url); } catch { /* noop */ } }
+      resolve(val);
+    };
+    try {
+      url = URL.createObjectURL(file);
+      const video = document.createElement('video');
+      video.muted = true;
+      video.playsInline = true;
+      video.preload = 'metadata';
+      video.crossOrigin = 'anonymous';
+      // Safety net — some codecs never fire `seeked`/`loadeddata`.
+      const timer = setTimeout(() => done(null), 4000);
+      const grab = () => {
+        try {
+          const vw = video.videoWidth, vh = video.videoHeight;
+          if (!vw || !vh) { clearTimeout(timer); return done(null); }
+          const scale = Math.min(1, maxEdge / Math.max(vw, vh));
+          const cw = Math.max(1, Math.round(vw * scale));
+          const ch = Math.max(1, Math.round(vh * scale));
+          const canvas = document.createElement('canvas');
+          canvas.width = cw; canvas.height = ch;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) { clearTimeout(timer); return done(null); }
+          ctx.drawImage(video, 0, 0, cw, ch);
+          clearTimeout(timer);
+          done(canvas.toDataURL('image/jpeg', 0.6));
+        } catch { clearTimeout(timer); done(null); }
+      };
+      video.addEventListener('seeked', grab, { once: true });
+      video.addEventListener('loadeddata', () => { try { video.currentTime = Math.min(0.1, (video.duration || 1) / 2); } catch { grab(); } }, { once: true });
+      video.addEventListener('error', () => { clearTimeout(timer); done(null); }, { once: true });
+      video.src = url;
+    } catch { done(null); }
+  });
+}
+
+function MediaUploader({
+  token, images, setImages, videos, setVideos,
 }: {
   token: string;
   images: ImageRow[];
   setImages: React.Dispatch<React.SetStateAction<ImageRow[]>>;
+  videos: VideoRow[];
+  setVideos: React.Dispatch<React.SetStateAction<VideoRow[]>>;
 }) {
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   const [uploading, setUploading] = React.useState(false);
@@ -1823,10 +1902,29 @@ function ImageUploader({
 
   async function handleFile(file: File) {
     setUploadError(null);
-    if (file.size > 5 * 1024 * 1024) {
-      setUploadError('File too large — maximum size is 5MB.');
+    const mime = file.type || '';
+    const isPhoto = PHOTO_MIMES.has(mime);
+    const isVideo = VIDEO_MIMES.has(mime);
+    if (!isPhoto && !isVideo) {
+      setUploadError('Unsupported file. Please share a photo (JPEG/PNG/WebP/GIF) or short video (MP4/MOV/3GP/WebM).');
       return;
     }
+    // Pre-flight cap & size so the customer gets an instant message instead of
+    // burning a multipart roundtrip just for the BE to reject it.
+    if (isPhoto && images.length >= MAX_PHOTOS) {
+      setUploadError(`Maximum ${MAX_PHOTOS} photos reached.`);
+      return;
+    }
+    if (isVideo && videos.length >= MAX_VIDEOS) {
+      setUploadError(`Maximum ${MAX_VIDEOS} videos reached.`);
+      return;
+    }
+    const limitMb = isPhoto ? MAX_IMAGE_MB : MAX_VIDEO_MB;
+    if (file.size > limitMb * 1024 * 1024) {
+      setUploadError(`${isPhoto ? 'Photo' : 'Video'} too large — maximum size is ${limitMb}MB.`);
+      return;
+    }
+
     setUploading(true);
     try {
       const apiBase = process.env.NEXT_PUBLIC_API_URL || '/api';
@@ -1837,8 +1935,19 @@ function ImageUploader({
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok || !body?.data) throw new Error(body?.error || 'Upload failed');
-      const { image_id, image } = body.data as { image_id: number; image: string };
-      setImages((prev) => [...prev, { image_id, key: image }]);
+      const d = body.data as { kind?: 'image' | 'video'; image_id?: number; media_id?: number; key?: string; image?: string };
+      // BE writes `key` for both kinds (and keeps the legacy `image` alias for
+      // older deploys). Newer responses also carry the `kind` discriminator.
+      const key = d.key || d.image || '';
+      if (d.kind === 'video' && d.media_id) {
+        // Generate the poster from the just-picked File (best-effort). We have
+        // the local File here, so no extra network — the customer sees a real
+        // frame immediately. Falls back to null → play-glyph tile.
+        const poster = isVideo ? await extractVideoPoster(file) : null;
+        setVideos((prev) => [...prev, { media_id: d.media_id!, key, poster }]);
+      } else if (d.image_id) {
+        setImages((prev) => [...prev, { image_id: d.image_id!, key }]);
+      }
     } catch (e) {
       setUploadError(e instanceof Error ? e.message : 'Upload failed');
     } finally {
@@ -1847,7 +1956,7 @@ function ImageUploader({
     }
   }
 
-  async function handleDelete(imageId: number) {
+  async function handleDeleteImage(imageId: number) {
     try {
       const res = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL || '/api'}/public/job-completion/${encodeURIComponent(token)}/images/${imageId}`,
@@ -1863,34 +1972,80 @@ function ImageUploader({
     }
   }
 
-  const atCap = images.length >= 5;
+  async function handleDeleteVideo(mediaId: number) {
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || '/api'}/public/job-completion/${encodeURIComponent(token)}/videos/${mediaId}`,
+        { method: 'DELETE', credentials: 'omit' }
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.error || 'Delete failed');
+      }
+      setVideos((prev) => prev.filter((v) => v.media_id !== mediaId));
+    } catch (e) {
+      setUploadError(e instanceof Error ? e.message : 'Delete failed');
+    }
+  }
+
+  const photoFull = images.length >= MAX_PHOTOS;
+  const videoFull = videos.length >= MAX_VIDEOS;
+  const fullyFull = photoFull && videoFull;
 
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap gap-2">
         {images.map((img, idx) => (
-          <div key={img.image_id}
+          <div key={`img-${img.image_id}`}
             className="relative w-[72px] h-[72px] rounded-md border bg-slate-100 flex items-center justify-center">
             <div className="text-center">
-              <div className="text-[10px] text-slate-500">Image</div>
+              <div className="text-[10px] text-slate-500">Photo</div>
               <div className="text-xs font-semibold text-slate-700">#{idx + 1}</div>
               <div className="text-[9px] text-emerald-600 font-medium">uploaded</div>
             </div>
-            <button type="button" onClick={() => handleDelete(img.image_id)}
+            <button type="button" onClick={() => handleDeleteImage(img.image_id)}
               className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-red-500 text-white rounded-full text-xs font-bold leading-none flex items-center justify-center hover:bg-red-600"
-              aria-label="Remove image">×</button>
+              aria-label="Remove photo">×</button>
           </div>
         ))}
-        {!atCap && (
+        {videos.map((vid, idx) => (
+          <div key={`vid-${vid.media_id}`}
+            className="relative w-[72px] h-[72px] rounded-md border bg-slate-800 text-white overflow-hidden flex items-center justify-center">
+            {/* Poster-frame thumbnail when we have one (just-picked video);
+                otherwise the dark tile + play-glyph. The play-glyph always
+                overlays so the tile reads as "video" even over a poster. */}
+            {vid.poster && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={vid.poster} alt={`Video ${idx + 1} preview`} className="absolute inset-0 w-full h-full object-cover" />
+            )}
+            <span className="relative z-10 inline-flex items-center justify-center w-7 h-7 rounded-full bg-black/45">
+              <svg viewBox="0 0 24 24" className="w-4 h-4 opacity-95" fill="currentColor" aria-hidden>
+                <path d="M8 5v14l11-7z" />
+              </svg>
+            </span>
+            <div className="absolute z-10 bottom-0 inset-x-0 text-[9px] text-center bg-black/60 py-0.5">
+              Video #{idx + 1}
+            </div>
+            <button type="button" onClick={() => handleDeleteVideo(vid.media_id)}
+              className="absolute z-20 -top-1.5 -right-1.5 w-5 h-5 bg-red-500 text-white rounded-full text-xs font-bold leading-none flex items-center justify-center hover:bg-red-600"
+              aria-label="Remove video">×</button>
+          </div>
+        ))}
+        {!fullyFull && (
           <button type="button" onClick={() => fileInputRef.current?.click()} disabled={uploading}
-            className="w-[72px] h-[72px] rounded-md border-2 border-dashed border-slate-300 text-slate-500 hover:border-sky-400 hover:text-sky-600 transition flex items-center justify-center text-xs">
-            {uploading ? '…' : '+ Add'}
+            className="w-[72px] h-[72px] rounded-md border-2 border-dashed border-slate-300 text-slate-500 hover:border-sky-400 hover:text-sky-600 transition flex flex-col items-center justify-center text-[11px] leading-tight">
+            {uploading ? '…' : (<><span>+ Add</span><span className="text-[9px]">Photo / Video</span></>)}
           </button>
         )}
       </div>
-      <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="hidden"
+      <input ref={fileInputRef} type="file" accept={ACCEPT_ATTR} className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleFile(f); }} />
-      {atCap && <p className="text-xs text-slate-500">Maximum 5 images reached.</p>}
+      {fullyFull && <p className="text-xs text-slate-500">Maximum {MAX_PHOTOS} photos and {MAX_VIDEOS} videos reached.</p>}
+      {!fullyFull && (photoFull || videoFull) && (
+        <p className="text-xs text-slate-500">
+          {photoFull ? `Photo limit reached (${MAX_PHOTOS}). You can still add a video.` : `Video limit reached (${MAX_VIDEOS}). You can still add a photo.`}
+        </p>
+      )}
       {uploadError && <p className="text-xs text-red-600">{uploadError}</p>}
     </div>
   );
