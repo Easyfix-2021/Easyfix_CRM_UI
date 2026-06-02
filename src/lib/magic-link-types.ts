@@ -91,6 +91,10 @@ export type PrefillResponse = {
   // Customer's OWN phone number — shown UNMASKED and read-only (it's the
   // identity field bound to the magic-link JWT; not editable).
   customer_mob?: string;
+  // Whether an EasyFix Support line is configured server-side (SUPPORT_PHONE
+  // set). Gates the "Contact Support" affordance so it never opens a dead-end
+  // dialog. Optional/absent → treated as unavailable (link hidden).
+  support_available?: boolean;
 };
 
 export type SubmitPayload = {

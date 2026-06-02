@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { Phone, PhoneOutgoing, PhoneIncoming, ArrowRight, Loader2, CheckCircle2, AlertTriangle, X } from 'lucide-react';
+import { Phone, Loader2, CheckCircle2, AlertTriangle, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api, ApiError } from '@/lib/api';
 import { useMe } from '@/lib/auth-context';
@@ -10,6 +10,7 @@ import { hasAction } from '@/lib/permissions';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useFetchOnce } from '@/lib/hooks';
 import { CallCustomNumbersDialog } from './CallCustomNumbersDialog';
+import { CallLegsPreview } from '@/components/ui/CallLegsPreview';
 
 /*
  * Click-to-call surface — two exports:
@@ -229,42 +230,10 @@ function useClickToCall(target: CallTarget) {
             the customer’s line is dialled and bridged.
           </p>
           {hasPreview && (
-            // Horizontal call-flow card: caller leg on the left, arrow in
-            // the middle, receiver leg on the right. The arrow visually
-            // encodes the bridge mechanic the prose just described —
-            // your phone rings, then theirs. Two equal-width columns
-            // (`1fr_auto_1fr`) use the full chip width without ever
-            // needing filler content.
-            <div className="mt-3 rounded-lg border border-emerald-200/70 bg-gradient-to-r from-emerald-50/80 via-emerald-50/40 to-emerald-50/80 px-4 py-3">
-              <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-4">
-                {/* FROM leg */}
-                <div className="flex items-center gap-2.5">
-                  <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-100 ring-1 ring-emerald-200">
-                    <PhoneOutgoing className="h-3.5 w-3.5 text-emerald-700" />
-                  </span>
-                  <div className="min-w-0">
-                    <div className="text-[10px] uppercase tracking-wider font-semibold text-emerald-700/80 leading-none">From</div>
-                    <div className="font-mono tabular-nums text-sm text-foreground mt-1 truncate">{preview!.dialFrom ?? '—'}</div>
-                  </div>
-                </div>
-
-                {/* Flow arrow — visually splits the two legs. `text-emerald-500`
-                    is muted enough to recede behind the values but legible
-                    enough to register as the directional cue. */}
-                <ArrowRight className="h-4 w-4 text-emerald-500 shrink-0" />
-
-                {/* TO leg */}
-                <div className="flex items-center gap-2.5">
-                  <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-100 ring-1 ring-emerald-200">
-                    <PhoneIncoming className="h-3.5 w-3.5 text-emerald-700" />
-                  </span>
-                  <div className="min-w-0">
-                    <div className="text-[10px] uppercase tracking-wider font-semibold text-emerald-700/80 leading-none">To</div>
-                    <div className="font-mono tabular-nums text-sm text-foreground mt-1 truncate">{preview!.dialTo ?? '—'}</div>
-                  </div>
-                </div>
-              </div>
-            </div>
+            // Shared masked from→to preview — same component the public
+            // magic-link "Need Help" / "Contact Support" confirmations use, so
+            // the "who gets dialled" visual is identical across the stack.
+            <CallLegsPreview from={preview!.dialFrom} to={preview!.dialTo} className="mt-3" />
           )}
         </>
       ),

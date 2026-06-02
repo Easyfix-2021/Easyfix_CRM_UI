@@ -35,6 +35,8 @@ import * as React from 'react';
 import type { PrefillResponse, SubmitPayload } from '@/lib/magic-link-types';
 // Pure presentational chip — no auth dependency, safe on the public page.
 import { StatusChip, type StatusChipTone } from '@/components/ui/StatusChip';
+// Shared masked from→to preview (also used by the CRM operator click-to-call).
+import { CallLegsPreview } from '@/components/ui/CallLegsPreview';
 // Shared presentational Button (cva-based, no auth dependency → safe on the
 // public page). Used for every button on the page so size/font/padding match;
 // colour is differentiated via `variant` + `className`, NOT by `size`.
@@ -298,11 +300,24 @@ export default function JobCompletionMagicLinkPage() {
 
   // Which secondary action is mid-flight (disables its button + shows a
   // spinner-ish label). Calling actions hit click-to-call endpoints.
-  const [actionBusy, setActionBusy] = React.useState<null | 'spoc' | 'reschedule' | 'cancel'>(null);
+  const [actionBusy, setActionBusy] = React.useState<null | 'spoc' | 'support' | 'reschedule' | 'cancel'>(null);
   // Inline overlay dialogs (no CRM Dialog import — plain styled overlays).
   // `spoc_confirm` is the "Need Help" → Call EasyFix SPOC confirmation step
   // (reuses OverlayShell; on confirm it runs handleSpocCall).
-  const [dialog, setDialog] = React.useState<null | 'reschedule' | 'cancel' | 'spoc_confirm'>(null);
+  const [dialog, setDialog] = React.useState<null | 'reschedule' | 'cancel' | 'spoc_confirm' | 'support_confirm'>(null);
+  // Masked from→to the SPOC bridge would dial — shown in the "Need Help"
+  // confirmation for customer visibility (mirrors the CRM operator click-to-
+  // call confirm dialog). Fetched lazily when the dialog opens.
+  type CallPreviewState = null | 'loading' | 'error' | { from: string | null; to: string | null; suppressed: boolean };
+  const [spocPreview, setSpocPreview] = React.useState<CallPreviewState>(null);
+  // Same, for the Contact-Support bridge. `unavailable` = SUPPORT_PHONE unset
+  // server-side (support_phone:null) → the confirm dialog shows a fallback.
+  const [supportPreview, setSupportPreview] =
+    React.useState<CallPreviewState | 'unavailable'>(null);
+  // Narrow a preview state to its data object (or null) for the shared preview
+  // component — avoids repeating the multi-literal guard inline in JSX.
+  const asPreviewObj = (p: CallPreviewState | 'unavailable') =>
+    p && p !== 'loading' && p !== 'error' && p !== 'unavailable' ? p : null;
 
   React.useEffect(() => {
     if (!token) { setState({ kind: 'invalid_token' }); return; }
@@ -368,6 +383,47 @@ export default function JobCompletionMagicLinkPage() {
     })();
     return () => { cancelled = true; };
   }, [token]);
+
+  // Lazily fetch the masked from→to whenever the "Need Help" confirmation opens
+  // so the customer sees which two numbers will be bridged (CRM-parity), in all
+  // envs. A fetch failure is non-fatal — we just hide the preview line.
+  React.useEffect(() => {
+    if (dialog !== 'spoc_confirm') { setSpocPreview(null); return; }
+    let cancelled = false;
+    setSpocPreview('loading');
+    (async () => {
+      try {
+        const p = await publicFetch<{ from: string | null; to: string | null; suppressed: boolean }>(
+          `/public/job-completion/${encodeURIComponent(token)}/spoc-call/preview`
+        );
+        if (!cancelled) setSpocPreview({ from: p.from, to: p.to, suppressed: !!p.suppressed });
+      } catch {
+        if (!cancelled) setSpocPreview('error');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [dialog, token]);
+
+  // Same lazy preview for the Contact-Support confirmation. `support_phone:null`
+  // (SUPPORT_PHONE unset) maps to the 'unavailable' state.
+  React.useEffect(() => {
+    if (dialog !== 'support_confirm') { setSupportPreview(null); return; }
+    let cancelled = false;
+    setSupportPreview('loading');
+    (async () => {
+      try {
+        const p = await publicFetch<{ from: string | null; to: string | null; suppressed: boolean; support_phone: boolean | null }>(
+          `/public/job-completion/${encodeURIComponent(token)}/support-call/preview`
+        );
+        if (cancelled) return;
+        if (!p.support_phone) setSupportPreview('unavailable');
+        else setSupportPreview({ from: p.from, to: p.to, suppressed: !!p.suppressed });
+      } catch {
+        if (!cancelled) setSupportPreview('error');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [dialog, token]);
 
   if (state.kind === 'loading') return <div className="text-center text-slate-500 py-12">Loading…</div>;
   if (state.kind === 'expired_state') return (
@@ -562,9 +618,27 @@ export default function JobCompletionMagicLinkPage() {
     }
   }
 
-  // (Contact Support click-to-call removed — the header "Need Help" affordance
-  // now routes through the SPOC-call confirmation flow instead. The BE
-  // /support-call endpoint remains but is no longer invoked from this page.)
+  // ── Click-to-call: EasyFix Support ──────────────────────────────────────
+  // POST /support-call (no body). Bridges the customer to the SUPPORT_PHONE
+  // line server-side. delivered:false + support_phone:null → support not
+  // configured (FE shows a fallback message).
+  async function handleSupportCall() {
+    if (actionBusy) return;
+    setActionBusy('support');
+    try {
+      const r = await publicFetch<{ delivered: boolean; support_phone?: string | null }>(
+        `/public/job-completion/${encodeURIComponent(token)}/support-call`, { method: 'POST' }
+      );
+      if (r.delivered) showToast('Connecting Your Call — Please Keep Your Phone Handy.', 'ok');
+      else if (r.support_phone === null) showToast('Support Calling Is Not Available Right Now.', 'err');
+      else showToast('Calling Is Currently Unavailable, Please Try Again Later.', 'err');
+    } catch (err) {
+      const e = err as { status?: number; message?: string };
+      showToast(e.message || 'Calling Is Currently Unavailable, Please Try Again Later.', 'err');
+    } finally {
+      setActionBusy(null);
+    }
+  }
 
   // ── Request: Reschedule ─────────────────────────────────────────────────
   // POST /reschedule-request { reason, remarks?, preferred_datetime? }.
@@ -1065,6 +1139,25 @@ export default function JobCompletionMagicLinkPage() {
             {isSubmitting ? 'Confirming…' : 'Confirm Order'}
           </Button>
         </div>
+
+        {/* Contact Support — secondary, low-weight affordance. Bridges the
+            customer to the EasyFix Support line (distinct from the SPOC "Need
+            Help" in the header). Centred text button so it never competes with
+            the primary action cluster above. Hidden unless a Support line is
+            configured server-side (support_available) — no dead-end dialog. */}
+        {data?.support_available && (
+          <div className="mt-4 flex justify-center">
+            <button
+              type="button"
+              onClick={() => setDialog('support_confirm')}
+              disabled={actionBusy === 'support'}
+              className="inline-flex items-center gap-1.5 text-sm text-slate-500 underline-offset-4 hover:text-sky-700 hover:underline disabled:opacity-60"
+            >
+              <LifeBuoy className="h-4 w-4" />
+              {actionBusy === 'support' ? 'Connecting…' : 'Contact EasyFix Support'}
+            </button>
+          </div>
+        )}
       </form>
 
       {/* ── Lightweight inline overlay dialogs (no CRM Dialog import) ────── */}
@@ -1097,6 +1190,14 @@ export default function JobCompletionMagicLinkPage() {
           <p className="text-sm text-slate-600">
             Call EasyFix SPOC? We&apos;ll Connect You To Your EasyFix Point Of Contact.
           </p>
+          {/* Masked from→to the bridge will dial — customer visibility, all
+              envs. Shared with the CRM operator click-to-call dialog. */}
+          <CallLegsPreview
+            loading={spocPreview === 'loading'}
+            from={asPreviewObj(spocPreview)?.from ?? null}
+            to={asPreviewObj(spocPreview)?.to ?? null}
+            suppressed={!!asPreviewObj(spocPreview)?.suppressed}
+          />
           {/* Shared <Button> at size="lg" so dialog footer matches the rest of
               the page: dismiss = outline, confirm = solid emerald CTA. */}
           <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-1">
@@ -1110,6 +1211,48 @@ export default function JobCompletionMagicLinkPage() {
               className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white">
               {actionBusy === 'spoc' ? 'Connecting…' : 'Call EasyFix SPOC'}
             </Button>
+          </div>
+        </OverlayShell>
+      )}
+      {/* "Contact Support" → Call EasyFix Support confirmation. Same pattern as
+          the SPOC confirm; shows the shared masked from→to preview and falls
+          back gracefully when SUPPORT_PHONE is not configured. */}
+      {dialog === 'support_confirm' && (
+        <OverlayShell
+          title="Contact EasyFix Support"
+          busy={actionBusy === 'support'}
+          onClose={() => { if (actionBusy !== 'support') setDialog(null); }}
+        >
+          {supportPreview === 'unavailable' ? (
+            <p className="text-sm text-slate-600">
+              Support calling isn&apos;t available right now. Please try the EasyFix Point Of Contact above, or reach us through your usual support channel.
+            </p>
+          ) : (
+            <>
+              <p className="text-sm text-slate-600">
+                Contact EasyFix Support? We&apos;ll Connect You To Our Support Team.
+              </p>
+              <CallLegsPreview
+                loading={supportPreview === 'loading'}
+                from={asPreviewObj(supportPreview)?.from ?? null}
+                to={asPreviewObj(supportPreview)?.to ?? null}
+                suppressed={!!asPreviewObj(supportPreview)?.suppressed}
+              />
+            </>
+          )}
+          <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-1">
+            <Button type="button" size="lg" variant="outline" disabled={actionBusy === 'support'}
+              onClick={() => { if (actionBusy !== 'support') setDialog(null); }}
+              className="w-full sm:w-auto">
+              Close
+            </Button>
+            {supportPreview !== 'unavailable' && (
+              <Button type="button" size="lg" disabled={actionBusy === 'support' || supportPreview === 'loading'}
+                onClick={() => { setDialog(null); void handleSupportCall(); }}
+                className="w-full sm:w-auto bg-sky-600 hover:bg-sky-700 text-white">
+                {actionBusy === 'support' ? 'Connecting…' : 'Call EasyFix Support'}
+              </Button>
+            )}
           </div>
         </OverlayShell>
       )}
