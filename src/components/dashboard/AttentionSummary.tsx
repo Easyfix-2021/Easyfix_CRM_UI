@@ -1,7 +1,13 @@
 'use client';
 
 import * as React from 'react';
-import Link from 'next/link';
+// Link removed 2026-06-03: tiles deep-link to /jobs and /my-orders tab
+// filters that currently route to menus hidden by the env-driven menu
+// filter (see hidden-menu-ids feature). Until those destinations are
+// surfaced again, the tiles render as static cards — counts still
+// update, but clicks are no-ops so ops don't land on a Coming-Soon page.
+// Re-enable by reinstating the `<Link>` wrapper below when the target
+// menus come back online.
 import {
   Clock, CheckCircle2, XCircle, BellRing, PhoneOff,
   // PackageX — visual cue for "Booked but no services attached"
@@ -164,7 +170,8 @@ export function AttentionSummary() {
         <div className="px-5 pt-4 pb-2">
           <h2 className="text-base font-semibold">Orders Needing Immediate Attention</h2>
           <p className="text-xs text-muted-foreground">
-            Click any tile to open the filtered list and act on the queue.
+            Live counts across the queue. Drill-down links are paused while the
+            target menus are off in the hidden-menu filter.
           </p>
         </div>
 
@@ -221,11 +228,18 @@ function AttentionTile({ tile, value, loading }: {
     Math.round((Math.max(titleExit, subExit) / PX_PER_SEC) * 1000),
   );
   return (
-    <Link
-      href={tile.href}
-      // Removing the link decoration so the tile reads as a tile, not
-      // as a hyperlink — hover-only shadow conveys it's clickable.
-      className="block rounded-lg border bg-card hover:shadow-md hover:border-foreground/20 transition-all p-3"
+    // Non-clickable tile (2026-06-03). Was previously a <Link href={tile.href}>
+    // with hover-shadow that signalled clickability; now a static <div>
+    // because the deep-link destinations (e.g. /jobs?tab=estimate-approved,
+    // /my-orders?tab=pending-app-ack) currently route to menus in the
+    // hidden-menu env filter, so a click lands on Coming Soon. The count
+    // is still meaningful — operators read it and act via the visible
+    // menus they have access to. Reinstate the <Link> wrapper (and the
+    // hover-shadow class) when the target menus are surfaced.
+    <div
+      className="block rounded-lg border bg-card p-3 cursor-default select-none"
+      aria-disabled="true"
+      title={`${tile.title} — drill-down temporarily disabled`}
     >
       <div className="flex items-start gap-3 min-w-0">
         <div className={`h-9 w-9 shrink-0 rounded-md grid place-items-center ${tile.iconBg}`}>
@@ -262,6 +276,6 @@ function AttentionTile({ tile, value, loading }: {
           </MarqueeOnHover>
         </div>
       </div>
-    </Link>
+    </div>
   );
 }
