@@ -3711,10 +3711,10 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer 
   /*
    * Per-tab field overrides (2026-05-19). When the operator picks
    * N service categories, each "Job K" tab carries its own values
-   * for the six fields that legacy spec'd as common-across-jobs:
+   * for the fields that legacy spec'd as common-across-jobs:
    *   - Job Image (job_image_file)
-   *   - Special Comments (remarks)
-   *   - Anything Handyman should keep in mind (efr_special_notes)
+   *   - Job Description (job_desc)         ← 2026-06-04: renamed from "Special Comments" (was bound to `remarks` — wrong column)
+   *   - Anything Handyman should keep in mind (efr_special_notes)  ← label preserved; column unchanged
    *   - Helper Required (helper_req)
    *   - Material Required (material_req)
    *   - Collected By (collected_by)
@@ -3728,6 +3728,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer 
    * to plain `set()` on `f` for single-tab.
    */
   type PerJobOverride = {
+    job_desc?: string;
     remarks?: string;
     efr_special_notes?: string;
     helper_req?: boolean;
@@ -4401,13 +4402,18 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer 
             address_instruction: (f as Record<string, unknown>).address_instruction as string | undefined,
           });
           if (address) patch.address = address;
-          // Products-section fields from legacy addEditJob. We reuse `remarks`
-          // for Special Comments and `efr_special_notes` for the
-          // "Anything Handyman should keep in mind?" prompt (both are already
-          // in MUTABLE_COLUMNS). `fk_service_type_id` / `fk_service_catg_id`
-          // carry the active filter selection.
-          setIf('remarks', f.remarks);
+          // Products-section fields from legacy addEditJob. Label/column
+          // mapping (post-2026-06-04 fix):
+          //   "Job Description" textarea                          → patch.job_desc         → tbl_job.job_desc
+          //   "Anything Handyman should keep in mind?" textarea   → patch.efr_special_notes → tbl_job.efr_special_notes
+          // `remarks` is still PATCH-able (legacy free-text notes column,
+          // used by the JobOutcomeDialog prefix path below) but no longer
+          // bound to a textarea on Confirm mode, so f.remarks is typically
+          // empty here and setIf drops it. `fk_service_type_id` /
+          // `fk_service_catg_id` carry the active filter selection.
+          setIf('job_desc', f.job_desc);
           setIf('efr_special_notes', f.efr_special_notes);
+          setIf('remarks', f.remarks);
           // helper_req is a boolean — `false` is a meaningful value the BE
           // must accept, so setIf (which omits `null`/`undefined`/`""` but
           // keeps `false`) handles it correctly. Type-check still here for
@@ -4663,11 +4669,13 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer 
         const basePayload = {
           fk_client_id: Number(f.fk_client_id),
           job_type: f.job_type,
-          // Source defaults to "manual" — the legacy UI only ever set
-          // this for Client Dashboard / Excel / API automation flows.
-          // CRM operators always go via "manual", and the new app
-          // hides the picker since it confused operators.
-          source_type: f.source_type || 'manual',
+          // Source defaults to 'CRM - New' for any new-CRM booking so the
+          // legacy 'CRM' bucket continues to denote legacy-CRM bookings
+          // unambiguously. Existing convention is mixed-case with spaces
+          // (Dashboard / Bulk Upload / Decathlon API / etc) so 'CRM - New'
+          // fits naturally. The picker is intentionally hidden — operators
+          // shouldn't override the source.
+          source_type: f.source_type || 'CRM - New',
           requested_date_time: new Date(f.requested_date_time).toISOString(),
           time_slot: f.time_slot || undefined,
           job_desc: f.job_desc || undefined,
@@ -5034,8 +5042,9 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer 
           />
         ) : null}
         {/*
-          * Job Summary strip — legacy parity. Four fields: Special Comments,
-          * Job Description, Product Quantity, Job Type. Mobile is a prominent
+          * Job Summary strip — legacy parity. Four fields: Handyman Notes
+          * (efr_special_notes), Job Description (job_desc), Product Quantity,
+          * Job Type. Mobile is a prominent
           * click-to-call link so the ops agent can dial while reading details
           * off the same strip. Kept visually minimal (2-column grid) so it
           * doesn't dominate the modal.
@@ -5070,7 +5079,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer 
             />
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1">
-            <div><span className="text-xs text-muted-foreground mr-2">Special Comments:</span>{String(initial.remarks ?? '—')}</div>
+            <div><span className="text-xs text-muted-foreground mr-2">Handyman Notes:</span>{String(initial.efr_special_notes ?? '—')}</div>
             <div><span className="text-xs text-muted-foreground mr-2">Job Description:</span>{String(initial.job_desc ?? '—')}</div>
             <div><span className="text-xs text-muted-foreground mr-2">Product Quantity:</span>{Array.isArray(initial.services) ? initial.services.length : 0}</div>
             <div><span className="text-xs text-muted-foreground mr-2">Job Type:</span><strong>{String(initial.job_type ?? '—')}</strong></div>
@@ -5908,20 +5917,26 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer 
                 <span>{getJobField('material_req') ? 'Yes' : 'No'}</span>
               </label>
             </Field>
-            {/* Special Comments + Anything Handyman — placed in a nested
-                2-col grid spanning all 3 outer columns. Ops asked for these
-                two textareas to sit half-half on the same row (2026-05-26),
-                matching the create-mode visual. resize-y locks horizontal
-                growth so the modal width stays predictable. */}
+            {/* Job Description + Anything Handyman should keep in mind — half-half row.
+                LABEL/COLUMN RECONCILIATION (2026-06-04):
+                  - "Job Description" stores to tbl_job.job_desc (the ops-facing
+                    description of what work is required). Previously mislabelled
+                    "Special Comments" but the underlying intent has always been
+                    a job description — now the label matches.
+                  - "Anything Handyman should keep in mind?" stores to
+                    tbl_job.efr_special_notes (the technician-facing pre-visit
+                    notes). Label kept verbatim; column unchanged.
+                resize-y locks horizontal growth so the modal width stays
+                predictable. */}
             <div className="md:col-span-3 grid grid-cols-1 md:grid-cols-2 gap-4">
-              <Field label="Special Comments *">
+              <Field label="Job Description *">
                 <textarea
                   required
                   rows={3}
-                  value={getJobField('remarks') ?? ''}
-                  onChange={(e) => setJobField('remarks', e.target.value)}
+                  value={getJobField('job_desc') ?? ''}
+                  onChange={(e) => setJobField('job_desc', e.target.value)}
                   className="flex w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 resize-y"
-                  placeholder="Any special notes visible to ops"
+                  placeholder="Describe the work required"
                 />
               </Field>
               <Field label="Anything Handyman should keep in mind? *">
@@ -7243,19 +7258,23 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer 
                   </label>
                 </div>
               </div>
-              {/* Side-by-side textareas. NOT `full` (would col-span-2 and
-                  push them onto separate rows); the 2-col outer grid
-                  already gives each its half. resize-y locks horizontal
-                  resize so the operator can't bust the modal width. */}
+              {/* Side-by-side textareas. Labels + bindings match the
+                  Create-mode block (see ~line 5917) — "Job Description"
+                  stores to tbl_job.job_desc, "Anything Handyman should keep
+                  in mind?" stores to tbl_job.efr_special_notes. The 2026-06-04
+                  fix renamed "Special Comments" (which had been mislabelled
+                  and writing to `remarks`) to "Job Description" and rebound
+                  it to job_desc; the Handyman label + column stayed put.
+                  resize-y locks horizontal resize. */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <Field label="Special Comments *">
+                <Field label="Job Description *">
                   <textarea
                     required
                     rows={3}
-                    value={getJobField('remarks') ?? ''}
-                    onChange={(e) => setJobField('remarks', e.target.value)}
+                    value={getJobField('job_desc') ?? ''}
+                    onChange={(e) => setJobField('job_desc', e.target.value)}
                     className="w-full border rounded px-3 py-2 text-sm bg-white resize-y"
-                    placeholder="Internal notes for ops"
+                    placeholder="Describe the work required"
                   />
                 </Field>
                 <Field label="Anything Handyman should keep in mind? *">

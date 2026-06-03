@@ -437,11 +437,15 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true 
           <textarea
             value={value.address_instruction || ''}
             onChange={(e) => patch({ address_instruction: e.target.value })}
-            rows={2}
+            rows={3}
             disabled={!editable}
+            maxLength={500}
             className="flex w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 resize-y disabled:opacity-50"
-            placeholder="Optional — landing notes for the technician (e.g. back gate open after 9pm)"
+            placeholder="Optional — landing notes for the technician. e.g. &#10;• Visit between 9am–1pm; no Sundays&#10;• Back gate open after 9pm; ring 2nd-floor bell&#10;• Avoid weekends; ground-floor access only"
           />
+          <p className="text-[10px] text-muted-foreground mt-1">
+            Mention visit windows, access notes, or day restrictions — anything the technician should know before arriving. Max 500 characters.
+          </p>
         </div>
       </div>
       {/* Right pane — Google Map. Falls back to a placeholder card if
