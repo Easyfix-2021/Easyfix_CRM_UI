@@ -60,6 +60,11 @@ type MenuRow = {
   has_child: number;
   url: string | null;
   sequence: number | null;
+  // Optional — present on /admin/menus responses (returns the raw column),
+  // absent on the legacy /shared/lookup/menus shape. Used to client-side
+  // filter deactivated menus out of the Manage Role tree so it matches the
+  // legacy CRM behaviour even though the admin endpoint returns them.
+  menu_status?: number;
 };
 
 type MenuActionRow = {
@@ -106,10 +111,19 @@ export default function ManageRolesPage() {
   // expansion (per-menu action permissions). Cached for the session.
   // Both endpoints are admin-only (already enforced by route middleware)
   // and small enough (~80 rows + ~300 rows in prod) to fetch upfront.
+  //
+  // We hit /admin/menus (NOT /shared/lookup/menus) on purpose — the shared
+  // endpoint applies the BE's NEW_CRM_VISIBLE_MENU_IDS allowlist that hides
+  // in-progress flows from the new CRM sidebar. Manage Role MUST show every
+  // active menu so admins can still toggle role access for screens that
+  // remain visible in the legacy Java CRM. menu_status=1 filter mirrors the
+  // legacy behaviour (deactivated menus aren't surfaced for role editing).
   const [allMenus, setAllMenus] = useState<MenuRow[]>([]);
   const [allActions, setAllActions] = useState<MenuActionRow[]>([]);
   useEffect(() => {
-    void api.get<MenuRow[]>('/shared/lookup/menus').then(setAllMenus).catch(() => setAllMenus([]));
+    void api.get<MenuRow[]>('/admin/menus')
+      .then((rows) => setAllMenus((rows || []).filter((m) => Number(m.menu_status) === 1)))
+      .catch(() => setAllMenus([]));
     void api.get<MenuActionRow[]>('/shared/lookup/menu-actions').then(setAllActions).catch(() => setAllActions([]));
   }, []);
 
@@ -275,7 +289,7 @@ export default function ManageRolesPage() {
           >
             {howOpen ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
             <Info className="size-4 shrink-0 text-blue-600" />
-            <span className="font-medium">How Role management works</span>
+            <span className="font-medium">How Role Management Works?</span>
             <span className="ml-auto text-xs text-muted-foreground">{howOpen ? 'Hide' : 'Show'}</span>
           </button>
           {howOpen && (
@@ -662,6 +676,15 @@ function RoleFormModal({
   const [menus, setMenus] = useState<MenuRow[]>([]);
   const [allActions, setAllActions] = useState<MenuActionRow[]>([]);
 
+  // Visibility filter state — driven by the BE's NEW_CRM_VISIBLE_MENU_IDS
+  // env. When the filter is active, every menu row that's currently being
+  // hidden from the new CRM's sidebar gets a small "Hidden in new CRM" pill
+  // so admins see at a glance which screens they're managing role access
+  // for via the legacy Java CRM only. `enabled=false` (filter off in this
+  // env) means no pill is rendered — there's nothing to flag.
+  const [hiddenMenuIds, setHiddenMenuIds] = useState<Set<number>>(new Set());
+  const [filterEnabled, setFilterEnabled] = useState(false);
+
   // Selection state — Sets keep add/remove O(1) and avoid the duplicate-id
   // bugs you'd hit with arrays. Persisted as arrays on save.
   const [selectedMenus, setSelectedMenus] = useState<Set<number>>(new Set());
@@ -681,14 +704,34 @@ function RoleFormModal({
 
   // Fetch catalogues on first open. They rarely change within a session;
   // we don't refetch on subsequent opens.
+  //
+  // /admin/menus (NOT /shared/lookup/menus) — Manage Role MUST see every
+  // active menu so admins can toggle role access for screens that remain
+  // visible in the legacy Java CRM but are hidden by the new CRM's
+  // NEW_CRM_VISIBLE_MENU_IDS allowlist. menu_status=1 filter keeps
+  // deactivated menus out of the editor (matches legacy behaviour).
   useEffect(() => {
     if (!open) return;
     if (menus.length === 0) {
-      void api.get<MenuRow[]>('/shared/lookup/menus').then(setMenus).catch(() => setMenus([]));
+      void api.get<MenuRow[]>('/admin/menus')
+        .then((rows) => setMenus((rows || []).filter((m) => Number(m.menu_status) === 1)))
+        .catch(() => setMenus([]));
     }
     if (allActions.length === 0) {
       void api.get<MenuActionRow[]>('/shared/lookup/menu-actions').then(setAllActions).catch(() => setAllActions([]));
     }
+    // Visibility filter — one extra small fetch so we know which menu_ids
+    // are currently hidden in the new CRM and can flag them in the tree.
+    // Backend may return either { enabled, hiddenMenuIds, … } (post-pill
+    // patch) or { enabled, hiddenLegacyUrls } (pre-pill clients) — we
+    // tolerate both shapes so a partial deploy doesn't break the page.
+    void api.get<{ enabled?: boolean; hiddenMenuIds?: number[] }>('/shared/lookup/menu-visibility')
+      .then((res) => {
+        setFilterEnabled(Boolean(res?.enabled));
+        const ids = Array.isArray(res?.hiddenMenuIds) ? res.hiddenMenuIds : [];
+        setHiddenMenuIds(new Set(ids.map(Number).filter((n) => Number.isFinite(n))));
+      })
+      .catch(() => { /* leave defaults — no pill rendered */ });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -1009,6 +1052,14 @@ function RoleFormModal({
                         onChange={() => toggleParent(parent)}
                       />
                       <span className="font-medium text-sm flex-1">{parent.menu_name}</span>
+                      {filterEnabled && hiddenMenuIds.has(parent.menu_id) && (
+                        <span
+                          className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 font-medium whitespace-nowrap"
+                          title="This menu is currently hidden from the new CRM sidebar by the NEW_CRM_VISIBLE_MENU_IDS env filter. Role access is still relevant for the legacy Java CRM, which reads tbl_menu directly."
+                        >
+                          Hidden in new CRM
+                        </span>
+                      )}
                       <button
                         type="button"
                         className="text-xs text-blue-600 hover:underline"
@@ -1045,6 +1096,14 @@ function RoleFormModal({
                               onChange={() => toggleMenu(child.menu_id)}
                             />
                             <span className="flex-1">{child.menu_name}</span>
+                            {filterEnabled && hiddenMenuIds.has(child.menu_id) && (
+                              <span
+                                className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 font-medium whitespace-nowrap"
+                                title="This menu is currently hidden from the new CRM sidebar by the NEW_CRM_VISIBLE_MENU_IDS env filter. Role access is still relevant for the legacy Java CRM, which reads tbl_menu directly."
+                              >
+                                Hidden in new CRM
+                              </span>
+                            )}
                             <span className="text-[10px] text-muted-foreground font-mono">#{child.menu_id}</span>
                           </div>
                           <MenuActionRows
