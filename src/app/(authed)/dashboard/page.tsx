@@ -155,9 +155,14 @@ function FlowCardTile({ card, value, loading }: { card: FlowCard; value: number;
     3000,
     Math.round((Math.max(titleExit, subExit) / PX_PER_SEC) * 1000),
   );
+  // Dashboard cards are now display-only — clicks disabled per ops 2026-06-04.
+  // Previously each card linked to `/my-orders?tab=<slug>`; that drove operators
+  // off the dashboard mid-glance. The funnel-narrative + count read better as a
+  // single overview surface; navigation lives on the sidebar / Jobs menu now.
+  // Hover lift / shadow stay so the cards still feel alive, just non-interactive.
   return (
-    <Link href={card.href} className="block h-full group/card">
-      <div className={`rounded-lg bg-gradient-to-br ${card.tint} text-white shadow-sm hover:shadow-md hover:scale-[1.02] transition-all p-3 h-32 flex flex-col gap-2 overflow-hidden`}>
+    <div className="block h-full group/card cursor-default">
+      <div className={`rounded-lg bg-gradient-to-br ${card.tint} text-white shadow-sm p-3 h-32 flex flex-col gap-2 overflow-hidden`}>
         <div className="flex items-center justify-between">
           <div className="h-7 w-7 rounded-md bg-white/15 grid place-items-center shrink-0">
             <Icon className="h-4 w-4" />
@@ -187,7 +192,7 @@ function FlowCardTile({ card, value, loading }: { card: FlowCard; value: number;
           </MarqueeOnHover>
         </div>
       </div>
-    </Link>
+    </div>
   );
 }
 

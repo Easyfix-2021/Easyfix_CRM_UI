@@ -188,6 +188,11 @@ export function JobModal({
   // Add-Remarks popup for the Unconfirmed view-mode footer. Lives at
   // the modal root so it can dismiss without unmounting JobForm/View.
   const [addRemarksOpen, setAddRemarksOpen] = useState(false);
+  // Bumped by every AddRemarksDialog save — drives JobCommentsTab's refetch
+  // so the just-added remark shows up immediately without manual refresh.
+  // (The Comments tab maintains its own list state and isn't re-mounted on
+  // refresh(), so a separate trigger is needed.)
+  const [commentsRefreshKey, setCommentsRefreshKey] = useState(0);
   /*
    * `compact` shrinks the modal to fit-to-content while the create-flow
    * mobile gate is showing. Once the operator submits the mobile and
@@ -371,6 +376,7 @@ export function JobModal({
                   onRefresh={refresh}
                   initialTab={initialTab}
                   onDirtyChange={(dirty) => { hasUnsavedQtyRef.current = dirty; }}
+                  commentsRefreshKey={commentsRefreshKey}
                 />
           )}
           {/* Mobile-first gate for the CREATE flow. Mirrors legacy
@@ -501,7 +507,21 @@ export function JobModal({
           open={addRemarksOpen}
           jobId={Number(jobId)}
           onClose={() => setAddRemarksOpen(false)}
-          onSaved={() => { setAddRemarksOpen(false); refresh(); onSaved?.(); }}
+          onSaved={() => {
+            setAddRemarksOpen(false);
+            // Trigger ONLY the Comments-tab refetch — do NOT call
+            // refresh() here (2026-06-04 fix). refresh() refetches the
+            // whole job and causes the modal to visibly flash/reload,
+            // which ops flagged as jarring. The new remark only affects
+            // tbl_job_comment, not the job row itself, so a scoped
+            // refetch via the comments-key bump is sufficient. The
+            // parent's onSaved?.() still fires so the underlying jobs
+            // list (last_update_time-driven sort, comment counts on
+            // row cards if any) can update — that runs against the
+            // PARENT's data tree, not the open modal.
+            setCommentsRefreshKey((k) => k + 1);
+            onSaved?.();
+          }}
         />
       )}
     </Dialog>
@@ -724,7 +744,7 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
 
 // ─── View body (tabbed read-only display) ────────────────────────────────────
 
-function ViewBody({ job, onRefresh, initialTab, onDirtyChange }: { job: Job; onRefresh?: () => void; initialTab?: string; onDirtyChange?: (dirty: boolean) => void }) {
+function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKey = 0 }: { job: Job; onRefresh?: () => void; initialTab?: string; onDirtyChange?: (dirty: boolean) => void; commentsRefreshKey?: number }) {
   const images = Array.isArray((job as Record<string, unknown>).images)
     ? ((job as Record<string, unknown>).images as Array<Record<string, unknown>>)
     : [];
@@ -886,7 +906,11 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange }: { job: Job; onR
           Backend: GET/POST /admin/jobs/:id/comments (tbl_job_comment).
           comment_on stages: 1=created, 2=check_in, 3=check_out, 4=in_progress. */}
       <TabsContent value="comments">
-        <JobCommentsTab jobId={job.job_id as number} />
+        <JobCommentsTab jobId={job.job_id as number} refreshKey={commentsRefreshKey} />
+        {/* commentsRefreshKey is bumped by the JobModal-level AddRemarksDialog
+            onSaved (see ~line 514); prop-drilled through ViewBody so the
+            Comments tab refetches the moment a remark lands, without
+            needing to be re-mounted. */}
       </TabsContent>
 
       {/* Materials tab — legacy `material.vm` + MaterialAction.java.
@@ -2643,7 +2667,7 @@ const COMMENT_STAGE_LABEL: Record<number, string> = {
   4: 'In Progress',
 };
 
-function JobCommentsTab({ jobId }: { jobId: number }) {
+function JobCommentsTab({ jobId, refreshKey = 0 }: { jobId: number; refreshKey?: number }) {
   const [comments, setComments] = useState<JobComment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -2660,7 +2684,11 @@ function JobCommentsTab({ jobId }: { jobId: number }) {
       setError(e instanceof ApiError ? e.message : 'Failed to load comments');
     } finally { setLoading(false); }
   }
-  useEffect(() => { void load(); /* eslint-disable-next-line */ }, [jobId]);
+  // Refetch on mount, on jobId change, AND whenever the parent bumps
+  // `refreshKey` (e.g. after AddRemarksDialog saves a remark from the
+  // view-mode footer — the dialog lives outside this component's tree
+  // so a parent-driven trigger is the only way the new row reaches us).
+  useEffect(() => { void load(); /* eslint-disable-next-line */ }, [jobId, refreshKey]);
 
   async function postComment() {
     const text = draft.trim();
@@ -2705,15 +2733,34 @@ function JobCommentsTab({ jobId }: { jobId: number }) {
 
       {error && <div className="text-sm text-red-600">{error}</div>}
 
-      {/* List */}
-      {loading && <div className="text-sm text-muted-foreground py-6 text-center">Loading…</div>}
+      {/* List
+       * Loading UX rules:
+       *  • First-ever load (no comments yet) → big centered "Loading…" placeholder.
+       *  • Refetch with existing comments     → keep the list visible AND show a
+       *                                          subtle "Refreshing…" pill at the
+       *                                          top. The existing rows stay so the
+       *                                          operator doesn't lose their place
+       *                                          mid-scroll. The new row pops in at
+       *                                          the top once the refetch resolves
+       *                                          (DESC order — latest first).
+       *  • No comments, not loading           → empty-state card.
+       */}
+      {loading && comments.length === 0 && (
+        <div className="text-sm text-muted-foreground py-6 text-center">Loading…</div>
+      )}
       {!loading && comments.length === 0 && (
         <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
           No comments on this job yet.
         </div>
       )}
-      {!loading && comments.length > 0 && (
+      {comments.length > 0 && (
         <ul className="space-y-2">
+          {loading && (
+            <li className="text-[11px] text-muted-foreground text-center py-1.5 inline-flex items-center justify-center gap-1.5 w-full">
+              <span className="inline-block h-3 w-3 rounded-full border-2 border-sky-500/30 border-t-sky-500 animate-spin" aria-hidden />
+              Refreshing comments…
+            </li>
+          )}
           {comments.map((c) => (
             <li key={c.id} className="rounded-md border bg-card p-3">
               <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
@@ -6020,7 +6067,11 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer 
               and styling as before; only the wrapping flex direction
               changed from justify-end to justify-between. */}
           <div className="flex items-center gap-2 flex-wrap justify-end">
-          <CancelButton onCancel={onCancel} />
+          {/* "Close" (not "Cancel") — this button just dismisses the modal
+              without rolling back the booking, since the job already exists
+              in Confirm & Schedule mode. "Cancel" would imply aborting the
+              booking, which this never does. */}
+          <CancelButton onCancel={onCancel} label="Close" />
           {canOutcomeButtons && (
             <Button
               type="button"
@@ -6105,6 +6156,22 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer 
           </LoadBtn>
           </div>
         </div>
+        {/* AddRemarksDialog — same situation as JobOutcomeDialog below:
+            confirm-mode early-returns at this if-block, so the mount at
+            ~line 7433 (inside the create/edit form's render block) is
+            never reached. Inlining here mirrors the JobOutcomeDialog
+            pattern. Without this, the "Add Remarks" button in the
+            Confirm & Schedule footer (~line 6015) flips state but
+            nothing renders — fixed 2026-06-04. Guard on initial?.job_id
+            matches the create/edit-side mount. */}
+        {initial?.job_id && (
+          <AddRemarksDialog
+            open={addRemarksFormOpen}
+            jobId={initial.job_id}
+            onClose={() => setAddRemarksFormOpen(false)}
+            onSaved={() => { setAddRemarksFormOpen(false); }}
+          />
+        )}
         {/* Outcome popup — identical to the one wired on the create
             form below. Inlined here because confirm-mode early-returns
             before reaching the create form's render block, so the
@@ -6115,10 +6182,15 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer 
           onClose={() => setOutcomeDialog(null)}
           onSubmit={({ dueTo, reason, reasonId, remarks }) => {
             const mode = outcomeDialog?.mode ?? 'unreachable';
-            const tag = mode === 'unreachable' ? 'Unreachable' : 'Enquiry';
-            const dueLabel = mode === 'unreachable' ? 'Pending Due To' : 'Open Due To';
-            const prefix = `[${tag} · ${dueLabel}: ${dueTo} · Reason: ${reason}]`;
-            const merged = remarks ? `${prefix} ${remarks}` : prefix;
+            // Comment text now carries only the operator's typed remark
+            // (2026-06-04 — dropped the legacy "[Unreachable/Enquiry · X ·
+            // Reason: Y]" structured prefix). The structured fields
+            // (dueTo, reasonId) are still stashed in outcomePayload below
+            // so submit() can stamp the canonical columns on tbl_job
+            // (enquiry_reason_id, cancel_by) + write a clean tbl_job_comment
+            // row (comment_on=16/17). The Comments tab joins back to
+            // tbl_enum_reason for the label on render — no info lost.
+            const merged = remarks || '';
             setF((s) => ({ ...s, remarks: merged }));
             // Stash the structured payload for submit() to use AFTER
             // the status PATCH lands — see the Enquiry persistence
@@ -7372,6 +7444,11 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer 
           ) : null}
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
+        {/* This footer is reached only in create / edit modes — confirm mode
+            early-returns at line 5024 with its own footer (see line 6023,
+            which uses label="Close" because the button doesn't roll back
+            the booking). Here in create mode, Cancel really does abort an
+            in-flight booking, so the default label is correct. */}
         <CancelButton onCancel={onCancel} />
         {isConfirm ? (
           <>
@@ -7450,11 +7527,12 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer 
         onSubmit={({ dueTo, reason, reasonId, remarks }) => {
           const mode = outcomeDialog?.mode ?? 'unreachable';
           const tag = mode === 'unreachable' ? 'Unreachable' : 'Enquiry';
-          const dueLabel = mode === 'unreachable' ? 'Pending Due To' : 'Open Due To';
-          const prefix = `[${tag} · ${dueLabel}: ${dueTo} · Reason: ${reason}]`;
-          // Preserve any existing remarks the operator typed below
-          // the structured prefix.
-          const merged = remarks ? `${prefix} ${remarks}` : prefix;
+          // Comment text now carries only the operator's typed remark
+          // (2026-06-04 — dropped the legacy "[Unreachable/Enquiry · X ·
+          // Reason: Y]" prefix). dueTo + reasonId stay in outcomePayload
+          // so submit() can stamp the canonical tbl_job columns separately;
+          // the Comments tab joins back to tbl_enum_reason for the label.
+          const merged = remarks || '';
           setF((s) => ({ ...s, remarks: merged }));
           // Stash the structured payload so submit() can stamp
           // enquiry_reason_id / enquiry_comment / cancel_by + post a
@@ -8807,20 +8885,31 @@ function JobOutcomeDialog({
     }
   }, [open, mode]);
 
-  // Fetch reasons for the active mode whenever the dialog opens or
-  // mode flips. Empty result is acceptable — the dropdown will show
-  // the placeholder option only, and Submit stays disabled until a
-  // reason is picked.
+  // Fetch reasons for the active mode + selected "Due To" radio.
+  // Refetches whenever the dialog opens, the mode flips, OR the
+  // operator switches the radio — the BE narrows the list to
+  // (action_type = 25 for Unreachable / 24 for Enquiry) AND
+  // (user_type = the radio's mapped int — Customer=1, Client=2,
+  // EasyFix=3, Technician=4). Mirrors the AddRemarksDialog refetch
+  // pattern. Also resets the picked reason when dueTo changes so
+  // a stale label from the previous bucket doesn't render as an
+  // opaque value in the dropdown.
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     setReasonsLoading(true);
-    api.get<Array<{ id: number | null; label: string }>>('/admin/jobs/action-reasons', { type: mode })
-      .then((rows) => { if (!cancelled) setReasons(rows || []); })
-      .catch(() => { if (!cancelled) setReasons([]); })
+    setReason('');
+    // Module-level 60s cache (see fetchReasonsCached above) means
+    // switching radios back to a previously-picked bucket within the
+    // minute is instant — no BE round-trip.
+    fetchReasonsCached('/admin/jobs/action-reasons', {
+      type: mode,
+      dueTo: dueTo.toLowerCase(),
+    })
+      .then((rows) => { if (!cancelled) setReasons(rows); })
       .finally(() => { if (!cancelled) setReasonsLoading(false); });
     return () => { cancelled = true; };
-  }, [open, mode]);
+  }, [open, mode, dueTo]);
 
   const title = mode === 'unreachable' ? 'Job Unreachable' : 'Job Enquiry';
   const dueLabel = mode === 'unreachable' ? 'Pending Due To' : 'Open Due To';
@@ -9086,6 +9175,45 @@ function ChangeDescriptionDialog({ open, onClose, initialDesc, onSubmit }: {
 const REMARK_DUE_TO_OPTIONS: Array<'Customer' | 'Client' | 'EasyFix' | 'Technician'> = [
   'Customer', 'Client', 'EasyFix', 'Technician',
 ];
+
+/*
+ * Module-level cache for the reason dropdowns (Add Remarks +
+ * JobOutcomeDialog). Keyed by `${endpoint}|${dueTo}` so each popup +
+ * radio combination caches independently. 60s TTL — the
+ * `action_taken_reason` table is admin-edited maybe-once-a-month so
+ * stale data for up to a minute is well within tolerance, and the
+ * cache kills the "fetch every time the radio changes" pattern ops
+ * flagged on 2026-06-05.
+ *
+ * Reusing one shared map across both dialogs means switching radios
+ * back-and-forth (Customer → Client → Customer) returns the second
+ * Customer fetch instantly from cache. Module scope persists for the
+ * tab's lifetime; refresh clears it.
+ */
+type CachedReasonRow = { id: number | null; label: string };
+const _reasonsCache = new Map<string, { rows: CachedReasonRow[]; expires: number }>();
+const REASONS_TTL_MS = 60_000;
+
+async function fetchReasonsCached(
+  endpoint: string,
+  params: Record<string, string>,
+): Promise<CachedReasonRow[]> {
+  // Stable cache key — endpoint distinguishes Add Remarks (`comment-reasons`)
+  // from Outcome (`action-reasons`); `type` distinguishes
+  // unreachable vs enquiry on the outcome side; `dueTo` is the radio.
+  const cacheKey = `${endpoint}|${params.type || '-'}|${params.dueTo || '-'}`;
+  const now = Date.now();
+  const hit = _reasonsCache.get(cacheKey);
+  if (hit && hit.expires > now) return hit.rows;
+  try {
+    const rows = (await api.get<CachedReasonRow[]>(endpoint, params)) || [];
+    _reasonsCache.set(cacheKey, { rows, expires: now + REASONS_TTL_MS });
+    return rows;
+  } catch {
+    // Don't poison the cache on a network error — let the next call retry.
+    return [];
+  }
+}
 function AddRemarksDialog({ open, jobId, onClose, onSaved }: {
   open: boolean; jobId: number;
   onClose: () => void; onSaved: () => void;
@@ -9114,10 +9242,16 @@ function AddRemarksDialog({ open, jobId, onClose, onSaved }: {
     let cancelled = false;
     setReasonsLoading(true);
     setReasonId('');
-    api.get<Array<{ id: number; label: string }>>('/admin/jobs/comment-reasons', {
-      dueTo: dueTo.toLowerCase(),
-    })
-      .then((rows) => { if (!cancelled) setReasons(rows || []); })
+    // Module-level 60s cache (see fetchReasonsCached above) reduces
+    // BE round-trips when the operator toggles the radio multiple times.
+    fetchReasonsCached('/admin/jobs/comment-reasons', { dueTo: dueTo.toLowerCase() })
+      .then((rows) => {
+        if (cancelled) return;
+        // AddRemarksDialog needs id as a non-null number; cached helper
+        // returns id|null for compatibility with JobOutcomeDialog. Cast
+        // here — comment-reasons never returns null ids by contract.
+        setReasons((rows || []).filter((r) => r.id != null).map((r) => ({ id: Number(r.id), label: r.label })));
+      })
       .catch(() => { if (!cancelled) setReasons([]); })
       .finally(() => { if (!cancelled) setReasonsLoading(false); });
     return () => { cancelled = true; };
@@ -9134,13 +9268,14 @@ function AddRemarksDialog({ open, jobId, onClose, onSaved }: {
     if (!remark) { setErr('Please enter a remark before saving.'); return; }
     setLoading(true); setErr(null);
     try {
-      const reasonLabel = reasons.find((r) => String(r.id) === reasonId)?.label || '';
-      // Structured prefix is the same shape as JobOutcomeDialog so
-      // ops can grep / parse remarks the same way regardless of which
-      // popup created the row.
-      const prefix = `[Open Due To: ${dueTo} · Reason: ${reasonLabel}]`;
+      // Comment column stores ONLY the operator's typed remark (2026-06-04 —
+      // dropped the legacy "[Open Due To: X · Reason: Y]" structured prefix
+      // per ops). The reason is fully captured by `enum_reason_id` below;
+      // the Comments tab joins back to `tbl_enum_reason` for the label on
+      // render, so no information is lost — just no prefix clutter in the
+      // text column.
       const payload = {
-        comments: `${prefix} ${remark}`,
+        comments: remark,
         comment_on: 1, // legacy "created" stage code — see commentBody Joi schema
         enum_reason_id: Number(reasonId),
       };
@@ -9160,6 +9295,15 @@ function AddRemarksDialog({ open, jobId, onClose, onSaved }: {
           </span>
           <DialogTitle className="text-[15px] font-semibold tracking-tight">Job CheckOut Remarks</DialogTitle>
         </div>
+        {/* Screen-reader-only description — required by Radix to satisfy
+            aria-describedby. Without it, modern Radix emits a console
+            warning AND nested dialogs (this one mounted inside JobModal)
+            can be unreachable because the parent stays focus-trapped.
+            Visible header above already conveys intent to sighted users,
+            so we keep this off-screen rather than adding visual noise. */}
+        <DialogDescription className="sr-only">
+          Capture a remark with a reason for this job — saved to the job timeline and visible to ops.
+        </DialogDescription>
         <div className="p-5 space-y-4">
           <div className="grid grid-cols-[150px_1fr] items-center gap-3">
             <label className="text-sm font-medium text-right">
