@@ -194,6 +194,24 @@ export function JobModal({
   // refresh(), so a separate trigger is needed.)
   const [commentsRefreshKey, setCommentsRefreshKey] = useState(0);
   /*
+   * Optimistic pending-comment list (2026-06-05).
+   *
+   * When the operator clicks Save in AddRemarksDialog, we synthesise a
+   * client-side JobComment row and prepend it here immediately — the
+   * dialog closes, the comment is visible at the top of the Comments tab
+   * with a "Sending…" pill, and the actual POST runs in the background.
+   * Reconciliation: when JobCommentsTab's refetch completes (triggered by
+   * `commentsRefreshKey` bump after POST resolves), `onCommentsLoaded`
+   * fires and we drop the matching pending row. On POST failure the
+   * dialog's catch removes the pending row and toasts the error.
+   *
+   * Negative `id` is the sentinel — real `tbl_job_comment` rows are
+   * AUTO_INCREMENT positives, so a negative tempId is collision-free and
+   * `key={c.id}` in the list render stays stable.
+   */
+  const [pendingComments, setPendingComments] = useState<Array<JobComment & { _pending?: true }>>([]);
+  const { me: currentMe } = useMe();
+  /*
    * `compact` shrinks the modal to fit-to-content while the create-flow
    * mobile gate is showing. Once the operator submits the mobile and
    * the gate transitions to the full form, the gate calls
@@ -377,6 +395,8 @@ export function JobModal({
                   initialTab={initialTab}
                   onDirtyChange={(dirty) => { hasUnsavedQtyRef.current = dirty; }}
                   commentsRefreshKey={commentsRefreshKey}
+                  pendingComments={pendingComments}
+                  onCommentsLoaded={() => setPendingComments([])}
                 />
           )}
           {/* Mobile-first gate for the CREATE flow. Mirrors legacy
@@ -501,24 +521,34 @@ export function JobModal({
       {/* AddRemarks popup — POSTs to /admin/jobs/:id/comments with the
           legacy "created" stage code (comment_on=1). Reuses the
           existing comments endpoint so the remark lands in
-          tbl_job_comment alongside any prior follow-up notes. */}
+          tbl_job_comment alongside any prior follow-up notes.
+          Optimistic flow (2026-06-05): the dialog closes the MOMENT
+          Save is clicked and synthesises a pending JobComment row
+          (`onOptimisticAdd`); the real POST runs in the background
+          and `onSaved` fires when it lands. Reconciliation happens
+          inside JobCommentsTab.onLoaded → clearing pendingComments.
+          POST failure → onPendingFailed removes the pending row + a
+          toast surfaces the error since the dialog is already gone. */}
       {jobId && (
         <AddRemarksDialog
           open={addRemarksOpen}
           jobId={Number(jobId)}
+          currentUserName={(currentMe?.user?.user_name || currentMe?.user?.official_email || 'You') as string}
           onClose={() => setAddRemarksOpen(false)}
-          onSaved={() => {
+          onOptimisticAdd={(row) => {
+            // Prepend the pending row + close the dialog immediately.
+            // The Comments tab will surface it with a "Sending…" pill.
+            setPendingComments((prev) => [row, ...prev]);
             setAddRemarksOpen(false);
-            // Trigger ONLY the Comments-tab refetch — do NOT call
-            // refresh() here (2026-06-04 fix). refresh() refetches the
-            // whole job and causes the modal to visibly flash/reload,
-            // which ops flagged as jarring. The new remark only affects
-            // tbl_job_comment, not the job row itself, so a scoped
-            // refetch via the comments-key bump is sufficient. The
-            // parent's onSaved?.() still fires so the underlying jobs
-            // list (last_update_time-driven sort, comment counts on
-            // row cards if any) can update — that runs against the
-            // PARENT's data tree, not the open modal.
+          }}
+          onPendingFailed={(tempId) => {
+            // POST rejected — drop the optimistic row + surface error.
+            setPendingComments((prev) => prev.filter((c) => c.id !== tempId));
+          }}
+          onSaved={() => {
+            // POST succeeded — bump refresh key so JobCommentsTab refetches
+            // and the canonical row replaces the pending one. (Pending
+            // cleanup happens via onCommentsLoaded after refetch finishes.)
             setCommentsRefreshKey((k) => k + 1);
             onSaved?.();
           }}
@@ -744,7 +774,7 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
 
 // ─── View body (tabbed read-only display) ────────────────────────────────────
 
-function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKey = 0 }: { job: Job; onRefresh?: () => void; initialTab?: string; onDirtyChange?: (dirty: boolean) => void; commentsRefreshKey?: number }) {
+function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKey = 0, pendingComments = [], onCommentsLoaded }: { job: Job; onRefresh?: () => void; initialTab?: string; onDirtyChange?: (dirty: boolean) => void; commentsRefreshKey?: number; pendingComments?: Array<JobComment & { _pending?: true }>; onCommentsLoaded?: () => void }) {
   const images = Array.isArray((job as Record<string, unknown>).images)
     ? ((job as Record<string, unknown>).images as Array<Record<string, unknown>>)
     : [];
@@ -906,11 +936,20 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
           Backend: GET/POST /admin/jobs/:id/comments (tbl_job_comment).
           comment_on stages: 1=created, 2=check_in, 3=check_out, 4=in_progress. */}
       <TabsContent value="comments">
-        <JobCommentsTab jobId={job.job_id as number} refreshKey={commentsRefreshKey} />
+        <JobCommentsTab
+          jobId={job.job_id as number}
+          refreshKey={commentsRefreshKey}
+          pendingComments={pendingComments}
+          onLoaded={onCommentsLoaded}
+        />
         {/* commentsRefreshKey is bumped by the JobModal-level AddRemarksDialog
             onSaved (see ~line 514); prop-drilled through ViewBody so the
             Comments tab refetches the moment a remark lands, without
-            needing to be re-mounted. */}
+            needing to be re-mounted. `pendingComments` carries the optimistic
+            row the dialog stamps on Save-click (~line 524) so it renders
+            instantly at the top of the list with a "Sending…" pill — once
+            the refetch completes, `onCommentsLoaded` fires and the parent
+            clears pendings so they're replaced by the canonical rows. */}
       </TabsContent>
 
       {/* Materials tab — legacy `material.vm` + MaterialAction.java.
@@ -2667,19 +2706,30 @@ const COMMENT_STAGE_LABEL: Record<number, string> = {
   4: 'In Progress',
 };
 
-function JobCommentsTab({ jobId, refreshKey = 0 }: { jobId: number; refreshKey?: number }) {
+function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded }: { jobId: number; refreshKey?: number; pendingComments?: Array<JobComment & { _pending?: true }>; onLoaded?: () => void }) {
   const [comments, setComments] = useState<JobComment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [stage, setStage] = useState<number>(4);
   const [posting, setPosting] = useState(false);
+  // Local optimistic state for THIS tab's inline textarea. Parent-supplied
+  // pendings (from AddRemarksDialog) come via `pendingComments` prop;
+  // local pendings (from postComment below) stay self-contained because
+  // the input + the list live inside the same component.
+  const [localPending, setLocalPending] = useState<Array<JobComment & { _pending?: true }>>([]);
+  const { me: currentMeForTab } = useMe();
+  const currentUserName = (currentMeForTab?.user?.user_name || currentMeForTab?.user?.official_email || 'You') as string;
 
   async function load() {
     setLoading(true); setError(null);
     try {
       const data = await api.get<JobComment[]>(`/admin/jobs/${jobId}/comments`);
       setComments(Array.isArray(data) ? data : []);
+      // Reconciliation hook — parent uses this to clear its pendings
+      // (the canonical rows are now in `comments`, so the optimistic
+      // placeholders are redundant).
+      onLoaded?.();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Failed to load comments');
     } finally { setLoading(false); }
@@ -2693,15 +2743,53 @@ function JobCommentsTab({ jobId, refreshKey = 0 }: { jobId: number; refreshKey?:
   async function postComment() {
     const text = draft.trim();
     if (!text) return;
+    // Optimistic prepend (2026-06-05) — synthesise a pending row + clear
+    // the input immediately. Real POST runs after; success path reaches
+    // load() which fetches the canonical row; we then drop the matching
+    // local pending. Failure path drops the pending + surfaces a toast.
+    const tempId = -Date.now() - Math.floor(Math.random() * 1000);
+    const optimistic: JobComment & { _pending?: true } = {
+      id: tempId,
+      job_id: jobId,
+      comments: text,
+      comment_on: stage,
+      stage: COMMENT_STAGE_LABEL[stage] ?? String(stage),
+      created_on: new Date().toISOString(),
+      appointment_on: null,
+      commented_by: null,
+      user_name: currentUserName,
+      efr_id: null,
+      enum_reason_id: null,
+      enum_desc: null,
+      _pending: true,
+    };
+    setLocalPending((prev) => [optimistic, ...prev]);
+    setDraft('');
     setPosting(true); setError(null);
     try {
       await api.post(`/admin/jobs/${jobId}/comments`, { comments: text, comment_on: stage });
-      setDraft('');
       await load();
+      // Drop the matching pending now that the canonical row is in the list.
+      setLocalPending((prev) => prev.filter((c) => c.id !== tempId));
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Failed to post comment');
+      // POST rejected — pull the pending row so the operator isn't left
+      // with a phantom comment, and surface the error.
+      setLocalPending((prev) => prev.filter((c) => c.id !== tempId));
+      const msg = e instanceof ApiError ? e.message : 'Failed to post comment';
+      setError(msg);
+      showToast({ variant: 'error', message: msg });
     } finally { setPosting(false); }
   }
+
+  // Merge parent + local pendings ABOVE the fetched list. Parent pendings
+  // first (they came from the AddRemarksDialog which closes before this
+  // tab's own input is interacted with), then local pendings, then the
+  // canonical comments (already DESC-sorted by the BE).
+  const allRows: Array<JobComment & { _pending?: true }> = [
+    ...pendingComments,
+    ...localPending,
+    ...comments,
+  ];
 
   return (
     <div className="space-y-3">
@@ -2745,15 +2833,15 @@ function JobCommentsTab({ jobId, refreshKey = 0 }: { jobId: number; refreshKey?:
        *                                          (DESC order — latest first).
        *  • No comments, not loading           → empty-state card.
        */}
-      {loading && comments.length === 0 && (
+      {loading && allRows.length === 0 && (
         <div className="text-sm text-muted-foreground py-6 text-center">Loading…</div>
       )}
-      {!loading && comments.length === 0 && (
+      {!loading && allRows.length === 0 && (
         <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
           No comments on this job yet.
         </div>
       )}
-      {comments.length > 0 && (
+      {allRows.length > 0 && (
         <ul className="space-y-2">
           {loading && (
             <li className="text-[11px] text-muted-foreground text-center py-1.5 inline-flex items-center justify-center gap-1.5 w-full">
@@ -2761,8 +2849,11 @@ function JobCommentsTab({ jobId, refreshKey = 0 }: { jobId: number; refreshKey?:
               Refreshing comments…
             </li>
           )}
-          {comments.map((c) => (
-            <li key={c.id} className="rounded-md border bg-card p-3">
+          {allRows.map((c) => (
+            <li
+              key={c.id}
+              className={`rounded-md border bg-card p-3 ${c._pending ? 'opacity-75 border-dashed border-sky-300 bg-sky-50/40' : ''}`}
+            >
               <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
                 <span>
                   <span className="font-medium text-foreground">{c.user_name ?? 'Unknown user'}</span>
@@ -2770,6 +2861,15 @@ function JobCommentsTab({ jobId, refreshKey = 0 }: { jobId: number; refreshKey?:
                   <span className="inline-block bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">
                     {COMMENT_STAGE_LABEL[c.comment_on] ?? c.stage}
                   </span>
+                  {c._pending && (
+                    <>
+                      {' · '}
+                      <span className="inline-flex items-center gap-1 bg-sky-100 text-sky-800 rounded px-1.5 py-0.5">
+                        <span className="inline-block h-2 w-2 rounded-full border-2 border-sky-600/30 border-t-sky-600 animate-spin" aria-hidden />
+                        Sending…
+                      </span>
+                    </>
+                  )}
                 </span>
                 <span>{formatDate(c.created_on)}</span>
               </div>
@@ -9214,9 +9314,21 @@ async function fetchReasonsCached(
     return [];
   }
 }
-function AddRemarksDialog({ open, jobId, onClose, onSaved }: {
+function AddRemarksDialog({ open, jobId, onClose, onSaved, currentUserName = 'You', onOptimisticAdd, onPendingFailed }: {
   open: boolean; jobId: number;
   onClose: () => void; onSaved: () => void;
+  // Display name to stamp on the optimistic comment row. Defaults to "You"
+  // when the parent doesn't have a resolved user (shouldn't happen in
+  // practice — `useMe()` is available everywhere this dialog opens).
+  currentUserName?: string;
+  // Called the MOMENT Save is clicked (before the POST resolves) with a
+  // fully-shaped JobComment row carrying a negative `id` (tempId). The
+  // parent prepends it to its `pendingComments` list which the
+  // JobCommentsTab renders at the top with a "Sending…" pill. Both this
+  // and `onPendingFailed` are optional — when omitted the dialog falls
+  // back to the legacy "wait for POST, then close" behaviour.
+  onOptimisticAdd?: (row: JobComment & { _pending?: true }) => void;
+  onPendingFailed?: (tempId: number) => void;
 }) {
   const [dueTo, setDueTo] = useState<string>('Customer');
   const [reasonId, setReasonId] = useState<string>('');
@@ -9266,19 +9378,54 @@ function AddRemarksDialog({ open, jobId, onClose, onSaved }: {
     const remark = text.trim();
     if (!reasonId) { setErr('Please pick a reason.'); return; }
     if (!remark) { setErr('Please enter a remark before saving.'); return; }
+    // Comment column stores ONLY the operator's typed remark (2026-06-04 —
+    // dropped the legacy "[Open Due To: X · Reason: Y]" structured prefix
+    // per ops). Reason is canonically in enum_reason_id below; the
+    // Comments tab joins back to `tbl_enum_reason` for the label on render.
+    const reasonLabel = reasons.find((r) => String(r.id) === reasonId)?.label || null;
+    const payload = {
+      comments: remark,
+      comment_on: 1, // legacy "created" stage — see commentBody Joi schema
+      enum_reason_id: Number(reasonId),
+    };
+    // Optimistic flow (2026-06-05). Stamp a pending row + close the dialog
+    // immediately so the operator sees their comment at the top of the
+    // Comments tab WHILE the POST is in flight. Negative `id` is the
+    // sentinel so the parent can match it on success/failure callbacks.
+    const tempId = -Date.now() - Math.floor(Math.random() * 1000);
+    const optimistic: JobComment & { _pending?: true } = {
+      id: tempId,
+      job_id: jobId,
+      comments: remark,
+      comment_on: 1,
+      stage: 'created',
+      created_on: new Date().toISOString(),
+      appointment_on: null,
+      commented_by: null,
+      user_name: currentUserName,
+      efr_id: null,
+      enum_reason_id: Number(reasonId),
+      enum_desc: reasonLabel,
+      _pending: true,
+    };
+    if (onOptimisticAdd) {
+      // Optimistic-mode path: dialog closes synchronously; POST runs as a
+      // background task; reconciliation happens inside JobCommentsTab.
+      onOptimisticAdd(optimistic);
+      api.post(`/admin/jobs/${jobId}/comments`, payload)
+        .then(() => onSaved())
+        .catch((e: unknown) => {
+          onPendingFailed?.(tempId);
+          const msg = e instanceof ApiError ? e.message : 'Failed to save remark';
+          showToast({ variant: 'error', message: msg });
+        });
+      return;
+    }
+    // Legacy path — kept for any future caller that doesn't wire the
+    // optimistic callbacks. Dialog stays open with a spinner until POST
+    // resolves, then closes on success.
     setLoading(true); setErr(null);
     try {
-      // Comment column stores ONLY the operator's typed remark (2026-06-04 —
-      // dropped the legacy "[Open Due To: X · Reason: Y]" structured prefix
-      // per ops). The reason is fully captured by `enum_reason_id` below;
-      // the Comments tab joins back to `tbl_enum_reason` for the label on
-      // render, so no information is lost — just no prefix clutter in the
-      // text column.
-      const payload = {
-        comments: remark,
-        comment_on: 1, // legacy "created" stage code — see commentBody Joi schema
-        enum_reason_id: Number(reasonId),
-      };
       await api.post(`/admin/jobs/${jobId}/comments`, payload);
       onSaved();
     } catch (e) {
