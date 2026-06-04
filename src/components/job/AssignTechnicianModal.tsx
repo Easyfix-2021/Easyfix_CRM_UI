@@ -32,6 +32,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { api, ApiError } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
 
@@ -250,8 +251,10 @@ export function AssignTechnicianModal({
     return rows;
   }, [data, search, sortBy, sortDir]);
 
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => assigning == null });
+
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent
         // Near-full-viewport per ops spec (~24px gutter all sides).
         // This modal is data-dense (technician candidate table); the

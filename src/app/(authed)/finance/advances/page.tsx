@@ -28,6 +28,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useFetch as useSharedFetch } from '@/lib/hooks';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
 type Advance = {
   advance_id: number;
@@ -244,9 +245,15 @@ function RejectAdvanceDialog({ advance, onClose, onSubmit }: {
 }) {
   const [remarks, setRemarks] = useState('');
   useEffect(() => { if (advance) setRemarks(''); }, [advance]);
+  // Hook order requires this BEFORE the conditional return, but the
+  // handler still needs to read the latest `remarks` — useFormDirtyGuard
+  // stores opts in a ref so inline closures stay current across renders.
+  const guardedOpenChange = useFormDirtyGuard(onClose, {
+    isDirty: () => remarks.trim() !== '',
+  });
   if (!advance) return null;
   return (
-    <Dialog open={!!advance} onOpenChange={(o) => { if (!o) onClose(); }}>
+    <Dialog open={!!advance} onOpenChange={guardedOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader><DialogTitle>Reject Advance #{advance.advance_id}</DialogTitle></DialogHeader>
         <div className="p-4 space-y-3">

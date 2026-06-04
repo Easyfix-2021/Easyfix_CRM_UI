@@ -42,6 +42,7 @@ import { SearchSelect } from '@/components/ui/search-select';
 import { showToast } from '@/components/ui/toast';
 import { api, ApiError } from '@/lib/api';
 import { useFetch, useFetchOnce, invalidateFetch, useDebouncedValue } from '@/lib/hooks';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
 type Mapping = {
   mapping_id: number;
@@ -426,6 +427,8 @@ function TechPickerDialog({
 
   const { data: eligible, loading } = useFetch<EligibleTech[]>(eligibleKey);
 
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !saving });
+
   function toggle(efrId: number) {
     setSelected((s) => {
       const next = new Set(s);
@@ -450,7 +453,7 @@ function TechPickerDialog({
   }
 
   return (
-    <Dialog open onOpenChange={(o) => !o && !saving && onClose()}>
+    <Dialog open onOpenChange={guardedOpenChange}>
       <DialogContent className="!max-w-2xl">
         <DialogHeader>
           <DialogTitle>Edit Technicians — {serviceTypeName ?? `#${serviceTypeId}`}</DialogTitle>
@@ -526,6 +529,7 @@ function AddMappingDialog({
 }) {
   const [serviceTypeId, setServiceTypeId] = useState<number>(0);
   const opts = availableTypes.map((t) => ({ value: t.service_type_id, label: t.service_type_name }));
+  const guardedOpenChange = useFormDirtyGuard(onClose);
 
   // Once a service-type is picked, switch over to the picker UI inline.
   if (serviceTypeId > 0) {
@@ -542,7 +546,7 @@ function AddMappingDialog({
   }
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={guardedOpenChange}>
       <DialogContent className="!max-w-md">
         <DialogHeader>
           <DialogTitle>Add Service-Type Mapping</DialogTitle>

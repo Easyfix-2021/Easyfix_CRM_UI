@@ -850,7 +850,20 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
             ['Mobile', <CallableMobile key="cust-mob" jobId={Number(job.job_id)} mobile={job.customer_mob_no as string | null} />],
             ['Email', job.customer_email],
             ['Alt Name', (job as Record<string, unknown>).additional_name as string],
-            ['Alt Number', (job as Record<string, unknown>).additional_number as string],
+            // Alt Number rendered via CallableMobile with useAlt=true so
+            // clicking the green chip dials tbl_job.additional_number
+            // through the same Kaleyra route the rest of the modal uses.
+            // The mobile prop is the masked value (display); the actual
+            // dial number is resolved server-side from the job row.
+            ['Alt Number', (job as Record<string, unknown>).additional_number ? (
+              <CallableMobile
+                key="alt-mob"
+                jobId={Number(job.job_id)}
+                useAlt
+                mobile={(job as Record<string, unknown>).additional_number as string | null}
+                hideWhenUnauthorized
+              />
+            ) : ((job as Record<string, unknown>).additional_number as string)],
           ]}/>
           <DlCard title="Client" rows={[
             ['Client', job.client_name],
@@ -2901,11 +2914,18 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
           <div className="rounded border bg-card overflow-hidden">
             <table className="data-table w-full text-xs">
               <thead>
+                {/* Width strategy: Date/Time + Remarks By + Reason are
+                    short, content-shaped strings — collapse each to its
+                    own content width via the `w-1 whitespace-nowrap`
+                    trick (the table layout algorithm hands the cell its
+                    intrinsic width when w-1 is below the content's
+                    natural minimum). Remarks (free-text) gets no width
+                    cap and takes the remaining space. */}
                 <tr>
-                  <th className="!text-left w-40">Date/Time</th>
+                  <th className="!text-left w-1 whitespace-nowrap">Date/Time</th>
                   <th className="!text-left">Remarks</th>
-                  <th className="!text-left w-32">Remarks By</th>
-                  <th className="!text-left w-40">Reason</th>
+                  <th className="!text-left w-1 whitespace-nowrap">Remarks By</th>
+                  <th className="!text-left w-1 whitespace-nowrap">Reason</th>
                 </tr>
               </thead>
               <tbody>
@@ -2926,10 +2946,16 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
                         </span>
                       )}
                     </td>
-                    <td className="!text-left align-top">
+                    {/* Remarks By + Reason cells get whitespace-nowrap so
+                        the column collapses to its intrinsic content
+                        width (matches the header's `w-1 whitespace-nowrap`
+                        and lets the Remarks column take all remaining
+                        horizontal space). Remarks itself keeps the inner
+                        `whitespace-pre-wrap` div so long free-text wraps. */}
+                    <td className="!text-left align-top whitespace-nowrap">
                       <span className="font-medium">{c.user_name ?? 'Unknown'}</span>
                     </td>
-                    <td className="!text-left align-top text-muted-foreground">
+                    <td className="!text-left align-top text-muted-foreground whitespace-nowrap">
                       {c.enum_desc ? c.enum_desc : <span className="italic">—</span>}
                     </td>
                   </tr>
@@ -4179,7 +4205,16 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
     if (!clientId) { setClientContacts([]); return; }
     let cancelled = false;
     setLoadingContacts(true);
-    api.get<ClientContact[]>(`/admin/clients/${clientId}/contacts`)
+    // `?unmasked=true` (2026-06-03): the mobile-masking middleware would
+    // otherwise return `contact_no` as a masked string like "12••••••89".
+    // When pickReportingContact auto-fills `f.client_spoc` from that
+    // value, the submit-time `safeMobile()` strips the bullets and the
+    // BE persists `client_spoc = NULL` → SPOC Phone displays "—" on
+    // the saved job. Fetching unmasked here gives the auto-fill a real
+    // number to copy through. The endpoint is staff-only (RBAC-gated)
+    // and the operator about to save will also be authorized for the
+    // unmasked view, so no new exposure.
+    api.get<ClientContact[]>(`/admin/clients/${clientId}/contacts?unmasked=true`)
       .then((rows) => {
         if (cancelled) return;
         // Filter to active contacts (status=1). Legacy CRM only listed active rows.
@@ -4809,6 +4844,135 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             setUploadStatuses({});
           }
         }
+        /*
+         * Multi-category fan-out for Confirm & Schedule (2026-06-03 per ops).
+         *
+         * Bug it fixes: when the operator picked 2+ Service Categories
+         * on an Unconfirmed order (e.g. Carpentry + Electrician), the
+         * original PATCH at line ~4688 only updated the existing
+         * tbl_job row with the FIRST category. Sibling categories were
+         * silently dropped — no second job was created.
+         *
+         * Fix: after the PATCH + status promotion succeed, fan out one
+         * POST /admin/jobs per ADDITIONAL category. Each new job:
+         *   - copies customer + address + schedule fields from the form
+         *   - reuses the EXISTING job's `client_ref_id` (from the PATCH
+         *     response) so the family of jobs is discoverable together
+         *   - filters `servicesPayload` to rows whose service_category_id
+         *     matches that category — same per-category filter the
+         *     CREATE path uses (line ~5023)
+         *   - inherits any per-tab override (job_image_files, helper_req,
+         *     etc.) from `perJobFields[String(catId)]` — same mechanism
+         *     as the CREATE multi-category loop
+         *
+         * The original job's category stays whatever the PATCH set
+         * (typically the first picked). Failures on sibling creates are
+         * logged but non-fatal — the original job is already in BOOKED
+         * and the operator can pick up the missed category(ies) from a
+         * subsequent Confirm pass.
+         *
+         * Gated on submitVariant === 'book' so Save Draft and outcome
+         * paths (Enquiry / Unreachable) don't accidentally fan out.
+         */
+        if (isConfirm && submitVariant === 'book') {
+          const allCatIds = (f.fk_service_catg_ids || '')
+            .split(',').filter(Boolean).map(Number)
+            .filter((n) => Number.isInteger(n) && n > 0);
+          // catIds[0] is the existing job's category (PATCH already handled).
+          // Any extras become new sibling jobs.
+          const siblingCats = allCatIds.slice(1);
+          if (siblingCats.length > 0) {
+            // Build a base payload once, mirroring the CREATE-flow
+            // basePayload at ~line 4922. We capture customer + address
+            // + schedule etc. so each sibling looks identical to a
+            // brand-new Book-New-Call job for that category.
+            const clientRefId = saved.client_ref_id || f.client_ref_id || undefined;
+            const siblingBase = {
+              fk_client_id: Number(f.fk_client_id),
+              job_type: f.job_type,
+              source_type: f.source_type || 'CRM - New',
+              requested_date_time: new Date(f.requested_date_time).toISOString(),
+              time_slot: f.time_slot || undefined,
+              client_ref_id: clientRefId,
+              customer: {
+                customer_name: f.customer_name,
+                customer_mob_no: f.customer_mob_no,
+                customer_email: f.customer_email || undefined,
+              },
+              address: {
+                address: f.address,
+                building: f.building || undefined,
+                landmark: f.landmark || undefined,
+                city_id: Number(f.city_id),
+                pin_code: f.pin_code,
+                gps_location: f.gps_location || undefined,
+                address_instruction: ((f as Record<string, unknown>).address_instruction as string | undefined) || undefined,
+              },
+              initial_status: 0,  // BOOKED — matches the PATCH'd original
+              branch_details:    f.branch_details || undefined,
+              product_code:      f.product_code || undefined,
+              building_name:     f.building_name || undefined,
+              reporting_contact_id: f.reporting_contact_id ? Number(f.reporting_contact_id) : undefined,
+              client_spoc:       safeMobile(f.client_spoc),
+              client_spoc_name:  f.client_spoc_name || undefined,
+              client_spoc_email: f.client_spoc_email || undefined,
+              additional_name:   f.additional_name   || undefined,
+              additional_number: safeMobile(f.additional_number),
+              collected_by:      collectedByCode(f.collected_by),
+            };
+            // buildServicesPayload() is called once here — its output is
+            // the full picked-services basket across ALL categories, the
+            // same array we pass to the PATCH above. We filter per
+            // sibling catId so each new job carries only its own rate-
+            // card rows (matches the CREATE-flow filter at ~line 5023).
+            const allServices = buildServicesPayload() as Array<Record<string, unknown>>;
+            const servicesForCat = (catId: number) =>
+              allServices.filter((s) => Number(s.service_category_id) === catId);
+            for (const catId of siblingCats) {
+              const override = (perJobFields[String(catId)] || {}) as PerJobOverride;
+              const filtered = servicesForCat(catId);
+              const siblingPayload = {
+                ...siblingBase,
+                fk_service_catg_id: catId,
+                job_desc:          (override.job_desc ?? f.job_desc) || undefined,
+                remarks:           (override.remarks ?? f.remarks) || undefined,
+                efr_special_notes: (override.efr_special_notes ?? f.efr_special_notes) || undefined,
+                helper_req:        override.helper_req ?? Boolean(f.helper_req),
+                material_req:      override.material_req ?? Boolean(f.material_req),
+                services:          filtered.length > 0 ? filtered : undefined,
+              };
+              try {
+                const newJob = await api.post<Job>('/admin/jobs', siblingPayload);
+                // Upload tab-specific images, if any. Falls back to the
+                // operator's general staged files only when this tab
+                // hasn't been touched separately — keeps each sibling
+                // job's image set distinct.
+                const tabFiles: File[] = (
+                  (override.job_image_files as File[] | undefined) ?? []
+                ).filter((x) => x instanceof File);
+                if (newJob?.job_id && tabFiles.length > 0) {
+                  for (const file of tabFiles) {
+                    try {
+                      const fd = new FormData();
+                      fd.append('file', file);
+                      await api.post(`/admin/jobs/${newJob.job_id}/images`, fd);
+                    } catch (upErr) {
+                      // eslint-disable-next-line no-console
+                      console.warn(`Sibling-job image upload failed for category ${catId}, job ${newJob.job_id}:`, upErr);
+                    }
+                  }
+                }
+              } catch (e) {
+                // Non-fatal — original is already BOOKED. Surface a
+                // console warning so the operator can manually re-confirm
+                // the missing category later.
+                // eslint-disable-next-line no-console
+                console.warn(`Failed to create sibling job for category ${catId} during Confirm fan-out:`, e);
+              }
+            }
+          }
+        }
+
         // Success-path toast for outcome-only flows. Transition the
         // loading toast to a green success toast at the same bottom-
         // centre slot. The toast component auto-dismisses success
@@ -5376,11 +5540,30 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 been picked yet (i.e. the BE already had SPOC info on
                 the row). */}
             <Field label="Client SPOC Phone">
-              <Input
-                value={maskMobile(f.client_spoc || initial.client_spoc)}
-                readOnly disabled
-                className="tabular-nums"
-              />
+              {/* Masked display + click-to-call (2026-06-03 per ops).
+                  The disabled Input keeps the visual parity with the
+                  sibling SPOC Name / SPOC Email read-only fields; the
+                  CallableMobile next to it provides the dial action.
+                  Routing keys off `reporting_contact_id` (preferred —
+                  the picked Reporting Contact's id), falling back to
+                  the parent job's id when editing an existing booking.
+                  `hideWhenUnauthorized` makes the button vanish for
+                  roles that don't carry the `isClickToCall` flag —
+                  the masked Input still shows the number. */}
+              <div className="flex items-center gap-2">
+                <Input
+                  value={maskMobile(f.client_spoc || initial.client_spoc)}
+                  readOnly disabled
+                  className="tabular-nums flex-1"
+                />
+                <CallableMobile
+                  mobile={(f.client_spoc as string | null | undefined) || (initial.client_spoc as string | null | undefined)}
+                  reportingContactId={f.reporting_contact_id ? Number(f.reporting_contact_id) : undefined}
+                  jobId={initial?.job_id ? Number(initial.job_id) : undefined}
+                  hideWhenUnauthorized
+                  className="shrink-0"
+                />
+              </div>
             </Field>
             <Field label="Client SPOC Name">
               <Input
@@ -5490,13 +5673,53 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
               />
             </Field>
             <Field label="Customer Alternate Number">
-              <Input
-                value={f.additional_number || ''}
-                onChange={(e) => set('additional_number', e.target.value.replace(/\D/g, '').slice(0, 10))}
-                inputMode="numeric"
-                placeholder="10 digits"
-                className="tabular-nums"
-              />
+              {/* Editable input + click-to-call button (2026-06-03).
+                  The icon uses `useAlt={true}` on the BE route so the
+                  Kaleyra dial targets tbl_job.additional_number on the
+                  CURRENT saved job. If the operator has typed a new
+                  alt number but not saved yet, the icon dials the
+                  previously-saved value — they need to save first.
+
+                  Validation (2026-06-03): Indian-mobile regex
+                  /^[6-9]\d{9}$/ — 10 digits starting with 6/7/8/9.
+                  Empty is fine (alt is optional). Inline error shows
+                  ONLY when the operator has typed something invalid;
+                  blank fields stay quiet so the form doesn't nag at
+                  first paint. `aria-invalid` flips on the input so
+                  the red ring (Tailwind ring-red-300 on aria-invalid:
+                  selectors elsewhere in globals.css) renders too. */}
+              {(() => {
+                const raw = String(f.additional_number || '');
+                const isValid = raw === '' || /^[6-9]\d{9}$/.test(raw);
+                return (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        value={raw}
+                        onChange={(e) => set('additional_number', e.target.value.replace(/\D/g, '').slice(0, 10))}
+                        inputMode="numeric"
+                        placeholder="10 digits"
+                        className={`tabular-nums flex-1 ${!isValid ? 'border-red-400 focus-visible:ring-red-300' : ''}`}
+                        aria-invalid={!isValid}
+                      />
+                      {(initial?.job_id && raw && isValid) ? (
+                        <CallableMobile
+                          jobId={Number(initial.job_id)}
+                          useAlt
+                          mobile={maskMobile(raw)}
+                          hideWhenUnauthorized
+                          className="shrink-0"
+                        />
+                      ) : null}
+                    </div>
+                    {!isValid && (
+                      <p className="text-[11px] text-red-600 mt-1">
+                        Must be a 10-digit Indian mobile starting with 6, 7, 8, or 9.
+                      </p>
+                    )}
+                  </>
+                );
+              })()}
             </Field>
             {/*
               * Layout: Booking Time Slot on LEFT, Requested Date/Time on
@@ -6888,13 +7111,32 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                   />
                 </Field>
                 <Field label="Customer Alternate Number">
-                  <Input
-                    value={f.additional_number || ''}
-                    onChange={(e) => set('additional_number', e.target.value.replace(/\D/g, '').slice(0, 10))}
-                    inputMode="numeric"
-                    placeholder="10 digits"
-                    className="font-mono"
-                  />
+                  {/* Indian-mobile validation: /^[6-9]\d{9}$/. Empty
+                      stays valid (alt is optional). Inline error +
+                      red ring only when the operator has typed
+                      something that fails the regex. Same pattern as
+                      the Confirm modal's Alt Number input. */}
+                  {(() => {
+                    const raw = String(f.additional_number || '');
+                    const isValid = raw === '' || /^[6-9]\d{9}$/.test(raw);
+                    return (
+                      <>
+                        <Input
+                          value={raw}
+                          onChange={(e) => set('additional_number', e.target.value.replace(/\D/g, '').slice(0, 10))}
+                          inputMode="numeric"
+                          placeholder="10 digits"
+                          className={`font-mono ${!isValid ? 'border-red-400 focus-visible:ring-red-300' : ''}`}
+                          aria-invalid={!isValid}
+                        />
+                        {!isValid && (
+                          <p className="text-[11px] text-red-600 mt-1">
+                            Must be a 10-digit Indian mobile starting with 6, 7, 8, or 9.
+                          </p>
+                        )}
+                      </>
+                    );
+                  })()}
                 </Field>
               </div>
               {/* Schedule sub-block — Date / Time / Booking Slot.
@@ -8863,7 +9105,15 @@ function toFormShape(j: Job | null) {
         && ((j as { services?: unknown[] }).services?.length ?? 0) > 0;
       return hasAnyService ? pick('job_type') : '';
     })(),
-    source_type: pick('source_type') || 'manual',
+    // source_type default: 'CRM - New' so newly-created jobs are
+    // attributed to the new-CRM origin. Was 'manual' before — that
+    // value is truthy so the submit-time `f.source_type || 'CRM - New'`
+    // fallback never fired and the BE persisted 'manual' for every new
+    // booking, masking new-CRM traffic in reports. For seeded forms
+    // (Edit / Confirm) pick('source_type') returns the row's existing
+    // value (e.g. 'CRM - Bulk' from a bulk upload) so the default
+    // only matters for fresh Book New Call.
+    source_type: pick('source_type') || 'CRM - New',
     requested_date_time: isBulkSentinel ? '' : dt('requested_date_time'),
     time_slot: isBulkSentinel ? '' : (pick('time_slot') || 'Morning 9 to 2'),
     upload_date_hint: uploadDateHint,

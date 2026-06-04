@@ -27,6 +27,7 @@ import { showToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { api, ApiError } from '@/lib/api';
 import { useFetch, useFetchOnce, invalidateFetch } from '@/lib/hooks';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import type { ClientBilling, BillingFormPayload } from '@/lib/client-types';
 
 type Props = {
@@ -152,6 +153,7 @@ function BillingFormDialog({
     paymentCycle: initial?.c_bill_payment_cycle ?? null,
   }));
   const [saving, setSaving] = useState(false);
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !saving });
 
   function update<K extends keyof BillingFormPayload>(key: K, value: BillingFormPayload[K]) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -188,7 +190,7 @@ function BillingFormDialog({
   }
 
   return (
-    <Dialog open onOpenChange={(o) => !o && !saving && onClose()}>
+    <Dialog open onOpenChange={guardedOpenChange}>
       <DialogContent className="!max-w-2xl">
         <DialogHeader>
           <DialogTitle>{isEdit ? 'Edit Billing Address' : 'Add Billing Address'}</DialogTitle>

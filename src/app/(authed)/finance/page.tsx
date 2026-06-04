@@ -40,6 +40,7 @@ import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useFetch as useSharedFetch } from '@/lib/hooks';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
 const TABS = ['invoices', 'transactions', 'purchase-orders', 'payouts', 'ndm-collection', 'efr-ledger'] as const;
 type TabKey = typeof TABS[number];
@@ -438,8 +439,9 @@ function CreateTransactionDialog({ open, defaultClientId, onClose, onSaved }: {
       showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Failed' });
     } finally { setBusy(false); }
   }
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !busy });
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader><DialogTitle>Add Transaction</DialogTitle></DialogHeader>
         <div className="p-4 space-y-3">
@@ -554,8 +556,9 @@ function CreatePurchaseOrderDialog({ open, defaultClientId, onClose, onSaved }: 
       showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Failed' });
     } finally { setBusy(false); }
   }
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !busy });
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader><DialogTitle>Add Purchase Order</DialogTitle></DialogHeader>
         <div className="p-4 space-y-3">
@@ -738,8 +741,9 @@ function CreatePayoutDialog({ open, onClose, onSaved }: { open: boolean; onClose
       showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Failed' });
     } finally { setBusy(false); }
   }
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !busy });
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader><DialogTitle>Create Payout</DialogTitle></DialogHeader>
         <div className="p-4 space-y-3">
@@ -883,8 +887,9 @@ function CreateNdmRechargeDialog({ open, onClose, onSaved }: { open: boolean; on
       showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Failed' });
     } finally { setBusy(false); }
   }
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !busy });
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader><DialogTitle>Submit NDM Recharge</DialogTitle></DialogHeader>
         <div className="p-4 space-y-3">

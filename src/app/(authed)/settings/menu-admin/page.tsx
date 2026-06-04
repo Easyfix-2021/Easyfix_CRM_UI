@@ -24,6 +24,7 @@ import { CancelButton } from '@/components/ui/cancel-button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { api, ApiError } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
 type MenuRow = {
   menu_id: number;
@@ -211,8 +212,10 @@ function MenuFormDialog({ open, onClose, editing, rows, onSaved }: {
   const parentChoices = rows
     .filter((r) => r.menu_status === 1 && (!editing || r.menu_id !== editing.menu_id));
 
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !loading });
+
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent>
         <DialogHeader><DialogTitle>{isEdit ? `Edit "${editing!.menu_name}"` : 'Add Menu'}</DialogTitle></DialogHeader>
         <div className="space-y-3">

@@ -28,6 +28,7 @@ import { hasAction } from '@/lib/permissions';
 import { useLookup } from '@/lib/use-lookup';
 import { api } from '@/lib/api';
 import { showToast } from '@/components/ui/toast';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
 const ACTIONS = [
   {
@@ -212,8 +213,13 @@ function GenerateInvoiceDialog({ open, onClose }: { open: boolean; onClose: () =
     } finally { setBusy(false); }
   }
 
+  const guardedOpenChange = useFormDirtyGuard(
+    () => { onClose(); setResult(null); },
+    { when: () => !busy },
+  );
+
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) { onClose(); setResult(null); } }}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>Generate Client Invoice</DialogTitle>

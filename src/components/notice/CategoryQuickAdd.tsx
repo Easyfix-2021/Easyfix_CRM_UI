@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label';
 import { api } from '@/lib/api';
 import { invalidateFetch } from '@/lib/hooks';
 import { showToast } from '@/components/ui/toast';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import type { NoticeCategory } from '@/lib/notice-types';
 
 /*
@@ -77,8 +78,10 @@ export function CategoryQuickAdd({
     }
   }
 
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !saving });
+
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o && !saving) onClose(); }}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">

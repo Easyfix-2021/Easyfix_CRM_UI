@@ -12,6 +12,7 @@ import { useLookup } from '@/lib/use-lookup';
 import { formatDate, formatEasyfixerName } from '@/lib/utils';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
 /*
  * One component, three modes — `create` | `edit` | `view`. The field set is
@@ -169,8 +170,17 @@ export function EasyfixerModal({
 
   const readOnly = mode === 'view';
 
+  // Discard-changes guard on Esc / X / overlay-click. Skipped in view
+  // mode (nothing to discard) and while a save is in flight (modal is
+  // about to unmount anyway). Matches the existing `!saving && onClose()`
+  // idiom used elsewhere in the codebase.
+  const guardedOpenChange = useFormDirtyGuard(onClose, {
+    when: () => !saving,
+    isDirty: () => mode !== 'view',
+  });
+
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent hideClose className="max-w-5xl w-[min(95vw,1100px)] h-[85vh] overflow-hidden p-0 flex flex-col">
         <DialogHeader className="px-6 pt-6 pb-3 border-b">
           {/* Header carries title + subtitle only. Edit / Activate-Deactivate

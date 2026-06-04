@@ -362,11 +362,18 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
         <SectionHeading>Remarks History</SectionHeading>
         <table className="w-full text-sm">
           <thead className="bg-slate-50/60">
+            {/* Width strategy mirrors JobCommentsTab — Date/Time,
+                Remarks By, Reason are short content-shaped strings:
+                collapse each with `w-1 whitespace-nowrap` so the
+                browser hands the cell its intrinsic min-width and
+                Remarks (free-text) gets the remaining horizontal
+                room. Operators were losing ~50% of the Remarks
+                column to a forced-wide Date/Time. */}
             <tr className="text-left text-xs text-muted-foreground">
-              <th className="px-3 py-2">Date/Time</th>
+              <th className="px-3 py-2 w-1 whitespace-nowrap">Date/Time</th>
               <th className="px-3 py-2">Remarks</th>
-              <th className="px-3 py-2">Remarks By</th>
-              <th className="px-3 py-2">Reason</th>
+              <th className="px-3 py-2 w-1 whitespace-nowrap">Remarks By</th>
+              <th className="px-3 py-2 w-1 whitespace-nowrap">Reason</th>
             </tr>
           </thead>
           <tbody>
@@ -377,9 +384,15 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
             ) : data.comments.map((c) => (
               <tr key={c.id} className="border-t border-slate-100 align-top">
                 <td className="px-3 py-2 text-xs whitespace-nowrap">{c.created_on ? formatDate(c.created_on) : '—'}</td>
-                <td className="px-3 py-2 text-xs max-w-[260px] whitespace-pre-wrap">{fmt(c.comments)}</td>
-                <td className="px-3 py-2 text-xs">{fmt(c.user_name)}</td>
-                <td className="px-3 py-2 text-xs">{fmt(c.enum_desc)}</td>
+                {/* Remarks cell: free-text wraps naturally; max-w cap
+                    removed so it absorbs remaining row space (the three
+                    sibling columns collapse via whitespace-nowrap). */}
+                <td className="px-3 py-2 text-xs whitespace-pre-wrap">{fmt(c.comments)}</td>
+                {/* Content-adaptive width on Remarks By + Reason, same
+                    as Date/Time — whitespace-nowrap forces the column
+                    to its intrinsic min-width. */}
+                <td className="px-3 py-2 text-xs whitespace-nowrap">{fmt(c.user_name)}</td>
+                <td className="px-3 py-2 text-xs whitespace-nowrap">{fmt(c.enum_desc)}</td>
               </tr>
             ))}
           </tbody>

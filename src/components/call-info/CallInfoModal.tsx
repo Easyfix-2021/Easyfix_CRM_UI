@@ -33,6 +33,7 @@ import { JobModal } from '@/components/job/JobModal';
 import { api, ApiError } from '@/lib/api';
 import { downloadXlsx as sharedDownloadXlsx } from '@/lib/download-xlsx';
 import { statusLabel, statusColorClass } from '@/lib/utils';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { ClickToCallTab } from './ClickToCallTab';
 
 /*
@@ -277,8 +278,10 @@ export function CallInfoModal({ open, onClose }: { open: boolean; onClose: () =>
     return copy;
   }, [filteredRows, sortBy, sortDir]);
 
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !downloading && !loading });
+
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       {/* `overflow-hidden` intentionally OMITTED on DialogContent so
           the DateRangePopover (an absolute child inside the form) can
           extend visually past the modal's bottom edge without

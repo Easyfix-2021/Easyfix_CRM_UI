@@ -37,6 +37,7 @@ import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/componen
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { useFetch, useDebouncedValue, invalidateFetch } from '@/lib/hooks';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { formatDate } from '@/lib/utils';
@@ -534,8 +535,10 @@ function BulkSpocUploadDialog({
     } finally { setUploading(false); }
   }
 
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !uploading });
+
   return (
-    <Dialog open onOpenChange={(o) => !o && !uploading && onClose()}>
+    <Dialog open onOpenChange={guardedOpenChange}>
       <DialogContent className="!max-w-2xl">
         <DialogHeader>
           <DialogTitle>Bulk Upload Primary/Secondary SPOCs</DialogTitle>

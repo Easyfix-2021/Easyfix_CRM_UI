@@ -38,6 +38,7 @@ import { showToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { api, ApiError } from '@/lib/api';
 import { useFetch, useFetchOnce, invalidateFetch } from '@/lib/hooks';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
 type RateCardRow = {
   rate_card_id?: number;            // absent for unsaved (locally-added) rows
@@ -425,8 +426,9 @@ function AddRowsDialog({
   onAdd: (ids: number[]) => void;
 }) {
   const [selected, setSelected] = useState<number[]>([]);
+  const guardedOpenChange = useFormDirtyGuard(onClose);
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={guardedOpenChange}>
       <DialogContent className="!max-w-lg">
         <DialogHeader>
           <DialogTitle>Add Rate Card Rows</DialogTitle>

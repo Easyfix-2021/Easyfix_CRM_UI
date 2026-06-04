@@ -28,6 +28,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
 type Props = {
   open: boolean;
@@ -84,8 +85,10 @@ export function CallCustomNumbersDialog({
     onConfirm(callFrom, callTo);
   }
 
+  const guardedOpenChange = useFormDirtyGuard(onCancel);
+
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) onCancel(); }}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       {/* `!p-0 !gap-0` opt-out of DialogContent defaults — same pattern as
           the upgraded ConfirmDialog primitive (see confirm-dialog.tsx).
           Lets each section own its padding instead of stacking 24+16+24px. */}

@@ -26,6 +26,7 @@ import { api, ApiError } from '@/lib/api';
 import { downloadXlsx as sharedDownloadXlsx } from '@/lib/download-xlsx';
 import { statusLabel, statusColorClass } from '@/lib/utils';
 import { useSort, SortHeader } from '@/lib/use-sort';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
 /*
  * formatDateOnly / formatTimeOnly — split a single ISO/MySQL DATETIME
@@ -295,8 +296,10 @@ export function EscalatedJobsModal({
     }
   }
 
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !downloading });
+
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent
         hideClose
         className="max-w-6xl w-[min(96vw,1280px)] h-[85vh] overflow-hidden p-0 flex flex-col"

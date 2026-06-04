@@ -118,10 +118,22 @@ type CallTarget = {
   customerId?: number;
   efrId?: number;             // call a technician
   reportingContactId?: number; // call a client SPOC
+  // useAlt (2026-06-03): modifier flag for the `jobId` path — when true
+  // the BE dials tbl_job.additional_number (the customer's per-job
+  // alternate) instead of the customer's master mobile. Ignored on
+  // every other path. NOT a target key in itself; the target is still
+  // `jobId`, which is why pickTargetKey filters it out below.
+  useAlt?: boolean;
 };
 
-function pickTargetKey(t: CallTarget): keyof CallTarget | null {
-  const keys: Array<keyof CallTarget> = ['jobId', 'customerId', 'efrId', 'reportingContactId'];
+// The "target keys" are the receiver-id slots the BE selects ON;
+// `useAlt` is a modifier, not a target, so it's intentionally excluded
+// here (otherwise a {jobId, useAlt} target would look ambiguous to
+// pickTargetKey and the call would refuse to fire).
+function pickTargetKey(t: CallTarget): Exclude<keyof CallTarget, 'useAlt'> | null {
+  const keys: Array<Exclude<keyof CallTarget, 'useAlt'>> = [
+    'jobId', 'customerId', 'efrId', 'reportingContactId',
+  ];
   const present = keys.filter((k) => t[k] != null);
   return present.length === 1 ? present[0] : null;
 }
@@ -156,8 +168,20 @@ function useClickToCall(target: CallTarget) {
    * are present (programming error).
    */
   const targetKey = pickTargetKey(target);
+  // Build the receiver-identifier body. useAlt is appended as a
+  // separate boolean so the BE handler can fork on it inside the
+  // jobId branch (see routes/admin/calls.js). Validator accepts it
+  // alongside any target id — but only the jobId branch consumes it.
+  // useAlt encoded as 1 (vs true) so it fits both the api.get query-string
+  // signature (Record<string, string | number | undefined>) and the BE's
+  // alternatives validator (boolean OR '1'/'0'/'true'/'false'). The
+  // serialized query becomes `&useAlt=1`, parsed back via the route's
+  // case-insensitive coercion.
   const targetBody: Record<string, number> | null = targetKey
-    ? { [targetKey]: target[targetKey]! }
+    ? {
+        [targetKey]: target[targetKey] as number,
+        ...(target.useAlt ? { useAlt: 1 } : {}),
+      }
     : null;
 
   /*
@@ -280,11 +304,11 @@ type ButtonProps = CallTarget & {
 };
 
 export function CallButton({
-  jobId, customerId, efrId, reportingContactId,
+  jobId, customerId, efrId, reportingContactId, useAlt,
   size = 'md', label = 'Call Customer', className,
 }: ButtonProps) {
   const { me } = useMe();
-  const target: CallTarget = { jobId, customerId, efrId, reportingContactId };
+  const target: CallTarget = { jobId, customerId, efrId, reportingContactId, useAlt };
   const { busy, placeCall, toastNode, customNode } = useClickToCall(target);
   if (!hasAction(me, 'isClickToCall')) return null;
   if (pickTargetKey(target) == null) return null;
@@ -323,11 +347,11 @@ type MobileProps = CallTarget & {
 };
 
 export function CallableMobile({
-  jobId, customerId, efrId, reportingContactId,
+  jobId, customerId, efrId, reportingContactId, useAlt,
   mobile, className, hideWhenUnauthorized = false,
 }: MobileProps) {
   const { me } = useMe();
-  const target: CallTarget = { jobId, customerId, efrId, reportingContactId };
+  const target: CallTarget = { jobId, customerId, efrId, reportingContactId, useAlt };
   const { busy, placeCall, toastNode, customNode } = useClickToCall(target);
 
   const display = mobile && String(mobile).trim() !== '' ? mobile : '—';
@@ -345,7 +369,10 @@ export function CallableMobile({
         type="button"
         onClick={placeCall}
         disabled={busy}
-        title="Click to call this customer"
+        // Tooltip names the leg so hover confirms before click —
+        // "Click to call alternate number" when useAlt is in effect,
+        // matches the visible "Alt" pill below.
+        title={useAlt ? 'Click to call alternate number' : 'Click to call this customer'}
         className={cn(
           'inline-flex items-center gap-1 text-xs',
           'text-emerald-700 hover:text-emerald-900 hover:underline',
@@ -356,6 +383,19 @@ export function CallableMobile({
         {busy
           ? <Loader2 className="h-3 w-3 animate-spin" />
           : <Phone className="h-3 w-3" />}
+        {/* "Alt" pill (2026-06-03) — visible only when this instance
+            is wired to dial the JOB's alternate number rather than
+            the customer's master mobile. Amber tint distinguishes
+            from the primary green-phone affordance at a glance and
+            matches the warning palette used elsewhere for "not the
+            default path" cues. The pill stays clickable as part of
+            the same button so the operator's click target remains
+            one wide tap zone. */}
+        {useAlt && (
+          <span className="bg-amber-100 text-amber-800 border border-amber-200 rounded px-1 py-px text-[9px] font-semibold uppercase tracking-wide leading-none">
+            Alt
+          </span>
+        )}
         <span className="font-mono">{display}</span>
       </button>
       {customNode}

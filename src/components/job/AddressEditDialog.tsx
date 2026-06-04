@@ -25,6 +25,7 @@ import { SearchSelect } from '@/components/ui/search-select';
 import { AddressAutocomplete } from '@/components/ui/address-autocomplete';
 import { api, ApiError } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
 export type EditableAddress = {
   address_id: number;
@@ -108,8 +109,10 @@ export function AddressEditDialog({
     }
   }
 
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !saving });
+
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent className="!max-w-[640px] w-[95vw]">
         <DialogHeader>
           <DialogTitle>Edit Address</DialogTitle>
