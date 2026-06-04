@@ -192,6 +192,22 @@ export function JobModal({
    * we surface it first when both flags are set.
    */
   async function guardedClose() {
+    /*
+     * View mode is read-only by contract — none of the editable
+     * fields render, so there's nothing the operator could have
+     * touched. Skip both prompts unconditionally. Defends against
+     * stale dirty-flags set by child component hydration (e.g. a
+     * SearchSelect committing its initial value on mount counts as
+     * a "change" to the form-state tracker even though no human
+     * input occurred) which would otherwise produce a phantom
+     * "Discard Unsaved Changes?" prompt on a pure-read flow.
+     */
+    if (mode === 'view') {
+      hasUnsavedQtyRef.current = false;
+      hasUnsavedFormRef.current = false;
+      onClose();
+      return;
+    }
     if (hasUnsavedQtyRef.current) {
       const ok = await confirm({
         title: 'Discard Invalid Quantity?',
