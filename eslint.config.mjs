@@ -81,6 +81,20 @@ const config = [
         ecmaFeatures: { jsx: true },
       },
     },
+    // Silence "Unused eslint-disable directive" warnings (2026-06-03):
+    //   ESLint 9 defaults `reportUnusedDisableDirectives` to 'warn'.
+    //   This flat config doesn't actually ENABLE many of the rules the
+    //   codebase has historical disable comments for (e.g.
+    //   `react-hooks/exhaustive-deps`, `@typescript-eslint/no-explicit-any`)
+    //   because Next's internal linter handles those at build time. The
+    //   default 'warn' fires on every dormant disable and Next's build
+    //   pipeline treats the noise as a failure (Docker build exit 1 on
+    //   `RUN npm run build`). Turning the meta-rule off lets historical
+    //   disable comments stay where they were authored without bringing
+    //   their underlying rule definitions into scope.
+    linterOptions: {
+      reportUnusedDisableDirectives: 'off',
+    },
     plugins: {
       'react-hooks': reactHooksPlugin,
     },
