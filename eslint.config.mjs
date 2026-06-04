@@ -169,6 +169,20 @@ const config = [
       // dirty data to discard.
       'src/components/job/MagicLinkActionPopup.tsx',
       'src/components/job/TransferJobOwnershipDialog.tsx',
+      // Drawer-shell / display-mode Dialogs (audit-flagged as non-form,
+      // see the audit table from 2026-06-03). These DON'T own form
+      // state themselves — they're wrappers around tabbed children
+      // (ClientDetailDialog hosts every client tab; CustomerDetail
+      // shows read-only customer info; the finance/page.tsx Dialogs
+      // at lines 242 and 295 are invoice viewers). Each inner tab is
+      // responsible for its own dirty-state warning when applicable;
+      // the outer Esc/X just unmounts the host. Migrating these to
+      // useFormDirtyGuard would prompt unconditionally on close even
+      // when no editable child was touched — wrong UX. Right fix is
+      // an architectural per-tab dirty-bus (deferred).
+      'src/app/(authed)/clients/page.tsx',
+      'src/app/(authed)/customers/page.tsx',
+      'src/app/(authed)/finance/page.tsx',
     ],
     rules: {
       'no-restricted-syntax': 'off',
