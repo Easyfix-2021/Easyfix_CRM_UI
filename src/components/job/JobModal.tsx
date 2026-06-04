@@ -20,6 +20,7 @@ import { CustomerSubmissionPanel } from './CustomerSubmissionPanel';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { api, ApiError } from '@/lib/api';
+import { resolveParentAddressId, buildJobAddressPayload } from '@/lib/job-address';
 import { useLookup } from '@/lib/use-lookup';
 import { formatDate, formatEasyfixerName, statusColorClass, statusLabel } from '@/lib/utils';
 import { maskMobile, INDIAN_MOBILE_REGEX, INDIAN_MOBILE_ERROR, isValidIndianMobile } from '@/lib/format';
@@ -4906,6 +4907,27 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             // + schedule etc. so each sibling looks identical to a
             // brand-new Book-New-Call job for that category.
             const clientRefId = saved.client_ref_id || f.client_ref_id || undefined;
+            /*
+             * C&S sibling fan-out address reuse (2026-06-04). Before this
+             * fix the FE shipped the FULL inline address on every sibling
+             * POST, which caused the BE `create()` to call `insertAddress`
+             * and create N duplicate rows in tbl_address for the same
+             * physical location. The BE already supports the
+             * `address.address_id` short-circuit (see job.service.js
+             * ~line 1279: `if (!addressId) insertAddress(...)`). So we
+             * pass ONLY the parent's address_id and let the BE reuse the
+             * existing row. `saved.fk_address_id` (PATCH response) is the
+             * source of truth; falls back to `initial.fk_address_id`
+             * (form prefill) and then to inline if neither is present
+             * (defensive — should never trigger in confirm mode).
+             */
+            // C&S sibling fan-out address reuse — see
+            // src/lib/job-address.ts for the full rationale + dev-time
+            // canary. Source priority: PATCH response (freshest), then
+            // form prefill. Fallback to inline only if both lack
+            // fk_address_id (defensive; should never trigger in confirm
+            // mode since the parent already has an address row).
+            const parentAddressId = resolveParentAddressId(saved, initial);
             const siblingBase = {
               fk_client_id: Number(f.fk_client_id),
               job_type: f.job_type,
@@ -4913,20 +4935,34 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
               requested_date_time: new Date(f.requested_date_time).toISOString(),
               time_slot: f.time_slot || undefined,
               client_ref_id: clientRefId,
+              // Explicit top-level job_customer_name (2026-06-04).
+              // The BE accepts both shapes (top-level OR nested under
+              // customer.customer_name) and prefers the top-level
+              // value when both are present. Sending it explicitly
+              // here defends against the C&S form-state edge case
+              // where `f.customer_name` was observed landing as the
+              // empty string for siblings — keeping tbl_job's per-job
+              // override populated independently of the customer
+              // master record.
+              job_customer_name: f.customer_name || undefined,
               customer: {
                 customer_name: f.customer_name,
                 customer_mob_no: f.customer_mob_no,
                 customer_email: f.customer_email || undefined,
               },
-              address: {
-                address: f.address,
-                building: f.building || undefined,
-                landmark: f.landmark || undefined,
-                city_id: Number(f.city_id),
-                pin_code: f.pin_code,
-                gps_location: f.gps_location || undefined,
-                address_instruction: ((f as Record<string, unknown>).address_instruction as string | undefined) || undefined,
-              },
+              address: buildJobAddressPayload(
+                parentAddressId,
+                {
+                  address: f.address,
+                  building: f.building || undefined,
+                  landmark: f.landmark || undefined,
+                  city_id: Number(f.city_id),
+                  pin_code: f.pin_code,
+                  gps_location: f.gps_location || undefined,
+                  address_instruction: ((f as Record<string, unknown>).address_instruction as string | undefined) || undefined,
+                },
+                { expectingReuse: true }, // C&S sibling — log a canary if we fall through
+              ),
               initial_status: 0,  // BOOKED — matches the PATCH'd original
               branch_details:    f.branch_details || undefined,
               product_code:      f.product_code || undefined,

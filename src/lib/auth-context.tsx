@@ -53,12 +53,24 @@ export type Me = {
    * clients in the New-Job picker) and show "no access" hints.
    */
   scope?: {
-    clients:   { mode: 'all' | 'allow' | 'none'; ids: number[] };
-    cities:    { mode: 'all' | 'allow' | 'none'; ids: number[] };
-    states:    { mode: 'all' | 'allow' | 'none'; ids: number[] };
-    verticals: { mode: 'all' | 'allow' | 'none'; ids: number[] };
+    clients:   { mode: 'all' | 'allow' | 'none'; ids: number[]; placeholders?: string };
+    cities:    { mode: 'all' | 'allow' | 'none'; ids: number[]; placeholders?: string };
+    states:    { mode: 'all' | 'allow' | 'none'; ids: number[]; placeholders?: string };
+    verticals: { mode: 'all' | 'allow' | 'none'; ids: number[]; placeholders?: string };
   };
+  /*
+   * Hierarchy roll-up — the count of direct reports and the full
+   * descendant set under this user in the manager tree. Surfaced in
+   * the Navbar's "Effective Access" panel so ops can self-diagnose
+   * "why am I seeing X downstream user's jobs?" without filing a
+   * ticket. The backend resolves this from tbl_user.manager_user_id.
+   */
+  hierarchy?: { directReportsCount: number; descendantsCount: number };
 };
+
+// Scope dimension shape — exported so the Navbar's effective-access panel
+// can type the row renderer without redeclaring the union locally.
+export type ScopeDimension = { mode: 'all' | 'allow' | 'none'; ids: number[]; placeholders?: string };
 
 const Ctx = createContext<{ me: Me | null; loading: boolean; refresh: () => Promise<void> }>({
   me: null, loading: true, refresh: async () => {},

@@ -1,14 +1,131 @@
 'use client';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { Bell, LogOut, Menu, BarChart3, Info, AlertTriangle, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { api, ApiError } from '@/lib/api';
 import { useFetchOnce } from '@/lib/hooks';
-import { useMe, clearMeCache } from '@/lib/auth-context';
+import { useMe, clearMeCache, type ScopeDimension, type Me } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
 import { EscalatedJobsModal } from '@/components/job/EscalatedJobsModal';
 import { CallInfoModal } from '@/components/call-info/CallInfoModal';
+
+/*
+ * EffectiveAccessPanel — small dropdown surfaced from the user-identity
+ * cluster in the navbar. Renders a 4-row table (clients / cities / states /
+ * verticals) with the resolved scope counts so operators can self-diagnose
+ * RBAC scope mismatches without filing a ticket. See the call-site comment
+ * in Navbar for the broader rationale.
+ *
+ * Rendering rules per dimension:
+ *   mode='all'   → "All"
+ *   mode='allow' → ids.length (e.g. "2")
+ *   mode='none'  → "None" in amber, since the user has zero access on that
+ *                   dimension and queries will return zero rows.
+ *
+ * For Admin/Finance (scope === undefined) we collapse the table into a
+ * single "Effective access: All (bypass role)" line — there's nothing
+ * useful to show per-dimension.
+ */
+function EffectiveAccessPanel({
+  scope,
+  hierarchy,
+}: {
+  scope: Me['scope'];
+  hierarchy: Me['hierarchy'];
+}) {
+  const [open, setOpen] = useState(false);
+  // No `me` yet — render nothing rather than a placeholder; AuthProvider
+  // hydrates from cache near-instantly so this gap is invisible.
+  if (!scope && !hierarchy) {
+    // Bypass role (Admin/Finance) — scope intentionally omitted by BE.
+    // Still expose a tiny indicator so operators know they're unscoped.
+    return (
+      <div className="hidden md:block text-[10px] text-muted-foreground italic pr-1" title="Bypass role: no row-level scope filter applies">
+        All access
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        onBlur={(e) => {
+          // Close when focus leaves the entire popover subtree (button + panel)
+          if (!e.currentTarget.parentElement?.contains(e.relatedTarget as Node)) {
+            setOpen(false);
+          }
+        }}
+        className="hidden md:inline-flex items-center px-2 h-7 rounded-md border border-input bg-background text-[11px] font-medium text-muted-foreground hover:bg-muted"
+        title="Show effective row-level access scope"
+        aria-haspopup="true"
+        aria-expanded={open}
+      >
+        Access
+      </button>
+      {open && (
+        <div
+          className="absolute right-0 top-full mt-1 z-50 w-56 rounded-md border bg-popover text-popover-foreground shadow-md p-2"
+          role="dialog"
+          aria-label="Effective Access"
+        >
+          {!scope ? (
+            <div className="text-xs">
+              <div className="font-semibold mb-1">Effective Access</div>
+              <div className="text-muted-foreground">All (bypass role)</div>
+            </div>
+          ) : (
+            <>
+              <div className="text-xs font-semibold mb-1">Effective Access</div>
+              <div className="border-t" />
+              <table className="w-full text-xs mt-1">
+                <tbody>
+                  <ScopeRow label="Clients"   dim={scope.clients} />
+                  <ScopeRow label="Cities"    dim={scope.cities} />
+                  <ScopeRow label="States"    dim={scope.states} />
+                  <ScopeRow label="Verticals" dim={scope.verticals} />
+                </tbody>
+              </table>
+              {hierarchy && hierarchy.descendantsCount > 0 && (
+                <>
+                  <div className="border-t mt-1" />
+                  <div className="text-xs text-muted-foreground italic mt-1">
+                    Including {hierarchy.descendantsCount} downstream report{hierarchy.descendantsCount === 1 ? '' : 's'}
+                  </div>
+                </>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Renders one row of the Effective Access table. `mode='none'` highlights
+// in amber because zero access usually means the operator's manage_*
+// column is mis-seeded — exactly the class of bug this panel exists to
+// surface.
+function ScopeRow({ label, dim }: { label: string; dim: ScopeDimension }) {
+  let value: ReactNode;
+  let valueClass = '';
+  if (dim.mode === 'all') {
+    value = 'All';
+  } else if (dim.mode === 'allow') {
+    value = dim.ids.length;
+  } else {
+    value = 'None';
+    valueClass = 'text-amber-600 font-medium';
+  }
+  return (
+    <tr>
+      <td className="text-left text-muted-foreground py-0.5">{label}</td>
+      <td className={`text-right py-0.5 ${valueClass}`}>{value}</td>
+    </tr>
+  );
+}
 
 export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
   const router = useRouter();
@@ -220,6 +337,20 @@ export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
           <div className="font-medium">{me?.user?.user_name ?? '…'}</div>
           <div className="text-muted-foreground">{me?.role?.role_name ?? me?.user?.official_email ?? ''}</div>
         </div>
+        {/*
+         * Effective Access panel — surfaces the operator's resolved row-level
+         * RBAC scope (clients / cities / states / verticals) so ops can spot
+         * "I'm scoped to 2 clients but seeing data for 50" issues at a glance
+         * instead of filing a ticket. Driven entirely from the /auth/me
+         * response already cached in AuthContext; no extra request.
+         *
+         * Skipped for bypass roles (Admin / Finance) where scope is absent
+         * server-side — those get a single "All (bypass role)" line.
+         */}
+        <EffectiveAccessPanel
+          scope={me?.scope}
+          hierarchy={me?.hierarchy}
+        />
         <Button variant="ghost" size="icon" onClick={logout} title="Log out">
           <LogOut className="h-5 w-5" />
         </Button>
