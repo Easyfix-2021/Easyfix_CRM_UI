@@ -1,0 +1,136 @@
+# EasyFix PROD — Frontend-only stack (CRM UI + Client UI together)
+#
+# Runs on the prod UI EC2 at /opt/easyfix/docker-compose.yml. Topology:
+#
+#   QA (one shared EC2)      — full combined stack (backend + crm-ui +
+#                              client-ui + dozzle) shipped by EasyFix_Backend
+#                              (deploy/docker-compose.yml in that repo).
+#   PROD (two EC2s)
+#     • PROD_BACKEND_INSTANCE_ID  ← backend + dozzle ONLY, shipped by
+#                                   EasyFix_Backend's deploy/docker-compose.prod-backend.yml
+#     • PROD_FRONTEND_INSTANCE_ID ← THIS file: crm-ui + client-ui + dozzle
+#                                   (no backend; lives on the BE host above)
+#
+# Both UI repos (Easyfix_CRM_UI + Easyfix_client_UI) ship this identical
+# file on every prod deploy. Idempotent — whichever deploy runs last wins,
+# and content is byte-identical so the final state is the same regardless.
+# This avoids a circular bootstrap (neither UI repo can depend on the
+# other to land first) without needing a shared infra repo.
+#
+# Why no `backend` service here: the prod UI EC2 doesn't run the backend
+# container. Listing it would (a) waste compose-pull cycles, (b) churn
+# /opt/easyfix/.env on every BE deploy via image-tag writes that nothing
+# on this host consumes, and (c) confuse `docker ps` readers.
+#
+# Image tags come from /opt/easyfix/.env (auto-loaded by docker compose):
+#   CRM_UI_IMAGE=902810393464.dkr.ecr.ap-south-1.amazonaws.com/easyfix/crm-ui:production-<sha>
+#   CLIENT_UI_IMAGE=902810393464.dkr.ecr.ap-south-1.amazonaws.com/easyfix/client-ui:production-<sha>
+#
+# Each UI repo's deploy workflow updates ONLY its own *_IMAGE line via
+# sed -i; the other repo's line is untouched.
+#
+# ECR pull authenticates via the EC2 instance profile's
+# AmazonEC2ContainerRegistryReadOnly policy + the
+# amazon-ecr-credential-helper installed on the box. No `docker login`
+# is ever required — IF the helper + IAM policy are present. If you see
+# `pull access denied… no basic auth credentials`, the helper is NOT
+# installed on this host; see ECR_AUTH_BOOTSTRAP.md in EasyFix_Backend.
+
+services:
+  crm-ui:
+    image: ${CRM_UI_IMAGE}
+    container_name: easyfix-crm-ui
+    restart: unless-stopped
+    # NEXT_PUBLIC_API_URL is BAKED INTO the static JS chunks at build
+    # time (in CI, via --build-arg). The container itself doesn't need
+    # any runtime env vars beyond NODE_ENV / PORT, which are set by the
+    # Dockerfile. Don't add an env_file here unless server-side runtime
+    # secrets become a thing (they currently don't).
+    environment:
+      NODE_ENV: production
+      PORT: "5180"
+    ports:
+      - "5180:5180"
+    networks:
+      - easyfix-net
+    # No depends_on backend — backend runs on a different EC2 (prod BE
+    # host). SSR fetches resolve over the network to that host's :5100.
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5180/login", "-O", "/dev/null"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  client-ui:
+    image: ${CLIENT_UI_IMAGE}
+    container_name: easyfix-client-ui
+    restart: unless-stopped
+    # Same baking model as crm-ui — NEXT_PUBLIC_API_URL is compiled into
+    # the bundle at build time. No env_file needed. The Client_UI portal
+    # serves SPOC users at /api/client/* on the backend.
+    environment:
+      NODE_ENV: production
+      PORT: "5181"
+    ports:
+      - "5181:5181"
+    networks:
+      - easyfix-net
+    healthcheck:
+      # Dedicated /healthcheck route handler (src/app/healthcheck/route.ts
+      # in Easyfix_client_UI). Cheaper than rendering `/`, and gives an
+      # explicit JSON contract: { status: "ok", service: "client-ui", ts }.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5181/healthcheck", "-O", "/dev/null"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # ─────────────────────────────────────────────────────────────────
+  # Dozzle — web UI for live Docker logs (https://dozzle.dev).
+  # Visit http://<ec2-private-ip>:8888 from the VPN to see live,
+  # searchable logs for crm-ui + client-ui in your browser. Multi-
+  # container tabs, regex filter, real-time follow.
+  #
+  # DOZZLE_HOSTNAME distinguishes this instance from the prod BE host's
+  # Dozzle (which uses "EasyFix Prod-BE") so a single browser session
+  # tabbing between the two doesn't get confused about which host's
+  # containers are which.
+  #
+  # SECURITY POSTURE — network-only:
+  # No app-level auth. The EC2 is in a private subnet; reaching :8888
+  # at all requires being on the AWS Client VPN, which is the trust
+  # boundary. The Docker socket is mounted READ-ONLY (`:ro`) so even
+  # if Dozzle had a vulnerability, it can't mutate Docker state — only
+  # read container metadata + logs.
+  dozzle:
+    image: amir20/dozzle:latest
+    container_name: easyfix-dozzle
+    restart: unless-stopped
+    environment:
+      DOZZLE_HOSTNAME: "EasyFix Prod-UI"
+    ports:
+      - "8888:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - easyfix-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+networks:
+  easyfix-net:
+    driver: bridge

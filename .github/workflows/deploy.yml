@@ -3,7 +3,16 @@
 # Targets:
 #   QA branch         → AWS EC2 at 10.30.2.30 (QA_INSTANCE_ID secret)
 #                                              SHARED VM with EasyFix_Backend
-#   Production branch → AWS EC2 (PROD_INSTANCE_ID)
+#                                              (BE repo ships the combined
+#                                               docker-compose.yml there).
+#   Production branch → AWS EC2 (PROD_FRONTEND_INSTANCE_ID secret)
+#                                              UI-only host (crm-ui + client-ui +
+#                                               dozzle); compose file is shipped
+#                                               by THIS deploy from
+#                                               deploy/docker-compose.prod-frontend.yml.
+#                                               Backend lives on a separate prod
+#                                               EC2 (PROD_BACKEND_INSTANCE_ID),
+#                                               shipped by EasyFix_Backend.
 #
 # Pipeline per push:
 #   1. Typecheck on github-hosted runner (cheap fail-fast)
@@ -239,12 +248,13 @@ jobs:
         run: |
           # Fallback for QA only — instance ID is public-info, hardcoding
           # avoids a transient secret-access misconfig blocking deploys.
-          # Prod stays strict (no fallback) because there's no prod box yet
-          # and a wrong instance ID would be a much bigger blast radius.
+          # Prod stays strict (no fallback) because a wrong instance ID
+          # would be a much bigger blast radius on a live host.
           #
-          # 2026-06-03: PROD_INSTANCE_ID split per repo (BE vs UI now
+          # 2026-06-03: PROD_*_INSTANCE_ID split per repo (BE vs UI now
           # target different EC2 hosts). This file (frontend) reads
-          # PROD_FRONTEND_INSTANCE_ID. The backend's deploy.yml reads
+          # PROD_FRONTEND_INSTANCE_ID — the UI-only host running crm-ui
+          # + client-ui + dozzle. The backend's deploy.yml reads
           # PROD_BACKEND_INSTANCE_ID. QA stays unified — both repos
           # deploy to the same shared QA box (i-032aa9d2942305364).
           ENV_NAME="${{ needs.build-and-push.outputs.env_name }}"
@@ -254,6 +264,21 @@ jobs:
             echo "instance_id=${{ secrets.PROD_FRONTEND_INSTANCE_ID }}" >> "$GITHUB_OUTPUT"
           fi
 
+      # Prod-only: ship deploy/docker-compose.prod-frontend.yml to the
+      # UI host. QA's compose is shipped by the BE repo's deploy (combined
+      # stack), so we skip these steps on QA. Checkout is also gated to
+      # prod — no need to clone the repo just to pull an image on QA.
+      - name: Checkout (prod only — to read prod-frontend compose)
+        if: needs.build-and-push.outputs.env_name == 'production'
+        uses: actions/checkout@v4
+
+      - name: Encode prod-frontend docker-compose.yml
+        id: compose
+        if: needs.build-and-push.outputs.env_name == 'production'
+        run: |
+          B64=$(base64 -w0 deploy/docker-compose.prod-frontend.yml)
+          echo "compose_b64=$B64" >> "$GITHUB_OUTPUT"
+
       - name: SSM compose pull + up
         id: ssm
         run: |
@@ -261,6 +286,10 @@ jobs:
           INSTANCE_ID="${{ steps.target.outputs.instance_id }}"
           IMAGE_TAG="${{ needs.build-and-push.outputs.image_tag }}"
           ENV_NAME="${{ needs.build-and-push.outputs.env_name }}"
+          # Compose file b64 — populated only on prod (the conditional
+          # encode step above is skipped on QA, so this is empty there
+          # and the remote-side guard avoids touching the compose file).
+          COMPOSE_B64="${{ steps.compose.outputs.compose_b64 }}"
 
           # Rebuild the ECR URI from secrets here — passing it across
           # jobs would cause GitHub to scrub it (registry/repo are
@@ -289,18 +318,56 @@ jobs:
           #                                deploy below).
           #   /opt/easyfix/backend.env  → BE service runtime config
           #                                (DB creds, JWT, KALEYRA_*, …)
+          #                                Only required on QA (combined
+          #                                stack) and prod-BE host; the
+          #                                prod-UI host has no backend
+          #                                container and therefore no
+          #                                backend.env requirement.
           #
           # The UI deploy requires .env to pre-exist because the file
           # carries UI runtime config that the deploy itself doesn't
-          # write — operators bootstrap it once per host. (The BE deploy
-          # only writes to .env for the image-tag interpolation, so it
-          # touches the file if absent rather than failing.)
-          for required in /opt/easyfix/.env /opt/easyfix/backend.env /opt/easyfix/docker-compose.yml; do
+          # write — operators bootstrap it once per host.
+          for required in /opt/easyfix/.env; do
             if [[ ! -f "\$required" ]]; then
               echo "::error::\$required missing — see AWS_QA_BOOTSTRAP.md"
               exit 1
             fi
           done
+
+          # backend.env is only needed where a backend container runs.
+          # On QA it's required (shared host runs backend too); on the
+          # prod-UI host it's not — backend lives on PROD_BACKEND_INSTANCE_ID.
+          if [[ "$ENV_NAME" == "qa" ]]; then
+            if [[ ! -f /opt/easyfix/backend.env ]]; then
+              echo "::error::/opt/easyfix/backend.env missing on QA host — see AWS_QA_BOOTSTRAP.md"
+              exit 1
+            fi
+          fi
+
+          # docker-compose.yml provenance:
+          #   QA           → shipped by the BE repo's deploy (combined stack).
+          #                   Required to pre-exist here; bootstrap via BE deploy.
+          #   Prod-UI host → shipped by THIS deploy (block below) from
+          #                   deploy/docker-compose.prod-frontend.yml in the
+          #                   UI repos. Both UI repos write byte-identical
+          #                   content, so whichever deploy runs last wins
+          #                   and the result is the same.
+          if [[ "$ENV_NAME" == "qa" ]]; then
+            if [[ ! -f /opt/easyfix/docker-compose.yml ]]; then
+              echo "::error::/opt/easyfix/docker-compose.yml missing — bootstrap via BE deploy first"
+              exit 1
+            fi
+          else
+            # Prod-UI host: write the frontend-only compose atomically.
+            # COMPOSE_B64 is substituted by the heredoc on the runner (unquoted EOF).
+            if [[ -z "$COMPOSE_B64" ]]; then
+              echo "::error::COMPOSE_B64 empty on prod — encode step must have run"
+              exit 1
+            fi
+            echo "▶ Writing /opt/easyfix/docker-compose.yml (prod-frontend topology)"
+            echo "$COMPOSE_B64" | base64 -d > /opt/easyfix/.docker-compose.yml.new
+            mv /opt/easyfix/.docker-compose.yml.new /opt/easyfix/docker-compose.yml
+          fi
 
           # Update CRM_UI_IMAGE in .env. Append if first run.
           if grep -q '^CRM_UI_IMAGE=' /opt/easyfix/.env; then

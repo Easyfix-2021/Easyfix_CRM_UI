@@ -81,6 +81,15 @@ import reactHooksPlugin from 'eslint-plugin-react-hooks';
 // "Definition for rule 'X' was not found".
 import nextPlugin from '@next/eslint-plugin-next';
 import tsPlugin from '@typescript-eslint/eslint-plugin';
+// jsx-a11y — registered to satisfy dormant
+//   // eslint-disable-next-line jsx-a11y/media-has-caption
+// comments in the codebase. Same pattern as the other two plugins
+// above: load but don't enable any rules, so Next's build-time linter
+// stays the only enforcement surface for accessibility checks.
+// Added 2026-06-03 after Docker build failed with
+//   "Definition for rule 'jsx-a11y/media-has-caption' was not found"
+// on JobModal.tsx:3452.
+import jsxA11yPlugin from 'eslint-plugin-jsx-a11y';
 
 const config = [
   {
@@ -111,6 +120,7 @@ const config = [
       'react-hooks': reactHooksPlugin,
       '@next/next': nextPlugin,
       '@typescript-eslint': tsPlugin,
+      'jsx-a11y': jsxA11yPlugin,
     },
     rules: {
       'no-restricted-syntax': ['error', RESTRICTED_DIALOG_ONOPENCHANGE],
