@@ -33,6 +33,7 @@ import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/componen
 import { SortHeader, cycleSort } from '@/lib/use-sort';
 import { Switch } from '@/components/ui/switch';
 import { useCancelConfirm } from '@/lib/use-cancel-confirm';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { api, ApiError } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { showToast } from '@/components/ui/toast';
@@ -1093,8 +1094,13 @@ function UserFormModal({
     }
   }
 
+  // useFormDirtyGuard (2026-06-03) — same pattern as the sibling
+  // Add/Edit Role modal: Esc / X / overlay-click now prompt with the
+  // shared "Discard changes?" confirm; skip while saving.
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !submitting });
+
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       {/* Wider modal — matches Add/Edit Role so the two settings forms
           feel like siblings, and gives the multi-select pickers enough
           horizontal room for the chip rows below them. */}

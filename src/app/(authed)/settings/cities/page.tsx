@@ -27,6 +27,7 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useLookup } from '@/lib/use-lookup';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
 type City = {
   city_id: number;
@@ -491,6 +492,8 @@ function CityFormModal({
     }
   }, [open, editing]);
 
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !submitting });
+
   async function handleSubmit() {
     setError(null);
     if (!name.trim()) { setError('City name is required'); return; }
@@ -525,7 +528,7 @@ function CityFormModal({
   }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{isEdit ? `Edit "${editing!.city_name}"` : 'Add City'}</DialogTitle>

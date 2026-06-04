@@ -20,6 +20,7 @@ import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { showToast } from '@/components/ui/toast';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
 /*
  * Manage Deep Skills — Service Category → Service Type → Deep Skill → Options.
@@ -410,6 +411,7 @@ function DeepSkillEditor({
   const [imageUploading, setImageUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !saving });
 
   useEffect(() => {
     if (!record) {
@@ -522,7 +524,7 @@ function DeepSkillEditor({
   }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent hideClose className="max-w-3xl">
         <DialogHeader>
           {/* Custom hero header — matches the legacy CRM teal banner */}

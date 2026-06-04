@@ -32,6 +32,7 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useLookup } from '@/lib/use-lookup';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
 type ServiceType = {
   service_type_id: number;
@@ -278,6 +279,7 @@ function TypeFormModal({ open, onClose, editing, categories, onSaved }: {
   const [active, setActive] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !submitting });
   /* Tools multi-select (2026-05-26) — closes the deferred field. The
      selection is stored as a CSV of tool_ids; on save we also build
      `service_type_tool_names` (CSV of tool names) so the legacy
@@ -348,7 +350,7 @@ function TypeFormModal({ open, onClose, editing, categories, onSaved }: {
   }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{isEdit ? `Edit "${editing!.service_type_name}"` : 'Add Service Type'}</DialogTitle>

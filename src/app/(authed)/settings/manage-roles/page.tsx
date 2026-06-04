@@ -29,6 +29,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Switch } from '@/components/ui/switch';
 import { useCancelConfirm } from '@/lib/use-cancel-confirm';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { api, ApiError } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useMe } from '@/lib/auth-context';
@@ -915,8 +916,14 @@ function RoleFormModal({
     }
   }
 
+  // useFormDirtyGuard (2026-06-03) — Esc / X / overlay-click now route
+  // through the same "Discard changes?" prompt the Cancel button uses
+  // via useCancelConfirm. Skip the prompt while a save is in flight
+  // (matches the pre-existing block on Cancel during `submitting`).
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !submitting });
+
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       {/* Wider modal — 1100px gives the Menu & Action tree room to lay
           out two columns of per-menu action checkboxes on most screens,
           and matches the wider Add/Edit User modal so the two settings

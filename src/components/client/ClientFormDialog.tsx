@@ -41,6 +41,7 @@ import { SearchMultiSelect } from '@/components/ui/search-multi-select';
 import { showToast } from '@/components/ui/toast';
 import { api, ApiError } from '@/lib/api';
 import { useFetchOnce, invalidateFetch } from '@/lib/hooks';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { COLLECTED_BY_OPTIONS, type ClientDetail } from '@/lib/client-types';
 
 type Mode = 'create' | 'edit';
@@ -316,8 +317,19 @@ export function ClientFormDialog({ open, onClose, onSaved, mode, initial }: Prop
     } finally { setSaving(false); }
   }
 
+  // useFormDirtyGuard (2026-06-03) — Esc / X / overlay-click now
+  // prompts with the same "Discard changes?" confirm as the Cancel
+  // button. `when: () => !saving` preserves the prior "block close
+  // while a save is in flight" idiom. Called at the component's top
+  // level (React rules-of-hooks); the saving check is read at click
+  // time via the function form so the latest value wins.
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !saving });
+
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && !saving && onClose()}>
+    <Dialog
+      open={open}
+      onOpenChange={guardedOpenChange}
+    >
       {/*
        * Sticky header + sticky footer:
        *   - DialogContent is a flex COLUMN with capped max-height +

@@ -20,6 +20,7 @@ import { api, ApiError } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
 type Tool = {
   tool_id: number;
@@ -248,6 +249,7 @@ function ToolFormModal({ open, onClose, editing, onSaved }: {
   const [submitting, setSubmitting] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !submitting });
 
   useEffect(() => {
     if (open) {
@@ -297,7 +299,7 @@ function ToolFormModal({ open, onClose, editing, onSaved }: {
   }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{isEdit ? `Edit "${editing!.tool_name}"` : 'Add Tool'}</DialogTitle>

@@ -350,32 +350,36 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
        */}
 
       {/* ─── Remarks History ──────────────────────────────────────── */}
+      {/* Columns trimmed to legacy 4-column spec (2026-06-03 per ops):
+          Date/Time · Remarks · Remarks By · Reason — same order and
+          field bindings as JobModal's JobCommentsTab so the read-only
+          single-page view stays consistent with the tabbed modal.
+          Dropped: "Remarks For" (stage label) + "Accountable" (was
+          rendered as "—" — placeholder for a feature that never
+          shipped). c.comment_on is still on the row if any future
+          report needs the stage; not surfaced visually. */}
       <Card dense>
         <SectionHeading>Remarks History</SectionHeading>
         <table className="w-full text-sm">
           <thead className="bg-slate-50/60">
             <tr className="text-left text-xs text-muted-foreground">
-              <th className="px-3 py-2">Remarks For</th>
-              <th className="px-3 py-2">Accountable</th>
-              <th className="px-3 py-2">Reason</th>
-              <th className="px-3 py-2">Remarks</th>
-              <th className="px-3 py-2">Remark By</th>
               <th className="px-3 py-2">Date/Time</th>
+              <th className="px-3 py-2">Remarks</th>
+              <th className="px-3 py-2">Remarks By</th>
+              <th className="px-3 py-2">Reason</th>
             </tr>
           </thead>
           <tbody>
             {data.comments.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-3 py-4 text-center text-muted-foreground text-xs">No remarks yet</td>
+                <td colSpan={4} className="px-3 py-4 text-center text-muted-foreground text-xs">No remarks yet</td>
               </tr>
             ) : data.comments.map((c) => (
               <tr key={c.id} className="border-t border-slate-100 align-top">
-                <td className="px-3 py-2 text-xs">{fmt(c.stage_label)}</td>
-                <td className="px-3 py-2 text-xs">—</td>
-                <td className="px-3 py-2 text-xs">{fmt(c.enum_desc)}</td>
+                <td className="px-3 py-2 text-xs whitespace-nowrap">{c.created_on ? formatDate(c.created_on) : '—'}</td>
                 <td className="px-3 py-2 text-xs max-w-[260px] whitespace-pre-wrap">{fmt(c.comments)}</td>
                 <td className="px-3 py-2 text-xs">{fmt(c.user_name)}</td>
-                <td className="px-3 py-2 text-xs">{c.created_on ? formatDate(c.created_on) : '—'}</td>
+                <td className="px-3 py-2 text-xs">{fmt(c.enum_desc)}</td>
               </tr>
             ))}
           </tbody>

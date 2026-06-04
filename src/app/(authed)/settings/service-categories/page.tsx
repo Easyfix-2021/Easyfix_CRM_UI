@@ -27,6 +27,7 @@ import { api, ApiError } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
 type Category = {
   service_catg_id: number;
@@ -295,6 +296,8 @@ function CategoryFormModal({ open, onClose, editing, onSaved }: {
     }
   }, [open, editing]);
 
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !submitting });
+
   async function handleSubmit() {
     setError(null);
     if (!name.trim()) { setError('Name is required'); return; }
@@ -317,7 +320,7 @@ function CategoryFormModal({ open, onClose, editing, onSaved }: {
   }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{isEdit ? `Edit "${editing!.service_catg_name}"` : 'Add Service Category'}</DialogTitle>

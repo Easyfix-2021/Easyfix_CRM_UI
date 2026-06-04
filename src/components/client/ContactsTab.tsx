@@ -25,6 +25,7 @@ import { showToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { api, ApiError } from '@/lib/api';
 import { useFetch, invalidateFetch } from '@/lib/hooks';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import type { ClientContact, ContactFormPayload } from '@/lib/client-types';
 
 type Props = {
@@ -238,8 +239,10 @@ function ContactFormDialog({
     } finally { setSaving(false); }
   }
 
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !saving });
+
   return (
-    <Dialog open onOpenChange={(o) => !o && !saving && onClose()}>
+    <Dialog open onOpenChange={guardedOpenChange}>
       <DialogContent className="!max-w-lg">
         <DialogHeader>
           <DialogTitle>{isEdit ? 'Edit Contact' : 'Add Contact'}</DialogTitle>

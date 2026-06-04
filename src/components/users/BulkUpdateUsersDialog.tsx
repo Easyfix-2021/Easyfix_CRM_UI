@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label';
 import { SearchSelect } from '@/components/ui/search-select';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
 import { api, ApiError } from '@/lib/api';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
 /*
  * BulkUpdateUsersDialog — Manage Users top-right "Bulk Update Users"
@@ -101,8 +102,10 @@ export function BulkUpdateUsersDialog({
     return () => { cancelled = true; };
   }, [open]);
 
+  const guardedOpenChange = useFormDirtyGuard(onClose);
+
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent className="!max-w-none w-[calc(100vw-48px)] h-[calc(100vh-48px)] overflow-hidden p-0 flex flex-col">
         <DialogHeader className="!mx-0 !mt-0 px-6 py-3.5 !mb-0">
           <DialogTitle className="flex items-center gap-2">

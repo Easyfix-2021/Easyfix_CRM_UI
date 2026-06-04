@@ -29,6 +29,7 @@ import { useLookup } from '@/lib/use-lookup';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { showToast } from '@/components/ui/toast';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
 type Zone = {
   zone_id: number;
@@ -284,6 +285,7 @@ function ZoneAddEditDialog({ open, zone, onClose, onSaved }: {
   const [active, setActive] = useState(true);
   const [busy,   setBusy]   = useState(false);
   const [err,    setErr]    = useState<string | null>(null);
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !busy });
 
   useEffect(() => {
     if (open) {
@@ -325,7 +327,7 @@ function ZoneAddEditDialog({ open, zone, onClose, onSaved }: {
   }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{zone ? `Edit "${zone.zone_name}"` : 'Add new zone'}</DialogTitle>
@@ -428,6 +430,7 @@ function ZoneUploadDialog({ open, onClose, onApplied }: {
   const [busy,   setBusy]   = useState(false);
   const [err,    setErr]    = useState<string | null>(null);
   const [result, setResult] = useState<UploadResult | null>(null);
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !busy });
 
   useEffect(() => {
     if (open) { setFile(null); setDryRun(true); setBusy(false); setErr(null); setResult(null); }
@@ -449,7 +452,7 @@ function ZoneUploadDialog({ open, onClose, onApplied }: {
   }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Bulk Upload Zone-Pincode Mapping</DialogTitle>

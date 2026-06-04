@@ -23,6 +23,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { api, ApiError } from '@/lib/api';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
 type QRow = Record<string, unknown> & {
   id: number;
@@ -183,6 +184,7 @@ function AddQuestionnaireDialog({ open, onClose, onSubmit }: {
   const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !loading });
   useEffect(() => { if (open) { setName(''); setErr(null); } }, [open]);
   async function go() {
     if (!name.trim()) { setErr('Name is required'); return; }
@@ -192,7 +194,7 @@ function AddQuestionnaireDialog({ open, onClose, onSubmit }: {
     finally { setLoading(false); }
   }
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent>
         <DialogHeader><DialogTitle>New Questionnaire</DialogTitle></DialogHeader>
         <div className="space-y-3">

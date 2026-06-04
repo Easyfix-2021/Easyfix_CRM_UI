@@ -172,10 +172,29 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true 
    */
   const lastGeocodedAddrRef = React.useRef<string>(String(value.address || ''));
 
+  /*
+   * `lastReverseGeocodedGpsRef` records the lat,lng string we most
+   * recently reverse-geocoded — drag, click, autocomplete pick, or
+   * manual GPS-input edit. The manual-GPS watcher below skips work
+   * when the field's current value matches this ref, preventing an
+   * infinite loop: reverseGeocode patches gps_location → that
+   * re-triggers the watcher → watcher re-fires reverseGeocode → loop.
+   * Stored normalized to .toFixed(6) on both sides for stable string
+   * compare (Google occasionally returns 5-decimal lat/lng; we always
+   * persist 6 — without normalising, strings would differ harmlessly
+   * but the watcher would still re-fire).
+   */
+  const lastReverseGeocodedGpsRef = React.useRef<string>('');
+
   // Reverse-geocode the marker position and patch dependent fields.
   // Called from the marker's `dragend` handler. Errors are logged but
   // non-fatal — the marker still moves even if reverse-geocode fails.
   async function reverseGeocode(lat: number, lng: number) {
+    // Stamp the canonical lat,lng we're about to reverse-geocode so
+    // the manual-GPS watcher doesn't re-trigger when patch() writes
+    // gps_location back through onChange. Stamped BEFORE the await so
+    // even a slow API response can't lose the race against a re-render.
+    lastReverseGeocodedGpsRef.current = `${lat.toFixed(6)},${lng.toFixed(6)}`;
     try {
       const r = await api.get<{
         formatted_address?: string;
@@ -195,7 +214,11 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true 
       if (comps.postal_code) next.pin_code = comps.postal_code;
       if (comps.city) {
         const match = cityByName.get(comps.city.toLowerCase());
-        if (match) next.city_id = match;
+        // Blank out city_id when the geocoded city isn't in the EasyFix
+        // master list — same invariant as the forward-geocode debounce
+        // and autocomplete onPick paths. (Previously: `if (match)` kept
+        // the stale previous city_id, silently misclassifying jobs.)
+        next.city_id = match || '';
       }
       patch(next);
     } catch (e) {
@@ -262,7 +285,14 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true 
         if (comps.postal_code) next.pin_code = comps.postal_code;
         if (comps.city) {
           const match = cityByName.get(comps.city.toLowerCase());
-          if (match) next.city_id = match;
+          // ALWAYS set city_id — empty string when no master-list match
+          // so the SearchSelect renders blank rather than silently
+          // keeping the stale previous selection. Operators then either
+          // pick a city manually or drag the pin into a serviced region.
+          // (Was previously `if (match) next.city_id = match;` which
+          // misclassified jobs when the pin moved into an unserviced
+          // tier-3 town — the old city_id stuck and got persisted on save.)
+          next.city_id = match || '';
         }
         patch(next);
       } catch {
@@ -273,6 +303,51 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true 
     return () => { cancelled = true; clearTimeout(handle); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value.address, editable]);
+
+  /*
+   * Manual-GPS → reverse-geocode debounce (2026-06-03).
+   *
+   * Operators occasionally paste a known-good "lat,lng" pair into the
+   * GPS Coordinates input (the BE supports this — see the input
+   * comment block below). Without this watcher, the GPS string updated
+   * but PIN + city + address stayed stale, silently misclassifying the
+   * job. Now: 800ms after the operator stops typing in the field, we
+   * reverse-geocode and patch all four dependent fields.
+   *
+   * Bounds + format guards (defensive — bad pastes shouldn't crash):
+   *   - exactly two CSV components
+   *   - both parse as finite numbers
+   *   - lat in [-90, 90], lng in [-180, 180]
+   * Anything else is silently ignored — the operator's input stays in
+   * the field, the reverse-geocode just doesn't fire.
+   *
+   * Dedupes against `lastReverseGeocodedGpsRef` (normalized to
+   * .toFixed(6)) so the patch reverseGeocode itself emits doesn't
+   * re-trigger this watcher — the loop guard described in that ref's
+   * docblock.
+   *
+   * Marker + map view re-centre via the existing `initialLatLng`
+   * useEffect — no extra wiring needed here.
+   */
+  React.useEffect(() => {
+    if (!editable) return;
+    const csv = String(value.gps_location || '').trim();
+    if (!csv) return;
+    const parts = csv.split(',').map((s) => Number(s.trim()));
+    if (parts.length !== 2 || parts.some((n) => !Number.isFinite(n))) return;
+    const [lat, lng] = parts;
+    if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return;
+    // Normalize for dedupe — same shape we always persist to state.
+    const norm = `${lat.toFixed(6)},${lng.toFixed(6)}`;
+    if (norm === lastReverseGeocodedGpsRef.current) return;
+    let cancelled = false;
+    const handle = setTimeout(() => {
+      if (cancelled) return;
+      void reverseGeocode(lat, lng);
+    }, 800);
+    return () => { cancelled = true; clearTimeout(handle); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value.gps_location, editable]);
 
   // Map bootstrap — loads JS API + instantiates map + marker on first
   // mount. Re-uses the existing marker instance on rerenders.
@@ -349,7 +424,12 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true 
               if (p.components.postal_code) next.pin_code = p.components.postal_code;
               if (p.components.city) {
                 const match = cityByName.get(p.components.city.toLowerCase());
-                if (match) next.city_id = match;
+                // Blank out city_id when the picked place's city isn't
+                // in the EasyFix master list — operator sees an empty
+                // dropdown and picks manually rather than the stale
+                // previous selection silently carrying over. Same
+                // invariant as reverseGeocode / forward-geocode paths.
+                next.city_id = match || '';
               }
               // Pick already supplied lat/lng — record so the typed-
               // address debounce skips this exact string and we don't

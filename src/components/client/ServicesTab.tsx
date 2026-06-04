@@ -42,7 +42,7 @@
  */
 
 import React, { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { Plus, Pencil, Trash2, AlertCircle, Layers, Tag, ChevronDown, BarChart3 } from 'lucide-react';
+import { Plus, Pencil, Trash2, AlertCircle, Layers, ChevronDown, BarChart3 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -54,6 +54,7 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { TablePagination, type TablePageSize } from '@/components/ui/table-pagination';
 import { api, ApiError } from '@/lib/api';
 import { useFetch, useFetchOnce, invalidateFetch } from '@/lib/hooks';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
 type ServiceCategory = { service_catg_id: number; service_catg_name: string };
 type ServiceType = { service_type_id: number; service_type_name: string; service_catg_id: number | null };
@@ -224,21 +225,13 @@ export function ServicesTab({ clientId, canEdit }: Props) {
             <thead>
               <tr>
                 <th className="!text-left">Service ID</th>
-                {/* Three separate columns per legacy CRM (2026-06-03):
-                    Service Name = joined service-type names rendered as
-                    plain text (the "what specifically" column from the
-                    legacy Manage Client Services page).
-                    Service Type = the same service-types but rendered as
-                    `#id - name` chips matching the legacy formatting
-                    (e.g. "3 - Wood Polish (d)").
-                    Service Category = the parent category — distinct
-                    field on the row. Both Name and Type derive from
-                    `service_type_ids` because our schema collapses what
-                    legacy stored as separate rate-card-name + type-name
-                    fields; the dual rendering keeps the legacy column
-                    structure visible while being faithful to our data. */}
+                {/* Service Type column dropped 2026-06-03 — the chip
+                    rendering of `#id - name` was duplicative with the
+                    Service Name column (both derived from the same
+                    `service_type_ids` array, just with different
+                    visual treatment). Keeping the prose-style
+                    "Service Name" + the Category column is enough. */}
                 <th className="!text-left">Service Name</th>
-                <th className="!text-left">Service Type</th>
                 <th className="!text-left">Service Category</th>
                 <th className="!text-right">Easyfixer Charges</th>
                 <th className="!text-right">Client Charges</th>
@@ -250,16 +243,14 @@ export function ServicesTab({ clientId, canEdit }: Props) {
               {paged.map((r) => {
                 const isOpen = openBreakdownId === r.client_service_id;
                 const bd = r.charges?._breakdown ?? null;
-                // Render the same chip-style as JobModal: numeric prefix
-                // before the type name. Falls back to "#<id>" when the
-                // BE didn't resolve a name (e.g. stale CSV entry).
-                const typeChip = (t: { service_type_id: number; service_type_name: string | null }) =>
-                  `${t.service_type_id} - ${t.service_type_name ?? '—'}`;
                 return (
                   <React.Fragment key={r.client_service_id}>
                     <tr>
                       <td className="!text-left font-mono text-xs">{r.client_service_id}</td>
-                      {/* Service Name — comma-joined names, plain text. */}
+                      {/* Service Name — comma-joined names, plain text.
+                          (Service Type column dropped — was duplicative
+                          with this column; both derived from the same
+                          service_type_ids array.) */}
                       <td className="!text-left text-xs">
                         {r.service_types.length === 0 ? (
                           <span className="text-muted-foreground italic">—</span>
@@ -269,24 +260,6 @@ export function ServicesTab({ clientId, canEdit }: Props) {
                               .map((t) => t.service_type_name ?? `#${t.service_type_id}`)
                               .join(', ')}
                           </span>
-                        )}
-                      </td>
-                      {/* Service Type — `#id - name` chips, legacy style. */}
-                      <td className="!text-left">
-                        {r.service_types.length === 0 ? (
-                          <span className="text-muted-foreground italic text-xs">—</span>
-                        ) : (
-                          <div className="flex flex-wrap gap-1">
-                            {r.service_types.map((t) => (
-                              <span
-                                key={t.service_type_id}
-                                className="text-[11px] bg-sky-50 text-sky-800 border border-sky-200 rounded px-1.5 py-0.5 inline-flex items-center gap-1"
-                              >
-                                <Tag className="size-2.5" />
-                                {typeChip(t)}
-                              </span>
-                            ))}
-                          </div>
                         )}
                       </td>
                       <td className="!text-left">
@@ -367,9 +340,9 @@ export function ServicesTab({ clientId, canEdit }: Props) {
                     </tr>
                     {isOpen && (
                       <tr>
-                        {/* colSpan = 8 (Service ID + Name + Type + Category
+                        {/* colSpan = 7 (Service ID + Name + Category
                             + EF Charges + Cl Charges + Status + Actions). */}
-                        <td colSpan={8} className="bg-slate-50 p-3">
+                        <td colSpan={7} className="bg-slate-50 p-3">
                           <BreakdownPanel row={r} breakdown={bd} />
                         </td>
                       </tr>
@@ -737,8 +710,10 @@ function ServiceFormDialog({
     } finally { setSaving(false); }
   }
 
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !saving });
+
   return (
-    <Dialog open onOpenChange={(o) => !o && !saving && onClose()}>
+    <Dialog open onOpenChange={guardedOpenChange}>
       {/* !max-w-2xl — the legacy field set is too tight at xl */}
       <DialogContent className="!max-w-2xl">
         <DialogHeader>

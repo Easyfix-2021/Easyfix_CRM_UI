@@ -30,6 +30,7 @@ import { CancelButton } from '@/components/ui/cancel-button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { api, ApiError } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useLookup } from '@/lib/use-lookup';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
@@ -507,8 +508,10 @@ function PincodeFormModal({
     }
   }
 
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !submitting });
+
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{isEdit ? 'Edit Pincode' : 'Add Pincode'}</DialogTitle>
@@ -655,8 +658,10 @@ function UploadModal({
     }
   }
 
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !busy });
+
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>Upload Pincodes (Bulk)</DialogTitle>

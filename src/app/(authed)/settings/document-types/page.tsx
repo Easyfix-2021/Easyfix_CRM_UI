@@ -22,6 +22,7 @@ import { api, ApiError } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
 type DocType = {
   document_type_id: number;
@@ -241,6 +242,7 @@ function DocTypeFormModal({ open, onClose, editing, onSaved }: {
   const [active, setActive] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !submitting });
 
   useEffect(() => {
     if (open) {
@@ -272,7 +274,7 @@ function DocTypeFormModal({ open, onClose, editing, onSaved }: {
   }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{isEdit ? `Edit "${editing!.document_name}"` : 'Add Document Type'}</DialogTitle>

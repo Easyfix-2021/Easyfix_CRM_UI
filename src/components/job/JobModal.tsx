@@ -163,13 +163,32 @@ export function JobModal({
    * (not state) suffices since the close handlers only READ at click-time.
    */
   const hasUnsavedQtyRef = React.useRef(false);
+  /*
+   * `hasUnsavedFormRef` — set by JobForm whenever the operator edits any
+   * form field on the Confirm & Schedule / Book New Call modal that
+   * would be discarded on close. JobForm flips it true on any user-
+   * initiated state change and back to false after a successful save.
+   * Read at close-time only (no re-render needed), hence a ref.
+   *
+   * Why a separate signal from `hasUnsavedQtyRef`: that one tracks
+   * INVALID qty edits specifically (auto-save skips them). This one
+   * tracks any dirty-form state — including valid edits that just
+   * haven't been submitted yet. Both feed `guardedClose` below.
+   */
+  const hasUnsavedFormRef = React.useRef(false);
   const confirm = useConfirm();
   /*
    * guardedClose — intercepts every close path (footer Close button,
-   * the Dialog's X / Escape / overlay-click via onOpenChange). Only
-   * prompts when there's an INVALID, uncommittable qty edit that closing
-   * would discard; valid edits auto-save on the close-click's blur, and a
-   * clean close skips the confirm entirely so the common case is one click.
+   * the Dialog's X / Escape / overlay-click via onOpenChange).
+   *
+   * Two-tier prompt:
+   *   • Invalid qty edits — explicit "this will be discarded" message
+   *     (auto-save can't commit them, so closing genuinely throws them away).
+   *   • Any other dirty form state — generic discard-changes confirm.
+   *
+   * Clean close skips both prompts and is one click. The order of
+   * checks matters: the qty-specific message is more actionable, so
+   * we surface it first when both flags are set.
    */
   async function guardedClose() {
     if (hasUnsavedQtyRef.current) {
@@ -181,8 +200,21 @@ export function JobModal({
         variant: 'destructive',
       });
       if (!ok) return;
+    } else if (hasUnsavedFormRef.current) {
+      // Generic dirty-form prompt — covers address instructions, customer
+      // edits, services tab adds/removes etc. The qty-specific branch
+      // above is more specific so it wins when both are dirty.
+      const ok = await confirm({
+        title: 'Discard Unsaved Changes?',
+        description: 'You have unsaved changes that will be lost. Close anyway?',
+        confirmLabel: 'Discard',
+        cancelLabel: 'Keep Editing',
+        variant: 'destructive',
+      });
+      if (!ok) return;
     }
     hasUnsavedQtyRef.current = false;
+    hasUnsavedFormRef.current = false;
     onClose();
   }
   // Add-Remarks popup for the Unconfirmed view-mode footer. Lives at
@@ -424,6 +456,7 @@ export function JobModal({
                   initial={null}
                   prefillCustomer={prefill}
                   onCancel={onClose}
+                  onFormDirty={(dirty) => { hasUnsavedFormRef.current = dirty; }}
                   onSaved={(saved) => {
                     if (saved?.job_id) { setJob(saved); setMode('view'); onSaved?.(); }
                   }}
@@ -471,6 +504,9 @@ export function JobModal({
               // after the X-delete on a thumbnail — without this the
               // tile stays visible and a retry click 404s.
               onRefresh={refresh}
+              // Dirty-form signal — drives the Esc / X / overlay
+              // "Discard Unsaved Changes?" prompt in guardedClose.
+              onFormDirty={(dirty) => { hasUnsavedFormRef.current = dirty; }}
             />
           )}
         </div>
@@ -2842,41 +2878,66 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
         </div>
       )}
       {allRows.length > 0 && (
-        <ul className="space-y-2">
+        <>
           {loading && (
-            <li className="text-[11px] text-muted-foreground text-center py-1.5 inline-flex items-center justify-center gap-1.5 w-full">
+            <div className="text-[11px] text-muted-foreground text-center py-1.5 inline-flex items-center justify-center gap-1.5 w-full">
               <span className="inline-block h-3 w-3 rounded-full border-2 border-sky-500/30 border-t-sky-500 animate-spin" aria-hidden />
               Refreshing comments…
-            </li>
+            </div>
           )}
-          {allRows.map((c) => (
-            <li
-              key={c.id}
-              className={`rounded-md border bg-card p-3 ${c._pending ? 'opacity-75 border-dashed border-sky-300 bg-sky-50/40' : ''}`}
-            >
-              <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
-                <span>
-                  <span className="font-medium text-foreground">{c.user_name ?? 'Unknown user'}</span>
-                  {' · '}
-                  <span className="inline-block bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">
-                    {COMMENT_STAGE_LABEL[c.comment_on] ?? c.stage}
-                  </span>
-                  {c._pending && (
-                    <>
-                      {' · '}
-                      <span className="inline-flex items-center gap-1 bg-sky-100 text-sky-800 rounded px-1.5 py-0.5">
-                        <span className="inline-block h-2 w-2 rounded-full border-2 border-sky-600/30 border-t-sky-600 animate-spin" aria-hidden />
-                        Sending…
-                      </span>
-                    </>
-                  )}
-                </span>
-                <span>{formatDate(c.created_on)}</span>
-              </div>
-              <div className="text-sm whitespace-pre-wrap">{c.comments}</div>
-            </li>
-          ))}
-        </ul>
+          {/*
+            Remarks history rebuilt as a 4-column table (2026-06-03 per ops):
+              • Date/Time   — `formatDate(c.created_on)`
+              • Remarks     — comment text + Sending/pending pill on optimistic rows
+              • Remarks By  — `c.user_name`
+              • Reason      — `c.enum_desc` (BE joins tbl_job_comment.enum_reason_id
+                              → action_taken_reason.id, projects .action_desc as
+                              `enum_desc` for FE contract stability).
+            The previous list-card layout surfaced stage + author inline; ops asked
+            for the table form because it's scannable at scale. Stage label is
+            dropped from the visible columns per the same spec — it's still in
+            c.comment_on if any future audit needs it.
+          */}
+          <div className="rounded border bg-card overflow-hidden">
+            <table className="data-table w-full text-xs">
+              <thead>
+                <tr>
+                  <th className="!text-left w-40">Date/Time</th>
+                  <th className="!text-left">Remarks</th>
+                  <th className="!text-left w-32">Remarks By</th>
+                  <th className="!text-left w-40">Reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                {allRows.map((c) => (
+                  <tr
+                    key={c.id}
+                    className={c._pending ? 'opacity-75 bg-sky-50/40' : ''}
+                  >
+                    <td className="!text-left text-muted-foreground whitespace-nowrap align-top">
+                      {formatDate(c.created_on)}
+                    </td>
+                    <td className="!text-left align-top">
+                      <div className="whitespace-pre-wrap">{c.comments}</div>
+                      {c._pending && (
+                        <span className="inline-flex items-center gap-1 mt-1 bg-sky-100 text-sky-800 rounded px-1.5 py-0.5 text-[11px]">
+                          <span className="inline-block h-2 w-2 rounded-full border-2 border-sky-600/30 border-t-sky-600 animate-spin" aria-hidden />
+                          Sending…
+                        </span>
+                      )}
+                    </td>
+                    <td className="!text-left align-top">
+                      <span className="font-medium">{c.user_name ?? 'Unknown'}</span>
+                    </td>
+                    <td className="!text-left align-top text-muted-foreground">
+                      {c.enum_desc ? c.enum_desc : <span className="italic">—</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </div>
   );
@@ -3688,11 +3749,20 @@ function CreateJobMobileGate({
  * outcome-only flows.
  */
 type JobFormSavedOpts = { closeAfter?: boolean; variant?: 'book' | 'enquiry' | 'unreachable' | 'draft' };
-function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer }: {
+function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer, onFormDirty }: {
   mode: 'create' | 'edit' | 'confirm';
   initial: Job | null;
   onCancel: () => void;
   onSaved: (saved: Job, opts?: JobFormSavedOpts) => void;
+  /*
+   * `onFormDirty` (2026-06-03) — flipped to `true` on every set()
+   * mutation so the parent JobModal's `hasUnsavedFormRef` can power
+   * the Esc / X / overlay-click → "Discard Unsaved Changes?" prompt.
+   * Parent resets back to false when the close completes or a save
+   * succeeds (the latter via unmount on `closeAfter`). Same mechanism
+   * the Services tab already uses for the qty-edit dirty flag.
+   */
+  onFormDirty?: (dirty: boolean) => void;
   /*
    * `onRefresh` (2026-05-28) — re-fetches the parent modal's `job`
    * state from `/admin/jobs/:id`. Used by the inline already-uploaded
@@ -4203,7 +4273,17 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [f.fk_service_type_ids, clientServices, isEditShape]);
 
-  function set<K extends keyof typeof f>(k: K, v: (typeof f)[K]) { setF((s) => ({ ...s, [k]: v })); }
+  function set<K extends keyof typeof f>(k: K, v: (typeof f)[K]) {
+    // Stamp the form as dirty on every user-initiated mutation so the
+    // parent JobModal's Esc / X / overlay-close prompt fires. This is
+    // intentionally generous — even a no-op edit (typing the same
+    // value) flips the flag — because tracking real-vs-no-op diffs
+    // here would add complexity for marginal UX gain. Clean close is
+    // still one click because the prompt only appears after AT LEAST
+    // one field has been touched in the session.
+    onFormDirty?.(true);
+    setF((s) => ({ ...s, [k]: v }));
+  }
 
   /*
    * Client's "Collected By" preference. Read from the client profile
@@ -4544,10 +4624,29 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer 
             city_id:             Number(f.city_id) || undefined,
             pin_code:            f.pin_code,
             gps_location:        f.gps_location,
-            // Free-text landing notes for the technician — persists on
-            // tbl_address.address_instruction.
-            address_instruction: (f as Record<string, unknown>).address_instruction as string | undefined,
           });
+          // address_instruction is force-included separately so both
+          // (a) a typed-then-cleared value propagates as a blank to the BE
+          //     (pickIf drops `''` so it would otherwise be silently
+          //     omitted — which on Save Draft meant a cleared note kept
+          //     the stale value), and
+          // (b) a non-empty value sent during Save Draft can't be
+          //     silently dropped by future tweaks to pickIf's filter.
+          // The BE validator (validators/job.validator.js#address_instruction)
+          // explicitly `.allow('', null)` so an empty string round-trips
+          // correctly through Joi.
+          const ai = (f as Record<string, unknown>).address_instruction;
+          if (ai !== undefined) {
+            const aiStr = ai == null ? '' : String(ai);
+            if (address) {
+              (address as Record<string, unknown>).address_instruction = aiStr;
+            } else {
+              // No other address fields changed but the operator did
+              // touch the instruction — still send a tiny address patch
+              // so the standalone note edit persists.
+              patch.address = { address_instruction: aiStr };
+            }
+          }
           if (address) patch.address = address;
           // Products-section fields from legacy addEditJob. Label/column
           // mapping (post-2026-06-04 fix):
@@ -8750,7 +8849,20 @@ function toFormShape(j: Job | null) {
 
   return {
     fk_client_id: pick('fk_client_id'),
-    job_type: pick('job_type') || 'Installation',
+    // job_type seed rules (2026-06-03, second pass per ops):
+    //   • Fresh create (j === null = Book New Call) → 'Installation' default.
+    //   • Seeded form (Edit / Confirm) → use the job's value ONLY when
+    //     the job has at least one active service row. Otherwise the
+    //     stamp is the BE's create-time default and the Confirm modal
+    //     should show an empty Job Type multi-select so the operator
+    //     picks intentionally (mirrors the same "no services → no
+    //     preselection" rule we apply to Service Categories below).
+    job_type: (() => {
+      if (!j) return 'Installation';
+      const hasAnyService = Array.isArray((j as Record<string, unknown>).services)
+        && ((j as { services?: unknown[] }).services?.length ?? 0) > 0;
+      return hasAnyService ? pick('job_type') : '';
+    })(),
     source_type: pick('source_type') || 'manual',
     requested_date_time: isBulkSentinel ? '' : dt('requested_date_time'),
     time_slot: isBulkSentinel ? '' : (pick('time_slot') || 'Morning 9 to 2'),
@@ -8802,12 +8914,23 @@ function toFormShape(j: Job | null) {
     fk_service_catg_id: pick('fk_service_catg_id'),
     // CSV of category IDs. In CREATE flow, multi-pick fans out into
     // N jobs at submit. In EDIT/CONFIRM flow, seed from the row's
-    // existing single category so the Confirm modal's Service Type
-    // picker (which keys its allowed-options off this CSV) actually
-    // filters correctly. Without this seed, Section 3 saw an empty
-    // multi CSV + bulk-uploaded jobs with no `fk_service_catg_id`
-    // → Service Type dropdown stayed unfiltered.
-    fk_service_catg_ids: pick('fk_service_catg_id') ? String(pick('fk_service_catg_id')) : '',
+    // existing single category ONLY when the job actually has at
+    // least one attached service — otherwise the Confirm modal's
+    // multi-selects would render "1 categories selected" + "1 types
+    // selected" purely from the job's default fk_service_catg_id /
+    // fk_service_type_id stamps (which the BE sets at create time
+    // even for Unconfirmed orders with no service rows yet).
+    //
+    // 2026-06-03 per ops: a freshly-opened Confirm & Schedule modal
+    // for an Unconfirmed order with no `tbl_job_services` rows must
+    // show empty pickers so the operator picks intentionally rather
+    // than committing whatever default the row inherited.
+    fk_service_catg_ids: (() => {
+      const hasAnyService = Array.isArray((j as Record<string, unknown> | null)?.services)
+        && ((j as { services?: unknown[] } | null)?.services?.length ?? 0) > 0;
+      const v = pick('fk_service_catg_id');
+      return hasAnyService && v ? String(v) : '';
+    })(),
     fk_service_type_id: pick('fk_service_type_id'),
     // Multi-select used in create flow's "Select Products" section.
     // Picking one or more Service Types auto-fans them out into the

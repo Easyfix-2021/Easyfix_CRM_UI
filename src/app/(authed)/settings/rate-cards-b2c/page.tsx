@@ -28,6 +28,7 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useLookup } from '@/lib/use-lookup';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
 type RateCard = {
   rrc_id: number;
@@ -324,6 +325,8 @@ function RateCardFormModal({ open, onClose, editing, categories, serviceTypes, o
     }
   }, [open, editing]);
 
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !submitting });
+
   async function handleSubmit() {
     setError(null);
     if (!catgId) { setError('Service Category is required'); return; }
@@ -356,7 +359,7 @@ function RateCardFormModal({ open, onClose, editing, categories, serviceTypes, o
   }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{isEdit ? `Edit "${editing!.rrc_service_name}"` : 'Add B2C Rate Card'}</DialogTitle>
