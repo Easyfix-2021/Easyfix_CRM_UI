@@ -68,6 +68,57 @@ const COST_LABELS: { key: keyof RateCardRow; label: string; group: 'easyfix' | '
   { key: 'client_variable',         label: 'Client Variable', group: 'client' },
 ];
 
+/*
+ * Per-₹100 cascade preview.
+ *
+ * The rate-cards grid stores the 6 cost columns but NOT a per-row total
+ * charge (that lives on tbl_client_service via rate_card_id linkage).
+ * So we can't show absolute ₹ amounts here — instead, show what fraction
+ * of any future ₹100 job-charge each party would receive.
+ *
+ * Formula mirrors backend `services/client-rate-cards.service.js`
+ * `calculateCharges()` — Variable% then Fixed at each layer (Easyfix
+ * Direct → Overhead → Client Share). The Client Share fixed/variable is
+ * the legacy "true-up" bucket; the technician's (Easyfixer) cut is the
+ * residual after all three layers.
+ */
+function splitPer100(r: RateCardRow) {
+  const total = 100;
+  let running = total;
+  const eVar = Math.max(0, Number(r.easyfix_direct_variable) || 0);
+  const eFix = Math.max(0, Number(r.easyfix_direct_fixed)    || 0);
+  const oVar = Math.max(0, Number(r.overhead_variable)       || 0);
+  const oFix = Math.max(0, Number(r.overhead_fixed)          || 0);
+  const cVar = Math.max(0, Number(r.client_variable)         || 0);
+  const cFix = Math.max(0, Number(r.client_fixed)            || 0);
+
+  const eVarAmt = running * (eVar / 100); running -= eVarAmt;
+  const eFixAmt = Math.min(running, eFix); running -= eFixAmt;
+  const oVarAmt = running * (oVar / 100); running -= oVarAmt;
+  const oFixAmt = Math.min(running, oFix); running -= oFixAmt;
+  const cVarAmt = running * (cVar / 100); running -= cVarAmt;
+  const cFixAmt = Math.min(running, cFix); running -= cFixAmt;
+
+  const easyfixDirect = eVarAmt + eFixAmt;
+  const overhead      = oVarAmt + oFixAmt;
+  const clientShare   = cVarAmt + cFixAmt;
+  const easyfixerCut  = Math.max(0, running);
+
+  return {
+    easyfixDirect,
+    overhead,
+    clientShare,
+    easyfixerCut,
+    breakdown: { eVarAmt, eFixAmt, oVarAmt, oFixAmt, cVarAmt, cFixAmt },
+  };
+}
+
+function fmt2(n: number) {
+  return (Math.round((n + Number.EPSILON) * 100) / 100).toLocaleString('en-IN', {
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
+  });
+}
+
 function blankRow(serviceTypeId: number, serviceTypeName?: string): RateCardRow {
   return {
     service_type_id: serviceTypeId,
@@ -225,6 +276,18 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
         )}
       </div>
 
+      {/* Formula helper — abbreviated; collapsed by default */}
+      <details className="text-[11px] text-muted-foreground bg-purple-50/40 border border-purple-100 rounded px-2 py-1">
+        <summary className="cursor-pointer select-none text-purple-900 font-medium">
+          Per &#8377;100 split formula
+        </summary>
+        <div className="pt-1 leading-snug">
+          Cascade per layer: Variable% then Fixed, applied in order &mdash;
+          Easyfix Direct &rarr; Overhead &rarr; Client Share &rarr; Easyfixer (residual).
+          The rightmost columns preview what fraction of a hypothetical &#8377;100 job each party receives.
+        </div>
+      </details>
+
       {error && (
         <div className="text-xs text-red-600 flex items-center gap-1">
           <AlertCircle className="size-3.5" /> {error}
@@ -258,6 +321,11 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
                     <User className="size-3.5" /> Client
                   </span>
                 </th>
+                <th className="!text-center bg-purple-50 text-purple-900 text-xs uppercase font-semibold tracking-wide border-b border-purple-200 border-r border-border" colSpan={4}>
+                  <span className="inline-flex items-center gap-1.5 justify-center">
+                    <Calculator className="size-3.5" /> Per &#8377;100 Split (Preview)
+                  </span>
+                </th>
                 {canEdit && <th rowSpan={2}></th>}
               </tr>
               <tr>
@@ -276,10 +344,20 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
                     </th>
                   );
                 })}
+                <th className="!text-right text-[11px] font-normal text-purple-900 bg-purple-50/40">EF Direct</th>
+                <th className="!text-right text-[11px] font-normal text-purple-900 bg-purple-50/40">Overhead</th>
+                <th className="!text-right text-[11px] font-normal text-purple-900 bg-purple-50/40">Client</th>
+                <th className="!text-right text-[11px] font-normal text-purple-900 bg-purple-50/40 border-r border-border">Easyfixer</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((r, idx) => (
+              {rows.map((r, idx) => {
+                const split = splitPer100(r);
+                const efTip   = `Variable: ₹${fmt2(split.breakdown.eVarAmt)}  •  Fixed: ₹${fmt2(split.breakdown.eFixAmt)}`;
+                const ohTip   = `Variable: ₹${fmt2(split.breakdown.oVarAmt)}  •  Fixed: ₹${fmt2(split.breakdown.oFixAmt)}`;
+                const clTip   = `Variable: ₹${fmt2(split.breakdown.cVarAmt)}  •  Fixed: ₹${fmt2(split.breakdown.cFixAmt)}`;
+                const fxrTip  = 'Residual after all three layers (Easyfix Direct → Overhead → Client Share)';
+                return (
                 <tr key={r.rate_card_id ?? `new-${r.service_type_id}-${idx}`}>
                   <td className="!text-left sticky left-0 bg-card z-10 font-medium border-r border-border">
                     {r.service_type_name ?? `#${r.service_type_id}`}
@@ -301,6 +379,18 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
                       </td>
                     );
                   })}
+                  <td className="!text-right bg-purple-50/30">
+                    <span className="font-mono text-xs" title={efTip}>&#8377;{fmt2(split.easyfixDirect)}</span>
+                  </td>
+                  <td className="!text-right bg-purple-50/30">
+                    <span className="font-mono text-xs" title={ohTip}>&#8377;{fmt2(split.overhead)}</span>
+                  </td>
+                  <td className="!text-right bg-purple-50/30">
+                    <span className="font-mono text-xs" title={clTip}>&#8377;{fmt2(split.clientShare)}</span>
+                  </td>
+                  <td className="!text-right bg-purple-50/30 border-r border-border">
+                    <span className="font-mono text-xs" title={fxrTip}>&#8377;{fmt2(split.easyfixerCut)}</span>
+                  </td>
                   {canEdit && (
                     <td className="!text-right">
                       <Button size="sm" variant="ghost" onClick={() => removeRow(r)} className="text-red-600 hover:text-red-700">
@@ -309,7 +399,8 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
                     </td>
                   )}
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
