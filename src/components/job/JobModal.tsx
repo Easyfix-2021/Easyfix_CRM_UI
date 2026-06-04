@@ -22,7 +22,7 @@ import { StatusChip } from '@/components/ui/StatusChip';
 import { api, ApiError } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
 import { formatDate, formatEasyfixerName, statusColorClass, statusLabel } from '@/lib/utils';
-import { maskMobile } from '@/lib/format';
+import { maskMobile, INDIAN_MOBILE_REGEX, INDIAN_MOBILE_ERROR, isValidIndianMobile } from '@/lib/format';
 
 /*
  * safeMobile(v) — defends against round-tripping a masked display value
@@ -3652,7 +3652,14 @@ function CreateJobMobileGate({
   // toggle here because the form's address radio list does it inline.
 
   async function lookup() {
-    if (mobile.length !== 10) { setErr('Mobile must be exactly 10 digits.'); return; }
+    // Tighter validation (2026-06-03): use the shared
+    // INDIAN_MOBILE_REGEX so the gate rejects junk numbers like
+    // 1111111111 before any backend lookup fires. The previous
+    // "exactly 10 digits" check accepted any leading digit.
+    if (!INDIAN_MOBILE_REGEX.test(mobile)) {
+      setErr(INDIAN_MOBILE_ERROR);
+      return;
+    }
     setErr(null); setBusy(true);
     try {
       const r = await api.get<{
@@ -3751,7 +3758,7 @@ function CreateJobMobileGate({
       {err && <div className="text-sm text-destructive">{err}</div>}
       <div className="flex justify-end gap-2 pt-1">
         <Button variant="outline" disabled={busy} onClick={() => onCancel?.()}>Cancel</Button>
-        <Button onClick={lookup} disabled={busy || mobile.length !== 10}>
+        <Button onClick={lookup} disabled={busy || !INDIAN_MOBILE_REGEX.test(mobile)}>
           {busy ? 'Looking up…' : 'Continue'}
         </Button>
       </div>
@@ -4502,6 +4509,18 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
      * (create / edit) are NOT subject to this gate — they have their
      * own minimal validation rules expressed elsewhere.
      */
+    // Alt Number format gate (2026-06-03): if the operator typed an
+    // alternate, it MUST be a valid Indian mobile. Applied to ALL
+    // submitVariants (book / draft / outcome) — even Save Draft
+    // shouldn't persist a junk number. Empty stays valid (alt is
+    // optional). Runs BEFORE the mandatory-fields gate so a junk alt
+    // shows up as a specific error rather than getting masked by
+    // "missing required field" noise.
+    if (f.additional_number && !isValidIndianMobile(String(f.additional_number))) {
+      setError(`Customer Alternate Number — ${INDIAN_MOBILE_ERROR}`);
+      setSubmitting(false);
+      return;
+    }
     // Save Draft (submitVariant === 'draft') intentionally bypasses this
     // mandatory-fields gate — the whole point of draft is to persist
     // partial progress. Only the 'book' variant is gated.
@@ -5680,8 +5699,8 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                   alt number but not saved yet, the icon dials the
                   previously-saved value — they need to save first.
 
-                  Validation (2026-06-03): Indian-mobile regex
-                  /^[6-9]\d{9}$/ — 10 digits starting with 6/7/8/9.
+                  Validation: shared INDIAN_MOBILE_REGEX from
+                  @/lib/format — 10 digits starting with 6/7/8/9.
                   Empty is fine (alt is optional). Inline error shows
                   ONLY when the operator has typed something invalid;
                   blank fields stay quiet so the form doesn't nag at
@@ -5690,7 +5709,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                   selectors elsewhere in globals.css) renders too. */}
               {(() => {
                 const raw = String(f.additional_number || '');
-                const isValid = raw === '' || /^[6-9]\d{9}$/.test(raw);
+                const isValid = isValidIndianMobile(raw);
                 return (
                   <>
                     <div className="flex items-center gap-2">
@@ -5713,9 +5732,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                       ) : null}
                     </div>
                     {!isValid && (
-                      <p className="text-[11px] text-red-600 mt-1">
-                        Must be a 10-digit Indian mobile starting with 6, 7, 8, or 9.
-                      </p>
+                      <p className="text-[11px] text-red-600 mt-1">{INDIAN_MOBILE_ERROR}</p>
                     )}
                   </>
                 );
@@ -7111,14 +7128,14 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                   />
                 </Field>
                 <Field label="Customer Alternate Number">
-                  {/* Indian-mobile validation: /^[6-9]\d{9}$/. Empty
-                      stays valid (alt is optional). Inline error +
-                      red ring only when the operator has typed
-                      something that fails the regex. Same pattern as
-                      the Confirm modal's Alt Number input. */}
+                  {/* Indian-mobile validation: shared INDIAN_MOBILE_REGEX.
+                      Empty stays valid (alt is optional). Inline error
+                      + red ring only when the operator has typed
+                      something that fails the regex. Mirrors the
+                      Confirm modal's Alt Number input. */}
                   {(() => {
                     const raw = String(f.additional_number || '');
-                    const isValid = raw === '' || /^[6-9]\d{9}$/.test(raw);
+                    const isValid = isValidIndianMobile(raw);
                     return (
                       <>
                         <Input
@@ -7130,9 +7147,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                           aria-invalid={!isValid}
                         />
                         {!isValid && (
-                          <p className="text-[11px] text-red-600 mt-1">
-                            Must be a 10-digit Indian mobile starting with 6, 7, 8, or 9.
-                          </p>
+                          <p className="text-[11px] text-red-600 mt-1">{INDIAN_MOBILE_ERROR}</p>
                         )}
                       </>
                     );

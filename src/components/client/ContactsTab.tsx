@@ -26,6 +26,7 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { api, ApiError } from '@/lib/api';
 import { useFetch, invalidateFetch } from '@/lib/hooks';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
+import { INDIAN_MOBILE_REGEX, INDIAN_MOBILE_ERROR } from '@/lib/format';
 import type { ClientContact, ContactFormPayload } from '@/lib/client-types';
 
 type Props = {
@@ -215,8 +216,12 @@ function ContactFormDialog({
       showToast({ variant: 'error', message: 'Name, email and phone are required.' });
       return;
     }
-    if (!/^[0-9]{10}$/.test(form.contactNo)) {
-      showToast({ variant: 'error', message: 'Phone must be 10 digits.' });
+    if (!INDIAN_MOBILE_REGEX.test(form.contactNo)) {
+      showToast({ variant: 'error', message: INDIAN_MOBILE_ERROR });
+      return;
+    }
+    if (form.contactAltNo && !INDIAN_MOBILE_REGEX.test(form.contactAltNo)) {
+      showToast({ variant: 'error', message: `Alt Phone: ${INDIAN_MOBILE_ERROR}` });
       return;
     }
     setSaving(true);
@@ -256,10 +261,43 @@ function ContactFormDialog({
               <Input type="email" value={form.contactEmail} onChange={(e) => update('contactEmail', e.target.value)} maxLength={255} required />
             </Field>
             <Field label="Phone" required>
-              <Input value={form.contactNo} onChange={(e) => update('contactNo', e.target.value.replace(/\D/g, '').slice(0, 10))} required />
+              {(() => {
+                const raw = String(form.contactNo || '');
+                const isValid = raw === '' || INDIAN_MOBILE_REGEX.test(raw);
+                return (
+                  <>
+                    <Input
+                      value={raw}
+                      onChange={(e) => update('contactNo', e.target.value.replace(/\D/g, '').slice(0, 10))}
+                      inputMode="numeric"
+                      placeholder="10 digits"
+                      className={`tabular-nums ${!isValid ? 'border-red-400 focus-visible:ring-red-300' : ''}`}
+                      aria-invalid={!isValid}
+                      required
+                    />
+                    {!isValid && <p className="text-[11px] text-red-600 mt-1">{INDIAN_MOBILE_ERROR}</p>}
+                  </>
+                );
+              })()}
             </Field>
             <Field label="Alt Phone">
-              <Input value={form.contactAltNo ?? ''} onChange={(e) => update('contactAltNo', e.target.value.replace(/\D/g, '').slice(0, 10))} />
+              {(() => {
+                const raw = String(form.contactAltNo ?? '');
+                const isValid = raw === '' || INDIAN_MOBILE_REGEX.test(raw);
+                return (
+                  <>
+                    <Input
+                      value={raw}
+                      onChange={(e) => update('contactAltNo', e.target.value.replace(/\D/g, '').slice(0, 10))}
+                      inputMode="numeric"
+                      placeholder="10 digits"
+                      className={`tabular-nums ${!isValid ? 'border-red-400 focus-visible:ring-red-300' : ''}`}
+                      aria-invalid={!isValid}
+                    />
+                    {!isValid && <p className="text-[11px] text-red-600 mt-1">{INDIAN_MOBILE_ERROR}</p>}
+                  </>
+                );
+              })()}
             </Field>
             <Field label="Designation">
               <Input value={form.contactDesgn ?? ''} onChange={(e) => update('contactDesgn', e.target.value)} maxLength={100} />

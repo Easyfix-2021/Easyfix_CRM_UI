@@ -4,6 +4,39 @@
  */
 
 /*
+ * INDIAN_MOBILE_REGEX — canonical 10-digit mobile-format check.
+ *
+ * Format: digit-1 ∈ {6,7,8,9} (the Indian carrier ranges the legacy
+ * CRM has always relied on), followed by exactly 9 more digits.
+ * NO country code, NO leading 0, NO spaces — the form inputs strip
+ * non-digits before this gets evaluated.
+ *
+ * Reuse everywhere a mobile is captured:
+ *   - Alt Number (JobModal Confirm + Book New Call)
+ *   - Customer Mobile (Book New Call create form)
+ *   - SPOC mobile fields (Add/Edit Client)
+ *   - Any other phone input
+ *
+ * Companion helper `isValidIndianMobile()` accepts an empty string
+ * as valid (most call sites treat the field as optional). Pass an
+ * explicit `{ required: true }` to disallow empty.
+ */
+export const INDIAN_MOBILE_REGEX = /^[6-9]\d{9}$/;
+
+export function isValidIndianMobile(value: unknown, opts?: { required?: boolean }): boolean {
+  const raw = String(value ?? '');
+  if (raw === '') return !opts?.required;
+  return INDIAN_MOBILE_REGEX.test(raw);
+}
+
+/*
+ * Human-readable error to pair with the regex. Centralised so every
+ * form's inline error reads identically.
+ */
+export const INDIAN_MOBILE_ERROR =
+  'Must be a 10-digit Indian mobile starting with 6, 7, 8, or 9.';
+
+/*
  * maskMobile — render a mobile number with first N digits visible and
  * the rest replaced by bullets.
  *
