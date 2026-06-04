@@ -280,6 +280,21 @@ jobs:
           set -euo pipefail
           cd /opt/easyfix
 
+          # Env-file convention (matches QA, formalised 2026-06-03):
+          #   /opt/easyfix/.env         → UI service runtime config
+          #                                (NEXT_PUBLIC_* + per-env tweaks)
+          #                                AND docker-compose's image-tag
+          #                                interpolation (BACKEND_IMAGE /
+          #                                CRM_UI_IMAGE — written by the
+          #                                deploy below).
+          #   /opt/easyfix/backend.env  → BE service runtime config
+          #                                (DB creds, JWT, KALEYRA_*, …)
+          #
+          # The UI deploy requires .env to pre-exist because the file
+          # carries UI runtime config that the deploy itself doesn't
+          # write — operators bootstrap it once per host. (The BE deploy
+          # only writes to .env for the image-tag interpolation, so it
+          # touches the file if absent rather than failing.)
           for required in /opt/easyfix/.env /opt/easyfix/backend.env /opt/easyfix/docker-compose.yml; do
             if [[ ! -f "\$required" ]]; then
               echo "::error::\$required missing — see AWS_QA_BOOTSTRAP.md"

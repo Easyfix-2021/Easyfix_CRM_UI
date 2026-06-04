@@ -70,6 +70,18 @@ import tsParser from '@typescript-eslint/parser';
 // having the plugin loaded satisfies the disable-directive references.
 import reactHooksPlugin from 'eslint-plugin-react-hooks';
 
+// Plugins registered ONLY so dormant disable comments resolve cleanly
+// (codebase carries
+//   // eslint-disable-next-line @next/next/no-img-element
+//   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+// from before this flat config existed). We import the plugin objects
+// but don't enable any of their rules — Next's build-time linter owns
+// those enforcement decisions. Without these registrations ESLint 9
+// throws hard errors on every reference inside a disable directive:
+// "Definition for rule 'X' was not found".
+import nextPlugin from '@next/eslint-plugin-next';
+import tsPlugin from '@typescript-eslint/eslint-plugin';
+
 const config = [
   {
     files: ['src/**/*.{ts,tsx}'],
@@ -97,18 +109,56 @@ const config = [
     },
     plugins: {
       'react-hooks': reactHooksPlugin,
+      '@next/next': nextPlugin,
+      '@typescript-eslint': tsPlugin,
     },
     rules: {
       'no-restricted-syntax': ['error', RESTRICTED_DIALOG_ONOPENCHANGE],
     },
   },
 
-  // Carve-out: the hook source files are allowed to author inline
-  // handlers internally — they WRAP and return these arrow shapes.
+  // Carve-outs from `no-restricted-syntax`:
+  //
+  //   src/lib/use-form-dirty-guard.ts  — the hook source itself wraps
+  //                                       an inline arrow.
+  //   src/lib/use-cancel-confirm.ts    — same — companion hook.
+  //   src/components/ui/confirm-dialog.tsx — the SHARED useConfirm
+  //                                       primitive that BOTH hooks
+  //                                       delegate to; its Dialog
+  //                                       mount intentionally uses
+  //                                       an inline arrow because
+  //                                       there's no `onClose` callback
+  //                                       at that layer (the whole
+  //                                       confirm-vs-reject decision
+  //                                       is encoded in the arrow).
+  //   src/components/notice/NoticeDetailModal.tsx — pure-display modal
+  //                                       with no editable form state
+  //                                       (audit flagged it as
+  //                                       "non-form, skip"). No dirty
+  //                                       state to guard.
+  //   src/components/zones/ZoneDetailModal.tsx — same: pure-display.
+  //
+  // Each file's exemption is documented at its own onOpenChange site
+  // too so future readers know why the rule was skipped.
   {
     files: [
       'src/lib/use-form-dirty-guard.ts',
       'src/lib/use-cancel-confirm.ts',
+      'src/components/ui/confirm-dialog.tsx',
+      'src/components/notice/NoticeDetailModal.tsx',
+      'src/components/zones/ZoneDetailModal.tsx',
+      // JobModal carries its own `guardedClose` dirty-tracking pattern
+      // (predates useFormDirtyGuard) — already audited as exempt. The
+      // file also hosts 10+ nested sub-dialogs (Outcome, AddRemarks,
+      // Address edit, etc.) each with their own inline onOpenChange
+      // by design. Migrating them piecemeal would create churn without
+      // changing observable behaviour.
+      'src/components/job/JobModal.tsx',
+      // Lightweight confirm-popup style dialogs that DON'T carry editable
+      // form state — closing silently is the intended behaviour, no
+      // dirty data to discard.
+      'src/components/job/MagicLinkActionPopup.tsx',
+      'src/components/job/TransferJobOwnershipDialog.tsx',
     ],
     rules: {
       'no-restricted-syntax': 'off',

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
@@ -13,6 +13,8 @@ import {
 import { cn } from '@/lib/utils';
 import { useMe } from '@/lib/auth-context';
 import { useFetchOnce } from '@/lib/hooks';
+import { api, ApiError } from '@/lib/api';
+import { showToast } from '@/components/ui/toast';
 // URL_MAP lives in a shared module so middleware.ts (server-side route
 // guard) can reverse-map hidden legacy URLs → Next.js paths without
 // duplicating the table. See src/lib/legacy-url-map.ts for the full mapping
@@ -149,6 +151,116 @@ export function Sidebar() {
   const { me } = useMe();
 
   /*
+   * 10-click flush gesture on the Easyfix logo (2026-06-03, counter
+   * affordance added later same day).
+   *
+   * Behaviour:
+   *   - Default click goes through the normal <Link> navigation
+   *     (→ /dashboard). The counter is purely additive — the link
+   *     navigation is never interrupted, so single-click UX is
+   *     unchanged.
+   *   - 10 quick clicks within a 3-second rolling window fires
+   *     POST /api/admin/properties/reload, which invalidates the BE's
+   *     `easyfix_properties` cache so a fresh SQL UPDATE shows up in
+   *     the next request without waiting for the 1-hour TTL refresh.
+   *   - A floating "N/10 clicks" pill surfaces beneath the logo
+   *     starting at click 5 so operators DISCOVER the gesture without
+   *     polluting normal 1-3-click navigation with chrome. Vanishes
+   *     after 3s of idle (matches the rolling-window timeout).
+   *   - On flush, a success/error toast surfaces the outcome.
+   */
+  const FLUSH_THRESHOLD = 10;
+  const FLUSH_WINDOW_MS = 3000;
+  const COUNTER_VISIBLE_AT = 5;  // hide until 5th click — keep chrome quiet for normal use
+  // Cooldown between cache-reload POSTs. Defends against rage-clicks
+  // chaining 10+ flushes in seconds — the BE handles them idempotently
+  // (the underlying SQL is just a re-SELECT), but the FE toasts would
+  // pile up and the network log would be noisy. 10 seconds is short
+  // enough that an operator who legitimately needs a second flush
+  // (e.g. fat-fingered the first one) gets it almost immediately, but
+  // long enough that an accidental double-burst is silently de-duped.
+  const RELOAD_COOLDOWN_MS = 10000;
+  const clickWindowRef = useRef<number[]>([]);
+  const [clickCount, setClickCount] = useState(0);
+  // Idle-decay timeout — clears the visible counter back to 0 after
+  // FLUSH_WINDOW_MS of no clicks so the pill doesn't linger on screen
+  // after a partial 4/5/6-click streak that the operator abandons.
+  const decayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Timestamp of the last successful reload POST (epoch ms). 0 means
+  // "never fired this session". Compared against Date.now() to gate
+  // the cooldown.
+  const lastReloadAtRef = useRef<number>(0);
+  function handleLogoClick() {
+    const now = Date.now();
+    const recent = clickWindowRef.current.filter((t) => now - t < FLUSH_WINDOW_MS);
+    recent.push(now);
+    clickWindowRef.current = recent;
+    setClickCount(recent.length);
+    // Reset the idle decay — fresh click extends the visible window.
+    if (decayTimerRef.current) clearTimeout(decayTimerRef.current);
+    decayTimerRef.current = setTimeout(() => {
+      setClickCount(0);
+      clickWindowRef.current = [];
+    }, FLUSH_WINDOW_MS);
+    if (recent.length >= FLUSH_THRESHOLD) {
+      clickWindowRef.current = [];
+      setClickCount(0);
+      if (decayTimerRef.current) clearTimeout(decayTimerRef.current);
+
+      // Cooldown gate (2026-06-03): swallow the POST if we fired one in
+      // the last RELOAD_COOLDOWN_MS. Surfaces a one-line "throttled"
+      // toast so the operator knows the gesture was recognised but
+      // skipped intentionally — silent no-op would feel broken.
+      const elapsed = now - lastReloadAtRef.current;
+      if (lastReloadAtRef.current > 0 && elapsed < RELOAD_COOLDOWN_MS) {
+        const waitSec = Math.ceil((RELOAD_COOLDOWN_MS - elapsed) / 1000);
+        showToast({
+          variant: 'info',
+          message: `Cache reload throttled — last fired ${Math.floor(elapsed / 1000)}s ago, wait ~${waitSec}s.`,
+        });
+        return;
+      }
+      // Stamp the lock BEFORE the await so a race-condition double-fire
+      // (two click-10s arriving back-to-back inside the same event loop
+      // tick) doesn't slip past the cooldown.
+      lastReloadAtRef.current = now;
+
+      // Fire-and-forget — the Link's default navigation already left
+      // for /dashboard so the operator's view is in flight. Toast
+      // surfaces on the new page (the Toast system is mounted at the
+      // root layout, not the Sidebar).
+      void (async () => {
+        try {
+          const r = await api.post<{ reloaded: boolean; count: number }>(
+            '/admin/properties/reload',
+            {},
+          );
+          showToast({
+            variant: 'success',
+            message: `Properties cache reloaded — ${r.count} key(s) re-read from DB.`,
+          });
+        } catch (e) {
+          // Failed call — rewind the cooldown stamp so the operator
+          // can retry immediately. The user's intent (flush) wasn't
+          // satisfied, so we shouldn't penalise their next attempt.
+          lastReloadAtRef.current = 0;
+          showToast({
+            variant: 'error',
+            message: `Cache reload failed: ${e instanceof ApiError ? e.message : 'unknown error'}`,
+          });
+        }
+      })();
+    }
+  }
+  // Cleanup the decay timer on unmount — guards against the setTimeout
+  // firing after navigation to a non-sidebar page (e.g. login).
+  useEffect(() => {
+    return () => {
+      if (decayTimerRef.current) clearTimeout(decayTimerRef.current);
+    };
+  }, []);
+
+  /*
    * Menus go through `useFetchOnce` for module-level Strict-Mode
    * dedupe + 30s cache. Without this, Sidebar's mount effect fired
    * twice on every authed-page load in dev. The defence-in-depth
@@ -281,8 +393,15 @@ export function Sidebar() {
 
   return (
     <aside className="hidden md:flex w-60 shrink-0 flex-col bg-sidebar text-sidebar-foreground">
-      <div className="px-5 h-16 border-b border-sidebar-accent flex items-center justify-center">
-        <Link href="/dashboard" className="flex items-center justify-center">
+      <div className="px-5 h-16 border-b border-sidebar-accent flex items-center justify-center relative">
+        <Link
+          href="/dashboard"
+          className="flex items-center justify-center"
+          // 10-quick-clicks → POST /admin/properties/reload while still
+          // letting the link navigate normally. See handleLogoClick
+          // docblock at the top of the component for the gesture spec.
+          onClick={handleLogoClick}
+        >
           <Image
             src="/logo.png"
             alt="EasyFix"
@@ -292,6 +411,24 @@ export function Sidebar() {
             className="h-9 w-auto object-contain"
           />
         </Link>
+        {/* Click counter affordance — visible only from click 5 onward
+            (kept quiet during normal navigation). Pinned to the bottom
+            of the logo strip; pointer-events-none so it never blocks
+            re-clicking the logo. Amber tint signals "almost there"
+            until threshold flips to a flush toast. */}
+        {clickCount >= COUNTER_VISIBLE_AT && clickCount < FLUSH_THRESHOLD && (
+          <div
+            className="absolute bottom-1 left-1/2 -translate-x-1/2 pointer-events-none
+                       text-[10px] font-semibold uppercase tracking-wide
+                       bg-amber-100 text-amber-900 border border-amber-200
+                       rounded px-1.5 py-px shadow-sm select-none
+                       transition-opacity"
+            aria-live="polite"
+            role="status"
+          >
+            {clickCount} / {FLUSH_THRESHOLD} clicks
+          </div>
+        )}
       </div>
 
       <nav className="flex-1 overflow-y-auto py-3">
