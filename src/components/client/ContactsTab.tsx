@@ -369,8 +369,13 @@ function BulkUploadDialog({
     } finally { setUploading(false); }
   }
 
+  // BulkUploadDialog missed by the earlier sweep — adding the guard now
+  // so the lint rule passes. `when: () => !uploading` preserves the
+  // prior "block close while an upload is in flight" idiom.
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !uploading });
+
   return (
-    <Dialog open onOpenChange={(o) => !o && !uploading && onClose()}>
+    <Dialog open onOpenChange={guardedOpenChange}>
       <DialogContent className="!max-w-2xl">
         <DialogHeader>
           <DialogTitle>Bulk Upload Contacts</DialogTitle>
