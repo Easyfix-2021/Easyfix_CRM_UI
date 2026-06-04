@@ -214,8 +214,12 @@ export function Sidebar() {
       const elapsed = now - lastReloadAtRef.current;
       if (lastReloadAtRef.current > 0 && elapsed < RELOAD_COOLDOWN_MS) {
         const waitSec = Math.ceil((RELOAD_COOLDOWN_MS - elapsed) / 1000);
+        // Use 'success' rather than 'error' — the gesture was recognised
+        // and the throttle is expected behaviour, not a failure.
+        // ToastVariant doesn't expose an 'info' variant, so success
+        // (green tint) is the closest fit for a neutral notification.
         showToast({
-          variant: 'info',
+          variant: 'success',
           message: `Cache reload throttled — last fired ${Math.floor(elapsed / 1000)}s ago, wait ~${waitSec}s.`,
         });
         return;
