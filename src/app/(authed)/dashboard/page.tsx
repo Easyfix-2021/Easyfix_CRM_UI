@@ -257,24 +257,38 @@ export default function DashboardPage() {
       const r = countsFetch.data;
       const b = r.byStatus || {};
       /*
-       * Canonical status → card mapping (2026-04-20 truth):
-       *   21                  → Orders in Followup
+       * Canonical status → card mapping (revised 2026-06-03 per ops):
+       *   15, 21              → Orders in Followup    (estimate-pending + on-hold)
        *   9                   → Unconfirmed Orders
        *   0 + tech null       → Pending for Scheduling (bookedUnassigned)
        *   0 + tech not null   → Pending App Ack        (bookedAssigned)
        *   1                   → Pending to Start
        *   2, 20               → Pending to Close
-       *   3, 5                → Audit & Complete
-       *   10                  → Pending for Feedback
+       *   10                  → Audit & Complete       (CHANGED — was 3+5)
+       *   10                  → Pending for Feedback   (kept; same status, different ops surface)
+       *
+       * The two changes:
+       *   • Audit & Complete now counts REVISIT (status 10) instead of
+       *     COMPLETED+COMPLETED_ALT (3+5). REVISIT is the state where
+       *     the booking is back in the audit queue — closer to the
+       *     "QA review" semantics of the tile's subtitle.
+       *   • Orders in Followup now adds "Estimate Pending Approval"
+       *     (status 15) to the existing "Fulfilment On Hold" (21).
+       *     Both are operationally "we're waiting on someone".
+       *
+       * NOTE: Audit & Complete and Pending for Feedback now both surface
+       * the same status (10). Per ops they are deliberately twin counts
+       * — the cards differ only in which sub-action surface they deep-
+       * link into (audit-complete vs pending-feedback list views).
        */
       setStats({
-        followup:          b['21'] ?? 0,
+        followup:          (b['15'] ?? 0) + (b['21'] ?? 0),
         unconfirmed:       b['9']  ?? 0,
         pendingScheduling: r.bookedUnassigned ?? 0,
         pendingAppAck:     r.bookedAssigned   ?? 0,
         pendingToStart:    b['1']  ?? 0,
         pendingToClose:    (b['2'] ?? 0) + (b['20'] ?? 0),
-        auditComplete:     (b['3'] ?? 0) + (b['5']  ?? 0),
+        auditComplete:     b['10'] ?? 0,
         pendingFeedback:   b['10'] ?? 0,
       });
     }
