@@ -4712,9 +4712,38 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
           // bound to a textarea on Confirm mode, so f.remarks is typically
           // empty here and setIf drops it. `fk_service_type_id` /
           // `fk_service_catg_id` carry the active filter selection.
-          setIf('job_desc', f.job_desc);
+          /*
+           * Per-category description support (2026-06-04). The C&S
+           * multi-category flow's first category (the one the PATCH'd
+           * parent retains) should consult its OWN per-tab override
+           * for job_desc, so each category — including the parent's
+           * — can carry a distinct description. Falls back to the
+           * top-level `f.job_desc` when the operator didn't touch
+           * the per-tab description input. Mirrors the sibling-loop
+           * pattern at ~line 4992.
+           */
+          const parentCatId = (f.fk_service_catg_ids || '')
+            .split(',').map((s) => Number(s.trim())).filter((n) => Number.isInteger(n) && n > 0)[0];
+          const parentOverride: PerJobOverride | undefined = parentCatId
+            ? (perJobFields[String(parentCatId)] as PerJobOverride | undefined)
+            : undefined;
+          setIf('job_desc', (parentOverride?.job_desc ?? f.job_desc) || undefined);
           setIf('efr_special_notes', f.efr_special_notes);
           setIf('remarks', f.remarks);
+          /*
+           * job_customer_name on the parent PATCH (2026-06-04). When
+           * the job was originally created via the legacy Client
+           * Dashboard or an integration, tbl_job.job_customer_name
+           * was often NULL (the column is a per-job override of the
+           * customer master name and integrations didn't populate it).
+           * Confirm & Schedule is the moment ops promotes the order to
+           * BOOKED — also a natural moment to ensure the per-job name
+           * matches what the operator sees in the form. Send it on
+           * the PATCH so the parent row gets backfilled in lock-step
+           * with the siblings (which already receive it via the
+           * top-level job_customer_name on their POST payload).
+           */
+          setIf('job_customer_name', f.customer_name);
           // helper_req is a boolean — `false` is a meaningful value the BE
           // must accept, so setIf (which omits `null`/`undefined`/`""` but
           // keeps `false`) handles it correctly. Type-check still here for
@@ -4986,9 +5015,29 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             for (const catId of siblingCats) {
               const override = (perJobFields[String(catId)] || {}) as PerJobOverride;
               const filtered = servicesForCat(catId);
+              /*
+               * fk_service_type_id per sibling (2026-06-04). The
+               * BE's create() binds `input.fk_service_type_id || null`
+               * for tbl_job.fk_service_type_id — without this we'd
+               * write NULL for every sibling. Resolution:
+               *   1. Per-tab override `perJobFields[catId].fk_service_type_id`
+               *      (operator explicitly chose a primary type for
+               *      this category's tab).
+               *   2. First service_type_id from `filtered` (services
+               *      belonging to this category). Establishes a
+               *      sensible default when ops doesn't pick one.
+               *   3. NULL if the category has no services attached.
+               */
+              const siblingTypeIdRaw =
+                (override as { fk_service_type_id?: number | string | null }).fk_service_type_id
+                ?? (filtered[0]?.fk_service_type_id ?? filtered[0]?.service_type_id);
+              const siblingTypeId = (siblingTypeIdRaw != null && siblingTypeIdRaw !== '')
+                ? Number(siblingTypeIdRaw)
+                : undefined;
               const siblingPayload = {
                 ...siblingBase,
                 fk_service_catg_id: catId,
+                fk_service_type_id: Number.isFinite(siblingTypeId) ? siblingTypeId : undefined,
                 job_desc:          (override.job_desc ?? f.job_desc) || undefined,
                 remarks:           (override.remarks ?? f.remarks) || undefined,
                 efr_special_notes: (override.efr_special_notes ?? f.efr_special_notes) || undefined,
