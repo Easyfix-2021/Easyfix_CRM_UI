@@ -1,18 +1,26 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import {
-  Plus, Pencil, Trash2, RotateCcw, Wrench, X as XIcon,
-  Image as ImageIcon, ChevronLeft, ChevronRight, UploadCloud,
+  Plus, Pencil, Trash2, Wrench, X as XIcon,
+  Image as ImageIcon, UploadCloud,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent } from '@/components/ui/card';
 import { SearchSelect } from '@/components/ui/search-select';
+import { Switch } from '@/components/ui/switch';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
+// Shared table-footer pager + page-size dropdown. Mirrors the canonical
+// usage in settings/manage-users/page.tsx so admin tables stay visually
+// uniform across the CRM.
+import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
+// Shared status pill — one shape across the CRM, no per-page colour drift.
+import { StatusChip } from '@/components/ui/StatusChip';
 import { api, ApiError } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
 import { cn } from '@/lib/utils';
@@ -48,6 +56,9 @@ type DeepSkill = {
   service_type_id: number;
   deepskill_name: string;
   deepskill_description: string | null;
+  // deepskill_tag_words (2026-06-06): VARCHAR(255) per-skill
+  // technician-visit tag(s). Max ~2 short phrases per ops convention.
+  deepskill_tag_words: string | null;
   deepskill_image: string | null;
   status: boolean | number;
   inserted_on: string;
@@ -82,11 +93,12 @@ export default function DeepSkillsSettingsPage() {
   /*
    * Pagination — client-side because the dataset is small (~370 rows in
    * production) and we already do client-side text search across all rows.
-   * Page size matches the jobs list (PAGE_SIZE = 25) for visual consistency
-   * across admin tables.
+   * Page size is now operator-controlled via the shared TablePagination
+   * footer (10 / 20 / 50 / All), matching the convention used by
+   * manage-users / manage-roles. Default 10 keeps the initial view dense.
    */
-  const PAGE_SIZE = 25;
   const [page, setPage] = useState(0); // 0-indexed; 0 = first page
+  const [pageSize, setPageSize] = useState<TablePageSize>(10);
 
   // Editor modal
   const [editorOpen, setEditorOpen] = useState(false);
@@ -139,17 +151,18 @@ export default function DeepSkillsSettingsPage() {
   // empty even though there's data to show).
   useEffect(() => { setPage(0); }, [search, statusFilter, categoryId, serviceTypeId, skills]);
 
-  // Slice the filtered list to the current page window.
-  const totalPages = Math.max(1, Math.ceil(filteredSkills.length / PAGE_SIZE));
+  // Slice the filtered list to the current page window. `pageSizeToLimit`
+  // returns the numeric limit, treating the 'all' sentinel as a very
+  // large number — we cap at the list length so the slice is a no-op.
+  const effectiveLimit = pageSize === 'all'
+    ? Math.max(filteredSkills.length, 1)
+    : pageSizeToLimit(pageSize);
+  const totalPages = Math.max(1, Math.ceil(filteredSkills.length / effectiveLimit));
   const safePage = Math.min(page, totalPages - 1);
   const visibleSkills = useMemo(
-    () => filteredSkills.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE),
-    [filteredSkills, safePage, PAGE_SIZE]
+    () => filteredSkills.slice(safePage * effectiveLimit, safePage * effectiveLimit + effectiveLimit),
+    [filteredSkills, safePage, effectiveLimit]
   );
-
-  function resetFilters() {
-    setCategoryId(''); setServiceTypeId(''); setSearch(''); setStatusFilter('active');
-  }
 
   function openCreate() {
     // Modal handles its own category/type selection — no longer requires the
@@ -159,6 +172,7 @@ export default function DeepSkillsSettingsPage() {
       category_id: categoryId ? Number(categoryId) : 0,
       service_type_id: serviceTypeId ? Number(serviceTypeId) : 0,
       deepskill_name: '', deepskill_description: '', deepskill_image: '',
+      deepskill_tag_words: null,
       status: 1, inserted_on: '', category_name: null, service_type_name: null, option_count: 0,
     });
     setEditorOpen(true);
@@ -184,18 +198,28 @@ export default function DeepSkillsSettingsPage() {
 
   return (
     <div className="space-y-3">
-      {/* Header — legacy "Add New" sits top-right, opposite the title */}
+      {/* Header — primary CTA sits top-right, opposite the title */}
       <div className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold">Manage Deep Skills</h1>
-          <p className="text-sm text-muted-foreground">
-            Service Category → Service Type → Deep Skill → Options. Used for technician skill mapping.
-          </p>
         </div>
         {can.isDeepSkillAddNew && (
-          <Button onClick={openCreate} size="sm">
-            <Plus className="h-4 w-4 mr-1" /> Add New
-          </Button>
+          <div className="flex items-center gap-2">
+            {/*
+             * Upload Excel — opens the dedicated bulk-upload page where
+             * operators pick an .xlsx, get a dry-run preview of parsed
+             * rows + per-row status, then commit. Gated on the same
+             * action flag as Add Deep Skill (no separate permission).
+             */}
+            <Link href="/settings/deep-skills/upload">
+              <Button variant="outline" size="sm">
+                <UploadCloud className="h-4 w-4 mr-1" /> Upload Excel
+              </Button>
+            </Link>
+            <Button onClick={openCreate} size="sm">
+              <Plus className="h-4 w-4 mr-1" /> Add Deep Skill
+            </Button>
+          </div>
         )}
       </div>
 
@@ -225,7 +249,7 @@ export default function DeepSkillsSettingsPage() {
               <Label className="text-xs">Search</Label>
               <Input placeholder="Name, category, type…" value={search} onChange={(e) => setSearch(e.target.value)} />
             </div>
-            <div className="md:col-span-2">
+            <div className="md:col-span-3">
               <Label className="text-xs">Status</Label>
               <select
                 value={statusFilter}
@@ -238,33 +262,43 @@ export default function DeepSkillsSettingsPage() {
               </select>
             </div>
             {/*
-              * No "Apply filter" button — every dropdown + the search input auto-
-              * trigger loadSkills() on change (server-driven filters via useEffect)
-              * or recompute visibleSkills (client-side search). Reset stays because
-              * clearing 4 fields one-by-one is annoying.
-              */}
-            <div className="md:col-span-1 flex justify-end">
-              <Button size="sm" variant="outline" onClick={resetFilters} title="Reset filters">
-                <RotateCcw className="h-4 w-4" />
-              </Button>
-            </div>
+             * No "Apply filter" / "Reset" buttons — every dropdown + the
+             * search input auto-trigger loadSkills() on change (server-driven
+             * filters via useEffect) or recompute visibleSkills (client-side
+             * search). Clearing a filter is a single dropdown change; the
+             * Reset shortcut was removed 2026-06-05 per ops feedback as
+             * unnecessary chrome.
+             */}
           </div>
         </CardContent>
       </Card>
 
-      {/* Skill list — column order matches the legacy table screenshot */}
+      {/* Skill list — column order matches the legacy table screenshot.
+          Pagination band lives inside the Card so the table + pager share
+          one visual frame (matches manage-users / manage-roles). */}
       <Card>
-        <CardContent className="p-0 overflow-x-auto">
+        <CardContent className="p-0">
+        <div className="overflow-x-auto">
           <table className="data-table">
+            {/*
+              * Column-header widths (2026-06-06): every <th> gets
+              * `whitespace-nowrap` so multi-word headers like "Category
+              * Name" / "Service Type" / "Deep Skill Name" / "Skill
+              * Options" stay on a single line. The parent CardContent
+              * wraps the table in `overflow-x-auto`, so if the total
+              * column width exceeds the viewport the table picks up a
+              * horizontal scrollbar instead of wrapping headers (which
+              * was the previous failure mode at narrow widths).
+              */}
             <thead>
               <tr>
-                <th>Id</th>
-                <th>Category Name</th>
-                <th>Service Type</th>
-                <th>Deep Skill Name</th>
-                <th>Skill Options</th>
-                <th className="text-center">Status</th>
-                <th className="text-right">Action</th>
+                <th className="whitespace-nowrap">Id</th>
+                <th className="whitespace-nowrap">Category Name</th>
+                <th className="whitespace-nowrap">Service Type</th>
+                <th className="whitespace-nowrap">Deep Skill Name</th>
+                <th className="whitespace-nowrap">Skill Options</th>
+                <th className="whitespace-nowrap text-center">Status</th>
+                <th className="whitespace-nowrap text-right">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -290,8 +324,8 @@ export default function DeepSkillsSettingsPage() {
                   </td>
                   <td className="text-center">
                     {Number(s.status)
-                      ? <span className="inline-flex rounded-full bg-emerald-100 text-emerald-700 px-2 py-0.5 text-xs font-medium">Active</span>
-                      : <span className="inline-flex rounded-full bg-slate-100 text-slate-600 px-2 py-0.5 text-xs font-medium">Inactive</span>}
+                      ? <StatusChip tone="emerald">Active</StatusChip>
+                      : <StatusChip tone="slate">Inactive</StatusChip>}
                   </td>
                   <td className="text-right whitespace-nowrap">
                     {can.isDeepSkillEdit ? (
@@ -317,26 +351,19 @@ export default function DeepSkillsSettingsPage() {
               ))}
             </tbody>
           </table>
+        </div>
+          {/* Shared pagination footer — Show: [N▾] | « ‹ page / totalPages › » */}
+          <div className="px-3 py-2 border-t">
+            <TablePagination
+              page={safePage}
+              pageSize={pageSize}
+              total={filteredSkills.length}
+              onPageChange={setPage}
+              onPageSizeChange={(s) => { setPageSize(s); setPage(0); }}
+            />
+          </div>
         </CardContent>
       </Card>
-
-      {/* Pager — same shape as the jobs list pager (Showing X–Y of Z + Prev/Next) */}
-      {filteredSkills.length > PAGE_SIZE && (
-        <div className="flex items-center justify-end gap-2 text-sm">
-          <span className="text-muted-foreground">
-            Showing {safePage * PAGE_SIZE + 1}–{Math.min((safePage + 1) * PAGE_SIZE, filteredSkills.length)} of {filteredSkills.length.toLocaleString()}
-          </span>
-          <Button variant="outline" size="sm" disabled={safePage === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
-            <ChevronLeft className="h-4 w-4" /> Prev
-          </Button>
-          <span className="text-xs text-muted-foreground tabular-nums">
-            Page {safePage + 1} / {totalPages}
-          </span>
-          <Button variant="outline" size="sm" disabled={safePage >= totalPages - 1} onClick={() => setPage((p) => p + 1)}>
-            Next <ChevronRight className="h-4 w-4" />
-          </Button>
-        </div>
-      )}
 
       <DeepSkillEditor
         open={editorOpen}
@@ -402,6 +429,7 @@ function DeepSkillEditor({
 
   const [f, setF] = useState({
     deepskill_name: '', deepskill_description: '', deepskill_image: '',
+    deepskill_tag_words: '',
     category_id: '', service_type_id: '',
     status: 1 as 0 | 1,
   });
@@ -411,23 +439,31 @@ function DeepSkillEditor({
   const [imageUploading, setImageUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Pending-upload buffer (2026-06-05): in Add mode the skill doesn't
+  // exist yet, so we can't upload the image immediately (the BE endpoint
+  // needs the deepskill_id to mint the `Skills/Skill_<id>_<seq>` key).
+  // Stash the picked File here and POST it after create() resolves.
+  const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
   const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !saving });
 
   useEffect(() => {
     if (!record) {
-      setF({ deepskill_name: '', deepskill_description: '', deepskill_image: '', category_id: '', service_type_id: '', status: 1 });
+      setF({ deepskill_name: '', deepskill_description: '', deepskill_image: '', deepskill_tag_words: '', category_id: '', service_type_id: '', status: 1 });
       setOptions([]); setCustomOpt(''); setErr(null);
+      setPendingImageFile(null);
       return;
     }
     setF({
       deepskill_name: record.deepskill_name || '',
       deepskill_description: record.deepskill_description || '',
       deepskill_image: record.deepskill_image || '',
+      deepskill_tag_words: record.deepskill_tag_words || '',
       category_id: String(record.category_id || ''),
       service_type_id: String(record.service_type_id || ''),
       status: Number(record.status) ? 1 : 0,
     });
     setCustomOpt(''); setErr(null);
+    setPendingImageFile(null);
     // For edit, fetch current options so the chip list reflects DB truth.
     if (record.deepskill_id) {
       api.get<DeepSkillDetail>(`/admin/deep-skills/${record.deepskill_id}`)
@@ -456,16 +492,38 @@ function DeepSkillEditor({
     setOptions((prev) => prev.filter((o) => o !== opt));
   }
 
+  /*
+   * Image picker handler (2026-06-05).
+   *
+   * Routes to the new `POST /admin/deep-skills/:id/image` endpoint
+   * which stores the file at `Skills/Skill_<id>_<seq>` in S3 (per the
+   * ops-confirmed key convention) and patches `tbl_deepskill.deepskill_image`
+   * with the S3 key. Replaces the previous /shared/files indirection
+   * which stored under the generic `easyfixer_documents` category.
+   *
+   * Two paths:
+   *   - Edit mode: skill_id is known → upload immediately, reflect new key.
+   *   - Add mode: skill_id doesn't exist yet → stash the File in
+   *     `pendingImageFile` and let submit() POST it AFTER create()
+   *     returns the new id.
+   */
   async function handleImage(file: File | null) {
     if (!file) return;
-    setImageUploading(true); setErr(null);
+    setErr(null);
+    if (!isEdit || !record?.deepskill_id) {
+      // Add mode — defer until after the skill is created.
+      setPendingImageFile(file);
+      // Show the local filename in the picker label as a "ready to upload"
+      // hint; the real S3 key replaces it after submit succeeds.
+      setF((s) => ({ ...s, deepskill_image: file.name }));
+      return;
+    }
+    setImageUploading(true);
     try {
-      // Same upload contract used elsewhere (UPLOAD_EASYFIXER_DOCS path).
       const fd = new FormData();
       fd.append('file', file);
-      fd.append('category', 'easyfixer_documents');
-      const res = await api.post<{ filename: string }>('/shared/files', fd);
-      setF((s) => ({ ...s, deepskill_image: res.filename }));
+      const res = await api.post<{ image: string }>(`/admin/deep-skills/${record.deepskill_id}/image`, fd);
+      setF((s) => ({ ...s, deepskill_image: res.image }));
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : 'Upload failed');
     } finally { setImageUploading(false); }
@@ -484,7 +542,15 @@ function DeepSkillEditor({
         service_type_id: Number(f.service_type_id),
         deepskill_name: f.deepskill_name.trim(),
         deepskill_description: f.deepskill_description || undefined,
-        deepskill_image: f.deepskill_image || undefined,
+        deepskill_tag_words: f.deepskill_tag_words || undefined,
+        // deepskill_image: only forward when it looks like a canonical
+        // S3 key, NOT when it's the local-file placeholder name we
+        // stashed during a pending Add-mode upload. Local placeholders
+        // get replaced by the real key after the post-create upload
+        // step runs below.
+        deepskill_image: (f.deepskill_image && f.deepskill_image.startsWith('Skills/'))
+          ? f.deepskill_image
+          : undefined,
         status: f.status,
       };
       let skillId: number;
@@ -515,6 +581,21 @@ function DeepSkillEditor({
           await api.post(`/admin/deep-skills/${skillId}/options`, { skill_option: opt });
         }
       }
+      // Deferred image upload (Add-mode tail). The skill row now exists
+      // and has an id, so the `Skills/Skill_<id>_<seq>` key can be
+      // minted. Best-effort: if the upload fails, the skill itself is
+      // already saved — log to the operator via setErr but don't roll
+      // back the create.
+      if (pendingImageFile) {
+        try {
+          const fd = new FormData();
+          fd.append('file', pendingImageFile);
+          await api.post(`/admin/deep-skills/${skillId}/image`, fd);
+        } catch (upErr) {
+          // Surface a non-fatal warning. The skill saved; image didn't.
+          setErr(`Skill saved. Image upload failed: ${upErr instanceof ApiError ? upErr.message : 'unknown error'}`);
+        }
+      }
       // Bust the row's options cache so the table reflects the new options.
       optionsCache.delete(skillId);
       onSaved();
@@ -525,29 +606,47 @@ function DeepSkillEditor({
 
   return (
     <Dialog open={open} onOpenChange={guardedOpenChange}>
-      <DialogContent hideClose className="max-w-3xl">
+      <DialogContent className="max-w-3xl">
+        {/*
+         * Header (2026-06-05): switched from a custom teal banner +
+         * custom X button to the platform-standard `DialogHeader` band.
+         * `DialogHeader` itself paints the dark-slate gradient + sky-500
+         * accent underline globally (see src/components/ui/dialog.tsx
+         * line ~318), and `DialogContent` ships a visible-on-slate close
+         * X automatically when `hideClose` is omitted (line ~277).
+         * Convention sourced from CLAUDE.md modal-header rule + applied
+         * uniformly across the CRM.
+         *
+         * `pr-10` on the inner cluster gives the title room to clear the
+         * top-right X button (`absolute right-3 top-3 h-7 w-7`) so the
+         * text never visually collides with the close affordance.
+         */}
         <DialogHeader>
-          {/* Custom hero header — matches the legacy CRM teal banner */}
-          <div className="-mx-6 -mt-6 mb-2 px-6 py-4 bg-gradient-to-r from-teal-500 to-teal-600 text-white rounded-t-lg flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-md bg-white/15 grid place-items-center">
-                <Wrench className="h-5 w-5" />
-              </div>
-              <div>
-                <DialogTitle className="text-white text-lg leading-tight">Technician Deep Skill</DialogTitle>
-                <div className="text-xs text-white/80 mt-0.5">Define specialized skills and expertise</div>
-              </div>
+          <div className="flex items-center gap-3 pr-10">
+            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-white/15 ring-1 ring-white/20">
+              <Wrench className="h-4 w-4 text-white" />
+            </span>
+            <div className="min-w-0">
+              <DialogTitle className="text-base leading-tight">Technician Deep Skill</DialogTitle>
+              <div className="text-xs text-slate-200/80 mt-0.5">Define specialized skills and expertise</div>
             </div>
-            <button type="button" onClick={onClose} className="rounded p-1 hover:bg-white/15">
-              <XIcon className="h-4 w-4" />
-            </button>
           </div>
         </DialogHeader>
 
         <form onSubmit={submit} className="space-y-4">
-          {/* Top row — three dropdowns side-by-side, matches legacy */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div>
+          {/*
+           * Top row (2026-06-05). Two dropdowns + (Edit mode only) a
+           * right-aligned Active/Inactive Switch. The Status control is
+           * intentionally absent in Add mode because every new skill
+           * defaults to active (status=1 on the BE) — operators don't
+           * need a separate toggle just to confirm a sane default. In
+           * Edit mode the Switch is the primary affordance to flip a
+           * live skill on/off (replaces the previous Active/Inactive
+           * dropdown, which UX-wise reads as a static value rather
+           * than a toggleable state).
+           */}
+          <div className="flex flex-col md:flex-row md:items-end gap-3">
+            <div className="flex-1 min-w-0">
               <Label className="text-xs">Service Category</Label>
               <SearchSelect
                 value={f.category_id}
@@ -556,7 +655,7 @@ function DeepSkillEditor({
                 placeholder="Select Service Category"
               />
             </div>
-            <div>
+            <div className="flex-1 min-w-0">
               <Label className="text-xs">Service Type</Label>
               <SearchSelect
                 value={f.service_type_id}
@@ -566,17 +665,24 @@ function DeepSkillEditor({
                 disabled={!f.category_id}
               />
             </div>
-            <div>
-              <Label className="text-xs">Status</Label>
-              <select
-                value={f.status}
-                onChange={(e) => setF((s) => ({ ...s, status: Number(e.target.value) as 0 | 1 }))}
-                className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
-              >
-                <option value={1}>Active</option>
-                <option value={0}>Inactive</option>
-              </select>
-            </div>
+            {isEdit && (
+              <div className="flex flex-col items-end shrink-0 pb-1">
+                <Label className="text-xs">Status</Label>
+                <div className="h-9 flex items-center gap-2">
+                  <Switch
+                    checked={f.status === 1}
+                    onCheckedChange={(next) => setF((s) => ({ ...s, status: (next ? 1 : 0) as 0 | 1 }))}
+                    ariaLabel="Toggle deep skill active"
+                  />
+                  <span className={cn(
+                    'text-xs font-medium tabular-nums select-none',
+                    f.status === 1 ? 'text-emerald-700' : 'text-slate-500',
+                  )}>
+                    {f.status === 1 ? 'Active' : 'Inactive'}
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Name + image upload row */}
@@ -612,6 +718,20 @@ function DeepSkillEditor({
               placeholder="Describe the skill…"
               rows={3}
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+            />
+          </div>
+
+          {/* Tag Words — short reminder(s) shown to the technician
+              when they accept the job (e.g. "Carry drain snake &
+              plunger" / "Carry DVR login credentials"). Max ~2 tags
+              per ops convention; VARCHAR(255) on the BE so the
+              textarea is single-line. */}
+          <div>
+            <Label className="text-xs">Technician Tag Words</Label>
+            <Input
+              value={f.deepskill_tag_words}
+              onChange={(e) => setF((s) => ({ ...s, deepskill_tag_words: e.target.value.slice(0, 255) }))}
+              placeholder="What should the technician keep in mind? (max ~2 short tags)"
             />
           </div>
 
@@ -669,13 +789,15 @@ function DeepSkillEditor({
 
           {err && <div className="text-sm text-destructive">{err}</div>}
 
-          {/* Footer */}
+          {/* Footer (2026-06-05): icon-free buttons per ops feedback —
+              the X on Cancel and the + on Add/Save were visual noise
+              given the words alone already communicate intent. */}
           <div className="flex justify-end gap-2 pt-3 border-t">
             <Button type="button" variant="outline" onClick={onClose}>
-              <XIcon className="h-4 w-4 mr-1" /> Cancel
+              Cancel
             </Button>
-            <Button type="submit" disabled={saving} className="bg-teal-600 hover:bg-teal-700">
-              <Plus className="h-4 w-4 mr-1" /> {saving ? 'Saving…' : (isEdit ? 'Save Changes' : 'Add Skill')}
+            <Button type="submit" disabled={saving}>
+              {saving ? 'Saving…' : (isEdit ? 'Save Changes' : 'Add Skill')}
             </Button>
           </div>
         </form>
