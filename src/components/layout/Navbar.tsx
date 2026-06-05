@@ -27,78 +27,65 @@ import { CallInfoModal } from '@/components/call-info/CallInfoModal';
  * single "Effective access: All (bypass role)" line — there's nothing
  * useful to show per-dimension.
  */
-function EffectiveAccessPanel({
+/*
+ * EffectiveAccessPopover — popover CONTENTS only.
+ *
+ * Refactor (2026-06-05): the trigger used to be a standalone "Access"
+ * pill button. Operators found that visually noisy next to the
+ * identity (name / role) cluster, and the natural mental model is
+ * "click on who I am to see what I can see." So the trigger is now
+ * the identity div itself (see the Navbar render at the call-site)
+ * and this component renders only the floating panel body — the
+ * call-site owns the open/close state, the click-target, and the
+ * positioning wrapper.
+ *
+ * Background fix (still 2026-06-05): `bg-popover` /
+ * `text-popover-foreground` are shadcn design-token classes defined as
+ * CSS variables in globals.css but the matching `popover` /
+ * `popover-foreground` color aliases were never added to
+ * `tailwind.config.js`, so those classes compile to no CSS rule and
+ * the panel rendered transparent. Using explicit `bg-white` /
+ * `text-slate-900` is the safest minimal fix.
+ */
+function EffectiveAccessPopover({
   scope,
   hierarchy,
 }: {
   scope: Me['scope'];
   hierarchy: Me['hierarchy'];
 }) {
-  const [open, setOpen] = useState(false);
-  // No `me` yet — render nothing rather than a placeholder; AuthProvider
-  // hydrates from cache near-instantly so this gap is invisible.
-  if (!scope && !hierarchy) {
-    // Bypass role (Admin/Finance) — scope intentionally omitted by BE.
-    // Still expose a tiny indicator so operators know they're unscoped.
-    return (
-      <div className="hidden md:block text-[10px] text-muted-foreground italic pr-1" title="Bypass role: no row-level scope filter applies">
-        All access
-      </div>
-    );
-  }
-
   return (
-    <div className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        onBlur={(e) => {
-          // Close when focus leaves the entire popover subtree (button + panel)
-          if (!e.currentTarget.parentElement?.contains(e.relatedTarget as Node)) {
-            setOpen(false);
-          }
-        }}
-        className="hidden md:inline-flex items-center px-2 h-7 rounded-md border border-input bg-background text-[11px] font-medium text-muted-foreground hover:bg-muted"
-        title="Show effective row-level access scope"
-        aria-haspopup="true"
-        aria-expanded={open}
-      >
-        Access
-      </button>
-      {open && (
-        <div
-          className="absolute right-0 top-full mt-1 z-50 w-56 rounded-md border bg-popover text-popover-foreground shadow-md p-2"
-          role="dialog"
-          aria-label="Effective Access"
-        >
-          {!scope ? (
-            <div className="text-xs">
-              <div className="font-semibold mb-1">Effective Access</div>
-              <div className="text-muted-foreground">All (bypass role)</div>
-            </div>
-          ) : (
+    <div
+      className="absolute right-0 top-full mt-1 z-50 w-56 rounded-md border border-slate-200 bg-white text-slate-900 shadow-lg p-2"
+      role="dialog"
+      aria-label="Effective Access"
+    >
+      {!scope ? (
+        <div className="text-xs">
+          <div className="font-semibold mb-1">Effective Access</div>
+          <div className="text-muted-foreground">All (bypass role)</div>
+        </div>
+      ) : (
+        <>
+          <div className="text-xs font-semibold mb-1">Effective Access</div>
+          <div className="border-t" />
+          <table className="w-full text-xs mt-1">
+            <tbody>
+              <ScopeRow label="Clients"   dim={scope.clients} />
+              <ScopeRow label="Cities"    dim={scope.cities} />
+              <ScopeRow label="States"    dim={scope.states} />
+              <ScopeRow label="Verticals" dim={scope.verticals} />
+            </tbody>
+          </table>
+          {hierarchy && hierarchy.descendantsCount > 0 && (
             <>
-              <div className="text-xs font-semibold mb-1">Effective Access</div>
-              <div className="border-t" />
-              <table className="w-full text-xs mt-1">
-                <tbody>
-                  <ScopeRow label="Clients"   dim={scope.clients} />
-                  <ScopeRow label="Cities"    dim={scope.cities} />
-                  <ScopeRow label="States"    dim={scope.states} />
-                  <ScopeRow label="Verticals" dim={scope.verticals} />
-                </tbody>
-              </table>
-              {hierarchy && hierarchy.descendantsCount > 0 && (
-                <>
-                  <div className="border-t mt-1" />
-                  <div className="text-xs text-muted-foreground italic mt-1">
-                    Including {hierarchy.descendantsCount} downstream report{hierarchy.descendantsCount === 1 ? '' : 's'}
-                  </div>
-                </>
-              )}
+              <div className="border-t mt-1" />
+              <div className="text-xs text-muted-foreground italic mt-1">
+                Including {hierarchy.descendantsCount} downstream report{hierarchy.descendantsCount === 1 ? '' : 's'}
+              </div>
             </>
           )}
-        </div>
+        </>
       )}
     </div>
   );
@@ -167,6 +154,10 @@ export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
   // on Dashboard / Manage Jobs while picking a date range and reading
   // the resulting call history table.
   const [callInfoOpen, setCallInfoOpen] = useState(false);
+  // Effective Access popover open/close — driven by clicks on the
+  // identity (name / role) block in the right-side cluster. See the
+  // render below for the wiring + click-outside dismiss strategy.
+  const [accessOpen, setAccessOpen] = useState(false);
 
   // Permission gates — mirror the legacy CRM, which only showed each header
   // button if the operator had the matching action permission. Keys
@@ -333,24 +324,50 @@ export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
         )}
       </button>
       <div className="flex items-center gap-3 border-l pl-3">
-        <div className="hidden sm:block text-right text-xs">
-          <div className="font-medium">{me?.user?.user_name ?? '…'}</div>
-          <div className="text-muted-foreground">{me?.role?.role_name ?? me?.user?.official_email ?? ''}</div>
-        </div>
         {/*
-         * Effective Access panel — surfaces the operator's resolved row-level
-         * RBAC scope (clients / cities / states / verticals) so ops can spot
-         * "I'm scoped to 2 clients but seeing data for 50" issues at a glance
-         * instead of filing a ticket. Driven entirely from the /auth/me
-         * response already cached in AuthContext; no extra request.
+         * Identity-as-trigger (2026-06-05). Clicking the name/role
+         * block toggles the Effective Access popover. Matches the
+         * operator's intuition ("click on who I am to see what I can
+         * see") and removes the visual clutter of a standalone
+         * "Access" pill. Wrapper is `relative` so the popover
+         * positions against THIS div, not the whole right-side
+         * cluster.
          *
-         * Skipped for bypass roles (Admin / Finance) where scope is absent
-         * server-side — those get a single "All (bypass role)" line.
+         * Trigger is a real <button> for keyboard + a11y (Space/Enter
+         * toggle, focus ring), styled to look identical to the
+         * previous inline div — only adds a subtle hover background +
+         * a pointer cursor so operators discover it's clickable.
+         *
+         * Behavior: tracks `accessOpen` locally. Click-outside dismiss
+         * is handled by the same onBlur subtree-check pattern used
+         * elsewhere in this navbar (works because the popover sits
+         * inside the wrapper, so focus landing on it doesn't trigger
+         * a close).
          */}
-        <EffectiveAccessPanel
-          scope={me?.scope}
-          hierarchy={me?.hierarchy}
-        />
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setAccessOpen((v) => !v)}
+            onBlur={(e) => {
+              if (!e.currentTarget.parentElement?.contains(e.relatedTarget as Node)) {
+                setAccessOpen(false);
+              }
+            }}
+            className="hidden sm:block text-right text-xs px-2 py-1 -mx-2 -my-1 rounded hover:bg-muted/60 transition-colors cursor-pointer"
+            title="Show effective row-level access scope"
+            aria-haspopup="dialog"
+            aria-expanded={accessOpen}
+          >
+            <div className="font-medium">{me?.user?.user_name ?? '…'}</div>
+            <div className="text-muted-foreground">{me?.role?.role_name ?? me?.user?.official_email ?? ''}</div>
+          </button>
+          {accessOpen && (
+            <EffectiveAccessPopover
+              scope={me?.scope}
+              hierarchy={me?.hierarchy}
+            />
+          )}
+        </div>
         <Button variant="ghost" size="icon" onClick={logout} title="Log out">
           <LogOut className="h-5 w-5" />
         </Button>
