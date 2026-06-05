@@ -4788,6 +4788,21 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
           if (typeof f.helper_req === 'boolean') patch.helper_req = f.helper_req;
           if (f.fk_service_catg_id) patch.fk_service_catg_id = Number(f.fk_service_catg_id);
           if (f.fk_service_type_id) patch.fk_service_type_id = Number(f.fk_service_type_id);
+          /*
+           * service_type_ids CSV (2026-06-05). The PATCH was sending
+           * only the singular fk_service_type_id, so tbl_job.service_type_ids
+           * stayed stale (often NULL on legacy bulk-upload rows) even
+           * after a multi-type C&S confirm. Send the full multi-pick
+           * CSV alongside the primary so both columns stay in sync.
+           * BE update() now lists `service_type_ids` in MUTABLE_COLUMNS
+           * and normalises array/CSV input the same way create() does.
+           */
+          if (Array.isArray(f.fk_service_type_ids) && f.fk_service_type_ids.length > 0) {
+            patch.service_type_ids = f.fk_service_type_ids
+              .map(Number)
+              .filter((n) => Number.isFinite(n) && n > 0)
+              .join(',');
+          }
         }
 
         // Outcome-only path: just the remarks (structured prefix from the
@@ -5071,10 +5086,33 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
               const siblingTypeId = (siblingTypeIdRaw != null && siblingTypeIdRaw !== '')
                 ? Number(siblingTypeIdRaw)
                 : undefined;
+              /*
+               * service_type_ids per sibling (2026-06-05): CSV of every
+               * service_type_id present in this sibling's filtered
+               * services basket. Mirrors the singular fk_service_type_id
+               * derivation above but covers EVERY picked type rather
+               * than just the primary. De-duplicated via Set so a
+               * category with two services of the same type doesn't
+               * write "12,12". Empty when the sibling has no services
+               * — the BE writes NULL.
+               */
+              const siblingTypeIdsCsv = (() => {
+                const ids = filtered
+                  .map((s) => {
+                    const raw = (s as { fk_service_type_id?: number | string; service_type_id?: number | string }).fk_service_type_id
+                      ?? (s as { service_type_id?: number | string }).service_type_id;
+                    const n = Number(raw);
+                    return Number.isFinite(n) && n > 0 ? n : null;
+                  })
+                  .filter((n): n is number => n !== null);
+                if (ids.length === 0) return undefined;
+                return Array.from(new Set(ids)).join(',');
+              })();
               const siblingPayload = {
                 ...siblingBase,
                 fk_service_catg_id: catId,
                 fk_service_type_id: Number.isFinite(siblingTypeId) ? siblingTypeId : undefined,
+                service_type_ids: siblingTypeIdsCsv,
                 job_desc:          (override.job_desc ?? f.job_desc) || undefined,
                 remarks:           (override.remarks ?? f.remarks) || undefined,
                 efr_special_notes: (override.efr_special_notes ?? f.efr_special_notes) || undefined,
@@ -5304,6 +5342,27 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
            * the FE doesn't pass them explicitly.
            */
           collected_by: collectedByCode(f.collected_by),
+          /*
+           * Service-type FKs (2026-06-05): persist BOTH columns on the
+           * new tbl_job row.
+           *   - fk_service_type_id  : the single PRIMARY type
+           *     (first selected — matches the C&S sibling derivation
+           *     at the loop below)
+           *   - service_type_ids    : comma-separated CSV of every
+           *     picked type id (multi-pick). BE create() accepts
+           *     either `service_type_ids` or `fk_service_type_ids`
+           *     (alias) and normalises arrays → CSV via Array.join
+           *     before the INSERT.
+           * The per-category loop below spreads basePayload then
+           * overrides `fk_service_type_id` per sibling — basePayload's
+           * value here serves the zero-or-single-category case.
+           */
+          fk_service_type_id: (Array.isArray(f.fk_service_type_ids) && f.fk_service_type_ids.length > 0)
+            ? Number(f.fk_service_type_ids[0])
+            : (f.fk_service_type_id ? Number(f.fk_service_type_id) : undefined),
+          service_type_ids: (Array.isArray(f.fk_service_type_ids) && f.fk_service_type_ids.length > 0)
+            ? f.fk_service_type_ids.map(Number).filter((n) => Number.isFinite(n) && n > 0).join(',')
+            : undefined,
           // Questionnaire FK (tbl_questionaire.c_questionaire_id). The
           // backend create() can stash this on tbl_job's reporting
           // metadata if a column exists; otherwise it surfaces in the
