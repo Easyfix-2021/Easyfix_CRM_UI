@@ -126,7 +126,16 @@ export function ConfirmDialogProvider({ children }: { children: React.ReactNode 
               bottom margin DialogHeader adds — the body's own pt-5 owns
               that spacing now. `!py-4` keeps the header band compact. */}
           <DialogHeader className="!mx-0 !mt-0 !mb-0 !py-4">
-            <div className="flex items-center gap-3">
+            {/*
+             * `pr-10` (2026-06-05): the top-right close X is positioned
+             * `absolute right-3 top-3 h-7 w-7` by DialogContent. Without
+             * trailing padding the wrapped title text runs UNDER the
+             * close button — visible on long titles like
+             * `Deactivate "Level 1 Charging Stations - 120V AC /Up to
+             * 3.3 kW"?`. 40px of right padding clears the 28px button
+             * plus a 12px breathing buffer.
+             */}
+            <div className="flex items-center gap-3 pr-10">
               {state.icon && (
                 <span
                   className={
