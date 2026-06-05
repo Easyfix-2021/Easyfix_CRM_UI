@@ -4,7 +4,8 @@ import { useEffect, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Phone, Loader2, CheckCircle2, AlertTriangle, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { api, ApiError } from '@/lib/api';
+import { api } from '@/lib/api';
+import { formatApiError } from '@/lib/api-errors';
 import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -172,15 +173,20 @@ function useClickToCall(target: CallTarget) {
   // separate boolean so the BE handler can fork on it inside the
   // jobId branch (see routes/admin/calls.js). Validator accepts it
   // alongside any target id — but only the jobId branch consumes it.
-  // useAlt encoded as 1 (vs true) so it fits both the api.get query-string
-  // signature (Record<string, string | number | undefined>) and the BE's
-  // alternatives validator (boolean OR '1'/'0'/'true'/'false'). The
-  // serialized query becomes `&useAlt=1`, parsed back via the route's
-  // case-insensitive coercion.
-  const targetBody: Record<string, number> | null = targetKey
+  //
+  // 2026-06-05: encode useAlt as the literal boolean `true`, NOT
+  // the number `1`. The BE body validator (validators/calls.validator.js)
+  // declares `useAlt: Joi.boolean()` — Joi's `convert: true` coerces
+  // string 'true'/'false' but not arbitrary numbers (number 1 is NOT
+  // in Joi's default truthy set), so sending `useAlt: 1` was 400ing on
+  // prod with "must be a boolean". Sending the actual boolean is the
+  // only shape Joi.boolean() reliably accepts in a JSON body. The
+  // query-side `/preview` path uses a separate `callListQuery` schema
+  // with explicit string alternatives and is unaffected.
+  const targetBody: Record<string, number | boolean> | null = targetKey
     ? {
         [targetKey]: target[targetKey] as number,
-        ...(target.useAlt ? { useAlt: 1 } : {}),
+        ...(target.useAlt ? { useAlt: true } : {}),
       }
     : null;
 
@@ -194,14 +200,20 @@ function useClickToCall(target: CallTarget) {
     if (busy || !targetBody) return;
     setBusy(true); setToast(null);
     try {
-      const body: Record<string, number | string> = { ...targetBody };
+      // Widened to include `boolean` so `useAlt: true` from targetBody
+      // type-narrows cleanly. Without this, the spread fails TS strict.
+      const body: Record<string, number | string | boolean> = { ...targetBody };
       if (callFrom) body.callFrom = callFrom;
       if (callTo)   body.callTo   = callTo;
       await api.post<{ delivered: boolean; message?: string }>('/admin/calls/click-to-call', body);
       setToast({ variant: 'success', message: 'Call initiated Successfully' });
     } catch (err) {
-      const msg = err instanceof ApiError ? err.message : 'Call failed';
-      setToast({ variant: 'error', message: msg });
+      // formatApiError unpacks `ApiError.details` (Joi 400 field-level
+      // messages) so operators see "Validation failed — useAlt must be
+      // a boolean" instead of the generic "Validation failed". Falls
+      // through to err.message for non-validation errors and to 'Call
+      // failed' if it isn't even an Error.
+      setToast({ variant: 'error', message: formatApiError(err, { fallback: 'Call failed' }) });
     } finally {
       setBusy(false);
     }
@@ -224,10 +236,23 @@ function useClickToCall(target: CallTarget) {
     // Fetch masked preview from the BE. Show a brief busy state during
     // the fetch — typically <100ms. Preview failure is non-fatal: we still
     // open the confirm, just without the masked dial-target line.
+    //
+    // Query coercion (2026-06-05): api.get's query-string signature is
+    // `Record<string, string | number | undefined>` — no boolean lane
+    // (booleans don't serialise unambiguously across all query parsers).
+    // So we project `useAlt: true` → `useAlt: 1` for the GET path. The
+    // BE's `callListQuery` schema accepts boolean / string / number for
+    // useAlt (see validators/calls.validator.js), so the numeric 1 is
+    // a valid wire format.
+    const previewQuery: Record<string, string | number | undefined> = {};
+    for (const [k, v] of Object.entries(targetBody)) {
+      if (typeof v === 'boolean') previewQuery[k] = v ? 1 : 0;
+      else if (typeof v === 'number' || typeof v === 'string') previewQuery[k] = v;
+    }
     setBusy(true);
     let preview: CallPreview | null = null;
     try {
-      preview = await api.get<CallPreview>('/admin/calls/preview', targetBody);
+      preview = await api.get<CallPreview>('/admin/calls/preview', previewQuery);
     } catch {
       // swallow — confirm still opens, just without preview line
     } finally {
