@@ -4671,6 +4671,27 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
           setIf('booking_cut_off_time_slot', f.time_slot); // legacy populated same value here
           setIf('additional_name',   f.additional_name);
           setIf('additional_number', f.additional_number);
+          /*
+           * original_appointment_* on C&S PATCH (2026-06-05). The job
+           * came from a no-promise source (bulk upload / legacy
+           * dashboard) where original_appointment_* was never stamped
+           * at create time. Confirm & Schedule IS the moment ops
+           * commits the first promise, so we snapshot the requested
+           * date/time into the "original" columns at the same instant.
+           * Mirrors the create()-flow default which derives these from
+           * requested_date_time when the caller doesn't pass them
+           * explicitly. BE update() applies the same IST formatter as
+           * create() (see services/job.service.js).
+           */
+          if (f.requested_date_time) {
+            setIf('original_appointment_date_time',
+              new Date(f.requested_date_time).toISOString());
+            // The legacy companion time column stores HH:MM. The BE's
+            // formatTimeIST handles ISO → IST conversion, so we can
+            // pass the same ISO and let the server own the projection.
+            setIf('original_appointment_time',
+              new Date(f.requested_date_time).toISOString());
+          }
         }
 
         // Confirm flow always sends services (even empty array == "no services"),
@@ -5238,6 +5259,21 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
           branch_details: f.branch_details || undefined,
           product_code: f.product_code || undefined,
           building_name: f.building_name || undefined,
+          /*
+           * efr_special_notes (2026-06-05): explicit basePayload fallback.
+           * The per-category loop below ALSO sets this from
+           * `(override.efr_special_notes ?? f.efr_special_notes)`, but
+           * in zero-categories-picked single-shot Book-New-Call the
+           * loop runs with catId=0 and perJobFields[0] is empty, so
+           * the override branch returns undefined and the fallback
+           * `f.efr_special_notes` is the only source. Carrying it on
+           * basePayload too defends against the per-category branch
+           * being optimised away in future and makes the contract
+           * explicit ("BE always receives the field, even if blank").
+           * The loop's spread happens AFTER basePayload so per-tab
+           * overrides still win on multi-category jobs.
+           */
+          efr_special_notes: f.efr_special_notes || undefined,
           // SPOC tags. Backend already accepts these directly on
           // tbl_job (verified in MUTABLE_COLUMNS + the INSERT column list).
           // safeMobile() strips any value that still contains a bullet —
@@ -5660,30 +5696,52 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 been picked yet (i.e. the BE already had SPOC info on
                 the row). */}
             <Field label="Client SPOC Phone">
-              {/* Masked display + click-to-call (2026-06-03 per ops).
-                  The disabled Input keeps the visual parity with the
-                  sibling SPOC Name / SPOC Email read-only fields; the
-                  CallableMobile next to it provides the dial action.
-                  Routing keys off `reporting_contact_id` (preferred —
-                  the picked Reporting Contact's id), falling back to
-                  the parent job's id when editing an existing booking.
-                  `hideWhenUnauthorized` makes the button vanish for
-                  roles that don't carry the `isClickToCall` flag —
-                  the masked Input still shows the number. */}
-              <div className="flex items-center gap-2">
-                <Input
-                  value={maskMobile(f.client_spoc || initial.client_spoc)}
-                  readOnly disabled
-                  className="tabular-nums flex-1"
-                />
-                <CallableMobile
-                  mobile={(f.client_spoc as string | null | undefined) || (initial.client_spoc as string | null | undefined)}
-                  reportingContactId={f.reporting_contact_id ? Number(f.reporting_contact_id) : undefined}
-                  jobId={initial?.job_id ? Number(initial.job_id) : undefined}
-                  hideWhenUnauthorized
-                  className="shrink-0"
-                />
-              </div>
+              {/*
+                * Clickable mobile as the entire field (2026-06-05 per
+                * ops). The masked digits ARE the click target — same
+                * affordance pattern used in job-list cells, customer
+                * rows, etc. No separate icon button; the whole pill is
+                * the dial action. Visual styling fills the same
+                * footprint as the sibling SPOC Name / SPOC Email
+                * disabled Inputs so the field row reads as a
+                * homogeneous trio.
+                *
+                * pickTargetKey() requires EXACTLY ONE receiver-id —
+                * prefer reportingContactId when the operator has
+                * picked a Reporting Contact, otherwise fall back to
+                * jobId so the BE resolves the job's SPOC-of-record.
+                *
+                * `hideWhenUnauthorized` is intentionally OMITTED so
+                * unauthorized roles still see the masked digits
+                * (CallableMobile's static-span fallback) instead of
+                * an empty field. Authorized roles get the same digits
+                * with hover-underline + dial action.
+                */}
+              {(() => {
+                const spocReportingId = f.reporting_contact_id ? Number(f.reporting_contact_id) : undefined;
+                const spocJobId = !spocReportingId && initial?.job_id ? Number(initial.job_id) : undefined;
+                const maskedSpoc = maskMobile(f.client_spoc || initial.client_spoc);
+                return (
+                  <CallableMobile
+                    mobile={maskedSpoc}
+                    reportingContactId={spocReportingId}
+                    jobId={spocJobId}
+                    /*
+                     * Input-pill styling — w-full + h-9 + px-3 +
+                     * rounded-md + border-input matches the visual
+                     * weight of the sibling <Input disabled> fields.
+                     * `bg-muted/40` mimics the disabled-Input fill.
+                     * `text-sm tabular-nums` overrides CallableMobile's
+                     * default text-xs so the digits are legible
+                     * alongside the other field values. `justify-start`
+                     * left-aligns the icon+digits inside the pill so
+                     * the layout reads like text-in-an-input rather
+                     * than a centered button label.
+                     */
+                    className="w-full h-9 px-3 rounded-md border border-input bg-muted/40 text-sm tabular-nums justify-start"
+                  />
+                );
+              })()}
             </Field>
             <Field label="Client SPOC Name">
               <Input
@@ -5793,45 +5851,30 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
               />
             </Field>
             <Field label="Customer Alternate Number">
-              {/* Editable input + click-to-call button (2026-06-03).
-                  The icon uses `useAlt={true}` on the BE route so the
-                  Kaleyra dial targets tbl_job.additional_number on the
-                  CURRENT saved job. If the operator has typed a new
-                  alt number but not saved yet, the icon dials the
-                  previously-saved value — they need to save first.
-
-                  Validation: shared INDIAN_MOBILE_REGEX from
-                  @/lib/format — 10 digits starting with 6/7/8/9.
-                  Empty is fine (alt is optional). Inline error shows
-                  ONLY when the operator has typed something invalid;
-                  blank fields stay quiet so the form doesn't nag at
-                  first paint. `aria-invalid` flips on the input so
-                  the red ring (Tailwind ring-red-300 on aria-invalid:
-                  selectors elsewhere in globals.css) renders too. */}
+              {/* Editable input ONLY (2026-06-05 per ops). The
+                  click-to-call icon previously rendered alongside this
+                  field was removed — alt-number is captured for
+                  reference / fallback context, not as a primary dial
+                  surface, so the icon was visual noise. The dial
+                  affordance remains available from the Customer
+                  Submission panel / Job detail view where it belongs.
+                  Validation: shared INDIAN_MOBILE_REGEX (10 digits
+                  starting with 6/7/8/9); empty stays quiet,
+                  aria-invalid triggers the red focus ring on bad
+                  input. */}
               {(() => {
                 const raw = String(f.additional_number || '');
                 const isValid = isValidIndianMobile(raw);
                 return (
                   <>
-                    <div className="flex items-center gap-2">
-                      <Input
-                        value={raw}
-                        onChange={(e) => set('additional_number', e.target.value.replace(/\D/g, '').slice(0, 10))}
-                        inputMode="numeric"
-                        placeholder="10 digits"
-                        className={`tabular-nums flex-1 ${!isValid ? 'border-red-400 focus-visible:ring-red-300' : ''}`}
-                        aria-invalid={!isValid}
-                      />
-                      {(initial?.job_id && raw && isValid) ? (
-                        <CallableMobile
-                          jobId={Number(initial.job_id)}
-                          useAlt
-                          mobile={maskMobile(raw)}
-                          hideWhenUnauthorized
-                          className="shrink-0"
-                        />
-                      ) : null}
-                    </div>
+                    <Input
+                      value={raw}
+                      onChange={(e) => set('additional_number', e.target.value.replace(/\D/g, '').slice(0, 10))}
+                      inputMode="numeric"
+                      placeholder="10 digits"
+                      className={`tabular-nums w-full ${!isValid ? 'border-red-400 focus-visible:ring-red-300' : ''}`}
+                      aria-invalid={!isValid}
+                    />
                     {!isValid && (
                       <p className="text-[11px] text-red-600 mt-1">{INDIAN_MOBILE_ERROR}</p>
                     )}

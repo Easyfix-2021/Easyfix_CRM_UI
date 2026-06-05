@@ -369,11 +369,22 @@ type MobileProps = CallTarget & {
   mobile: string | null | undefined;
   className?: string;
   hideWhenUnauthorized?: boolean;
+  /*
+   * Suppresses the inline mobile-number text inside the button so the
+   * affordance reads as a pure icon-button. Use when CallableMobile is
+   * paired with a SEPARATE display element that already shows the
+   * masked number (e.g. the Confirm & Schedule modal's Client SPOC
+   * Phone field, where the masked Input shows the digits and the
+   * adjacent CallableMobile is just the dial action). Defaults to
+   * false to preserve every existing list/table call site where the
+   * button IS the only place the number appears.
+   */
+  iconOnly?: boolean;
 };
 
 export function CallableMobile({
   jobId, customerId, efrId, reportingContactId, useAlt,
-  mobile, className, hideWhenUnauthorized = false,
+  mobile, className, hideWhenUnauthorized = false, iconOnly = false,
 }: MobileProps) {
   const { me } = useMe();
   const target: CallTarget = { jobId, customerId, efrId, reportingContactId, useAlt };
@@ -385,6 +396,15 @@ export function CallableMobile({
 
   if (!clickable) {
     if (hideWhenUnauthorized && !can) return null;
+    // iconOnly callers (e.g. fields where a SEPARATE display element
+    // already shows the masked digits) NEVER want the fallback span to
+    // render the raw mobile — that's exactly the duplicate-display bug
+    // the prop exists to prevent. Return null in iconOnly mode so the
+    // affordance vanishes entirely when clickable is false (no target
+    // id, or display === '—'). Non-iconOnly callers keep the original
+    // span fallback so list/table cells still show the digits when the
+    // call action isn't available.
+    if (iconOnly) return null;
     return <span className={cn('text-xs', className)}>{display}</span>;
   }
 
@@ -421,7 +441,10 @@ export function CallableMobile({
             Alt
           </span>
         )}
-        <span className="font-mono">{display}</span>
+        {/* iconOnly suppresses the inline number text so paired display
+            elements (e.g. a sibling Input showing the masked digits)
+            don't render the value twice. See the prop's docstring. */}
+        {!iconOnly && <span className="font-mono">{display}</span>}
       </button>
       {customNode}
       {toastNode}
