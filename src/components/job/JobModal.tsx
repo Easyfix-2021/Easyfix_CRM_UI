@@ -5617,6 +5617,16 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
   // Section 2 (Customer Details) requires the full set of legacy
   // mandatory fields: name + slot + datetime + address + city + 6-digit
   // pincode. Customer mobile is read-only in confirm so it's not gated.
+  /*
+   * GPS coords mandatory on Confirm & Schedule too (2026-06-06).
+   * Same regex as Book-New-Call section2Complete. C&S parent jobs
+   * often arrive from bulk-upload / legacy Client Dashboard with a
+   * NULL or empty `gps_location`, and the legacy schedule modal can't
+   * dispatch without it (`getRoadDistance` returns blank distances).
+   * Gating the "Next →" button here forces ops to use the
+   * AddressPickerWithMap (or paste valid coords) before booking.
+   */
+  const CONFIRM_GPS_RX = /^-?\d+(\.\d+)?,-?\d+(\.\d+)?$/;
   const confirmSection2Complete =
     confirmSection1Complete &&
     !!f.customer_name &&
@@ -5624,7 +5634,8 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
     !!f.requested_date_time &&
     !!f.address &&
     !!String(f.city_id || '').trim() &&
-    /^[0-9]{6}$/.test(String(f.pin_code || ''));
+    /^[0-9]{6}$/.test(String(f.pin_code || '')) &&
+    CONFIRM_GPS_RX.test(String(f.gps_location || '').trim());
 
   /*
    * Section 3 (Products / Services) — at least one row with both a
@@ -6965,10 +6976,24 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requestedTime, requestedDate]);
+  /*
+   * GPS coords mandatory (2026-06-06). Matches the BE validator's
+   * `lat,lng` Joi pattern and the legacy CRM's `isCoordinateBlank()`
+   * write-time check in addEditCustAddress.vm. Without this gate,
+   * operators could submit Book-New-Call jobs whose
+   * `tbl_address.gps_location` lands NULL, which silently breaks the
+   * legacy Schedule modal (renders "GPS Location: Not Found" + cascades
+   * a blank `getRoadDistance(custGps, …)` for every technician row).
+   * Investigation report dated 2026-06-06; AddressPickerWithMap
+   * populates the coords whenever auto-geocode succeeds, so the only
+   * way to fail this gate is to type an address and skip the map pick.
+   */
+  const GPS_RX = /^-?\d+(\.\d+)?,-?\d+(\.\d+)?$/;
   const section2Complete =
     section1Complete &&
     !!f.customer_name && /^[0-9]{10}$/.test(String(f.customer_mob_no || '')) &&
     !!f.address && !!f.city_id && /^[0-9]{6}$/.test(String(f.pin_code || '')) &&
+    GPS_RX.test(String(f.gps_location || '').trim()) &&
     // Schedule moved from Section 3 → Section 2: date + time both
     // required before moving to Products.
     !!f.requested_date_time;
