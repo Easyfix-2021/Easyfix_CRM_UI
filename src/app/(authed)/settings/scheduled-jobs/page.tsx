@@ -19,10 +19,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
-  ChevronDown, ChevronRight, Play, RotateCcw, AlertTriangle, Clock,
+  ChevronDown, ChevronRight, Play, RotateCcw, AlertTriangle, Clock, Send,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from '@/components/ui/dialog';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { showToast } from '@/components/ui/toast';
@@ -30,6 +34,7 @@ import { api } from '@/lib/api';
 import { formatApiError } from '@/lib/api-errors';
 import { cn } from '@/lib/utils';
 import { useMe } from '@/lib/auth-context';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
 type ScheduledJob = {
   id: string;
@@ -43,7 +48,19 @@ type ScheduledJob = {
   lastDurationMs: number | null;
   lastResult: unknown;
   lastError: string | null;
-  lastTriggerKind: 'cron' | 'manual' | null;
+  lastTriggerKind: 'cron' | 'manual' | 'test' | null;
+  // Test-send surface (2026-06-06). When `testable` is true, a "Test"
+  // button renders alongside "Trigger Now" and the modal uses the
+  // testSourceLabel / testSourceHelp strings for its optional source-id
+  // input. Source id semantics are per-job (efr_id for the profile-
+  // reminder cron, job_id for the magic-link cron); the BE validates.
+  testable?: boolean;
+  testSourceLabel?: string | null;
+  testSourceHelp?: string | null;
+  lastTestAt?: string | null;
+  lastTestDurationMs?: number | null;
+  lastTestResult?: unknown;
+  lastTestError?: string | null;
 };
 
 type JobsResponse = { jobs: ScheduledJob[] };
@@ -79,6 +96,11 @@ export default function ScheduledJobsPage() {
   // Per-job triggering flag — disables the button + shows a busy state
   // without blocking the whole page (other jobs stay actionable).
   const [triggering, setTriggering] = useState<Set<string>>(new Set());
+  // Test-send modal target. When non-null, the modal opens for this job
+  // and submits to POST /admin/scheduled-jobs/:id/test. Single modal at
+  // a time because the modal owns transient input state (mobile +
+  // sourceId); two open simultaneously would race the input refs.
+  const [testTarget, setTestTarget] = useState<ScheduledJob | null>(null);
 
   async function load() {
     setLoading(true);
@@ -268,6 +290,28 @@ export default function ScheduledJobsPage() {
                       </div>
                     </div>
                   </button>
+                  {/*
+                    * Test button (2026-06-06) — visible only when the
+                    * job's tester is registered on the BE (job.testable
+                    * is true). Opens a modal where the operator types
+                    * a mobile + optional source-row id; the WhatsApp
+                    * dispatches only to the typed mobile, never to the
+                    * source row's real recipient. See TestJobModal
+                    * below.
+                    */}
+                  {job.testable && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setTestTarget(job)}
+                      className="shrink-0"
+                      title="Send a one-off test message to any number you choose"
+                    >
+                      <Send className="h-3.5 w-3.5 mr-1" />
+                      Test
+                    </Button>
+                  )}
                   <Button
                     type="button"
                     size="sm"
@@ -334,6 +378,42 @@ export default function ScheduledJobsPage() {
                           </dd>
                         </>
                       )}
+                      {/*
+                        * Last Test telemetry (2026-06-06) — only shows
+                        * when the job is testable AND has actually been
+                        * tested since the server last restarted. Kept
+                        * SEPARATE from "Last Run" so a test send
+                        * doesn't confuse "did the cron itself run".
+                        */}
+                      {job.testable && (job.lastTestAt || job.lastTestError) && (
+                        <>
+                          <dt className="font-semibold text-muted-foreground text-xs">Last Test</dt>
+                          <dd className="text-xs">
+                            {job.lastTestAt ? formatDateTime(job.lastTestAt) : '—'}
+                            {job.lastTestDurationMs != null && (
+                              <span className="text-muted-foreground"> · {formatDuration(job.lastTestDurationMs)}</span>
+                            )}
+                          </dd>
+                          {job.lastTestError && (
+                            <>
+                              <dt className="font-semibold text-destructive text-xs">Last Test Error</dt>
+                              <dd className="text-xs text-destructive whitespace-pre-wrap break-words">
+                                {job.lastTestError}
+                              </dd>
+                            </>
+                          )}
+                          {!job.lastTestError && job.lastTestResult != null && (
+                            <>
+                              <dt className="font-semibold text-muted-foreground text-xs">Last Test Result</dt>
+                              <dd className="text-xs whitespace-pre-wrap break-words">
+                                <pre className="bg-background border rounded p-2 text-[11px] overflow-x-auto">
+                                  {JSON.stringify(job.lastTestResult, null, 2)}
+                                </pre>
+                              </dd>
+                            </>
+                          )}
+                        </>
+                      )}
                     </dl>
                   </div>
                 )}
@@ -378,7 +458,212 @@ export default function ScheduledJobsPage() {
         </Button>
       </div>
       {content}
+      {/*
+        * Test-send modal — single instance, target set via setTestTarget.
+        * Mounted at the page root so it doesn't get unmounted when the
+        * memoized `content` reconciles. Modal handles its OWN reload of
+        * job state on close-after-success so the Last Test panel
+        * refreshes without us having to thread anything through here.
+        */}
+      <TestJobModal
+        target={testTarget}
+        onClose={() => setTestTarget(null)}
+        onSuccess={() => { void load(); }}
+      />
     </div>
+  );
+}
+
+/*
+ * TestJobModal (2026-06-06).
+ *
+ * Modal opened from the "Test" button next to "Trigger Now" on testable
+ * jobs (currently `magic-link-hourly-sweep` and `easyfixer-profile-reminder`).
+ *
+ * Behaviour contract (matches the BE tester):
+ *   - The Mobile field is REQUIRED. The WhatsApp dispatches to this
+ *     number ONLY — never to any real customer / easyfixer / SPOC.
+ *   - The Source ID field is OPTIONAL. When provided, the BE looks up
+ *     that row READ-ONLY and uses its display fields (customer name +
+ *     client name for magic-link; easyfixer name for profile-reminder)
+ *     as placeholder values in the template. The lookup never mutates
+ *     the source row (no send-count increment, no audit columns
+ *     touched, no url-shortener row).
+ *   - If Source ID is blank, dummy values populate the template ("Test
+ *     Customer" / "EasyFix Demo" / "Test Easyfixer").
+ *
+ * The label / help copy comes from the per-job
+ * testSourceLabel / testSourceHelp strings the BE registered, so adding
+ * a third testable job later doesn't need any FE change here.
+ */
+function TestJobModal({
+  target, onClose, onSuccess,
+}: {
+  target: ScheduledJob | null;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [mobile, setMobile] = useState('');
+  const [sourceId, setSourceId] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [inlineError, setInlineError] = useState<string | null>(null);
+
+  // Reset form whenever the target changes (modal re-opened, possibly for a
+  // different job). Without this, a previous mobile/sourceId would leak
+  // into the next test target which would be confusing.
+  useEffect(() => {
+    if (target) {
+      setMobile('');
+      setSourceId('');
+      setInlineError(null);
+      setSubmitting(false);
+    }
+  }, [target?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const open = !!target;
+  const trimmedMobile = mobile.trim();
+  const cleanedDigits = trimmedMobile.replace(/\D/g, '');
+  const mobileValid = cleanedDigits.length === 10
+    || (cleanedDigits.length === 12 && cleanedDigits.startsWith('91'));
+  const sourceIdLooksValid =
+    sourceId.trim() === '' || /^\d+$/.test(sourceId.trim());
+  const canSubmit = mobileValid && sourceIdLooksValid && !submitting;
+
+  // Discard-changes guard for Esc / X / overlay-click. Project-wide ESLint
+  // rule forbids inline `onOpenChange` on Dialog because it bypasses this
+  // shared behaviour. `isDirty` includes the source-id field so a typo into
+  // that field also prompts before discarding. The `when` gate skips the
+  // prompt while a submit is in flight — that close path is already a
+  // success that's tearing down the modal.
+  const guardedOpenChange = useFormDirtyGuard(onClose, {
+    isDirty: trimmedMobile !== '' || sourceId.trim() !== '',
+    when: () => !submitting,
+  });
+
+  if (!target) return null;
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!canSubmit || !target) return;
+    setSubmitting(true);
+    setInlineError(null);
+    try {
+      await api.post(
+        `/admin/scheduled-jobs/${encodeURIComponent(target.id)}/test`,
+        {
+          mobile: trimmedMobile,
+          sourceId: sourceId.trim() === '' ? undefined : sourceId.trim(),
+        },
+      );
+      showToast({
+        variant: 'success',
+        message: `Test message dispatched to ${trimmedMobile}.`,
+      });
+      onSuccess();
+      onClose();
+    } catch (err) {
+      setInlineError(formatApiError(err, { fallback: 'Test send failed.' }));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Test &ldquo;{target.name}&rdquo;</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {/*
+            * Hard-rule callout. Repeats the BE guarantee at the top of
+            * the modal so the operator can't miss it — the entire point
+            * of this dialog is "real recipient is NEVER contacted",
+            * surface that visibly.
+            */}
+          <div className="rounded-md border border-amber-300 bg-amber-50 text-amber-900 px-3 py-2 text-xs leading-relaxed">
+            <strong>Safety rule:</strong> the test WhatsApp is sent to the
+            mobile number you enter below — and <strong>only</strong> to that
+            number. Even if you provide an existing {target.testSourceLabel || 'source ID'}{' '}
+            below, that record&apos;s real owner will <strong>not</strong> receive
+            the message.
+          </div>
+
+          <div>
+            <label className="text-sm font-medium block mb-1">
+              Mobile Number <span className="text-red-600">*</span>
+            </label>
+            <Input
+              type="tel"
+              inputMode="numeric"
+              value={mobile}
+              onChange={(e) => setMobile(e.target.value)}
+              placeholder="10-digit Indian mobile (e.g. 9876543210)"
+              autoFocus
+            />
+            <p className="text-[11px] text-muted-foreground mt-1">
+              Where the test WhatsApp will land. 10 digits, India (or 12
+              digits including the 91 prefix).
+            </p>
+            {!mobileValid && trimmedMobile.length > 0 && (
+              <p className="text-[11px] text-destructive mt-1">
+                Enter a valid 10-digit Indian mobile number.
+              </p>
+            )}
+          </div>
+
+          <div>
+            <label className="text-sm font-medium block mb-1">
+              {target.testSourceLabel || 'Source ID'}{' '}
+              <span className="text-muted-foreground text-xs font-normal">(optional)</span>
+            </label>
+            <Input
+              type="text"
+              inputMode="numeric"
+              value={sourceId}
+              onChange={(e) => setSourceId(e.target.value)}
+              placeholder="Leave blank to use dummy details"
+            />
+            {target.testSourceHelp && (
+              <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
+                {target.testSourceHelp}
+              </p>
+            )}
+            {!sourceIdLooksValid && (
+              <p className="text-[11px] text-destructive mt-1">
+                ID must be a positive integer.
+              </p>
+            )}
+          </div>
+
+          {inlineError && (
+            <div className="rounded-md border border-destructive/40 bg-destructive/5 text-destructive text-xs px-3 py-2">
+              {inlineError}
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onClose}
+              disabled={submitting}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              size="sm"
+              disabled={!canSubmit}
+            >
+              <Send className="h-3.5 w-3.5 mr-1" />
+              {submitting ? 'Sending…' : 'Send Test Message'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 
