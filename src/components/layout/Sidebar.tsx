@@ -533,6 +533,35 @@ export function Sidebar() {
                         </li>
                       );
                     })}
+                    {/*
+                      * Hardcoded Scheduled Jobs entry (2026-06-06) —
+                      * appears as the LAST child of the Settings
+                      * parent ONLY when the operator's email is on the
+                      * `scheduled.jobs.visible.emails` allowlist. The
+                      * page bypasses tbl_menu / role_menu permissions
+                      * entirely (per ops spec — no menu table entry).
+                      * Visibility is decided by the
+                      * `me.scheduledJobsAccess` boolean which the BE
+                      * derives from the same property used to gate
+                      * /admin/scheduled-jobs/*.
+                      */}
+                    {parent.menu_name === 'Settings' && me?.scheduledJobsAccess && (
+                      <li key="hardcoded-scheduled-jobs">
+                        <Link
+                          href="/settings/scheduled-jobs"
+                          className={cn(
+                            'flex items-center gap-1.5 rounded px-3 py-1.5 text-[13px] transition-colors',
+                            globalActiveHref === '/settings/scheduled-jobs'
+                              ? 'bg-sidebar-accent text-white'
+                              : 'text-sidebar-foreground/80 hover:bg-sidebar-accent/60 hover:text-white',
+                          )}
+                          title="Visible only to operators on the scheduled.jobs.visible.emails allowlist"
+                        >
+                          <Circle className="h-1.5 w-1.5 shrink-0 fill-current opacity-40" />
+                          <span className="truncate">Scheduled Jobs</span>
+                        </Link>
+                      </li>
+                    )}
                   </ul>
                 )}
               </li>

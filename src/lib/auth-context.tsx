@@ -66,6 +66,16 @@ export type Me = {
    * ticket. The backend resolves this from tbl_user.manager_user_id.
    */
   hierarchy?: { directReportsCount: number; descendantsCount: number };
+  /*
+   * scheduledJobsAccess (2026-06-06): true when the operator's
+   * official_email is present in the `scheduled.jobs.visible.emails`
+   * easyfix_properties row. Drives a single hardcoded sidebar entry
+   * ("Settings → Scheduled Jobs") that doesn't go through the normal
+   * menu/role pipeline. The BE returns 403 from
+   * /admin/scheduled-jobs/* for off-allowlist users regardless of the
+   * FE flag — this is purely a UI affordance.
+   */
+  scheduledJobsAccess?: boolean;
 };
 
 // Scope dimension shape — exported so the Navbar's effective-access panel
