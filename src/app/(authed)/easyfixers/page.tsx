@@ -17,7 +17,7 @@ import {
 import { api } from '@/lib/api';
 import { downloadXlsx } from '@/lib/download-xlsx';
 import { useLookup } from '@/lib/use-lookup';
-import { formatDate, formatEasyfixerName } from '@/lib/utils';
+import { cn, formatDate, formatEasyfixerName } from '@/lib/utils';
 import { EasyfixerModal, type EasyfixerModalMode } from '@/components/easyfixer/EasyfixerModal';
 import { EasyfixerActionMenu } from '@/components/easyfixer/EasyfixerActionMenu';
 import { EasyfixerTransactionsModal } from '@/components/easyfixer/EasyfixerTransactionsModal';
@@ -43,7 +43,20 @@ type Ef = {
   efr_service_category: string | null; efr_service_type: string | null;
   efr_profile_perc: number | null;
   is_technician_verified: boolean | number | null;
-  efr_status: number; efr_manager_id: number | null;
+  efr_status: number;
+  /*
+   * `efr_status_label` (2026-06-08) — server-side derived from the 4
+   * underlying columns (user_id, personal_details_filled,
+   * is_identity_details_verified, is_technician_verified, efr_status).
+   * Use this string in the Status column, NOT the binary `efr_status`.
+   * Possible values: 'Active' · 'Inactive' · 'Idle' · 'Not Eligible'
+   *                · 'Not Suitable' · 'Registration In Progress'
+   */
+  efr_status_label: 'Active' | 'Inactive' | 'Idle' | 'Not Eligible' | 'Not Suitable' | 'Registration In Progress';
+  user_id: number | null;
+  personal_details_filled: number | null;
+  is_identity_details_verified: number | null;
+  efr_manager_id: number | null;
   insert_date: string; update_date: string | null;
   // New fields (BE contract — sibling agent adds these in parallel).
   state_id: number | null;
@@ -128,12 +141,56 @@ function writeAggregatesToCache(rows: AggregateRow[]): void {
   for (const r of rows) aggregateCache.set(r.efr_id, { data: r, at });
 }
 
+/*
+ * Status-counts cache (2026-06-08). Mirrors the aggregateCache TTL +
+ * lifecycle. Rapid Search clicks within the TTL window hit the cache
+ * synchronously instead of refiring the SUM-CASE query (~150-200ms
+ * each). Same module-scope persistence so the cache survives modal
+ * open/close cycles. Counts only meaningfully change on Edit-save,
+ * which already triggers a fresh load() from the modal's onSaved
+ * callback — that bypass is handled below via `invalidateStatusCounts()`.
+ *
+ * Single-row cache (not keyed) because the response is global (not
+ * filter-narrowed) — there's only ever one current "snapshot" of all
+ * 6 counts at any time.
+ */
+const STATUS_COUNTS_CACHE_TTL_MS = 30_000;
+let statusCountsCache: { data: StatusCountsResp; at: number } | null = null;
+
+function readStatusCountsFromCache(): StatusCountsResp | null {
+  if (!statusCountsCache) return null;
+  if (Date.now() - statusCountsCache.at > STATUS_COUNTS_CACHE_TTL_MS) return null;
+  return statusCountsCache.data;
+}
+function writeStatusCountsToCache(data: StatusCountsResp): void {
+  statusCountsCache = { data, at: Date.now() };
+}
+function invalidateStatusCounts(): void {
+  statusCountsCache = null;
+}
+
 type AttendanceRow = {
   efr_id: number;
   att_is_leave_marked: number | null;
   att_morning_slot: number | null;
   att_evening_slot: number | null;
   att_created_on: string | null;
+};
+
+/*
+ * Status-counts API response (2026-06-08). One number per of the 6
+ * status buckets the dropdown filter exposes, plus an unfiltered total.
+ * Buckets overlap (sum > total) because the legacy WHERE clauses don't
+ * priority-guard each other; that's the documented contract.
+ */
+type StatusCountsResp = {
+  active: number;
+  inactive: number;
+  idle: number;
+  not_eligible: number;
+  not_suitable: number;
+  reg_in_progress: number;
+  total: number;
 };
 
 type ServiceType = { service_type_id: number; service_type_name: string; service_catg_id: number };
@@ -184,6 +241,24 @@ function efAccountTone(v: Ef['ef_account']): StatusChipTone {
   if (v === 'Master') return 'sky';
   if (v === 'Under Master') return 'emerald';
   return 'slate';
+}
+
+/*
+ * Status pill tone per the 6-status enum (2026-06-08). Mirrors the
+ * legacy CRM colour convention: green for happy-path Active, slate
+ * for terminal/parked states (Inactive/Idle), amber/red for blocked,
+ * sky for in-flight registration.
+ */
+function statusLabelTone(v: Ef['efr_status_label']): StatusChipTone {
+  switch (v) {
+    case 'Active':                    return 'emerald';
+    case 'Inactive':                  return 'slate';
+    case 'Idle':                      return 'slate';
+    case 'Registration In Progress':  return 'sky';
+    case 'Not Eligible':              return 'red';
+    case 'Not Suitable':              return 'amber';
+    default:                          return 'slate';
+  }
 }
 
 /*
@@ -324,6 +399,14 @@ export default function EasyfixersPage() {
   // Total comes from the base list response; rows are stored separately
   // so we can mutate them in place when aggregates/attendance land.
   const [rows, setRows] = useState<EnrichedEf[]>([]);
+  /*
+   * Status-counts strip (2026-06-08). Populated by a single
+   * GET /admin/easyfixers/status-counts call alongside every load().
+   * Each count matches what the operator sees after clicking the
+   * corresponding dropdown filter — buckets overlap by design
+   * (legacy parity).
+   */
+  const [statusCounts, setStatusCounts] = useState<StatusCountsResp | null>(null);
   const [total, setTotal] = useState(0);
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   // TablePagination is 0-indexed; we keep the same convention here.
@@ -406,6 +489,23 @@ export default function EasyfixersPage() {
     const limit = pageSizeToLimit(ps, 500);
     const offset = pg * (ps === 'all' ? 0 : Number(ps));
     try {
+      /*
+       * Status-counts: consult the 30s cache first. Rapid Search clicks
+       * within the TTL window hit synchronously — no network round-trip,
+       * no SUM-CASE re-query. Edit-saves invalidate the cache via
+       * `invalidateStatusCounts()` in the modal's onSaved callback below,
+       * so post-mutation counts always refresh.
+       */
+      const cachedCounts = readStatusCountsFromCache();
+      if (cachedCounts) {
+        setStatusCounts(cachedCounts);
+      } else {
+        void api
+          .get<StatusCountsResp>('/admin/easyfixers/status-counts')
+          .then((c) => { writeStatusCountsToCache(c); setStatusCounts(c); })
+          .catch(() => { /* keep prior counts on failure */ });
+      }
+
       const r = await fetchListOnce({
         limit, offset,
         ...buildQuery(f),
@@ -608,7 +708,29 @@ export default function EasyfixersPage() {
       <div className="flex items-end justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Easyfixers</h1>
-          <p className="text-sm text-muted-foreground">{loading && total === 0 ? '…' : total.toLocaleString()} technicians</p>
+          {/*
+            * Status-counts strip (2026-06-08). Replaces the bare
+            * "{total} technicians" subtitle with a one-click filter
+            * shortcut for each of the 6 status buckets. Clicking a
+            * count sets the Status filter to that bucket and triggers
+            * a load() — matches what the dropdown click does.
+            * Each count comes from a single BE GET that runs alongside
+            * the base list, so the strip stays in sync after edits.
+            */}
+          {statusCounts ? (
+            <StatusCountsStrip
+              counts={statusCounts}
+              activeStatus={filters.status}
+              onPick={(s) => {
+                const next = { ...filters, status: s };
+                setFilters(next);
+                setPage(0);
+                load(true, next, 0);
+              }}
+            />
+          ) : (
+            <p className="text-sm text-muted-foreground">{loading ? '…' : total.toLocaleString()} technicians</p>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {can.isAddNew && (
@@ -663,13 +785,23 @@ export default function EasyfixersPage() {
               />
             </Field>
             <Field label="Status">
+              {/*
+                * 6-status enum (2026-06-08) — matches legacy CRM dropdown.
+                * Value=0 is "All". Default selection is '1' (Active) set
+                * in DEFAULT_FILTERS. The BE applies a priority-aware
+                * WHERE clause per value (see easyfixer.service.js list()).
+                */}
               <SearchSelect
                 placeholder="All"
                 value={filters.status}
                 onChange={(v) => setFilters({ ...filters, status: v })}
                 options={[
                   { value: '1', label: 'Active' },
-                  { value: '0', label: 'Inactive' },
+                  { value: '2', label: 'Inactive' },
+                  { value: '3', label: 'Idle' },
+                  { value: '4', label: 'Not Eligible' },
+                  { value: '5', label: 'Not Suitable' },
+                  { value: '6', label: 'Registration In Progress' },
                 ]}
               />
             </Field>
@@ -886,7 +1018,7 @@ export default function EasyfixersPage() {
                 <SortHeader col="efr_profile_perc"       align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Profile %</SortHeader>
                 <SortHeader col="is_technician_verified" align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Verified</SortHeader>
                 <SortHeader col="insert_date"            align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Registered</SortHeader>
-                <SortHeader col="efr_status"             align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Status</SortHeader>
+                <SortHeader col="efr_status_label"       align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Status</SortHeader>
                 <th className="!text-right whitespace-nowrap stick-col-head stick-right">Action</th>
               </tr>
             </thead>
@@ -951,16 +1083,16 @@ export default function EasyfixersPage() {
                   <td className="!text-right text-xs tabular-nums truncate">{e.efr_profile_perc != null ? `${Math.round(Number(e.efr_profile_perc))}%` : '—'}</td>
                   <td className="!text-center truncate">{e.is_technician_verified ? '✓' : <span className="text-muted-foreground">—</span>}</td>
                   <td className="!text-left text-xs whitespace-nowrap text-muted-foreground truncate" title={formatDate(e.insert_date)}>{formatDate(e.insert_date)}</td>
-                  <td className="!text-center truncate">{e.efr_status ? (
-                    <span className="inline-flex items-center rounded-full bg-emerald-100 text-emerald-700 px-2 py-0.5 text-xs font-medium">Active</span>
-                  ) : (
-                    <span className="inline-flex items-center rounded-full bg-slate-100 text-slate-600 px-2 py-0.5 text-xs font-medium">Inactive</span>
-                  )}</td>
+                  <td className="!text-center truncate">
+                    {e.efr_status_label
+                      ? <StatusChip tone={statusLabelTone(e.efr_status_label)} size="sm">{e.efr_status_label}</StatusChip>
+                      : <span className="text-muted-foreground">—</span>}
+                  </td>
                   <td className="!text-right stick-col stick-right">
                     <EasyfixerActionMenu
                       easyfixer={{ efr_id: e.efr_id, efr_name: e.efr_name }}
                       canEdit={!!can.isEdit}
-                      onEdit={() => setModal({ open: true, mode: 'edit', id: e.efr_id })}
+                      onEdit={() => router.push(`/easyfixers/${e.efr_id}/verification`)}
                       onClientMapping={() => setClientMappingFor(e)}
                       onTransactions={() => setTransactionsFor(e)}
                       onAssessment={() => router.push('/coming-soon')}
@@ -998,7 +1130,7 @@ export default function EasyfixersPage() {
         mode={modal.mode}
         easyfixerId={modal.id}
         onClose={closeModal}
-        onSaved={() => load(true)}
+        onSaved={() => { invalidateStatusCounts(); load(true); }}
       />
 
       <CsvCellModal
@@ -1070,5 +1202,82 @@ function CsvCellButton({ items, onOpen }: { items: CsvCellItem[]; onOpen: () => 
         </span>
       )}
     </button>
+  );
+}
+
+/*
+ * StatusCountsStrip — clickable inline counts strip that replaces the
+ * bare "{total} technicians" subtitle. Each entry shows the count for
+ * one of the 6 dropdown filter values; clicking it sets the Status
+ * filter to that value and reloads. Matches the legacy CRM's "filter
+ * by status with one click from the header" affordance.
+ *
+ * Tones mirror the in-row StatusChip palette: emerald for Active,
+ * slate for Inactive/Idle, sky for Reg In Progress, red for Not
+ * Eligible, amber for Not Suitable. The dot before each count is
+ * the only colour-coded element so the strip stays scannable in a
+ * single line.
+ */
+function StatusCountsStrip({
+  counts,
+  activeStatus,
+  onPick,
+}: {
+  counts: StatusCountsResp;
+  /*
+   * Currently-selected dropdown value ('1'..'6' or ''). When it matches
+   * an entry's value, that entry renders BOLD with a fully-filled,
+   * slightly larger dot — a non-intrusive way for the operator to see
+   * which status is currently filtering the list without having to look
+   * down at the dropdown.
+   */
+  activeStatus: string;
+  onPick: (statusValue: string) => void;
+}) {
+  const items: Array<{ key: keyof StatusCountsResp; label: string; value: string; dot: string; ring: string }> = [
+    { key: 'active',          label: 'Active',                   value: '1', dot: 'bg-emerald-500', ring: 'ring-emerald-500/30' },
+    { key: 'inactive',        label: 'Inactive',                 value: '2', dot: 'bg-slate-500',   ring: 'ring-slate-500/30' },
+    { key: 'idle',            label: 'Idle',                     value: '3', dot: 'bg-slate-400',   ring: 'ring-slate-400/30' },
+    { key: 'not_eligible',    label: 'Not Eligible',             value: '4', dot: 'bg-red-500',     ring: 'ring-red-500/30' },
+    { key: 'not_suitable',    label: 'Not Suitable',             value: '5', dot: 'bg-amber-500',   ring: 'ring-amber-500/30' },
+    { key: 'reg_in_progress', label: 'Registration In Progress', value: '6', dot: 'bg-sky-500',     ring: 'ring-sky-500/30' },
+  ];
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground mt-1">
+      {items.map((it, i) => {
+        const isActive = activeStatus === it.value;
+        return (
+          <span key={it.key} className="inline-flex items-center gap-2">
+            {i > 0 && <span className="text-muted-foreground/50">·</span>}
+            <button
+              type="button"
+              onClick={() => onPick(it.value)}
+              /*
+               * Active state — bold text + slightly enlarged solid dot
+               * with a subtle ring halo. Inactive entries keep the
+               * default muted appearance + the small dot. Hover still
+               * grows the dot + underlines the label on both states.
+               */
+              className={cn(
+                'inline-flex items-center gap-1.5 transition-colors group',
+                isActive ? 'text-foreground font-semibold' : 'hover:text-foreground',
+              )}
+              title={`Filter list by "${it.label}"${isActive ? ' (currently active)' : ''}`}
+              aria-pressed={isActive}
+            >
+              <span className={cn(
+                'inline-block rounded-full transition-all',
+                it.dot,
+                isActive
+                  ? `size-2 ring-2 ${it.ring}`
+                  : 'size-1.5 group-hover:size-2',
+              )} />
+              <span className="tabular-nums">{Number(counts[it.key]).toLocaleString('en-IN')}</span>
+              <span className={cn(!isActive && 'group-hover:underline')}>{it.label}</span>
+            </button>
+          </span>
+        );
+      })}
+    </div>
   );
 }
