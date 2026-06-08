@@ -320,16 +320,21 @@ export function UnconfirmedJobsTable({
                     </button>
                   )}
                   {/*
-                    Send / Re-send Magic Link. Double-gated: operator
-                    permission (`isJobMagicLinkSend`, passed through as
-                    `canSendMagicLink`) AND the client's opt-in flag
-                    (`client_opted_in` — derived BE-side from the
-                    auto_process_unconfirmed_order custom property). Both
-                    must be true; otherwise the button is absent (no
-                    disabled state). Label flips first-send vs re-send;
-                    the popup itself owns the action-choice branching.
+                    Send / Re-send Magic Link.
 
-                    Additionally hidden once the customer has acted via the
+                    Gate (2026-06-08, simplified): SINGLE permission gate
+                    on `canSendMagicLink` (= `isJobMagicLinkSend`). Was
+                    previously double-gated against the client's
+                    `client_opted_in` flag too, but that conflated the
+                    cron's auto-trigger gate with the manual-trigger
+                    gate. The auto_process_unconfirmed_order property
+                    only governs whether the hourly cron auto-sends
+                    magic links; the MANUAL operator click should work
+                    for any unconfirmed order regardless of that flag.
+                    The BE route mirrors this change — see
+                    routes/admin/job-magic-link.js.
+
+                    Still hidden once the customer has acted via the
                     link — either submitted details (`customer_submitted_at`)
                     or raised a pending cancel/reschedule request
                     (`pending_request_type`). Re-sending after the customer
@@ -337,7 +342,6 @@ export function UnconfirmedJobsTable({
                     entirely (other actions in the cell stay).
                   */}
                   {canSendMagicLink
-                    && (j.client_opted_in === true || j.client_opted_in === 1)
                     && !j.customer_submitted_at
                     && j.pending_request_type == null && (
                     <button
