@@ -297,7 +297,29 @@ export default function EasyfixersPage() {
   const lk = useLookup();
   const router = useRouter();
   const { me } = useMe();
-  const can = actionFlags(me, ['isEasyfixerAddNew', 'isEasyfixerEdit']);
+  /*
+   * Action permission keys (2026-06-08).
+   *
+   * The Manage Easyfixers screen uses BARE verbs (`isAddNew`, `isEdit`,
+   * `isClientMapping`, `isAssessment`) — NOT the `is{Entity}{Verb}`
+   * convention every other module follows (`isClientEdit`, `isToolEdit`,
+   * `isJobEdit`, `isRollEdit`, etc.).
+   *
+   * Why the exception: the Legacy CRM (Java) has been gating its own
+   * Manage Easyfixers screen on these bare names for years. The DB seed
+   * matches (menu_action.action_name for menu_id=9 is the bare verb).
+   * Renaming to add the entity prefix would silently break Legacy CRM's
+   * permission checks since both CRMs share the same `easyfix_core` DB.
+   *
+   * No FE collision risk: no other Easyfix_CRM_UI page checks `isEdit`
+   * or `isAddNew` as bare keys (verified via grep — every other module
+   * uses prefixed keys). The bare keys are namespaced de-facto to this
+   * one screen.
+   *
+   * Future easyfixer-specific actions should also use bare names here
+   * to stay consistent with the Legacy CRM seed.
+   */
+  const can = actionFlags(me, ['isAddNew', 'isEdit']);
   const searchParams = useSearchParams();
   // Total comes from the base list response; rows are stored separately
   // so we can mutate them in place when aggregates/attendance land.
@@ -589,7 +611,7 @@ export default function EasyfixersPage() {
           <p className="text-sm text-muted-foreground">{loading && total === 0 ? '…' : total.toLocaleString()} technicians</p>
         </div>
         <div className="flex items-center gap-2">
-          {can.isEasyfixerAddNew && (
+          {can.isAddNew && (
             <Button onClick={openCreate}><Plus className="h-4 w-4 mr-1" /> Add New Easyfixer</Button>
           )}
           <DownloadButton onClick={onDownload} downloading={downloading} />
@@ -937,7 +959,7 @@ export default function EasyfixersPage() {
                   <td className="!text-right stick-col stick-right">
                     <EasyfixerActionMenu
                       easyfixer={{ efr_id: e.efr_id, efr_name: e.efr_name }}
-                      canEdit={!!can.isEasyfixerEdit}
+                      canEdit={!!can.isEdit}
                       onEdit={() => setModal({ open: true, mode: 'edit', id: e.efr_id })}
                       onClientMapping={() => setClientMappingFor(e)}
                       onTransactions={() => setTransactionsFor(e)}

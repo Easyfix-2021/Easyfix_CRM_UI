@@ -17,6 +17,11 @@ import { cn } from '@/lib/utils';
  * background — only the icon colour shifts on hover. Result: icons sit
  * tightly together with no "boxy" padding around them. The native
  * `title` attribute supplies the tooltip.
+ *
+ * The Pencil (Update Easyfixer) icon is gated by `canEdit` — roles
+ * without the `isEasyfixerEdit` action permission don't see it.
+ * Operators on those roles still see the other 3 icons (read-only:
+ * Client Mapping list, Transaction list, Assessment placeholder).
  */
 type Easyfixer = { efr_id: number; efr_name: string };
 
