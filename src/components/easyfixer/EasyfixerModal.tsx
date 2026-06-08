@@ -1,35 +1,34 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { useEffect, useMemo, useState } from 'react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { SearchSelect } from '@/components/ui/search-select';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { api, ApiError } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
 import { formatDate, formatEasyfixerName } from '@/lib/utils';
+import { maskMobile } from '@/lib/format';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
 /*
- * One component, three modes — `create` | `edit` | `view`. The field set is
- * identical across modes; only the rendering style (inputs vs. read-only rows)
- * and the footer actions differ. This avoids the trap of having three diverging
- * forms that drift apart with each schema change.
+ * One component, two modes — `create` | `edit`. The legacy `view` mode
+ * was retired 2026-06 — list page now opens the modal directly in edit
+ * mode (with the same dirty-state guard as the rest of the CRM).
  *
- * Callers decide which entry they're hitting:
- *   mode="create"                      — empty form; submit → POST /admin/easyfixers
- *   mode="view"  + easyfixerId         — loads record; inputs disabled; "Edit" button flips to edit
- *   mode="edit"  + easyfixerId         — loads record; inputs editable; submit → PATCH /admin/easyfixers/:id
- *
- * Detail view is tabbed (Profile / Flags & Verification / Finance & Audit)
- * matching the legacy easyfixer profile page layout.
+ * Both modes render the same 3-tab layout — Profile / Flags & Verification
+ * / Finance & Audit — matching the legacy easyfixer detail screen. In
+ * Profile, the body is two side-by-side cards (Basic on the left, Address
+ * on the right) with `<dl>` row layouts inside each card. Edit mode slots
+ * an `<Input>` into the `<dd>` cell; the un-editable rows (ID, audit
+ * timestamps, balance) render as plain text in both modes.
  */
 
-export type EasyfixerModalMode = 'create' | 'edit' | 'view';
+export type EasyfixerModalMode = 'create' | 'edit';
 
 type EfRecord = Record<string, unknown> & { efr_id: number; efr_name: string; efr_status: number };
 
@@ -50,12 +49,13 @@ const emptyForm = {
   have_bike: false, use_whatsapp: false,
   is_technician_verified: false, is_email_verified: false,
   efr_profile_img: '',
+  inactive_reason: '', inactive_comment: '',
 };
 
 type FormShape = typeof emptyForm;
 
 export function EasyfixerModal({
-  open, onClose, mode: initialMode, easyfixerId, onSaved,
+  open, onClose, mode, easyfixerId, onSaved,
 }: {
   open: boolean;
   onClose: () => void;
@@ -64,47 +64,46 @@ export function EasyfixerModal({
   onSaved?: (record: EfRecord) => void;
 }) {
   const lk = useLookup();
-  // Modal-internal permission gates. View mode is open to anyone with
-  // access to /easyfixers; Edit + Activate/Deactivate + Save require
-  // the legacy `isEasyfixerEdit` action, and the Create form's submit
-  // requires `isEasyfixerAddNew` so a user who can browse but not add
-  // doesn't see a non-functional submit button after switching modes.
+  // Modal-internal permission gates. Edit + Activate/Deactivate + Save
+  // require `isEasyfixerEdit`; the Create flow requires `isEasyfixerAddNew`
+  // so a user without add rights doesn't see a non-functional Save.
   const { me } = useMe();
   const can = actionFlags(me, ['isEasyfixerAddNew', 'isEasyfixerEdit']);
-  const [mode, setMode] = useState<EasyfixerModalMode>(initialMode);
   const [record, setRecord] = useState<EfRecord | null>(null);
   const [form, setForm] = useState<FormShape>(emptyForm);
+  const [pristine, setPristine] = useState<FormShape>(emptyForm);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Reset to the caller's requested mode whenever the modal re-opens. Prevents
-  // state bleed-through when the user views one easyfixer, closes, then opens
-  // another — they'd otherwise land on whatever mode the previous session ended in.
-  useEffect(() => { if (open) { setMode(initialMode); setError(null); } }, [open, initialMode, easyfixerId]);
+  useEffect(() => { if (open) setError(null); }, [open]);
 
   useEffect(() => {
-    if (!open || !easyfixerId) { if (!easyfixerId) { setRecord(null); setForm(emptyForm); } return; }
-    // Stale-data fix: clear record + form BEFORE the fetch so the title,
-    // subtitle, and any field that reads from `record.efr_name` don't
-    // flash the previously-opened easyfixer's details. Title/subtitle
-    // fall through to "Loading…" via the !loading gate below.
+    if (!open || !easyfixerId) {
+      if (!easyfixerId) { setRecord(null); setForm(emptyForm); setPristine(emptyForm); }
+      return;
+    }
+    // Stale-data guard: clear before the fetch so the header doesn't
+    // flash the previously-opened easyfixer's name/id/city.
     setRecord(null);
     setForm(emptyForm);
+    setPristine(emptyForm);
     setError(null);
     setLoading(true);
-    // Edit modes opt out of the /admin/* mobile-masking middleware so
-    // the form pre-fill round-trips cleanly — saving an unchanged
-    // "9310••••••" would otherwise fail the Joi mobile-pattern validator.
-    // See JobModal for the same pattern + rationale.
-    const fetchQuery = (mode === 'edit') ? { unmasked: 'true' } : undefined;
+    // Edit mode opts out of the /admin/* mobile-masking middleware so
+    // the round-trip is clean — saving an unchanged "9310••••••" would
+    // otherwise fail the Joi mobile-pattern validator. (Same trick as
+    // JobModal — see comment there for the longer rationale.)
+    const fetchQuery = mode === 'edit' ? { unmasked: 'true' } : undefined;
     (async () => {
       try {
         const data = await api.get<EfRecord>(`/admin/easyfixers/${easyfixerId}`, fetchQuery);
         setRecord(data);
-        setForm(recordToForm(data));
+        const fresh = recordToForm(data);
+        setForm(fresh);
+        setPristine(fresh);
       } catch {
-        setError('Could not load easyfixer details');
+        setError('Could Not Load Easyfixer Details');
       } finally { setLoading(false); }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -114,8 +113,15 @@ export function EasyfixerModal({
     setForm((s) => ({ ...s, [k]: v }));
   }
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
+  const isDirty = useMemo(() => {
+    for (const k of Object.keys(form) as (keyof FormShape)[]) {
+      if (form[k] !== pristine[k]) return true;
+    }
+    return false;
+  }, [form, pristine]);
+
+  async function submit(e?: React.FormEvent) {
+    e?.preventDefault();
     setSaving(true); setError(null);
     try {
       const payload: Record<string, unknown> = {};
@@ -123,7 +129,8 @@ export function EasyfixerModal({
         if (typeof v === 'boolean') { payload[k] = v; continue; }
         if (v === '' || v === null) continue;
         if (['efr_cityId', 'efr_zone_city_id', 'efr_manager_id', 'experience_id',
-             'efr_children', 'efr_age', 'skill', 'skill_rating', 'tool_rating'].includes(k)) {
+             'efr_children', 'efr_age', 'skill', 'skill_rating', 'tool_rating',
+             'inactive_reason'].includes(k)) {
           payload[k] = Number(v);
         } else {
           payload[k] = v;
@@ -137,70 +144,57 @@ export function EasyfixerModal({
     } catch (err) {
       setError(err instanceof ApiError
         ? err.message + (err.details ? ` — ${JSON.stringify(err.details)}` : '')
-        : 'Failed to save');
+        : 'Failed To Save');
     } finally { setSaving(false); }
   }
 
-  async function toggleStatus() {
-    if (!record) return;
-    const active = !Number(record.efr_status);
-    await api.patch(`/admin/easyfixers/${record.efr_id}/status`, {
-      active, reasonId: active ? undefined : 1,
-      comment: active ? undefined : 'deactivated from CRM',
-    });
-    const refreshed = await api.get<EfRecord>(`/admin/easyfixers/${record.efr_id}`);
-    setRecord(refreshed); setForm(recordToForm(refreshed));
-    onSaved?.(refreshed);
-  }
+  // Header title + subtitle composition — matches the screenshot:
+  //   line 1: large readable name (or "New Easyfixer" in create)
+  //   line 2: muted subtitle "Easyfixer #<id> · <masked mobile> · <city>"
+  // During load, suppress identity-bearing parts so the prior record's
+  // details can't flash through.
+  const displayName = loading
+    ? 'Easyfixer'
+    : mode === 'create'
+      ? (form.efr_name || 'New Easyfixer')
+      : formatEasyfixerName(String(record?.efr_name ?? form.efr_name ?? '')) || 'Easyfixer';
 
-  // While the fresh record is loading, suppress the identity-bearing
-  // parts of the title/subtitle (name, id, city) so the operator can't
-  // see the previously-opened easyfixer's details flash. We render a
-  // neutral title ("Easyfixer") rather than "Loading easyfixer…" so
-  // the centered body loader is the ONLY loading indicator visible —
-  // header + body together used to produce two loading hints which
-  // looked sloppy.
-  const title = mode === 'create' ? 'Add New Easyfixer'
-             : loading            ? 'Easyfixer'
-             : mode === 'edit'    ? `Edit · ${formatEasyfixerName(record?.efr_name ?? '')}`
-             : formatEasyfixerName(record?.efr_name ?? '') || 'Easyfixer';
-  const subtitle = mode === 'view' && !loading && record
-    ? `Easyfixer #${record.efr_id} · ${String(record.efr_no ?? '')} · ${String(record.city_name ?? '—')}`
-    : undefined;
+  const subtitle = mode === 'edit' && !loading && record
+    ? <>Easyfixer #{record.efr_id} · {maskMobile(record.efr_no)} · {String(record.city_name ?? '—')}</>
+    : <>New Technician Registration</>;
 
-  const readOnly = mode === 'view';
-
-  // Discard-changes guard on Esc / X / overlay-click. Skipped in view
-  // mode (nothing to discard) and while a save is in flight (modal is
-  // about to unmount anyway). Matches the existing `!saving && onClose()`
+  // Discard-changes guard on Esc / X / overlay-click. Skipped while
+  // saving (modal is about to unmount). Matches the `!saving && onClose()`
   // idiom used elsewhere in the codebase.
   const guardedOpenChange = useFormDirtyGuard(onClose, {
     when: () => !saving,
-    isDirty: () => mode !== 'view',
+    isDirty: () => isDirty,
   });
+
+  const canSave = mode === 'create' ? can.isEasyfixerAddNew : can.isEasyfixerEdit;
 
   return (
     <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent hideClose className="max-w-5xl w-[min(95vw,1100px)] h-[85vh] overflow-hidden p-0 flex flex-col">
-        <DialogHeader className="px-6 pt-6 pb-3 border-b">
-          {/* Header carries title + subtitle only. Edit / Activate-Deactivate
-              and any other action buttons live in the footer below, with
-              the established left=less-usable / right=primary ordering. */}
+        <DialogHeader className="!mx-0 !mt-0 !mb-0 px-6 py-4">
+          {/* Header band uses the auto-styled dark-slate gradient. Close
+              moved to the footer per ops 2026-06 — header carries only
+              identity (name + meta subtitle) and an optional read-only
+              hint when the user has no edit rights. */}
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <DialogTitle className="truncate">{title}</DialogTitle>
-              {subtitle && <DialogDescription className="mt-1">{subtitle}</DialogDescription>}
+              <DialogTitle className="truncate text-lg">{displayName}</DialogTitle>
+              <DialogDescription className="mt-1 text-white/80">
+                {subtitle}
+              </DialogDescription>
             </div>
-            {mode === 'view' && record && !can.isEasyfixerEdit && (
-              <span className="text-xs text-muted-foreground italic shrink-0">view-only</span>
+            {mode === 'edit' && !can.isEasyfixerEdit && (
+              <span className="text-xs text-white/70 italic shrink-0">view-only</span>
             )}
           </div>
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto px-6 py-5">
-          {/* Single centered loader — see JobModal for the same pattern.
-              Header title stays neutral while loading; this is the only
-              loading indicator the operator sees. */}
           {loading && (
             <div className="flex items-center justify-center h-full">
               <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
@@ -212,45 +206,53 @@ export function EasyfixerModal({
               </span>
             </div>
           )}
-          {!loading && mode === 'view' && record && <ViewBody record={record} />}
-          {!loading && mode !== 'view' && (
-            <form id="efr-form" onSubmit={submit} className="space-y-5">
-              <FormSections form={form} set={set} readOnly={false} lk={lk} />
-              {error && <div className="text-sm text-destructive">{error}</div>}
+          {!loading && (
+            <form id="efr-form" onSubmit={submit}>
+              <Tabs defaultValue="profile">
+                <TabsList>
+                  <TabsTrigger value="profile">Profile</TabsTrigger>
+                  <TabsTrigger value="flags">Flags &amp; Verification</TabsTrigger>
+                  <TabsTrigger value="finance">Finance &amp; Audit</TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="profile" className="mt-4">
+                  <div className="grid md:grid-cols-2 gap-5">
+                    <ProfileBasicCard mode={mode} form={form} record={record} set={set} />
+                    <ProfileAddressCard form={form} set={set} lk={lk} />
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="flags" className="mt-4">
+                  <div className="grid md:grid-cols-2 gap-5">
+                    <FlagsCard form={form} set={set} />
+                    <InactiveReasonCard form={form} set={set} record={record} />
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="finance" className="mt-4">
+                  <div className="grid md:grid-cols-2 gap-5">
+                    <FinanceCard record={record} />
+                    <AuditCard record={record} />
+                  </div>
+                </TabsContent>
+              </Tabs>
+              {error && <div className="mt-4 text-sm text-destructive">{error}</div>}
             </form>
           )}
         </div>
 
-        {/* Footer — single right-aligned cluster. Per ops 2026-05-21:
-            Close is no longer pinned to the far-left edge. It sits
-            immediately left of the primary action(s) so the entire
-            action group reads as one cluster from less-used (Close) to
-            most-used (Save / Edit / Activate). No left-cluster controls
-            exist for Easyfixers (Add Remarks is a Job-only affordance).
-            `flex-wrap` lets the cluster degrade onto a second line on
-            narrow viewports without overlapping. */}
-        <div className="px-6 py-3 border-t bg-muted/30 flex items-center justify-end gap-2 flex-wrap">
+        <DialogFooter className="!mb-0 px-6 pb-4 pt-3">
           <Button variant="outline" onClick={onClose}>Close</Button>
-          {/* View mode — lifecycle controls relocated from the header. */}
-          {mode === 'view' && record && can.isEasyfixerEdit && (
-            <>
-              <Button size="sm" variant="outline" onClick={() => setMode('edit')}>Edit</Button>
-              <Button size="sm" variant={Number(record.efr_status) ? 'destructive' : 'default'} onClick={toggleStatus}>
-                {Number(record.efr_status) ? 'Deactivate' : 'Activate'}
-              </Button>
-            </>
-          )}
-          {mode === 'create' && can.isEasyfixerAddNew && (
-            <Button type="submit" form="efr-form" disabled={saving || loading}>
-              {saving ? 'Saving…' : 'Create Easyfixer'}
+          {canSave && (
+            <Button
+              type="submit"
+              form="efr-form"
+              disabled={saving || loading || (mode === 'edit' && !isDirty)}
+            >
+              {saving ? 'Saving…' : mode === 'create' ? 'Create Easyfixer' : 'Save'}
             </Button>
           )}
-          {mode === 'edit' && can.isEasyfixerEdit && (
-            <Button type="submit" form="efr-form" disabled={saving || loading}>
-              {saving ? 'Saving…' : 'Save changes'}
-            </Button>
-          )}
-        </div>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
@@ -287,262 +289,240 @@ function recordToForm(r: EfRecord): FormShape {
     use_whatsapp: bool('use_whatsapp'),
     is_technician_verified: bool('is_technician_verified'), is_email_verified: bool('is_email_verified'),
     efr_profile_img: pick('efr_profile_img'),
+    inactive_reason: pick('inactive_reason'), inactive_comment: pick('inactive_comment'),
   };
 }
 
-// ─── Sub-components ──────────────────────────────────────────────────────────
+// ─── Tabbed cards ────────────────────────────────────────────────────────────
 
 type Lookup = ReturnType<typeof useLookup>;
+type Setter = <K extends keyof FormShape>(k: K, v: FormShape[K]) => void;
 
-function FormSections({ form, set, lk }: {
-  form: FormShape;
-  set: <K extends keyof FormShape>(k: K, v: FormShape[K]) => void;
-  readOnly: boolean;
-  lk: Lookup;
-}) {
+/*
+ * Each card uses a <dl> row layout matching the screenshot:
+ *   label on the left (muted text), value on the right (right-aligned,
+ *   font-medium). In edit mode, the value slot renders an <Input>; the
+ *   un-editable rows (ID, audit fields, balance) render plain text in
+ *   both modes.
+ */
+
+function ProfileBasicCard({
+  mode, form, record, set,
+}: { mode: EasyfixerModalMode; form: FormShape; record: EfRecord | null; set: Setter }) {
   return (
-    <>
-      <Section title="Basic">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Field label="Full name *"><Input required value={form.efr_name} onChange={(e) => set('efr_name', e.target.value)} /></Field>
-          <Field label="First name"><Input value={form.efr_first_name} onChange={(e) => set('efr_first_name', e.target.value)} /></Field>
-          <Field label="Last name"><Input value={form.efr_last_name} onChange={(e) => set('efr_last_name', e.target.value)} /></Field>
-          <Field label="Mobile *"><Input required pattern="[0-9]{10}" value={form.efr_no} onChange={(e) => set('efr_no', e.target.value.replace(/\D/g, ''))} /></Field>
-          <Field label="Alt mobile"><Input pattern="[0-9]{10}" value={form.efr_alt_no} onChange={(e) => set('efr_alt_no', e.target.value.replace(/\D/g, ''))} /></Field>
-          <Field label="Email"><Input type="email" value={form.efr_email} onChange={(e) => set('efr_email', e.target.value)} /></Field>
-          <Field label="Type"><Input value={form.efr_type} onChange={(e) => set('efr_type', e.target.value)} placeholder="Technician / Helper" /></Field>
-        </div>
-      </Section>
-
-      <Section title="Address">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Field label="Work address" full><Input value={form.efr_address} onChange={(e) => set('efr_address', e.target.value)} /></Field>
-          <Field label="Residential address" full><Input value={form.efr_address_res} onChange={(e) => set('efr_address_res', e.target.value)} /></Field>
-          <Field label="Building"><Input value={form.efr_building} onChange={(e) => set('efr_building', e.target.value)} /></Field>
-          <Field label="Landmark"><Input value={form.efr_landmark} onChange={(e) => set('efr_landmark', e.target.value)} /></Field>
-          <Field label="PIN code"><Input pattern="[0-9]{6}" value={form.efr_pin_no} onChange={(e) => set('efr_pin_no', e.target.value.replace(/\D/g, ''))} /></Field>
-          <Field label="City *"><SearchSelect required value={form.efr_cityId} onChange={(v) => set('efr_cityId', v)} placeholder="— Select city —" options={lk.toOpts.cities.map((o) => ({ value: o.value, label: String(o.label) }))} /></Field>
-          <Field label="Zonal city"><SearchSelect value={form.efr_zone_city_id} onChange={(v) => set('efr_zone_city_id', v)} placeholder="— Select zone —" options={lk.toOpts.cities.map((o) => ({ value: o.value, label: String(o.label) }))} /></Field>
-          <Field label="Base GPS"><Input value={form.efr_base_gps} onChange={(e) => set('efr_base_gps', e.target.value)} placeholder="28.6139,77.2090" /></Field>
-          <Field label="Current GPS"><Input value={form.efr_current_gps} onChange={(e) => set('efr_current_gps', e.target.value)} placeholder="auto from mobile" /></Field>
-        </div>
-      </Section>
-
-      <Section title="Service">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Field label="Service category *">
-            <SearchSelect
-              required
-              value={form.efr_service_category}
-              onChange={(v) => set('efr_service_category', v)}
-              placeholder="— Select —"
-              options={lk.serviceCategories.map((c) => ({ value: c.service_catg_name, label: c.service_catg_name }))}
-            />
-          </Field>
-          <Field label="Service type *">
-            {/*
-              * Easyfixer record stores the service_type_name (not id) so the
-              * option value must match. Same contract as the original native
-              * <Select> above; SearchSelect adds type-to-filter for 100+ items.
-              */}
-            <SearchSelect
-              required
-              value={form.efr_service_type}
-              onChange={(v) => set('efr_service_type', v)}
-              placeholder="— Select —"
-              options={lk.serviceTypes.map((t) => ({ value: t.service_type_name, label: t.service_type_name }))}
-            />
-          </Field>
-          <Field label="Manager"><SearchSelect value={form.efr_manager_id} onChange={(v) => set('efr_manager_id', v)} placeholder="— Select —" options={lk.toOpts.adminUsers.map((o) => ({ value: o.value, label: String(o.label) }))} /></Field>
-          <Field label="Experience ID"><Input type="number" value={form.experience_id} onChange={(e) => set('experience_id', e.target.value)} /></Field>
-        </div>
-      </Section>
-
-      <Section title="Personal">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Field label="Date of birth"><Input type="date" value={form.date_of_birth} onChange={(e) => set('date_of_birth', e.target.value)} /></Field>
-          <Field label="Age"><Input type="number" min={16} max={90} value={form.efr_age} onChange={(e) => set('efr_age', e.target.value)} /></Field>
-          <Field label="Marital status">
-            <SearchSelect value={form.efr_marital_status} onChange={(v) => set('efr_marital_status', v)} placeholder="— Select —" options={[
-              { value: 'Single', label: 'Single' }, { value: 'Married', label: 'Married' },
-              { value: 'Divorced', label: 'Divorced' }, { value: 'Widowed', label: 'Widowed' },
-            ]} />
-          </Field>
-          <Field label="Children"><Input type="number" min={0} max={20} value={form.efr_children} onChange={(e) => set('efr_children', e.target.value)} /></Field>
-          <Field label="About" full><Input value={form.about_yourself} onChange={(e) => set('about_yourself', e.target.value)} /></Field>
-        </div>
-      </Section>
-
-      <Section title="Identity & Skills">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Field label="Aadhaar (12 digits)"><Input pattern="[0-9]{12}" value={form.adhaar_card_number} onChange={(e) => set('adhaar_card_number', e.target.value.replace(/\D/g, ''))} /></Field>
-          <Field label="PAN"><Input pattern="[A-Z]{5}[0-9]{4}[A-Z]" value={form.pan_card_number} onChange={(e) => set('pan_card_number', e.target.value.toUpperCase())} /></Field>
-          <Field label="Profile image URL"><Input value={form.efr_profile_img} onChange={(e) => set('efr_profile_img', e.target.value)} /></Field>
-          <Field label="Tools (list)" full><Input value={form.efr_tools} onChange={(e) => set('efr_tools', e.target.value)} placeholder="drill, hammer, ladder…" /></Field>
-          <Field label="Skill score"><Input type="number" value={form.skill} onChange={(e) => set('skill', e.target.value)} /></Field>
-          <Field label="Skill rating (0-5)"><Input type="number" min={0} max={5} value={form.skill_rating} onChange={(e) => set('skill_rating', e.target.value)} /></Field>
-          <Field label="Tool rating (0-5)"><Input type="number" min={0} max={5} value={form.tool_rating} onChange={(e) => set('tool_rating', e.target.value)} /></Field>
-        </div>
-      </Section>
-
-      <Section title="Flags">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <Check label="Has bike" checked={form.have_bike} onChange={(v) => set('have_bike', v)} />
-          <Check label="Uses WhatsApp" checked={form.use_whatsapp} onChange={(v) => set('use_whatsapp', v)} />
-          <Check label="Driving licence" checked={form.have_driving_lisence} onChange={(v) => set('have_driving_lisence', v)} />
-          <Check label="Health insurance" checked={form.health_insurance} onChange={(v) => set('health_insurance', v)} />
-          <Check label="Accidental insurance" checked={form.accidental_insurance} onChange={(v) => set('accidental_insurance', v)} />
-          <Check label="Technician verified" checked={form.is_technician_verified} onChange={(v) => set('is_technician_verified', v)} />
-          <Check label="Email verified" checked={form.is_email_verified} onChange={(v) => set('is_email_verified', v)} />
-        </div>
-      </Section>
-    </>
-  );
-}
-
-function ViewBody({ record }: { record: EfRecord }) {
-  // Matches the legacy detail-page tabs exactly (Profile / Flags & Verification / Finance & Audit)
-  // so muscle memory carries across.
-  const sections: { title: string; rows: [string, unknown][] }[] = [
-    { title: 'Basic', rows: [
-      ['Easyfixer ID', record.efr_id], ['Full name', formatEasyfixerName(String(record.efr_name ?? ''))],
-      ['First name', record.efr_first_name], ['Last name', record.efr_last_name],
-      ['Mobile', record.efr_no], ['Alt mobile', record.efr_alt_no],
-      ['Email', record.efr_email], ['Type', record.efr_type],
-    ]},
-    { title: 'Address', rows: [
-      ['Work address', record.efr_address], ['Residential', record.efr_address_res],
-      ['Building', record.efr_building], ['Landmark', record.efr_landmark],
-      ['PIN', record.efr_pin_no], ['City', record.city_name],
-      ['Base GPS', record.efr_base_gps], ['Current GPS', record.efr_current_gps],
-    ]},
-    { title: 'Service', rows: [
-      ['Category', record.efr_service_category], ['Service type', record.efr_service_type],
-      ['Manager ID', record.efr_manager_id], ['Experience ID', record.experience_id],
-    ]},
-    { title: 'Personal', rows: [
-      ['Date of birth', record.date_of_birth ? formatDate(String(record.date_of_birth)) : null],
-      ['Age', record.efr_age], ['Marital status', record.efr_marital_status],
-      ['Children', record.efr_children], ['About', record.about_yourself],
-    ]},
-    { title: 'Identity', rows: [
-      ['Aadhaar', record.adhaar_card_number], ['PAN', record.pan_card_number],
-      ['Profile image', record.efr_profile_img],
-    ]},
-    { title: 'Skills & Tools', rows: [
-      ['Tools', record.efr_tools], ['Skill', record.skill],
-      ['Skill rating', record.skill_rating], ['Tool rating', record.tool_rating],
-    ]},
-    { title: 'Flags', rows: [
-      ['Has bike', boolish(record.have_bike)], ['Uses WhatsApp', boolish(record.use_whatsapp)],
-      ['Driving licence', boolish(record.have_driving_lisence)],
-      ['Health insurance', boolish(record.health_insurance)],
-      ['Accidental insurance', boolish(record.accidental_insurance)],
-      ['Technician verified', boolish(record.is_technician_verified)],
-      ['Email verified', boolish(record.is_email_verified)],
-      ['New easyfixer', boolish(record.new_easy_fixer)],
-      ['Existing easyfixer', boolish(record.is_existing_easyfixer)],
-      ['Final submission', boolish(record.final_submission)],
-    ]},
-    { title: 'Profile completion', rows: [
-      ['Overall %', record.efr_profile_perc],
-      ['Personal %', record.efr_personal_details_perc],
-      ['Professional %', record.efr_professional_details_perc],
-      ['Identity %', record.efr_identity_details_perc],
-      ['Bank %', record.efr_bank_details_perc],
-    ]},
-    { title: 'Finance', rows: [
-      ['Current balance', record.current_balance],
-      ['Balance updated', record.balance_updated ? formatDate(String(record.balance_updated)) : null],
-      ['Registration fee date', record.efr_reg_fee_date ? formatDate(String(record.efr_reg_fee_date)) : null],
-      ['Collection mode', record.efr_collection_mode],
-      ['Collected by', record.efr_amnt_collected_by],
-    ]},
-    { title: 'Audit', rows: [
-      ['Inserted by', record.inserted_by],
-      ['Created', record.insert_date ? formatDate(String(record.insert_date)) : null],
-      ['Updated by', record.updated_by],
-      ['Updated', record.update_date ? formatDate(String(record.update_date)) : null],
-    ]},
-  ];
-
-  return (
-    <Tabs defaultValue="profile">
-      <TabsList>
-        <TabsTrigger value="profile">Profile</TabsTrigger>
-        <TabsTrigger value="flags">Flags &amp; Verification</TabsTrigger>
-        <TabsTrigger value="finance">Finance &amp; Audit</TabsTrigger>
-      </TabsList>
-      <TabsContent value="profile">
-        <div className="grid md:grid-cols-2 gap-5">
-          {sections.slice(0, 6).map((s) => <DlCard key={s.title} title={s.title} rows={s.rows} />)}
-        </div>
-      </TabsContent>
-      <TabsContent value="flags">
-        <div className="grid md:grid-cols-2 gap-5">
-          {sections.slice(6, 8).map((s) => <DlCard key={s.title} title={s.title} rows={s.rows} />)}
-        </div>
-      </TabsContent>
-      <TabsContent value="finance">
-        <div className="grid md:grid-cols-2 gap-5">
-          {sections.slice(8).map((s) => <DlCard key={s.title} title={s.title} rows={s.rows} />)}
-        </div>
-      </TabsContent>
-    </Tabs>
-  );
-}
-
-// ─── Tiny presentational helpers ─────────────────────────────────────────────
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section className="rounded-lg border bg-card">
-      <div className="px-5 py-3 border-b bg-muted/30">
-        <h3 className="text-sm font-semibold">{title}</h3>
-      </div>
-      <div className="p-5">{children}</div>
-    </section>
-  );
-}
-
-function Field({ label, children, full }: { label: string; children: React.ReactNode; full?: boolean }) {
-  return (
-    <div className={`space-y-1.5 ${full ? 'md:col-span-full' : ''}`}>
-      <Label>{label}</Label>
-      {children}
-    </div>
-  );
-}
-
-function Check({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <label className="flex items-center gap-2 text-sm cursor-pointer">
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="h-4 w-4 rounded border-input accent-primary" />
-      <span>{label}</span>
-    </label>
-  );
-}
-
-function DlCard({ title, rows }: { title: string; rows: [string, unknown][] }) {
-  return (
-    <div className="rounded-lg border bg-card">
-      <div className="px-5 py-3 border-b bg-muted/30"><h3 className="text-sm font-semibold">{title}</h3></div>
-      <div className="p-5">
-        <dl className="text-sm space-y-1.5">
-          {rows.map(([k, v]) => (
-            <div key={k} className="flex justify-between gap-4 border-b last:border-0 pb-1.5 last:pb-0">
-              <dt className="text-muted-foreground">{k}</dt>
-              <dd className="font-medium text-right break-all max-w-[60%]">{v == null || v === '' ? '—' : String(v)}</dd>
-            </div>
-          ))}
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm">Basic</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <dl className="divide-y">
+          <Row label="Easyfixer ID" value={record?.efr_id ?? '—'} />
+          <EditableRow label="Full Name" mode={mode} display={form.efr_name}>
+            <Input required value={form.efr_name} onChange={(e) => set('efr_name', e.target.value)} className="h-8 text-sm" />
+          </EditableRow>
+          <EditableRow label="First Name" mode={mode} display={form.efr_first_name}>
+            <Input value={form.efr_first_name} onChange={(e) => set('efr_first_name', e.target.value)} className="h-8 text-sm" />
+          </EditableRow>
+          <EditableRow label="Last Name" mode={mode} display={form.efr_last_name}>
+            <Input value={form.efr_last_name} onChange={(e) => set('efr_last_name', e.target.value)} className="h-8 text-sm" />
+          </EditableRow>
+          <EditableRow label="Mobile" mode={mode} display={maskMobile(form.efr_no)}>
+            <Input required pattern="[0-9]{10}" value={form.efr_no} onChange={(e) => set('efr_no', e.target.value.replace(/\D/g, ''))} className="h-8 text-sm" />
+          </EditableRow>
+          <EditableRow label="Alt Mobile" mode={mode} display={form.efr_alt_no ? maskMobile(form.efr_alt_no) : '—'}>
+            <Input pattern="[0-9]{10}" value={form.efr_alt_no} onChange={(e) => set('efr_alt_no', e.target.value.replace(/\D/g, ''))} className="h-8 text-sm" />
+          </EditableRow>
+          <EditableRow label="Email" mode={mode} display={form.efr_email}>
+            <Input type="email" value={form.efr_email} onChange={(e) => set('efr_email', e.target.value)} className="h-8 text-sm" />
+          </EditableRow>
+          <EditableRow label="Type" mode={mode} display={form.efr_type}>
+            <Input value={form.efr_type} onChange={(e) => set('efr_type', e.target.value)} placeholder="Technician / Helper" className="h-8 text-sm" />
+          </EditableRow>
         </dl>
-      </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ProfileAddressCard({ form, set, lk }: { form: FormShape; set: Setter; lk: Lookup }) {
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm">Address</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <dl className="divide-y">
+          <EditableRow label="Work Address" mode="edit" display={form.efr_address}>
+            <Input value={form.efr_address} onChange={(e) => set('efr_address', e.target.value)} className="h-8 text-sm" />
+          </EditableRow>
+          <EditableRow label="Residential" mode="edit" display={form.efr_address_res}>
+            <Input value={form.efr_address_res} onChange={(e) => set('efr_address_res', e.target.value)} className="h-8 text-sm" />
+          </EditableRow>
+          <EditableRow label="Building" mode="edit" display={form.efr_building}>
+            <Input value={form.efr_building} onChange={(e) => set('efr_building', e.target.value)} className="h-8 text-sm" />
+          </EditableRow>
+          <EditableRow label="Landmark" mode="edit" display={form.efr_landmark}>
+            <Input value={form.efr_landmark} onChange={(e) => set('efr_landmark', e.target.value)} className="h-8 text-sm" />
+          </EditableRow>
+          <EditableRow label="PIN Code" mode="edit" display={form.efr_pin_no}>
+            <Input pattern="[0-9]{6}" value={form.efr_pin_no} onChange={(e) => set('efr_pin_no', e.target.value.replace(/\D/g, ''))} className="h-8 text-sm" />
+          </EditableRow>
+          <EditableRow label="City" mode="edit" display={cityLabel(form.efr_cityId, lk)}>
+            <div className="w-full max-w-[60%]">
+              <SearchSelect required value={form.efr_cityId} onChange={(v) => set('efr_cityId', v)} placeholder="— Select City —" options={lk.toOpts.cities.map((o) => ({ value: o.value, label: String(o.label) }))} />
+            </div>
+          </EditableRow>
+          <EditableRow label="Zonal City" mode="edit" display={cityLabel(form.efr_zone_city_id, lk)}>
+            <div className="w-full max-w-[60%]">
+              <SearchSelect value={form.efr_zone_city_id} onChange={(v) => set('efr_zone_city_id', v)} placeholder="— Select Zone —" options={lk.toOpts.cities.map((o) => ({ value: o.value, label: String(o.label) }))} />
+            </div>
+          </EditableRow>
+          <EditableRow label="Base GPS" mode="edit" display={form.efr_base_gps}>
+            <Input value={form.efr_base_gps} onChange={(e) => set('efr_base_gps', e.target.value)} placeholder="28.6139,77.2090" className="h-8 text-sm" />
+          </EditableRow>
+          <EditableRow label="Current GPS" mode="edit" display={form.efr_current_gps}>
+            <Input value={form.efr_current_gps} onChange={(e) => set('efr_current_gps', e.target.value)} placeholder="auto from mobile" className="h-8 text-sm" />
+          </EditableRow>
+        </dl>
+      </CardContent>
+    </Card>
+  );
+}
+
+function FlagsCard({ form, set }: { form: FormShape; set: Setter }) {
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm">Verification &amp; Flags</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <dl className="divide-y">
+          <CheckRow label="Technician Verified" checked={form.is_technician_verified} onChange={(v) => set('is_technician_verified', v)} />
+          <CheckRow label="Email Verified" checked={form.is_email_verified} onChange={(v) => set('is_email_verified', v)} />
+          {/* legacy typo preserved verbatim — DB column is `have_driving_lisence` */}
+          <CheckRow label="Driving Licence" checked={form.have_driving_lisence} onChange={(v) => set('have_driving_lisence', v)} />
+          <CheckRow label="Has Bike" checked={form.have_bike} onChange={(v) => set('have_bike', v)} />
+          <CheckRow label="Uses WhatsApp" checked={form.use_whatsapp} onChange={(v) => set('use_whatsapp', v)} />
+          <CheckRow label="Accidental Insurance" checked={form.accidental_insurance} onChange={(v) => set('accidental_insurance', v)} />
+          <CheckRow label="Health Insurance" checked={form.health_insurance} onChange={(v) => set('health_insurance', v)} />
+        </dl>
+      </CardContent>
+    </Card>
+  );
+}
+
+function InactiveReasonCard({ form, set, record }: { form: FormShape; set: Setter; record: EfRecord | null }) {
+  const isInactive = record ? !Number(record.efr_status) : false;
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm">Inactive Reason</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {isInactive ? (
+          <dl className="divide-y">
+            <EditableRow label="Reason Code" mode="edit" display={form.inactive_reason || '—'}>
+              <Input type="number" value={form.inactive_reason} onChange={(e) => set('inactive_reason', e.target.value)} className="h-8 text-sm" />
+            </EditableRow>
+            <EditableRow label="Comment" mode="edit" display={form.inactive_comment || '—'}>
+              <Input value={form.inactive_comment} onChange={(e) => set('inactive_comment', e.target.value)} className="h-8 text-sm" />
+            </EditableRow>
+          </dl>
+        ) : (
+          <p className="text-sm text-muted-foreground">Easyfixer Is Currently Active — No Inactive Reason On Record.</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function FinanceCard({ record }: { record: EfRecord | null }) {
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm">Finance</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <dl className="divide-y">
+          <Row label="Current Balance" value={record?.current_balance ?? '—'} />
+          <Row label="Balance Updated" value={record?.balance_updated ? formatDate(String(record.balance_updated)) : '—'} />
+          <Row label="Registration Fee Date" value={record?.efr_reg_fee_date ? formatDate(String(record.efr_reg_fee_date)) : '—'} />
+          <Row label="Collection Mode" value={record?.efr_collection_mode ?? '—'} />
+          <Row label="Collected By" value={record?.efr_amnt_collected_by ?? '—'} />
+        </dl>
+      </CardContent>
+    </Card>
+  );
+}
+
+function AuditCard({ record }: { record: EfRecord | null }) {
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm">Audit</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <dl className="divide-y">
+          <Row label="Inserted By" value={record?.inserted_by ?? '—'} />
+          <Row label="Created" value={record?.insert_date ? formatDate(String(record.insert_date)) : '—'} />
+          <Row label="Updated By" value={record?.updated_by ?? '—'} />
+          <Row label="Updated" value={record?.update_date ? formatDate(String(record.update_date)) : '—'} />
+        </dl>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── Row primitives ──────────────────────────────────────────────────────────
+
+function Row({ label, value }: { label: string; value: unknown }) {
+  return (
+    <div className="flex justify-between items-center gap-4 py-2">
+      <dt className="text-sm text-muted-foreground">{label}</dt>
+      <dd className="text-sm font-medium text-right break-all max-w-[60%]">
+        {value == null || value === '' ? '—' : String(value)}
+      </dd>
     </div>
   );
 }
 
-function boolish(v: unknown): string {
-  if (v === true || v === 1 || v === '1') return 'Yes';
-  if (v === false || v === 0 || v === '0') return 'No';
-  return '—';
+/*
+ * EditableRow — display an editable form control in `edit`/`create` mode,
+ * or a read-only display value otherwise. The display string is used as
+ * the value-cell text when the row is non-editable (currently only on
+ * fields hard-coded to `mode="edit"`, i.e. the address card which is
+ * always editable when shown). Kept as a single component so future
+ * read-only modes don't need a parallel tree.
+ */
+function EditableRow({
+  label, mode, display, children,
+}: { label: string; mode: EasyfixerModalMode; display: unknown; children: React.ReactNode }) {
+  // Both `create` and `edit` are editable today; keeping the prop for
+  // future-proofing in case a `view` mode resurfaces.
+  const editable = mode === 'create' || mode === 'edit';
+  return (
+    <div className="flex justify-between items-center gap-4 py-2">
+      <dt className="text-sm text-muted-foreground shrink-0">{label}</dt>
+      <dd className="text-sm font-medium text-right break-all min-w-0 flex-1 flex justify-end">
+        {editable ? children : (display == null || display === '' ? '—' : String(display))}
+      </dd>
+    </div>
+  );
+}
+
+function CheckRow({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <div className="flex justify-between items-center gap-4 py-2">
+      <dt className="text-sm text-muted-foreground">{label}</dt>
+      <dd>
+        <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="h-4 w-4 rounded border-input accent-primary" />
+      </dd>
+    </div>
+  );
+}
+
+function cityLabel(id: string, lk: Lookup): string {
+  if (!id) return '—';
+  const found = lk.toOpts.cities.find((o) => String(o.value) === String(id));
+  return found ? String(found.label) : id;
 }
