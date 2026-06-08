@@ -1,10 +1,50 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+
+/*
+ * Mapped-easyfixer count cache (2026-06-08, 30s TTL). Mirrors the
+ * aggregateCache pattern on the Manage Easyfixers list page. Counts
+ * only meaningfully change when an operator edits a tech's option
+ * mappings — rare enough that 30s of staleness is acceptable, and
+ * the cache evaporates on any page refresh anyway.
+ *
+ * Module-scope so the cache survives modal open/close cycles. Keyed
+ * by deepskill_id (the row's PK). Visible-page IDs are split into
+ * cached + missing on every loadSkills() call; only the missing
+ * IDs are POSTed to the side endpoint.
+ */
+const MAPPED_COUNT_CACHE_TTL_MS = 30_000;
+const mappedCountCache = new Map<number, { count: number; at: number }>();
+
+function readMappedCountsFromCache(ids: number[]): {
+  cached: Array<{ deepskill_id: number; count: number }>;
+  missing: number[];
+} {
+  const now = Date.now();
+  const cached: Array<{ deepskill_id: number; count: number }> = [];
+  const missing: number[] = [];
+  for (const id of ids) {
+    const hit = mappedCountCache.get(id);
+    if (hit && now - hit.at < MAPPED_COUNT_CACHE_TTL_MS) {
+      cached.push({ deepskill_id: id, count: hit.count });
+    } else {
+      missing.push(id);
+    }
+  }
+  return { cached, missing };
+}
+
+function writeMappedCountsToCache(rows: Array<{ deepskill_id: number; count: number }>): void {
+  const at = Date.now();
+  for (const r of rows) {
+    mappedCountCache.set(r.deepskill_id, { count: r.count, at });
+  }
+}
 import Link from 'next/link';
 import {
   Plus, Pencil, Trash2, Wrench, X as XIcon,
-  Image as ImageIcon, UploadCloud,
+  Image as ImageIcon, UploadCloud, Users,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -29,6 +69,7 @@ import { actionFlags } from '@/lib/permissions';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { showToast } from '@/components/ui/toast';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
+import { DeepSkillMappedEasyfixersModal } from '@/components/deep-skill/DeepSkillMappedEasyfixersModal';
 
 /*
  * Manage Deep Skills — Service Category → Service Type → Deep Skill → Options.
@@ -104,6 +145,19 @@ export default function DeepSkillsSettingsPage() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorRecord, setEditorRecord] = useState<DeepSkill | null>(null);
 
+  // Mapped Easyfixers modal — read-only listing of every easyfixer
+  // mapped to ANY option under the chosen deep skill. Open via the
+  // Users icon in the Action cell of each row.
+  const [mappedFor, setMappedFor] = useState<{ id: number; name: string } | null>(null);
+
+  /*
+   * Mapped-easyfixer counts (2026-06-08). Powers the new aggregate
+   * column. Map<deepskill_id, count>. Populated lazily as pages of
+   * the list become visible; backed by the module-level 30s cache
+   * so re-visiting an already-seen page hits synchronously.
+   */
+  const [mappedCounts, setMappedCounts] = useState<Map<number, number>>(new Map());
+
   // Service types narrowed to the chosen category so the picker stays focused.
   const filteredServiceTypes = useMemo(() => {
     if (!categoryId) return lk.serviceTypes;
@@ -163,6 +217,53 @@ export default function DeepSkillsSettingsPage() {
     () => filteredSkills.slice(safePage * effectiveLimit, safePage * effectiveLimit + effectiveLimit),
     [filteredSkills, safePage, effectiveLimit]
   );
+
+  /*
+   * Mapped-easyfixer counts fetch (2026-06-08). Triggered whenever
+   * the visible page changes (pagination, filter narrowing, page-size
+   * change). Splits the visible IDs into cached + missing via the
+   * module-level 30s cache; for cached IDs, the count is merged into
+   * local state synchronously, and only the missing IDs are POSTed.
+   * Failure leaves the missing entries blank — the cell renders "—"
+   * rather than throwing.
+   */
+  useEffect(() => {
+    if (visibleSkills.length === 0) return;
+    const ids = visibleSkills.map((s) => s.deepskill_id);
+    const { cached, missing } = readMappedCountsFromCache(ids);
+
+    // Apply cached counts synchronously — no flicker for re-visits.
+    if (cached.length > 0) {
+      setMappedCounts((prev) => {
+        const next = new Map(prev);
+        for (const c of cached) next.set(c.deepskill_id, c.count);
+        return next;
+      });
+    }
+    if (missing.length === 0) return;
+
+    let cancelled = false;
+    void api.post<{ items: Array<{ deepskill_id: number; count: number }> }>(
+      '/admin/deep-skills/mapped-easyfixer-counts',
+      { deepSkillIds: missing },
+    ).then((resp) => {
+      if (cancelled) return;
+      // The endpoint returns ONE row per skill that has at least one
+      // mapping — skills with zero mappings are absent. Default the
+      // missing IDs to 0 before merging the response so the cell
+      // shows "0" instead of staying as a "…" placeholder.
+      const zeroed = missing.map((id) => ({ deepskill_id: id, count: 0 }));
+      const merged = [...zeroed, ...resp.items]; // resp.items wins via Map.set
+      writeMappedCountsToCache(merged);
+      setMappedCounts((prev) => {
+        const next = new Map(prev);
+        for (const r of merged) next.set(r.deepskill_id, r.count);
+        return next;
+      });
+    }).catch(() => { /* leave missing entries undefined */ });
+
+    return () => { cancelled = true; };
+  }, [visibleSkills]);
 
   function openCreate() {
     // Modal handles its own category/type selection — no longer requires the
@@ -297,16 +398,25 @@ export default function DeepSkillsSettingsPage() {
                 <th className="whitespace-nowrap">Service Type</th>
                 <th className="whitespace-nowrap">Deep Skill Name</th>
                 <th className="whitespace-nowrap">Skill Options</th>
+                {/*
+                  * Mapped Easyfixers count column (2026-06-08). Aggregate
+                  * of distinct techs mapped to ANY option under this
+                  * skill, via tbl_efr_deepskill_mapping. Populated by a
+                  * side-endpoint POST keyed on the visible page's IDs;
+                  * counts cached client-side for 30s. Clicking the count
+                  * opens the same modal as the Users icon in Action.
+                  */}
+                <th className="whitespace-nowrap text-right">Mapped</th>
                 <th className="whitespace-nowrap text-center">Status</th>
                 <th className="whitespace-nowrap text-right">Action</th>
               </tr>
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={7} className="text-center py-8 text-muted-foreground">Loading…</td></tr>
+                <tr><td colSpan={8} className="text-center py-8 text-muted-foreground">Loading…</td></tr>
               )}
               {!loading && visibleSkills.length === 0 && (
-                <tr><td colSpan={7} className="text-center py-8 text-muted-foreground">No deep skills match the filters</td></tr>
+                <tr><td colSpan={8} className="text-center py-8 text-muted-foreground">No deep skills match the filters</td></tr>
               )}
               {!loading && visibleSkills.map((s) => (
                 <tr key={s.deepskill_id}>
@@ -322,12 +432,51 @@ export default function DeepSkillsSettingsPage() {
                   <td>
                     <SkillOptionsCell skillId={s.deepskill_id} fallbackCount={s.option_count} />
                   </td>
+                  <td className="text-right tabular-nums">
+                    {/*
+                      * Mapped count cell. Three states:
+                      *  - undefined → still loading (fetch in flight or
+                      *    cache miss without response yet) → render
+                      *    a muted "…" placeholder so the cell doesn't
+                      *    silently render "0" before the count lands
+                      *  - 0          → render "0" (no techs mapped yet)
+                      *  - >0         → render the count as a clickable
+                      *    link that opens the same modal as the Users
+                      *    icon in Action — saves the operator a click
+                      */}
+                    {(() => {
+                      const c = mappedCounts.get(s.deepskill_id);
+                      if (c === undefined) return <span className="text-muted-foreground">…</span>;
+                      if (c === 0) return <span className="text-muted-foreground">0</span>;
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => setMappedFor({ id: s.deepskill_id, name: s.deepskill_name })}
+                          className="text-primary hover:underline font-medium"
+                          title="View Mapped Easyfixers"
+                        >
+                          {c.toLocaleString('en-IN')}
+                        </button>
+                      );
+                    })()}
+                  </td>
                   <td className="text-center">
                     {Number(s.status)
                       ? <StatusChip tone="emerald">Active</StatusChip>
                       : <StatusChip tone="slate">Inactive</StatusChip>}
                   </td>
                   <td className="text-right whitespace-nowrap">
+                    {/* View Mapped Easyfixers — read-only affordance, always
+                        visible (no edit-permission gate). Mirrors the
+                        muted-foreground icon style used elsewhere for
+                        secondary row actions. */}
+                    <button
+                      onClick={() => setMappedFor({ id: s.deepskill_id, name: s.deepskill_name })}
+                      className="text-muted-foreground hover:text-primary inline-flex items-center gap-1 text-xs mr-3"
+                      title="View Mapped Easyfixers"
+                    >
+                      <Users className="h-3.5 w-3.5" />
+                    </button>
                     {can.isDeepSkillEdit ? (
                       <>
                         <button onClick={() => openEdit(s)}
@@ -370,6 +519,17 @@ export default function DeepSkillsSettingsPage() {
         record={editorRecord}
         onClose={() => { setEditorOpen(false); setEditorRecord(null); }}
         onSaved={() => { setEditorOpen(false); setEditorRecord(null); loadSkills(); }}
+      />
+
+      {/* Mapped Easyfixers — read-only modal opened from each row's
+          Users icon. Mounts at page root so it overlays everything
+          including the editor (defensive — they don't open together
+          in practice). */}
+      <DeepSkillMappedEasyfixersModal
+        open={mappedFor != null}
+        onClose={() => setMappedFor(null)}
+        deepSkillId={mappedFor?.id ?? null}
+        deepSkillName={mappedFor?.name ?? null}
       />
     </div>
   );
