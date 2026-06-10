@@ -61,17 +61,13 @@ export const URL_MAP: Record<string, string> = {
   'checkBalance':          '/search',
   // Onboarding queue — EasyFixers awaiting technician verification.
   'efer-registration':     '/easyfixers/registrations',
-  // Zone management lives in TWO places (intentional split):
-  //   - /settings/zones        — full management surface: CRUD + city
-  //                              mapping editor + bulk Excel upload/download.
-  //                              `manageZones` (the new sidebar entry under
-  //                              Settings) routes here.
-  //   - /easyfixers/zones      — read-only "browse zones from EasyFixers
-  //                              context" view. The legacy CRM seeded its
-  //                              tbl_menu row with url='easyfixerZones' so we
-  //                              keep that key for backwards compatibility.
+  // Zone management — single surface at /settings/zones: CRUD + city
+  // mapping editor + bulk Excel upload/download. The legacy
+  // `easyfixerZones` sub-menu was never seeded in production tbl_menu
+  // (audit 2026-06-10) — the URL_MAP entry was removed entirely.
+  // Sidebar's default fallback routes unknown slugs to /coming-soon
+  // so any in-flight legacy bookmarks still land softly.
   'manageZones':           '/settings/zones',
-  'easyfixerZones':        '/easyfixers/zones',
   // Pincode master under Settings: CRUD + bulk Excel upload. Status
   // (Local/Travel) is computed from active-tech availability — no
   // status column to maintain.
@@ -126,7 +122,15 @@ export const URL_MAP: Record<string, string> = {
   'jobTracking':            '/tracking?focus=jobs',
   'clientTracking':         '/tracking?focus=clients',
   'adminAction':            '/admin-actions',
-  'generateClientInvoice':  '/admin-actions?focus=generate-invoice',
+  /*
+   * `generateClientInvoice` (2026-06-08): the sidebar entry now lands
+   * on plain /admin-actions (was: ?focus=generate-invoice). The auto-
+   * open logic on the page still respects the focus param for genuine
+   * deep links (e.g. emails / docs), but the menu click no longer
+   * triggers the popup unsolicited — operator clicks the "Generate
+   * Client Invoice" card on the page when they actually want it.
+   */
+  'generateClientInvoice':  '/admin-actions',
   'webhook':                '/admin-actions/webhooks',
   'webhookManager':         '/admin-actions/webhooks',
   // Finance sub-resources — Finance landing page links to these

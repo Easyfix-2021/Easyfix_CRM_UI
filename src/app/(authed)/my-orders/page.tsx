@@ -22,6 +22,7 @@ import { CallableMobile } from '@/components/calls/CallButton';
 import { useSort, SortHeader } from '@/lib/use-sort';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
+import { useDebouncedValue } from '@/lib/hooks';
 
 // `/admin/jobs` Joi caps limit at 500 — pass to pageSizeToLimit so
 // "All" sends 500 instead of the default 1000 (which would 400).
@@ -113,6 +114,17 @@ export default function MyOrdersPage() {
     return t && TABS.some((x) => x.value === t) ? t : 'all';
   });
   const [q, setQ] = useState('');
+  /*
+   * Unconfirmed-tab global search (2026-06-10). Ops want "find any
+   * unconfirmed job by id regardless of page" — the existing
+   * client-side filter only matches within the currently-loaded page.
+   * On the Unconfirmed tab we forward `q` to the BE's /admin/jobs
+   * search (it already supports searching id / customer / address);
+   * other tabs keep client-side filtering for now. Debounced 300ms
+   * so every keystroke doesn't fire a request.
+   */
+  const debouncedQ = useDebouncedValue(q, 300);
+  const serverQ = tab === 'unconfirmed' && debouncedQ.trim() ? debouncedQ.trim() : '';
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState<TablePageSize>(DEFAULT_PAGE_SIZE);
   const limit = pageSizeToLimit(pageSize, JOBS_MAX_LIMIT);
@@ -147,8 +159,10 @@ export default function MyOrdersPage() {
     const tabDef = TABS.find((t) => t.value === tab);
     const off = reset ? 0 : offset;
     // Cache key includes pageSize so changing rows-per-page doesn't
-    // serve a stale 50-row payload.
-    const key = `${tab}|${off}|${limit}|${scopedOwnerId ?? 'admin-all'}`;
+    // serve a stale 50-row payload. Also includes serverQ so the
+    // Unconfirmed-tab search results don't collide with the
+    // unfiltered cache entry for the same offset.
+    const key = `${tab}|${off}|${limit}|${scopedOwnerId ?? 'admin-all'}|q=${serverQ}`;
 
     if (!force) {
       const hit = cacheRef.current.get(key);
@@ -178,6 +192,11 @@ export default function MyOrdersPage() {
         assigned:  tabDef?.assigned === undefined ? undefined : String(tabDef.assigned),
         limit, offset: off,
         ownerId: scopedOwnerId,
+        // Global search (Unconfirmed tab only). BE's /admin/jobs accepts
+        // `q` and searches across id / customer / address. Empty string
+        // ⇒ undefined so we don't send a no-op param on other tabs or
+        // when the box is cleared.
+        q: serverQ || undefined,
       });
       inflightRef.current.set(key, reqPromise);
       const r = await reqPromise;
@@ -192,7 +211,11 @@ export default function MyOrdersPage() {
 
   // Refetch on tab/scope change AND on page/pageSize change. pageSize
   // change resets page via the onPageSizeChange handler below.
-  useEffect(() => { setPage(0); load(true, true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [tab, scopedOwnerId]);
+  // `serverQ` triggers a fresh page-0 refetch — typing in the search
+  // box on Unconfirmed re-queries the BE with `q` (debounced 300ms via
+  // `useDebouncedValue` above) and clearing the box falls back to the
+  // unfiltered paginated list.
+  useEffect(() => { setPage(0); load(true, true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [tab, scopedOwnerId, serverQ]);
   useEffect(() => { load(false); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [page, pageSize]);
 
   // (refreshCounts removed with the pill bar — each sub-menu is its own page
@@ -278,6 +301,14 @@ export default function MyOrdersPage() {
   // Client-side search over the currently-loaded page. Matches every
   // visible column including the human-readable status label and the
   // formatted date strings — see jobs/page.tsx for the rationale.
+  //
+  // 2026-06-10 fix: client filter now runs for the Unconfirmed tab TOO.
+  // Earlier this short-circuited to `return true` because BE was assumed
+  // to be the only source of truth, but that meant typing a job_id in
+  // the search box did NOTHING for the first 300ms (until the debounced
+  // server-q refetch fired). Now: client filter shows current-page
+  // matches INSTANTLY; the debounced server-q refetch in parallel
+  // expands the result to off-page matches when it lands.
   const filteredItems = (data?.items ?? []).filter((j) => {
     if (!q) return true;
     const needle = q.toLowerCase();

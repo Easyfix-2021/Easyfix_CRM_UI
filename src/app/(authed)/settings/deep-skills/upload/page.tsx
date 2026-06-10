@@ -62,9 +62,19 @@ type BulkUploadSummary = {
   optionsNew: number;
 };
 
+/*
+ * BulkUploadCommitted (2026-06-10 shape update). After the case-
+ * insensitive matching refactor, the BE now returns the full
+ * { id, name } objects for newly-created categories and types — not
+ * bare strings. The FE renders the names with `.map(x => x.name).join(...)`.
+ *
+ * Old shape: categoriesCreated: string[] (caused `[object Object]`
+ * console output because the original `.join(', ')` stringified the
+ * raw objects).
+ */
 type BulkUploadCommitted = {
-  categoriesCreated: string[];
-  typesCreated: string[];
+  categoriesCreated: Array<{ id: number; name: string }>;
+  typesCreated: Array<{ id: number; name: string; catId?: number }>;
   skillsCreated: number;
   optionsCreated: number;
 };
@@ -357,7 +367,7 @@ export default function DeepSkillsBulkUploadPage() {
               <div className="mb-2 text-xs">
                 <span className="font-medium">New Categories:</span>{' '}
                 <span className="text-muted-foreground">
-                  {committed.committed.categoriesCreated.join(', ')}
+                  {committed.committed.categoriesCreated.map((c) => `${c.name} (Id: ${c.id})`).join(', ')}
                 </span>
               </div>
             )}
@@ -365,7 +375,7 @@ export default function DeepSkillsBulkUploadPage() {
               <div className="mb-3 text-xs">
                 <span className="font-medium">New Types:</span>{' '}
                 <span className="text-muted-foreground">
-                  {committed.committed.typesCreated.join(', ')}
+                  {committed.committed.typesCreated.map((t) => `${t.name} (Id: ${t.id})`).join(', ')}
                 </span>
               </div>
             )}

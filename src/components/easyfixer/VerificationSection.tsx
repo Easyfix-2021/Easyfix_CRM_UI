@@ -16,26 +16,59 @@ import { cn } from '@/lib/utils';
  *     'sub'     = lighter grey band (inner sub-section header)
  */
 
-export type VerificationSectionProps = {
+/*
+ * Discriminated prop types (2026-06-11). Callers MUST pick exactly
+ * one open-state source: `open` (controlled by parent) OR `defaultOpen`
+ * (uncontrolled, seeded once). `never` on the opposing field prevents
+ * accidentally mixing the two — a previously-silent footgun where
+ * `open` would silently win and `defaultOpen` became a no-op.
+ *
+ * `onOpenChange` stays in BaseProps — even uncontrolled callers may
+ * want to observe state changes, so it's not part of the discrimination.
+ */
+type BaseProps = {
   title: React.ReactNode;
   progress?: number | null;
   verified?: boolean;
-  defaultOpen?: boolean;
   headerTone?: 'primary' | 'sub';
   rightSlot?: React.ReactNode;
   children: React.ReactNode;
+  onOpenChange?: (open: boolean) => void;
 };
+type ControlledProps = {
+  open: boolean;
+  defaultOpen?: never;
+};
+type UncontrolledProps = {
+  open?: never;
+  defaultOpen?: boolean;
+};
+export type VerificationSectionProps = BaseProps & (ControlledProps | UncontrolledProps);
 
 export function VerificationSection({
   title,
   progress = null,
   verified = false,
   defaultOpen = false,
+  open: controlledOpen,
+  onOpenChange,
   headerTone = 'primary',
   rightSlot,
   children,
 }: VerificationSectionProps) {
-  const [open, setOpen] = React.useState(defaultOpen);
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen);
+  const isControlled = controlledOpen !== undefined;
+  const open = isControlled ? controlledOpen : uncontrolledOpen;
+
+  const handleToggle = () => {
+    const next = !open;
+    if (isControlled) {
+      onOpenChange?.(next);
+    } else {
+      setUncontrolledOpen(next);
+      onOpenChange?.(next);
+    }
+  };
 
   return (
     <div className={cn(
@@ -44,7 +77,7 @@ export function VerificationSection({
     )}>
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={handleToggle}
         className={cn(
           'w-full text-left px-4 py-3 flex items-center gap-3 transition-colors',
           headerTone === 'primary'

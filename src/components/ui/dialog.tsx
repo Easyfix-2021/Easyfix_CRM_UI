@@ -98,13 +98,39 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
  * look cluttered and create a "which one?" micro-decision every time. Small
  * confirmation dialogs without a footer action row should leave it on
  * (default true corner-X behaviour) so Escape and the click target both work.
+ *
+ * `noPadding` (2026-06-11) tells DialogContent to render WITHOUT the default
+ * `p-6` body padding — typical for modals that own their entire surface
+ * (fullscreen tables, custom layouts with a scrollable middle band, etc.).
+ * Setting this also publishes a context value that DialogHeader / DialogFooter
+ * consume, automatically applying `!mx-0 !mt-0 !mb-0` overrides on the
+ * header band and `!mx-0 !mb-0` on the footer.
+ *
+ * BACKGROUND — the bug this codifies away (2026-06-11): DialogHeader uses
+ * `-mx-6 -mt-6` and DialogFooter uses `-mx-6 -mb-6` so their coloured bands
+ * "punch through" the parent's default 24px padding to reach the rounded
+ * edge. When a caller used `className="p-0"` on DialogContent without also
+ * overriding those negative margins on the header/footer, the bands got
+ * pushed OUTSIDE the modal frame — clipped at the viewport edge. We
+ * debugged that symptom across six iterations (treating it as positioning)
+ * before finding the real cause was the offset on the children. With
+ * `noPadding`, the discriminated context flows down automatically and the
+ * trap can't be sprung again.
+ *
+ * Migration policy: existing modals that strip padding with `!p-0`/`p-0`
+ * + explicit `!mx-0 !mt-0` overrides continue to work unchanged. Touch them
+ * opportunistically; new modals should use `<DialogContent noPadding>` and
+ * skip the boilerplate. A dev-mode console warning fires if the className
+ * looks like it's stripping padding but `noPadding` isn't set.
  */
-type DialogContentExtraProps = { hideClose?: boolean };
+type DialogContentExtraProps = { hideClose?: boolean; noPadding?: boolean };
+
+const DialogPaddingContext = React.createContext<{ noPadding: boolean }>({ noPadding: false });
 
 export const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & DialogContentExtraProps
->(({ className, children, hideClose, onInteractOutside, onPointerDownOutside, ...props }, ref) => (
+>(({ className, children, hideClose, noPadding, onInteractOutside, onPointerDownOutside, ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay />
     {/*
@@ -253,7 +279,11 @@ export const DialogContent = React.forwardRef<
         // the panel's rounded corners (the header uses `-mx-6 -mt-6` to
         // sit edge-to-edge; without clipping the band's square top-edge
         // pokes past the rounded container).
-        'p-6 overflow-hidden',
+        // `noPadding` (2026-06-11) lets a caller strip the 24px body
+        // padding cleanly — see DialogPaddingContext below; header /
+        // footer auto-strip their negative-margin compensation when
+        // the context says noPadding.
+        noPadding ? 'p-0 overflow-hidden' : 'p-6 overflow-hidden',
         /*
          * Open/close animation. Combines fade + zoom + a tiny
          * downward slide so the dialog feels like it "lands" from
@@ -273,7 +303,9 @@ export const DialogContent = React.forwardRef<
       )}
       {...props}
     >
-      {children}
+      <DialogPaddingContext.Provider value={{ noPadding: !!noPadding }}>
+        {children}
+      </DialogPaddingContext.Provider>
       {!hideClose && (
         // Visible-on-slate close: tinted background pill so the X reads
         // against the dark band (was disappearing as a low-contrast glyph
@@ -315,23 +347,33 @@ DialogContent.displayName = DialogPrimitive.Content.displayName;
  * override the negative margins (`!mx-0 !mt-0`) — see [JobModal.tsx]
  * for the standard pattern.
  */
-export const DialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div
-    className={cn(
-      'flex flex-col space-y-1 text-left',
-      '-mx-6 -mt-6 px-6 py-4 mb-5',
-      // Pronounced slate gradient (slate-900 → slate-700 → slate-900)
-      // gives the band visible depth instead of a flat fill.
-      'bg-gradient-to-r from-slate-900 via-slate-700 to-slate-900 text-white',
-      // 3px sky-500 underline drawn with a literal rgba inset shadow —
-      // Tailwind's `theme()`-with-opacity syntax doesn't reliably
-      // resolve in arbitrary values, so we spell the colour out.
-      'shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]',
-      className,
-    )}
-    {...props}
-  />
-);
+export const DialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => {
+  // Auto-override the negative-margin compensation when the parent
+  // DialogContent has noPadding. Without this, the header band escapes
+  // the modal frame and clips at the viewport edge.
+  const { noPadding } = React.useContext(DialogPaddingContext);
+  return (
+    <div
+      className={cn(
+        'flex flex-col space-y-1 text-left',
+        // The `-mx-6 -mt-6` here assumes DialogContent has `p-6`. When
+        // noPadding is set, override to !mx-0 !mt-0 so the band stays
+        // inside the modal frame.
+        '-mx-6 -mt-6 px-6 py-4 mb-5',
+        noPadding && '!mx-0 !mt-0 !mb-0',
+        // Pronounced slate gradient (slate-900 → slate-700 → slate-900)
+        // gives the band visible depth instead of a flat fill.
+        'bg-gradient-to-r from-slate-900 via-slate-700 to-slate-900 text-white',
+        // 3px sky-500 underline drawn with a literal rgba inset shadow —
+        // Tailwind's `theme()`-with-opacity syntax doesn't reliably
+        // resolve in arbitrary values, so we spell the colour out.
+        'shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]',
+        className,
+      )}
+      {...props}
+    />
+  );
+};
 
 /*
  * Symmetric footer separator. Same -mx-6 / negative-bottom-margin trick
@@ -340,16 +382,23 @@ export const DialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLD
  * Opt-in: existing modals that hand-roll their footer can switch over
  * when they're next touched.
  */
-export const DialogFooter = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div
-    className={cn(
-      'flex items-center justify-end gap-2',
-      '-mx-6 -mb-6 px-6 pt-3 pb-4 mt-1 border-t bg-background',
-      className,
-    )}
-    {...props}
-  />
-);
+export const DialogFooter = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => {
+  // Same noPadding auto-override as DialogHeader: drop the negative
+  // bottom margin when the parent DialogContent has stripped padding,
+  // otherwise the footer escapes the modal frame.
+  const { noPadding } = React.useContext(DialogPaddingContext);
+  return (
+    <div
+      className={cn(
+        'flex items-center justify-end gap-2',
+        '-mx-6 -mb-6 px-6 pt-3 pb-4 mt-1 border-t bg-background',
+        noPadding && '!mx-0 !mb-0',
+        className,
+      )}
+      {...props}
+    />
+  );
+};
 
 export const DialogTitle = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Title>,

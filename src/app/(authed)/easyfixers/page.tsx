@@ -69,6 +69,7 @@ type Ef = {
   total_earnings: number;
   job_count: number;
   avg_rating: number | null;
+  options_mapped_count: number;
   ef_account: 'Under Master' | 'Master' | 'Individual';
   att_is_leave_marked: number | null;
   att_morning_slot: number | null;
@@ -97,6 +98,7 @@ type AggregateRow = {
   total_earnings: number;
   job_count: number;
   avg_rating: number | null;
+  options_mapped_count: number;
 };
 /*
  * Aggregates cache (2026-06-08). Pagination back-and-forth, search-and-back,
@@ -541,6 +543,7 @@ export default function EasyfixersPage() {
               total_earnings: agg.total_earnings,
               job_count: agg.job_count,
               avg_rating: agg.avg_rating,
+              options_mapped_count: agg.options_mapped_count,
               _aggregatesLoaded: true,
             };
           }));
@@ -566,6 +569,7 @@ export default function EasyfixersPage() {
                   total_earnings: agg.total_earnings,
                   job_count: agg.job_count,
                   avg_rating: agg.avg_rating,
+                  options_mapped_count: agg.options_mapped_count,
                   _aggregatesLoaded: true,
                 };
               }));
@@ -964,7 +968,7 @@ export default function EasyfixersPage() {
             *   - SortHeader rendered with `align` so the header aligns to
             *     the cell content direction.
             */}
-          <table className="data-table" style={{ tableLayout: 'fixed', minWidth: '2260px' }}>
+          <table className="data-table" style={{ tableLayout: 'fixed', minWidth: '2370px' }}>
             {/*
               * Explicit px widths (not percentages) so the table has a
               * deterministic intrinsic width that exceeds the viewport,
@@ -972,7 +976,7 @@ export default function EasyfixersPage() {
               * `overflow-x-auto` div. Sticky ID + Action cols pin to
               * viewport edges; everything else scrolls between them.
               *
-              * Sum of widths = 2260px. Content-heavy cells (Name,
+              * Sum of widths = 2370px. Content-heavy cells (Name,
               * Email, Service Cat/Type) get the lion's share; numeric
               * + status cells stay narrow.
               */}
@@ -990,6 +994,7 @@ export default function EasyfixersPage() {
               <col style={{ width: '90px'  }} />{/* Clients Mapped */}
               <col style={{ width: '110px' }} />{/* Total Earnings */}
               <col style={{ width: '80px'  }} />{/* Job Count */}
+              <col style={{ width: '110px' }} />{/* Options Mapped */}
               <col style={{ width: '110px' }} />{/* A/C Balance */}
               <col style={{ width: '80px'  }} />{/* Rating */}
               <col style={{ width: '80px'  }} />{/* Profile % */}
@@ -1013,6 +1018,7 @@ export default function EasyfixersPage() {
                 <SortHeader col="clients_mapped"         align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Clients Mapped</SortHeader>
                 <SortHeader col="total_earnings"         align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Total Earnings</SortHeader>
                 <SortHeader col="job_count"              align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Job Count</SortHeader>
+                <SortHeader col="options_mapped_count"   align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Options Mapped</SortHeader>
                 <SortHeader col="current_balance"        align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>A/C Balance</SortHeader>
                 <SortHeader col="avg_rating"             align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Rating</SortHeader>
                 <SortHeader col="efr_profile_perc"       align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Profile %</SortHeader>
@@ -1028,10 +1034,10 @@ export default function EasyfixersPage() {
                   200ms server round-trip — only show "Loading…" on the
                   cold first paint when there's nothing to keep. */}
               {loading && sorted.length === 0 && (
-                <tr><td colSpan={20} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
+                <tr><td colSpan={21} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
               )}
               {!loading && sorted.length === 0 && (
-                <tr><td colSpan={20} className="!text-center text-muted-foreground py-6">No easyfixers match the current filters.</td></tr>
+                <tr><td colSpan={21} className="!text-center text-muted-foreground py-6">No easyfixers match the current filters.</td></tr>
               )}
               {!loading && sorted.map((e) => {
                 const catItems = parseCsvCell(e.efr_service_category, categoryById);
@@ -1072,6 +1078,13 @@ export default function EasyfixersPage() {
                   <td className="!text-right tabular-nums truncate">
                     {e._aggregatesLoaded
                       ? (e.job_count ?? 0)
+                      : <span className="text-muted-foreground">…</span>}
+                  </td>
+                  <td className="!text-right tabular-nums truncate">
+                    {e._aggregatesLoaded
+                      ? (e.options_mapped_count > 0
+                        ? <span className="font-semibold text-primary">{e.options_mapped_count}</span>
+                        : <span className="text-muted-foreground">0</span>)
                       : <span className="text-muted-foreground">…</span>}
                   </td>
                   <td className="!text-right tabular-nums truncate">{e.current_balance != null ? `₹${Number(e.current_balance).toLocaleString('en-IN')}` : '—'}</td>

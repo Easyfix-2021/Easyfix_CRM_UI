@@ -21,10 +21,10 @@
  * — see the field-to-column map in the BE service file header.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, Check, Phone, Smile, X, Upload } from 'lucide-react';
+import { ArrowLeft, Check, Loader2, Phone, Smile, X, Upload, ChevronDown, ChevronRight, Search } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -32,6 +32,7 @@ import { Label } from '@/components/ui/label';
 import { SearchSelect } from '@/components/ui/search-select';
 import { VerificationSection } from '@/components/easyfixer/VerificationSection';
 import { CommentsPanel, type CommentEntry } from '@/components/easyfixer/CommentsPanel';
+import { showToast } from '@/components/ui/toast';
 import { formatDate } from '@/lib/utils';
 
 // ─── BE payload shape (matches getVerificationPage) ─────────────────
@@ -122,6 +123,17 @@ type VerificationPayload = {
     };
     comments: Comment[];
   };
+  /*
+   * Additional Details section (2026-06-11). Counts come from the BE
+   * payload so the progress bar paints correctly on first render
+   * without waiting for the child components to mount + fetch.
+   */
+  additional: {
+    deep_skills_count: number;
+    serviceable_pincodes_count: number;
+    progress: number;
+    is_complete: boolean;
+  };
   lookups: { cities: LookupCity[]; easyfix_banks: LookupBank[] };
 };
 
@@ -176,9 +188,57 @@ export default function EasyfixerVerificationPage() {
   return <VerificationView data={data} onReload={load} />;
 }
 
+type ActiveSection = 'lead' | 'verification' | 'activation';
+
+/*
+ * Compute the "last active" outer section from the payload (2026-06-10).
+ * First section in display order that is NOT YET complete becomes the
+ * active one — that's the one auto-expanded on page mount. Logic:
+ *   - Lead not yet accepted (personal_details_filled !== 1) → 'lead'
+ *   - Registration verification not done → 'verification'
+ *   - Otherwise → 'activation' (the final step)
+ */
+function computeActiveSection(data: VerificationPayload): ActiveSection {
+  if (data.lead.status.personal_details_filled !== 1) return 'lead';
+  if (!data.registrationVerification.is_verified) return 'verification';
+  return 'activation';
+}
+
 function VerificationView({ data, onReload }: { data: VerificationPayload; onReload: () => Promise<void> }) {
   const router = useRouter();
   const efrId = data.header.efr_id;
+
+  /*
+   * Outer-accordion state (2026-06-10). One of the three sections is
+   * "open" at a time; the rest are collapsed. On first paint we pick
+   * the last-active section per the payload (see computeActiveSection).
+   * Clicking "Proceed To Tx Activation" inside the Registration
+   * Verification section flips this to 'activation' so that band
+   * expands and the previous band collapses.
+   *
+   * We memo the initial value so payload changes (e.g. after a reload
+   * following an action) don't re-snap the user back to a state-derived
+   * section in the middle of their work — only manual toggles + the
+   * Proceed button move the active section after first paint.
+   *
+   * Implementation note (2026-06-10): VerificationSection now supports a
+   * controlled `open`/`onOpenChange` mode. We pass the activeSection
+   * state through as `open`, which lets the open/close transition
+   * animate naturally instead of remounting via a synthetic `key`
+   * swap. Remounting was killing scroll position, sub-section state,
+   * and giving the impression of a full page reload.
+   */
+  const initialActive = useMemo(() => computeActiveSection(data), []); // eslint-disable-line react-hooks/exhaustive-deps
+  /*
+   * Nullable to support manual COLLAPSE (2026-06-11). The earlier
+   * `if (o) setActiveSection('X')` guard in each onOpenChange dropped
+   * the close intent on the floor — once one section was open, clicking
+   * its header did nothing. Allowing `null` means a click on the active
+   * header collapses everything; clicking another header opens that one
+   * (auto-closing whichever was previously open, since only one open
+   * slot exists in this state machine).
+   */
+  const [activeSection, setActiveSection] = useState<ActiveSection | null>(initialActive);
 
   // ─── Helpers ──────────────────────────────────────────────────────
   const reloadAfter = async <T,>(p: Promise<T>) => { try { await p; } finally { await onReload(); } };
@@ -229,7 +289,8 @@ function VerificationView({ data, onReload }: { data: VerificationPayload; onRel
         title="New Technician Lead"
         verified={data.lead.status.personal_details_filled === 1}
         progress={data.lead.status.personal_details_filled === 1 ? null : data.lead.status.progress}
-        defaultOpen={data.lead.status.personal_details_filled !== 1}
+        open={activeSection === 'lead'}
+        onOpenChange={(o) => setActiveSection(o ? 'lead' : null)}
       >
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-4">
@@ -287,7 +348,8 @@ function VerificationView({ data, onReload }: { data: VerificationPayload; onRel
         title="Registration Verification"
         verified={data.registrationVerification.is_verified}
         progress={data.registrationVerification.overall_progress}
-        defaultOpen={data.lead.status.personal_details_filled === 1 && !data.registrationVerification.is_verified}
+        open={activeSection === 'verification'}
+        onOpenChange={(o) => setActiveSection(o ? 'verification' : null)}
       >
         <div className="space-y-3">
           {/* 2a. Professional Details */}
@@ -336,9 +398,17 @@ function VerificationView({ data, onReload }: { data: VerificationPayload; onRel
               <Button
                 className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-full px-6"
                 onClick={async () => {
+                  /*
+                   * proceed-to-activation is a pure gate-check on the BE
+                   * (no DB writes), so we don't need to refetch the
+                   * payload. On success we just flip the active section
+                   * — the controlled VerificationSection animates the
+                   * collapse/expand via CSS transition (no remount).
+                   * On error we keep the current section open.
+                   */
                   try {
                     await api.post(`/admin/easyfixers/${efrId}/verification/proceed-to-activation`, {});
-                    await onReload();
+                    setActiveSection('activation');
                   } catch (e) {
                     alert(e instanceof ApiError ? e.message : 'Cannot proceed');
                   }
@@ -356,7 +426,8 @@ function VerificationView({ data, onReload }: { data: VerificationPayload; onRel
         title="Technician Activation"
         verified={data.activation.is_activated}
         progress={data.activation.progress}
-        defaultOpen={data.registrationVerification.is_verified && !data.activation.is_activated}
+        open={activeSection === 'activation'}
+        onOpenChange={(o) => setActiveSection(o ? 'activation' : null)}
       >
         <ActivationSection
           efrId={efrId}
@@ -365,6 +436,24 @@ function VerificationView({ data, onReload }: { data: VerificationPayload; onRel
           onReload={onReload}
           addComment={addComment(SECTION_ACTIVATION)}
         />
+      </VerificationSection>
+
+      {/* ───── Section 4: Additional Details ───── */}
+      {/*
+       * Houses Skill & Service Area Mapping (Deep Skill Option Mapping
+       * + Serviceable Pincodes). Moved out of Technician Activation
+       * (2026-06-10) into its own collapsible band so the activation
+       * step stays focused on payment/beneficiary/BGV/activate. Stays
+       * uncontrolled (defaultOpen=false) — independent of the
+       * activeSection state machine; user opens it on demand.
+       */}
+      <VerificationSection
+        title="Additional Details"
+        progress={data.additional.progress}
+        verified={data.additional.is_complete}
+        defaultOpen={false}
+      >
+        <SkillAndServiceAreaMapping efrId={efrId} onReload={onReload} />
       </VerificationSection>
     </div>
   );
@@ -726,6 +815,31 @@ function IdentitySection({ efrId, d, onReload, addComment }: {
   );
 }
 
+function SkillAndServiceAreaMapping({ efrId, onReload }: { efrId: number; onReload: () => Promise<void> }) {
+  /*
+   * "Skill & Service Area Mapping" — sub-section under Additional
+   * Details that groups the Deep Skill Option Mapping picker with the
+   * Serviceable Pincodes multi-select. `onReload` (2026-06-11) is
+   * forwarded down so each child can refresh the parent payload after
+   * a successful save — that's what keeps the Additional Details
+   * progress bar in sync without a manual page reload.
+   */
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50/50">
+      <div className="px-4 py-2 border-b border-slate-200 bg-slate-100/60">
+        <h4 className="text-sm font-semibold text-slate-700">Skill & Service Area Mapping</h4>
+        <p className="text-xs text-slate-500">
+          Map This Technician To Deep Skill Options And The Pincodes They Will Service.
+        </p>
+      </div>
+      <div className="p-4 space-y-2 bg-white">
+        <DeepSkillOptionMapping efrId={efrId} onReload={onReload} />
+        <ServiceablePincodes efrId={efrId} onReload={onReload} />
+      </div>
+    </div>
+  );
+}
+
 function ActivationSection({
   efrId, activation, banks, onReload, addComment,
 }: {
@@ -811,6 +925,13 @@ function ActivationSection({
         </div>
 
         <hr />
+        {/*
+         * Skill & Service Area Mapping has moved to the new
+         * "Additional Details" top-level section (2026-06-10). Kept
+         * the divider above for visual consistency between the
+         * Allocate Clients / Add Tx block and the BGV Upload block.
+         */}
+
         <div className="space-y-2">
           <Label>Upload BGV Report</Label>
           <div className="flex items-center gap-2">
@@ -875,6 +996,776 @@ function ActivationSection({
         </div>
         <CommentsPanel entries={activation.comments as CommentEntry[]} onAdd={addComment} addLabel="Add Your Notes" />
       </aside>
+    </div>
+  );
+}
+
+/* ───────── Deep Skill Option Mapping ───────── */
+/*
+ * 4-level tree picker (Service Category → Service Type → Deep Skill →
+ * Options) for tbl_efr_deepskill_mapping. The mapping table stores ONE
+ * row per (easyfixer × option) — see the docblock in
+ * services/easyfixer-verification.service.js for the column-name
+ * inversion this FE deliberately abstracts away (we work in semantic
+ * names only).
+ *
+ * Loading model:
+ *   - On mount: fetch current mappings + ALL service categories.
+ *   - On expanding a category: lazy-load that category's service types.
+ *   - On expanding a service type: lazy-load that type's deep skills.
+ *   - On expanding a deep skill: lazy-load its options.
+ *
+ * Lazy-loading keeps the initial paint cheap (3 categories x N types x
+ * M skills x K options would balloon fast). Children are cached
+ * in-state once fetched so collapse/expand toggles never re-fetch.
+ *
+ * The "currently mapped" indicator is computed from `original` — the
+ * set captured on first fetch. The Save button is disabled until
+ * `selected` diverges from `original`.
+ */
+
+type OptionMapping = {
+  category_id: number; category_name: string | null;
+  service_type_id: number; service_type_name: string | null;
+  deep_skill_id: number; deep_skill_name: string | null;
+  option_id: number; option_name: string | null;
+};
+
+type ServiceCategoryLU = { service_catg_id: number; service_catg_name: string };
+type ServiceTypeLU     = { service_type_id: number; service_type_name: string; service_catg_id: number };
+type DeepSkillLU       = { deepskill_id: number; deepskill_name: string; category_id: number; service_type_id: number };
+type DeepSkillOptionLU = { id: number; skill_option: string; status: number };
+type DeepSkillDetail   = { deepskill_id: number; deepskill_name: string; options: DeepSkillOptionLU[] };
+
+function mapKey(catg: number, type: number, skill: number, option: number) {
+  return `${catg}|${type}|${skill}|${option}`;
+}
+
+function DeepSkillOptionMapping({ efrId, onReload }: { efrId: number; onReload?: () => Promise<void> }) {
+  const [categories, setCategories] = useState<ServiceCategoryLU[]>([]);
+  const [mappings, setMappings] = useState<OptionMapping[]>([]);
+  const [original, setOriginal] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [openCatg, setOpenCatg] = useState<Set<number>>(new Set());
+  const [openType, setOpenType] = useState<Set<number>>(new Set());
+  const [openSkill, setOpenSkill] = useState<Set<number>>(new Set());
+  // Lazy-loaded children — keyed by parent id.
+  const [typesByCatg, setTypesByCatg] = useState<Record<number, ServiceTypeLU[]>>({});
+  const [skillsByType, setSkillsByType] = useState<Record<number, DeepSkillLU[]>>({});
+  const [optionsBySkill, setOptionsBySkill] = useState<Record<number, DeepSkillOptionLU[]>>({});
+
+  // Initial fetch — current mappings + the full categories list.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        setLoading(true);
+        const [mapResp, catResp] = await Promise.all([
+          api.get<{ items: OptionMapping[] }>(`/admin/easyfixers/${efrId}/option-mappings`),
+          api.get<ServiceCategoryLU[]>(`/shared/lookup/service-categories`),
+        ]);
+        if (cancelled) return;
+        const items = mapResp?.items ?? [];
+        const set = new Set(items.map((m) => mapKey(m.category_id, m.service_type_id, m.deep_skill_id, m.option_id)));
+        setMappings(items);
+        setOriginal(new Set(set));
+        setSelected(new Set(set));
+        setCategories(Array.isArray(catResp) ? catResp : []);
+      } catch (e) {
+        if (!cancelled) setError(e instanceof ApiError ? e.message : 'Failed to load option mappings');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [efrId]);
+
+  async function toggleCatg(catgId: number) {
+    const next = new Set(openCatg);
+    if (next.has(catgId)) { next.delete(catgId); setOpenCatg(next); return; }
+    next.add(catgId); setOpenCatg(next);
+    if (!typesByCatg[catgId]) {
+      try {
+        const types = await api.get<ServiceTypeLU[]>(`/shared/lookup/service-types?categoryId=${catgId}`);
+        setTypesByCatg((s) => ({ ...s, [catgId]: Array.isArray(types) ? types : [] }));
+      } catch (e) {
+        setError(e instanceof ApiError ? e.message : 'Failed to load service types');
+      }
+    }
+  }
+
+  async function toggleType(typeId: number, catgId: number) {
+    const next = new Set(openType);
+    if (next.has(typeId)) { next.delete(typeId); setOpenType(next); return; }
+    next.add(typeId); setOpenType(next);
+    if (!skillsByType[typeId]) {
+      try {
+        const skills = await api.get<DeepSkillLU[]>(`/admin/deep-skills?categoryId=${catgId}&serviceTypeId=${typeId}`);
+        setSkillsByType((s) => ({ ...s, [typeId]: Array.isArray(skills) ? skills : [] }));
+      } catch (e) {
+        setError(e instanceof ApiError ? e.message : 'Failed to load deep skills');
+      }
+    }
+  }
+
+  async function toggleSkill(skillId: number) {
+    const next = new Set(openSkill);
+    if (next.has(skillId)) { next.delete(skillId); setOpenSkill(next); return; }
+    next.add(skillId); setOpenSkill(next);
+    if (!optionsBySkill[skillId]) {
+      try {
+        const detail = await api.get<DeepSkillDetail>(`/admin/deep-skills/${skillId}`);
+        const opts = (detail?.options || []).filter((o) => Number(o.status) === 1);
+        setOptionsBySkill((s) => ({ ...s, [skillId]: opts }));
+      } catch (e) {
+        setError(e instanceof ApiError ? e.message : 'Failed to load skill options');
+      }
+    }
+  }
+
+  function toggleOption(catgId: number, typeId: number, skillId: number, optionId: number) {
+    const key = mapKey(catgId, typeId, skillId, optionId);
+    const next = new Set(selected);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    setSelected(next);
+  }
+
+  const dirty = useMemo(() => {
+    if (selected.size !== original.size) return true;
+    for (const k of selected) if (!original.has(k)) return true;
+    return false;
+  }, [selected, original]);
+
+  /*
+   * Selected-count badges at EVERY level (2026-06-11). The `selected`
+   * Set keys are `${catgId}|${typeId}|${skillId}|${optionId}`. We
+   * derive three Maps in a single O(n) pass:
+   *   - countByCategory          : key = catgId
+   *   - countByType              : key = "catgId|typeId"
+   *   - countBySkill             : key = "catgId|typeId|skillId"
+   * Surfaced as small emerald pills next to each header so operators
+   * see option counts cascade up the hierarchy without expanding every
+   * branch. Recomputed on every selected change; Set size is tiny
+   * (≤ ~150 in practice) so the cost is negligible.
+   */
+  const { countByCategory, countByType, countBySkill } = useMemo(() => {
+    const byCatg = new Map<number, number>();
+    const byType = new Map<string, number>();
+    const bySkill = new Map<string, number>();
+    for (const k of selected) {
+      const [c, t, s] = k.split('|');
+      const catgId = Number(c);
+      byCatg.set(catgId, (byCatg.get(catgId) || 0) + 1);
+      byType.set(`${c}|${t}`, (byType.get(`${c}|${t}`) || 0) + 1);
+      bySkill.set(`${c}|${t}|${s}`, (bySkill.get(`${c}|${t}|${s}`) || 0) + 1);
+    }
+    return { countByCategory: byCatg, countByType: byType, countBySkill: bySkill };
+  }, [selected]);
+
+  async function save() {
+    setSaving(true);
+    setError(null);
+    try {
+      const items = Array.from(selected).map((k) => {
+        const [c, t, s, o] = k.split('|').map(Number);
+        return { category_id: c, service_type_id: t, deep_skill_id: s, option_id: o };
+      });
+      await api.put(`/admin/easyfixers/${efrId}/option-mappings`, { items });
+      // Refetch + re-anchor original to the new server state.
+      const mapResp = await api.get<{ items: OptionMapping[] }>(`/admin/easyfixers/${efrId}/option-mappings`);
+      const fresh = mapResp?.items ?? [];
+      const set = new Set(fresh.map((m) => mapKey(m.category_id, m.service_type_id, m.deep_skill_id, m.option_id)));
+      setMappings(fresh);
+      setOriginal(new Set(set));
+      setSelected(new Set(set));
+      // Refresh parent payload so the Additional Details progress bar
+      // reflects the new deep-skill count.
+      if (onReload) await onReload();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Failed to save option mappings');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="border-t pt-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <h4 className="text-sm font-semibold text-slate-700">Deep Skill Option Mapping</h4>
+        <span className="text-xs text-slate-500">
+          {selected.size} Option{selected.size === 1 ? '' : 's'} Selected
+        </span>
+      </div>
+
+      {loading ? (
+        <div className="text-xs text-slate-500">Loading…</div>
+      ) : error ? (
+        <div className="text-xs text-rose-600">{error}</div>
+      ) : categories.length === 0 ? (
+        <div className="text-xs text-slate-500">No Service Categories Available.</div>
+      ) : (
+        <>
+          {mappings.length === 0 && selected.size === 0 && (
+            <div className="rounded border border-dashed border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
+              No Options Mapped Yet. Pick A Service Category To Begin.
+            </div>
+          )}
+
+          <div className="rounded-md border border-slate-200 divide-y divide-slate-200">
+            {categories.map((c) => (
+              <div key={c.service_catg_id}>
+                <button
+                  type="button"
+                  className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-slate-50"
+                  onClick={() => toggleCatg(c.service_catg_id)}
+                >
+                  {openCatg.has(c.service_catg_id)
+                    ? <ChevronDown className="h-4 w-4 text-slate-500" />
+                    : <ChevronRight className="h-4 w-4 text-slate-500" />}
+                  <span className="font-medium">{c.service_catg_name}</span>
+                  {countByCategory.get(c.service_catg_id) ? (
+                    <span className="ml-2 inline-flex items-center justify-center min-w-[1.5rem] h-5 px-1.5 rounded-full bg-emerald-100 text-emerald-700 text-[11px] font-semibold tabular-nums">
+                      {countByCategory.get(c.service_catg_id)}
+                    </span>
+                  ) : null}
+                </button>
+                {openCatg.has(c.service_catg_id) && (
+                  <div className="bg-slate-50/60">
+                    {!typesByCatg[c.service_catg_id]
+                      ? <div className="pl-9 pr-3 py-2 text-xs text-slate-500">Loading…</div>
+                      : typesByCatg[c.service_catg_id].length === 0
+                      ? <div className="pl-9 pr-3 py-2 text-xs text-slate-500">No Service Types.</div>
+                      : typesByCatg[c.service_catg_id].map((t) => (
+                        <div key={t.service_type_id}>
+                          <button
+                            type="button"
+                            className="w-full flex items-center gap-2 pl-9 pr-3 py-1.5 text-left text-sm hover:bg-slate-100"
+                            onClick={() => toggleType(t.service_type_id, c.service_catg_id)}
+                          >
+                            {openType.has(t.service_type_id)
+                              ? <ChevronDown className="h-4 w-4 text-slate-500" />
+                              : <ChevronRight className="h-4 w-4 text-slate-500" />}
+                            <span>{t.service_type_name}</span>
+                            {countByType.get(`${c.service_catg_id}|${t.service_type_id}`) ? (
+                              <span className="ml-2 inline-flex items-center justify-center min-w-[1.5rem] h-5 px-1.5 rounded-full bg-emerald-100 text-emerald-700 text-[11px] font-semibold tabular-nums">
+                                {countByType.get(`${c.service_catg_id}|${t.service_type_id}`)}
+                              </span>
+                            ) : null}
+                          </button>
+                          {openType.has(t.service_type_id) && (
+                            <div>
+                              {!skillsByType[t.service_type_id]
+                                ? <div className="pl-16 pr-3 py-2 text-xs text-slate-500">Loading…</div>
+                                : skillsByType[t.service_type_id].length === 0
+                                ? <div className="pl-16 pr-3 py-2 text-xs text-slate-500">No Deep Skills.</div>
+                                : skillsByType[t.service_type_id].map((s) => (
+                                  <div key={s.deepskill_id}>
+                                    <button
+                                      type="button"
+                                      className="w-full flex items-center gap-2 pl-16 pr-3 py-1.5 text-left text-sm hover:bg-slate-100"
+                                      onClick={() => toggleSkill(s.deepskill_id)}
+                                    >
+                                      {openSkill.has(s.deepskill_id)
+                                        ? <ChevronDown className="h-4 w-4 text-slate-500" />
+                                        : <ChevronRight className="h-4 w-4 text-slate-500" />}
+                                      <span>{s.deepskill_name}</span>
+                                      {countBySkill.get(`${c.service_catg_id}|${t.service_type_id}|${s.deepskill_id}`) ? (
+                                        <span className="ml-2 inline-flex items-center justify-center min-w-[1.5rem] h-5 px-1.5 rounded-full bg-emerald-100 text-emerald-700 text-[11px] font-semibold tabular-nums">
+                                          {countBySkill.get(`${c.service_catg_id}|${t.service_type_id}|${s.deepskill_id}`)}
+                                        </span>
+                                      ) : null}
+                                    </button>
+                                    {openSkill.has(s.deepskill_id) && (
+                                      <div className="pl-24 pr-3 py-1 space-y-1">
+                                        {!optionsBySkill[s.deepskill_id]
+                                          ? <div className="text-xs text-slate-500">Loading…</div>
+                                          : optionsBySkill[s.deepskill_id].length === 0
+                                          ? <div className="text-xs text-slate-500">No Options.</div>
+                                          : optionsBySkill[s.deepskill_id].map((o) => {
+                                            const key = mapKey(c.service_catg_id, t.service_type_id, s.deepskill_id, o.id);
+                                            const isSelected = selected.has(key);
+                                            const isOriginal = original.has(key);
+                                            return (
+                                              <label key={o.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                                                <input
+                                                  type="checkbox"
+                                                  className="h-4 w-4 accent-emerald-600"
+                                                  checked={isSelected}
+                                                  onChange={() => toggleOption(c.service_catg_id, t.service_type_id, s.deepskill_id, o.id)}
+                                                />
+                                                <span className={isOriginal ? 'font-semibold text-emerald-700' : 'text-slate-700'}>
+                                                  {o.skill_option}
+                                                </span>
+                                                {isOriginal && <Check className="h-3.5 w-3.5 text-emerald-600" />}
+                                              </label>
+                                            );
+                                          })}
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div className="flex justify-end gap-2 pt-1">
+            <Button disabled={saving || !dirty} onClick={save} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+              {saving ? 'Saving…' : 'Save Option Mappings'}
+            </Button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ───────── Serviceable Pincodes ───────── */
+/*
+ * Multi-select of pincodes the technician will accept jobs in. Persisted
+ * to tbl_efr_serviceable_pincode_map via /admin/easyfixers/:id/
+ * serviceable-pincodes (GET + PUT).
+ *
+ * Load model (2026-06 redesign):
+ *   - On first dropdown open we fetch the ENTIRE active pincode catalog
+ *     (~155k rows) in one shot via /admin/pincodes?limit=200000&status=1.
+ *     The query is a single indexed scan; sub-second.
+ *   - Cached at module scope (`allPincodesCache`) so re-mounts across
+ *     navigations don't re-fetch.
+ *   - Filtering is client-side substring match against pincode + city —
+ *     no debounce, no server round-trips.
+ *
+ * Bulk-paste (operator productivity):
+ *   - When the search input contains comma/space/newline separators AND
+ *     enough digits for 2+ pincodes, an "Add All Matching Pincodes"
+ *     button appears next to the search; Enter triggers the same flow.
+ *   - Codes are parsed, 6-digit-validated, and resolved via
+ *     POST /admin/pincodes/lookup-many. Matched rows merge into the chip
+ *     set; unmatched codes surface in a toast.
+ *
+ * State model mirrors DeepSkillOptionMapping: `original` is the Set
+ * captured on first fetch (re-anchored after Save); `selected` is the
+ * working set; Save is disabled until divergence.
+ */
+
+type PincodeChip = {
+  pincode_id: number;
+  pincode: string;
+  city_name: string | null;
+  state_name: string | null;
+};
+
+type PincodeSearchRow = PincodeChip & {
+  location?: string | null;
+};
+
+// Module-scope cache + in-flight promise so multiple mounts share one fetch.
+let allPincodesCache: PincodeSearchRow[] | null = null;
+let allPincodesInflight: Promise<PincodeSearchRow[]> | null = null;
+
+async function loadAllPincodes(): Promise<PincodeSearchRow[]> {
+  if (allPincodesCache) return allPincodesCache;
+  if (allPincodesInflight) return allPincodesInflight;
+  allPincodesInflight = (async () => {
+    const resp = await api.get<{ items: PincodeSearchRow[] }>(
+      // status param dropped (2026-06-11) — BE's status enum is
+      // LOCAL/TRAVEL (a derived classification), not active/inactive.
+      // includeInactive=false already filters out the inactive rows
+      // we don't want; sending status=1 produced a Joi 400.
+      `/admin/pincodes?limit=200000&includeInactive=false`
+    );
+    const items = Array.isArray(resp?.items) ? resp.items : [];
+    allPincodesCache = items;
+    return items;
+  })();
+  try {
+    return await allPincodesInflight;
+  } finally {
+    allPincodesInflight = null;
+  }
+}
+
+function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: () => Promise<void> }) {
+  const [selected, setSelected] = useState<Map<number, PincodeChip>>(new Map());
+  const [original, setOriginal] = useState<Map<number, PincodeChip>>(new Map());
+  const [search, setSearch] = useState('');
+  const [allPincodes, setAllPincodes] = useState<PincodeSearchRow[]>(() => allPincodesCache ?? []);
+  const [isLoadingAll, setIsLoadingAll] = useState(false);
+  const [bulkLookupBusy, setBulkLookupBusy] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  // Initial load — fetch current serviceable pincodes for this efr.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        setLoading(true);
+        const resp = await api.get<{ items: PincodeChip[] }>(
+          `/admin/easyfixers/${efrId}/serviceable-pincodes`
+        );
+        if (cancelled) return;
+        const items = resp?.items ?? [];
+        const map = new Map<number, PincodeChip>();
+        for (const p of items) {
+          map.set(Number(p.pincode_id), {
+            pincode_id: Number(p.pincode_id),
+            pincode: String(p.pincode),
+            city_name: p.city_name ?? null,
+            state_name: p.state_name ?? null,
+          });
+        }
+        setSelected(new Map(map));
+        setOriginal(new Map(map));
+      } catch (e) {
+        if (!cancelled) setError(e instanceof ApiError ? e.message : 'Failed to load serviceable pincodes');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [efrId]);
+
+  // Lazy-load the full catalog on first dropdown open. Cached at module
+  // scope so subsequent mounts (across navigations) skip the round-trip.
+  const ensureAllPincodes = useCallback(async () => {
+    if (allPincodesCache) {
+      if (allPincodes.length === 0) setAllPincodes(allPincodesCache);
+      return;
+    }
+    setIsLoadingAll(true);
+    try {
+      const items = await loadAllPincodes();
+      setAllPincodes(items);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Failed to load pincodes');
+    } finally {
+      setIsLoadingAll(false);
+    }
+  }, [allPincodes.length]);
+
+  useEffect(() => {
+    if (open && allPincodes.length === 0 && !allPincodesCache) {
+      void ensureAllPincodes();
+    }
+  }, [open, allPincodes.length, ensureAllPincodes]);
+
+  // Click-outside to close the dropdown.
+  useEffect(() => {
+    function onDocClick(e: MouseEvent) {
+      if (!containerRef.current) return;
+      if (!containerRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    if (open) document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [open]);
+
+  // Bulk-paste detection heuristic:
+  //   • input must contain a comma, space, or newline (separator), AND
+  //   • digits-only length ≥ 12 (i.e. at least 2 pincodes worth).
+  // Threshold 12 keeps incidental whitespace from triggering while a real
+  // paste like "110001, 110002" passes.
+  const isBulkInput = useMemo(() => {
+    if (!/[,\s\n]/.test(search)) return false;
+    const digitsOnly = search.replace(/\D/g, '');
+    return digitsOnly.length >= 12;
+  }, [search]);
+
+  // Client-side substring filter — no debounce, data is local.
+  // First 100 results returned; matches against pincode OR city_name.
+  const filteredResults = useMemo(() => {
+    if (isBulkInput) return [];
+    const q = search.trim().toLowerCase();
+    if (!q) return allPincodes.slice(0, 100);
+    const out: PincodeSearchRow[] = [];
+    for (const p of allPincodes) {
+      if (
+        String(p.pincode).toLowerCase().includes(q) ||
+        (p.city_name && p.city_name.toLowerCase().includes(q))
+      ) {
+        out.push(p);
+        if (out.length >= 100) break;
+      }
+    }
+    return out;
+  }, [allPincodes, search, isBulkInput]);
+
+  function toggle(row: PincodeSearchRow) {
+    const id = Number(row.pincode_id);
+    const next = new Map(selected);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.set(id, {
+        pincode_id: id,
+        pincode: String(row.pincode),
+        city_name: row.city_name ?? null,
+        state_name: row.state_name ?? null,
+      });
+    }
+    setSelected(next);
+  }
+
+  function removeChip(id: number) {
+    const next = new Map(selected);
+    next.delete(id);
+    setSelected(next);
+  }
+
+  async function handleBulkAdd() {
+    if (bulkLookupBusy) return;
+    const codes = search
+      .split(/[,\s\n]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .filter((p) => /^\d{6}$/.test(p));
+    if (codes.length === 0) {
+      showToast({ variant: 'error', message: 'No Valid Pincodes Found In Input' });
+      return;
+    }
+    setBulkLookupBusy(true);
+    setError(null);
+    try {
+      const resp = await api.post<{ items: PincodeSearchRow[]; notFound: string[] }>(
+        `/admin/pincodes/lookup-many`,
+        { pincodes: codes }
+      );
+      const items = Array.isArray(resp?.items) ? resp.items : [];
+      const notFound = Array.isArray(resp?.notFound) ? resp.notFound : [];
+      const next = new Map(selected);
+      for (const it of items) {
+        const id = Number(it.pincode_id);
+        next.set(id, {
+          pincode_id: id,
+          pincode: String(it.pincode),
+          city_name: it.city_name ?? null,
+          state_name: it.state_name ?? null,
+        });
+      }
+      setSelected(next);
+      setSearch('');
+      if (items.length > 0) {
+        showToast({
+          variant: 'success',
+          message: `Added ${items.length} Pincode${items.length === 1 ? '' : 's'}`,
+        });
+      }
+      if (notFound.length > 0) {
+        const preview = notFound.slice(0, 5).join(', ');
+        const suffix = notFound.length > 5 ? '…' : '';
+        showToast({
+          variant: 'error',
+          message: `${notFound.length} pincodes not found: ${preview}${suffix}`,
+        });
+      }
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : 'Bulk lookup failed';
+      setError(msg);
+      showToast({ variant: 'error', message: msg });
+    } finally {
+      setBulkLookupBusy(false);
+    }
+  }
+
+  function onSearchKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Enter' && isBulkInput) {
+      e.preventDefault();
+      void handleBulkAdd();
+    }
+  }
+
+  const dirty = useMemo(() => {
+    if (selected.size !== original.size) return true;
+    for (const k of selected.keys()) if (!original.has(k)) return true;
+    return false;
+  }, [selected, original]);
+
+  async function save() {
+    setSaving(true);
+    setError(null);
+    try {
+      const pincodeIds = Array.from(selected.keys());
+      await api.put(`/admin/easyfixers/${efrId}/serviceable-pincodes`, { pincodeIds });
+      // Re-fetch + re-anchor original to the new server state.
+      const resp = await api.get<{ items: PincodeChip[] }>(
+        `/admin/easyfixers/${efrId}/serviceable-pincodes`
+      );
+      const items = resp?.items ?? [];
+      const map = new Map<number, PincodeChip>();
+      for (const p of items) {
+        map.set(Number(p.pincode_id), {
+          pincode_id: Number(p.pincode_id),
+          pincode: String(p.pincode),
+          city_name: p.city_name ?? null,
+          state_name: p.state_name ?? null,
+        });
+      }
+      setSelected(new Map(map));
+      setOriginal(new Map(map));
+      showToast({ variant: 'success', message: 'Serviceable Pincodes Updated' });
+      // Refresh parent payload so the Additional Details progress bar
+      // reflects the new pincode count.
+      if (onReload) await onReload();
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : 'Failed to save serviceable pincodes';
+      setError(msg);
+      showToast({ variant: 'error', message: msg });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const chips = useMemo(
+    () => Array.from(selected.values()).sort((a, b) => a.pincode.localeCompare(b.pincode)),
+    [selected]
+  );
+
+  return (
+    <div className="border-t pt-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <h4 className="text-sm font-semibold text-slate-700">Serviceable Pincodes</h4>
+          <p className="text-xs text-slate-500">
+            Pincodes Where This Technician Will Accept Jobs. Type To Search, Or Paste A Comma/Space Separated List To Bulk-Add.
+          </p>
+        </div>
+        <span className="text-xs text-slate-500">
+          {selected.size} Pincode{selected.size === 1 ? '' : 's'} Selected
+        </span>
+      </div>
+
+      {loading ? (
+        <div className="text-xs text-slate-500">Loading…</div>
+      ) : (
+        <>
+          <div ref={containerRef} className="relative">
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+                <Input
+                  value={search}
+                  placeholder="Search By Pincode Or City, Or Paste A List…"
+                  onChange={(e) => { setSearch(e.target.value); setOpen(true); }}
+                  onFocus={() => setOpen(true)}
+                  onKeyDown={onSearchKeyDown}
+                  className="pl-8"
+                />
+              </div>
+              {isBulkInput && (
+                <Button
+                  type="button"
+                  onClick={() => void handleBulkAdd()}
+                  disabled={bulkLookupBusy}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white whitespace-nowrap"
+                >
+                  {bulkLookupBusy ? (
+                    <span className="inline-flex items-center gap-1.5">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" /> Adding…
+                    </span>
+                  ) : (
+                    'Add All Matching Pincodes'
+                  )}
+                </Button>
+              )}
+            </div>
+            {open && !isBulkInput && (
+              <div className="absolute z-20 mt-1 w-full rounded-md border border-slate-200 bg-white shadow-lg max-h-72 overflow-auto">
+                {isLoadingAll && allPincodes.length === 0 ? (
+                  <div className="px-3 py-3 text-xs text-slate-500 inline-flex items-center gap-2">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading Pincodes…
+                  </div>
+                ) : filteredResults.length === 0 ? (
+                  <div className="px-3 py-2 text-xs text-slate-500">No Pincodes Match.</div>
+                ) : (
+                  <>
+                    {filteredResults.map((r) => {
+                      const id = Number(r.pincode_id);
+                      const isSelected = selected.has(id);
+                      const sub = [r.city_name, r.state_name].filter(Boolean).join(', ');
+                      return (
+                        <button
+                          type="button"
+                          key={id}
+                          onClick={() => toggle(r)}
+                          className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-slate-50"
+                        >
+                          <span className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              readOnly
+                              checked={isSelected}
+                              className="h-4 w-4 accent-emerald-600 pointer-events-none"
+                            />
+                            <span className="font-medium text-slate-800">{r.pincode}</span>
+                            {sub && <span className="text-xs text-slate-500">· {sub}</span>}
+                          </span>
+                          {isSelected && <Check className="h-4 w-4 text-emerald-600 shrink-0" />}
+                        </button>
+                      );
+                    })}
+                    {filteredResults.length >= 100 && (
+                      <div className="px-3 py-1.5 text-[11px] text-slate-400 border-t bg-slate-50/60">
+                        Showing First 100 Matches — Refine Your Search Or Paste A List To Bulk-Add.
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+            {isBulkInput && (
+              <div className="mt-1 text-[11px] text-slate-500">
+                Press Enter Or Click The Button To Resolve And Add All Pincodes.
+              </div>
+            )}
+          </div>
+
+          {/* Selected chips */}
+          {chips.length === 0 ? (
+            <div className="rounded border border-dashed border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
+              No Serviceable Pincodes Selected Yet — Type Above To Search Or Paste A List To Bulk-Add.
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {chips.map((c) => (
+                <span
+                  key={c.pincode_id}
+                  className="inline-flex items-center gap-1.5 rounded-full bg-sky-50 border border-sky-200 text-sky-700 pl-3 pr-1.5 py-0.5 text-xs"
+                  title={[c.city_name, c.state_name].filter(Boolean).join(', ') || undefined}
+                >
+                  <span className="font-medium">{c.pincode}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeChip(c.pincode_id)}
+                    className="rounded-full p-0.5 hover:bg-sky-100"
+                    aria-label={`Remove ${c.pincode}`}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          {error && <div className="text-xs text-rose-600">{error}</div>}
+
+          <div className="flex justify-end gap-2 pt-1">
+            <Button disabled={saving || !dirty} onClick={save} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+              {saving ? 'Saving…' : 'Save Serviceable Pincodes'}
+            </Button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

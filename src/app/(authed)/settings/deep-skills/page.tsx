@@ -70,6 +70,8 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { showToast } from '@/components/ui/toast';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { DeepSkillMappedEasyfixersModal } from '@/components/deep-skill/DeepSkillMappedEasyfixersModal';
+import { DownloadButton } from '@/components/ui/download-button';
+import { downloadXlsx } from '@/lib/download-xlsx';
 
 /*
  * Manage Deep Skills — Service Category → Service Type → Deep Skill → Options.
@@ -144,6 +146,23 @@ export default function DeepSkillsSettingsPage() {
   // Editor modal
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorRecord, setEditorRecord] = useState<DeepSkill | null>(null);
+
+  // Download (2026-06-10) — emerald CTA in the header, mirrors the
+  // shared DownloadButton pattern used by jobs/reports pages. Always
+  // exports the full catalogue; FE filters don't narrow the download.
+  const [downloading, setDownloading] = useState(false);
+  async function handleDownload() {
+    setDownloading(true);
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      await downloadXlsx({
+        url: '/admin/deep-skills/download',
+        filename: `deep-skills-${today}.xlsx`,
+      });
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Download failed' });
+    } finally { setDownloading(false); }
+  }
 
   // Mapped Easyfixers modal — read-only listing of every easyfixer
   // mapped to ANY option under the chosen deep skill. Open via the
@@ -304,24 +323,40 @@ export default function DeepSkillsSettingsPage() {
         <div>
           <h1 className="text-2xl font-semibold">Manage Deep Skills</h1>
         </div>
-        {can.isDeepSkillAddNew && (
-          <div className="flex items-center gap-2">
-            {/*
-             * Upload Excel — opens the dedicated bulk-upload page where
-             * operators pick an .xlsx, get a dry-run preview of parsed
-             * rows + per-row status, then commit. Gated on the same
-             * action flag as Add Deep Skill (no separate permission).
-             */}
-            <Link href="/settings/deep-skills/upload">
-              <Button variant="outline" size="sm">
-                <UploadCloud className="h-4 w-4 mr-1" /> Upload Excel
+        <div className="flex items-center gap-2">
+          {/*
+           * Download Deep Skills (2026-06-10) — full-catalogue XLSX
+           * with category/type/options/image filename/status/created.
+           * Visible to anyone who can see the page (no separate
+           * action flag — read-only export).
+           */}
+          <DownloadButton
+            onClick={handleDownload}
+            downloading={downloading}
+            label="Download Deep Skills"
+            loadingLabel="Preparing…"
+            title="Download all deep skills as an Excel file"
+            className="h-9 px-3 text-sm"
+          />
+          {can.isDeepSkillAddNew && (
+            <>
+              {/*
+               * Upload Excel — opens the dedicated bulk-upload page where
+               * operators pick an .xlsx, get a dry-run preview of parsed
+               * rows + per-row status, then commit. Gated on the same
+               * action flag as Add Deep Skill (no separate permission).
+               */}
+              <Link href="/settings/deep-skills/upload">
+                <Button variant="outline" size="sm">
+                  <UploadCloud className="h-4 w-4 mr-1" /> Upload Excel
+                </Button>
+              </Link>
+              <Button onClick={openCreate} size="sm">
+                <Plus className="h-4 w-4 mr-1" /> Add Deep Skill
               </Button>
-            </Link>
-            <Button onClick={openCreate} size="sm">
-              <Plus className="h-4 w-4 mr-1" /> Add Deep Skill
-            </Button>
-          </div>
-        )}
+            </>
+          )}
+        </div>
       </div>
 
       {/* Filter strip — mirrors legacy layout */}
@@ -604,13 +639,37 @@ function DeepSkillEditor({
   // needs the deepskill_id to mint the `Skills/Skill_<id>_<seq>` key).
   // Stash the picked File here and POST it after create() resolves.
   const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
+  /*
+   * Preview URL (2026-06-10). Two sources:
+   *   - Edit mode w/ existing image → /image-url endpoint returns
+   *     a short-TTL presigned S3 URL; rendered straight in <img>.
+   *   - Add mode w/ a picked file → local FileReader object URL so
+   *     operators see what they chose before the post-create upload.
+   * `useEffect` revokes the object URL on cleanup when sourced
+   * locally; presigned URLs need no cleanup (they're plain strings).
+   */
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  /*
+   * Lightbox (2026-06-10). The 80×80 preview tile is click-to-zoom —
+   * tapping it opens a separate Dialog that renders the image at viewport
+   * size so operators can verify orientation / content without leaving
+   * the editor. `zoomedImage` holds the URL of whatever is currently being
+   * shown enlarged (presigned S3 URL in Edit mode, blob: object URL in
+   * Add mode); null means the lightbox is closed.
+   */
+  const [zoomedImage, setZoomedImage] = useState<string | null>(null);
   const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !saving });
+  // Lightbox is read-only — no form state to guard, so isDirty:false
+  // keeps the close path frictionless (Esc / overlay click / X close
+  // immediately without a discard prompt).
+  const guardedLightboxClose = useFormDirtyGuard(() => setZoomedImage(null), { isDirty: false });
 
   useEffect(() => {
     if (!record) {
       setF({ deepskill_name: '', deepskill_description: '', deepskill_image: '', deepskill_tag_words: '', category_id: '', service_type_id: '', status: 1 });
       setOptions([]); setCustomOpt(''); setErr(null);
       setPendingImageFile(null);
+      setPreviewUrl(null);
       return;
     }
     setF({
@@ -624,15 +683,38 @@ function DeepSkillEditor({
     });
     setCustomOpt(''); setErr(null);
     setPendingImageFile(null);
+    setPreviewUrl(null);
     // For edit, fetch current options so the chip list reflects DB truth.
     if (record.deepskill_id) {
       api.get<DeepSkillDetail>(`/admin/deep-skills/${record.deepskill_id}`)
         .then((d) => setOptions(d.options.filter((o) => Number(o.status)).map((o) => o.skill_option)))
         .catch(() => setOptions([]));
+      // 2026-06-10: load the existing image as a presigned-URL preview.
+      // The BE endpoint mints a short-TTL S3 URL; we just drop it on an
+      // <img src=…> without any auth header — same pattern as Notice
+      // Board reads. If the column is empty or S3 isn't enabled, the
+      // response `url` field is null and the preview row stays hidden.
+      if (record.deepskill_image) {
+        api.get<{ image: string; url: string | null }>(
+          `/admin/deep-skills/${record.deepskill_id}/image-url`,
+        ).then((r) => { if (r.url) setPreviewUrl(r.url); })
+          .catch(() => { /* preview is best-effort */ });
+      }
     } else {
       setOptions([]);
     }
   }, [record, open]);
+
+  // Revoke local object URLs when they're replaced or the modal closes.
+  // Presigned S3 URLs are plain strings — `blob:` is the marker for an
+  // object URL that needs explicit cleanup.
+  useEffect(() => {
+    return () => {
+      if (previewUrl && previewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(previewUrl);
+      }
+    };
+  }, [previewUrl]);
 
   const filteredTypes = useMemo(() => {
     if (!f.category_id) return lk.serviceTypes;
@@ -670,6 +752,16 @@ function DeepSkillEditor({
   async function handleImage(file: File | null) {
     if (!file) return;
     setErr(null);
+    // Local FileReader-style object URL gives the operator immediate
+    // visual feedback — no waiting for the round-trip in Edit mode and
+    // it's the only preview available in Add mode (where the upload
+    // doesn't happen until after the create round-trip).
+    const localUrl = URL.createObjectURL(file);
+    setPreviewUrl((prev) => {
+      if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
+      return localUrl;
+    });
+
     if (!isEdit || !record?.deepskill_id) {
       // Add mode — defer until after the skill is created.
       setPendingImageFile(file);
@@ -682,11 +774,42 @@ function DeepSkillEditor({
     try {
       const fd = new FormData();
       fd.append('file', file);
-      const res = await api.post<{ image: string }>(`/admin/deep-skills/${record.deepskill_id}/image`, fd);
+      // 2026-06-10: canonical multipart endpoint. Returns the new S3
+      // key plus a fresh presigned URL we can swap into the preview.
+      const res = await api.post<{ image: string; url: string | null }>(
+        `/admin/deep-skills/${record.deepskill_id}/upload-image`, fd);
       setF((s) => ({ ...s, deepskill_image: res.image }));
+      if (res.url) {
+        setPreviewUrl((prev) => {
+          if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
+          return res.url;
+        });
+      }
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : 'Upload failed');
     } finally { setImageUploading(false); }
+  }
+
+  /*
+   * Remove the current image (2026-06-10). Two paths:
+   *  - Edit mode + saved key → DELETE /image endpoint clears the DB
+   *    column AND the S3 object in one call.
+   *  - Add mode OR pending local file → just drop the local preview
+   *    + clear `pendingImageFile`; nothing was persisted yet.
+   */
+  async function removeImage() {
+    setErr(null);
+    if (previewUrl && previewUrl.startsWith('blob:')) URL.revokeObjectURL(previewUrl);
+    setPreviewUrl(null);
+    setPendingImageFile(null);
+    setF((s) => ({ ...s, deepskill_image: '' }));
+    if (isEdit && record?.deepskill_id && record.deepskill_image) {
+      try {
+        await api.delete(`/admin/deep-skills/${record.deepskill_id}/image`);
+      } catch (e) {
+        setErr(e instanceof ApiError ? e.message : 'Failed to clear image');
+      }
+    }
   }
 
   async function submit(e: React.FormEvent) {
@@ -750,7 +873,12 @@ function DeepSkillEditor({
         try {
           const fd = new FormData();
           fd.append('file', pendingImageFile);
-          await api.post(`/admin/deep-skills/${skillId}/image`, fd);
+          // 2026-06-10: routed to the canonical /upload-image endpoint
+          // which both stores the file in S3 AND persists the key to
+          // `tbl_deep_skill.deepskill_image` (previous endpoint
+          // wrote to a misnamed `tbl_deepskill` table and silently
+          // failed — user-reported as "image not storing in DB").
+          await api.post(`/admin/deep-skills/${skillId}/upload-image`, fd);
         } catch (upErr) {
           // Surface a non-fatal warning. The skill saved; image didn't.
           setErr(`Skill saved. Image upload failed: ${upErr instanceof ApiError ? upErr.message : 'unknown error'}`);
@@ -765,8 +893,19 @@ function DeepSkillEditor({
   }
 
   return (
+    <>
     <Dialog open={open} onOpenChange={guardedOpenChange}>
-      <DialogContent className="max-w-3xl">
+      {/*
+       * Scrollability (2026-06-10). `max-h-[90vh]` + `overflow-hidden`
+       * + `flex flex-col` caps the modal at viewport height and lets
+       * the inner body scroll independently. Sticky DialogHeader sits
+       * at the top, the form fields scroll inside a `flex-1 min-h-0
+       * overflow-y-auto` region, and the footer (Cancel / Save) is
+       * pinned at the bottom — operators with images + multiple chips
+       * + a long description no longer lose access to Save/Cancel
+       * when the form overflows the viewport.
+       */}
+      <DialogContent className="max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
         {/*
          * Header (2026-06-05): switched from a custom teal banner +
          * custom X button to the platform-standard `DialogHeader` band.
@@ -793,7 +932,8 @@ function DeepSkillEditor({
           </div>
         </DialogHeader>
 
-        <form onSubmit={submit} className="space-y-4">
+        <form onSubmit={submit} className="flex flex-col flex-1 min-h-0">
+        <div className="overflow-y-auto -mx-6 px-6 flex-1 min-h-0 space-y-4 py-1">
           {/*
            * Top row (2026-06-05). Two dropdowns + (Edit mode only) a
            * right-aligned Active/Inactive Switch. The Status control is
@@ -863,9 +1003,52 @@ function DeepSkillEditor({
                 <span className="text-muted-foreground">
                   {imageUploading ? 'Uploading…' : (f.deepskill_image || 'Upload Image')}
                 </span>
-                <input type="file" accept="image/*" className="hidden"
+                <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="hidden"
                   onChange={(e) => handleImage(e.target.files?.[0] ?? null)} />
               </label>
+              {/*
+               * Preview tile (2026-06-10). 80×80 thumbnail of the
+               * currently-picked or saved image. Two source paths:
+               *   - Edit mode w/ existing key → presigned S3 URL via
+               *     GET /image-url (signed URL is a plain string, no
+               *     auth header on the <img>).
+               *   - Add mode or replacement w/ pending file → local
+               *     object URL from FileReader-style URL.createObjectURL.
+               * The X overlay clears local + DB state; in Edit mode it
+               * also DELETEs the underlying S3 object.
+               */}
+              {previewUrl && (
+                <div className="mt-2 relative inline-block">
+                  {/*
+                   * Click-to-zoom (2026-06-10). The 80×80 tile becomes a
+                   * <button> with `cursor-zoom-in` so operators can verify
+                   * details without leaving the editor. Opens a separate
+                   * Dialog at the page level (see below) with the image
+                   * rendered at viewport size. Esc / overlay-click closes.
+                   */}
+                  <button
+                    type="button"
+                    onClick={() => setZoomedImage(previewUrl)}
+                    title="Click To Enlarge"
+                    className="block cursor-zoom-in"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={previewUrl}
+                      alt="Skill image preview"
+                      className="w-20 h-20 object-cover rounded border border-input"
+                    />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={removeImage}
+                    title="Remove Image"
+                    className="absolute -top-1 -right-1 inline-flex items-center justify-center h-5 w-5 rounded-full bg-rose-600 hover:bg-rose-700 text-white shadow"
+                  >
+                    <XIcon className="h-3 w-3" />
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -948,11 +1131,14 @@ function DeepSkillEditor({
           </div>
 
           {err && <div className="text-sm text-destructive">{err}</div>}
+        </div>
 
           {/* Footer (2026-06-05): icon-free buttons per ops feedback —
               the X on Cancel and the + on Add/Save were visual noise
-              given the words alone already communicate intent. */}
-          <div className="flex justify-end gap-2 pt-3 border-t">
+              given the words alone already communicate intent.
+              Pinned via `shrink-0` so it stays visible when the body
+              above scrolls. */}
+          <div className="flex justify-end gap-2 pt-3 mt-3 border-t shrink-0">
             <Button type="button" variant="outline" onClick={onClose}>
               Cancel
             </Button>
@@ -963,5 +1149,54 @@ function DeepSkillEditor({
         </form>
       </DialogContent>
     </Dialog>
+
+      {/*
+       * Lightbox (2026-06-10). Separate Dialog rendered as a sibling
+       * of the editor so it overlays everything (including the editor).
+       * The image is the URL we're already using in the preview tile —
+       * presigned S3 URL (edit) or local object URL (add) — no extra
+       * fetch needed. `max-w-3xl p-0` lets the image fill the dialog
+       * without internal padding; `w-full h-auto` scales it to the
+       * dialog width preserving aspect ratio.
+       */}
+      {/*
+        * Lightbox (2026-06-10 fix v2). Previous version had no visible
+        * close affordance + the image could fill the entire viewport
+        * when zoomedImage was a high-res photo, blocking the Esc/click-
+        * outside hint. Now:
+        *   - max-w-2xl + max-h-[85vh] keeps the dialog modal-sized,
+        *     not full-screen
+        *   - Explicit X close button at top-right (sticky-positioned
+        *     above the image so it's always visible regardless of
+        *     image dimensions)
+        *   - Image gets max-h-[80vh] + object-contain so portrait /
+        *     landscape ratios both fit inside the dialog without
+        *     overflow
+        *   - mx-auto centres the image when it's narrower than the
+        *     dialog (logos, square thumbnails)
+        */}
+      <Dialog open={zoomedImage != null} onOpenChange={guardedLightboxClose}>
+        <DialogContent className="max-w-2xl max-h-[85vh] p-0 overflow-hidden">
+          <DialogTitle className="sr-only">Skill Image Preview</DialogTitle>
+          <button
+            type="button"
+            onClick={() => setZoomedImage(null)}
+            className="absolute top-2 right-2 z-10 rounded-full bg-white/90 hover:bg-white text-slate-700 hover:text-slate-900 shadow-md p-1.5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+            title="Close preview"
+            aria-label="Close preview"
+          >
+            <XIcon className="h-4 w-4" />
+          </button>
+          {zoomedImage && (
+            /* eslint-disable-next-line @next/next/no-img-element */
+            <img
+              src={zoomedImage}
+              alt="Skill image enlarged"
+              className="w-auto h-auto max-w-full max-h-[80vh] object-contain mx-auto block"
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
