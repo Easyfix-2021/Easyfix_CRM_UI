@@ -44,7 +44,7 @@ function writeMappedCountsToCache(rows: Array<{ deepskill_id: number; count: num
 import Link from 'next/link';
 import {
   Plus, Pencil, Trash2, Wrench, X as XIcon,
-  Image as ImageIcon, UploadCloud, Users,
+  Image as ImageIcon, UploadCloud, Users, RefreshCw,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -61,6 +61,10 @@ import {
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
 // Shared status pill — one shape across the CRM, no per-page colour drift.
 import { StatusChip } from '@/components/ui/StatusChip';
+// Shared animated info strip — used for the "image will be auto-generated"
+// notice in the deep-skill editor footer. Same component the Profile Update
+// form uses for inline progress hints.
+import { AnimatedLoadingBar } from '@/components/ui/animated-loading-bar';
 import { api, ApiError } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
 import { cn } from '@/lib/utils';
@@ -108,6 +112,12 @@ type DeepSkill = {
   category_name: string | null;
   service_type_name: string | null;
   option_count: number;
+  // Image auto-generation status (2026-06-12). Surfaced from the list
+  // endpoint so the row can render a "Generating…" / "Image Failed"
+  // chip + Retry button without an extra round-trip. null = no auto-gen
+  // ever attempted (manual upload OR complete + cleared).
+  image_gen_status?: 'pending' | 'failed' | null;
+  image_gen_attempted_at?: string | null;
 };
 
 type Option = { id: number; skill_option: string; status: boolean | number };
@@ -201,6 +211,50 @@ export default function DeepSkillsSettingsPage() {
   }
   useEffect(() => { loadSkills(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ },
     [categoryId, serviceTypeId, statusFilter]);
+
+  /*
+   * Image-gen polling (2026-06-12). When any row in the list is in the
+   * 'pending' state (BE is still calling DALL-E in the background), poll
+   * loadSkills() every 10s until none remain. Lightweight refetch —
+   * already cached on the BE side and only kicks in transiently. The
+   * effect tears down its interval the moment the row's status flips
+   * to null (success) or 'failed', and on unmount.
+   *
+   * Implementation note: we drive off `skills` (the raw fetched list)
+   * rather than `filteredSkills` so a user-set status/search filter
+   * can't accidentally hide a 'pending' row and stop the poll prematurely.
+   */
+  useEffect(() => {
+    const hasPending = (skills ?? []).some((r) => r.image_gen_status === 'pending');
+    if (!hasPending) return;
+    const id = setInterval(() => { loadSkills(); }, 10_000);
+    return () => clearInterval(id);
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [skills]);
+
+  /*
+   * Manual retry for a failed image generation. POSTs to the regenerate
+   * endpoint; on success we refetch so the row flips back to 'pending'
+   * (the polling effect above then takes over). 409 = already in flight,
+   * silently noop. Other errors toast through.
+   */
+  async function retryImageGen(skillId: number) {
+    try {
+      await api.post(`/admin/deep-skills/${skillId}/regenerate-image`, {});
+      showToast({ variant: 'success', message: 'Image Generation Restarted' });
+      loadSkills();
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        // 409 = already in flight. Surface as a success-tone confirmation
+        // ("nothing to do, it's running") rather than an error tone —
+        // the toast component only supports success/error/loading.
+        showToast({ variant: 'success', message: 'Already Generating' });
+        loadSkills();
+        return;
+      }
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Retry failed' });
+    }
+  }
 
   // Client-side text search — covers name, category, service type.
   const filteredSkills = useMemo(() => {
@@ -468,6 +522,35 @@ export default function DeepSkillsSettingsPage() {
                     <span className="inline-flex items-center gap-1.5">
                       {s.deepskill_image && <ImageIcon className="h-3.5 w-3.5 text-muted-foreground" />}
                       {s.deepskill_name}
+                      {/*
+                        * Image auto-gen status (2026-06-12).
+                        *   - 'pending' → sky chip "Generating…"; the
+                        *     page-level polling effect refetches every
+                        *     10s until none remain, at which point this
+                        *     chip naturally disappears.
+                        *   - 'failed'  → rose chip + small icon button
+                        *     calling POST /:id/regenerate-image. 409
+                        *     (already in progress) is treated as a noop.
+                        *   - null/undefined → render nothing (manual
+                        *     upload or already complete).
+                        */}
+                      {s.image_gen_status === 'pending' && (
+                        <StatusChip tone="sky" size="sm">Generating…</StatusChip>
+                      )}
+                      {s.image_gen_status === 'failed' && (
+                        <>
+                          <StatusChip tone="rose" size="sm">Image Failed</StatusChip>
+                          <button
+                            type="button"
+                            onClick={() => retryImageGen(s.deepskill_id)}
+                            className="text-muted-foreground hover:text-primary inline-flex items-center gap-1 text-[11px]"
+                            title="Retry Image Generation"
+                          >
+                            <RefreshCw className="h-3 w-3" />
+                            Retry
+                          </button>
+                        </>
+                      )}
                     </span>
                   </td>
                   <td>
@@ -1155,6 +1238,25 @@ function DeepSkillEditor({
 
           {err && <div className="text-sm text-destructive">{err}</div>}
         </div>
+
+          {/*
+           * Auto-gen info notice (2026-06-12). Shows above the footer
+           * when the operator hasn't picked any image — both the saved
+           * key (`f.deepskill_image`) AND the pending local file
+           * (`pendingImageFile`) are empty. The BE auto-generates the
+           * image from skill name + options after save; this notice
+           * sets that expectation so the operator isn't surprised by a
+           * pending/generating chip on the list row a moment later.
+           *
+           * Title Case per `feedback_easyfix_label_casing.md`.
+           */}
+          {!f.deepskill_image && !pendingImageFile && (
+            <AnimatedLoadingBar
+              visible
+              tone="sky"
+              message="Skill Image Will Be Auto-Generated From Skill Name + Options After Save."
+            />
+          )}
 
           {/* Footer (2026-06-05): icon-free buttons per ops feedback —
               the X on Cancel and the + on Add/Save were visual noise
