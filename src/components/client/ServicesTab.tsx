@@ -605,6 +605,13 @@ function ServiceFormDialog({
     let cancelled = false;
     (async () => {
       try {
+        // Edit-mode hydrate:
+        // single fetch fanning out to 15+ form-field setters with derived
+        // values (chargeType normalisation, on/off pair seeding, etc.).
+        // useFetchOnce would store the raw row, but the form would still
+        // need an effect to project it across all those fields — same
+        // amount of code, plus an extra cache entry.
+        // eslint-disable-next-line no-restricted-syntax
         const row = await api.get<ClientServiceRow>(`/admin/clients/services/${editingId}`);
         if (cancelled) return;
         setCategoryId(row.service_category_id);

@@ -62,6 +62,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent } from '@/components/ui/card';
 import { SkillImageLightbox } from '@/components/easyfixer/SkillImageLightbox';
+import { AnimatedLoadingBar } from '@/components/ui/animated-loading-bar';
 
 /*
  * Tiny bridge wrapper (2026-06-11) that memoises the `value` object and the
@@ -991,17 +992,15 @@ function SkillsMappingPicker({
         <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>
       ) : null}
 
+      <AnimatedLoadingBar visible={saving} message="Saving Skills Mapping…" tone="sky" />
+
       <div className="flex justify-end">
         <Button
           onClick={save}
           disabled={!dirty || saving}
           className="h-11 sm:h-9 w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white"
         >
-          {saving ? (
-            <span className="inline-flex items-center gap-2">
-              <Loader2 className="h-4 w-4 animate-spin" /> Saving…
-            </span>
-          ) : saved && !dirty ? 'Saved · Tap To Re-Save' : 'Save Skills Mapping'}
+          {saved && !dirty ? 'Saved · Tap To Re-Save' : 'Save Skills Mapping'}
         </Button>
       </div>
 
@@ -1267,30 +1266,7 @@ function PincodePicker({
           * results in state, so no data plumbing change is needed.
           */}
         <div className="relative rounded-md border border-slate-200 bg-white max-h-72 overflow-y-auto divide-y divide-slate-100">
-          {/*
-            * Subtle loading bar at the top, sticky over the scroll.
-            * 2026-06-11: rendered unconditionally with an opacity +
-            * max-height + border-color transition so it FADES in/out
-            * instead of popping. `overflow-hidden` clips the icon +
-            * text when collapsed to max-h-0, and the border-bottom
-            * fades to `border-transparent` so there's no stray 1px
-            * line in the resting state. Uses `transition-all` so the
-            * three properties animate together; 200ms is the project
-            * standard for "subtle UI fades".
-            */}
-          <div
-            aria-hidden={!searching}
-            className={
-              `sticky top-0 z-10 bg-white/95 backdrop-blur-[1px] ` +
-              `flex items-center gap-1.5 text-[10px] text-slate-500 ` +
-              `overflow-hidden transition-all duration-200 ease-out border-b ` +
-              (searching
-                ? 'max-h-8 opacity-100 px-3 py-1 border-slate-100'
-                : 'max-h-0 opacity-0 px-3 py-0 border-transparent')
-            }
-          >
-            <Loader2 className="h-3 w-3 animate-spin shrink-0" /> Searching…
-          </div>
+          <AnimatedLoadingBar visible={searching} message="Searching…" tone="slate" sticky />
           {/*
             * Body: show existing results even during `searching` so the
             * container height stays stable. The error / empty states only
@@ -1339,17 +1315,15 @@ function PincodePicker({
         <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>
       ) : null}
 
+      <AnimatedLoadingBar visible={saving} message="Saving Service Area…" tone="sky" />
+
       <div className="flex justify-end">
         <Button
           onClick={save}
           disabled={!dirty || saving}
           className="h-11 sm:h-9 w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white"
         >
-          {saving ? (
-            <span className="inline-flex items-center gap-2">
-              <Loader2 className="h-4 w-4 animate-spin" /> Saving…
-            </span>
-          ) : saved && !dirty ? 'Saved · Tap To Re-Save' : 'Save Service Area'}
+          {saved && !dirty ? 'Saved · Tap To Re-Save' : 'Save Service Area'}
         </Button>
       </div>
     </div>

@@ -95,6 +95,13 @@ export function BulkUpdateUsersDialog({
     if (!open) return;
     let cancelled = false;
     setLookupsLoading(true);
+    // Dialog-open-gated
+    // master-list fetch. Could migrate to `useFetch(open ? key : null)`,
+    // but the lookupsLoading state is consumed by 5+ sub-components for
+    // skeleton rendering and that's already wired through prop drilling
+    // here. Leaving the manual effect for parity with the rest of the
+    // dialog's open/close lifecycle.
+    // eslint-disable-next-line no-restricted-syntax
     api.get<Lookups>('/admin/users/bulk-lookups')
       .then((d) => { if (!cancelled) setLookups(d); })
       .catch(() => { if (!cancelled) setLookups(null); })

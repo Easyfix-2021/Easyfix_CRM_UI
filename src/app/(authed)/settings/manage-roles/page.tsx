@@ -122,9 +122,18 @@ export default function ManageRolesPage() {
   const [allMenus, setAllMenus] = useState<MenuRow[]>([]);
   const [allActions, setAllActions] = useState<MenuActionRow[]>([]);
   useEffect(() => {
+    // Both calls feed
+    // catalogues (menus + menu actions) that the page filters in-memory
+    // (menu_status=1 only); the transform makes `useFetchOnce` awkward
+    // because we want the filtered slice in state, not the raw payload
+    // re-derived on every render. Pair-loaded together so the editor
+    // mounts with both ready.
+    // eslint-disable-next-line no-restricted-syntax
     void api.get<MenuRow[]>('/admin/menus')
       .then((rows) => setAllMenus((rows || []).filter((m) => Number(m.menu_status) === 1)))
       .catch(() => setAllMenus([]));
+    // See note above.
+    // eslint-disable-next-line no-restricted-syntax
     void api.get<MenuActionRow[]>('/shared/lookup/menu-actions').then(setAllActions).catch(() => setAllActions([]));
   }, []);
 
@@ -714,11 +723,20 @@ function RoleFormModal({
   useEffect(() => {
     if (!open) return;
     if (menus.length === 0) {
+      // Conditional first-
+      // load inside a modal-open effect: only fires when the user opens the
+      // editor AND the cache is empty. `useFetchOnce` can't express "only
+      // fetch if local state is empty AND modal is open" without an enabled
+      // flag chain that's noisier than this guard.
+      // eslint-disable-next-line no-restricted-syntax
       void api.get<MenuRow[]>('/admin/menus')
         .then((rows) => setMenus((rows || []).filter((m) => Number(m.menu_status) === 1)))
         .catch(() => setMenus([]));
     }
     if (allActions.length === 0) {
+      // Same as above:
+      // gated on modal-open + empty cache.
+      // eslint-disable-next-line no-restricted-syntax
       void api.get<MenuActionRow[]>('/shared/lookup/menu-actions').then(setAllActions).catch(() => setAllActions([]));
     }
     // Visibility filter — one extra small fetch so we know which menu_ids
@@ -726,6 +744,10 @@ function RoleFormModal({
     // Backend may return either { enabled, hiddenMenuIds, … } (post-pill
     // patch) or { enabled, hiddenLegacyUrls } (pre-pill clients) — we
     // tolerate both shapes so a partial deploy doesn't break the page.
+    // Same modal-open gating
+    // pattern as the catalogue fetches above; intentionally not cached
+    // across opens so a freshly toggled visibility allowlist surfaces.
+    // eslint-disable-next-line no-restricted-syntax
     void api.get<{ enabled?: boolean; hiddenMenuIds?: number[] }>('/shared/lookup/menu-visibility')
       .then((res) => {
         setFilterEnabled(Boolean(res?.enabled));
@@ -748,6 +770,12 @@ function RoleFormModal({
     setSelectedActions(new Set());
     if (editing) {
       setHydrating(true);
+      // Detail-hydration on
+      // modal-open with the editing row's id. `useFetchOnce` doesn't fit:
+      // we need to (1) clear `hydrating` even on failure, (2) update two
+      // separate setState sinks, and (3) NOT fire when `editing` is null.
+      // Inline manual fetch is the simpler primitive here.
+      // eslint-disable-next-line no-restricted-syntax
       api.get<RoleDetail>(`/admin/roles/${editing.role_id}`)
         .then((full) => {
           setSelectedMenus(new Set(full.menu_ids ?? []));

@@ -26,6 +26,7 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { ArrowLeft, Check, Loader2, Phone, Smile, X, Upload, ChevronDown, ChevronRight, Search } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
+import { useFetch } from '@/lib/hooks';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -33,6 +34,7 @@ import { SearchSelect } from '@/components/ui/search-select';
 import { VerificationSection } from '@/components/easyfixer/VerificationSection';
 import { CommentsPanel, type CommentEntry } from '@/components/easyfixer/CommentsPanel';
 import { SkillImageLightbox } from '@/components/easyfixer/SkillImageLightbox';
+import { AnimatedLoadingBar } from '@/components/ui/animated-loading-bar';
 import { showToast } from '@/components/ui/toast';
 import { formatDate } from '@/lib/utils';
 
@@ -180,21 +182,32 @@ export default function EasyfixerVerificationPage() {
   const router = useRouter();
   const efrId = Number(params.id);
 
-  const [data, setData] = useState<VerificationPayload | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  /*
+   * Page data load via the shared `useFetch` hook (2026-06-11). The
+   * module-level dedupe in `@/lib/hooks` absorbs React 18 Strict-Mode
+   * double-mounts so the network panel shows ONE request on first paint,
+   * not two. The hook re-fires automatically when the `key` (URL) flips
+   * — operator navigating to a different easyfixer changes the URL, so
+   * a fresh fetch lands without a manual effect.
+   *
+   * `enabled` defers the request until we have a valid efrId (the route
+   * param could briefly be NaN during a transition).
+   *
+   * Save handlers in this tree call `onReload` after mutating; that
+   * resolves to the hook's `refetch`, which drops the cached entry for
+   * this URL and re-fires. We wrap it as a `Promise<void>` so existing
+   * `await onReload()` call sites keep their sequencing semantics
+   * unchanged.
+   */
+  const validEfrId = Number.isInteger(efrId) && efrId > 0;
+  const fetchKey = validEfrId ? `/admin/easyfixers/${efrId}/verification` : null;
+  const { data, loading, error, refetch } = useFetch<VerificationPayload>(fetchKey, {
+    enabled: validEfrId,
+  });
 
-  const load = useCallback(async () => {
-    try {
-      setLoading(true);
-      const payload = await api.get<VerificationPayload>(`/admin/easyfixers/${efrId}/verification`);
-      setData(payload);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Failed to load verification page');
-    } finally { setLoading(false); }
-  }, [efrId]);
-
-  useEffect(() => { if (Number.isInteger(efrId) && efrId > 0) load(); }, [efrId, load]);
+  const reload = useCallback(async () => {
+    refetch();
+  }, [refetch]);
 
   if (loading) return <div className="p-8 text-sm text-slate-500">Loading…</div>;
   if (error || !data) return (
@@ -209,7 +222,7 @@ export default function EasyfixerVerificationPage() {
     </div>
   );
 
-  return <VerificationView data={data} onReload={load} />;
+  return <VerificationView data={data} onReload={reload} />;
 }
 
 type ActiveSection = 'lead' | 'verification' | 'activation';
@@ -517,6 +530,7 @@ function LeadActions({ efrId, onReload }: { efrId: number; onReload: () => Promi
         onChange={(e) => setReason(e.target.value)}
         className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500/40"
       />
+      <AnimatedLoadingBar visible={busy} message="Saving Lead Action…" tone="emerald" />
       <div className="flex flex-wrap gap-2 justify-center">
         <Button onClick={() => call(1)} disabled={!checked || busy} className="bg-emerald-600 hover:bg-emerald-700 text-white">Accept</Button>
         <Button onClick={() => call(2)} disabled={busy} className="bg-rose-600 hover:bg-rose-700 text-white">Deny</Button>
@@ -593,8 +607,9 @@ function ProfessionalSection({ efrId, d, onReload, addComment }: {
           </div>
         </div>
 
+        <AnimatedLoadingBar visible={saving} message="Saving Professional Details…" tone="emerald" />
         <div className="flex justify-end gap-2 pt-2">
-          <Button disabled={saving} onClick={save}>Update</Button>
+          <Button disabled={saving} onClick={save}>{saving ? 'Saving…' : 'Update'}</Button>
         </div>
 
         <div className="text-xs text-slate-500 border-t pt-2">
@@ -653,9 +668,10 @@ function PersonalSection({ efrId, d, onReload, addComment }: {
             value={comment} onChange={(e) => setComment(e.target.value)}
             placeholder="Your remarks and notes"
             className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+          <AnimatedLoadingBar visible={saving} message="Saving Personal Details…" tone="emerald" />
           <div className="flex justify-end">
             <Button disabled={saving || d.is_verified} onClick={markVerified} className="bg-emerald-600 hover:bg-emerald-700 text-white">
-              Yes, I Have Validated All Details
+              {saving ? 'Saving…' : 'Yes, I Have Validated All Details'}
             </Button>
           </div>
           {d.verification_comment && (
@@ -725,6 +741,7 @@ function BankingSection({ efrId, d, onReload, addComment }: {
             value={invalidReason} onChange={(e) => setInvalidReason(e.target.value)}
             placeholder="Reason (required if marking invalid)"
             className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+          <AnimatedLoadingBar visible={busy} message="Saving Banking Details…" tone="emerald" />
           <div className="flex flex-wrap gap-2 justify-end">
             <Button disabled={busy || d.verification_status === 1} onClick={() => setStatus(1)} className="bg-emerald-600 hover:bg-emerald-700 text-white">
               Valid Banking Details
@@ -757,10 +774,11 @@ function IdentitySection({ efrId, d, onReload, addComment }: {
   const [aadhaar, setAadhaar] = useState(d.adhaar_card_number ?? '');
   const [pan, setPan] = useState(d.pan_card_number ?? '');
   const [rejectReason, setRejectReason] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [savingNumbers, setSavingNumbers] = useState(false);
+  const [savingStatus, setSavingStatus] = useState(false);
 
   async function saveNumbers() {
-    setBusy(true);
+    setSavingNumbers(true);
     try {
       await api.put(`/admin/easyfixers/${efrId}/verification/identity`, {
         adhaar_card_number: aadhaar || undefined,
@@ -768,7 +786,7 @@ function IdentitySection({ efrId, d, onReload, addComment }: {
       });
       await onReload();
     } catch (e) { alert(e instanceof ApiError ? e.message : 'Failed'); }
-    finally { setBusy(false); }
+    finally { setSavingNumbers(false); }
   }
 
   async function setStatus(verification_status: 1 | 2) {
@@ -776,7 +794,7 @@ function IdentitySection({ efrId, d, onReload, addComment }: {
       alert('Please write a reason to reject');
       return;
     }
-    setBusy(true);
+    setSavingStatus(true);
     try {
       await api.put(`/admin/easyfixers/${efrId}/verification/identity`, {
         verification_status,
@@ -784,7 +802,7 @@ function IdentitySection({ efrId, d, onReload, addComment }: {
       });
       await onReload();
     } catch (e) { alert(e instanceof ApiError ? e.message : 'Failed'); }
-    finally { setBusy(false); }
+    finally { setSavingStatus(false); }
   }
 
   return (
@@ -799,8 +817,9 @@ function IdentitySection({ efrId, d, onReload, addComment }: {
           <Label>PAN Card Number</Label>
           <Input value={pan} maxLength={10} onChange={(e) => setPan(e.target.value.toUpperCase())} />
         </div>
+        <AnimatedLoadingBar visible={savingNumbers} message="Saving Identity Details…" tone="emerald" />
         <div className="flex justify-end">
-          <Button onClick={saveNumbers} disabled={busy}>Update Identity Numbers</Button>
+          <Button onClick={saveNumbers} disabled={savingNumbers}>{savingNumbers ? 'Saving…' : 'Update Identity Numbers'}</Button>
         </div>
 
         {d.driving_lisence_img && (
@@ -816,11 +835,12 @@ function IdentitySection({ efrId, d, onReload, addComment }: {
             value={rejectReason} onChange={(e) => setRejectReason(e.target.value)}
             placeholder="Your reasons (required to reject / send back)"
             className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+          <AnimatedLoadingBar visible={savingStatus} message="Saving Identity Verification…" tone="emerald" />
           <div className="flex flex-wrap gap-2 justify-end">
-            <Button disabled={busy || d.verification_status === 1} onClick={() => setStatus(1)} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+            <Button disabled={savingStatus || d.verification_status === 1} onClick={() => setStatus(1)} className="bg-emerald-600 hover:bg-emerald-700 text-white">
               Send To Finance
             </Button>
-            <Button disabled={busy} onClick={() => setStatus(2)} className="bg-rose-600 hover:bg-rose-700 text-white">
+            <Button disabled={savingStatus} onClick={() => setStatus(2)} className="bg-rose-600 hover:bg-rose-700 text-white">
               Reject Profile
             </Button>
           </div>
@@ -878,12 +898,21 @@ function ActivationSection({
   const [grade, setGrade] = useState<'Silver' | 'Gold' | 'Diamond'>('Silver');
   const [activateComment, setActivateComment] = useState('');
   const [tempFlag, setTempFlag] = useState(false);
-  const [busy, setBusy] = useState(false);
+  /*
+   * Split per-action busy flags (2026-06-11). Previously a single
+   * `busy` flag controlled both the Edit Finance row and the Activate
+   * Technician row, which meant clicking either button greyed out the
+   * OTHER row's button + bar — visually confusing because the operator
+   * had no signal about which save was actually in flight. Each handler
+   * now owns its own flag and its own AnimatedLoadingBar.
+   */
+  const [savingFinance, setSavingFinance] = useState(false);
+  const [activating, setActivating] = useState(false);
 
   const isLocked = activation.payment.is_locked;
 
   async function saveFinance() {
-    setBusy(true);
+    setSavingFinance(true);
     try {
       await api.put(`/admin/easyfixers/${efrId}/verification/activation`, {
         easyfix_bank_name_id: bankId || 0,
@@ -891,12 +920,12 @@ function ActivationSection({
       });
       await onReload();
     } catch (e) { alert(e instanceof ApiError ? e.message : 'Failed'); }
-    finally { setBusy(false); }
+    finally { setSavingFinance(false); }
   }
 
   async function activate() {
     if (!activateComment.trim()) { alert('Comment is required'); return; }
-    setBusy(true);
+    setActivating(true);
     try {
       await api.put(`/admin/easyfixers/${efrId}/verification/activation`, {
         activate: true,
@@ -906,7 +935,7 @@ function ActivationSection({
       });
       await onReload();
     } catch (e) { alert(e instanceof ApiError ? e.message : 'Failed'); }
-    finally { setBusy(false); }
+    finally { setActivating(false); }
   }
 
   const bankOptions = useMemo(() => banks.map((b) => ({ value: b.id, label: b.bank_name })), [banks]);
@@ -931,8 +960,9 @@ function ActivationSection({
             <Input value={beneficiary} disabled={isLocked} onChange={(e) => setBeneficiary(e.target.value)} />
           </div>
         </div>
+        <AnimatedLoadingBar visible={savingFinance} message="Saving Finance Details…" tone="emerald" />
         <div className="flex justify-end">
-          <Button disabled={busy} onClick={saveFinance}>Edit Finance Details</Button>
+          <Button disabled={savingFinance} onClick={saveFinance}>Edit Finance Details</Button>
         </div>
 
         <hr />
@@ -989,8 +1019,9 @@ function ActivationSection({
               placeholder="Comment (required)"
               value={activateComment} onChange={(e) => setActivateComment(e.target.value)}
               className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+            <AnimatedLoadingBar visible={activating} message="Activating Technician…" tone="emerald" />
             <div className="flex justify-end">
-              <Button onClick={activate} disabled={busy} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+              <Button onClick={activate} disabled={activating} className="bg-emerald-600 hover:bg-emerald-700 text-white">
                 Activate Technician
               </Button>
             </div>
@@ -1085,13 +1116,19 @@ function DeepSkillOptionMapping({ efrId, onReload }: { efrId: number; onReload?:
   const [lightboxUrl, setLightboxUrl] = useState<{ url: string; name: string } | null>(null);
 
   // Initial fetch — current mappings + the full categories list.
+  // Two-request Promise.all + transform-into-Set state pattern doesn't
+  // map cleanly to `useFetch` (single URL → single payload); the
+  // cancelled-flag + module-level dedupe via api here is the correct
+  // shape. Targeted disable, not a global carve-out.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         setLoading(true);
         const [mapResp, catResp] = await Promise.all([
+          // eslint-disable-next-line no-restricted-syntax
           api.get<{ items: OptionMapping[] }>(`/admin/easyfixers/${efrId}/option-mappings`),
+          // eslint-disable-next-line no-restricted-syntax
           api.get<ServiceCategoryLU[]>(`/shared/lookup/service-categories`),
         ]);
         if (cancelled) return;
@@ -1471,11 +1508,16 @@ function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: ()
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   // Initial load — fetch current serviceable pincodes for this efr.
+  // The response is reshaped into a Map<pincodeId, chip> that backs
+  // BOTH `selected` and `original` (dirty-tracking). useFetch returns
+  // a single `data` value; threading two derived Map states through
+  // it would just hide a setEffect-on-data dance. Targeted disable.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         setLoading(true);
+        // eslint-disable-next-line no-restricted-syntax
         const resp = await api.get<{ items: PincodeChip[] }>(
           `/admin/easyfixers/${efrId}/serviceable-pincodes`
         );

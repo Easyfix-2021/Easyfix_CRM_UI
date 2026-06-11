@@ -58,6 +58,51 @@ const RESTRICTED_DIALOG_ONOPENCHANGE = {
     + '<Dialog onOpenChange={guardedOpenChange}>`.',
 };
 
+/*
+ * RESTRICTED_USEEFFECT_API_CALL — blocks `useEffect(() => { api.<verb>(…) })`
+ * and `useEffect(() => { fetch(…) })`. React 18 Strict Mode mounts effects
+ * twice in dev, which silently doubles every direct fetch you write at a
+ * component call site. The shared `useFetchOnce` / `useFetch` / `useDebouncedValue`
+ * hooks in `@/lib/hooks` dedupe in-flight requests at the module level,
+ * memoise results, and own the cancellation/cleanup story — that's the
+ * canonical migration target for any "load data on mount / when key
+ * changes" pattern.
+ *
+ * The selector matches a CallExpression whose callee is the identifier
+ * `useEffect`, with an arrow-function first argument whose body
+ * synchronously contains a CallExpression on `api.<get|post|put|delete|patch>`
+ * or a bare `fetch(...)`. It catches both `api.get(...)` direct and
+ * `await api.get(...)` (still a CallExpression descendant).
+ *
+ * Side-effect call sites (e.g. an `api.post` fired from a save handler
+ * declared inside `useEffect` only as a closure to be called later from
+ * a UI event) are technically caught by this selector — when that
+ * happens, the right escape is a targeted `// eslint-disable-next-line
+ * no-restricted-syntax` comment with a one-line rationale.
+ */
+const RESTRICTED_USEEFFECT_API_CALL = {
+  selector:
+    'CallExpression[callee.name="useEffect"] '
+    + 'CallExpression[callee.object.name="api"][callee.property.name=/^(get|post|put|delete|patch)$/]',
+  message:
+    "Don't call `api.<verb>` inside `useEffect` — React 18 Strict Mode "
+    + 'double-fires effects in dev, causing duplicate HTTP requests. Use '
+    + '`useFetchOnce` / `useFetch` / `useDebouncedValue` from '
+    + "'@/lib/hooks' instead (module-level dedupe + cache + cleanup baked "
+    + "in). If this is a legitimate side-effect (not a data load), add a "
+    + 'targeted `// eslint-disable-next-line no-restricted-syntax` with a '
+    + 'one-line rationale.',
+};
+
+const RESTRICTED_USEEFFECT_FETCH = {
+  selector:
+    'CallExpression[callee.name="useEffect"] CallExpression[callee.name="fetch"]',
+  message:
+    "Don't call `fetch()` directly inside `useEffect` — use `useFetchOnce` "
+    + "/ `useFetch` from '@/lib/hooks' (Strict-Mode-safe + dedupe + "
+    + 'cleanup).',
+};
+
 // TS-aware parser (already installed as a transitive of eslint-config-next).
 // Required because our source is TypeScript + JSX — the default
 // `espree` parser bails on TS syntax (`Unexpected token :` on `prop: type`).
@@ -123,7 +168,12 @@ const config = [
       'jsx-a11y': jsxA11yPlugin,
     },
     rules: {
-      'no-restricted-syntax': ['error', RESTRICTED_DIALOG_ONOPENCHANGE],
+      'no-restricted-syntax': [
+        'error',
+        RESTRICTED_DIALOG_ONOPENCHANGE,
+        RESTRICTED_USEEFFECT_API_CALL,
+        RESTRICTED_USEEFFECT_FETCH,
+      ],
     },
   },
 
@@ -186,6 +236,38 @@ const config = [
     ],
     rules: {
       'no-restricted-syntax': 'off',
+    },
+  },
+
+  // Carve-outs from `no-restricted-syntax` for the useEffect+api rule:
+  //
+  //   src/lib/hooks.ts             — DEFINES `useFetch` / `useFetchOnce`
+  //                                  themselves. They literally implement
+  //                                  the dedup+cleanup pattern that the
+  //                                  rule mandates everyone else use.
+  //   src/lib/use-lookup.ts        — Peer hook (`useLookup`) with its own
+  //                                  module-level `fetchOnce` dedup; the
+  //                                  whole shared/lookup payload is loaded
+  //                                  once per session.
+  //   src/app/(authed)/easyfixers/page.tsx
+  //                                — Actively iterated; skipping per
+  //                                  instructions to avoid mid-session
+  //                                  conflicts.
+  //   src/app/(public)/profile-update/[token]/page.tsx
+  //                                — Possibly touched by another agent.
+  {
+    // NOTE on globs: Next.js dynamic-segment dirs contain literal `[id]`
+    // brackets which micromatch interprets as char classes. Use a `**`
+    // wildcard inside the bracket position so the carve-out actually
+    // matches the file on disk (verified via `npx eslint --print-config`).
+    files: [
+      'src/lib/hooks.ts',
+      'src/lib/use-lookup.ts',
+      'src/app/(authed)/easyfixers/page.tsx',
+      'src/app/(public)/profile-update/**/page.tsx',
+    ],
+    rules: {
+      'no-restricted-syntax': ['error', RESTRICTED_DIALOG_ONOPENCHANGE],
     },
   },
 

@@ -922,6 +922,15 @@ function UserFormModal({
       try {
         const params: Record<string, string | number> = { email: e };
         if (name.trim()) params.name = name.trim();
+        // Debounced
+        // availability probe with its own `emailCacheRef` keyed on
+        // email+name; the effect implements bespoke setTimeout-debounce
+        // + stale-response cancellation that's tighter than what
+        // useFetch/useDebouncedValue would give here (cache key depends
+        // on TWO inputs, and we suppress fetch entirely on invalid
+        // formats / Edit mode / same-as-editing). Migration would mean
+        // reimplementing the cache+gating layer above the hook.
+        // eslint-disable-next-line no-restricted-syntax
         const res = await api.get<{
           available: boolean;
           takenBy?: { user_id: number; user_name: string };
@@ -969,6 +978,13 @@ function UserFormModal({
       try {
         const params: Record<string, string | number> = { mobile };
         if (isEdit && editing?.user_id) params.excludeUserId = editing.user_id;
+        // Mirror of the
+        // email availability probe above: bespoke setTimeout-debounce
+        // + per-mobile cache ref + same-as-editing short-circuit. Same
+        // rationale as the email probe — useFetch's single-key contract
+        // can't express the "skip when same as editing" branch without
+        // a contrived enabled chain.
+        // eslint-disable-next-line no-restricted-syntax
         const res = await api.get<{ available: boolean; takenBy?: { user_id: number; user_name: string } }>(
           '/admin/users/check-mobile', params,
         );

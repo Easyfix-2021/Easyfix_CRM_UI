@@ -12,12 +12,11 @@
  *     with q=<mobile> if the filter is unsupported)
  */
 
-import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, AlertTriangle, User, Phone, Mail, MapPin, Briefcase } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
-import { api, ApiError } from '@/lib/api';
+import { useFetchOnce, useFetch } from '@/lib/hooks';
 import { formatDate, statusLabel } from '@/lib/utils';
 import { CallableMobile } from '@/components/calls/CallButton';
 
@@ -63,53 +62,33 @@ type JobRow = {
 export default function CustomerDetailPage() {
   const router = useRouter();
   const { id } = useParams<{ id: string }>();
-  const [cust, setCust] = useState<CustomerDetail | null>(null);
-  const [jobs, setJobs] = useState<JobRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [jobsLoading, setJobsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setLoading(true); setError(null);
-      try {
-        const c = await api.get<CustomerDetail>(`/admin/customers/${id}`);
-        if (!cancelled) {
-          setCust(c);
-          // Kick off the jobs lookup once we have a mobile to search by.
-          if (c.customer_mob_no) {
-            void loadJobs(c.customer_mob_no, c.customer_id);
-          } else {
-            setJobsLoading(false);
-          }
-        }
-      } catch (e) {
-        if (!cancelled) setError(e instanceof ApiError ? e.message : 'Failed to load customer');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  // Customer fetch — `useFetchOnce` deduplicates Strict-Mode double-mounts
+  // and caches inside `@/lib/hooks` (see `feedback_crm_ui_fetch_hooks`).
+  const { data: cust, loading, error: custError } = useFetchOnce<CustomerDetail>(
+    `/admin/customers/${id}`,
+  );
 
-  async function loadJobs(mobile: string, customerId: number) {
-    setJobsLoading(true);
-    try {
-      // /admin/jobs doesn't have a customerId filter today, but the `q`
-      // param matches against `customer_mob_no` — equivalent for our case.
-      // If a customerId filter ever lands, swap to it (faster, exact).
-      const r = await api.get<{ items: JobRow[]; total: number }>(`/admin/jobs?q=${encodeURIComponent(mobile)}&limit=50`);
-      // Filter client-side to this exact customer (defensive — `q` may
-      // surface false positives on shared mobiles in dev data).
-      setJobs(r.items || []);
-    } catch {
-      setJobs([]);
-    } finally {
-      setJobsLoading(false);
-    }
-  }
+  // Dependent jobs fetch keyed on the customer's mobile. `useFetch(null)`
+  // is a no-op until cust resolves; once mobile is in hand the URL becomes
+  // the cache key and one request fires. `enabled` stays implicit via the
+  // null key.
+  // /admin/jobs doesn't have a customerId filter today, but `q` matches
+  // against `customer_mob_no` — equivalent for our case. If a customerId
+  // filter ever lands, swap to it (faster, exact).
+  const jobsKey = cust?.customer_mob_no
+    ? `/admin/jobs?q=${encodeURIComponent(cust.customer_mob_no)}&limit=50`
+    : null;
+  const { data: jobsResp, loading: jobsLoadingRaw } = useFetch<{
+    items: JobRow[];
+    total: number;
+  }>(jobsKey);
+  // Preserve the original observable shape: if customer has no mobile, we
+  // treat jobs as "loaded with empty list" (not still spinning). The
+  // useFetch hook returns loading=false when key=null, so this maps cleanly.
+  const jobs: JobRow[] = jobsResp?.items ?? [];
+  const jobsLoading = jobsKey ? jobsLoadingRaw : false;
+  const error = custError;
 
   if (loading) return <div className="text-sm text-muted-foreground py-6">Loading…</div>;
   if (error || !cust) {

@@ -216,6 +216,12 @@ export function SeedIndiaLocationsModal({
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
+    // Modal-open-gated
+    // informational fetch (best-effort, no error surfaced). useFetchOnce
+    // doesn't support an `enabled` flag tied to a parent prop like `open`
+    // without mounting/unmounting the host component; this lightweight
+    // effect is simpler than the alternative.
+    // eslint-disable-next-line no-restricted-syntax
     api.get<{ url: string }>('/admin/india-locations/seed/source-url')
       .then((r) => { if (!cancelled) setSourceUrl(r.url); })
       .catch(() => { /* silent — source-url is informational only */ });
@@ -238,6 +244,12 @@ export function SeedIndiaLocationsModal({
     if (!open) return;
     let cancelled = false;
     setLastCompletedLoading(true);
+    // Re-fetched on every
+    // seed completion (the `tick` dep changes from the polling loop),
+    // gated on `open`. The "last-completed snapshot" is mutable state
+    // that re-keys on completion; useFetch would work with a tick-laced
+    // URL but adds noise without removing the cancelled-flag bookkeeping.
+    // eslint-disable-next-line no-restricted-syntax
     api.get<JobSnapshot | null>('/admin/india-locations/seed/last-completed')
       .then((r) => { if (!cancelled) setLastCompleted(r || null); })
       .catch(() => { if (!cancelled) setLastCompleted(null); })
@@ -251,6 +263,12 @@ export function SeedIndiaLocationsModal({
     let cancelled = false;
     (async () => {
       try {
+        // "Reattach to
+        // in-flight job" on modal open: drives the phase machine
+        // (setPhase('running')) only when an active job exists. The
+        // hook abstraction would have us route a server response through
+        // an effect anyway to update phase state — same shape, more code.
+        // eslint-disable-next-line no-restricted-syntax
         const snap = await api.get<JobSnapshot>('/admin/india-locations/seed/jobs/current');
         if (cancelled) return;
         if (snap?.jobId && snap.status === 'running') {
@@ -271,6 +289,12 @@ export function SeedIndiaLocationsModal({
     let cancelled = false;
     const tickPoll = async () => {
       try {
+        // Polling loop.
+        // Fires every interval inside a setInterval/setTimeout chain; this
+        // is exactly the "fetch from inside useEffect for orchestration"
+        // pattern that has nothing to do with the Strict-Mode double-fire
+        // hazard. The phase state machine owns the cancel flag.
+        // eslint-disable-next-line no-restricted-syntax
         const snap = await api.get<JobSnapshot>(`/admin/india-locations/seed/jobs/${jobId}`);
         if (cancelled) return;
         setJobSnap(snap);

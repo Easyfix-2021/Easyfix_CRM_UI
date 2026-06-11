@@ -97,6 +97,14 @@ export function EasyfixerModal({
     const fetchQuery = mode === 'edit' ? { unmasked: 'true' } : undefined;
     (async () => {
       try {
+        // Mode-conditional
+        // hydrate: the `unmasked=true` query is only added in edit mode to
+        // bypass the mobile-masking middleware. useFetchOnce keys on a
+        // single URL string; encoding the conditional query into the key
+        // works, but the response then fans out to 3 form-shape setters
+        // (record, form, pristine) — the same imperative shape we'd write
+        // back from the hook.
+        // eslint-disable-next-line no-restricted-syntax
         const data = await api.get<EfRecord>(`/admin/easyfixers/${easyfixerId}`, fetchQuery);
         setRecord(data);
         const fresh = recordToForm(data);

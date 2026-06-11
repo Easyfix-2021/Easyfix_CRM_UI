@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { MapPin, Users, Search, Building2, Hash } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { api } from '@/lib/api';
+import { useFetchOnce } from '@/lib/hooks';
 import { formatEasyfixerName } from '@/lib/utils';
 import { ZoneDetailModal } from '@/components/zones/ZoneDetailModal';
 
@@ -40,7 +41,11 @@ type PincodeSearchResult = {
 };
 
 export default function EasyfixerZonesPage() {
-  const [zones, setZones] = useState<Zone[] | null>(null);
+  const { data: zonesData, error: zonesError } = useFetchOnce<Zone[]>('/admin/zones');
+  // Original code substituted `[]` on fetch failure (treated as "no zones").
+  // Preserve that observable behaviour so downstream `useMemo` filtering /
+  // count rendering stays identical.
+  const zones: Zone[] | null = zonesData ?? (zonesError ? [] : null);
   const [zoneSearch, setZoneSearch] = useState('');
   const [selectedZoneId, setSelectedZoneId] = useState<number | null>(null);
 
@@ -48,10 +53,6 @@ export default function EasyfixerZonesPage() {
   const [pincodeResult, setPincodeResult] = useState<PincodeSearchResult | null>(null);
   const [pincodeLoading, setPincodeLoading] = useState(false);
   const [pincodeErr, setPincodeErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    api.get<Zone[]>('/admin/zones').then(setZones).catch(() => setZones([]));
-  }, []);
 
   const filteredZones = useMemo(() => {
     if (!zones) return [];

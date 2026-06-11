@@ -87,10 +87,24 @@ export default function SearchPage() {
     (async () => {
       try {
         const [efList, custList] = await Promise.all([
+          // Composite search:
+          // two list endpoints fanned out with `Promise.all`, then per-row
+          // enrichment (`/admin/easyfixers/:id` + `/admin/jobs?easyfixerId=…`)
+          // that mutates indexed slots in local state. The hook
+          // `useFetch`/`useFetchOnce` model is single-key-per-hook and can't
+          // express "fire N parallel keys derived from a runtime list" without
+          // a per-row child component refactor (which we want, but it's a
+          // bigger change than this PR). Strict-Mode double-fire risk is
+          // partially mitigated by the 350ms `useDebounce` upstream — the
+          // first invocation's `cancelled` flag prevents stale writes.
+          // eslint-disable-next-line no-restricted-syntax
           api.get<{ items: EfListRow[]; total: number }>('/admin/easyfixers', {
             q: debouncedQ,
             limit: 10,
           }),
+          // See note above:
+          // sibling of the easyfixers call; same composite-search rationale.
+          // eslint-disable-next-line no-restricted-syntax
           api.get<{ items: CustomerRow[]; total: number }>('/admin/customers', {
             q: debouncedQ,
             limit: 10,
@@ -121,7 +135,16 @@ export default function SearchPage() {
           efList.items.map(async (e, idx) => {
             try {
               const [detail, jobs] = await Promise.all([
+                // Per-row
+                // enrichment fired from inside the parent search useEffect.
+                // The enrichment is indexed by row position and conditional
+                // on the parent fetch resolving first — neither pattern fits
+                // the single-key-per-hook shape of useFetch/useFetchOnce.
+                // See parent-effect comment above for the full rationale.
+                // eslint-disable-next-line no-restricted-syntax
                 api.get<EfDetail>(`/admin/easyfixers/${e.efr_id}`),
+                // Same as above.
+                // eslint-disable-next-line no-restricted-syntax
                 api.get<{ items: unknown[]; total: number }>('/admin/jobs', {
                   easyfixerId: e.efr_id,
                   statuses: '0,1,2',

@@ -262,6 +262,12 @@ export default function DeepSkillsSettingsPage() {
     if (missing.length === 0) return;
 
     let cancelled = false;
+    // POST with a dynamic
+    // `missing[]` body derived from a module-level cache. `useFetch` is
+    // GET-only and keys on URL strings; this is a batched POST that
+    // intentionally omits already-cached IDs from the request body —
+    // a pattern that doesn't match the hook's single-key dedup model.
+    // eslint-disable-next-line no-restricted-syntax
     void api.post<{ items: Array<{ deepskill_id: number; count: number }> }>(
       '/admin/deep-skills/mapped-easyfixer-counts',
       { deepSkillIds: missing },
@@ -584,6 +590,12 @@ function SkillOptionsCell({ skillId, fallbackCount }: { skillId: number; fallbac
   useEffect(() => {
     let cancelled = false;
     if (optionsCache.has(skillId)) { setOpts(optionsCache.get(skillId)!); return; }
+    // Per-row lazy load
+    // backed by a local `optionsCache` Map (separate from the @/lib/hooks
+    // cache because the response is TRANSFORMED before storage — we drop
+    // inactive options and project to a string[]). useFetchOnce would
+    // store the raw payload and the transform would re-run every render.
+    // eslint-disable-next-line no-restricted-syntax
     api.get<DeepSkillDetail>(`/admin/deep-skills/${skillId}`).then((d) => {
       const labels = d.options.filter((o) => Number(o.status)).map((o) => o.skill_option);
       optionsCache.set(skillId, labels);
@@ -686,6 +698,11 @@ function DeepSkillEditor({
     setPreviewUrl(null);
     // For edit, fetch current options so the chip list reflects DB truth.
     if (record.deepskill_id) {
+      // Record-driven detail
+      // hydrate inside the modal-open + record-changed effect; the response
+      // is filtered/projected before going into local state (same transform
+      // shape as the SkillOptionsCell sibling).
+      // eslint-disable-next-line no-restricted-syntax
       api.get<DeepSkillDetail>(`/admin/deep-skills/${record.deepskill_id}`)
         .then((d) => setOptions(d.options.filter((o) => Number(o.status)).map((o) => o.skill_option)))
         .catch(() => setOptions([]));
@@ -695,6 +712,12 @@ function DeepSkillEditor({
       // Board reads. If the column is empty or S3 isn't enabled, the
       // response `url` field is null and the preview row stays hidden.
       if (record.deepskill_image) {
+        // Conditional
+        // sub-fetch (only when image column is non-empty) chained off the
+        // outer record-change effect. Best-effort: failure silently leaves
+        // preview unset. useFetch's enabled flag would require lifting
+        // the inner condition into a separate hook call site.
+        // eslint-disable-next-line no-restricted-syntax
         api.get<{ image: string; url: string | null }>(
           `/admin/deep-skills/${record.deepskill_id}/image-url`,
         ).then((r) => { if (r.url) setPreviewUrl(r.url); })

@@ -101,6 +101,13 @@ export default function AutoAllocationPage() {
   }, [scope]);
 
   useEffect(() => {
+    // The shared `saveValue` handler below ALSO calls this exact endpoint
+    // to refresh the overridden-clients chips after a per-client write.
+    // Both call sites need to share one mutable setter, and `useFetchOnce`
+    // would only cover the mount-time fire. Keeping the manual `useEffect`
+    // here is less code than ref-syncing a refetch handle and the request
+    // is one-shot.
+    // eslint-disable-next-line no-restricted-syntax
     api.get<ClientLite[]>('/admin/auto-allocation/clients-with-overrides')
       .then(setOverridden).catch(() => setOverridden([]));
   }, []);

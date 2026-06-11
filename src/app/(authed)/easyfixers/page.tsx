@@ -493,7 +493,39 @@ export default function EasyfixersPage() {
   const isProd = process.env.NODE_ENV === 'production';
 
   function openSendDialog(e: Ef) {
-    setSendDialogFor(e);
+    /*
+     * Defer the Dialog open by one macrotask (2026-06-11). Classic
+     * Radix DropdownMenu → Dialog race: the DropdownMenuItem's onClick
+     * fires + sets `sendDialogFor`, which mounts the Dialog. The
+     * dropdown then auto-closes — and the pointer-up event that closed
+     * it is what Radix's <Dialog> interprets as a "pointer down outside"
+     * event for the just-mounted Dialog, calling `onOpenChange(false)`
+     * → instant dismiss.
+     *
+     * setTimeout(..., 0) schedules the state update for the next
+     * event-loop tick, by which time the dropdown's close + focus-
+     * management sequence has settled and Radix's outside-click
+     * detector no longer sees the original pointer-up as relevant
+     * to the new Dialog. requestAnimationFrame would also work but
+     * setTimeout(0) is the conventional Radix workaround for this race.
+     */
+    setTimeout(() => setSendDialogFor(e), 0);
+  }
+
+  /*
+   * Same Radix DropdownMenu → Dialog race as openSendDialog above
+   * (2026-06-11 audit). Client Mapping and Transactions modals were
+   * being opened directly from DropdownMenuItem onClick handlers; the
+   * pointer-up that closed the dropdown was being interpreted by the
+   * just-mounted Dialog as an outside click → instant dismiss. Defer
+   * via setTimeout(0) so the dropdown teardown finishes first.
+   */
+  function openClientMapping(e: Ef) {
+    setTimeout(() => setClientMappingFor(e), 0);
+  }
+
+  function openTransactions(e: Ef) {
+    setTimeout(() => setTransactionsFor(e), 0);
   }
 
   /*
@@ -1273,8 +1305,8 @@ export default function EasyfixersPage() {
                       canSend={!!can.isProfileUpdateLinkSend}
                       canCopyDevUrl={!isProd && !!can.isProfileUpdateLinkSend}
                       onEdit={() => router.push(`/easyfixers/${e.efr_id}/verification`)}
-                      onClientMapping={() => setClientMappingFor(e)}
-                      onTransactions={() => setTransactionsFor(e)}
+                      onClientMapping={() => openClientMapping(e)}
+                      onTransactions={() => openTransactions(e)}
                       onAssessment={() => router.push('/coming-soon')}
                       onSendProfileUpdateLink={() => openSendDialog(e)}
                       onCopyDevUrl={() => copyDevUrl(e)}

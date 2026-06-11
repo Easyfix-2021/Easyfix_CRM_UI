@@ -224,6 +224,12 @@ export function EscalatedJobsModal({
     if (!open) return;
     let cancelled = false;
     setLoading(true); setError(null);
+    // Modal-open + status-
+    // tab-driven list fetch. `updateAction` below also triggers a soft
+    // refetch by bumping `q` (re-runs the in-memory filter, not this
+    // effect). useFetch's `refetch()` would replace the bump trick, but
+    // the effect would still need to live here for the open/status gating.
+    // eslint-disable-next-line no-restricted-syntax
     api.get<Resp>('/admin/jobs/escalated', { status, limit: 200 })
       .then((r) => { if (!cancelled) setData(r); })
       .catch((e) => {
