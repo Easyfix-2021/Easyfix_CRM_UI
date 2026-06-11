@@ -101,6 +101,18 @@ async function fetchHiddenPaths(cookieHeader: string | null): Promise<Set<string
 }
 
 export async function middleware(req: NextRequest) {
+  // Public Magic-Link Profile Update form (technician-facing, JWT-in-URL
+  // auth model — same envelope as /job-completion). The page lives under
+  // `app/(public)/profile-update/[token]` and CANNOT be guarded by the
+  // staff-CRM menu-visibility check (which requires a logged-in operator
+  // cookie). Early-return so the middleware is a no-op for these paths.
+  // The `/job-completion` route is excluded at the matcher level for the
+  // same reason; we keep this one in-body to avoid touching the matcher
+  // regex.
+  if (req.nextUrl.pathname.startsWith('/profile-update/')) {
+    return NextResponse.next();
+  }
+
   const hidden = await fetchHiddenPaths(req.headers.get('cookie'));
   if (hidden.has(req.nextUrl.pathname)) {
     const redirectUrl = req.nextUrl.clone();

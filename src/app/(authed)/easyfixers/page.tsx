@@ -10,11 +10,22 @@ import { DownloadButton } from '@/components/ui/download-button';
 import { StatusChip, type StatusChipTone } from '@/components/ui/StatusChip';
 import { CsvCellModal, type CsvCellItem } from '@/components/ui/CsvCellModal';
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import { Label } from '@/components/ui/label';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
+import {
   TablePagination,
   type TablePageSize,
   pageSizeToLimit,
 } from '@/components/ui/table-pagination';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
+import { showToast } from '@/components/ui/toast';
 import { downloadXlsx } from '@/lib/download-xlsx';
 import { useLookup } from '@/lib/use-lookup';
 import { cn, formatDate, formatEasyfixerName } from '@/lib/utils';
@@ -75,6 +86,14 @@ type Ef = {
   att_morning_slot: number | null;
   att_evening_slot: number | null;
   att_created_on: string | null;
+  /*
+   * Profile-update magic-link audit (2026-06-11). Surfaced via the
+   * aggregates POST; rendered in the "Last Link Sent" column so
+   * operators see who's been pinged and how many times. Nullable until
+   * the first send (per the migration default of 0/NULL).
+   */
+  profile_update_sent_at: string | null;
+  profile_update_send_count: number;
 };
 type Resp = { items: Ef[]; total: number; limit: number; offset: number };
 
@@ -99,6 +118,9 @@ type AggregateRow = {
   job_count: number;
   avg_rating: number | null;
   options_mapped_count: number;
+  // Profile-update magic-link audit (2026-06-11).
+  profile_update_sent_at: string | null;
+  profile_update_send_count: number;
 };
 /*
  * Aggregates cache (2026-06-08). Pagination back-and-forth, search-and-back,
@@ -396,7 +418,7 @@ export default function EasyfixersPage() {
    * Future easyfixer-specific actions should also use bare names here
    * to stay consistent with the Legacy CRM seed.
    */
-  const can = actionFlags(me, ['isAddNew', 'isEdit']);
+  const can = actionFlags(me, ['isAddNew', 'isEdit', 'isProfileUpdateLinkSend']);
   const searchParams = useSearchParams();
   // Total comes from the base list response; rows are stored separately
   // so we can mutate them in place when aggregates/attendance land.
@@ -435,6 +457,118 @@ export default function EasyfixersPage() {
   }>({ open: false, title: '', items: [] });
   const [clientMappingFor, setClientMappingFor] = useState<Ef | null>(null);
   const [transactionsFor, setTransactionsFor] = useState<Ef | null>(null);
+  /*
+   * Per-row spinner state for the "Send Profile Update Link" action.
+   * Tracks efr_ids whose POST is currently in flight so multiple rows
+   * can be in flight concurrently without one row's spinner masking
+   * another's. The row-level menu reads this via `isSending` and shows
+   * a Loader2 in place of the Send icon until the POST resolves.
+   */
+  const [sendingFor, setSendingFor] = useState<Set<number>>(new Set());
+  // Per-row loading state for the dev-only "Copy Dev URL" action. Same
+  // Set<number>-of-efr_ids pattern as `sendingFor` so the menu can show
+  // a spinner without coupling to the broader page state.
+  const [copyingDevUrlFor, setCopyingDevUrlFor] = useState<Set<number>>(new Set());
+  /*
+   * "Send To" confirmation dialog (2026-06-10).
+   *
+   * Replaces the direct POST on action-menu click with an environment-aware
+   * confirmation step:
+   *   - Production: dialog shows the technician's real mobile MASKED with
+   *     the input DISABLED. Operator just confirms.
+   *   - Non-prod (dev/staging): dialog prefills the real mobile but lets
+   *     the operator OVERRIDE it (test against their own WhatsApp number).
+   * The BE Joi schema rejects `override_mobile` outright in production
+   * (custom production-block rule) so this isn't security boundary — it's
+   * a UX guard to prevent accidental pings to real technicians while
+   * QA / staging testing.
+   */
+  const [sendDialogFor, setSendDialogFor] = useState<Ef | null>(null);
+  /*
+   * Environment detection — uses the same `process.env.NODE_ENV` pattern
+   * already established for the QuickSight URL split in Navbar.tsx. Next.js
+   * inlines NODE_ENV at build time so this is a static branch in the
+   * compiled bundle (production builds will never see the override path).
+   */
+  const isProd = process.env.NODE_ENV === 'production';
+
+  function openSendDialog(e: Ef) {
+    setSendDialogFor(e);
+  }
+
+  /*
+   * Dev-only "Copy Dev URL" handler (2026-06-11). Hits the new
+   * GET /admin/easyfixers/:id/profile-update-link/dev-url endpoint
+   * (which returns 404 in production) and copies the response URL to
+   * the clipboard. No WhatsApp send. The button that invokes this is
+   * already gated behind `process.env.NODE_ENV !== 'production'`, so
+   * this handler should only ever fire in non-prod — but we still let
+   * the BE be the source of truth for the prod block (the FE gate is
+   * a defence-in-depth nicety; the 404 is the real enforcement).
+   */
+  async function copyDevUrl(e: Ef) {
+    setCopyingDevUrlFor((prev) => new Set(prev).add(e.efr_id));
+    try {
+      const resp = await api.get<{ efrId: number; token: string; url: string }>(
+        `/admin/easyfixers/${e.efr_id}/profile-update-link/dev-url`,
+      );
+      if (!resp?.url) throw new Error('No URL returned from BE');
+      // navigator.clipboard requires a secure context (https or localhost).
+      // localhost:5180 qualifies, so this works in standard dev.
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(resp.url);
+        showToast({ variant: 'success', message: `Dev URL copied for ${e.efr_name}` });
+      } else {
+        // Clipboard API not available — surface the URL in the toast so
+        // the operator can copy it manually.
+        showToast({ variant: 'success', message: `Dev URL: ${resp.url}` });
+      }
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) {
+        showToast({ variant: 'error', message: "You don't have permission to copy dev URLs." });
+      } else if (err instanceof ApiError && err.status === 404) {
+        showToast({ variant: 'error', message: 'Dev URL endpoint disabled in this environment.' });
+      } else {
+        showToast({ variant: 'error', message: err instanceof Error ? err.message : 'Failed to copy dev URL' });
+      }
+    } finally {
+      setCopyingDevUrlFor((prev) => {
+        const next = new Set(prev);
+        next.delete(e.efr_id);
+        return next;
+      });
+    }
+  }
+
+  async function confirmSendProfileUpdateLink(efrId: number, overrideMobile: string | undefined) {
+    setSendingFor((prev) => new Set(prev).add(efrId));
+    try {
+      await api.post(`/admin/easyfixers/${efrId}/profile-update-link/send`, {
+        action: 'first',
+        ...(overrideMobile ? { override_mobile: overrideMobile } : {}),
+      });
+      const target = sendDialogFor;
+      showToast({
+        variant: 'success',
+        message: overrideMobile
+          ? `Profile update link sent to ${overrideMobile} on WhatsApp`
+          : `Profile update link sent to ${target?.efr_name ?? 'easyfixer'} on WhatsApp`,
+      });
+      setSendDialogFor(null);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) {
+        showToast({ variant: 'error', message: "You don't have permission to send profile update links." });
+      } else {
+        showToast({ variant: 'error', message: err instanceof Error ? err.message : 'Failed to send link' });
+      }
+    } finally {
+      setSendingFor((prev) => {
+        const next = new Set(prev);
+        next.delete(efrId);
+        return next;
+      });
+    }
+  }
 
   useEffect(() => {
     if (searchParams.get('new') === '1') {
@@ -544,6 +678,8 @@ export default function EasyfixersPage() {
               job_count: agg.job_count,
               avg_rating: agg.avg_rating,
               options_mapped_count: agg.options_mapped_count,
+              profile_update_sent_at: agg.profile_update_sent_at ?? null,
+              profile_update_send_count: agg.profile_update_send_count ?? 0,
               _aggregatesLoaded: true,
             };
           }));
@@ -570,6 +706,8 @@ export default function EasyfixersPage() {
                   job_count: agg.job_count,
                   avg_rating: agg.avg_rating,
                   options_mapped_count: agg.options_mapped_count,
+                  profile_update_sent_at: agg.profile_update_sent_at ?? null,
+                  profile_update_send_count: agg.profile_update_send_count ?? 0,
                   _aggregatesLoaded: true,
                 };
               }));
@@ -968,7 +1106,7 @@ export default function EasyfixersPage() {
             *   - SortHeader rendered with `align` so the header aligns to
             *     the cell content direction.
             */}
-          <table className="data-table" style={{ tableLayout: 'fixed', minWidth: '2370px' }}>
+          <table className="data-table" style={{ tableLayout: 'fixed', minWidth: '2530px' }}>
             {/*
               * Explicit px widths (not percentages) so the table has a
               * deterministic intrinsic width that exceeds the viewport,
@@ -997,11 +1135,12 @@ export default function EasyfixersPage() {
               <col style={{ width: '110px' }} />{/* Options Mapped */}
               <col style={{ width: '110px' }} />{/* A/C Balance */}
               <col style={{ width: '80px'  }} />{/* Rating */}
+              <col style={{ width: '160px' }} />{/* Last Link Sent */}
               <col style={{ width: '80px'  }} />{/* Profile % */}
               <col style={{ width: '70px'  }} />{/* Verified */}
               <col style={{ width: '120px' }} />{/* Registered */}
               <col style={{ width: '90px'  }} />{/* Status */}
-              <col style={{ width: '130px' }} />{/* Action — sticky-right */}
+              <col style={{ width: '72px' }} />{/* Action — sticky-right; kebab menu only (was 130px when 6 inline icons) */}
             </colgroup>
             <thead>
               <tr>
@@ -1021,6 +1160,7 @@ export default function EasyfixersPage() {
                 <SortHeader col="options_mapped_count"   align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Options Mapped</SortHeader>
                 <SortHeader col="current_balance"        align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>A/C Balance</SortHeader>
                 <SortHeader col="avg_rating"             align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Rating</SortHeader>
+                <SortHeader col="profile_update_sent_at" align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Last Link Sent</SortHeader>
                 <SortHeader col="efr_profile_perc"       align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Profile %</SortHeader>
                 <SortHeader col="is_technician_verified" align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Verified</SortHeader>
                 <SortHeader col="insert_date"            align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Registered</SortHeader>
@@ -1034,10 +1174,10 @@ export default function EasyfixersPage() {
                   200ms server round-trip — only show "Loading…" on the
                   cold first paint when there's nothing to keep. */}
               {loading && sorted.length === 0 && (
-                <tr><td colSpan={21} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
+                <tr><td colSpan={22} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
               )}
               {!loading && sorted.length === 0 && (
-                <tr><td colSpan={21} className="!text-center text-muted-foreground py-6">No easyfixers match the current filters.</td></tr>
+                <tr><td colSpan={22} className="!text-center text-muted-foreground py-6">No easyfixers match the current filters.</td></tr>
               )}
               {!loading && sorted.map((e) => {
                 const catItems = parseCsvCell(e.efr_service_category, categoryById);
@@ -1093,6 +1233,31 @@ export default function EasyfixersPage() {
                       ? (e.avg_rating != null ? `${Number(e.avg_rating).toFixed(1)} ★` : '—')
                       : <span className="text-muted-foreground">…</span>}
                   </td>
+                  {/*
+                    * Last Link Sent — profile-update magic-link audit
+                    * (2026-06-11). Date + a slate "N×" pill showing
+                    * `profile_update_send_count` when > 0. Placeholder "…"
+                    * while aggregates phase is still in flight; muted "—"
+                    * when the easyfixer has never been pinged.
+                    */}
+                  <td className="!text-left text-xs tabular-nums truncate">
+                    {e._aggregatesLoaded ? (
+                      e.profile_update_sent_at ? (
+                        <span className="inline-flex items-center gap-1.5" title={formatDate(e.profile_update_sent_at)}>
+                          <span className="truncate">{formatDate(e.profile_update_sent_at)}</span>
+                          {e.profile_update_send_count > 1 && (
+                            <span className="text-[10px] font-medium rounded bg-slate-100 px-1.5 py-0.5 text-slate-600 shrink-0">
+                              {e.profile_update_send_count}×
+                            </span>
+                          )}
+                        </span>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )
+                    ) : (
+                      <span className="text-muted-foreground">…</span>
+                    )}
+                  </td>
                   <td className="!text-right text-xs tabular-nums truncate">{e.efr_profile_perc != null ? `${Math.round(Number(e.efr_profile_perc))}%` : '—'}</td>
                   <td className="!text-center truncate">{e.is_technician_verified ? '✓' : <span className="text-muted-foreground">—</span>}</td>
                   <td className="!text-left text-xs whitespace-nowrap text-muted-foreground truncate" title={formatDate(e.insert_date)}>{formatDate(e.insert_date)}</td>
@@ -1105,10 +1270,16 @@ export default function EasyfixersPage() {
                     <EasyfixerActionMenu
                       easyfixer={{ efr_id: e.efr_id, efr_name: e.efr_name }}
                       canEdit={!!can.isEdit}
+                      canSend={!!can.isProfileUpdateLinkSend}
+                      canCopyDevUrl={!isProd && !!can.isProfileUpdateLinkSend}
                       onEdit={() => router.push(`/easyfixers/${e.efr_id}/verification`)}
                       onClientMapping={() => setClientMappingFor(e)}
                       onTransactions={() => setTransactionsFor(e)}
                       onAssessment={() => router.push('/coming-soon')}
+                      onSendProfileUpdateLink={() => openSendDialog(e)}
+                      onCopyDevUrl={() => copyDevUrl(e)}
+                      isSending={sendingFor.has(e.efr_id)}
+                      isCopyingDevUrl={copyingDevUrlFor.has(e.efr_id)}
                     />
                   </td>
                 </tr>
@@ -1166,6 +1337,17 @@ export default function EasyfixersPage() {
         easyfixerId={transactionsFor?.efr_id ?? null}
         easyfixerName={transactionsFor?.efr_name ?? null}
         easyfixerMobile={transactionsFor?.efr_no ?? null}
+      />
+
+      <SendProfileUpdateLinkDialog
+        open={sendDialogFor !== null}
+        easyfixer={sendDialogFor}
+        isProd={isProd}
+        isSending={sendDialogFor ? sendingFor.has(sendDialogFor.efr_id) : false}
+        onConfirm={(overrideMobile) => {
+          if (sendDialogFor) confirmSendProfileUpdateLink(sendDialogFor.efr_id, overrideMobile);
+        }}
+        onClose={() => setSendDialogFor(null)}
       />
 
     </div>
@@ -1292,5 +1474,135 @@ function StatusCountsStrip({
         );
       })}
     </div>
+  );
+}
+
+/*
+ * SendProfileUpdateLinkDialog — environment-aware "Send To" confirmation
+ * step (2026-06-10).
+ *
+ * Why this exists: testing in dev / staging accidentally pinged real
+ * technicians on WhatsApp. The dialog adds a confirmation step plus, in
+ * non-prod only, an editable destination override so testers can send to
+ * their own number. In production the input is disabled AND the mobile
+ * is masked so an over-the-shoulder operator can't accidentally read out
+ * another technician's number.
+ *
+ * Defence in depth: even if a tampered client bypassed this dialog and
+ * POSTed `override_mobile` directly, the BE Joi schema's custom
+ * `production-block` rule rejects it 400 in production.
+ *
+ * Defined inline in this file (per spec). The masking rule is "first 2 +
+ * last 3 digits visible, the rest X'd" — e.g. `9876543210` →
+ * `98XXXXX210`.
+ */
+function SendProfileUpdateLinkDialog({
+  open, easyfixer, isProd, isSending, onConfirm, onClose,
+}: {
+  open: boolean;
+  easyfixer: Ef | null;
+  isProd: boolean;
+  isSending: boolean;
+  onConfirm: (overrideMobile: string | undefined) => void;
+  onClose: () => void;
+}) {
+  const realMobile = easyfixer?.efr_no ?? '';
+  const [override, setOverride] = useState('');
+  useEffect(() => {
+    if (open && easyfixer) {
+      setOverride(realMobile);
+    }
+  }, [open, easyfixer, realMobile]);
+
+  function maskMobile(m: string): string {
+    if (!m) return '—';
+    const clean = m.replace(/[^\d]/g, '');
+    if (clean.length < 6) return clean;
+    const head = clean.slice(0, 2);
+    const tail = clean.slice(-3);
+    return `${head}${'X'.repeat(Math.max(0, clean.length - 5))}${tail}`;
+  }
+
+  /*
+   * Discard-changes guard for Esc / overlay-click / X. This dialog is a
+   * confirmation step, not a multi-field form — `isDirty: false` so the
+   * prompt never fires (operator just closes). The `when` gate suppresses
+   * the close path entirely while a send is in flight so the dialog can't
+   * unmount mid-POST.
+   *
+   * MUST be called above the `if (!easyfixer) return null` early-return
+   * below (2026-06-11). Rules of Hooks: every render must call the same
+   * hooks in the same order. Putting this below the early-return meant
+   * the very first render (when `easyfixer === null` on mount) called
+   * 2 hooks (useState + useEffect) and skipped the third; the second
+   * render (after `sendDialogFor` was set) called all 3 — React's
+   * "Previous: undefined, Next: useContext" hooks-order error.
+   */
+  const guardedOpenChange = useFormDirtyGuard(onClose, {
+    isDirty: false,
+    when: () => !isSending,
+  });
+
+  // Fragment instead of null (2026-06-11) — keeps the render shape
+  // consistent across all render paths so React's reconciliation
+  // doesn't flag a shape-change. Functionally identical for the user.
+  if (!easyfixer) return <></>;
+
+  const cleanedOverride = override.replace(/[^\d]/g, '');
+  const overrideInvalid = !isProd && cleanedOverride.length < 10;
+
+  return (
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Send Profile Update Link</DialogTitle>
+          <DialogDescription>
+            {isProd
+              ? `WhatsApp Link Will Be Sent To ${easyfixer.efr_name} On Their Registered Mobile.`
+              : `Override The Destination Mobile For Testing — Production Sends To The Real Mobile.`}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          <Label htmlFor="dest-mobile" className="text-sm">Destination Mobile</Label>
+          {isProd ? (
+            <Input
+              id="dest-mobile"
+              value={maskMobile(realMobile)}
+              disabled
+              className="font-mono"
+            />
+          ) : (
+            <Input
+              id="dest-mobile"
+              value={override}
+              onChange={(e) => setOverride(e.target.value)}
+              placeholder="Enter destination mobile (10-15 digits)"
+              className="font-mono"
+              inputMode="numeric"
+            />
+          )}
+          <p className="text-xs text-muted-foreground">
+            {isProd
+              ? `Real Mobile Is Masked For Privacy.`
+              : `In Non-Production Environments You Can Send The Link To Your Own Number For Testing.`}
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={isSending}>Cancel</Button>
+          <Button
+            onClick={() => {
+              // In prod: undefined (BE uses real efr_no). In non-prod: send the
+              // override unconditionally — the BE no-ops it back to efr_no if
+              // it happens to equal the real value, but explicit override
+              // makes the audit trail unambiguous.
+              onConfirm(isProd ? undefined : cleanedOverride);
+            }}
+            disabled={isSending || overrideInvalid}
+          >
+            {isSending ? 'Sending…' : 'Send'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

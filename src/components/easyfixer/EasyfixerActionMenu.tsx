@@ -1,27 +1,52 @@
 'use client';
 
-import { Pencil, Link as LinkIcon, Receipt, ClipboardList } from 'lucide-react';
+import { Pencil, Link as LinkIcon, Receipt, ClipboardList, Send, Loader2, ClipboardCopy, MoreVertical } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from '@/components/ui/dropdown-menu';
 
 /*
- * EasyfixerActionMenu — 4-icon inline action group for the Manage
- * Easyfixers row Action cell. Mirrors the legacy CRM's row-level
- * affordances:
+ * EasyfixerActionMenu — kebab (3-dot) dropdown menu for the Manage
+ * Easyfixers row Action cell. Replaces the legacy horizontal 6-icon strip
+ * with a single MoreVertical trigger that opens a portaled dropdown of
+ * labeled action items. Same six actions, same gating contract:
  *
- *   1. Update Easyfixer  → edit modal      (Pencil)
- *   2. Client Mapping    → mapped-clients  (Link)
- *   3. Transaction List  → transactions    (Receipt)
- *   4. Assessment        → coming-soon     (ClipboardList)
+ *   Read-only group:
+ *     1. Edit Easyfixer          → edit modal       (Pencil)         [gated by canEdit]
+ *     2. Client Mapping          → mapped-clients   (Link)
+ *     3. Transactions            → transactions     (Receipt)
+ *     4. Assessment              → coming-soon      (ClipboardList)
+ *   --- separator ---
+ *   Write group:
+ *     5. Send Profile Update Link → magic-link send  (Send)           [gated by canSend; isSending → spinner+disable]
+ *     6. Copy Dev URL            → mint + clipboard (ClipboardCopy)  [gated by canCopyDevUrl; isCopyingDevUrl → spinner+disable]
  *
- * Each button is a 24×24 hit target (down from 28×28) with NO hover
- * background — only the icon colour shifts on hover. Result: icons sit
- * tightly together with no "boxy" padding around them. The native
- * `title` attribute supplies the tooltip.
+ * The Edit action is gated by `canEdit` — roles without
+ * `isEasyfixerEdit` action permission don't see it. Read-only roles
+ * still get Client Mapping, Transactions, Assessment.
  *
- * The Pencil (Update Easyfixer) icon is gated by `canEdit` — roles
- * without the `isEasyfixerEdit` action permission don't see it.
- * Operators on those roles still see the other 3 icons (read-only:
- * Client Mapping list, Transaction list, Assessment placeholder).
+ * The Send action is gated by `canSend` (`isProfileUpdateLinkSend`
+ * permission). While a send is in flight (`isSending`), the icon swaps
+ * to a spinning Loader2 and the item is disabled to prevent double-fires.
+ *
+ * The Copy Dev URL action is shown ONLY in non-production builds via the
+ * `canCopyDevUrl` prop the parent sets from
+ * `process.env.NODE_ENV !== 'production' && hasIsProfileUpdateLinkSend`.
+ * Production bundles strip the override path through Next's static
+ * dead-code elimination, so the item literally doesn't ship in prod.
+ * Clicking calls the dev-url endpoint and copies the response URL to the
+ * clipboard — lets engineers paste the link into a mobile-viewport tab
+ * without an actual WhatsApp send. While the request is in flight
+ * (`isCopyingDevUrl`), the icon swaps to a Loader2 spinner.
+ *
+ * Trigger is a 28×28 (h-7 w-7) icon button with MoreVertical. Content is
+ * portaled and aligned to the trigger's end edge, so it overflows the
+ * row without clipping. Each item is a flex row: icon (16×16) + label.
  */
 type Easyfixer = { efr_id: number; efr_name: string };
 
@@ -31,58 +56,100 @@ export function EasyfixerActionMenu({
   onClientMapping,
   onTransactions,
   onAssessment,
+  onSendProfileUpdateLink,
+  onCopyDevUrl,
   canEdit = true,
+  canSend = false,
+  canCopyDevUrl = false,
+  isSending = false,
+  isCopyingDevUrl = false,
 }: {
   easyfixer: Easyfixer;
   onEdit: () => void;
   onClientMapping: () => void;
   onTransactions: () => void;
   onAssessment: () => void;
+  /* Click handler for the Send Profile Update Link action; only invoked
+   * when `canSend` is true and `isSending` is false. */
+  onSendProfileUpdateLink?: () => void;
+  /* Click handler for the Copy Dev URL action; only invoked when
+   * `canCopyDevUrl` is true and `isCopyingDevUrl` is false. */
+  onCopyDevUrl?: () => void;
   /* Some viewers (read-only roles) shouldn't see Edit; pass false to hide. */
   canEdit?: boolean;
+  /* Roles without `isProfileUpdateLinkSend` shouldn't see the Send item. */
+  canSend?: boolean;
+  /* Non-prod-only affordance — parent passes
+   * `process.env.NODE_ENV !== 'production' && hasPermission`. Hidden in
+   * prod via static dead-code elimination. */
+  canCopyDevUrl?: boolean;
+  /* While a send-link request is in flight, show a spinner + disable the
+   * item so rapid double-clicks don't fire two POSTs. */
+  isSending?: boolean;
+  /* While a dev-url request is in flight, show a spinner + disable the
+   * item so rapid double-clicks don't double-mint. */
+  isCopyingDevUrl?: boolean;
 }) {
+  const hasWriteGroup = (canSend && onSendProfileUpdateLink) || (canCopyDevUrl && onCopyDevUrl);
   return (
-    <div className="inline-flex items-center gap-0.5" role="group" aria-label={`Actions for ${easyfixer.efr_name}`}>
-      {canEdit && (
-        <IconButton title="Update Easyfixer" onClick={onEdit}>
-          <Pencil className="h-4 w-4" />
-        </IconButton>
-      )}
-      <IconButton title="Client Mapping" onClick={onClientMapping}>
-        <LinkIcon className="h-4 w-4" />
-      </IconButton>
-      <IconButton title="Transaction List" onClick={onTransactions}>
-        <Receipt className="h-4 w-4" />
-      </IconButton>
-      <IconButton title="Assessment" onClick={onAssessment}>
-        <ClipboardList className="h-4 w-4" />
-      </IconButton>
-    </div>
-  );
-}
-
-function IconButton({
-  title,
-  onClick,
-  children,
-}: {
-  title: string;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      aria-label={title}
-      className={cn(
-        'inline-flex items-center justify-center h-6 w-6 rounded',
-        'text-muted-foreground hover:text-primary',
-        'transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
-      )}
-    >
-      {children}
-    </button>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            'inline-flex h-7 w-7 items-center justify-center rounded',
+            'text-muted-foreground hover:bg-slate-100 hover:text-primary',
+            'transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
+          )}
+          aria-label={`Actions for ${easyfixer.efr_name}`}
+        >
+          <MoreVertical className="h-4 w-4" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        {canEdit && (
+          <DropdownMenuItem onClick={onEdit}>
+            <Pencil className="mr-2 h-4 w-4" />
+            Edit Easyfixer
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuItem onClick={onClientMapping}>
+          <LinkIcon className="mr-2 h-4 w-4" />
+          Client Mapping
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={onTransactions}>
+          <Receipt className="mr-2 h-4 w-4" />
+          Transactions
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={onAssessment}>
+          <ClipboardList className="mr-2 h-4 w-4" />
+          Assessment
+        </DropdownMenuItem>
+        {hasWriteGroup && <DropdownMenuSeparator />}
+        {canSend && onSendProfileUpdateLink && (
+          <DropdownMenuItem
+            onClick={onSendProfileUpdateLink}
+            disabled={isSending}
+          >
+            {isSending
+              ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              : <Send className="mr-2 h-4 w-4" />}
+            {isSending ? 'Sending…' : 'Send Profile Update Link'}
+          </DropdownMenuItem>
+        )}
+        {canCopyDevUrl && onCopyDevUrl && (
+          <DropdownMenuItem
+            onClick={onCopyDevUrl}
+            disabled={isCopyingDevUrl}
+          >
+            {isCopyingDevUrl
+              ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              : <ClipboardCopy className="mr-2 h-4 w-4" />}
+            {isCopyingDevUrl ? 'Copying…' : 'Copy Dev URL'}
+            <span className="ml-auto text-xs text-muted-foreground">(dev)</span>
+          </DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

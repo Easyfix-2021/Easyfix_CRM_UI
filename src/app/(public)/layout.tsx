@@ -1,11 +1,20 @@
+import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog';
+
 /*
  * Layout for the (public) route group.
  *
  * Pages under `app/(public)/*` are intentionally OUTSIDE the `(authed)` group
  * so they don't inherit the sidebar / navbar / auth-gate of the staff CRM.
- * The single customer-facing surface today is the Magic-Link Job Completion
- * form at `/job-completion/[token]`; future public surfaces (e.g. a public
- * status-check page) can drop in here without touching the authed layout.
+ * Customer-facing surfaces today: the Magic-Link Job Completion form at
+ * `/job-completion/[token]` and the Easyfixer Profile Update form at
+ * `/profile-update/[token]`.
+ *
+ * `<ConfirmDialogProvider>` wraps children (2026-06-11) so the public form's
+ * `useFormDirtyGuard` calls work the same way they do under `(authed)`.
+ * Without the provider, `useConfirm()` throws "must be used inside
+ * <ConfirmDialogProvider>" the first time any Dialog's close path runs
+ * through `useFormDirtyGuard` — which is the project-canonical close handler
+ * (the `no-restricted-syntax` ESLint rule forbids inline `onOpenChange`).
  *
  * Visual: a soft slate background with a centred column. Adaptive width —
  * narrow-ish on mobile (single-task focus) but opens up to a wide container
@@ -22,8 +31,10 @@
  */
 export default function PublicLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 px-4 py-6 md:px-8 md:py-8 lg:px-12">
-      <div className="mx-auto max-w-7xl">{children}</div>
-    </div>
+    <ConfirmDialogProvider>
+      <div className="min-h-screen bg-slate-50 text-slate-900 px-4 py-6 md:px-8 md:py-8 lg:px-12">
+        <div className="mx-auto max-w-7xl">{children}</div>
+      </div>
+    </ConfirmDialogProvider>
   );
 }

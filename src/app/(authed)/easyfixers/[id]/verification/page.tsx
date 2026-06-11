@@ -32,8 +32,32 @@ import { Label } from '@/components/ui/label';
 import { SearchSelect } from '@/components/ui/search-select';
 import { VerificationSection } from '@/components/easyfixer/VerificationSection';
 import { CommentsPanel, type CommentEntry } from '@/components/easyfixer/CommentsPanel';
+import { SkillImageLightbox } from '@/components/easyfixer/SkillImageLightbox';
 import { showToast } from '@/components/ui/toast';
 import { formatDate } from '@/lib/utils';
+
+/*
+ * Tiny bridge wrapper (2026-06-11) that memoises the `value` object and the
+ * `onClose` callback before passing them to <SkillImageLightbox>. Without
+ * this, the inline `onClose={() => setLightboxUrl(null)}` is a fresh
+ * function every render, which forces the lightbox child to reconcile
+ * even when no state changed. Defining as a real component (not inline
+ * useMemo) keeps the host component's hook order untouched.
+ */
+function MemoizedSkillImageLightboxBridge({
+  lightboxUrl,
+  setLightboxUrl,
+}: {
+  lightboxUrl: { url: string; name: string } | null;
+  setLightboxUrl: React.Dispatch<React.SetStateAction<{ url: string; name: string } | null>>;
+}) {
+  const value = useMemo(
+    () => (lightboxUrl ? { url: lightboxUrl.url, name: lightboxUrl.name } : null),
+    [lightboxUrl],
+  );
+  const onClose = useCallback(() => setLightboxUrl(null), [setLightboxUrl]);
+  return <SkillImageLightbox value={value} onClose={onClose} />;
+}
 
 // ─── BE payload shape (matches getVerificationPage) ─────────────────
 type Comment = { id?: number; text: string; author: string | null; createdAt: string | null };
@@ -1028,12 +1052,13 @@ type OptionMapping = {
   category_id: number; category_name: string | null;
   service_type_id: number; service_type_name: string | null;
   deep_skill_id: number; deep_skill_name: string | null;
+  deep_skill_image_url: string | null;
   option_id: number; option_name: string | null;
 };
 
 type ServiceCategoryLU = { service_catg_id: number; service_catg_name: string };
 type ServiceTypeLU     = { service_type_id: number; service_type_name: string; service_catg_id: number };
-type DeepSkillLU       = { deepskill_id: number; deepskill_name: string; category_id: number; service_type_id: number };
+type DeepSkillLU       = { deepskill_id: number; deepskill_name: string; category_id: number; service_type_id: number; deep_skill_image_url: string | null };
 type DeepSkillOptionLU = { id: number; skill_option: string; status: number };
 type DeepSkillDetail   = { deepskill_id: number; deepskill_name: string; options: DeepSkillOptionLU[] };
 
@@ -1056,6 +1081,8 @@ function DeepSkillOptionMapping({ efrId, onReload }: { efrId: number; onReload?:
   const [typesByCatg, setTypesByCatg] = useState<Record<number, ServiceTypeLU[]>>({});
   const [skillsByType, setSkillsByType] = useState<Record<number, DeepSkillLU[]>>({});
   const [optionsBySkill, setOptionsBySkill] = useState<Record<number, DeepSkillOptionLU[]>>({});
+  // Click-to-enlarge lightbox for the 24×24 deep-skill thumbnails.
+  const [lightboxUrl, setLightboxUrl] = useState<{ url: string; name: string } | null>(null);
 
   // Initial fetch — current mappings + the full categories list.
   useEffect(() => {
@@ -1263,21 +1290,56 @@ function DeepSkillOptionMapping({ efrId, onReload }: { efrId: number; onReload?:
                                 ? <div className="pl-16 pr-3 py-2 text-xs text-slate-500">No Deep Skills.</div>
                                 : skillsByType[t.service_type_id].map((s) => (
                                   <div key={s.deepskill_id}>
-                                    <button
-                                      type="button"
-                                      className="w-full flex items-center gap-2 pl-16 pr-3 py-1.5 text-left text-sm hover:bg-slate-100"
+                                    {/*
+                                     * Outer skill-row toggle is a `<div role="button">` (not
+                                     * `<button>`) because it contains the thumbnail's inner
+                                     * `<button>` — nested interactive elements are invalid HTML.
+                                     * `cursor-pointer` + focus ring + onKeyDown keep the
+                                     * keyboard/mouse affordances a real button would give.
+                                     */}
+                                    <div
+                                      role="button"
+                                      tabIndex={0}
+                                      className="w-full flex items-center gap-2 pl-16 pr-3 py-1.5 text-left text-sm hover:bg-slate-100 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 rounded"
                                       onClick={() => toggleSkill(s.deepskill_id)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter' || e.key === ' ') {
+                                          e.preventDefault();
+                                          toggleSkill(s.deepskill_id);
+                                        }
+                                      }}
                                     >
                                       {openSkill.has(s.deepskill_id)
                                         ? <ChevronDown className="h-4 w-4 text-slate-500" />
                                         : <ChevronRight className="h-4 w-4 text-slate-500" />}
+                                      {s.deep_skill_image_url ? (
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            if (s.deep_skill_image_url) {
+                                              setLightboxUrl({ url: s.deep_skill_image_url, name: s.deepskill_name });
+                                            }
+                                          }}
+                                          className="shrink-0 cursor-zoom-in focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 rounded"
+                                          title="Click To Enlarge"
+                                        >
+                                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                                          <img
+                                            src={s.deep_skill_image_url}
+                                            alt={s.deepskill_name}
+                                            className="h-6 w-6 rounded object-cover border border-slate-200"
+                                            loading="lazy"
+                                          />
+                                        </button>
+                                      ) : null}
                                       <span>{s.deepskill_name}</span>
                                       {countBySkill.get(`${c.service_catg_id}|${t.service_type_id}|${s.deepskill_id}`) ? (
                                         <span className="ml-2 inline-flex items-center justify-center min-w-[1.5rem] h-5 px-1.5 rounded-full bg-emerald-100 text-emerald-700 text-[11px] font-semibold tabular-nums">
                                           {countBySkill.get(`${c.service_catg_id}|${t.service_type_id}|${s.deepskill_id}`)}
                                         </span>
                                       ) : null}
-                                    </button>
+                                    </div>
                                     {openSkill.has(s.deepskill_id) && (
                                       <div className="pl-24 pr-3 py-1 space-y-1">
                                         {!optionsBySkill[s.deepskill_id]
@@ -1324,6 +1386,8 @@ function DeepSkillOptionMapping({ efrId, onReload }: { efrId: number; onReload?:
           </div>
         </>
       )}
+
+      <MemoizedSkillImageLightboxBridge lightboxUrl={lightboxUrl} setLightboxUrl={setLightboxUrl} />
     </div>
   );
 }
