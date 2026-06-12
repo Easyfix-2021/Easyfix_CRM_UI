@@ -44,7 +44,7 @@ function writeMappedCountsToCache(rows: Array<{ deepskill_id: number; count: num
 import Link from 'next/link';
 import {
   Plus, Pencil, Trash2, Wrench, X as XIcon,
-  Image as ImageIcon, UploadCloud, Users, RefreshCw,
+  Image as ImageIcon, UploadCloud, Users, RefreshCw, Sparkles,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -709,6 +709,9 @@ function DeepSkillEditor({
   const [options, setOptions] = useState<string[]>([]);
   const [customOpt, setCustomOpt] = useState('');
   const [imageUploading, setImageUploading] = useState(false);
+  // AI image generation (2026-06-12). Blocks ~5-15s while DALL-E runs on
+  // the BE; both add + edit modes are supported (see handleGenerate).
+  const [generating, setGenerating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // Pending-upload buffer (2026-06-05): in Add mode the skill doesn't
@@ -898,6 +901,56 @@ function DeepSkillEditor({
         setErr(e instanceof ApiError ? e.message : 'Failed to clear image');
       }
     }
+  }
+
+  /*
+   * AI-generate a skill thumbnail (2026-06-12). Synchronous BE call that
+   * blocks ~5-15s while DALL-E renders. Two paths:
+   *   - Edit mode (skill_id > 0): POST /:id/generate-image — the BE
+   *     replaces the skill's image immediately and returns the new key
+   *     + a fresh presigned preview URL.
+   *   - Add mode (no id): POST /generate-image — the BE renders to a
+   *     staging key (`Skills/staging/…`) WITHOUT persisting a row and
+   *     returns the staging key + preview URL. submit()'s `Skills/`
+   *     filter forwards the staging key on create.
+   * On success we drop the URL on the existing preview tile and stash the
+   * key in `f.deepskill_image`; a generated image supersedes any staged
+   * local file, so `pendingImageFile` is cleared. The auto-gen info banner
+   * (gated on empty image + no pending file) auto-hides once the key is set.
+   */
+  async function handleGenerate() {
+    // Name is required to build the prompt — the button is disabled while
+    // it's blank, so this is just defensive.
+    if (!f.deepskill_name.trim()) return;
+    // A meaningful thumbnail needs ≥1 skill option (a name-only prompt is
+    // weak and DALL-E may reject it). Surface a clear, instant message on
+    // click — for BOTH add and edit modes — instead of letting the BE
+    // round-trip return the generic "Image generation failed" toast.
+    if (options.length === 0) {
+      showToast({ variant: 'error', message: 'Please Add At Least One Skill Option Before Generating An Image.' });
+      return;
+    }
+    setGenerating(true); setErr(null);
+    try {
+      const body = { deepskill_name: f.deepskill_name.trim(), options };
+      const res = isEdit && record?.deepskill_id
+        ? await api.post<{ image: string; url: string }>(
+            `/admin/deep-skills/${record.deepskill_id}/generate-image`, body)
+        : await api.post<{ image: string; url: string }>(
+            '/admin/deep-skills/generate-image', body);
+      // A generated image replaces any staged local file.
+      if (previewUrl && previewUrl.startsWith('blob:')) URL.revokeObjectURL(previewUrl);
+      setPendingImageFile(null);
+      setPreviewUrl(res.url);
+      setF((s) => ({ ...s, deepskill_image: res.image }));
+      showToast({ variant: 'success', message: 'Image Generated' });
+    } catch (e) {
+      // Leave existing image/preview untouched on failure.
+      showToast({
+        variant: 'error',
+        message: e instanceof ApiError ? e.message : 'Image generation failed — please retry',
+      });
+    } finally { setGenerating(false); }
   }
 
   async function submit(e: React.FormEvent) {
@@ -1095,15 +1148,40 @@ function DeepSkillEditor({
             </div>
             <div>
               <Label className="text-xs">Skill Image</Label>
-              {/* Click-to-upload box matches legacy "Upload Image" affordance */}
-              <label className="flex items-center justify-center gap-2 h-9 rounded-md border border-dashed border-input bg-background px-3 text-sm cursor-pointer hover:bg-muted/40 transition-colors">
-                <UploadCloud className="h-4 w-4 text-muted-foreground" />
-                <span className="text-muted-foreground">
-                  {imageUploading ? 'Uploading…' : (f.deepskill_image || 'Upload Image')}
-                </span>
-                <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="hidden"
-                  onChange={(e) => handleImage(e.target.files?.[0] ?? null)} />
-              </label>
+              {/* Upload + AI Generate sit side-by-side — operators can
+                  pick a file OR have DALL-E render a thumbnail from the
+                  skill name + options before saving. */}
+              <div className="flex items-stretch gap-2">
+                {/* Click-to-upload box matches legacy "Upload Image" affordance */}
+                <label className="flex flex-1 min-w-0 items-center justify-center gap-2 h-9 rounded-md border border-dashed border-input bg-background px-3 text-sm cursor-pointer hover:bg-muted/40 transition-colors">
+                  <UploadCloud className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <span className="text-muted-foreground truncate">
+                    {imageUploading ? 'Uploading…' : (f.deepskill_image || 'Upload Image')}
+                  </span>
+                  <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="hidden"
+                    onChange={(e) => handleImage(e.target.files?.[0] ?? null)} />
+                </label>
+                {/* AI Generate — disabled until a Skill Name exists (needed
+                    to build the prompt) or while another image op runs.
+                    Label flips to "Regenerate" once an image is present. */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-9 shrink-0"
+                  onClick={handleGenerate}
+                  disabled={!f.deepskill_name.trim() || generating || imageUploading}
+                  title={!f.deepskill_name.trim() ? 'Enter A Skill Name First' : undefined}
+                >
+                  <Sparkles className="h-4 w-4 mr-1" />
+                  {generating
+                    ? 'Generating…'
+                    : ((f.deepskill_image || pendingImageFile || previewUrl) ? 'Regenerate' : 'Generate')}
+                </Button>
+              </div>
+              {/* AI generation progress — emerald to distinguish from the
+                  sky auto-gen-after-save info banner below. */}
+              <AnimatedLoadingBar visible={generating} message="Generating Image…" tone="emerald" />
               {/*
                * Preview tile (2026-06-10). 80×80 thumbnail of the
                * currently-picked or saved image. Two source paths:

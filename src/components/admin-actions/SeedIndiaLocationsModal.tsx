@@ -91,6 +91,10 @@ interface SeedStats {
   pincodes_inserted: number;
   pincodes_updated?: number; // 2026-06-11 — fill-blank UPDATEs on existing rows
   pincodes_skipped_dupe: number;
+  // 2026-06-12 — batch-isolation: a failed flush is logged + counted and
+  // the seed continues rather than aborting. Surfaced only when non-zero.
+  batches_failed?: number;
+  pincodes_failed?: number;
 }
 
 type JobStatus = 'running' | 'completed' | 'failed' | 'cancelled';
@@ -585,6 +589,11 @@ export function SeedIndiaLocationsModal({
               <span>Pincodes Inserted: {(liveStats?.pincodes_inserted ?? 0).toLocaleString('en-IN')}</span>
               <span>Pincodes Updated: {(liveStats?.pincodes_updated ?? 0).toLocaleString('en-IN')}</span>
               <span>Pincodes Skipped (Dupe): {(liveStats?.pincodes_skipped_dupe ?? 0).toLocaleString('en-IN')}</span>
+              {(liveStats?.pincodes_failed ?? 0) > 0 && (
+                <span className="text-rose-600 font-medium">
+                  Pincodes Failed: {(liveStats?.pincodes_failed ?? 0).toLocaleString('en-IN')} ({liveStats?.batches_failed ?? 0} batch{(liveStats?.batches_failed ?? 0) === 1 ? '' : 'es'})
+                </span>
+              )}
             </div>
           </div>
         )}
@@ -618,6 +627,11 @@ export function SeedIndiaLocationsModal({
               <span>Pincodes Inserted: {jobSnap.stats.pincodes_inserted.toLocaleString('en-IN')}</span>
               <span>Pincodes Updated: {(jobSnap.stats.pincodes_updated ?? 0).toLocaleString('en-IN')}</span>
               <span>Pincodes Skipped (Dupe): {jobSnap.stats.pincodes_skipped_dupe.toLocaleString('en-IN')}</span>
+              {(jobSnap.stats.pincodes_failed ?? 0) > 0 && (
+                <span className="text-rose-600 font-medium">
+                  Pincodes Failed: {(jobSnap.stats.pincodes_failed ?? 0).toLocaleString('en-IN')} ({jobSnap.stats.batches_failed ?? 0} batch{(jobSnap.stats.batches_failed ?? 0) === 1 ? '' : 'es'})
+                </span>
+              )}
             </div>
           </div>
         )}
@@ -675,6 +689,11 @@ export function SeedIndiaLocationsModal({
                 <span>Pincodes Inserted: {(lastCompleted.stats.pincodes_inserted ?? 0).toLocaleString('en-IN')}</span>
                 <span>Pincodes Updated: {(lastCompleted.stats.pincodes_updated ?? 0).toLocaleString('en-IN')}</span>
                 <span>Pincodes Skipped (Dupe): {(lastCompleted.stats.pincodes_skipped_dupe ?? 0).toLocaleString('en-IN')}</span>
+                {(lastCompleted.stats.pincodes_failed ?? 0) > 0 && (
+                  <span className="text-rose-600 font-medium">
+                    Pincodes Failed: {(lastCompleted.stats.pincodes_failed ?? 0).toLocaleString('en-IN')} ({lastCompleted.stats.batches_failed ?? 0} batch{(lastCompleted.stats.batches_failed ?? 0) === 1 ? '' : 'es'})
+                  </span>
+                )}
               </div>
               <div className="text-emerald-700/80">
                 Took {((lastCompleted.took_ms || 0) / 1000).toFixed(1)}s
