@@ -32,7 +32,8 @@ import { DateRangePopover } from '@/components/ui/date-range-popover';
 import { JobModal } from '@/components/job/JobModal';
 import { api, ApiError } from '@/lib/api';
 import { downloadXlsx as sharedDownloadXlsx } from '@/lib/download-xlsx';
-import { statusLabel, statusColorClass } from '@/lib/utils';
+import { statusLabel, statusTone } from '@/lib/utils';
+import { StatusChip } from '@/components/ui/StatusChip';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { ClickToCallTab } from './ClickToCallTab';
 
@@ -582,9 +583,9 @@ export function CallInfoModal({ open, onClose }: { open: boolean; onClose: () =>
                                 glance. Empty when job_status isn't set
                                 on the joined row. */}
                             {r.job_status != null && r.job_status !== '' ? (
-                              <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${statusColorClass(Number(r.job_status))}`}>
+                              <StatusChip tone={statusTone(Number(r.job_status))}>
                                 {statusLabel(Number(r.job_status))}
-                              </span>
+                              </StatusChip>
                             ) : '—'}
                           </td>
                         </tr>

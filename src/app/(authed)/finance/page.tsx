@@ -39,7 +39,7 @@ import { showToast } from '@/components/ui/toast';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { useConfirm } from '@/components/ui/confirm-dialog';
-import { useFetch as useSharedFetch } from '@/lib/hooks';
+import { useFetch as useSharedFetch, useDebouncedValue } from '@/lib/hooks';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
 const TABS = ['invoices', 'transactions', 'purchase-orders', 'payouts', 'ndm-collection', 'efr-ledger'] as const;
@@ -52,6 +52,7 @@ export default function FinanceLandingPage() {
   const initialTab = (sp.get('tab') as TabKey) || 'invoices';
   const [tab, setTab] = useState<TabKey>(TABS.includes(initialTab) ? initialTab : 'invoices');
   const [clientId, setClientId] = useState('');
+  const debouncedClientId = useDebouncedValue(clientId, 300);
 
   // Keep URL in sync so the Finance child menus light up the right tab.
   // Two-way sync (2026-05-26 fix):
@@ -106,9 +107,9 @@ export default function FinanceLandingPage() {
           <TabsTrigger value="ndm-collection">NDM Collection</TabsTrigger>
           <TabsTrigger value="efr-ledger">EFR Ledger</TabsTrigger>
         </TabsList>
-        <TabsContent value="invoices"><InvoicesTab clientId={clientId} /></TabsContent>
-        <TabsContent value="transactions"><TransactionsTab clientId={clientId} /></TabsContent>
-        <TabsContent value="purchase-orders"><PurchaseOrdersTab clientId={clientId} /></TabsContent>
+        <TabsContent value="invoices"><InvoicesTab clientId={debouncedClientId} /></TabsContent>
+        <TabsContent value="transactions"><TransactionsTab clientId={debouncedClientId} /></TabsContent>
+        <TabsContent value="purchase-orders"><PurchaseOrdersTab clientId={debouncedClientId} /></TabsContent>
         <TabsContent value="payouts"><PayoutsTab /></TabsContent>
         <TabsContent value="ndm-collection"><NdmCollectionTab /></TabsContent>
         <TabsContent value="efr-ledger"><EfrLedgerTab /></TabsContent>
@@ -218,6 +219,7 @@ function RecordPaymentDialog({ invoice, onClose, onSaved }: { invoice: Invoice |
       setPaidBy('');
     }
   }, [invoice]);
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !busy });
   if (!invoice) return null;
   async function submit() {
     if (!amount || !paidDate || !paidBy) {
@@ -239,7 +241,7 @@ function RecordPaymentDialog({ invoice, onClose, onSaved }: { invoice: Invoice |
     } finally { setBusy(false); }
   }
   return (
-    <Dialog open={!!invoice} onOpenChange={(o) => { if (!o) onClose(); }}>
+    <Dialog open={!!invoice} onOpenChange={guardedOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader><DialogTitle>Record Payment · Invoice #{invoice.id}</DialogTitle></DialogHeader>
         <div className="p-4 space-y-3">
@@ -277,6 +279,7 @@ function ChangeInvoiceStatusDialog({ invoice, onClose, onSaved }: { invoice: Inv
       setComments('');
     }
   }, [invoice]);
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !busy });
   if (!invoice) return null;
   async function submit() {
     setBusy(true);
@@ -292,7 +295,7 @@ function ChangeInvoiceStatusDialog({ invoice, onClose, onSaved }: { invoice: Inv
     } finally { setBusy(false); }
   }
   return (
-    <Dialog open={!!invoice} onOpenChange={(o) => { if (!o) onClose(); }}>
+    <Dialog open={!!invoice} onOpenChange={guardedOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader><DialogTitle>Change Status · Invoice #{invoice.id}</DialogTitle></DialogHeader>
         <div className="p-4 space-y-3">
@@ -724,6 +727,9 @@ function CreatePayoutDialog({ open, onClose, onSaved }: { open: boolean; onClose
   const [opsAmount, setOpsAmount] = useState('');
   const [pmRequestAmount, setPmRequestAmount] = useState('');
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (open) { setEfrId(''); setEfrBalance(''); setOpsAmount(''); setPmRequestAmount(''); }
+  }, [open]);
   async function submit() {
     if (!efrId || !efrBalance || !opsAmount || !pmRequestAmount) {
       showToast({ variant: 'error', message: 'All four fields are required' });
@@ -867,6 +873,9 @@ function CreateNdmRechargeDialog({ open, onClose, onSaved }: { open: boolean; on
   const [referenceId, setReferenceId] = useState('');
   const [comments, setComments] = useState('');
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (open) { setEfrId(''); setRechargeAmount(''); setPaymentMode('Cash'); setReferenceId(''); setComments(''); }
+  }, [open]);
   async function submit() {
     if (!efrId || !rechargeAmount) {
       showToast({ variant: 'error', message: 'Easyfixer ID + Amount are required' });
@@ -935,6 +944,7 @@ function EfrLedgerTab() {
   const initialType = sp.get('type') || '';
   const [type, setType] = useState<string>(initialType);
   const [efrId, setEfrId] = useState('');
+  const debouncedEfrId = useDebouncedValue(efrId, 300);
 
   useEffect(() => {
     const params = new URLSearchParams(sp.toString());
@@ -949,7 +959,7 @@ function EfrLedgerTab() {
 
   const qs = new URLSearchParams();
   if (type) qs.set('type', type);
-  if (efrId) qs.set('efrId', efrId);
+  if (debouncedEfrId) qs.set('efrId', debouncedEfrId);
   qs.set('limit', '200');
   const url = `/admin/finance/efr-transactions?${qs.toString()}`;
   const { data, loading, error } = useFetch<EfrTxn>(url);

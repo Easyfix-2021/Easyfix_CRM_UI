@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Plus, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -286,6 +286,21 @@ function statusLabelTone(v: Ef['efr_status_label']): StatusChipTone {
 }
 
 /*
+ * Pure CSV-cell parser (module scope so memoised rows keep a stable
+ * reference) — maps a comma-separated id string to {id, name} items via
+ * the supplied lookup Map. See the CSV cell helper comment inside the
+ * component for the display contract.
+ */
+function parseCsvCell(raw: string | null | undefined, lookup: Map<string, string>): CsvCellItem[] {
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((id) => ({ id, name: lookup.get(id) ?? `Unknown (${id})` }));
+}
+
+/*
  * Module-level dedupe for inline lookup fetches.
  *
  * React StrictMode mounts effects twice in dev, and a single page mount
@@ -310,21 +325,30 @@ let serviceTypesAllPromise: Promise<ServiceType[]> | null = null;
  *
  * React StrictMode mounts the page twice in dev, firing `load(true)`
  * twice on the same tick — both hit `/admin/easyfixers` and both wait
- * 20s+ for the legacy slow query, doubling the network footprint. This
- * promise is cleared in .finally() so subsequent paginations / search
- * clicks aren't stuck behind a stale resolved promise; we ONLY want to
- * coalesce concurrent identical calls, not memoise across the session.
+ * 20s+ for the legacy slow query, doubling the network footprint. The
+ * dedupe is PARAM-KEYED: only concurrent IDENTICAL calls (same filters
+ * + pagination — StrictMode's double-mount) collapse into one request.
+ * A call with DIFFERENT params (Search with new filters, page flip,
+ * status-chip click while a slow load is still in flight) fires its own
+ * request immediately instead of being served the stale in-flight
+ * response. Stale responses are additionally discarded in the component
+ * via the `loadSeqRef` sequence counter so a superseded load() can't
+ * clobber newer state. The in-flight entry is cleared in .finally() so
+ * nothing memoises across the session.
  *
- * Param-keyed dedupe would be over-engineering for the mount-only case
- * StrictMode triggers — the simple in-flight collapse is enough.
+ * JSON.stringify is a safe key here because every call site builds the
+ * params object with identical literal key order
+ * (`{ limit, offset, ...buildQuery(f) }`).
  */
-let listPromise: Promise<Resp> | null = null;
+let listInflight: { key: string; promise: Promise<Resp> } | null = null;
 function fetchListOnce(params: Record<string, string | number | undefined>): Promise<Resp> {
-  if (listPromise) return listPromise;
-  listPromise = api.get<Resp>('/admin/easyfixers', params).finally(() => {
-    listPromise = null;
+  const key = JSON.stringify(params);
+  if (listInflight && listInflight.key === key) return listInflight.promise;
+  const promise = api.get<Resp>('/admin/easyfixers', params).finally(() => {
+    if (listInflight && listInflight.key === key) listInflight = null;
   });
-  return listPromise;
+  listInflight = { key, promise };
+  return promise;
 }
 
 const SS_PREFIX = 'ef-mgmt-lookup:';
@@ -438,6 +462,9 @@ export default function EasyfixersPage() {
   const [pageSize, setPageSize] = useState<TablePageSize>(50);
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  // Monotonic sequence per load() call — a superseded load (older seq)
+  // discards its response instead of clobbering newer rows/total state.
+  const loadSeqRef = useRef(0);
 
   // Inline lookups not exposed by useLookup() (we keep that hook untouched
   // per the strict file-scope rule and fetch these one-time on mount).
@@ -492,7 +519,7 @@ export default function EasyfixersPage() {
    */
   const isProd = process.env.NODE_ENV === 'production';
 
-  function openSendDialog(e: Ef) {
+  const openSendDialog = useCallback((e: Ef) => {
     /*
      * Defer the Dialog open by one macrotask (2026-06-11). Classic
      * Radix DropdownMenu → Dialog race: the DropdownMenuItem's onClick
@@ -508,9 +535,12 @@ export default function EasyfixersPage() {
      * detector no longer sees the original pointer-up as relevant
      * to the new Dialog. requestAnimationFrame would also work but
      * setTimeout(0) is the conventional Radix workaround for this race.
+     *
+     * useCallback (empty deps — only the stable setter + setTimeout) so
+     * the memoised <EfRow> sees a stable prop across re-renders.
      */
     setTimeout(() => setSendDialogFor(e), 0);
-  }
+  }, []);
 
   /*
    * Same Radix DropdownMenu → Dialog race as openSendDialog above
@@ -520,13 +550,21 @@ export default function EasyfixersPage() {
    * just-mounted Dialog as an outside click → instant dismiss. Defer
    * via setTimeout(0) so the dropdown teardown finishes first.
    */
-  function openClientMapping(e: Ef) {
+  const openClientMapping = useCallback((e: Ef) => {
     setTimeout(() => setClientMappingFor(e), 0);
-  }
+  }, []);
 
-  function openTransactions(e: Ef) {
+  const openTransactions = useCallback((e: Ef) => {
     setTimeout(() => setTransactionsFor(e), 0);
-  }
+  }, []);
+
+  // Stable row-action navigation callbacks for the memoised <EfRow>.
+  const onRowEdit = useCallback((e: Ef) => {
+    router.push(`/easyfixers/${e.efr_id}/verification`);
+  }, [router]);
+  const onRowAssessment = useCallback(() => {
+    router.push('/coming-soon');
+  }, [router]);
 
   /*
    * Dev-only "Copy Dev URL" handler (2026-06-11). Hits the new
@@ -538,7 +576,7 @@ export default function EasyfixersPage() {
    * the BE be the source of truth for the prod block (the FE gate is
    * a defence-in-depth nicety; the 404 is the real enforcement).
    */
-  async function copyDevUrl(e: Ef) {
+  const copyDevUrl = useCallback(async (e: Ef) => {
     setCopyingDevUrlFor((prev) => new Set(prev).add(e.efr_id));
     try {
       const resp = await api.get<{ efrId: number; token: string; url: string }>(
@@ -570,7 +608,7 @@ export default function EasyfixersPage() {
         return next;
       });
     }
-  }
+  }, []);
 
   async function confirmSendProfileUpdateLink(efrId: number, overrideMobile: string | undefined) {
     setSendingFor((prev) => new Set(prev).add(efrId));
@@ -579,6 +617,14 @@ export default function EasyfixersPage() {
         action: 'first',
         ...(overrideMobile ? { override_mobile: overrideMobile } : {}),
       });
+      // Send succeeded — the cached aggregate row (60s TTL) now holds a
+      // stale "Last Link Sent" date/count. Drop it so the next load()
+      // refetches, and optimistically patch the rendered row so the
+      // column reflects the send immediately (no full load() refire).
+      aggregateCache.delete(efrId);
+      setRows((prev) => prev.map((r) => r.efr_id === efrId
+        ? { ...r, profile_update_sent_at: new Date().toISOString(), profile_update_send_count: (r.profile_update_send_count ?? 0) + 1 }
+        : r));
       const target = sendDialogFor;
       showToast({
         variant: 'success',
@@ -647,6 +693,7 @@ export default function EasyfixersPage() {
     overridePage?: number,
     overridePageSize?: TablePageSize,
   ) {
+    const seq = ++loadSeqRef.current;
     setLoading(true);
     const f = overrideFilters ?? filters;
     const pg = reset ? 0 : (overridePage ?? page);
@@ -678,6 +725,7 @@ export default function EasyfixersPage() {
         limit, offset,
         ...buildQuery(f),
       });
+      if (seq !== loadSeqRef.current) return; // superseded by a newer load — discard
       const enriched: EnrichedEf[] = r.items.map((e) => ({
         ...e,
         _aggregatesLoaded: false,
@@ -765,7 +813,12 @@ export default function EasyfixersPage() {
           })
           .catch(() => { /* keep placeholders on failure */ });
       }
-    } finally { setLoading(false); }
+    } finally {
+      // A superseded load leaves `loading` for the newer in-flight load
+      // to clear; the non-superseded case (including the early discard
+      // return) clears it here as before.
+      if (seq === loadSeqRef.current) setLoading(false);
+    }
   }
 
   // SINGLE initial-mount effect. React StrictMode double-fires this in
@@ -863,19 +916,25 @@ export default function EasyfixersPage() {
     return m;
   }, [serviceTypesAll, lk.serviceTypes]);
 
-  function parseCsvCell(raw: string | null | undefined, lookup: Map<string, string>): CsvCellItem[] {
-    if (!raw) return [];
-    return raw
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .map((id) => ({ id, name: lookup.get(id) ?? `Unknown (${id})` }));
-  }
-
-  function openCsvModal(title: string, items: CsvCellItem[]) {
+  const openCsvModal = useCallback((title: string, items: CsvCellItem[]) => {
     if (items.length === 0) return;
     setCsvCell({ open: true, title, items });
-  }
+  }, []);
+
+  /*
+   * Per-row derived data, hoisted out of the row render (2026-06-11).
+   * Previously each row re-parsed both CSV columns + re-formatted the
+   * name on EVERY page render — including filter keystrokes that don't
+   * touch the table at all. Memoising the bundle here (and rendering
+   * rows via the memoised <EfRow>) means typing in a filter input no
+   * longer re-reconciles 500 rows × 22 cells.
+   */
+  const displayRows = useMemo(() => sorted.map((e) => ({
+    e,
+    catItems: parseCsvCell(e.efr_service_category, categoryById),
+    typeItems: parseCsvCell(e.efr_service_type, serviceTypeById),
+    efName: formatEasyfixerName(e.efr_name),
+  })), [sorted, categoryById, serviceTypeById]);
 
   return (
     <div className="space-y-5">
@@ -1211,112 +1270,24 @@ export default function EasyfixersPage() {
               {!loading && sorted.length === 0 && (
                 <tr><td colSpan={22} className="!text-center text-muted-foreground py-6">No easyfixers match the current filters.</td></tr>
               )}
-              {!loading && sorted.map((e) => {
-                const catItems = parseCsvCell(e.efr_service_category, categoryById);
-                const typeItems = parseCsvCell(e.efr_service_type, serviceTypeById);
-                const efName = formatEasyfixerName(e.efr_name);
-                return (
-                <tr key={e.efr_id}>
-                  <td className="!text-center font-mono text-xs truncate stick-col stick-left">{e.efr_id}</td>
-                  <td className="!text-left font-medium truncate" title={efName}>{efName}</td>
-                  <td className="!text-left truncate" title={e.user_mapped_to_city ?? ''}>{e.user_mapped_to_city ?? <span className="text-muted-foreground">—</span>}</td>
-                  <td className="!text-left truncate">{e.ef_account ? <StatusChip tone={efAccountTone(e.ef_account)} size="sm">{e.ef_account}</StatusChip> : <span className="text-muted-foreground">—</span>}</td>
-                  <td className="!text-left truncate" title={e.state_name ?? ''}>{e.state_name ?? <span className="text-muted-foreground">—</span>}</td>
-                  <td className="!text-left truncate" title={e.city_name ?? ''}>{e.city_name ?? <span className="text-muted-foreground">—</span>}</td>
-                  <td className="!text-left font-mono text-xs truncate" title={e.efr_no}>{e.efr_no}</td>
-                  <td className="!text-left text-xs truncate" title={e.efr_email ?? ''}>{e.efr_email ?? <span className="text-muted-foreground">—</span>}</td>
-                  <td className="!text-left text-xs truncate">
-                    <CsvCellButton
-                      items={catItems}
-                      onOpen={() => openCsvModal(`Service Categories — ${efName}`, catItems)}
-                    />
-                  </td>
-                  <td className="!text-left text-xs truncate">
-                    <CsvCellButton
-                      items={typeItems}
-                      onOpen={() => openCsvModal(`Service Types — ${efName}`, typeItems)}
-                    />
-                  </td>
-                  <td className="!text-right tabular-nums truncate">
-                    {e._aggregatesLoaded
-                      ? (e.clients_mapped ?? 0)
-                      : <span className="text-muted-foreground">…</span>}
-                  </td>
-                  <td className="!text-right tabular-nums truncate">
-                    {e._aggregatesLoaded
-                      ? (e.total_earnings != null ? `₹${Number(e.total_earnings).toLocaleString('en-IN')}` : '—')
-                      : <span className="text-muted-foreground">…</span>}
-                  </td>
-                  <td className="!text-right tabular-nums truncate">
-                    {e._aggregatesLoaded
-                      ? (e.job_count ?? 0)
-                      : <span className="text-muted-foreground">…</span>}
-                  </td>
-                  <td className="!text-right tabular-nums truncate">
-                    {e._aggregatesLoaded
-                      ? (e.options_mapped_count > 0
-                        ? <span className="font-semibold text-primary">{e.options_mapped_count}</span>
-                        : <span className="text-muted-foreground">0</span>)
-                      : <span className="text-muted-foreground">…</span>}
-                  </td>
-                  <td className="!text-right tabular-nums truncate">{e.current_balance != null ? `₹${Number(e.current_balance).toLocaleString('en-IN')}` : '—'}</td>
-                  <td className="!text-right tabular-nums truncate">
-                    {e._aggregatesLoaded
-                      ? (e.avg_rating != null ? `${Number(e.avg_rating).toFixed(1)} ★` : '—')
-                      : <span className="text-muted-foreground">…</span>}
-                  </td>
-                  {/*
-                    * Last Link Sent — profile-update magic-link audit
-                    * (2026-06-11). Date + a slate "N×" pill showing
-                    * `profile_update_send_count` when > 0. Placeholder "…"
-                    * while aggregates phase is still in flight; muted "—"
-                    * when the easyfixer has never been pinged.
-                    */}
-                  <td className="!text-left text-xs tabular-nums truncate">
-                    {e._aggregatesLoaded ? (
-                      e.profile_update_sent_at ? (
-                        <span className="inline-flex items-center gap-1.5" title={formatDate(e.profile_update_sent_at)}>
-                          <span className="truncate">{formatDate(e.profile_update_sent_at)}</span>
-                          {e.profile_update_send_count > 1 && (
-                            <span className="text-[10px] font-medium rounded bg-slate-100 px-1.5 py-0.5 text-slate-600 shrink-0">
-                              {e.profile_update_send_count}×
-                            </span>
-                          )}
-                        </span>
-                      ) : (
-                        <span className="text-slate-400">—</span>
-                      )
-                    ) : (
-                      <span className="text-muted-foreground">…</span>
-                    )}
-                  </td>
-                  <td className="!text-right text-xs tabular-nums truncate">{e.efr_profile_perc != null ? `${Math.round(Number(e.efr_profile_perc))}%` : '—'}</td>
-                  <td className="!text-center truncate">{e.is_technician_verified ? '✓' : <span className="text-muted-foreground">—</span>}</td>
-                  <td className="!text-left text-xs whitespace-nowrap text-muted-foreground truncate" title={formatDate(e.insert_date)}>{formatDate(e.insert_date)}</td>
-                  <td className="!text-center truncate">
-                    {e.efr_status_label
-                      ? <StatusChip tone={statusLabelTone(e.efr_status_label)} size="sm">{e.efr_status_label}</StatusChip>
-                      : <span className="text-muted-foreground">—</span>}
-                  </td>
-                  <td className="!text-right stick-col stick-right">
-                    <EasyfixerActionMenu
-                      easyfixer={{ efr_id: e.efr_id, efr_name: e.efr_name }}
-                      canEdit={!!can.isEdit}
-                      canSend={!!can.isProfileUpdateLinkSend}
-                      canCopyDevUrl={!isProd && !!can.isProfileUpdateLinkSend}
-                      onEdit={() => router.push(`/easyfixers/${e.efr_id}/verification`)}
-                      onClientMapping={() => openClientMapping(e)}
-                      onTransactions={() => openTransactions(e)}
-                      onAssessment={() => router.push('/coming-soon')}
-                      onSendProfileUpdateLink={() => openSendDialog(e)}
-                      onCopyDevUrl={() => copyDevUrl(e)}
-                      isSending={sendingFor.has(e.efr_id)}
-                      isCopyingDevUrl={copyingDevUrlFor.has(e.efr_id)}
-                    />
-                  </td>
-                </tr>
-                );
-              })}
+              {!loading && displayRows.map((row) => (
+                <EfRow
+                  key={row.e.efr_id}
+                  row={row}
+                  canEdit={!!can.isEdit}
+                  canSend={!!can.isProfileUpdateLinkSend}
+                  isProd={isProd}
+                  isSending={sendingFor.has(row.e.efr_id)}
+                  isCopyingDevUrl={copyingDevUrlFor.has(row.e.efr_id)}
+                  onEdit={onRowEdit}
+                  onClientMapping={openClientMapping}
+                  onTransactions={openTransactions}
+                  onAssessment={onRowAssessment}
+                  onSendProfileUpdateLink={openSendDialog}
+                  onCopyDevUrl={copyDevUrl}
+                  onOpenCsvModal={openCsvModal}
+                />
+              ))}
             </tbody>
           </table>
           </div>
@@ -1385,6 +1356,151 @@ export default function EasyfixersPage() {
     </div>
   );
 }
+
+/*
+ * Per-row display bundle produced by the `displayRows` memo in the page
+ * component — the CSV columns are parsed and the name formatted ONCE per
+ * rows/lookup change, not on every render pass.
+ */
+type DisplayRow = {
+  e: EnrichedEf;
+  catItems: CsvCellItem[];
+  typeItems: CsvCellItem[];
+  efName: string;
+};
+
+/*
+ * EfRow — memoised list row (2026-06-11). The 14 controlled filter
+ * inputs live in the same component as the table, so before this every
+ * filter keystroke re-rendered all rows (at pageSize 'All' that's 500
+ * rows × 22 cells + 1,000 CSV parses + 500 action-menu re-renders per
+ * keystroke — for zero visual change, since filters don't refetch).
+ * React.memo + the stable `row` bundle from `displayRows` + useCallback'd
+ * handlers mean a keystroke skips the entire tbody. Aggregate/attendance
+ * merges replace row objects immutably, so affected rows still re-render.
+ */
+const EfRow = memo(function EfRow({
+  row, canEdit, canSend, isProd, isSending, isCopyingDevUrl,
+  onEdit, onClientMapping, onTransactions, onAssessment,
+  onSendProfileUpdateLink, onCopyDevUrl, onOpenCsvModal,
+}: {
+  row: DisplayRow;
+  canEdit: boolean;
+  canSend: boolean;
+  isProd: boolean;
+  isSending: boolean;
+  isCopyingDevUrl: boolean;
+  onEdit: (e: Ef) => void;
+  onClientMapping: (e: Ef) => void;
+  onTransactions: (e: Ef) => void;
+  onAssessment: () => void;
+  onSendProfileUpdateLink: (e: Ef) => void;
+  onCopyDevUrl: (e: Ef) => void;
+  onOpenCsvModal: (title: string, items: CsvCellItem[]) => void;
+}) {
+  const { e, catItems, typeItems, efName } = row;
+  return (
+    <tr>
+      <td className="!text-center font-mono text-xs truncate stick-col stick-left">{e.efr_id}</td>
+      <td className="!text-left font-medium truncate" title={efName}>{efName}</td>
+      <td className="!text-left truncate" title={e.user_mapped_to_city ?? ''}>{e.user_mapped_to_city ?? <span className="text-muted-foreground">—</span>}</td>
+      <td className="!text-left truncate">{e.ef_account ? <StatusChip tone={efAccountTone(e.ef_account)} size="sm">{e.ef_account}</StatusChip> : <span className="text-muted-foreground">—</span>}</td>
+      <td className="!text-left truncate" title={e.state_name ?? ''}>{e.state_name ?? <span className="text-muted-foreground">—</span>}</td>
+      <td className="!text-left truncate" title={e.city_name ?? ''}>{e.city_name ?? <span className="text-muted-foreground">—</span>}</td>
+      <td className="!text-left font-mono text-xs truncate" title={e.efr_no}>{e.efr_no}</td>
+      <td className="!text-left text-xs truncate" title={e.efr_email ?? ''}>{e.efr_email ?? <span className="text-muted-foreground">—</span>}</td>
+      <td className="!text-left text-xs truncate">
+        <CsvCellButton
+          items={catItems}
+          onOpen={() => onOpenCsvModal(`Service Categories — ${efName}`, catItems)}
+        />
+      </td>
+      <td className="!text-left text-xs truncate">
+        <CsvCellButton
+          items={typeItems}
+          onOpen={() => onOpenCsvModal(`Service Types — ${efName}`, typeItems)}
+        />
+      </td>
+      <td className="!text-right tabular-nums truncate">
+        {e._aggregatesLoaded
+          ? (e.clients_mapped ?? 0)
+          : <span className="text-muted-foreground">…</span>}
+      </td>
+      <td className="!text-right tabular-nums truncate">
+        {e._aggregatesLoaded
+          ? (e.total_earnings != null ? `₹${Number(e.total_earnings).toLocaleString('en-IN')}` : '—')
+          : <span className="text-muted-foreground">…</span>}
+      </td>
+      <td className="!text-right tabular-nums truncate">
+        {e._aggregatesLoaded
+          ? (e.job_count ?? 0)
+          : <span className="text-muted-foreground">…</span>}
+      </td>
+      <td className="!text-right tabular-nums truncate">
+        {e._aggregatesLoaded
+          ? (e.options_mapped_count > 0
+            ? <span className="font-semibold text-primary">{e.options_mapped_count}</span>
+            : <span className="text-muted-foreground">0</span>)
+          : <span className="text-muted-foreground">…</span>}
+      </td>
+      <td className="!text-right tabular-nums truncate">{e.current_balance != null ? `₹${Number(e.current_balance).toLocaleString('en-IN')}` : '—'}</td>
+      <td className="!text-right tabular-nums truncate">
+        {e._aggregatesLoaded
+          ? (e.avg_rating != null ? `${Number(e.avg_rating).toFixed(1)} ★` : '—')
+          : <span className="text-muted-foreground">…</span>}
+      </td>
+      {/*
+        * Last Link Sent — profile-update magic-link audit
+        * (2026-06-11). Date + a slate "N×" pill showing
+        * `profile_update_send_count` when > 0. Placeholder "…"
+        * while aggregates phase is still in flight; muted "—"
+        * when the easyfixer has never been pinged.
+        */}
+      <td className="!text-left text-xs tabular-nums truncate">
+        {e._aggregatesLoaded ? (
+          e.profile_update_sent_at ? (
+            <span className="inline-flex items-center gap-1.5" title={formatDate(e.profile_update_sent_at)}>
+              <span className="truncate">{formatDate(e.profile_update_sent_at)}</span>
+              {e.profile_update_send_count > 1 && (
+                <span className="text-[10px] font-medium rounded bg-slate-100 px-1.5 py-0.5 text-slate-600 shrink-0">
+                  {e.profile_update_send_count}×
+                </span>
+              )}
+            </span>
+          ) : (
+            <span className="text-slate-400">—</span>
+          )
+        ) : (
+          <span className="text-muted-foreground">…</span>
+        )}
+      </td>
+      <td className="!text-right text-xs tabular-nums truncate">{e.efr_profile_perc != null ? `${Math.round(Number(e.efr_profile_perc))}%` : '—'}</td>
+      <td className="!text-center truncate">{e.is_technician_verified ? '✓' : <span className="text-muted-foreground">—</span>}</td>
+      <td className="!text-left text-xs whitespace-nowrap text-muted-foreground truncate" title={formatDate(e.insert_date)}>{formatDate(e.insert_date)}</td>
+      <td className="!text-center truncate">
+        {e.efr_status_label
+          ? <StatusChip tone={statusLabelTone(e.efr_status_label)} size="sm">{e.efr_status_label}</StatusChip>
+          : <span className="text-muted-foreground">—</span>}
+      </td>
+      <td className="!text-right stick-col stick-right">
+        <EasyfixerActionMenu
+          easyfixer={{ efr_id: e.efr_id, efr_name: e.efr_name }}
+          canEdit={canEdit}
+          canSend={canSend}
+          canCopyDevUrl={!isProd && canSend}
+          onEdit={() => onEdit(e)}
+          onClientMapping={() => onClientMapping(e)}
+          onTransactions={() => onTransactions(e)}
+          onAssessment={onAssessment}
+          onSendProfileUpdateLink={() => onSendProfileUpdateLink(e)}
+          onCopyDevUrl={() => onCopyDevUrl(e)}
+          isSending={isSending}
+          isCopyingDevUrl={isCopyingDevUrl}
+        />
+      </td>
+    </tr>
+  );
+});
 
 /*
  * Small label+control wrapper — keeps the 3-row filter grid visually tidy

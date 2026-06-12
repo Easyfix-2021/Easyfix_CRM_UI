@@ -3,7 +3,8 @@
 import * as React from 'react';
 import { Phone, Pencil } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
-import { formatDate, statusColorClass, statusLabel } from '@/lib/utils';
+import { formatDate, statusLabel, statusTone } from '@/lib/utils';
+import { StatusChip } from '@/components/ui/StatusChip';
 import { maskMobile } from '@/lib/format';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { Button } from '@/components/ui/button';
@@ -176,9 +177,9 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
           <DLRow label="Job Id">{j.job_id}</DLRow>
           <DLRow label="Booking Date Time">{j.ticket_created_date_time ? formatDate(j.ticket_created_date_time) : formatDate(j.created_date_time)}</DLRow>
           <DLRow label="Order Status">
-            <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${statusColorClass(Number(j.job_status))}`}>
+            <StatusChip tone={statusTone(Number(j.job_status))}>
               {statusLabel(Number(j.job_status), { assigned: j.fk_easyfixter_id != null })}
-            </span>
+            </StatusChip>
           </DLRow>
           <DLRow label="Project Owner">{fmt(j.owner_name)}</DLRow>
           <DLRow label="Technician">{fmt(j.easyfixer_name)}</DLRow>

@@ -40,13 +40,16 @@ function dedupedGet<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
   }
   const existing = inflight.get(key);
   if (existing) return existing as Promise<T>;
-  const p = fetcher()
+  // Guard both writes on identity: if this entry was evicted (invalidate /
+  // refetch) while the request was in flight, the orphaned promise must not
+  // write a pre-mutation snapshot back into the caches.
+  const p: Promise<T> = fetcher()
     .then((data) => {
-      cache.set(key, { at: Date.now(), data });
+      if (inflight.get(key) === p) cache.set(key, { at: Date.now(), data });
       return data;
     })
     .finally(() => {
-      inflight.delete(key);
+      if (inflight.get(key) === p) inflight.delete(key);
     });
   inflight.set(key, p);
   return p;
@@ -60,6 +63,7 @@ function dedupedGet<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
  */
 export function invalidateFetch(predicate: (key: string) => boolean) {
   for (const k of Array.from(cache.keys())) if (predicate(k)) cache.delete(k);
+  for (const k of Array.from(inflight.keys())) if (predicate(k)) inflight.delete(k);
 }
 
 /*
@@ -67,6 +71,7 @@ export function invalidateFetch(predicate: (key: string) => boolean) {
  */
 export function clearFetchCache() {
   cache.clear();
+  inflight.clear();
 }
 
 type FetchState<T> = { data: T | null; loading: boolean; error: string | null };
@@ -117,7 +122,7 @@ export function useFetch<T>(
     refetch: () => {
       // Drop cached entry for this key, then bump the tick. The next
       // effect run will see no cache hit and fire a real request.
-      if (key) cache.delete(key);
+      if (key) { cache.delete(key); inflight.delete(key); }
       setTick((t) => t + 1);
     },
   };

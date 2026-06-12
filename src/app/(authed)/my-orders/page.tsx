@@ -13,8 +13,9 @@ import { Card, CardContent } from '@/components/ui/card';
 import { api } from '@/lib/api';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
-import { formatDate, formatEasyfixerName, statusColorClass, statusLabel } from '@/lib/utils';
-import { TABS } from '@/lib/job-tabs';
+import { formatDate, formatEasyfixerName, statusLabel, statusTone } from '@/lib/utils';
+import { StatusChip } from '@/components/ui/StatusChip';
+import { TABS, filterJobRows, makeQuickStatusChange } from '@/lib/job-tabs';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { UnconfirmedJobsTable } from '@/components/job/UnconfirmedJobsTable';
 import { AssignTechnicianModal, type AssignMode } from '@/components/job/AssignTechnicianModal';
@@ -281,26 +282,21 @@ export default function MyOrdersPage() {
   const [rowBusy, setRowBusy] = useState<number | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const confirmAction = useConfirm();
-  async function quickStatusChange(jobId: number, toStatus: number, verb: string) {
-    const ok = await confirmAction({
-      title: `${verb} job #${jobId}?`,
-      description: `The job's status will be updated. You can continue working while the update applies.`,
-      confirmLabel: verb,
-    });
-    if (!ok) return;
-    setRowBusy(jobId);
-    try {
-      await api.patch(`/admin/jobs/${jobId}/status`, { status: toStatus });
-      cacheRef.current.clear();
-      await load(false, true);
-    } catch (e) {
-      setErrorMsg(`${verb} failed: ${e instanceof Error ? e.message : 'Unknown error'}`);
-    } finally { setRowBusy(null); }
-  }
+  // Shared factory (lib/job-tabs.ts). /my-orders keeps its longer "continue
+  // working" confirm copy and does NOT refresh counts (no pill bar here — see
+  // the refreshCounts-removed note above), so no afterReload is passed.
+  const quickStatusChange = makeQuickStatusChange({
+    confirmAction,
+    api,
+    description: `The job's status will be updated. You can continue working while the update applies.`,
+    setRowBusy,
+    setErrorMsg,
+    clearCache: () => cacheRef.current.clear(),
+    reload: async () => { await load(false, true); },
+  });
 
-  // Client-side search over the currently-loaded page. Matches every
-  // visible column including the human-readable status label and the
-  // formatted date strings — see jobs/page.tsx for the rationale.
+  // Client-side search over the currently-loaded page (shared filterJobRows
+  // in lib/job-tabs.ts — see there for the column/label/date matching rationale).
   //
   // 2026-06-10 fix: client filter now runs for the Unconfirmed tab TOO.
   // Earlier this short-circuited to `return true` because BE was assumed
@@ -309,24 +305,7 @@ export default function MyOrdersPage() {
   // server-q refetch fired). Now: client filter shows current-page
   // matches INSTANTLY; the debounced server-q refetch in parallel
   // expands the result to off-page matches when it lands.
-  const filteredItems = (data?.items ?? []).filter((j) => {
-    if (!q) return true;
-    const needle = q.toLowerCase();
-    const haystacks: Array<unknown> = [
-      j.job_id, j.job_reference_id, j.client_ref_id,
-      j.client_name, j.customer_name, j.customer_mob_no,
-      j.city_name, j.easyfixer_name, j.owner_name, j.job_type,
-      j.source_type,
-      j.job_status,
-      statusLabel(Number(j.job_status), { assigned: j.fk_easyfixter_id != null }),
-      j.created_date_time && formatDate(j.created_date_time),
-      j.requested_date_time && formatDate(j.requested_date_time),
-      j.scheduled_date_time && formatDate(j.scheduled_date_time),
-      j.checkin_date_time && formatDate(j.checkin_date_time),
-      j.checkout_date_time && formatDate(j.checkout_date_time),
-    ];
-    return haystacks.some((h) => h != null && String(h).toLowerCase().includes(needle));
-  });
+  const filteredItems = filterJobRows(data?.items ?? [], q);
   const { sorted, sortKey, sortDir, toggle } = useSort<JobRow>(filteredItems);
 
   // Resolve the current tab's human label for the page header — each sidebar
@@ -447,9 +426,9 @@ export default function MyOrdersPage() {
                   <td>{j.easyfixer_name ? formatEasyfixerName(j.easyfixer_name) : <span className="text-muted-foreground">unassigned</span>}</td>
                   <td className="text-xs whitespace-nowrap">{j.requested_date_time ? formatDate(j.requested_date_time) : '—'}</td>
                   <td>
-                    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${statusColorClass(j.job_status)}`}>
+                    <StatusChip tone={statusTone(j.job_status)}>
                       {statusLabel(j.job_status, { assigned: j.fk_easyfixter_id != null })}
-                    </span>
+                    </StatusChip>
                     {/*
                      * "No Services" pill — shared anomaly indicator for
                      * BOOKED jobs with zero active services (counts only

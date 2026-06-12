@@ -202,11 +202,20 @@ export default function ManageRolesPage() {
   }, [howOpen]);
 
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Guards against stale list responses overwriting fresher ones — see
+  // manage-users fetchList for the original pattern. api.get doesn't take
+  // the signal; we only discard out-of-date responses client-side.
+  const inflightAbortRef = useRef<AbortController | null>(null);
+  // The page/sort effect below already performs the initial mount fetch;
+  // skipping the debounced effect's first run avoids a duplicate request.
+  const didMountRef = useRef(false);
   useEffect(() => {
+    if (!didMountRef.current) { didMountRef.current = true; return; }
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
     searchTimerRef.current = setTimeout(() => {
-      setPage(0);
-      void fetchList();
+      // When page > 0, resetting it re-runs the page/sort effect which owns
+      // the fetch — fetching here too would fire with the stale offset.
+      if (page !== 0) { setPage(0); } else { void fetchList(); }
     }, 300);
     return () => {
       if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
@@ -217,6 +226,9 @@ export default function ManageRolesPage() {
   useEffect(() => { void fetchList(); /* eslint-disable-next-line */ }, [page, pageSize, sortBy, sortDir]);
 
   async function fetchList() {
+    inflightAbortRef.current?.abort();
+    const ac = new AbortController();
+    inflightAbortRef.current = ac;
     setLoading(true);
     setError(null);
     try {
@@ -232,12 +244,14 @@ export default function ManageRolesPage() {
         params.set('sortDir', sortDir);
       }
       const data = await api.get<ListResponse>(`/admin/roles?${params}`);
+      if (ac.signal.aborted) return;
       setItems(data.items);
       setTotal(data.total);
     } catch (e) {
+      if (ac.signal.aborted) return;
       setError(e instanceof ApiError ? e.message : 'Failed to load roles');
     } finally {
-      setLoading(false);
+      if (!ac.signal.aborted) setLoading(false);
     }
   }
 
@@ -677,6 +691,7 @@ function RoleFormModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hydrating, setHydrating] = useState(false);
+  const [hydrateFailed, setHydrateFailed] = useState(false);
   // Cancel button now prompts before closing — applies to every Add /
   // Edit Role open, since the form state is always at risk of being
   // discarded by an accidental click.
@@ -766,6 +781,7 @@ function RoleFormModal({
     setDesc(editing?.role_desc ?? '');
     setActive(editing ? editing.role_status === 1 : true);
     setError(null);
+    setHydrateFailed(false);
     setSelectedMenus(new Set(editing?.menu_ids ?? []));
     setSelectedActions(new Set());
     if (editing) {
@@ -781,7 +797,7 @@ function RoleFormModal({
           setSelectedMenus(new Set(full.menu_ids ?? []));
           setSelectedActions(new Set(full.menu_action_ids ?? []));
         })
-        .catch(() => { /* keep the list-derived menu_ids; just no actions */ })
+        .catch(() => { setHydrateFailed(true); setError('Could not load current permissions — close and reopen to retry'); })
         .finally(() => setHydrating(false));
     }
   }, [open, editing]);
@@ -879,6 +895,10 @@ function RoleFormModal({
   }
 
   async function handleSubmit() {
+    // Defensive guard — saving an edit before the detail GET resolves (or
+    // after it fails) would send an empty menu_action_ids set and silently
+    // wipe every action grant on the role. Add Role has no hydration.
+    if (isEdit && (hydrating || hydrateFailed)) { setError('Permissions are still loading — please wait'); return; }
     setError(null);
     if (!name.trim()) { setError('Role name is required'); return; }
     if (name.trim().length < 2) { setError('Role name is too short'); return; }
@@ -1164,8 +1184,8 @@ function RoleFormModal({
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={cancelWithConfirm} disabled={submitting}>Cancel</Button>
-          <Button onClick={handleSubmit} disabled={submitting}>
-            {submitting ? 'Saving…' : isEdit ? 'Save Changes' : 'Add Role'}
+          <Button onClick={handleSubmit} disabled={submitting || hydrating || hydrateFailed}>
+            {hydrating ? 'Loading…' : submitting ? 'Saving…' : isEdit ? 'Save Changes' : 'Add Role'}
           </Button>
         </DialogFooter>
       </DialogContent>

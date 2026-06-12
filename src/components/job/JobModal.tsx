@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { useEffect, useMemo, useState, Fragment } from 'react';
+import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import { useFetch } from '@/lib/hooks';
 import { Sparkles, Search, CalendarCheck, History, Eye, Plus, X, Pencil, CalendarPlus, CheckCircle2, BarChart3, Trash2, RotateCcw } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
@@ -22,7 +22,7 @@ import { StatusChip } from '@/components/ui/StatusChip';
 import { api, ApiError } from '@/lib/api';
 import { resolveParentAddressId, buildJobAddressPayload } from '@/lib/job-address';
 import { useLookup } from '@/lib/use-lookup';
-import { formatDate, formatEasyfixerName, statusColorClass, statusLabel } from '@/lib/utils';
+import { formatDate, formatEasyfixerName, statusLabel, statusTone } from '@/lib/utils';
 import { maskMobile, INDIAN_MOBILE_REGEX, INDIAN_MOBILE_ERROR, isValidIndianMobile } from '@/lib/format';
 
 /*
@@ -401,9 +401,9 @@ export function JobModal({
                     previous job's badge can't flash on re-open. */}
                 {mode === 'view' && !loading && job && (
                   <DialogDescription className="mt-1 flex items-center gap-2">
-                    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${statusColorClass(Number(job.job_status))}`}>
+                    <StatusChip tone={statusTone(Number(job.job_status))}>
                       {statusLabel(Number(job.job_status), { assigned: job.fk_easyfixter_id != null })}
-                    </span>
+                    </StatusChip>
                     <span className="text-xs">{String(job.job_type ?? '')}</span>
                   </DialogDescription>
                 )}
@@ -3888,6 +3888,30 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
   };
 
   /*
+   * Blob preview URLs cached per file identity (fileKey) so re-renders
+   * (every form keystroke) reuse the same URL instead of allocating a
+   * fresh one per render. All cached URLs are revoked when JobForm
+   * unmounts — JobForm remounts per modal session, so lifetime is bounded.
+   */
+  const previewUrlCacheRef = useRef(new Map<string, string>());
+  const getPreviewUrl = (file: File): string => {
+    const k = fileKey(file);
+    let u = previewUrlCacheRef.current.get(k);
+    if (!u) {
+      u = URL.createObjectURL(file);
+      previewUrlCacheRef.current.set(k, u);
+    }
+    return u;
+  };
+  useEffect(() => {
+    const cache = previewUrlCacheRef.current;
+    return () => {
+      cache.forEach((u) => URL.revokeObjectURL(u));
+      cache.clear();
+    };
+  }, []);
+
+  /*
    * Section-only image state (2026-05-28). Mirrors the canonical
    * `initial.images` array on mount and is mutated locally on
    * delete. The inline Confirm-mode Job Image section reads from
@@ -6519,7 +6543,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                         <div className="mt-2 flex flex-wrap gap-2">
                           {stashed.map((file, i) => {
                             const isImg = (file.type || '').startsWith('image/');
-                            const url = isImg ? URL.createObjectURL(file) : null;
+                            const url = isImg ? getPreviewUrl(file) : null;
                             /*
                              * Per-tile upload status overlay (2026-05-28).
                              * Reads from the parent's uploadStatuses map;
@@ -6543,7 +6567,6 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                                     src={url}
                                     alt={file.name}
                                     className="w-full h-full object-cover"
-                                    onLoad={() => URL.revokeObjectURL(url)}
                                   />
                                 ) : (
                                   <div className="w-full h-full flex flex-col items-center justify-center text-[9px] text-muted-foreground text-center p-1 break-all">
@@ -8961,9 +8984,9 @@ function CustomerHistoryDialog({
                       <td className="px-3 py-2">{String(j.client_name ?? '—')}</td>
                       <td className="px-3 py-2">{String(j.job_type ?? '—')}</td>
                       <td className="px-3 py-2">
-                        <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${statusColorClass(Number(j.job_status))}`}>
+                        <StatusChip tone={statusTone(Number(j.job_status))}>
                           {statusLabel(Number(j.job_status), { assigned: j.fk_easyfixter_id != null })}
-                        </span>
+                        </StatusChip>
                       </td>
                       <td className="px-3 py-2">{String(j.easyfixer_name ?? '—')}</td>
                       <td className="px-3 py-2">{String(j.city_name ?? '—')}</td>

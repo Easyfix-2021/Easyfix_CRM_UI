@@ -79,6 +79,11 @@ export default function AutoAllocationPage() {
    */
   const [toggleOptimistic, setToggleOptimistic] = useState<boolean | null>(null);
   const toggleRef = useRef<{ saving: boolean; queued: boolean | null }>({ saving: false, queued: null });
+  // Always-current scope — lets in-flight async handlers (toggle save,
+  // saveValue, clearOverride) detect a scope switch and skip their stale
+  // `load()` so they never overwrite the new scope's settings.
+  const scopeRef = useRef<typeof scope>(scope);
+  scopeRef.current = scope;
 
   async function load() {
     setLoading(true); setError(null);
@@ -95,8 +100,11 @@ export default function AutoAllocationPage() {
   useEffect(() => {
     // Scope changed → drop any lingering optimistic toggle state so the UI
     // reflects the new scope's server value, not the previous scope's click.
+    // Only the queued intent is cleared — `saving` stays untouched so an
+    // in-flight save's finally block remains the single owner of that flag
+    // (resetting it here would let a new click start a parallel save loop).
     setToggleOptimistic(null);
-    toggleRef.current = { saving: false, queued: null };
+    toggleRef.current.queued = null;
     load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */
   }, [scope]);
 
@@ -127,7 +135,7 @@ export default function AutoAllocationPage() {
         await api.put('/admin/auto-allocation/override', { clientId: scope, settingId: s.id, value });
       }
       setToast(`Saved: ${titleCase(s.key)}`);
-      await load();
+      if (scopeRef.current === scope) await load();
       if (scope !== 'global') {
         api.get<ClientLite[]>('/admin/auto-allocation/clients-with-overrides')
           .then(setOverridden).catch(() => {});
@@ -173,6 +181,12 @@ export default function AutoAllocationPage() {
         // If the user clicked again while we were saving, fire another save
         // with the latest intent. Otherwise we're done.
         const q = toggleRef.current.queued;
+        // Scope switched mid-save — never replay a queued click against the
+        // old scope's endpoint; the new scope's effect handles its own load.
+        if (scopeRef.current !== scope) {
+          toggleRef.current.queued = null;
+          break;
+        }
         if (q !== null && q !== target) {
           target = q;
           toggleRef.current.queued = null;
@@ -183,11 +197,18 @@ export default function AutoAllocationPage() {
       }
     } finally {
       toggleRef.current.saving = false;
-      await load();
-      setToggleOptimistic(null);
-      if (scope !== 'global') {
-        api.get<ClientLite[]>('/admin/auto-allocation/clients-with-overrides')
-          .then(setOverridden).catch(() => {});
+      if (scopeRef.current === scope) {
+        await load();
+        setToggleOptimistic(null);
+        if (scope !== 'global') {
+          api.get<ClientLite[]>('/admin/auto-allocation/clients-with-overrides')
+            .then(setOverridden).catch(() => {});
+        }
+      } else {
+        // Scope changed while saving — the scope effect already reloaded the
+        // new scope; skip the stale load() but still drop the optimistic
+        // state so the switch falls back to the new scope's server truth.
+        setToggleOptimistic(null);
       }
     }
   }
@@ -205,7 +226,7 @@ export default function AutoAllocationPage() {
     try {
       await api.delete(`/admin/auto-allocation/override?clientId=${scope}&settingId=${s.id}`);
       setToast(`Override cleared for ${titleCase(s.key)}`);
-      await load();
+      if (scopeRef.current === scope) await load();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Clear failed');
     } finally { setSaving(null); }
@@ -784,7 +805,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function stringify(v: unknown, type: Setting['data_type']): string {
   if (v == null) return '';
   if (type === 'bool')  return v ? 'true' : 'false';
-  if (type === 'json')  try { return JSON.stringify(v); } catch { return String(v); }
+  if (type === 'json')  try { return JSON.stringify(v, null, 2); } catch { return String(v); }
   return String(v);
 }
 
@@ -1084,9 +1105,9 @@ function ValueInput({
  * JSON value input.
  *
  * Behaviour:
- *   - On first render, parse the value and re-stringify with 2-space indent
- *     so the textarea opens with a readable, formatted structure rather
- *     than a single-line minified blob.
+ *   - Values arrive pre-prettified (2-space indent) from `stringify()` via
+ *     the draft seeding in load(), so the textarea opens readable with no
+ *     mount-time mutation — and the SaveBtn dirty compare stays in sync.
  *   - The browser's native textarea has a resize handle in the bottom-right
  *     corner. Native handles support double-click to "auto-fit" on Firefox;
  *     for Chrome/Safari (no native auto-fit), we detect the dblclick on the
@@ -1096,19 +1117,6 @@ function ValueInput({
  */
 function JsonValueInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const taRef = useRef<HTMLTextAreaElement | null>(null);
-
-  // Pretty-print on mount + whenever an external value lands as a single
-  // line (e.g. a fresh save round-trip). We only reformat if it parses
-  // cleanly AND was previously single-line — never overwrite an in-flight
-  // mid-edit value.
-  useEffect(() => {
-    if (!value || value.includes('\n')) return;
-    try {
-      const parsed = JSON.parse(value);
-      onChange(JSON.stringify(parsed, null, 2));
-    } catch { /* leave as-is — user is mid-edit on invalid JSON */ }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   function autoFit() {
     const el = taRef.current;

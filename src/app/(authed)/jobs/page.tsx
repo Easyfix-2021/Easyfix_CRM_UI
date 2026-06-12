@@ -12,12 +12,13 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
 import { SearchSelect } from '@/components/ui/search-select';
+import { StatusChip } from '@/components/ui/StatusChip';
 import { DownloadButton } from '@/components/ui/download-button';
 import { downloadXlsx } from '@/lib/download-xlsx';
 import { api } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
-import { formatDate, formatEasyfixerName, statusColorClass, statusLabel } from '@/lib/utils';
-import { TABS, type CountsResp, countFor } from '@/lib/job-tabs';
+import { formatDate, formatEasyfixerName, statusLabel, statusTone } from '@/lib/utils';
+import { TABS, type CountsResp, countFor, filterJobRows, makeQuickStatusChange } from '@/lib/job-tabs';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { TransferJobOwnershipDialog } from '@/components/job/TransferJobOwnershipDialog';
 import { UnconfirmedJobsTable } from '@/components/job/UnconfirmedJobsTable';
@@ -189,6 +190,13 @@ export default function JobsPage() {
    */
   const inflightRef = useRef<Map<string, Promise<Resp>>>(new Map());
   /*
+   * Monotonic load sequence. Each load() invocation claims the latest
+   * number; only the most recent invocation may commit UI state. Stops
+   * a slow response for a previous tab/filter from overwriting the
+   * rows (and spinner) of the request the operator actually wants.
+   */
+  const loadSeqRef = useRef(0);
+  /*
    * Same dedupe pattern for /counts. The dashboard's `refreshCounts`
    * effect fires twice in Strict Mode; with this guard the second
    * call attaches to the in-flight Promise instead of starting a
@@ -211,6 +219,7 @@ export default function JobsPage() {
   }
 
   async function load(reset = false, force = false) {
+    const seq = ++loadSeqRef.current;
     const tabDef = TABS.find((t) => t.value === tab);
     const off = reset ? 0 : offset;
     // Cache key includes pageSize so changing rows-per-page doesn't
@@ -235,8 +244,10 @@ export default function JobsPage() {
     if (inflight) {
       try {
         const r = await inflight;
-        setData(r);
-        if (reset) setPage(0);
+        if (seq === loadSeqRef.current) {
+          setData(r);
+          if (reset) setPage(0);
+        }
       } catch { /* ignore — the originating call will surface the error */ }
       return;
     }
@@ -336,12 +347,18 @@ export default function JobsPage() {
       });
       inflightRef.current.set(key, reqPromise);
       const r = await reqPromise;
-      setData(r);
+      // Cache unconditionally — the payload is correct for its own key
+      // regardless of whether this invocation is still the latest.
       cacheRef.current.set(key, { at: Date.now(), data: r });
-      if (reset) setPage(0);
+      if (seq === loadSeqRef.current) {
+        setData(r);
+        if (reset) setPage(0);
+      }
+    } catch (e) {
+      setErrorMsg(`Failed to load jobs: ${e instanceof Error ? e.message : 'Unknown error'}`);
     } finally {
       inflightRef.current.delete(key);
-      setLoading(false);
+      if (seq === loadSeqRef.current) setLoading(false);
     }
   }
 
@@ -549,55 +566,25 @@ export default function JobsPage() {
   const [rowBusy, setRowBusy] = useState<number | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const confirmAction = useConfirm();
-  async function quickStatusChange(jobId: number, toStatus: number, verb: string) {
-    const ok = await confirmAction({
-      title: `${verb} job #${jobId}?`,
-      description: `The job's status will be updated.`,
-      confirmLabel: verb,
-    });
-    if (!ok) return;
-    setRowBusy(jobId);
-    try {
-      await api.patch(`/admin/jobs/${jobId}/status`, { status: toStatus });
-      cacheRef.current.clear();
-      await load(false, true);
-      refreshCounts();
-    } catch (e) {
-      setErrorMsg(`${verb} failed: ${e instanceof Error ? e.message : 'Unknown error'}`);
-    } finally {
-      setRowBusy(null);
-    }
-  }
-
-  // Apply UI-only search filter before sorting. Matches against every
-  // visible column INCLUDING the human-readable status label (so typing
-  // "scheduled" matches status=1 rows) and the source text. Date columns
-  // are stringified via formatDate so operators can also type "12 May"
-  // or partial dates and get hits. The needle is lowercased once and
-  // compared against the lowercase string form of each candidate.
-  const filteredItems = (data?.items ?? []).filter((j) => {
-    if (!q) return true;
-    const needle = q.toLowerCase();
-    const haystacks: Array<unknown> = [
-      j.job_id, j.job_reference_id, j.client_ref_id,
-      j.client_name, j.customer_name, j.customer_mob_no,
-      j.city_name, j.easyfixer_name, j.owner_name, j.job_type,
-      j.source_type,
-      // Status as both numeric code AND human label so "scheduled",
-      // "completed", "cancelled" all match. statusLabel takes the same
-      // {assigned} hint the row renders.
-      j.job_status,
-      statusLabel(Number(j.job_status), { assigned: j.fk_easyfixter_id != null }),
-      // Date columns rendered via formatDate so partial date typing
-      // matches what the operator visually sees.
-      j.created_date_time && formatDate(j.created_date_time),
-      j.requested_date_time && formatDate(j.requested_date_time),
-      j.scheduled_date_time && formatDate(j.scheduled_date_time),
-      j.checkin_date_time && formatDate(j.checkin_date_time),
-      j.checkout_date_time && formatDate(j.checkout_date_time),
-    ];
-    return haystacks.some((h) => h != null && String(h).toLowerCase().includes(needle));
+  // Shared factory (lib/job-tabs.ts). /jobs keeps the short confirm copy and
+  // refreshes the dashboard counts after reload (afterReload: refreshCounts).
+  const quickStatusChange = makeQuickStatusChange({
+    confirmAction,
+    api,
+    description: `The job's status will be updated.`,
+    setRowBusy,
+    setErrorMsg,
+    clearCache: () => cacheRef.current.clear(),
+    reload: async () => { await load(false, true); },
+    afterReload: refreshCounts,
   });
+
+  // Apply UI-only search filter before sorting (shared filterJobRows in
+  // lib/job-tabs.ts — see there for the column/label/date matching rationale).
+  // Memoized on [data, q] so unrelated renders (rowBusy/transferAlert/
+  // showFilters) keep a stable filteredItems identity and don't trigger
+  // useSort's internal re-sort.
+  const filteredItems = useMemo(() => filterJobRows(data?.items ?? [], q), [data, q]);
   // Sort hook must live at the component root to satisfy Rules of Hooks.
   const { sorted, sortKey, sortDir, toggle } = useSort<JobRow>(filteredItems);
 
@@ -1028,9 +1015,9 @@ export default function JobsPage() {
                   <td className="text-xs whitespace-nowrap">{j.checkin_date_time ? formatDate(j.checkin_date_time) : '—'}</td>
                   <td className="text-xs whitespace-nowrap">{j.checkout_date_time ? formatDate(j.checkout_date_time) : '—'}</td>
                   <td>
-                    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${statusColorClass(j.job_status)}`}>
+                    <StatusChip tone={statusTone(j.job_status)}>
                       {statusLabel(j.job_status, { assigned: j.fk_easyfixter_id != null })}
-                    </span>
+                    </StatusChip>
                     {/*
                      * "No Services" pill (added 2026-05-28). Surfaces the
                      * legacy data-quality gap where a BOOKED job has zero

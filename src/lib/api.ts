@@ -36,22 +36,31 @@ async function request<T>(
   if (!isFormData && opts.body !== undefined) headers['Content-Type'] = 'application/json';
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
-  const res = await fetch(url.toString().replace(window?.location?.origin || '', ''), {
-    method: opts.method || (opts.body ? 'POST' : 'GET'),
-    credentials: 'include',
-    headers,
-    body: isFormData ? (opts.body as FormData) : opts.body ? JSON.stringify(opts.body) : undefined,
-    cache: 'no-store',
-  });
+  let res: Response;
+  try {
+    res = await fetch(url.toString().replace(window?.location?.origin || '', ''), {
+      method: opts.method || (opts.body ? 'POST' : 'GET'),
+      credentials: 'include',
+      headers,
+      body: isFormData ? (opts.body as FormData) : opts.body ? JSON.stringify(opts.body) : undefined,
+      cache: 'no-store',
+    });
+  } catch (e) {
+    throw new ApiError(0, 'Network error — please retry', e);
+  }
 
   const text = await res.text();
   let json: { success?: boolean; data?: T; error?: string; details?: unknown } = {};
-  try { json = text ? JSON.parse(text) : {}; } catch { /* non-JSON body */ }
+  let parsed = true;
+  try { json = text ? JSON.parse(text) : {}; } catch { parsed = false; /* non-JSON body */ }
 
   if (!res.ok || json.success === false) {
     throw new ApiError(res.status, json.error || `HTTP ${res.status}`, json.details);
   }
-  return (json.data ?? (json as unknown)) as T;
+  if (!parsed && text) {
+    throw new ApiError(res.status, 'Invalid response from server', text.slice(0, 200));
+  }
+  return ((json && typeof json === 'object' && 'data' in json) ? json.data : json) as T;
 }
 
 export const api = {

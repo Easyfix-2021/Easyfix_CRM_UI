@@ -17,7 +17,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { invalidateFetch } from '@/lib/hooks';
+import { invalidateFetch, useDebouncedValue } from '@/lib/hooks';
 import {
   UserCog, Users, Search, Plus, Pencil, Trash2,
   AlertTriangle, ChevronDown, ChevronRight, Info, Layers,
@@ -99,6 +99,7 @@ export default function ManageUsersPage() {
   const [items, setItems] = useState<User[]>([]);
   const [total, setTotal] = useState(0);
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search, 300);
   const [roleFilter, setRoleFilter] = useState<number | ''>('');
   const [cityFilter, setCityFilter] = useState<number | ''>('');
   const [includeInactive, setIncludeInactive] = useState(false);
@@ -156,7 +157,7 @@ export default function ManageUsersPage() {
 
   function buildQuery(): string {
     const params = new URLSearchParams();
-    if (search.trim()) params.set('q', search.trim());
+    if (debouncedSearch.trim()) params.set('q', debouncedSearch.trim());
     if (roleFilter)    params.set('roleId', String(roleFilter));
     if (cityFilter)    params.set('cityId', String(cityFilter));
     if (includeInactive) params.set('includeInactive', 'true');
@@ -190,14 +191,13 @@ export default function ManageUsersPage() {
     }
   }
 
-  // Single source of truth for list refresh. Filter changes are
-  // debounced 300ms; pagination/sort changes fire immediately. The
+  // Single source of truth for list refresh. The search input is
+  // debounced 300ms via useDebouncedValue upstream of this effect;
+  // pagination/sort/select-filter changes fire immediately. The
   // 100ms dedupe window catches React Strict Mode's double-mount in
   // dev — without it, every page load triggers `users?…` twice.
   useEffect(() => {
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-    const filtersChanged = true; // placeholder kept for readability
-    void filtersChanged;
     const fire = () => {
       const key = buildQuery();
       const now = Date.now();
@@ -206,11 +206,11 @@ export default function ManageUsersPage() {
       lastQueryRef.current = { key, at: now };
       void fetchList();
     };
-    // Debounce typed inputs; fire pagination/sort immediately.
+    // setTimeout(0) batches same-tick dep changes into one fire.
     searchTimerRef.current = setTimeout(fire, 0);
     return () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, roleFilter, cityFilter, includeInactive, page, pageSize, sortBy, sortDir]);
+  }, [debouncedSearch, roleFilter, cityFilter, includeInactive, page, pageSize, sortBy, sortDir]);
 
   async function handleDeactivate(u: User) {
     const ok = await confirm({

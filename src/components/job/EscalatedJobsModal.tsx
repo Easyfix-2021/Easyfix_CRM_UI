@@ -24,7 +24,8 @@ import { Input } from '@/components/ui/input';
 import { SearchSelect } from '@/components/ui/search-select';
 import { api, ApiError } from '@/lib/api';
 import { downloadXlsx as sharedDownloadXlsx } from '@/lib/download-xlsx';
-import { statusLabel, statusColorClass } from '@/lib/utils';
+import { statusLabel, statusTone } from '@/lib/utils';
+import { StatusChip } from '@/components/ui/StatusChip';
 import { useSort, SortHeader } from '@/lib/use-sort';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
@@ -458,9 +459,9 @@ export function EscalatedJobsModal({
                       </span>
                     </td>
                     <td className="!text-center">
-                      <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ${statusColorClass(Number(r.job_status))}`}>
+                      <StatusChip tone={statusTone(Number(r.job_status))} size="sm">
                         {statusLabel(Number(r.job_status), { assigned: r.fk_easyfixter_id != null })}
-                      </span>
+                      </StatusChip>
                     </td>
                     <td className="!text-center font-mono text-xs">
                       {r.no_of_escalations ?? 0}

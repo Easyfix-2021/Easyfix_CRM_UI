@@ -96,36 +96,35 @@ export function useLookup() {
   const [zones,     setZones]     = useState<Zone[]>([]);
 
   useEffect(() => {
-    (async () => {
-      try { setCities(await fetchOnce('cities', () => api.get<City[]>('/shared/lookup/cities', { limit: 1000 }))); } catch {}
-      try { setVerticals(await fetchOnce('verticals', () => api.get<Vertical[]>('/shared/lookup/verticals'))); } catch {}
-      try { setStates(await fetchOnce('states', () => api.get<State[]>('/shared/lookup/states'))); } catch {}
-      try { setZones(await fetchOnce('zones', () => api.get<Zone[]>('/shared/lookup/zones'))); } catch {}
-      try {
-        // Many legacy tbl_service_catg rows carry a stray trailing
-        // apostrophe ("Electrician Services'"). Strip on load so every
-        // consumer (dropdowns, Job-tab labels, reports) sees a clean
-        // name — single source of truth.
-        const raw = await fetchOnce('svcCat', () => api.get<ServiceCategory[]>('/shared/lookup/service-categories'));
-        setServiceCategories(raw.map((c) => ({ ...c, service_catg_name: (c.service_catg_name || '').replace(/'+$/u, '').trim() })));
-      } catch {}
-      try {
-        const raw = await fetchOnce('svcType', () => api.get<ServiceType[]>('/shared/lookup/service-types'));
-        setServiceTypes(raw.map((t) => ({ ...t, service_type_name: (t.service_type_name || '').replace(/'+$/u, '').trim() })));
-      } catch {}
-      try { setClients(await fetchOnce('clients', () => api.get<ClientLite[]>('/shared/lookup/clients', { limit: 500 }))); } catch {}
-      try { setAdminUsers(await fetchOnce('admUsers', () => api.get<UserLite[]>('/shared/lookup/users', { roleGroup: 'admin', limit: 500 }))); } catch {}
-      // Fetch EVERY role (not just admin-group). Some legacy roles aren't
-      // classified in role.service.js::ROLE_ID_TO_GROUP, which made them
-      // invisible in the Manage Users role dropdown. The picker should
-      // show all options and let the backend reject invalid combos at save.
-      try { setRoles(await fetchOnce('roles', () => api.get<RoleLite[]>('/shared/lookup/roles'))); } catch {}
-      try { setEasyfixers(await fetchOnce('efrs', () => api.get<EasyfixerLite[]>('/shared/lookup/easyfixers'))); } catch {}
-      try { setBanks(await fetchOnce('banks', () => api.get<Bank[]>('/shared/lookup/banks'))); } catch {}
-      try { setCancelReasons(await fetchOnce('cancelR', () => api.get<Reason[]>('/shared/lookup/cancel-reasons'))); } catch {}
-      try { setRescheduleReasons(await fetchOnce('reschR', () => api.get<Reason[]>('/shared/lookup/reschedule-reasons'))); } catch {}
-      try { setDocumentTypes(await fetchOnce('docT', () => api.get<DocumentType[]>('/shared/lookup/document-types'))); } catch {}
-    })();
+    // Fire all lookups in parallel — they're independent, and fetchOnce
+    // already de-dupes per key. Each dropdown renders as soon as its own
+    // data lands; one failed lookup never blocks the others.
+    fetchOnce('cities', () => api.get<City[]>('/shared/lookup/cities', { limit: 1000 })).then(setCities).catch(() => {});
+    fetchOnce('verticals', () => api.get<Vertical[]>('/shared/lookup/verticals')).then(setVerticals).catch(() => {});
+    fetchOnce('states', () => api.get<State[]>('/shared/lookup/states')).then(setStates).catch(() => {});
+    fetchOnce('zones', () => api.get<Zone[]>('/shared/lookup/zones')).then(setZones).catch(() => {});
+    // Many legacy tbl_service_catg rows carry a stray trailing
+    // apostrophe ("Electrician Services'"). Strip on load so every
+    // consumer (dropdowns, Job-tab labels, reports) sees a clean
+    // name — single source of truth.
+    fetchOnce('svcCat', () => api.get<ServiceCategory[]>('/shared/lookup/service-categories'))
+      .then((raw) => setServiceCategories(raw.map((c) => ({ ...c, service_catg_name: (c.service_catg_name || '').replace(/'+$/u, '').trim() }))))
+      .catch(() => {});
+    fetchOnce('svcType', () => api.get<ServiceType[]>('/shared/lookup/service-types'))
+      .then((raw) => setServiceTypes(raw.map((t) => ({ ...t, service_type_name: (t.service_type_name || '').replace(/'+$/u, '').trim() }))))
+      .catch(() => {});
+    fetchOnce('clients', () => api.get<ClientLite[]>('/shared/lookup/clients', { limit: 500 })).then(setClients).catch(() => {});
+    fetchOnce('admUsers', () => api.get<UserLite[]>('/shared/lookup/users', { roleGroup: 'admin', limit: 500 })).then(setAdminUsers).catch(() => {});
+    // Fetch EVERY role (not just admin-group). Some legacy roles aren't
+    // classified in role.service.js::ROLE_ID_TO_GROUP, which made them
+    // invisible in the Manage Users role dropdown. The picker should
+    // show all options and let the backend reject invalid combos at save.
+    fetchOnce('roles', () => api.get<RoleLite[]>('/shared/lookup/roles')).then(setRoles).catch(() => {});
+    fetchOnce('efrs', () => api.get<EasyfixerLite[]>('/shared/lookup/easyfixers')).then(setEasyfixers).catch(() => {});
+    fetchOnce('banks', () => api.get<Bank[]>('/shared/lookup/banks')).then(setBanks).catch(() => {});
+    fetchOnce('cancelR', () => api.get<Reason[]>('/shared/lookup/cancel-reasons')).then(setCancelReasons).catch(() => {});
+    fetchOnce('reschR', () => api.get<Reason[]>('/shared/lookup/reschedule-reasons')).then(setRescheduleReasons).catch(() => {});
+    fetchOnce('docT', () => api.get<DocumentType[]>('/shared/lookup/document-types')).then(setDocumentTypes).catch(() => {});
   }, []);
 
   return {

@@ -112,6 +112,11 @@ type DeepSkill = {
   category_name: string | null;
   service_type_name: string | null;
   option_count: number;
+  // Active option labels joined by '||' (e.g. "Installation||Repair"),
+  // or null when the skill has no active options. Additive list-endpoint
+  // field (2026-06-12) that replaces the old per-row detail fetch in
+  // SkillOptionsCell — no more N+1 on page size 'All'.
+  option_labels: string | null;
   // Image auto-generation status (2026-06-12). Surfaced from the list
   // endpoint so the row can render a "Generating…" / "Image Failed"
   // chip + Retry button without an extra round-trip. null = no auto-gen
@@ -205,8 +210,9 @@ export default function DeepSkillsSettingsPage() {
         includeInactive: statusFilter === 'active' ? undefined : 'true',
       });
       setSkills(rows);
-    } catch {
+    } catch (e) {
       setSkills([]);
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Failed to Load Deep Skills' });
     } finally { setLoading(false); }
   }
   useEffect(() => { loadSkills(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ },
@@ -272,11 +278,12 @@ export default function DeepSkillsSettingsPage() {
     return rows;
   }, [skills, search, statusFilter]);
 
-  // Reset to first page whenever the filter set or fetched data changes —
-  // otherwise we'd land on a now-empty page (e.g. you're on page 4 of 5,
-  // type a search that narrows to 12 rows; without reset the table looks
-  // empty even though there's data to show).
-  useEffect(() => { setPage(0); }, [search, statusFilter, categoryId, serviceTypeId, skills]);
+  // Reset to first page only when the filter set changes — otherwise we'd
+  // land on a now-empty page (e.g. you're on page 4 of 5, type a search
+  // that narrows to 12 rows). Refetches of the same filter set (10s
+  // image-gen poll, post-save/deactivate refresh) must NOT reset the page;
+  // the safePage clamp below handles any shrink in row count.
+  useEffect(() => { setPage(0); }, [search, statusFilter, categoryId, serviceTypeId]);
 
   // Slice the filtered list to the current page window. `pageSizeToLimit`
   // returns the numeric limit, treating the 'all' sentinel as a very
@@ -354,6 +361,7 @@ export default function DeepSkillsSettingsPage() {
       deepskill_name: '', deepskill_description: '', deepskill_image: '',
       deepskill_tag_words: null,
       status: 1, inserted_on: '', category_name: null, service_type_name: null, option_count: 0,
+      option_labels: null,
     });
     setEditorOpen(true);
   }
@@ -507,13 +515,14 @@ export default function DeepSkillsSettingsPage() {
               </tr>
             </thead>
             <tbody>
-              {loading && (
+              {/* Keep existing rows visible during refetch — see manage-users for the rationale. */}
+              {loading && visibleSkills.length === 0 && (
                 <tr><td colSpan={8} className="text-center py-8 text-muted-foreground">Loading…</td></tr>
               )}
               {!loading && visibleSkills.length === 0 && (
                 <tr><td colSpan={8} className="text-center py-8 text-muted-foreground">No deep skills match the filters</td></tr>
               )}
-              {!loading && visibleSkills.map((s) => (
+              {visibleSkills.map((s) => (
                 <tr key={s.deepskill_id}>
                   <td className="text-xs text-muted-foreground">{s.deepskill_id}</td>
                   <td>{s.category_name ?? '—'}</td>
@@ -554,7 +563,7 @@ export default function DeepSkillsSettingsPage() {
                     </span>
                   </td>
                   <td>
-                    <SkillOptionsCell skillId={s.deepskill_id} fallbackCount={s.option_count} />
+                    <SkillOptionsCell labels={s.option_labels ? s.option_labels.split('||') : []} />
                   </td>
                   <td className="text-right tabular-nums">
                     {/*
@@ -659,41 +668,14 @@ export default function DeepSkillsSettingsPage() {
   );
 }
 
-// ─── Skill options cell (lazy-loads on first render to keep list query light)
-/*
- * The list endpoint only returns `option_count` (a cheap COUNT join). To show
- * the actual option labels in the table — like the legacy CRM does — we lazy-
- * load each row's detail on first paint. Cached per-skill so re-rendering the
- * table doesn't re-fetch.
- */
-const optionsCache = new Map<number, string[]>();
-
-function SkillOptionsCell({ skillId, fallbackCount }: { skillId: number; fallbackCount: number }) {
-  const [opts, setOpts] = useState<string[] | null>(optionsCache.get(skillId) ?? null);
-  useEffect(() => {
-    let cancelled = false;
-    if (optionsCache.has(skillId)) { setOpts(optionsCache.get(skillId)!); return; }
-    // Per-row lazy load
-    // backed by a local `optionsCache` Map (separate from the @/lib/hooks
-    // cache because the response is TRANSFORMED before storage — we drop
-    // inactive options and project to a string[]). useFetchOnce would
-    // store the raw payload and the transform would re-run every render.
-    // eslint-disable-next-line no-restricted-syntax
-    api.get<DeepSkillDetail>(`/admin/deep-skills/${skillId}`).then((d) => {
-      const labels = d.options.filter((o) => Number(o.status)).map((o) => o.skill_option);
-      optionsCache.set(skillId, labels);
-      if (!cancelled) setOpts(labels);
-    }).catch(() => { if (!cancelled) setOpts([]); });
-    return () => { cancelled = true; };
-  }, [skillId]);
-
-  if (opts === null) {
-    return <span className="text-xs text-muted-foreground">{fallbackCount} option{fallbackCount === 1 ? '' : 's'}…</span>;
-  }
-  if (opts.length === 0) return <span className="text-xs text-muted-foreground">—</span>;
+// ─── Skill options cell ─────────────────────────────────────────────
+// Pure presentational — active option labels now arrive inline on the list
+// row (`option_labels`, '||'-joined), so no per-row detail fetch is needed.
+function SkillOptionsCell({ labels }: { labels: string[] }) {
+  if (labels.length === 0) return <span className="text-xs text-muted-foreground">—</span>;
   return (
     <div className="flex flex-col gap-0.5 text-sm leading-tight">
-      {opts.map((o) => <span key={o}>{o}</span>)}
+      {labels.map((o) => <span key={o}>{o}</span>)}
     </div>
   );
 }
@@ -704,9 +686,9 @@ function SkillOptionsCell({ skillId, fallbackCount }: { skillId: number; fallbac
  * via the standard file input), Description is a textarea, Skill Options are
  * chip-style with the 3 legacy presets always visible + free-text custom add.
  *
- * Options are persisted to `/options` endpoints — for the create flow we
- * defer those calls until AFTER the deep skill itself is created (we need
- * the new ID). Edit flow saves them inline on add/remove.
+ * Options: the create flow sends them inline in the POST payload (BE inserts
+ * skill + options in one transaction); the edit flow reconciles them against
+ * the `/options` endpoints on save.
  */
 function DeepSkillEditor({
   open, record, onClose, onSaved,
@@ -924,6 +906,13 @@ function DeepSkillEditor({
       setErr('Service Category, Service Type, and Deep Skill Name are required');
       return;
     }
+    // Add mode mirrors the BE create contract (options required). Edit mode
+    // must NOT get this guard — the reconcile flow legitimately allows
+    // deactivating all options.
+    if (!isEdit && options.length === 0) {
+      setErr('At least one Skill Option is required');
+      return;
+    }
     setSaving(true); setErr(null);
     try {
       const payload = {
@@ -964,11 +953,14 @@ function DeepSkillEditor({
           }
         }
       } else {
-        const created = await api.post<{ deepskill_id: number }>('/admin/deep-skills', payload);
+        // Options ride along in the create payload so the BE inserts the
+        // skill + options in one transaction — no orphaned half-created
+        // skill if an option write fails mid-way.
+        const created = await api.post<{ deepskill_id: number }>('/admin/deep-skills', {
+          ...payload,
+          options: options.map((o) => ({ skill_option: o })),
+        });
         skillId = created.deepskill_id;
-        for (const opt of options) {
-          await api.post(`/admin/deep-skills/${skillId}/options`, { skill_option: opt });
-        }
       }
       // Deferred image upload (Add-mode tail). The skill row now exists
       // and has an id, so the `Skills/Skill_<id>_<seq>` key can be
@@ -990,8 +982,8 @@ function DeepSkillEditor({
           setErr(`Skill saved. Image upload failed: ${upErr instanceof ApiError ? upErr.message : 'unknown error'}`);
         }
       }
-      // Bust the row's options cache so the table reflects the new options.
-      optionsCache.delete(skillId);
+      // Options refresh comes for free: onSaved() calls loadSkills(), which
+      // refetches the list (now carrying option_labels per row).
       onSaved();
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : 'Save failed');

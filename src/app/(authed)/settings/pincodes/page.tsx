@@ -18,7 +18,7 @@
  *   services/pincode.service.js + services/pincode-upload.service.js).
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   MapPin, Search, Plus, Pencil, Trash2, Upload, Download,
   AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Info,
@@ -29,6 +29,7 @@ import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { api, ApiError } from '@/lib/api';
+import { useFetch, useDebouncedValue, invalidateFetch } from '@/lib/hooks';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useLookup } from '@/lib/use-lookup';
@@ -65,13 +66,9 @@ export default function ManagePincodesPage() {
   // and assigning them to the Admin role via Manage Roles → action checkboxes.
   const can = actionFlags(me, ['isPincodeAddNew', 'isPincodeEdit', 'isPincodeUpload']);
 
-  const [items, setItems] = useState<Pincode[]>([]);
-  const [total, setTotal] = useState(0);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
   const [page, setPage] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
   const [editing, setEditing] = useState<Pincode | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
@@ -90,38 +87,26 @@ export default function ManagePincodesPage() {
   }, [howOpen]);
 
   // Debounced server-side search to keep payloads small even as the catalog grows.
-  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-    searchTimerRef.current = setTimeout(() => {
-      setPage(0);
-      void fetchList();
-    }, 300);
-    return () => {
-      if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, statusFilter]);
+  const debouncedSearch = useDebouncedValue(search, 300);
+  // Reset page to 0 whenever filters change (debouncedSearch handles its own delay).
+  useEffect(() => { setPage(0); }, [debouncedSearch, statusFilter]);
 
-  useEffect(() => { void fetchList(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [page]);
+  const urlParams = new URLSearchParams();
+  if (debouncedSearch.trim()) urlParams.set('q', debouncedSearch.trim());
+  if (statusFilter !== 'ALL') urlParams.set('status', statusFilter);
+  urlParams.set('limit', String(PAGE_SIZE));
+  urlParams.set('offset', String(page * PAGE_SIZE));
+  const listUrl = `/admin/pincodes?${urlParams.toString()}`;
+  const { data: listData, loading, error: fetchError, refetch } = useFetch<ListResponse>(listUrl);
+  const items: Pincode[] = listData?.items ?? [];
+  const total = listData?.total ?? 0;
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { setError(fetchError); }, [fetchError]);
 
-  async function fetchList() {
-    setLoading(true);
-    setError(null);
-    try {
-      const params = new URLSearchParams();
-      if (search.trim()) params.set('q', search.trim());
-      if (statusFilter !== 'ALL') params.set('status', statusFilter);
-      params.set('limit', String(PAGE_SIZE));
-      params.set('offset', String(page * PAGE_SIZE));
-      const data = await api.get<ListResponse>(`/admin/pincodes?${params}`);
-      setItems(data.items);
-      setTotal(data.total);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Failed to load pincodes');
-    } finally {
-      setLoading(false);
-    }
+  // Invalidate the 30s module cache for ALL pincode list pages, then refetch.
+  function refreshList() {
+    invalidateFetch((k) => k.startsWith('/admin/pincodes'));
+    refetch();
   }
 
   async function handleDelete(p: Pincode) {
@@ -134,7 +119,7 @@ export default function ManagePincodesPage() {
     if (!ok) return;
     try {
       await api.delete(`/admin/pincodes/${p.pincode_id}`);
-      void fetchList();
+      refreshList();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Deactivate failed');
     }
@@ -402,13 +387,13 @@ export default function ManagePincodesPage() {
         onClose={() => setModalOpen(false)}
         editing={editing}
         cities={lookup.cities.map((c) => ({ city_id: c.city_id, city_name: c.city_name }))}
-        onSaved={() => { setModalOpen(false); void fetchList(); }}
+        onSaved={() => { setModalOpen(false); refreshList(); }}
       />
 
       <UploadModal
         open={uploadOpen}
         onClose={() => setUploadOpen(false)}
-        onCommitted={() => { setUploadOpen(false); void fetchList(); }}
+        onCommitted={() => { setUploadOpen(false); refreshList(); }}
       />
     </div>
   );

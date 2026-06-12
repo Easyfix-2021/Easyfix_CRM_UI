@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { api } from './api';
+import { api, ApiError } from './api';
 
 /*
  * Single source of truth for the logged-in user + role. Before this, Sidebar
@@ -147,9 +147,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const fresh = await fetchMeOnce();
       setMe(fresh);
       writeMeCache(fresh);
-    } catch {
-      clearMeCache();
-      router.replace('/login');
+    } catch (e) {
+      if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
+        clearMeCache();
+        router.replace('/login');
+      }
+      // Transient failure (network blip, 5xx, backend restart): keep the
+      // cached `me` — the cookie/JWT is still valid. Next focus-refresh
+      // (>=30s) or navigation retries automatically.
     } finally {
       setLoading(false);
     }

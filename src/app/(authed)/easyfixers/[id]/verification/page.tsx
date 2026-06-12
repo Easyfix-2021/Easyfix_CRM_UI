@@ -26,7 +26,7 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { ArrowLeft, Check, Loader2, Phone, Smile, X, Upload, ChevronDown, ChevronRight, Search } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
-import { useFetch } from '@/lib/hooks';
+import { useFetch, useDebouncedValue } from '@/lib/hooks';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -1435,14 +1435,14 @@ function DeepSkillOptionMapping({ efrId, onReload }: { efrId: number; onReload?:
  * to tbl_efr_serviceable_pincode_map via /admin/easyfixers/:id/
  * serviceable-pincodes (GET + PUT).
  *
- * Load model (2026-06 redesign):
- *   - On first dropdown open we fetch the ENTIRE active pincode catalog
- *     (~155k rows) in one shot via /admin/pincodes?limit=200000&status=1.
- *     The query is a single indexed scan; sub-second.
- *   - Cached at module scope (`allPincodesCache`) so re-mounts across
- *     navigations don't re-fetch.
- *   - Filtering is client-side substring match against pincode + city —
- *     no debounce, no server round-trips.
+ * Load model (2026-06-11 redesign — server-side typeahead):
+ *   - While the dropdown is open, the search input (debounced 300ms via
+ *     useDebouncedValue) is sent as `q` to
+ *     /admin/pincodes?limit=100&includeInactive=false.
+ *   - Empty query intentionally fetches the first 100 rows so the
+ *     on-focus dropdown still shows results.
+ *   - useFetch's module cache dedupes repeat queries; the full ~155k-row
+ *     catalog is never downloaded to the browser.
  *
  * Bulk-paste (operator productivity):
  *   - When the search input contains comma/space/newline separators AND
@@ -1468,38 +1468,10 @@ type PincodeSearchRow = PincodeChip & {
   location?: string | null;
 };
 
-// Module-scope cache + in-flight promise so multiple mounts share one fetch.
-let allPincodesCache: PincodeSearchRow[] | null = null;
-let allPincodesInflight: Promise<PincodeSearchRow[]> | null = null;
-
-async function loadAllPincodes(): Promise<PincodeSearchRow[]> {
-  if (allPincodesCache) return allPincodesCache;
-  if (allPincodesInflight) return allPincodesInflight;
-  allPincodesInflight = (async () => {
-    const resp = await api.get<{ items: PincodeSearchRow[] }>(
-      // status param dropped (2026-06-11) — BE's status enum is
-      // LOCAL/TRAVEL (a derived classification), not active/inactive.
-      // includeInactive=false already filters out the inactive rows
-      // we don't want; sending status=1 produced a Joi 400.
-      `/admin/pincodes?limit=200000&includeInactive=false`
-    );
-    const items = Array.isArray(resp?.items) ? resp.items : [];
-    allPincodesCache = items;
-    return items;
-  })();
-  try {
-    return await allPincodesInflight;
-  } finally {
-    allPincodesInflight = null;
-  }
-}
-
 function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: () => Promise<void> }) {
   const [selected, setSelected] = useState<Map<number, PincodeChip>>(new Map());
   const [original, setOriginal] = useState<Map<number, PincodeChip>>(new Map());
   const [search, setSearch] = useState('');
-  const [allPincodes, setAllPincodes] = useState<PincodeSearchRow[]>(() => allPincodesCache ?? []);
-  const [isLoadingAll, setIsLoadingAll] = useState(false);
   const [bulkLookupBusy, setBulkLookupBusy] = useState(false);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -1543,30 +1515,6 @@ function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: ()
     return () => { cancelled = true; };
   }, [efrId]);
 
-  // Lazy-load the full catalog on first dropdown open. Cached at module
-  // scope so subsequent mounts (across navigations) skip the round-trip.
-  const ensureAllPincodes = useCallback(async () => {
-    if (allPincodesCache) {
-      if (allPincodes.length === 0) setAllPincodes(allPincodesCache);
-      return;
-    }
-    setIsLoadingAll(true);
-    try {
-      const items = await loadAllPincodes();
-      setAllPincodes(items);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Failed to load pincodes');
-    } finally {
-      setIsLoadingAll(false);
-    }
-  }, [allPincodes.length]);
-
-  useEffect(() => {
-    if (open && allPincodes.length === 0 && !allPincodesCache) {
-      void ensureAllPincodes();
-    }
-  }, [open, allPincodes.length, ensureAllPincodes]);
-
   // Click-outside to close the dropdown.
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
@@ -1588,24 +1536,17 @@ function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: ()
     return digitsOnly.length >= 12;
   }, [search]);
 
-  // Client-side substring filter — no debounce, data is local.
-  // First 100 results returned; matches against pincode OR city_name.
-  const filteredResults = useMemo(() => {
-    if (isBulkInput) return [];
-    const q = search.trim().toLowerCase();
-    if (!q) return allPincodes.slice(0, 100);
-    const out: PincodeSearchRow[] = [];
-    for (const p of allPincodes) {
-      if (
-        String(p.pincode).toLowerCase().includes(q) ||
-        (p.city_name && p.city_name.toLowerCase().includes(q))
-      ) {
-        out.push(p);
-        if (out.length >= 100) break;
-      }
-    }
-    return out;
-  }, [allPincodes, search, isBulkInput]);
+  // Server-side typeahead — debounced q search, limit 100. Empty query
+  // intentionally fetches the first 100 rows so the on-focus dropdown
+  // still shows results. useFetch's module cache dedupes repeat queries.
+  // (status param omitted — BE's status enum is LOCAL/TRAVEL, a derived
+  // classification, not active/inactive; includeInactive=false filters.)
+  const dq = useDebouncedValue(search.trim(), 300);
+  const searchKey = open && !isBulkInput
+    ? `/admin/pincodes?limit=100&includeInactive=false${dq ? `&q=${encodeURIComponent(dq)}` : ''}`
+    : null;
+  const { data: searchData, loading: searchLoading } = useFetch<{ items: PincodeSearchRow[] }>(searchKey);
+  const filteredResults = isBulkInput ? [] : (searchData?.items ?? []);
 
   function toggle(row: PincodeSearchRow) {
     const id = Number(row.pincode_id);
@@ -1787,7 +1728,7 @@ function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: ()
             </div>
             {open && !isBulkInput && (
               <div className="absolute z-20 mt-1 w-full rounded-md border border-slate-200 bg-white shadow-lg max-h-72 overflow-auto">
-                {isLoadingAll && allPincodes.length === 0 ? (
+                {searchLoading && filteredResults.length === 0 ? (
                   <div className="px-3 py-3 text-xs text-slate-500 inline-flex items-center gap-2">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading Pincodes…
                   </div>

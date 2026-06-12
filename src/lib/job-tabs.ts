@@ -1,3 +1,7 @@
+import type { ConfirmOptions } from '@/components/ui/confirm-dialog';
+import { api } from '@/lib/api';
+import { formatDate, statusLabel } from '@/lib/utils';
+
 /*
  * Shared lifecycle-tab definitions used by BOTH /jobs (org-wide) and
  * /my-orders (user-scoped). Keeping the canonical TABS list in one place
@@ -78,4 +82,101 @@ export function countFor(tab: TabDef, counts: CountsResp | null): number | null 
   if (tab.statuses) return tab.statuses.reduce((s, code) => s + (counts.byStatus[String(code)] ?? 0), 0);
   if (tab.status !== undefined) return counts.byStatus[String(tab.status)] ?? 0;
   return 0;
+}
+
+/*
+ * Minimal row shape the client-side search filter reads. Both /jobs and
+ * /my-orders pass their richer JobRow (a structural superset) — the generic
+ * `T extends SearchableJobRow` keeps the caller's exact row type flowing
+ * through to the filtered result.
+ */
+export type SearchableJobRow = {
+  job_id: number;
+  job_reference_id: string | null;
+  client_ref_id: string | null;
+  job_status: number;
+  job_type: string;
+  source_type: string | null;
+  client_name: string | null;
+  customer_name: string | null;
+  customer_mob_no: string | null;
+  city_name: string | null;
+  easyfixer_name: string | null;
+  owner_name: string | null;
+  fk_easyfixter_id: number | null;
+  created_date_time: string;
+  requested_date_time: string;
+  scheduled_date_time: string | null;
+  checkin_date_time: string | null;
+  checkout_date_time: string | null;
+};
+
+/*
+ * Client-side search over the currently-loaded page, shared by /jobs and
+ * /my-orders (previously copy-pasted and drifting). Matches every visible
+ * column INCLUDING the human-readable status label (so typing "scheduled"
+ * matches status=1 rows) and the formatted date strings (so partial date
+ * typing like "12 May" hits what the operator visually sees). The needle is
+ * lowercased once; each candidate is compared as its lowercase string form.
+ * Kept as a per-row haystack array (not a joined string) so a needle can
+ * never false-positive across field boundaries.
+ */
+export function filterJobRows<T extends SearchableJobRow>(items: T[], q: string): T[] {
+  if (!q) return items;
+  const needle = q.toLowerCase();
+  return items.filter((j) => {
+    const haystacks: Array<unknown> = [
+      j.job_id, j.job_reference_id, j.client_ref_id,
+      j.client_name, j.customer_name, j.customer_mob_no,
+      j.city_name, j.easyfixer_name, j.owner_name, j.job_type,
+      j.source_type,
+      j.job_status,
+      statusLabel(Number(j.job_status), { assigned: j.fk_easyfixter_id != null }),
+      j.created_date_time && formatDate(j.created_date_time),
+      j.requested_date_time && formatDate(j.requested_date_time),
+      j.scheduled_date_time && formatDate(j.scheduled_date_time),
+      j.checkin_date_time && formatDate(j.checkin_date_time),
+      j.checkout_date_time && formatDate(j.checkout_date_time),
+    ];
+    return haystacks.some((h) => h != null && String(h).toLowerCase().includes(needle));
+  });
+}
+
+/*
+ * Factory for the per-row quick status-change handler shared by /jobs and
+ * /my-orders. The two pages differ only in (a) the confirm description copy
+ * and (b) whether a counts refresh fires after reload — so those are passed
+ * in rather than branched on. Everything else (confirm dialog shape, the
+ * PATCH /admin/jobs/:id/status payload, the cache-clear → reload sequence,
+ * row-busy + error wiring) is identical and lives here once.
+ */
+export function makeQuickStatusChange(opts: {
+  confirmAction: (o?: ConfirmOptions) => Promise<boolean>;
+  api: typeof api;
+  description: ConfirmOptions['description'];
+  setRowBusy: (id: number | null) => void;
+  setErrorMsg: (m: string) => void;
+  clearCache: () => void;
+  reload: () => Promise<void>;
+  afterReload?: () => void;
+}) {
+  return async function quickStatusChange(jobId: number, toStatus: number, verb: string) {
+    const ok = await opts.confirmAction({
+      title: `${verb} job #${jobId}?`,
+      description: opts.description,
+      confirmLabel: verb,
+    });
+    if (!ok) return;
+    opts.setRowBusy(jobId);
+    try {
+      await opts.api.patch(`/admin/jobs/${jobId}/status`, { status: toStatus });
+      opts.clearCache();
+      await opts.reload();
+      opts.afterReload?.();
+    } catch (e) {
+      opts.setErrorMsg(`${verb} failed: ${e instanceof Error ? e.message : 'Unknown error'}`);
+    } finally {
+      opts.setRowBusy(null);
+    }
+  };
 }
