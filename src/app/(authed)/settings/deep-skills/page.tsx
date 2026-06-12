@@ -812,6 +812,25 @@ function DeepSkillEditor({
     return lk.serviceTypes.filter((t) => t.service_catg_id === Number(f.category_id));
   }, [lk.serviceTypes, f.category_id]);
 
+  /*
+   * Category options for the modal. The /shared/lookup/service-categories
+   * endpoint returns only ACTIVE categories (service_catg_status = 1), but
+   * a deep skill can reference a category that was later deactivated —
+   * and the sibling service-types lookup does NOT filter on the parent
+   * category's status, so the skill's Service Type still resolves while
+   * its Category would silently fall back to the placeholder in edit mode.
+   * Fix: always inject the saved {category_id, category_name} when it's
+   * absent from the active list, so edit mode renders the real selection.
+   * (`category_name` rides along on the list row + getById detail.)
+   */
+  const categoryOptions = useMemo(() => {
+    const opts = lk.toOpts.serviceCategories.map((o) => ({ value: o.value, label: String(o.label) }));
+    if (f.category_id && !opts.some((o) => String(o.value) === String(f.category_id))) {
+      opts.unshift({ value: f.category_id, label: record?.category_name || `Category #${f.category_id}` });
+    }
+    return opts;
+  }, [lk.toOpts.serviceCategories, f.category_id, record?.category_name]);
+
   function toggleOption(opt: string) {
     setOptions((prev) => prev.includes(opt) ? prev.filter((o) => o !== opt) : [...prev, opt]);
   }
@@ -1102,7 +1121,7 @@ function DeepSkillEditor({
               <SearchSelect
                 value={f.category_id}
                 onChange={(v) => setF((s) => ({ ...s, category_id: v, service_type_id: '' }))}
-                options={lk.toOpts.serviceCategories.map((o) => ({ value: o.value, label: String(o.label) }))}
+                options={categoryOptions}
                 placeholder="Select Service Category"
               />
             </div>
