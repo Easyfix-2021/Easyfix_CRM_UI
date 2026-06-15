@@ -20,8 +20,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
-  MapPin, Search, Plus, Pencil, Trash2, Upload, Download,
-  AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Info,
+  MapPin, Search, Plus, Upload, Download,
+  AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Info, Users,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -30,7 +30,6 @@ import { CancelButton } from '@/components/ui/cancel-button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { api, ApiError } from '@/lib/api';
 import { useFetch, useDebouncedValue, invalidateFetch } from '@/lib/hooks';
-import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useLookup } from '@/lib/use-lookup';
 import { useMe } from '@/lib/auth-context';
@@ -47,6 +46,8 @@ type Pincode = {
   is_active: boolean;
   status: 'LOCAL' | 'TRAVEL';
   active_efr_count: number;
+  lat: number | null;
+  lng: number | null;
 };
 
 type ListResponse = {
@@ -58,13 +59,12 @@ type StatusFilter = 'ALL' | 'LOCAL' | 'TRAVEL';
 const PAGE_SIZE = 100;
 
 export default function ManagePincodesPage() {
-  const confirm = useConfirm();
   const lookup  = useLookup();
   const { me } = useMe();
   // Permission gating — keys follow the legacy `is{Entity}{Verb}` convention.
   // Production rollout requires seeding the corresponding rows in `menu_action`
   // and assigning them to the Admin role via Manage Roles → action checkboxes.
-  const can = actionFlags(me, ['isPincodeAddNew', 'isPincodeEdit', 'isPincodeUpload']);
+  const can = actionFlags(me, ['isPincodeAddNew', 'isPincodeUpload']);
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
@@ -73,6 +73,7 @@ export default function ManagePincodesPage() {
   const [editing, setEditing] = useState<Pincode | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [techModalPincode, setTechModalPincode] = useState<Pincode | null>(null);
 
   // Help panel — collapsed by default (operator-confirmed: most uses of
   // this page are routine, not first-time onboarding). Persisted state
@@ -107,22 +108,6 @@ export default function ManagePincodesPage() {
   function refreshList() {
     invalidateFetch((k) => k.startsWith('/admin/pincodes'));
     refetch();
-  }
-
-  async function handleDelete(p: Pincode) {
-    const ok = await confirm({
-      title: 'Deactivate pincode?',
-      description: `${p.pincode} (${p.city_name ?? 'unknown city'}) will be marked inactive. Historical jobs that reference it stay intact; new jobs created with this pincode after deactivation are flagged Unzoned. You can reactivate later by editing and toggling "Active".`,
-      confirmLabel: 'Deactivate',
-      variant: 'destructive',
-    });
-    if (!ok) return;
-    try {
-      await api.delete(`/admin/pincodes/${p.pincode_id}`);
-      refreshList();
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Deactivate failed');
-    }
   }
 
   async function downloadTemplate() {
@@ -328,16 +313,17 @@ export default function ManagePincodesPage() {
                 <th className="!text-left">City</th>
                 <th className="!text-left">District</th>
                 <th className="!text-left">State</th>
+                <th className="!text-right">Latitude</th>
+                <th className="!text-right">Longitude</th>
                 <th className="!text-center">Status</th>
-                <th className="!text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={7} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
+                <tr><td colSpan={8} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
               )}
               {!loading && items.length === 0 && (
-                <tr><td colSpan={7} className="!text-center text-muted-foreground py-6">No pincodes match the current filters.</td></tr>
+                <tr><td colSpan={8} className="!text-center text-muted-foreground py-6">No pincodes match the current filters.</td></tr>
               )}
               {!loading && items.map((p) => (
                 <tr key={p.pincode_id}>
@@ -346,22 +332,18 @@ export default function ManagePincodesPage() {
                   <td className="!text-left">{p.city_name ?? <span className="text-muted-foreground">—</span>}</td>
                   <td className="!text-left">{p.district ?? <span className="text-muted-foreground">—</span>}</td>
                   <td className="!text-left">{p.state_name ?? <span className="text-muted-foreground">—</span>}</td>
-                  <td className="!text-center">
-                    <StatusPill status={p.status} count={p.active_efr_count} />
+                  <td className="!text-right font-mono text-sm">
+                    {p.lat != null ? p.lat.toFixed(5) : <span className="text-muted-foreground">—</span>}
                   </td>
-                  <td className="!text-right">
-                    {can.isPincodeEdit ? (
-                      <>
-                        <Button size="sm" variant="ghost" onClick={() => { setEditing(p); setModalOpen(true); }}>
-                          <Pencil className="size-3.5" />
-                        </Button>
-                        <Button size="sm" variant="ghost" onClick={() => handleDelete(p)}>
-                          <Trash2 className="size-3.5 text-red-600" />
-                        </Button>
-                      </>
-                    ) : (
-                      <span className="text-[10px] text-muted-foreground">view-only</span>
-                    )}
+                  <td className="!text-right font-mono text-sm">
+                    {p.lng != null ? p.lng.toFixed(5) : <span className="text-muted-foreground">—</span>}
+                  </td>
+                  <td className="!text-center">
+                    <StatusPill
+                      status={p.status}
+                      count={p.active_efr_count}
+                      onClick={p.active_efr_count > 0 ? () => setTechModalPincode(p) : undefined}
+                    />
                   </td>
                 </tr>
               ))}
@@ -395,19 +377,48 @@ export default function ManagePincodesPage() {
         onClose={() => setUploadOpen(false)}
         onCommitted={() => { setUploadOpen(false); refreshList(); }}
       />
+
+      <PincodeTechniciansModal
+        pincode={techModalPincode}
+        onClose={() => setTechModalPincode(null)}
+      />
     </div>
   );
 }
 
 // ─── Status pill ────────────────────────────────────────────────────
-function StatusPill({ status, count }: { status: 'LOCAL' | 'TRAVEL'; count: number }) {
+function StatusPill({
+  status,
+  count,
+  onClick,
+}: {
+  status: 'LOCAL' | 'TRAVEL';
+  count: number;
+  onClick?: () => void;
+}) {
+  const label = count === 1 ? '1 Technician' : `${count} Technicians`;
+
   if (status === 'LOCAL') {
+    if (onClick) {
+      return (
+        <button
+          type="button"
+          onClick={onClick}
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700 hover:bg-emerald-200 transition-colors cursor-pointer"
+          title={`View ${label} servicing this pincode`}
+        >
+          <CheckCircle2 className="size-3" /> Local · {label}
+        </button>
+      );
+    }
     return (
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">
-        <CheckCircle2 className="size-3" /> Local · {count} tech
+        <CheckCircle2 className="size-3" /> Local · {label}
       </span>
     );
   }
+
+  // TRAVEL status — count is 0 so no click handler is expected
   return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
       Travel
@@ -712,6 +723,140 @@ function UploadModal({
               {busy && phase === 'dry-run' ? 'Uploading…' : 'Commit Upload'}
             </Button>
           </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Pincode Technicians Modal ───────────────────────────────────────
+type TechItem = {
+  efr_id: number;
+  efr_name: string | null;
+  efr_no: string | null;
+  city_name: string | null;
+  zone_name: string | null;
+};
+
+type TechResp = {
+  items: TechItem[];
+  total: number;
+};
+
+/*
+ * PincodeTechniciansModal — searchable list of active+verified technicians
+ * who explicitly service the selected pincode (matched via
+ * tbl_efr_serviceable_pincodes). Mirrors the DeepSkillMappedEasyfixersModal
+ * pattern: useDebouncedValue + useFetch, sidebar-dark header, data-table.
+ */
+function PincodeTechniciansModal({
+  pincode,
+  onClose,
+}: {
+  pincode: Pincode | null;
+  onClose: () => void;
+}) {
+  const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search, 300);
+
+  // Reset search when the modal closes or opens for a different pincode.
+  useEffect(() => { setSearch(''); }, [pincode]);
+
+  const listKey = useMemo(() => {
+    if (!pincode) return null;
+    const p = new URLSearchParams();
+    if (debouncedSearch.trim()) p.set('q', debouncedSearch.trim());
+    p.set('limit', '50');
+    p.set('offset', '0');
+    return `/admin/pincodes/${pincode.pincode_id}/technicians?${p.toString()}`;
+  }, [pincode, debouncedSearch]);
+
+  const { data, loading, error } = useFetch<TechResp>(listKey);
+  const items = data?.items ?? [];
+  const total = data?.total ?? 0;
+
+  // Read-only modal — no dirty state; guard never blocks, but satisfies the
+  // no-restricted-syntax rule that bans inline onOpenChange lambdas on <Dialog>.
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => false });
+
+  if (!pincode) return null;
+
+  const headerSub = pincode.city_name
+    ? `${pincode.pincode} · ${pincode.city_name}`
+    : pincode.pincode;
+
+  return (
+    <Dialog open={!!pincode} onOpenChange={guardedOpenChange}>
+      <DialogContent className="max-w-3xl w-[min(96vw,900px)] h-[75vh] overflow-hidden p-0 flex flex-col">
+        <DialogHeader className="!mx-0 !mt-0 px-6 py-4 mb-0">
+          <DialogTitle className="flex items-center gap-2">
+            <Users className="size-4" /> Serviceable Technicians
+          </DialogTitle>
+          <div className="text-[12px] text-slate-300/85 mt-0.5">
+            {headerSub}{' '}·{' '}
+            {loading ? 'Loading…' : `${total} Technician${total === 1 ? '' : 's'}`}
+          </div>
+        </DialogHeader>
+
+        <div className="px-4 pt-3 pb-2">
+          <div className="relative">
+            <Search className="size-4 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              placeholder="Search by name, mobile or ID…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-8"
+              autoFocus
+            />
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-auto px-4 pb-3">
+          <table className="data-table w-full">
+            <thead>
+              <tr>
+                <th className="whitespace-nowrap !text-left">Id</th>
+                <th className="whitespace-nowrap !text-left">Name</th>
+                <th className="whitespace-nowrap !text-left">Mobile</th>
+                <th className="whitespace-nowrap !text-left">City</th>
+                <th className="whitespace-nowrap !text-left">Zone</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading && (
+                <tr>
+                  <td colSpan={5} className="!text-center py-8 text-muted-foreground">
+                    Loading…
+                  </td>
+                </tr>
+              )}
+              {!loading && error && (
+                <tr>
+                  <td colSpan={5} className="!text-center py-8 text-rose-600">
+                    <AlertTriangle className="size-4 inline mr-1" />{error}
+                  </td>
+                </tr>
+              )}
+              {!loading && !error && items.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="!text-center py-8 text-muted-foreground">
+                    {debouncedSearch.trim()
+                      ? 'No technicians match the search.'
+                      : 'No active technicians service this pincode.'}
+                  </td>
+                </tr>
+              )}
+              {!loading && !error && items.map((t) => (
+                <tr key={t.efr_id}>
+                  <td className="!text-left text-xs text-muted-foreground tabular-nums">{t.efr_id}</td>
+                  <td className="!text-left font-medium">{t.efr_name ?? '—'}</td>
+                  <td className="!text-left text-xs whitespace-nowrap">{t.efr_no ?? '—'}</td>
+                  <td className="!text-left text-xs">{t.city_name ?? '—'}</td>
+                  <td className="!text-left text-xs">{t.zone_name ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </DialogContent>
     </Dialog>

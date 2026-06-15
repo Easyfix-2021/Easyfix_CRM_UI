@@ -40,7 +40,6 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { SearchSelect } from '@/components/ui/search-select';
 import { api, ApiError } from '@/lib/api';
 import { useFetch, invalidateFetch } from '@/lib/hooks';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -52,13 +51,42 @@ import { CallableMobile } from '@/components/calls/CallButton';
 
 /* ── Time-slot options — mirror the values used in JobModal's Confirm
    form so a re-fetch against an edited slot keys on the same labels the
-   BE already stores in tbl_job.time_slot. ─────────────────────────────── */
+   BE already stores in tbl_job.time_slot.
+   The slot is AUTO-DERIVED from the Job Date's hour — NOT user-selectable.
+   This array is the single source of truth for slot labels used by the
+   derivation logic below. ─────────────────────────────────────────────── */
 const TIME_SLOT_OPTIONS = [
   { value: 'Morning 9 to 2', label: 'Morning 9 to 2' },
   { value: 'Afternoon 12 to 5', label: 'Afternoon 12 to 5' },
   { value: 'Evening 2 to 7', label: 'Evening 2 to 7' },
   { value: 'Anytime', label: 'Anytime' },
 ] as const;
+
+/*
+ * Derive the time slot from the Job Date's wall-clock hour (IST, since the
+ * picker value is always an IST wall-clock string).
+ *
+ *   Morning 9 to 2   → 09:00–11:59  (hours 9–11)
+ *   Afternoon 12 to 5 → 12:00–13:59 (hours 12–13)
+ *   Evening 2 to 7   → 14:00–18:59  (hours 14–18)
+ *   Anytime          → fallback for anything outside the above ranges
+ *
+ * Overlap resolution: Morning ends before Afternoon starts (we split at 12);
+ * Afternoon ends before Evening (we split at 14). Hours ≥ 19 → Anytime.
+ *
+ * Input: the datetime-local picker string 'YYYY-MM-DDTHH:mm' (IST wall-clock).
+ * Returns one of the TIME_SLOT_OPTIONS values, never null.
+ */
+function deriveTimeSlot(datetimeLocal: string): string {
+  if (!datetimeLocal) return 'Anytime';
+  const m = datetimeLocal.match(/T(\d{2}):/);
+  if (!m) return 'Anytime';
+  const hour = Number(m[1]);
+  if (hour >= 9 && hour <= 11) return 'Morning 9 to 2';
+  if (hour >= 12 && hour <= 13) return 'Afternoon 12 to 5';
+  if (hour >= 14 && hour <= 18) return 'Evening 2 to 7';
+  return 'Anytime';
+}
 
 /* ── BE row shape (exact contract). ──────────────────────────────────── */
 type DistanceTier =
@@ -167,9 +195,15 @@ export function ScheduleAssignModal({
   // Proposed schedule — seeded from the job's current values once it
   // loads, then operator-editable. `seeded` guards the one-time seed so
   // a re-fetch (triggered BY editing) doesn't clobber the operator's edit.
+  // timeSlot is AUTO-DERIVED from jobDateLocal — not user-settable.
   const [jobDateLocal, setJobDateLocal] = useState('');
-  const [timeSlot, setTimeSlot] = useState('');
   const [seeded, setSeeded] = useState(false);
+
+  // Derived time slot — recomputed whenever the Job Date changes.
+  // Falls back to the job's stored slot ONLY during the seed phase (before
+  // the operator has set a date). Once seeded the hour-based rule always wins.
+  const [seedSlot, setSeedSlot] = useState('');
+  const timeSlot = seeded ? deriveTimeSlot(jobDateLocal) : seedSlot;
 
   const [search, setSearch] = useState('');
   const [assigning, setAssigning] = useState<number | null>(null);
@@ -185,7 +219,7 @@ export function ScheduleAssignModal({
   // Reset transient state whenever the modal closes / the job changes.
   useEffect(() => {
     if (!open) {
-      setSeeded(false); setJobDateLocal(''); setTimeSlot('');
+      setSeeded(false); setJobDateLocal(''); setSeedSlot('');
       setSearch(''); setAssigning(null); setErr(null); setPincodeModalFor(null);
       setRetainedJob(null);
     }
@@ -213,10 +247,12 @@ export function ScheduleAssignModal({
   const top = useFetch<CandidatesResponse>(topKey, { enabled: !!topKey });
 
   // Seed the proposed schedule from the loaded job exactly once.
+  // seedSlot captures the job's stored time_slot for display during the seed
+  // phase; once seeded, deriveTimeSlot() takes over from the picked date.
   useEffect(() => {
     if (seeded || !top.data?.job) return;
     setJobDateLocal(isoToLocalInput(top.data.job.requested_date_time));
-    setTimeSlot(top.data.job.time_slot ?? '');
+    setSeedSlot(top.data.job.time_slot ?? 'Anytime');
     setSeeded(true);
   }, [seeded, top.data]);
 
@@ -286,11 +322,11 @@ export function ScheduleAssignModal({
   // Read-only modal otherwise, but the editable schedule fields make it
   // "dirty" once touched — guard close so an accidental Esc after editing
   // the date prompts. Skip while an assign is in flight.
+  // Only the Job Date is user-editable; timeSlot is derived so not part of dirty check.
   const guardedOpenChange = useFormDirtyGuard(onClose, {
     isDirty: () =>
       seeded && job != null &&
-      (jobDateLocal !== isoToLocalInput(job.requested_date_time) ||
-        timeSlot !== (job.time_slot ?? '')),
+      jobDateLocal !== isoToLocalInput(job.requested_date_time),
     when: () => assigning == null,
   });
 
@@ -349,8 +385,8 @@ export function ScheduleAssignModal({
                 </div>
 
                 {/* EDITABLE scheduling row — drives the candidate re-fetch. */}
-                <div className="mt-3 pt-3 border-t grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
+                <div className="mt-3 pt-3 border-t">
+                  <div className="space-y-1.5 max-w-xs">
                     <label className="text-xs font-medium text-foreground flex items-center gap-1">
                       <Calendar className="h-3.5 w-3.5 text-muted-foreground" /> Job Date *
                     </label>
@@ -360,19 +396,20 @@ export function ScheduleAssignModal({
                       onChange={(e) => setJobDateLocal(e.target.value)}
                     />
                   </div>
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-medium text-foreground">Time Slot</label>
-                    <SearchSelect
-                      value={timeSlot}
-                      onChange={setTimeSlot}
-                      placeholder="— Select slot —"
-                      options={TIME_SLOT_OPTIONS as unknown as Array<{ value: string; label: string }>}
-                    />
-                  </div>
+                  {/* Auto-derived Time Slot chip — read-only; derived from the Job Date's hour. */}
+                  {timeSlot && (
+                    <div className="mt-2 flex items-center gap-1.5">
+                      <span className="text-[11px] text-muted-foreground">Time Slot:</span>
+                      <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-medium text-slate-700 border border-slate-200">
+                        {timeSlot}
+                      </span>
+                    </div>
+                  )}
                 </div>
                 <p className="mt-2 text-[11px] text-muted-foreground">
-                  Editing the Job Date or Time Slot re-ranks technicians and recomputes
+                  Editing the Job Date re-ranks technicians and recomputes
                   attendance, concurrent jobs and same-slot conflicts against the proposed schedule.
+                  The Time Slot is automatically derived from the selected time.
                 </p>
               </div>
             )}

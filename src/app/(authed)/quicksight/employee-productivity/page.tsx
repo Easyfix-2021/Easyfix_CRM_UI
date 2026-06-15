@@ -93,6 +93,21 @@ type KraMetrics = {
 type Vertical = { vertical_id: number; vertical_name: string };
 type ManagerLite = { user_id: number; user_name: string };
 
+type SpocRevenueRow = {
+  userId: number;
+  userName: string;
+  jobsCompleted: number;
+  revenue: number;
+};
+
+type SpocRevenueResponse = {
+  spocCount: number;
+  totalJobs: number;
+  totalRevenue: number;
+  avgRevenue: number;
+  spocs: SpocRevenueRow[];
+};
+
 /* ── date helpers (Yesterday default; no TZ math beyond local calendar) ── */
 function isoDaysAgo(n: number): string {
   const d = new Date();
@@ -219,6 +234,10 @@ export default function EmployeeProductivityPage() {
   );
   const kraKey = canView ? `${BASE}/kra-metrics?${kraQuery}` : null;
   const { data: kra } = useFetch<KraMetrics>(kraKey);
+
+  // SPOC Revenue — same filter key as kra-metrics (no pagination).
+  const spocKey = canView ? `${BASE}/spoc-revenue?${kraQuery}` : null;
+  const { data: spocData, loading: spocLoading, error: spocError } = useFetch<SpocRevenueResponse>(spocKey);
 
   const rows = tableData?.data ?? [];
   const total = tableData?.totalRecords ?? 0;
@@ -461,6 +480,17 @@ export default function EmployeeProductivityPage() {
         {/* KRA tile strip */}
         {kra && <KraTiles kra={kra} />}
 
+        {/* Primary SPOC Revenue — always render section when data is available;
+            show an empty-state row when the period has zero SPOC revenue so the
+            section is never silently invisible. */}
+        {canView && !spocLoading && !spocError && spocData && (
+          <SpocRevenueSection
+            data={spocData}
+            startDate={startDate}
+            endDate={endDate}
+          />
+        )}
+
         {/* Graphical View — derived from the current page of rows. */}
         {hasCharts && (
           <section className="space-y-3">
@@ -578,6 +608,69 @@ export default function EmployeeProductivityPage() {
         />
       </div>
     </ReportPageScaffold>
+  );
+}
+
+/* Primary SPOC Revenue section — header row + sub-line + card grid. */
+function SpocRevenueSection({
+  data,
+  startDate,
+  endDate,
+}: {
+  data: SpocRevenueResponse;
+  startDate: string;
+  endDate: string;
+}) {
+  return (
+    <section className="space-y-3">
+      {/* Header row */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-slate-800">Primary SPOC Revenue</h2>
+        <div className="flex items-center gap-4 text-sm font-medium">
+          <span>
+            Total Revenue{' '}
+            <span className="text-emerald-700">₹{fmtNum(data.totalRevenue)}</span>
+          </span>
+          <span className="text-muted-foreground">·</span>
+          <span>
+            Avg{' '}
+            <span className="text-emerald-700">₹{fmtNum(data.avgRevenue)}</span>
+          </span>
+        </div>
+      </div>
+
+      {/* Sub-line */}
+      <p className="text-xs text-muted-foreground">
+        {data.spocCount} {data.spocCount === 1 ? 'SPOC' : 'SPOCs'} · {data.totalJobs}{' '}
+        {data.totalJobs === 1 ? 'job' : 'jobs'} completed · {startDate} to {endDate}
+      </p>
+
+      {/* Card grid — or empty-state so the section is never invisible */}
+      {data.spocs.length > 0 ? (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+          {data.spocs.map((s) => (
+            <div
+              key={s.userId}
+              className="rounded-md border bg-card p-3 space-y-1"
+            >
+              <div className="text-sm font-medium leading-tight truncate" title={s.userName}>
+                {s.userName || '—'}
+              </div>
+              <div className="text-base font-semibold tabular-nums text-emerald-700">
+                ₹{fmtNum(s.revenue)}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {s.jobsCompleted} {s.jobsCompleted === 1 ? 'job' : 'jobs'} completed
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          No SPOC revenue for the selected period.
+        </p>
+      )}
+    </section>
   );
 }
 

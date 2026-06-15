@@ -86,6 +86,8 @@ type FormState = {
   panNumber: string;
   mouContact: string;
   referenceCode: string;
+  // commercial (extended)
+  monthlyRevenue: string;
   // mapping refs
   verticalId: number | '';
   primaryUserId: number | '';
@@ -99,7 +101,7 @@ function blankForm(): FormState {
     clientName: '', clientEmail: '', clientAddress: '',
     building: '', landmark: '', cityId: '', pincode: '',
     paidBy: '', collectedBy: '', travelDistance: '0', bookingCutOff: '0',
-    minOrders: '0', couponCode: '',
+    minOrders: '0', couponCode: '', monthlyRevenue: '',
     cinNumber: '', panNumber: '', mouContact: '', referenceCode: '',
     verticalId: '', primaryUserId: '', secondaryUserId: '',
     reportingContactIds: [], clientStatus: 1,
@@ -127,6 +129,7 @@ function seedForm(initial?: ClientDetail | null): FormState {
     bookingCutOff: String(initial.booking_cut_off ?? '0'),
     minOrders: String(initial.max_orders ?? '0'),
     couponCode: String((initial as Record<string, unknown>).coupon_code ?? ''),
+    monthlyRevenue: initial.monthly_revenue != null ? String(initial.monthly_revenue) : '',
     cinNumber: String((initial as Record<string, unknown>).tan_number ?? ''),
     panNumber: String((initial as Record<string, unknown>).client_pan_number ?? ''),
     mouContact: String((initial as Record<string, unknown>).client_aadhaar ?? ''),
@@ -243,6 +246,8 @@ export function ClientFormDialog({ open, onClose, onSaved, mode, initial }: Prop
       setIf('bookingCutOff', form.bookingCutOff === '' ? undefined : Number(form.bookingCutOff));
       setIf('minOrders', form.minOrders === '' ? undefined : Number(form.minOrders));
       setIf('couponCode', form.couponCode);
+      // monthlyRevenue: include as number or null (never skip — update schema supports it too)
+      payload.monthlyRevenue = form.monthlyRevenue.trim() !== '' ? Number(form.monthlyRevenue) : null;
       setIf('cinNumber', form.cinNumber);
       setIf('panNumber', form.panNumber);
       setIf('mouContact', form.mouContact);
@@ -458,6 +463,22 @@ export function ClientFormDialog({ open, onClose, onSaved, mode, initial }: Prop
             </Field>
             <Field label="Discount / Coupon Code">
               <Input value={form.couponCode} onChange={(e) => update('couponCode', e.target.value)} maxLength={50} />
+            </Field>
+            <Field label="Monthly Revenue (INR)">
+              <div className="relative">
+                <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground select-none">₹</span>
+                <Input
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  step={1}
+                  value={form.monthlyRevenue}
+                  onChange={(e) => update('monthlyRevenue', e.target.value)}
+                  onWheel={(e) => (e.target as HTMLInputElement).blur()}
+                  placeholder="0"
+                  className="pl-6"
+                />
+              </div>
             </Field>
           </Section>
 

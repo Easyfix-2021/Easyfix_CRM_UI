@@ -17,7 +17,7 @@
  * normalisation happens only on read.
  */
 
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Plus, Pencil, Trash2, AlertCircle, Tag } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -31,7 +31,7 @@ import { api, ApiError } from '@/lib/api';
 import { useFetch, invalidateFetch } from '@/lib/hooks';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { titleCaseLabel } from '@/lib/format';
-import type { ClientCustomProperty, CustomPropertyFormPayload } from '@/lib/client-types';
+import type { ClientCustomProperty, ClientDetail, CustomPropertyFormPayload } from '@/lib/client-types';
 
 /*
  * Shape of the cross-client distinct-keys endpoint
@@ -118,9 +118,10 @@ function invalidatePropertyKeysCache() { _keysCache = null; }
 type Props = {
   clientId: number;
   canEdit: boolean;
+  client?: ClientDetail | null;
 };
 
-export function CustomPropsTab({ clientId, canEdit }: Props) {
+export function CustomPropsTab({ clientId, canEdit, client }: Props) {
   const key = `/admin/clients/${clientId}/custom-properties`;
   const { data, loading, error, refetch } = useFetch<ClientCustomProperty[]>(key);
   const [adding, setAdding] = useState(false);
@@ -178,6 +179,11 @@ export function CustomPropsTab({ clientId, canEdit }: Props) {
         legacy snake_case rows still resolve.
       */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+        <MonthlyRevenueCard
+          clientId={clientId}
+          initialValue={client?.monthly_revenue ?? null}
+          canEdit={canEdit}
+        />
         <AutoProcessCard
           clientId={clientId}
           existing={autoProcessRow}
@@ -662,6 +668,91 @@ function OrderModeCard({
           <option value="form">Form (link)</option>
           <option value="conversation">WhatsApp Conversation</option>
         </select>
+      </div>
+    </div>
+  );
+}
+
+/*
+ * MonthlyRevenueCard — dedicated ₹ numeric input + Save button for
+ * the client's expected monthly revenue. Calls PUT /admin/clients/:id
+ * with { monthlyRevenue } and refreshes local draft on save.
+ *
+ * Modelled on MaxSendCountCard: local draft state, dirty + isValid
+ * guards, disabled when !canEdit or saving. The initial value comes
+ * from the ClientDetail fetched by the parent dialog (monthly_revenue
+ * column) so no extra fetch is needed here.
+ */
+function MonthlyRevenueCard({
+  clientId, initialValue, canEdit,
+}: {
+  clientId: number;
+  initialValue: number | null;
+  canEdit: boolean;
+}) {
+  const toStr = (v: number | null) => (v == null ? '' : String(v));
+  const [draft, setDraft] = useState<string>(toStr(initialValue));
+  const [saving, setSaving] = useState(false);
+  // Ref to the "committed" value so dirty check works even when the
+  // parent re-renders with a new initialValue after an unrelated refetch.
+  const committedRef = useRef<string>(toStr(initialValue));
+  useEffect(() => {
+    const s = toStr(initialValue);
+    setDraft(s);
+    committedRef.current = s;
+  }, [initialValue]);
+
+  const dirty = draft.trim() !== committedRef.current.trim();
+  const parsedNum = Number(draft.trim());
+  const isValid = !draft.trim() || (Number.isFinite(parsedNum) && parsedNum >= 0);
+
+  async function onSave() {
+    if (saving || !dirty || !isValid) return;
+    setSaving(true);
+    try {
+      const monthlyRevenue = draft.trim() ? parsedNum : null;
+      await api.put<{ updated: boolean }>(`/admin/clients/${clientId}`, { monthlyRevenue } as never);
+      committedRef.current = draft.trim();
+      showToast({ variant: 'success', message: 'Monthly revenue updated.' });
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Save failed.' });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="rounded border bg-card px-3 py-2.5 flex flex-col gap-2">
+      <div>
+        <div className="text-sm font-medium">Monthly Revenue</div>
+        <div className="text-xs text-muted-foreground mt-0.5">
+          Expected monthly revenue from this client (₹). Used for reporting and account prioritisation.
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <div className="relative w-36">
+          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground select-none">₹</span>
+          <Input
+            type="number"
+            inputMode="numeric"
+            min={0}
+            step={1}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onWheel={(e) => (e.target as HTMLInputElement).blur()}
+            placeholder="0"
+            className="pl-6 w-full"
+            disabled={!canEdit || saving}
+          />
+        </div>
+        <Button
+          size="sm"
+          onClick={onSave}
+          disabled={!canEdit || saving || !dirty || !isValid}
+          title={!isValid ? 'Enter a non-negative number' : (dirty ? 'Save' : 'No changes')}
+        >
+          {saving ? 'Saving…' : 'Save'}
+        </Button>
       </div>
     </div>
   );

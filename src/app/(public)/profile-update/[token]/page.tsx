@@ -89,6 +89,169 @@ function MemoizedSkillImageLightboxBridgePublic({
 import { showToast, ToastHost } from '@/components/ui/toast';
 import { useDebouncedValue } from '@/lib/hooks';
 
+/* ───────── OTP Gate ───────── */
+/*
+ * Renders an inline "Verify Via WhatsApp OTP" step that sits between the
+ * user clicking a section's Save button and the actual PUT /save call.
+ *
+ * Flow:
+ *   1. User clicks section Save → parent calls setOtpGateOpen(true).
+ *   2. OtpGate shows a "Send OTP" button.
+ *   3. User taps Send OTP → POST /send-otp fired; Gallabox delivers the
+ *      code to the easyfixer's WhatsApp.
+ *   4. User types the 4-digit code → clicks "Verify & Save".
+ *   5. Parent's onVerified(otp) is called with the entered code; the parent
+ *      includes it in the PUT /save body.
+ *   6. If the BE returns 400 (invalid OTP), the error is surfaced here so
+ *      the user can retry without losing their form edits.
+ *
+ * onVerified receives the raw OTP string — the parent converts to Number
+ * before including it in the body.
+ * onCancel closes the gate and returns the user to the form (no data lost).
+ */
+function OtpGate({
+  token,
+  open,
+  sending,          // parent sets true while it is executing the save after OTP
+  onVerified,
+  onCancel,
+  saveError,
+}: {
+  token: string;
+  open: boolean;
+  sending: boolean;
+  onVerified: (otp: string) => void;
+  onCancel: () => void;
+  saveError: string | null;
+}) {
+  const [otpSending, setOtpSending] = React.useState(false);
+  const [otpSent, setOtpSent] = React.useState(false);
+  const [otpValue, setOtpValue] = React.useState('');
+  const [otpError, setOtpError] = React.useState<string | null>(null);
+
+  // Reset when gate is re-opened (e.g. after a failed save).
+  React.useEffect(() => {
+    if (!open) {
+      setOtpSent(false);
+      setOtpValue('');
+      setOtpError(null);
+      setOtpSending(false);
+    }
+  }, [open]);
+
+  if (!open) return null;
+
+  async function handleSendOtp() {
+    setOtpSending(true);
+    setOtpError(null);
+    try {
+      await publicFetch<{ sent: boolean }>(
+        `/public/easyfixer-profile-update/send-otp?token=${encodeURIComponent(token)}`,
+        { method: 'POST' },
+      );
+      setOtpSent(true);
+    } catch (e) {
+      const err = e as { message?: string };
+      setOtpError(err?.message || 'Failed to send OTP. Please try again.');
+    } finally {
+      setOtpSending(false);
+    }
+  }
+
+  function handleVerify() {
+    if (otpValue.length !== 4) {
+      setOtpError('Please enter the 4-digit OTP you received on WhatsApp.');
+      return;
+    }
+    setOtpError(null);
+    onVerified(otpValue);
+  }
+
+  return (
+    <div className="rounded-md border border-sky-200 bg-sky-50 p-4 space-y-3">
+      <div className="flex items-start gap-2">
+        <CheckCircle2 className="h-5 w-5 text-sky-600 shrink-0 mt-0.5" />
+        <div>
+          <p className="text-sm font-semibold text-sky-900">Verify Via WhatsApp OTP</p>
+          <p className="text-xs text-sky-700 mt-0.5">
+            We'll send a 4-digit code to your registered WhatsApp number to confirm this change.
+          </p>
+        </div>
+      </div>
+
+      {!otpSent ? (
+        <Button
+          onClick={handleSendOtp}
+          disabled={otpSending}
+          className="w-full sm:w-auto h-10 bg-sky-600 hover:bg-sky-700 text-white"
+        >
+          {otpSending ? (
+            <><Loader2 className="h-4 w-4 animate-spin mr-2" />Sending OTP…</>
+          ) : (
+            'Send OTP On WhatsApp'
+          )}
+        </Button>
+      ) : (
+        <div className="space-y-2">
+          <p className="text-xs text-sky-700">
+            OTP sent! Enter the 4-digit code you received on WhatsApp.
+          </p>
+          <div className="flex gap-2 items-center">
+            <Input
+              id="otp-input"
+              value={otpValue}
+              onChange={(e) => {
+                const v = e.target.value.replace(/\D/g, '').slice(0, 4);
+                setOtpValue(v);
+                setOtpError(null);
+              }}
+              placeholder="Enter OTP"
+              inputMode="numeric"
+              maxLength={4}
+              className="h-11 sm:h-9 w-36 text-center tracking-widest font-mono text-lg"
+              autoFocus
+            />
+            <Button
+              onClick={handleVerify}
+              disabled={sending || otpValue.length !== 4}
+              className="h-11 sm:h-9 bg-emerald-600 hover:bg-emerald-700 text-white"
+            >
+              {sending ? (
+                <><Loader2 className="h-4 w-4 animate-spin mr-2" />Saving…</>
+              ) : (
+                'Verify & Save'
+              )}
+            </Button>
+          </div>
+          <button
+            type="button"
+            onClick={handleSendOtp}
+            disabled={otpSending}
+            className="text-xs text-sky-600 underline underline-offset-2 hover:text-sky-800 disabled:opacity-50"
+          >
+            Resend OTP
+          </button>
+        </div>
+      )}
+
+      {/* Errors: either OTP gate errors or the parent's save error */}
+      {(otpError || saveError) ? (
+        <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+          {otpError || saveError}
+        </div>
+      ) : null}
+
+      <button
+        type="button"
+        onClick={onCancel}
+        className="text-xs text-slate-500 underline underline-offset-2 hover:text-slate-700"
+      >
+        Cancel
+      </button>
+    </div>
+  );
+}
+
 /* ───────── Types (mirror the BE contract) ───────── */
 
 type HeaderBlock = {
@@ -773,6 +936,8 @@ function SkillsMappingPicker({
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [saved, setSaved] = React.useState(false);
+  // OTP gate state for the Skills Mapping save flow.
+  const [otpGateOpen, setOtpGateOpen] = React.useState(false);
   // Click-to-enlarge lightbox for the 24×24 deep-skill thumbnails.
   const [lightboxUrl, setLightboxUrl] = React.useState<{ url: string; name: string } | null>(null);
 
@@ -811,7 +976,7 @@ function SkillsMappingPicker({
     return { countByCategory: byCatg, countByType: byType, countBySkill: bySkill };
   }, [selected]);
 
-  async function save() {
+  async function save(otp: string) {
     setSaving(true);
     setError(null);
     try {
@@ -824,7 +989,7 @@ function SkillsMappingPicker({
         {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ deep_skill_items: items }),
+          body: JSON.stringify({ deep_skill_items: items, otp: Number(otp) }),
         }
       );
       const merged = next ?? prefill;
@@ -833,12 +998,15 @@ function SkillsMappingPicker({
       setOriginal(fresh);
       setSelected(new Set(fresh));
       setSaved(true);
+      setOtpGateOpen(false);
       onSaved(merged);
       showToast({ variant: 'success', message: 'Skills Mapping Saved' });
     } catch (e) {
       const err = e as { status?: number; message?: string };
       const msg = err?.message || 'Failed to save skills mapping';
       setError(msg);
+      // Keep gate open on OTP error so the user can retry.
+      if (err?.status !== 400) setOtpGateOpen(false);
       showToast({ variant: 'error', message: msg });
     } finally {
       setSaving(false);
@@ -988,21 +1156,33 @@ function SkillsMappingPicker({
         ))}
       </div>
 
-      {error ? (
-        <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>
-      ) : null}
-
       <AnimatedLoadingBar visible={saving} message="Saving Skills Mapping…" tone="sky" />
 
-      <div className="flex justify-end">
-        <Button
-          onClick={save}
-          disabled={!dirty || saving}
-          className="h-11 sm:h-9 w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white"
-        >
-          {saved && !dirty ? 'Saved · Tap To Re-Save' : 'Save Skills Mapping'}
-        </Button>
-      </div>
+      <OtpGate
+        token={token}
+        open={otpGateOpen}
+        sending={saving}
+        onVerified={(otp) => save(otp)}
+        onCancel={() => { setOtpGateOpen(false); setError(null); }}
+        saveError={error}
+      />
+
+      {!otpGateOpen ? (
+        <>
+          {error ? (
+            <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>
+          ) : null}
+          <div className="flex justify-end">
+            <Button
+              onClick={() => { setError(null); setOtpGateOpen(true); }}
+              disabled={!dirty || saving}
+              className="h-11 sm:h-9 w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white"
+            >
+              {saved && !dirty ? 'Saved · Tap To Re-Save' : 'Save Skills Mapping'}
+            </Button>
+          </div>
+        </>
+      ) : null}
 
       <MemoizedSkillImageLightboxBridgePublic lightboxUrl={lightboxUrl} setLightboxUrl={setLightboxUrl} />
     </div>
@@ -1063,6 +1243,8 @@ function PincodePicker({
   const [saving, setSaving] = React.useState(false);
   const [saved, setSaved] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  // OTP gate state for the Service Area save flow.
+  const [otpGateOpen, setOtpGateOpen] = React.useState(false);
 
   // Debounce the input so we don't fire one request per keystroke. 300ms is
   // the project-standard debounce (see useDebouncedValue docblock).
@@ -1174,7 +1356,7 @@ function PincodePicker({
     return false;
   }, [selected, original]);
 
-  async function save() {
+  async function save(otp: string) {
     setSaving(true);
     setError(null);
     try {
@@ -1184,7 +1366,7 @@ function PincodePicker({
         {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ serviceable_pincode_ids: ids }),
+          body: JSON.stringify({ serviceable_pincode_ids: ids, otp: Number(otp) }),
         }
       );
       const merged = next ?? prefill;
@@ -1193,12 +1375,15 @@ function PincodePicker({
       setOriginal(fresh);
       setSelected(new Map(fresh));
       setSaved(true);
+      setOtpGateOpen(false);
       onSaved(merged);
       showToast({ variant: 'success', message: 'Service Area Saved' });
     } catch (e) {
       const err = e as { status?: number; message?: string };
       const msg = err?.message || 'Failed to save service area';
       setError(msg);
+      // Keep gate open on OTP error so the user can retry.
+      if (err?.status !== 400) setOtpGateOpen(false);
       showToast({ variant: 'error', message: msg });
     } finally {
       setSaving(false);
@@ -1311,21 +1496,33 @@ function PincodePicker({
         </div>
       </div>
 
-      {error ? (
-        <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>
-      ) : null}
-
       <AnimatedLoadingBar visible={saving} message="Saving Service Area…" tone="sky" />
 
-      <div className="flex justify-end">
-        <Button
-          onClick={save}
-          disabled={!dirty || saving}
-          className="h-11 sm:h-9 w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white"
-        >
-          {saved && !dirty ? 'Saved · Tap To Re-Save' : 'Save Service Area'}
-        </Button>
-      </div>
+      <OtpGate
+        token={token}
+        open={otpGateOpen}
+        sending={saving}
+        onVerified={(otp) => save(otp)}
+        onCancel={() => { setOtpGateOpen(false); setError(null); }}
+        saveError={error}
+      />
+
+      {!otpGateOpen ? (
+        <>
+          {error ? (
+            <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>
+          ) : null}
+          <div className="flex justify-end">
+            <Button
+              onClick={() => { setError(null); setOtpGateOpen(true); }}
+              disabled={!dirty || saving}
+              className="h-11 sm:h-9 w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white"
+            >
+              {saved && !dirty ? 'Saved · Tap To Re-Save' : 'Save Service Area'}
+            </Button>
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

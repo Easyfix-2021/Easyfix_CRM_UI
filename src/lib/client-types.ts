@@ -66,6 +66,7 @@ export type ClientDetail = ClientRow & Record<string, unknown> & {
   update_date?: string | null;
   max_orders?: number | null;
   travel_distance?: number | null;
+  monthly_revenue?: number | null;
 };
 
 export type ClientContact = {

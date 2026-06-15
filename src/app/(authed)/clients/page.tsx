@@ -26,7 +26,8 @@
  */
 
 import { useMemo, useState } from 'react';
-import { Building2, Search, AlertTriangle, Pencil, Plus, Upload, FileDown } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { Building2, Search, AlertTriangle, Pencil, Plus, Upload } from 'lucide-react';
 import { RowActionsMenu } from '@/components/client/RowActionsMenu';
 type ClientTab = 'overview' | 'contacts' | 'billing' | 'props' | 'services' | 'rate-cards' | 'tech-mapping' | 'verticals' | 'documents';
 import { Card, CardContent } from '@/components/ui/card';
@@ -37,14 +38,12 @@ import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/componen
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { useFetch, useDebouncedValue, invalidateFetch } from '@/lib/hooks';
-import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { formatDate } from '@/lib/utils';
 import { cycleSort, SortHeader, type SortDir } from '@/lib/use-sort';
 import { downloadXlsx } from '@/lib/download-xlsx';
 import { showToast } from '@/components/ui/toast';
-import { api, ApiError } from '@/lib/api';
 import type { ClientRow, ClientDetail, ClientListResponse } from '@/lib/client-types';
 import { ClientFormDialog } from '@/components/client/ClientFormDialog';
 import { ContactsTab } from '@/components/client/ContactsTab';
@@ -56,13 +55,13 @@ import { ServicesTab } from '@/components/client/ServicesTab';
 import { RateCardsTab } from '@/components/client/RateCardsTab';
 import { TechMappingTab } from '@/components/client/TechMappingTab';
 import { COLLECTED_BY_OPTIONS } from '@/lib/client-types';
-import { useRef } from 'react';
 
 type SortKey = keyof ClientRow;
 
 export default function ClientsPage() {
   const { me } = useMe();
   const can = actionFlags(me, ['isClientAddNew', 'isClientEdit']);
+  const router = useRouter();
 
   const [search, setSearch] = useState('');
   const [includeInactive, setIncludeInactive] = useState(false);
@@ -131,7 +130,6 @@ export default function ClientsPage() {
   // the operator to click Edit → tab. 'overview' is the default.
   const [editingTab, setEditingTab] = useState<ClientTab>('overview');
   const [creating, setCreating] = useState(false);
-  const [bulkUploading, setBulkUploading] = useState(false);
   const [downloading, setDownloading] = useState(false);
 
   function openClient(id: number, tab: ClientTab = 'overview') {
@@ -172,8 +170,8 @@ export default function ClientsPage() {
         </div>
         <div className="flex items-center gap-2">
           {can.isClientAddNew && (
-            <Button variant="outline" onClick={() => setBulkUploading(true)}>
-              <Upload className="size-4 mr-1" /> Bulk Upload SPOCs
+            <Button variant="outline" onClick={() => router.push('/clients/bulk-upload')}>
+              <Upload className="size-4 mr-1" /> Bulk Upload
             </Button>
           )}
           <DownloadButton
@@ -315,15 +313,6 @@ export default function ClientsPage() {
           onSaved={(id) => {
             setCreating(false);
             setEditingId(id);
-            invalidateFetch((k) => k.startsWith('/admin/clients'));
-          }}
-        />
-      )}
-
-      {bulkUploading && (
-        <BulkSpocUploadDialog
-          onClose={() => setBulkUploading(false)}
-          onUploaded={() => {
             invalidateFetch((k) => k.startsWith('/admin/clients'));
           }}
         />
@@ -480,132 +469,5 @@ function OverviewPanel({ client }: { client: ClientDetail }) {
         </div>
       ))}
     </div>
-  );
-}
-
-/* ─── Bulk SPOC Assignment Upload Dialog ──────────────────────────── */
-
-type BulkSpocResult = {
-  rowNumber: number;
-  status: 'updated' | 'invalid' | 'skipped' | 'failed';
-  errors?: string[];
-  reason?: string;
-  detail?: { primary?: string; secondary?: string };
-};
-
-function BulkSpocUploadDialog({
-  onClose, onUploaded,
-}: {
-  onClose: () => void;
-  onUploaded: () => void;
-}) {
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [uploading, setUploading] = useState(false);
-  const [result, setResult] = useState<{
-    summary: { total: number; updated: number; invalid: number; skipped: number; failed: number };
-    results: BulkSpocResult[];
-  } | null>(null);
-
-  async function downloadTemplate() {
-    try {
-      await downloadXlsx({
-        url: '/admin/clients/bulk-spoc-template',
-        filename: 'client-bulk-spoc-template.xlsx',
-      });
-    } catch (e) {
-      showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Download failed.' });
-    }
-  }
-
-  async function onUpload() {
-    if (!fileRef.current?.files?.[0]) {
-      showToast({ variant: 'error', message: 'Choose an .xlsx file first.' });
-      return;
-    }
-    setUploading(true);
-    try {
-      const fd = new FormData();
-      fd.append('file', fileRef.current.files[0]);
-      const res = await api.post<typeof result>(`/admin/clients/bulk-upload-spocs`, fd);
-      setResult(res);
-      if (res && res.summary.updated > 0) onUploaded();
-      showToast({ variant: 'success', message: `${res?.summary.updated ?? 0} client SPOC pair(s) updated.` });
-    } catch (e) {
-      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Upload failed.' });
-    } finally { setUploading(false); }
-  }
-
-  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !uploading });
-
-  return (
-    <Dialog open onOpenChange={guardedOpenChange}>
-      <DialogContent className="!max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Bulk Upload Primary/Secondary SPOCs</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-2 pt-1">
-          <div className="text-xs text-muted-foreground">
-            Upload an .xlsx with columns: <b>Client ID</b>, Client Name (for reference),{' '}
-            <b>Primary SPOC User ID</b>, <b>Secondary SPOC User ID</b>. Existing assignments are updated;
-            new ones are created automatically. Primary and Secondary must be different users.
-          </div>
-          <div className="grid grid-cols-12 gap-2 items-end">
-            <div className="col-span-7">
-              <label className="text-xs font-medium">File</label>
-              <Input
-                ref={fileRef}
-                type="file"
-                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-              />
-            </div>
-            <div className="col-span-5 flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={downloadTemplate} className="flex-1">
-                <FileDown className="size-3.5 mr-1" /> Template
-              </Button>
-              <Button onClick={onUpload} disabled={uploading} className="flex-1">
-                <Upload className="size-3.5 mr-1" /> {uploading ? 'Uploading…' : 'Upload'}
-              </Button>
-            </div>
-          </div>
-
-          {result && (
-            <div className="mt-3 rounded border bg-card p-3 space-y-1">
-              <div className="text-sm font-medium">
-                Total {result.summary.total} · Updated {result.summary.updated} ·
-                Invalid {result.summary.invalid} · Skipped {result.summary.skipped} ·
-                Failed {result.summary.failed}
-              </div>
-              <div className="max-h-60 overflow-auto text-xs border rounded">
-                <table className="w-full">
-                  <thead className="bg-muted/40">
-                    <tr>
-                      <th className="text-left px-2 py-1">Row</th>
-                      <th className="text-left px-2 py-1">Status</th>
-                      <th className="text-left px-2 py-1">Details</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y">
-                    {result.results.map((r, i) => (
-                      <tr key={i} className={
-                        r.status === 'updated' ? 'bg-emerald-50/30'
-                        : r.status === 'skipped' ? 'bg-amber-50/30'
-                        : 'bg-red-50/30'
-                      }>
-                        <td className="px-2 py-1 font-mono">{r.rowNumber}</td>
-                        <td className="px-2 py-1">{r.status}</td>
-                        <td className="px-2 py-1">
-                          {r.reason ?? r.errors?.join('; ')
-                            ?? (r.detail ? `primary=${r.detail.primary}, secondary=${r.detail.secondary}` : '')}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
   );
 }
