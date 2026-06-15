@@ -3,7 +3,7 @@ import { useState, type ReactNode } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { Bell, LogOut, Menu, BarChart3, Info, AlertTriangle, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { api, ApiError } from '@/lib/api';
+import { api } from '@/lib/api';
 import { useFetchOnce } from '@/lib/hooks';
 import { useMe, clearMeCache, type ScopeDimension, type Me } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
@@ -170,51 +170,20 @@ export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
     bookNewCall:  hasAction(me, 'isBookNewCall'),
   };
 
-  async function openQuickSight() {
-    // QuickSight migration — preserves the legacy CRM flow:
-    //   1. Mint a short-lived session-bridge JWT on the backend
-    //      (`/admin/quicksight/token`). The JWT carries session_proof +
-    //      user_id and is signed HS256 with QUICKSIGHT_JWT_SECRET. This
-    //      is the cookies-equivalent "logged-in session only" check the
-    //      user asked about — pasting the resulting URL into a different
-    //      browser fails verification because the session_proof was
-    //      minted for the originating session.
-    //   2. Concatenate the JWT to the env-specific QuickSight base URL
-    //      at the path `/EF-QuickSight/openOrders/`.
-    //   3. Open in a new tab so the operator doesn't lose their CRM
-    //      page state.
-    //
-    // Env detection: NEXT_PUBLIC_QA_QUICKSIGHT_URL on UAT/QA;
-    // NEXT_PUBLIC_PROD_QUICKSIGHT_URL on production. We pick based on
-    // build-time NODE_ENV — Next.js sets this to 'production' for
-    // `next build` (Vercel/server bundle) and 'development' locally.
-    // Operators on a UAT deployment built with NODE_ENV=production but
-    // pointing at the UAT host should override by setting
-    // NEXT_PUBLIC_QA_QUICKSIGHT_URL only and leaving the PROD one unset
-    // — the fallback below picks whichever is defined.
-    const base = (process.env.NODE_ENV === 'production'
-      ? process.env.NEXT_PUBLIC_PROD_QUICKSIGHT_URL
-      : process.env.NEXT_PUBLIC_QA_QUICKSIGHT_URL)
-      || process.env.NEXT_PUBLIC_PROD_QUICKSIGHT_URL
-      || process.env.NEXT_PUBLIC_QA_QUICKSIGHT_URL;
-    if (!base) {
-      router.push('/coming-soon?title=QuickSight');
-      return;
-    }
-    try {
-      const r = await api.get<{ token: string }>('/admin/quicksight/token');
-      const url = `${base.replace(/\/+$/, '')}/EF-QuickSight/openOrders/${r.token}`;
-      window.open(url, '_blank', 'noopener,noreferrer');
-    } catch (e) {
-      // Surface the backend's message (e.g. "QuickSight is not
-      // configured" or "You do not have QuickSight access") so the
-      // operator gets a meaningful failure, not a silent no-op.
-      const msg = e instanceof ApiError ? e.message : 'Could not open QuickSight';
-      // Falling back to coming-soon with the failure message so the
-      // user always lands somewhere informative rather than the button
-      // dead-ending. Coming-soon page reads `?title=` for context.
-      router.push(`/coming-soon?title=${encodeURIComponent(`QuickSight unavailable: ${msg}`)}`);
-    }
+  function openQuickSight() {
+    // QuickSight is NOT a sidebar menu — it's this dashboard-header button.
+    // Reports are now NATIVE CRM pages (2026-06-14 rebuild), so the button
+    // simply navigates in-app to the QuickSight landing, which shows cards
+    // for the reports the user's role can access (gated per-report via the
+    // isQuickSight<Report>View action keys; the button itself is gated on
+    // the family key ef-QuickSight — see the `quickSight` flag below).
+    // Because the landing + report pages live under the authed route group,
+    // a shared report link only resolves if the visitor is logged into the
+    // CRM in that browser — which is exactly the access rule we want, with
+    // no JWT session-bridge or cross-subdomain cookie. The legacy
+    // /admin/quicksight/token mint + the external Angular app are now
+    // vestigial (decommission once parity is confirmed).
+    router.push('/quicksight');
   }
 
   async function logout() {

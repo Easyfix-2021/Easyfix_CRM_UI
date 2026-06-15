@@ -85,6 +85,11 @@ const PARENT_META: Record<string, { icon: LucideIcon }> = {
   'User':              { icon: User },
   'Settings':          { icon: Settings },
   'Report':            { icon: BarChart3 },
+  // NOTE: QuickSight is intentionally NOT a sidebar menu. It is the
+  // dashboard-header button (Navbar.openQuickSight) → /quicksight landing,
+  // which shows cards for the reports the user can access. No PARENT_META
+  // entry; the seed migration does NOT add it to any role's menu_ids, so
+  // it never renders here.
   'Tracking':          { icon: MapPin },
   'Easyfixer Advance': { icon: Wallet },
 };

@@ -12,7 +12,7 @@
  * apps' fetch behavior consistent.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError } from './api';
 
 /*
@@ -173,4 +173,105 @@ export function useDebouncedValue<T>(value: T, delayMs = 300): T {
     return () => clearTimeout(t);
   }, [value, delayMs]);
   return debounced;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * usePostFetch — POST sibling of the GET-only useFetch.
+ *
+ * Report pages POST a Joi-validated filter body to /api/admin/quicksight/*
+ * endpoints; useFetch can only GET. This hook carries the same guarantees:
+ *   - module-level in-flight dedupe (Strict-Mode double-mount → one request);
+ *   - stale-response cancellation guard (a slow earlier request can't clobber
+ *     newer state when url/body change mid-flight);
+ *   - loading / error / data + refetch, plus `status` so callers can detect a
+ *     403 the same way they read `error` (matches the error-shape convention
+ *     of useFetch — ApiError.message → error, ApiError.status → status).
+ *
+ * NOTE: unlike useFetch there is NO result-cache TTL here. POST bodies are
+ * filter queries; re-firing on a changed body must always hit the server.
+ * Dedupe is purely in-flight (kills the dev double-fire) and self-evicts.
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/* JSON-serializable request body. Loose by design — the BE Joi schema is the
+ * real contract; the hook only needs it to be stable-stringifiable for keying.
+ */
+export type PostBody = Record<string, unknown>;
+
+/* In-flight POSTs keyed by `${url}\n${serializedBody}`. Separate from the GET
+ * caches so a GET and POST to the same path never collide on a bare path key.
+ */
+const inflightPost = new Map<string, Promise<unknown>>();
+
+function dedupedPost<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
+  const existing = inflightPost.get(key);
+  if (existing) return existing as Promise<T>;
+  const p: Promise<T> = fetcher().finally(() => {
+    if (inflightPost.get(key) === p) inflightPost.delete(key);
+  });
+  inflightPost.set(key, p);
+  return p;
+}
+
+type PostFetchState<T> = FetchState<T> & { status: number | null };
+
+/*
+ * usePostFetch — fetch via api.post, re-firing whenever `url` or the serialized
+ * `body` changes. Pass `url: null` (or `enabled: false`) to defer the call.
+ *
+ *   const { data, loading, error, status } = usePostFetch<SummaryRow[]>(
+ *     canView ? '/admin/quicksight/open-orders/summary' : null,
+ *     appliedFilters,
+ *     { enabled: canView },
+ *   );
+ *   const is403 = status === 403;
+ */
+export function usePostFetch<T>(
+  url: string | null,
+  body: PostBody,
+  options: { enabled?: boolean } = {},
+): PostFetchState<T> & { refetch: () => void } {
+  const enabled = options.enabled !== false && url != null;
+
+  // Serialize the body once per render so the effect re-runs on a value change
+  // (not on a new object identity). This is the POST analogue of useFetch's
+  // string key — url + serialized body together identify the request.
+  const serializedBody = useMemo(() => JSON.stringify(body ?? {}), [body]);
+  const key = url == null ? null : `${url}\n${serializedBody}`;
+
+  const [state, setState] = useState<PostFetchState<T>>({
+    data: null, loading: enabled, error: null, status: null,
+  });
+  // Bump to force a refetch (drops the in-flight entry then re-runs the effect).
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    if (!enabled || url == null || key == null) return;
+    let cancelled = false;
+    setState((s) => ({ ...s, loading: true, error: null, status: null }));
+    dedupedPost<T>(key, () => api.post<T>(url, body))
+      .then((data) => {
+        if (!cancelled) setState({ data, loading: false, error: null, status: 200 });
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setState({
+          data: null,
+          loading: false,
+          error: e instanceof ApiError ? e.message : 'Failed to load',
+          status: e instanceof ApiError ? e.status : 0,
+        });
+      });
+    return () => { cancelled = true; };
+    // `body` is captured through `key` (serialized); re-running on `key`/`tick`
+    // covers every value change without depending on object identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, enabled, tick]);
+
+  return {
+    ...state,
+    refetch: () => {
+      if (key) inflightPost.delete(key);
+      setTick((t) => t + 1);
+    },
+  };
 }

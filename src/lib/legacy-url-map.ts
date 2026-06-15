@@ -121,6 +121,54 @@ export const URL_MAP: Record<string, string> = {
   'tracking':               '/tracking',
   'jobTracking':            '/tracking?focus=jobs',
   'clientTracking':         '/tracking?focus=clients',
+  /*
+   * QuickSight Reports (native rebuild) — replaces the legacy Angular
+   * EF-QuickSight app + its URL-path-JWT session bridge. Lands on the
+   * /quicksight card-grid landing page; each report routes to its native
+   * /quicksight/<urlBase> page (urlBase values are canonical — see
+   * /tmp/qs/_registry.json). Per-report sidebar visibility + the family
+   * `ef-QuickSight` gate are driven by the menu/role seed migration; this
+   * map only resolves the tbl_menu.url slug → Next.js route.
+   *
+   * Two slug families are listed:
+   *   (1) canonical urlBase slugs — what the seed migration stores in
+   *       tbl_menu.url for the DB-driven sidebar children. These cannot
+   *       collide with any existing menu slug.
+   *   (2) legacy EF-QuickSight slugs (openOrders / performance / …) —
+   *       aliases so in-flight bookmarks / direct navigation of the old
+   *       Angular URLs still resolve to the native pages.
+   *
+   * NOTE on the `vertical` legacy slug: it is intentionally NOT remapped
+   * here. The legacy EF-QuickSight Vertical-Orders report and the Settings
+   * → Verticals master-data page both used `vertical` in their separate
+   * apps; in this unified DB-driven sidebar `vertical` already resolves to
+   * /settings/verticals (above) and must keep doing so. The native Vertical
+   * Orders report is reachable via its canonical `vertical-orders` slug
+   * (the seed migration uses that for the QuickSight child menu).
+   */
+  'quicksight':             '/quicksight',
+  // (1) canonical urlBase slugs — DB-driven sidebar children.
+  'open-orders':            '/quicksight/open-orders',
+  'client-performance':     '/quicksight/client-performance',
+  'vertical-orders':        '/quicksight/vertical-orders',
+  'priority-jobs':          '/quicksight/priority-jobs',
+  'material-report':        '/quicksight/material-report',
+  'city-performance':       '/quicksight/city-performance',
+  'technician-performance': '/quicksight/technician-performance',
+  'supply-gap':             '/quicksight/supply-gap',
+  'employee-productivity':  '/quicksight/employee-productivity',
+  'admin-dashboard':        '/quicksight/admin-dashboard',
+  // (2) legacy EF-QuickSight slug aliases (bookmarks / old Angular URLs).
+  // `vertical` deliberately omitted — see NOTE above (kept as Settings → Verticals).
+  'openOrders':             '/quicksight/open-orders',
+  'performance':            '/quicksight/client-performance',
+  'priorityJobs':           '/quicksight/priority-jobs',
+  'materiallist':           '/quicksight/material-report',
+  'cityperformance':        '/quicksight/city-performance',
+  'txperformance':          '/quicksight/technician-performance',
+  'opencity':               '/quicksight/supply-gap',
+  'productivity':           '/quicksight/employee-productivity',
+  'adminDashboard':         '/quicksight/admin-dashboard',
   'adminAction':            '/admin-actions',
   /*
    * `generateClientInvoice` (2026-06-08): the sidebar entry now lands
