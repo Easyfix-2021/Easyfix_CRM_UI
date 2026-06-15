@@ -123,28 +123,30 @@ type SearchResponse = {
   capped?: boolean;
 };
 
-/* ── ISO ⇄ datetime-local helpers (Asia/Kolkata display). ───────────────
- * <input type="datetime-local"> wants `YYYY-MM-DDTHH:mm`. We render the
- * BE ISO in IST so the picker shows the same wall-clock the rest of the
- * CRM displays via formatDate(), then send back an ISO string on assign. */
-function isoToLocalInput(iso: string | null | undefined): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return '';
-  // Project-wide display TZ is Asia/Kolkata (UTC+5:30). Shift the epoch by
-  // the IST offset then read UTC parts so the picker matches formatDate().
-  const ist = new Date(d.getTime() + 5.5 * 60 * 60 * 1000);
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${ist.getUTCFullYear()}-${p(ist.getUTCMonth() + 1)}-${p(ist.getUTCDate())}T${p(ist.getUTCHours())}:${p(ist.getUTCMinutes())}`;
+/* ── IST wall-clock ⇄ datetime-local helpers. ───────────────────────────
+ * The BE delivers requested_date_time as an IST WALL-CLOCK string
+ * ('YYYY-MM-DD HH:MM:SS' — db.js uses dateStrings:true) and EXPECTS an IST
+ * wall-clock string back: the jobDate query param + assign's
+ * requestedDateTime are validated against
+ *   /^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?$/
+ * so an ISO 'Z'/millisecond form (e.g. 2026-06-09T08:30:00.000Z) is
+ * REJECTED with a 400. We therefore NEVER go through a UTC Date round-trip
+ * here — we only reshape the wall-clock STRING between the picker's
+ * 'YYYY-MM-DDTHH:mm' and the BE's 'YYYY-MM-DD HH:mm:ss'. This is also
+ * timezone-independent (the old Date-based version only worked when the
+ * browser TZ happened to be IST). */
+function isoToLocalInput(v: string | null | undefined): string {
+  if (!v) return '';
+  // Accept both 'YYYY-MM-DD HH:MM[:SS]' and ISO 'YYYY-MM-DDTHH:mm[...]'.
+  const m = String(v).match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})/);
+  return m ? `${m[1]}T${m[2]}` : '';
 }
-function localInputToIso(local: string): string {
-  // Interpret the picker value as IST wall-clock, convert back to a UTC ISO.
+function localInputToWallClock(local: string): string {
+  // Picker value is 'YYYY-MM-DDTHH:mm' IST wall-clock. Send it verbatim as
+  // 'YYYY-MM-DD HH:mm:ss' — NO timezone conversion, NO 'Z'.
   if (!local) return '';
-  const [datePart, timePart] = local.split('T');
-  const [y, mo, da] = datePart.split('-').map(Number);
-  const [hh, mm] = (timePart || '00:00').split(':').map(Number);
-  const utcMs = Date.UTC(y, mo - 1, da, hh, mm) - 5.5 * 60 * 60 * 1000;
-  return new Date(utcMs).toISOString();
+  const withSecs = local.length === 16 ? `${local}:00` : local;
+  return withSecs.replace('T', ' ');
 }
 
 export function ScheduleAssignModal({
@@ -174,12 +176,18 @@ export function ScheduleAssignModal({
   const [err, setErr] = useState<string | null>(null);
   // Serviceable-pincodes "view all" modal target (the clicked candidate).
   const [pincodeModalFor, setPincodeModalFor] = useState<ScheduleCandidate | null>(null);
+  // Last successfully-loaded job. The candidates endpoint returns BOTH the
+  // job and the ranked list, so if a re-fetch fails (e.g. a transient error
+  // while the operator edits the schedule) we keep showing Job Details +
+  // the search/assign flow instead of blanking the whole modal.
+  const [retainedJob, setRetainedJob] = useState<ScheduleJob | null>(null);
 
   // Reset transient state whenever the modal closes / the job changes.
   useEffect(() => {
     if (!open) {
       setSeeded(false); setJobDateLocal(''); setTimeSlot('');
       setSearch(''); setAssigning(null); setErr(null); setPincodeModalFor(null);
+      setRetainedJob(null);
     }
   }, [open, jobId]);
 
@@ -187,14 +195,14 @@ export function ScheduleAssignModal({
   // operator's chosen date/slot so the BE recomputes attendance /
   // concurrent / same-slot against the proposed schedule (falls back to
   // the job's stored values BE-side when omitted, but we send explicitly).
-  const proposedIso = jobDateLocal ? localInputToIso(jobDateLocal) : '';
+  const proposedWallClock = jobDateLocal ? localInputToWallClock(jobDateLocal) : '';
   const scheduleQs = useMemo(() => {
     const p = new URLSearchParams();
-    if (proposedIso) p.set('jobDate', proposedIso);
+    if (proposedWallClock) p.set('jobDate', proposedWallClock);
     if (timeSlot) p.set('timeSlot', timeSlot);
     const s = p.toString();
     return s ? `&${s}` : '';
-  }, [proposedIso, timeSlot]);
+  }, [proposedWallClock, timeSlot]);
 
   // (b) TOP 10 — keyed on jobId + proposed schedule so editing the date
   // re-fetches. `enabled` waits until the modal is open AND the schedule
@@ -212,7 +220,12 @@ export function ScheduleAssignModal({
     setSeeded(true);
   }, [seeded, top.data]);
 
-  const job = top.data?.job ?? null;
+  // Retain the last good job so Job Details survive a failed candidate
+  // re-fetch (resilience — the flow must not break on a Top-10 error).
+  useEffect(() => {
+    if (top.data?.job) setRetainedJob(top.data.job);
+  }, [top.data]);
+  const job = top.data?.job ?? retainedJob;
 
   // (c) SEARCH — debounced via the box; keyed so it re-fires on schedule
   // edits too (computed columns must match the proposed schedule).
@@ -232,8 +245,8 @@ export function ScheduleAssignModal({
 
   async function assign(c: ScheduleCandidate) {
     if (!jobId) return;
-    const scheduleNote = proposedIso
-      ? `\n\nSchedule: ${formatDate(proposedIso)}${timeSlot ? ` · ${timeSlot}` : ''}.`
+    const scheduleNote = proposedWallClock
+      ? `\n\nSchedule: ${formatDate(proposedWallClock)}${timeSlot ? ` · ${timeSlot}` : ''}.`
       : '';
     const ok = await confirmAction({
       title: `Assign Job #${jobId} to ${c.efr_name}?`,
@@ -256,7 +269,7 @@ export function ScheduleAssignModal({
       await api.patch(`/admin/jobs/${jobId}/assign`, {
         easyfixerId: c.efr_id,
         // Atomic schedule edit — BE updates date/time in the same txn.
-        ...(proposedIso ? { requestedDateTime: proposedIso } : {}),
+        ...(proposedWallClock ? { requestedDateTime: proposedWallClock } : {}),
         ...(timeSlot ? { timeSlot } : {}),
       });
       // Bust the candidates cache so reopening reflects the new state.
@@ -403,17 +416,36 @@ export function ScheduleAssignModal({
               </p>
             )}
 
-            {/* ───────── (b)/(c) shared technician table ───────── */}
-            <CandidateTable
-              rows={rows}
-              loading={listLoading}
-              error={listError}
-              showingSearch={showingSearch}
-              canCommit={canCommit}
-              assigning={assigning}
-              onAssign={assign}
-              onOpenPincodes={setPincodeModalFor}
-            />
+            {/* (b)/(c) Technician list. Error + empty states render as a
+                MODAL-WIDTH centered message — NOT inside the wide, horizontally
+                scrolling table, where a colSpan-centered cell lands off to the
+                right rather than at the modal's centre. The Job Details panel
+                and the search box above stay usable regardless, so a Top-10
+                failure never blocks searching + assigning a technician. */}
+            {!listLoading && listError ? (
+              <div className="py-12 text-center text-sm text-red-700">
+                {showingSearch
+                  ? 'Something Went Wrong!! Search Failed'
+                  : 'Something Went Wrong!! Top Technicians Not Available'}
+              </div>
+            ) : !listLoading && rows.length === 0 ? (
+              <div className="py-12 text-center text-sm text-muted-foreground">
+                {showingSearch
+                  ? 'No Technicians Match Your Search.'
+                  : 'No Technicians Available For This Job.'}
+              </div>
+            ) : (
+              <CandidateTable
+                rows={rows}
+                loading={listLoading}
+                error={null}
+                showingSearch={showingSearch}
+                canCommit={canCommit}
+                assigning={assigning}
+                onAssign={assign}
+                onOpenPincodes={setPincodeModalFor}
+              />
+            )}
           </section>
         </div>
 

@@ -75,6 +75,9 @@ type JobRow = {
   fk_easyfixter_id: number | null; easyfixer_name: string | null;
   job_owner: number | null; owner_name: string | null;
   fk_address_id: number; city_name: string | null;
+  // service_category surfaced on the LIST projection for the
+  // Pending-for-Scheduling custom column set (BE list now returns it).
+  service_category?: string | null;
   // service_count surfaced on the LIST projection — counts only
   // job_service_status = 1 so soft-deleted services don't mask the
   // "Booked with no active services" anomaly. Same usage pattern as
@@ -325,6 +328,22 @@ export default function MyOrdersPage() {
   // sub-menu is a standalone status page, so the tab name IS the page title.
   const activeTab = TABS.find((t) => t.value === tab);
 
+  // Pending-for-Scheduling tab (status=0, unassigned) gets a DISTINCT
+  // column set + a stripped-down action menu (Schedule & Assign only —
+  // no generic View; the modal already shows full job detail). All other
+  // tabs keep the shared table below unchanged.
+  const isPendingScheduling = tab === 'pending-scheduling';
+
+  // Whole days between a ticket-created timestamp and now, e.g. "12d".
+  // Null/invalid → '—'. Negative clamps to 0d (future-dated guard).
+  function jobAgeLabel(d: string | null | undefined): string {
+    if (!d) return '—';
+    const t = new Date(d).getTime();
+    if (Number.isNaN(t)) return '—';
+    const days = Math.floor((Date.now() - t) / 86_400_000);
+    return `${days < 0 ? 0 : days}d`;
+  }
+
   return (
     <div className="space-y-5">
       {errorMsg && (
@@ -398,6 +417,88 @@ export default function MyOrdersPage() {
               // appears immediately after the popup closes successfully.
               onMagicLinkSent={() => load(false, true)}
             />
+          ) : isPendingScheduling ? (
+          /*
+            * Pending-for-Scheduling custom layout. Distinct columns vs the
+            * shared table: surfaces ticket age, service category, appointment
+            * date + slot, and the open reason — the signals ops need to
+            * triage the scheduling queue. Sole row action is Schedule &
+            * Assign (no generic View — the modal shows full job detail).
+            */
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th className="stick-col-head stick-left">Job ID</th>
+                <th>Ticket Created Date / Job Age</th>
+                <th>Client</th>
+                <th>City</th>
+                <th>Service Category</th>
+                <th>Appointment Date &amp; Time</th>
+                <th>Customer</th>
+                <th>Current Status</th>
+                <th>Open Reason / Remarks</th>
+                <th className="stick-col-head stick-right text-right">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading && Array.from({ length: 5 }).map((_, i) => (
+                <tr key={`sk-${i}`}>
+                  {Array.from({ length: 10 }).map((_, c) => (
+                    <td key={c}><div className="h-3 w-24 rounded bg-muted animate-pulse" /></td>
+                  ))}
+                </tr>
+              ))}
+              {!loading && sorted.length === 0 && (
+                <tr><td colSpan={10} className="text-center text-muted-foreground py-8">
+                  No orders in this bucket{!isAdmin ? ' owned by you' : ''}.
+                </td></tr>
+              )}
+              {!loading && sorted.map((j) => (
+                <tr key={j.job_id} className="hover:bg-muted/40">
+                  <td className="stick-col stick-left font-medium">#{j.job_id}</td>
+                  <td className="whitespace-nowrap">
+                    <div className="text-xs">{formatDate(j.ticket_created_date_time)}</div>
+                    <div className="text-[10px] text-muted-foreground">{jobAgeLabel(j.ticket_created_date_time)}</div>
+                  </td>
+                  <td>{j.client_name ?? '—'}</td>
+                  <td>{j.city_name ?? '—'}</td>
+                  <td>{j.service_category ?? '—'}</td>
+                  <td className="whitespace-nowrap">
+                    <div className="text-xs">{j.requested_date_time ? formatDate(j.requested_date_time) : '—'}</div>
+                    {j.time_slot && <div className="text-[10px] text-muted-foreground">· {j.time_slot}</div>}
+                  </td>
+                  <td>
+                    <div>{j.customer_name ?? '—'}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {/* Click-to-call + masking handled by CallableMobile. */}
+                      <CallableMobile jobId={j.job_id} mobile={j.customer_mob_no} />
+                    </div>
+                  </td>
+                  <td>
+                    <StatusChip tone={statusTone(j.job_status)}>
+                      {statusLabel(j.job_status, { assigned: j.fk_easyfixter_id != null })}
+                    </StatusChip>
+                  </td>
+                  <td className="max-w-[16rem] truncate" title={j.remarks ?? undefined}>{j.remarks || '—'}</td>
+                  <td className="stick-col stick-right text-right whitespace-nowrap">
+                    <div className="inline-flex items-center gap-1 justify-end">
+                      {/* Sole action: Schedule & Assign (no View — modal shows detail). */}
+                      {canJob.isJobAssign && (
+                        <button
+                          type="button"
+                          onClick={() => openSchedule(j.job_id)}
+                          className="inline-flex items-center gap-1 text-indigo-700 text-xs hover:underline"
+                          title="Schedule & Assign — set the date/slot and pick a technician"
+                        >
+                          <CalendarClock className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
           ) : (
           <table className="data-table">
             <thead>
@@ -470,14 +571,24 @@ export default function MyOrdersPage() {
                   <td className="stick-col stick-right text-right whitespace-nowrap">
                     {/* Row actions follow legacy Manage Jobs + our /jobs page convention */}
                     <div className="inline-flex items-center gap-1 justify-end">
-                      <button
-                        type="button"
-                        onClick={() => openView(j.job_id)}
-                        className="inline-flex items-center gap-1 text-primary text-xs hover:underline"
-                        title="View details"
-                      >
-                        <Eye className="h-3.5 w-3.5" />
-                      </button>
+                      {/*
+                        * Generic View (Eye) shows on every tab EXCEPT
+                        * Pending-for-Scheduling, whose Schedule & Assign
+                        * modal already surfaces full job detail. (That tab
+                        * also renders its own custom table above, so this
+                        * branch is unreached there — the guard documents the
+                        * intent and is defensive against future refactors.)
+                        */}
+                      {!isPendingScheduling && (
+                        <button
+                          type="button"
+                          onClick={() => openView(j.job_id)}
+                          className="inline-flex items-center gap-1 text-primary text-xs hover:underline"
+                          title="View details"
+                        >
+                          <Eye className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                       {/* Outbound call now lives on the customer mobile cell
                           (see Mobile column above) — clicking the number
                           dials it. */}
