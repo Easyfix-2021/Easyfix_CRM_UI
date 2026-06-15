@@ -1,16 +1,20 @@
 'use client';
 
 /*
- * Zone detail — pincode-mapping editor (spec-aligned).
+ * Zone detail — pincode-mapping editor (many-to-many).
  *
- * Each zone belongs to one city. The editor lists pincodes in that city
- * (from tbl_pincode) that are either currently in this zone or unzoned,
- * and lets the operator tick which ones belong here. Pincodes already in
- * a different zone are not selectable from here — see backend
- * services/zone.service.js::listAssignablePincodes for the rule.
+ * Each zone belongs to one city. The editor lists ALL assignable pincodes
+ * in that city (from tbl_pincode) and lets the operator tick which ones
+ * belong to THIS zone. Membership is many-to-many via
+ * tbl_zone_pincode_mapping — a pincode may belong to several zones at once,
+ * so every row carries an `in_this_zone` flag reflecting whether it is
+ * currently mapped to the zone being edited. See backend
+ * services/zone.service.js::listAssignablePincodes for the source query.
  *
  * Save calls PATCH /admin/zones/:id/pincodes with the WHOLE pincode set
- * (wipe + re-insert pattern, matches the multi-select UX).
+ * this zone should own. It only affects THIS zone's mappings — other zones'
+ * membership of the same pincodes is untouched (wipe + re-insert scoped to
+ * this zone, matching the multi-select UX).
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -21,6 +25,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { api, ApiError } from '@/lib/api';
+import { useFetch } from '@/lib/hooks';
 
 type ZoneDetail = {
   zone_id: number;
@@ -44,16 +49,25 @@ type Assignable = {
   pincode: string;
   location: string | null;
   district: string | null;
-  zone_id: number | null;
+  in_this_zone: boolean;
 };
 
 export default function ManageZoneDetail() {
   const router = useRouter();
   const params = useParams<{ zoneId: string }>();
   const zoneId = Number(params.zoneId);
+  const validZone = Number.isFinite(zoneId);
 
-  const [zone, setZone] = useState<ZoneDetail | null>(null);
-  const [pool, setPool] = useState<Assignable[]>([]);
+  const {
+    data: zone,
+    error: zoneErr,
+  } = useFetch<ZoneDetail>(validZone ? `/admin/zones/${zoneId}` : null);
+  const {
+    data: pool,
+    error: poolErr,
+    refetch: refetchPool,
+  } = useFetch<Assignable[]>(validZone ? `/admin/zones/${zoneId}/assignable-pincodes` : null);
+
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [filter, setFilter] = useState('');
   const [busy, setBusy] = useState(false);
@@ -61,25 +75,19 @@ export default function ManageZoneDetail() {
   const [success, setSuccess] = useState<string | null>(null);
   const [rejected, setRejected] = useState<Array<{ pincode_id: number; pincode?: string; reason: string }>>([]);
 
-  async function load() {
-    try {
-      const [z, list] = await Promise.all([
-        api.get<ZoneDetail>(`/admin/zones/${zoneId}`),
-        api.get<Assignable[]>(`/admin/zones/${zoneId}/assignable-pincodes`),
-      ]);
-      setZone(z);
-      setPool(list);
-      setPicked(new Set(z.pincodes.map((p) => p.pincode_id)));
-    } catch (e) {
-      setErr(e instanceof ApiError ? e.message : 'Failed to load zone');
-    }
-  }
-  useEffect(() => { if (Number.isFinite(zoneId)) load(); /* eslint-disable-next-line */ }, [zoneId]);
+  // Seed the editable selection from the membership flag whenever the pool
+  // (re)loads. `in_this_zone` is the source of truth for current membership.
+  useEffect(() => {
+    if (pool) setPicked(new Set(pool.filter((p) => p.in_this_zone).map((p) => p.pincode_id)));
+  }, [pool]);
+
+  const loadErr = zoneErr ?? poolErr;
 
   const filteredPool = useMemo(() => {
+    const list = pool ?? [];
     const q = filter.trim().toLowerCase();
-    if (!q) return pool;
-    return pool.filter((p) =>
+    if (!q) return list;
+    return list.filter((p) =>
       p.pincode.includes(q) ||
       (p.location ?? '').toLowerCase().includes(q) ||
       (p.district ?? '').toLowerCase().includes(q)
@@ -102,30 +110,30 @@ export default function ManageZoneDetail() {
       const updated = await api.patch<SaveResp>(`/admin/zones/${zoneId}/pincodes`, {
         pincode_ids: [...picked],
       });
-      setZone(updated);
-      setPicked(new Set(updated.pincodes.map((p) => p.pincode_id)));
       setRejected(updated.rejected ?? []);
       const okCount = updated.pincodes.length;
       const rejCount = (updated.rejected ?? []).length;
       setSuccess(
-        `Saved. ${okCount} pincode${okCount === 1 ? '' : 's'} mapped to this zone.` +
-        (rejCount > 0 ? ` ${rejCount} row${rejCount === 1 ? '' : 's'} rejected — see below.` : '')
+        `Saved. ${okCount} Pincode${okCount === 1 ? '' : 's'} Mapped To This Zone.` +
+        (rejCount > 0 ? ` ${rejCount} Row${rejCount === 1 ? '' : 's'} Rejected — See Below.` : '')
       );
-      const fresh = await api.get<Assignable[]>(`/admin/zones/${zoneId}/assignable-pincodes`);
-      setPool(fresh);
+      // Refetch the assignable list; the effect above re-seeds `picked`
+      // from the fresh `in_this_zone` flags.
+      refetchPool();
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : 'Save failed');
     } finally { setBusy(false); }
   }
 
-  if (!Number.isFinite(zoneId)) return <div className="p-4 text-sm text-destructive">Invalid zone id</div>;
+  if (!validZone) return <div className="p-4 text-sm text-destructive">Invalid Zone Id</div>;
+  if (loadErr) return <div className="p-4 text-sm text-red-600">{loadErr}</div>;
   if (!zone) return <div className="p-4 text-sm text-muted-foreground">Loading…</div>;
 
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2">
         <Link href="/settings/zones" className="text-sm text-muted-foreground hover:underline inline-flex items-center">
-          <ChevronLeft className="h-4 w-4" /> Back to zones
+          <ChevronLeft className="h-4 w-4" /> Back To Zones
         </Link>
       </div>
 
@@ -134,7 +142,7 @@ export default function ManageZoneDetail() {
           <h1 className="text-2xl font-semibold">{zone.zone_name}</h1>
           <div className="text-sm text-muted-foreground mt-0.5">
             <Building2 className="inline h-4 w-4 mr-1 text-sky-700" />
-            {zone.city_name ?? 'No city'} · ID {zone.zone_id}
+            {zone.city_name ?? 'No City'} · ID {zone.zone_id}
             {zone.zone_status
               ? <span className="ml-3 text-emerald-700 text-xs">● Active</span>
               : <span className="ml-3 text-muted-foreground text-xs">○ Inactive</span>}
@@ -142,13 +150,13 @@ export default function ManageZoneDetail() {
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={() => router.push('/settings/zones')}>Cancel</Button>
-          <Button onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save mapping'}</Button>
+          <Button onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save Mapping'}</Button>
         </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <SummaryCard icon={<MapPin className="h-4 w-4 text-violet-700" />} label="Pincodes in zone" value={picked.size} />
-        <SummaryCard icon={<MapPin className="h-4 w-4 text-amber-600" />}  label="Available to pick" value={pool.filter((p) => !picked.has(p.pincode_id)).length} />
+        <SummaryCard icon={<MapPin className="h-4 w-4 text-violet-700" />} label="Pincodes In Zone" value={picked.size} />
+        <SummaryCard icon={<MapPin className="h-4 w-4 text-amber-600" />}  label="Not In This Zone" value={(pool ?? []).filter((p) => !picked.has(p.pincode_id)).length} />
         <SummaryCard icon={<Building2 className="h-4 w-4 text-sky-700" />} label="Technicians"      value={zone.technician_count} />
       </div>
 
@@ -158,7 +166,7 @@ export default function ManageZoneDetail() {
       {rejected.length > 0 && (
         <Card>
           <CardContent className="p-3 text-sm space-y-1">
-            <div className="font-medium text-amber-700">Rejected rows ({rejected.length})</div>
+            <div className="font-medium text-amber-700">Rejected Rows ({rejected.length})</div>
             <ul className="list-disc pl-5 text-xs text-muted-foreground">
               {rejected.slice(0, 20).map((r, i) => (
                 <li key={i}>
@@ -174,15 +182,15 @@ export default function ManageZoneDetail() {
         <CardContent className="p-3 space-y-3">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div className="text-sm">
-              <strong>Pincodes in {zone.city_name ?? 'this city'}</strong>
+              <strong>Pincodes In {zone.city_name ?? 'This City'}</strong>
               <span className="text-xs text-muted-foreground ml-2">
-                Already in this zone (checked) and unzoned ones in the same city
+                Tick The Pincodes That Belong To This Zone — A Pincode May Also Belong To Other Zones
               </span>
             </div>
             <div className="relative w-72">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
-                placeholder="Filter by pincode, location, district…"
+                placeholder="Filter By Pincode, Location, District…"
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
                 className="pl-9"
@@ -190,9 +198,9 @@ export default function ManageZoneDetail() {
             </div>
           </div>
 
-          {pool.length === 0 ? (
+          {(pool ?? []).length === 0 ? (
             <div className="text-sm text-muted-foreground p-4 text-center">
-              No pincodes available for this zone&apos;s city. Add pincodes via Settings → Manage Pincodes first.
+              No Pincodes Available For This Zone&apos;s City. Add Pincodes Via Settings → Manage Pincodes First.
             </div>
           ) : (
             <div className="border rounded max-h-[28rem] overflow-auto">
@@ -203,13 +211,12 @@ export default function ManageZoneDetail() {
                     <th className="!text-left">Pincode</th>
                     <th className="!text-left">Location</th>
                     <th className="!text-left">District</th>
-                    <th className="!text-center">Currently</th>
+                    <th className="!text-center">In This Zone</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredPool.map((p) => {
                     const checked = picked.has(p.pincode_id);
-                    const inThisZone = p.zone_id === zoneId;
                     return (
                       <tr key={p.pincode_id} className="hover:bg-muted/40 cursor-pointer" onClick={() => toggle(p.pincode_id)}>
                         <td className="!text-center">
@@ -224,9 +231,9 @@ export default function ManageZoneDetail() {
                         <td className="!text-left">{p.location ?? <span className="text-muted-foreground">—</span>}</td>
                         <td className="!text-left">{p.district ?? <span className="text-muted-foreground">—</span>}</td>
                         <td className="!text-center text-xs">
-                          {inThisZone
-                            ? <span className="text-emerald-700">In this zone</span>
-                            : <span className="text-muted-foreground">Unzoned</span>}
+                          {checked
+                            ? <span className="text-emerald-700">In This Zone</span>
+                            : <span className="text-muted-foreground">Not In This Zone</span>}
                         </td>
                       </tr>
                     );

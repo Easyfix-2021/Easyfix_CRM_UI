@@ -193,9 +193,10 @@ export default function DeepSkillsSettingsPage() {
   const [mappedCounts, setMappedCounts] = useState<Map<number, number>>(new Map());
 
   // Service types narrowed to the chosen category so the picker stays focused.
+  // Only display === 2 types are deep-skill types; non-deep-skill types must never appear here.
   const filteredServiceTypes = useMemo(() => {
-    if (!categoryId) return lk.serviceTypes;
-    return lk.serviceTypes.filter((t) => t.service_catg_id === Number(categoryId));
+    if (!categoryId) return lk.serviceTypes.filter((t) => t.display === 2);
+    return lk.serviceTypes.filter((t) => t.service_catg_id === Number(categoryId) && t.display === 2);
   }, [lk.serviceTypes, categoryId]);
 
   // Clear service-type when category changes so it can't dangle invalidly.
@@ -808,8 +809,8 @@ function DeepSkillEditor({
   }, [previewUrl]);
 
   const filteredTypes = useMemo(() => {
-    if (!f.category_id) return lk.serviceTypes;
-    return lk.serviceTypes.filter((t) => t.service_catg_id === Number(f.category_id));
+    if (!f.category_id) return lk.serviceTypes.filter((t) => t.display === 2);
+    return lk.serviceTypes.filter((t) => t.service_catg_id === Number(f.category_id) && t.display === 2);
   }, [lk.serviceTypes, f.category_id]);
 
   /*
@@ -1131,7 +1132,7 @@ function DeepSkillEditor({
                 value={f.service_type_id}
                 onChange={(v) => setF((s) => ({ ...s, service_type_id: v }))}
                 options={filteredTypes.map((t) => ({ value: t.service_type_id, label: t.service_type_name }))}
-                placeholder="Select Service Type"
+                placeholder={f.category_id ? 'Select Service Type' : 'Select a category first'}
                 disabled={!f.category_id}
               />
             </div>

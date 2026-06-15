@@ -46,6 +46,7 @@ type Pincode = {
   is_active: boolean;
   status: 'LOCAL' | 'TRAVEL';
   active_efr_count: number;
+  zone_count: number;
   lat: number | null;
   lng: number | null;
 };
@@ -315,15 +316,16 @@ export default function ManagePincodesPage() {
                 <th className="!text-left">State</th>
                 <th className="!text-right">Latitude</th>
                 <th className="!text-right">Longitude</th>
+                <th className="!text-center">Zones</th>
                 <th className="!text-center">Status</th>
               </tr>
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={8} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
+                <tr><td colSpan={9} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
               )}
               {!loading && items.length === 0 && (
-                <tr><td colSpan={8} className="!text-center text-muted-foreground py-6">No pincodes match the current filters.</td></tr>
+                <tr><td colSpan={9} className="!text-center text-muted-foreground py-6">No pincodes match the current filters.</td></tr>
               )}
               {!loading && items.map((p) => (
                 <tr key={p.pincode_id}>
@@ -338,6 +340,7 @@ export default function ManagePincodesPage() {
                   <td className="!text-right font-mono text-sm">
                     {p.lng != null ? p.lng.toFixed(5) : <span className="text-muted-foreground">—</span>}
                   </td>
+                  <td className="!text-center tabular-nums">{p.zone_count}</td>
                   <td className="!text-center">
                     <StatusPill
                       status={p.status}
