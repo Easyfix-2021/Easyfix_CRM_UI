@@ -25,7 +25,15 @@
  */
 
 import { useCallback, useMemo, useState } from 'react';
-import { ClipboardList, Flame, ExternalLink, Loader2 } from 'lucide-react';
+import {
+  ClipboardList,
+  Flame,
+  ExternalLink,
+  Loader2,
+  AlertTriangle,
+  Users,
+  Clock,
+} from 'lucide-react';
 
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
@@ -38,6 +46,14 @@ import {
   QuickSightFilterBar,
   type QuickSightFilterValue,
 } from '@/components/quicksight/QuickSightFilterBar';
+import {
+  ChartCard,
+  QsBarChart,
+  QsDonut,
+  QsKpiTile,
+  QS_COLORS,
+  QS_SEMANTIC,
+} from '@/components/quicksight/charts';
 import { Button } from '@/components/ui/button';
 import { DownloadButton } from '@/components/ui/download-button';
 import {
@@ -181,6 +197,55 @@ export default function OpenOrdersPage() {
     return acc;
   }, [rows]);
 
+  /* ── Graphical-view data (derived from the SAME summary rows / totals,
+   * no extra fetches) ────────────────────────────────────────────────── */
+
+  /* Top owners by total alerts, with the per-bucket breakdown for a stacked
+   * bar. We chart at most the 8 busiest owners so the axis stays readable. */
+  const topOwnersChart = useMemo(
+    () =>
+      [...rows]
+        .filter((r) => r.totalAlerts > 0)
+        .sort((a, b) => b.totalAlerts - a.totalAlerts)
+        .slice(0, 8)
+        .map((r) => ({
+          owner: r.pmName,
+          waitingForAllocation: r.waitingForAllocation,
+          runningLate: r.runningLate,
+          unconfirmed: r.unconfirmed,
+          openOnApp: r.openOnApp,
+          waitingAudit: r.waitingAudit,
+        })),
+    [rows],
+  );
+
+  /* Total alerts split by bucket type for the donut (drop empty buckets so
+   * the legend stays meaningful). */
+  const bucketDonut = useMemo(
+    () =>
+      [
+        { name: 'Waiting For Allocation', value: totals.waitingForAllocation },
+        { name: 'Running Late', value: totals.runningLate },
+        { name: 'Unconfirmed', value: totals.unconfirmed },
+        { name: 'Waiting To Close >12 Hrs', value: totals.openOnApp },
+        { name: 'Waiting Audit >18 Hrs', value: totals.waitingAudit },
+      ].filter((b) => b.value > 0),
+    [totals],
+  );
+
+  const bucketSeries = useMemo(
+    () => [
+      { key: 'waitingForAllocation', label: 'Waiting For Allocation', color: QS_COLORS[0] },
+      { key: 'runningLate', label: 'Running Late', color: QS_SEMANTIC.warn },
+      { key: 'unconfirmed', label: 'Unconfirmed', color: QS_COLORS[5] },
+      { key: 'openOnApp', label: 'Waiting To Close >12 Hrs', color: QS_COLORS[4] },
+      { key: 'waitingAudit', label: 'Waiting Audit >18 Hrs', color: QS_SEMANTIC.bad },
+    ],
+    [],
+  );
+
+  const hasCharts = rows.length > 0 && totals.totalAlerts > 0;
+
   /* ── Drill-down modal state ────────────────────────────────────────── */
   const [drill, setDrill] = useState<{ pmUserId: number; pmName: string } | null>(null);
   const drillBody = useMemo(
@@ -286,6 +351,69 @@ export default function OpenOrdersPage() {
         </div>
       }
     >
+      {/* ── Graphical View ── */}
+      {hasCharts && (
+        <section className="mb-6 space-y-4">
+          <div>
+            <h2 className="text-base font-semibold text-slate-800">Graphical View</h2>
+            <p className="text-xs text-muted-foreground">
+              Charts Reflect The Currently Filtered Owners.
+            </p>
+          </div>
+
+          {/* KPI row */}
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+            <QsKpiTile
+              label="Total Alerts"
+              value={totals.totalAlerts.toLocaleString()}
+              accent={QS_COLORS[0]}
+              icon={<AlertTriangle className="size-5" />}
+            />
+            <QsKpiTile
+              label="Escalations"
+              value={totals.escalationCount.toLocaleString()}
+              accent={QS_SEMANTIC.bad}
+              icon={<Flame className="size-5" />}
+            />
+            <QsKpiTile
+              label="Job Owners"
+              value={rows.length.toLocaleString()}
+              accent={QS_SEMANTIC.info}
+              icon={<Users className="size-5" />}
+            />
+            <QsKpiTile
+              label="Running Late"
+              value={totals.runningLate.toLocaleString()}
+              accent={QS_SEMANTIC.warn}
+              icon={<Clock className="size-5" />}
+            />
+          </div>
+
+          {/* Charts grid */}
+          <div className="grid gap-4 md:grid-cols-2">
+            <ChartCard
+              title="Top Owners By Alerts"
+              subtitle="Alert Buckets Per Job Owner (Top 8)"
+            >
+              <QsBarChart
+                data={topOwnersChart}
+                xKey="owner"
+                series={bucketSeries}
+                stacked
+                height={320}
+              />
+            </ChartCard>
+
+            <ChartCard
+              title="Alerts By Bucket Type"
+              subtitle="Share Of Total Alerts By Bucket"
+            >
+              <QsDonut data={bucketDonut} nameKey="name" valueKey="value" height={320} />
+            </ChartCard>
+          </div>
+        </section>
+      )}
+
       {/* ── Summary table ── */}
       <div className="overflow-x-auto rounded-md border border-border">
         <table className="data-table">

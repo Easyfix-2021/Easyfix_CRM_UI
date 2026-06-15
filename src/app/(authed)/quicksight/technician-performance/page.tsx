@@ -37,6 +37,7 @@ import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { cn } from '@/lib/utils';
 import { TechnicianCategoryModal } from './TechnicianCategoryModal';
+import { TechnicianPerformanceCharts } from './TechnicianPerformanceCharts';
 
 const FAMILY_KEY = 'ef-QuickSight';
 const ACTION_KEY = 'isQuickSightTechnicianPerformanceView';
@@ -391,7 +392,9 @@ export default function TechnicianPerformancePage() {
       onDownload={handleDownload}
       downloading={downloading}
     >
-      <div className="space-y-3">
+      <div className="space-y-4">
+        <TechnicianPerformanceCharts rows={rows} periodLabel={periodHeaders[0] ?? ''} />
+
         <div className="overflow-x-auto rounded-md border">
           <table className="data-table w-full">
             <thead>

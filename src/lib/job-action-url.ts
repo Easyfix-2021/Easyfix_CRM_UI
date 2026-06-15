@@ -36,10 +36,10 @@ import { useCallback, useMemo } from 'react';
  *   old shape will be normalised by the page's next URL push.
  */
 
-export type JobAction = 'create' | 'view' | 'edit' | 'confirm' | 'assign' | 'reassign';
+export type JobAction = 'create' | 'view' | 'edit' | 'confirm' | 'assign' | 'reassign' | 'schedule';
 
 const KNOWN_ACTIONS: ReadonlySet<JobAction> = new Set<JobAction>([
-  'create', 'view', 'edit', 'confirm', 'assign', 'reassign',
+  'create', 'view', 'edit', 'confirm', 'assign', 'reassign', 'schedule',
 ]);
 
 export interface JobActionParams {

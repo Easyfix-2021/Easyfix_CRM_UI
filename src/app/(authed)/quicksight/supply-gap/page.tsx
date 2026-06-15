@@ -25,7 +25,15 @@
  */
 
 import { useCallback, useMemo, useState } from 'react';
-import { LayoutGrid, Eye, Loader2 } from 'lucide-react';
+import {
+  LayoutGrid,
+  Eye,
+  Loader2,
+  ListChecks,
+  DoorOpen,
+  Users,
+  Hourglass,
+} from 'lucide-react';
 
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
@@ -45,6 +53,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  ChartCard,
+  QsBarChart,
+  QsDonut,
+  QsKpiTile,
+  QS_COLORS,
+  QS_SEMANTIC,
+} from '@/components/quicksight/charts';
 
 const ACTION_KEY = 'isQuickSightSupplyGapView';
 const API_BASE = '/admin/quicksight/supply-gap';
@@ -223,6 +239,62 @@ export default function SupplyGapPage() {
   const accessDenied = is403;
   const isEmpty = !loading && !error && rows.length === 0;
 
+  /* ── Graphical-view data (derived from the CURRENT page of rows only —
+   * the list is server-paginated, so charts reflect this slice). No new API
+   * calls; pure useMemo transforms of `rows`. ───────────────────────────── */
+  const kpis = useMemo(() => {
+    const openCount = rows.filter((r) => r.status === 0 || r.status === 1).length;
+    const allocations = rows.reduce((sum, r) => sum + (r.allocationCount || 0), 0);
+    const gapAges = rows.map((r) => r.gapAge).filter((g) => Number.isFinite(g));
+    const avgGap = gapAges.length
+      ? Math.round(gapAges.reduce((s, g) => s + g, 0) / gapAges.length)
+      : 0;
+    return { onPage: rows.length, openCount, allocations, avgGap };
+  }, [rows]);
+
+  /* Donut: distribution of gaps by status (Title-Case labels). */
+  const statusData = useMemo(() => {
+    const counts = new Map<number, number>();
+    for (const r of rows) {
+      const s = r.status ?? -1;
+      counts.set(s, (counts.get(s) ?? 0) + 1);
+    }
+    return Array.from(counts.entries())
+      .map(([status, value]) => ({
+        name: STATUS_LABEL[status] ?? `Status ${status}`,
+        value,
+      }))
+      .sort((a, b) => b.value - a.value);
+  }, [rows]);
+
+  /* Bar: top-10 cities by number of supply gaps on this page. */
+  const cityData = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const r of rows) {
+      const city = (r.cityName ?? '').trim() || 'Unknown';
+      counts.set(city, (counts.get(city) ?? 0) + 1);
+    }
+    return Array.from(counts.entries())
+      .map(([city, gaps]) => ({ city, gaps }))
+      .sort((a, b) => b.gaps - a.gaps)
+      .slice(0, 10);
+  }, [rows]);
+
+  /* Bar: top-8 categories by number of supply gaps on this page. */
+  const categoryData = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const r of rows) {
+      const cat = (r.category ?? '').trim() || 'Uncategorized';
+      counts.set(cat, (counts.get(cat) ?? 0) + 1);
+    }
+    return Array.from(counts.entries())
+      .map(([category, gaps]) => ({ category, gaps }))
+      .sort((a, b) => b.gaps - a.gaps)
+      .slice(0, 8);
+  }, [rows]);
+
+  const hasChartData = rows.length > 0;
+
   /* ── Detail modal (eye icon) ───────────────────────────────────────── */
   const [detailId, setDetailId] = useState<number | null>(null);
   const detailKey = useMemo(
@@ -362,6 +434,93 @@ export default function SupplyGapPage() {
         </div>
       }
     >
+      {/* ── Graphical View (derived from the current page of rows) ── */}
+      {hasChartData && (
+        <section className="mb-4 space-y-3">
+          <div className="flex items-baseline justify-between gap-3">
+            <h2 className="text-sm font-semibold text-slate-800">Graphical View</h2>
+            <span className="text-xs text-muted-foreground">
+              Charts reflect the current page.
+            </span>
+          </div>
+
+          {/* KPI tile row */}
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <QsKpiTile
+              label="Gaps On Page"
+              value={kpis.onPage}
+              accent={QS_COLORS[0]}
+              icon={<ListChecks className="size-5" />}
+            />
+            <QsKpiTile
+              label="Open / In Progress"
+              value={kpis.openCount}
+              accent={QS_SEMANTIC.info}
+              icon={<DoorOpen className="size-5" />}
+            />
+            <QsKpiTile
+              label="Technicians Added"
+              value={kpis.allocations}
+              accent={QS_SEMANTIC.good}
+              icon={<Users className="size-5" />}
+            />
+            <QsKpiTile
+              label="Avg Gap Days"
+              value={kpis.avgGap}
+              accent={QS_SEMANTIC.warn}
+              icon={<Hourglass className="size-5" />}
+            />
+          </div>
+
+          {/* Chart grid */}
+          <div className="grid gap-3 md:grid-cols-2">
+            {cityData.length > 0 && (
+              <ChartCard
+                title="Top Cities By Supply Gaps"
+                subtitle="Number Of Gaps Per City On This Page"
+              >
+                <QsBarChart
+                  data={cityData}
+                  xKey="city"
+                  layout="vertical"
+                  height={300}
+                  series={[{ key: 'gaps', label: 'Gaps', color: QS_COLORS[4] }]}
+                />
+              </ChartCard>
+            )}
+
+            {statusData.length > 0 && (
+              <ChartCard
+                title="Allocation Status Mix"
+                subtitle="Gaps By Status On This Page"
+              >
+                <QsDonut
+                  data={statusData}
+                  nameKey="name"
+                  valueKey="value"
+                  height={300}
+                />
+              </ChartCard>
+            )}
+
+            {categoryData.length > 0 && (
+              <ChartCard
+                title="Top Categories By Supply Gaps"
+                subtitle="Number Of Gaps Per Service Category On This Page"
+                className="md:col-span-2"
+              >
+                <QsBarChart
+                  data={categoryData}
+                  xKey="category"
+                  height={300}
+                  series={[{ key: 'gaps', label: 'Gaps', color: QS_COLORS[5] }]}
+                />
+              </ChartCard>
+            )}
+          </div>
+        </section>
+      )}
+
       {/* ── List table ── */}
       <div className="space-y-3">
         <div className="overflow-x-auto rounded-md border border-border">

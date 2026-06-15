@@ -30,9 +30,12 @@
  */
 
 import { useMemo, useState } from 'react';
-import { Building2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Building2, ChevronLeft, ChevronRight, Ticket, FolderOpen, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { ReportPageScaffold } from '@/components/quicksight/ReportPageScaffold';
 import { QuickSightFilterBar } from '@/components/quicksight/QuickSightFilterBar';
+import {
+  ChartCard, QsBarChart, QsDonut, QsLineChart, QsKpiTile, QS_COLORS, QS_SEMANTIC,
+} from '@/components/quicksight/charts';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent } from '@/components/ui/card';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
@@ -147,6 +150,202 @@ function buildSummaryQuery(
 }
 
 const METRIC_HEADERS = ['Ticket Created', 'SDA%', 'TAT%', 'Open Orders'] as const;
+
+/* The most-recent period is index 0 (BE returns i=1=current month/week first). */
+const LATEST = 0;
+
+/* Compact integer formatter for KPI tiles + axis-free labels. */
+function fmtInt(n: number): string {
+  return new Intl.NumberFormat('en-IN').format(n);
+}
+
+/* Average of the non-null percentage values in a list (rounded). null when the
+ * list has no usable values — keeps the line chart honest about empty periods. */
+function avgPct(values: Array<number | null | undefined>): number | null {
+  const usable = values.filter((v): v is number => v != null);
+  if (usable.length === 0) return null;
+  return Math.round(usable.reduce((a, b) => a + b, 0) / usable.length);
+}
+
+/*
+ * Graphical View — colorful charts derived ENTIRELY from the data the page has
+ * already fetched (the current table page + the TAT summary). No extra calls.
+ * Renders above the data table. Gracefully shows nothing useful only when there
+ * is genuinely no data to chart.
+ *
+ * Charts:
+ *   - KPI row (4 tiles): latest-period Tickets Created + Open Orders totalled
+ *     across the current page of cities; Cities Meeting TAT (>=85) and Below TAT
+ *     from the latest period summary.
+ *   - Tickets vs Open Orders per City (grouped horizontal bars, latest period,
+ *     current page of cities).
+ *   - SDA% / TAT% Trend (line across the 3 periods — page-average rate metric).
+ *   - TAT Compliance Split (donut: cities >=85 vs <85, latest period summary).
+ */
+function GraphicalView({
+  rows,
+  summaries,
+  flag,
+}: {
+  rows: CityRow[];
+  summaries: TatSummary[];
+  flag: Flag;
+}) {
+  // Drop the synthetic "No city" placeholder (cityId === null) from chart data.
+  const realRows = useMemo(
+    () => rows.filter((r) => r.cityId != null && r.cityName),
+    [rows],
+  );
+
+  // Per-city bars for the latest period: Tickets Created vs Open Orders.
+  const cityBars = useMemo(
+    () =>
+      realRows.map((r) => {
+        const p = r.cityPerformanceDataDateWise[LATEST];
+        return {
+          city: r.cityName,
+          tickets: p?.cityTktCreated ?? 0,
+          open: p?.cityOpenOrders ?? 0,
+        };
+      }),
+    [realRows],
+  );
+
+  // Page-average SDA% / TAT% across the 3 periods (rate metric over periods).
+  // Walk periods in chronological order (oldest → latest) so the line reads L→R.
+  const rateTrend = useMemo(() => {
+    const periodCount = realRows[0]?.cityPerformanceDataDateWise.length ?? 0;
+    const order = Array.from({ length: periodCount }, (_, i) => i).reverse(); // oldest first
+    return order.map((idx) => {
+      const sample = realRows[0]?.cityPerformanceDataDateWise[idx];
+      const label = sample ? periodHeader(sample, flag) : `Period ${idx + 1}`;
+      return {
+        period: label,
+        sda: avgPct(realRows.map((r) => r.cityPerformanceDataDateWise[idx]?.citySdaPercentage)),
+        tat: avgPct(realRows.map((r) => r.cityPerformanceDataDateWise[idx]?.cityTatPercentage)),
+      };
+    });
+  }, [realRows, flag]);
+
+  // Latest-period totals (current page) for KPI tiles.
+  const totals = useMemo(() => {
+    return realRows.reduce(
+      (acc, r) => {
+        const p = r.cityPerformanceDataDateWise[LATEST];
+        acc.tickets += p?.cityTktCreated ?? 0;
+        acc.open += p?.cityOpenOrders ?? 0;
+        return acc;
+      },
+      { tickets: 0, open: 0 },
+    );
+  }, [realRows]);
+
+  // Latest-period TAT split from the summary widget (page-independent totals).
+  const latestSummary = summaries[LATEST];
+  const tatSplit = useMemo(() => {
+    if (!latestSummary) return [];
+    const more = latestSummary.tatMoreThan85 ?? 0;
+    const less = latestSummary.tatLessThan85 ?? 0;
+    if (more + less === 0) return [];
+    return [
+      { name: 'TAT >= 85', value: more },
+      { name: 'TAT < 85', value: less },
+    ];
+  }, [latestSummary]);
+
+  // Nothing meaningful to chart at all → render nothing (table still shows).
+  const hasCityData = cityBars.length > 0;
+  if (!hasCityData && tatSplit.length === 0) return null;
+
+  const latestLabel =
+    realRows[0]?.cityPerformanceDataDateWise[LATEST]
+      ? periodHeader(realRows[0].cityPerformanceDataDateWise[LATEST], flag)
+      : '';
+
+  return (
+    <div className="space-y-4">
+      {hasCityData && (
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <QsKpiTile
+            label="Tickets Created (Page)"
+            value={fmtInt(totals.tickets)}
+            accent={QS_COLORS[0]}
+            icon={<Ticket className="size-5" />}
+          />
+          <QsKpiTile
+            label="Open Orders (Page)"
+            value={fmtInt(totals.open)}
+            accent={QS_SEMANTIC.warn}
+            icon={<FolderOpen className="size-5" />}
+          />
+          <QsKpiTile
+            label="Cities Meeting TAT (>= 85)"
+            value={latestSummary ? fmtInt(latestSummary.tatMoreThan85 ?? 0) : '—'}
+            accent={QS_SEMANTIC.good}
+            icon={<CheckCircle2 className="size-5" />}
+          />
+          <QsKpiTile
+            label="Cities Below TAT (< 85)"
+            value={latestSummary ? fmtInt(latestSummary.tatLessThan85 ?? 0) : '—'}
+            accent={QS_SEMANTIC.bad}
+            icon={<AlertTriangle className="size-5" />}
+          />
+        </div>
+      )}
+
+      <div className="grid gap-4 md:grid-cols-2">
+        {hasCityData && (
+          <ChartCard
+            title="Tickets vs Open Orders by City"
+            subtitle={`Latest Period${latestLabel ? ` — ${latestLabel}` : ''}. Charts reflect the current page.`}
+          >
+            <QsBarChart
+              data={cityBars}
+              xKey="city"
+              layout="vertical"
+              height={Math.max(220, cityBars.length * 38)}
+              series={[
+                { key: 'tickets', label: 'Tickets Created', color: QS_COLORS[0] },
+                { key: 'open', label: 'Open Orders', color: QS_SEMANTIC.warn },
+              ]}
+            />
+          </ChartCard>
+        )}
+
+        {rateTrend.length > 0 && (
+          <ChartCard
+            title="SDA% / TAT% Trend"
+            subtitle="Page Average Across Periods. Charts reflect the current page."
+          >
+            <QsLineChart
+              data={rateTrend}
+              xKey="period"
+              area
+              series={[
+                { key: 'sda', label: 'SDA %', color: QS_SEMANTIC.info },
+                { key: 'tat', label: 'TAT %', color: QS_SEMANTIC.good },
+              ]}
+            />
+          </ChartCard>
+        )}
+
+        {tatSplit.length > 0 && (
+          <ChartCard
+            title="TAT Compliance Split"
+            subtitle={`Latest Period${latestLabel ? ` — ${latestLabel}` : ''} — Cities At or Above vs Below 85.`}
+          >
+            <QsDonut
+              data={tatSplit}
+              nameKey="name"
+              valueKey="value"
+              colors={[QS_SEMANTIC.good, QS_SEMANTIC.bad]}
+            />
+          </ChartCard>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default function CityPerformancePage() {
   const { me } = useMe();
@@ -316,6 +515,8 @@ export default function CityPerformancePage() {
           index={tatIndex}
           onStep={setTatIndex}
         />
+
+        <GraphicalView rows={rows} summaries={summaries} flag={flag} />
 
         <div className="overflow-x-auto rounded-md border">
           <table className="data-table w-full">

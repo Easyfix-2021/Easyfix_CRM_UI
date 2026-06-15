@@ -5,7 +5,7 @@ import { useJobActionParams, useJobActionNav } from '@/lib/job-action-url';
 import {
   Search, Eye,
   CalendarClock, PlayCircle, CheckCircle2, CalendarCheck,
-  UserPlus, RefreshCw,
+  RefreshCw,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -19,6 +19,7 @@ import { TABS, filterJobRows, makeQuickStatusChange } from '@/lib/job-tabs';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { UnconfirmedJobsTable } from '@/components/job/UnconfirmedJobsTable';
 import { AssignTechnicianModal, type AssignMode } from '@/components/job/AssignTechnicianModal';
+import { ScheduleAssignModal } from '@/components/job/ScheduleAssignModal';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { useSort, SortHeader } from '@/lib/use-sort';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -268,6 +269,16 @@ export default function MyOrdersPage() {
     return { open: false, jobId: null, mode: 'assign' };
   }, [urlAction, urlJobId]);
 
+  // ScheduleAssignModal state — derived from `?action=schedule`. This is
+  // the Pending-for-Scheduling flow (status=0, unassigned): pick a date +
+  // slot AND a technician in one atomic step.
+  const scheduleModal = useMemo<{ open: boolean; jobId: number | null }>(() => {
+    if (urlAction === 'schedule' && urlJobId != null) {
+      return { open: true, jobId: urlJobId };
+    }
+    return { open: false, jobId: null };
+  }, [urlAction, urlJobId]);
+
   function closeModal()                { closeJobAction(); }
   function openView(id: number)        { openJobAction('view',     id); }
   // Unconfirmed orders open the dedicated confirm form (edit layout +
@@ -276,6 +287,8 @@ export default function MyOrdersPage() {
   function openConfirm(id: number)     { openJobAction('confirm',  id); }
   function openAssign(id: number)      { openJobAction('assign',   id); }
   function openReassign(id: number)    { openJobAction('reassign', id); }
+  // Pending-for-Scheduling rows → combined Schedule & Assign modal.
+  function openSchedule(id: number)    { openJobAction('schedule', id); }
 
   // Row-level quick action — same pattern as /jobs. Confirms, PATCHes status,
   // busts cache, refetches list + counts so badges stay coherent.
@@ -483,30 +496,25 @@ export default function MyOrdersPage() {
                           <CalendarCheck className="h-3.5 w-3.5" />
                         </button>
                       )}
+                      {/*
+                        * Pending for Scheduling (status=0, unassigned):
+                        * EXACTLY two actions — View (the generic Eye above,
+                        * read-only) + Schedule & Assign. The latter opens
+                        * ScheduleAssignModal, which edits the Job Date/Slot
+                        * AND assigns a technician atomically. The old
+                        * separate Schedule (→JobModal) and Assign
+                        * (→AssignTechnicianModal) buttons are folded into
+                        * this one combined flow.
+                        */}
                       {j.job_status === 0 && canJob.isJobAssign && (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => openView(j.job_id)}
-                            className="inline-flex items-center gap-1 text-sky-700 text-xs hover:underline"
-                            title="Schedule — opens modal to assign a technician"
-                          >
-                            <CalendarClock className="h-3.5 w-3.5" />
-                          </button>
-                          {/*
-                            * Assign Technician — opens the layered-ranking
-                            * modal directly (skips the JobModal). Same
-                            * backend pipeline as on-create auto-assign.
-                            */}
-                          <button
-                            type="button"
-                            onClick={() => openAssign(j.job_id)}
-                            className="inline-flex items-center gap-1 text-indigo-700 text-xs hover:underline"
-                            title="Assign Technician — pick from ranked list"
-                          >
-                            <UserPlus className="h-3.5 w-3.5" />
-                          </button>
-                        </>
+                        <button
+                          type="button"
+                          onClick={() => openSchedule(j.job_id)}
+                          className="inline-flex items-center gap-1 text-indigo-700 text-xs hover:underline"
+                          title="Schedule & Assign — set the date/slot and pick a technician"
+                        >
+                          <CalendarClock className="h-3.5 w-3.5" />
+                        </button>
                       )}
                       {j.job_status === 1 && (
                         <>
@@ -574,6 +582,18 @@ export default function MyOrdersPage() {
         open={assignModal.open}
         jobId={assignModal.jobId}
         mode={assignModal.mode}
+        onClose={() => closeJobAction()}
+        onAssigned={() => { cacheRef.current.clear(); load(false, true); }}
+      />
+
+      {/*
+        * Schedule & Assign — Pending-for-Scheduling combined flow. Edits
+        * the Job Date/Slot and assigns a technician in one atomic step,
+        * then refreshes the list so the row moves to "Pending App Ack".
+        */}
+      <ScheduleAssignModal
+        open={scheduleModal.open}
+        jobId={scheduleModal.jobId}
         onClose={() => closeJobAction()}
         onAssigned={() => { cacheRef.current.clear(); load(false, true); }}
       />

@@ -38,6 +38,7 @@ import { useMemo, useState } from 'react';
 import { PackageOpen } from 'lucide-react';
 
 import { ReportPageScaffold } from '@/components/quicksight/ReportPageScaffold';
+import { MaterialReportCharts } from './MaterialReportCharts';
 import { Button } from '@/components/ui/button';
 import { SearchSelect } from '@/components/ui/search-select';
 import { useFetch } from '@/lib/hooks';
@@ -343,34 +344,38 @@ export default function MaterialReportPage() {
         </div>
       }
     >
-      <div className="space-y-2">
-        <h2 className="text-base font-semibold">Client Element Deployed</h2>
-        {imageError && (
-          <p className="text-sm font-medium text-red-600">{imageError}</p>
-        )}
-        <div className="overflow-x-auto rounded-md border border-border">
-          <table className="data-table">
-            <thead>
-              <tr>
-                {COLUMNS.map((c) => (
-                  <th key={c.key} className={ALIGN_CLASS[c.align]}>
-                    {c.label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r, i) => (
-                <tr key={`${r.jobId}-${i}`}>
+      <div className="space-y-6">
+        <MaterialReportCharts rows={rows} />
+
+        <div className="space-y-2">
+          <h2 className="text-base font-semibold">Client Element Deployed</h2>
+          {imageError && (
+            <p className="text-sm font-medium text-red-600">{imageError}</p>
+          )}
+          <div className="overflow-x-auto rounded-md border border-border">
+            <table className="data-table">
+              <thead>
+                <tr>
                   {COLUMNS.map((c) => (
-                    <td key={c.key} className={ALIGN_CLASS[c.align]}>
-                      {renderCell(r, c, openImage, openingLink)}
-                    </td>
+                    <th key={c.key} className={ALIGN_CLASS[c.align]}>
+                      {c.label}
+                    </th>
                   ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={`${r.jobId}-${i}`}>
+                    {COLUMNS.map((c) => (
+                      <td key={c.key} className={ALIGN_CLASS[c.align]}>
+                        {renderCell(r, c, openImage, openingLink)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </ReportPageScaffold>

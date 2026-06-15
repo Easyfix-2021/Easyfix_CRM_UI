@@ -32,7 +32,7 @@
  */
 
 import { useCallback, useMemo, useState } from 'react';
-import { Flame, ExternalLink, Loader2 } from 'lucide-react';
+import { Flame, ExternalLink, Loader2, AlertTriangle, FileQuestion, MapPin } from 'lucide-react';
 
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
@@ -42,6 +42,13 @@ import { useLookup } from '@/lib/use-lookup';
 import type { SearchOption } from '@/components/ui/search-select';
 
 import { ReportPageScaffold } from '@/components/quicksight/ReportPageScaffold';
+import {
+  ChartCard,
+  QsBarChart,
+  QsDonut,
+  QsKpiTile,
+  QS_SEMANTIC,
+} from '@/components/quicksight/charts';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
 import type { QuickSightFilterValue } from '@/components/quicksight/QuickSightFilterBar';
 import { Button } from '@/components/ui/button';
@@ -224,6 +231,51 @@ export default function PriorityJobsPage() {
     return acc;
   }, [rows]);
 
+  /* ── Chart data (derived from the SAME current-page grid rows + KPIs;
+   * no extra API calls). Charts reflect the current paginated page of cities. */
+
+  /* Stacked aging buckets per top-N city (by Total). The grid is already
+   * ordered total-desc, so the current page is the hottest slice. */
+  const cityAgingData = useMemo(
+    () =>
+      [...rows]
+        .sort((a, b) => b.totalCount - a.totalCount)
+        .slice(0, 8)
+        .map((r) => ({
+          city: r.cityName || 'NA',
+          today: r.todayCount || 0,
+          yesterday: r.yesterdayCount || 0,
+          days2To7: r.days2To7Count || 0,
+          greaterThan7: r.greaterThan7Count || 0,
+        })),
+    [rows],
+  );
+
+  /* Donut: Escalated vs Unconfirmed (the two report-level KPIs). */
+  const kpiDonutData = useMemo(
+    () =>
+      [
+        { name: 'Open Escalation', value: escalatedCount },
+        { name: 'Unconfirmed Orders', value: unconfirmedCount },
+      ].filter((d) => d.value > 0),
+    [escalatedCount, unconfirmedCount],
+  );
+
+  /* Aging mix across the visible page (one slice per bucket). */
+  const agingMixData = useMemo(
+    () =>
+      [
+        { name: 'Today', value: totals.todayCount },
+        { name: 'Yesterday', value: totals.yesterdayCount },
+        { name: '2 To 7 Days', value: totals.days2To7Count },
+        { name: '> 7 Days', value: totals.greaterThan7Count },
+      ].filter((d) => d.value > 0),
+    [totals],
+  );
+
+  const hasChartData =
+    cityAgingData.length > 0 || kpiDonutData.length > 0 || agingMixData.length > 0;
+
   /* ── Drill-down dialog state ───────────────────────────────────────── */
   const [drill, setDrill] = useState<{ cityId: number; cityName: string } | null>(null);
   const drillBody = useMemo(
@@ -334,6 +386,103 @@ export default function PriorityJobsPage() {
         </div>
       }
     >
+      {/* ── Graphical View (derived from the current page + KPIs) ── */}
+      {hasChartData && (
+        <section className="space-y-3">
+          <div className="flex items-baseline justify-between gap-3">
+            <h2 className="text-sm font-semibold text-slate-800">Graphical View</h2>
+            <span className="text-xs text-muted-foreground">
+              Charts reflect the current page.
+            </span>
+          </div>
+
+          {/* KPI tile row */}
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <QsKpiTile
+              label="Open Escalation"
+              value={escalatedCount}
+              accent={QS_SEMANTIC.warn}
+              icon={<AlertTriangle className="size-5" />}
+            />
+            <QsKpiTile
+              label="Unconfirmed Orders"
+              value={unconfirmedCount}
+              accent={QS_SEMANTIC.info}
+              icon={<FileQuestion className="size-5" />}
+            />
+            <QsKpiTile
+              label="Cities On Page"
+              value={rows.length}
+              accent={QS_SEMANTIC.good}
+              icon={<MapPin className="size-5" />}
+            />
+            <QsKpiTile
+              label="Open Jobs On Page"
+              value={totals.totalCount}
+              accent={QS_SEMANTIC.bad}
+              icon={<Flame className="size-5" />}
+            />
+          </div>
+
+          {/* Chart grid */}
+          <div className="grid gap-3 md:grid-cols-2">
+            {cityAgingData.length > 0 && (
+              <ChartCard
+                title="City Aging Buckets"
+                subtitle="Open Owned Jobs By Age, Top Cities On This Page"
+                className="md:col-span-2"
+              >
+                <QsBarChart
+                  data={cityAgingData}
+                  xKey="city"
+                  stacked
+                  height={300}
+                  series={[
+                    { key: 'today', label: 'Today', color: QS_SEMANTIC.good },
+                    { key: 'yesterday', label: 'Yesterday', color: QS_SEMANTIC.info },
+                    { key: 'days2To7', label: '2 To 7 Days', color: QS_SEMANTIC.warn },
+                    { key: 'greaterThan7', label: '> 7 Days', color: QS_SEMANTIC.bad },
+                  ]}
+                />
+              </ChartCard>
+            )}
+
+            {kpiDonutData.length > 0 && (
+              <ChartCard
+                title="Escalated Vs Unconfirmed"
+                subtitle="Report-Level Headline Counts"
+              >
+                <QsDonut
+                  data={kpiDonutData}
+                  nameKey="name"
+                  valueKey="value"
+                  colors={[QS_SEMANTIC.warn, QS_SEMANTIC.info]}
+                />
+              </ChartCard>
+            )}
+
+            {agingMixData.length > 0 && (
+              <ChartCard
+                title="Aging Mix On Page"
+                subtitle="Open Owned Jobs By Age Bucket"
+              >
+                <QsDonut
+                  data={agingMixData}
+                  nameKey="name"
+                  valueKey="value"
+                  colors={[
+                    QS_SEMANTIC.good,
+                    QS_SEMANTIC.info,
+                    QS_SEMANTIC.warn,
+                    QS_SEMANTIC.bad,
+                  ]}
+                />
+              </ChartCard>
+            )}
+          </div>
+        </section>
+      )}
+
       {/* ── KPI chips ── */}
       <div className="flex flex-wrap gap-3">
         <KpiChip label="Open Escalation" value={escalatedCount} tone="orange" />

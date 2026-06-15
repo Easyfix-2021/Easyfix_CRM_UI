@@ -48,6 +48,20 @@ import { actionFlags } from '@/lib/permissions';
 import { useLookup } from '@/lib/use-lookup';
 
 import { ReportPageScaffold } from '@/components/quicksight/ReportPageScaffold';
+import {
+  ChartCard,
+  QsBarChart,
+  QsDonut,
+  QsKpiTile,
+  QS_COLORS,
+  QS_SEMANTIC,
+} from '@/components/quicksight/charts';
+import {
+  BadgeCheck,
+  CalendarClock,
+  IndianRupee,
+  Star,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -496,6 +510,16 @@ export default function AdminDashboardPage() {
       }
     >
       <div className="space-y-6">
+        {/* ── Graphical View (colorful charts over the same fetched data) ── */}
+        <GraphicalView
+          kra={kra.data}
+          tiles={openOrders.data?.tiles ?? []}
+          cancellation={cancellation.data}
+          cancelEnabled={cancelEnabled}
+          prodRows={prodRows}
+          prodTotal={prod.data?.totalRecords ?? 0}
+        />
+
         {/* ── KRA Metrics tiles ── */}
         <KraTiles kra={kra.data} />
 
@@ -546,6 +570,189 @@ export default function AdminDashboardPage() {
         </DialogContent>
       </Dialog>
     </ReportPageScaffold>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * Graphical View — colorful charts derived (useMemo) entirely from the data
+ * the page already fetched. No new API calls. Renders above the KRA tiles +
+ * data table. Each block self-guards on empty data.
+ * ════════════════════════════════════════════════════════════════════════ */
+function GraphicalView({
+  kra,
+  tiles,
+  cancellation,
+  cancelEnabled,
+  prodRows,
+  prodTotal,
+}: {
+  kra: KraMetrics | null;
+  tiles: OpenOrderTile[];
+  cancellation: CancellationResponse | null;
+  cancelEnabled: boolean;
+  prodRows: ProductivityRow[];
+  prodTotal: number;
+}) {
+  /* KPI headline tiles from KRA totals. */
+  const revenue = kra ? Math.round(kra.revenue) : null;
+
+  /* Open-order totals → bar chart (one bar per order category). */
+  const openOrderBars = useMemo(
+    () =>
+      tiles
+        .map((t) => ({ name: t.title.trim(), count: t.totalCount }))
+        .filter((d) => d.name),
+    [tiles],
+  );
+  const openOrderTotal = useMemo(
+    () => openOrderBars.reduce((s, d) => s + d.count, 0),
+    [openOrderBars],
+  );
+
+  /* Cancellation before/after → donut. */
+  const cancelDonut = useMemo(() => {
+    if (!cancellation) return [];
+    const { beforeAllocation, afterAllocation } = cancellation.summary;
+    const rows = [
+      { name: 'Before Allocation', value: beforeAllocation },
+      { name: 'After Allocation', value: afterAllocation },
+    ].filter((d) => d.value > 0);
+    return rows;
+  }, [cancellation]);
+
+  /* Cancellation time buckets → horizontal bar. */
+  const cancelBuckets = useMemo(
+    () =>
+      (cancellation?.bucketData ?? [])
+        .map((b) => ({ name: b.timeBucket, jobs: b.totalJobs }))
+        .filter((d) => d.name),
+    [cancellation],
+  );
+
+  /* Employee Productivity (current page) → grouped bar of top performers. */
+  const prodBars = useMemo(
+    () =>
+      [...prodRows]
+        .sort((a, b) => b.closedCount - a.closedCount)
+        .slice(0, 8)
+        .map((r) => ({
+          name: r.userName,
+          booked: r.booked,
+          closed: r.closedCount,
+          cancelled: r.cancelCount,
+        })),
+    [prodRows],
+  );
+
+  const hasAnything =
+    kra != null ||
+    openOrderBars.some((d) => d.count > 0) ||
+    cancelDonut.length > 0 ||
+    cancelBuckets.length > 0 ||
+    prodBars.length > 0;
+
+  if (!hasAnything) return null;
+
+  return (
+    <div className="space-y-4">
+      <h2 className="text-base font-semibold text-slate-800">Graphical View</h2>
+
+      {/* ── KPI tile row ── */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <QsKpiTile
+          label="Revenue"
+          value={revenue != null ? revenue.toLocaleString('en-IN') : '—'}
+          accent={QS_COLORS[1]}
+          icon={<IndianRupee className="size-5" />}
+        />
+        <QsKpiTile
+          label="On-Time Appointment %"
+          value={kra?.otaPercentage ?? '—'}
+          accent={QS_COLORS[0]}
+          icon={<BadgeCheck className="size-5" />}
+        />
+        <QsKpiTile
+          label="Avg TAT (Days)"
+          value={kra ? String(kra.avgTat) : '—'}
+          accent={QS_COLORS[2]}
+          icon={<CalendarClock className="size-5" />}
+        />
+        <QsKpiTile
+          label="Avg Rating"
+          value={kra ? String(kra.avgRating) : '—'}
+          accent={QS_COLORS[4]}
+          icon={<Star className="size-5" />}
+        />
+      </div>
+
+      {/* ── Charts grid ── */}
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        {/* Open orders by category (bar). */}
+        {openOrderBars.some((d) => d.count > 0) && (
+          <ChartCard
+            title="Open Orders By Category"
+            subtitle={`${openOrderTotal.toLocaleString('en-IN')} Open Orders Total`}
+          >
+            <QsBarChart
+              data={openOrderBars}
+              xKey="name"
+              series={[{ key: 'count', label: 'Open Orders', color: QS_COLORS[0] }]}
+            />
+          </ChartCard>
+        )}
+
+        {/* Cancellations before vs after allocation (donut). */}
+        {cancelEnabled && cancelDonut.length > 0 && (
+          <ChartCard
+            title="Cancellations By Allocation"
+            subtitle={`${(cancellation?.summary.totalOrderCancelled ?? 0).toLocaleString('en-IN')} Cancelled Total`}
+          >
+            <QsDonut
+              data={cancelDonut}
+              nameKey="name"
+              valueKey="value"
+              colors={[QS_SEMANTIC.good, QS_SEMANTIC.bad]}
+            />
+          </ChartCard>
+        )}
+
+        {/* Cancellations by time bucket (horizontal bar). */}
+        {cancelEnabled && cancelBuckets.length > 0 && (
+          <ChartCard
+            title="Cancellations By Time Bucket"
+            subtitle="Days From Booking To Cancellation"
+          >
+            <QsBarChart
+              data={cancelBuckets}
+              xKey="name"
+              series={[{ key: 'jobs', label: 'Cancelled Jobs', color: QS_SEMANTIC.warn }]}
+              layout="vertical"
+            />
+          </ChartCard>
+        )}
+
+        {/* Employee productivity — top performers (grouped bar). */}
+        {prodBars.length > 0 && (
+          <ChartCard
+            title="Top Performers — Booked vs Closed"
+            subtitle={`Current Page · ${prodTotal.toLocaleString('en-IN')} Employees Total`}
+          >
+            <QsBarChart
+              data={prodBars}
+              xKey="name"
+              series={[
+                { key: 'booked', label: 'Booked', color: QS_COLORS[0] },
+                { key: 'closed', label: 'Closed', color: QS_SEMANTIC.good },
+                { key: 'cancelled', label: 'Cancelled', color: QS_SEMANTIC.bad },
+              ]}
+            />
+            <p className="mt-2 text-xs text-muted-foreground">
+              Charts reflect the current page.
+            </p>
+          </ChartCard>
+        )}
+      </div>
+    </div>
   );
 }
 

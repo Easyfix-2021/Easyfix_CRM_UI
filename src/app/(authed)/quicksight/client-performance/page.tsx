@@ -23,9 +23,17 @@
  */
 
 import { useMemo, useState } from 'react';
-import { Gauge } from 'lucide-react';
+import { Gauge, Ticket, IndianRupee, Receipt, Users } from 'lucide-react';
 import { ReportPageScaffold } from '@/components/quicksight/ReportPageScaffold';
 import { QuickSightFilterBar } from '@/components/quicksight/QuickSightFilterBar';
+import {
+  ChartCard,
+  QsBarChart,
+  QsLineChart,
+  QsKpiTile,
+  QS_COLORS,
+  QS_SEMANTIC,
+} from '@/components/quicksight/charts';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { useFetch, useFetchOnce } from '@/lib/hooks';
@@ -71,6 +79,11 @@ function fmtDateOnly(iso: string): string {
   return d.toLocaleDateString('en-IN', {
     day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata',
   });
+}
+
+/* Compact Indian-locale number for KPI tiles (₹1,23,456 / 1,234). */
+function fmtInt(n: number): string {
+  return new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(Math.round(n));
 }
 
 /* Render a period header: month name as-is; week range with formatted dates. */
@@ -181,6 +194,73 @@ export default function ClientPerformancePage() {
     const sample = sortedRows[0]?.periods ?? [];
     return sample.map((p) => periodHeader(p, period));
   }, [sortedRows, period]);
+
+  // ── Graphical View transforms ──────────────────────────────────────
+  // All derived from the SAME `sortedRows` the table renders (no new fetch).
+  // The response is a full (un-paginated) array, so charts cover all rows.
+
+  // Period axis labels (short) for the cross-period charts.
+  const chartPeriodLabels = useMemo(
+    () => periodHeaders.map((lbl) => (period === 'monthly' ? lbl : lbl.replace(/, \d{4}/g, ''))),
+    [periodHeaders, period],
+  );
+
+  // Index of the "current" period — the LAST bucket the BE returns (most
+  // recent), used for the headline KPIs and the per-client bar chart.
+  const currentIdx = useMemo(
+    () => Math.max(0, (sortedRows[0]?.periods.length ?? 0) - 1),
+    [sortedRows],
+  );
+
+  // Headline KPI totals for the current period across all rows.
+  const kpis = useMemo(() => {
+    let tickets = 0;
+    let revenue = 0;
+    const clientSet = new Set<number>();
+    for (const row of sortedRows) {
+      const p = row.periods[currentIdx];
+      if (!p) continue;
+      tickets += p.ticketCreated;
+      revenue += p.sumOfTotalCharge;
+      clientSet.add(row.clientId);
+    }
+    const avgTicketSize = tickets > 0 ? revenue / tickets : 0;
+    return { tickets, revenue, avgTicketSize, clients: clientSet.size };
+  }, [sortedRows, currentIdx]);
+
+  // Tickets Received per client for the current period (top 8 by volume so the
+  // bars stay readable; the table still shows the full list).
+  const ticketsByClient = useMemo(() => {
+    return sortedRows
+      .map((row) => {
+        const p = row.periods[currentIdx];
+        return {
+          client: row.clientName || '—',
+          tickets: p?.ticketCreated ?? 0,
+        };
+      })
+      .filter((d) => d.tickets > 0)
+      .sort((a, b) => b.tickets - a.tickets)
+      .slice(0, 8);
+  }, [sortedRows, currentIdx]);
+
+  // Revenue summed across all clients, one point per period (trend line).
+  const revenueTrend = useMemo(() => {
+    const n = sortedRows[0]?.periods.length ?? 0;
+    return Array.from({ length: n }, (_, i) => {
+      let revenue = 0;
+      let tickets = 0;
+      for (const row of sortedRows) {
+        const p = row.periods[i];
+        if (!p) continue;
+        revenue += p.sumOfTotalCharge;
+        tickets += p.ticketCreated;
+      }
+      return { period: chartPeriodLabels[i] ?? `P${i + 1}`, revenue, tickets };
+    });
+  }, [sortedRows, chartPeriodLabels]);
+
+  const hasCharts = sortedRows.length > 0;
 
   // 403 → access panel. useFetch flattens the error to a string; the BE 403
   // messages ("insufficient permissions", "Missing permission: …", "You do
@@ -306,6 +386,82 @@ export default function ClientPerformancePage() {
       onDownload={handleDownload}
       downloading={downloading}
     >
+      {hasCharts && (
+        <section className="mb-6 space-y-4">
+          <div className="flex items-baseline justify-between gap-3">
+            <h2 className="text-base font-semibold text-slate-800">Graphical View</h2>
+            <span className="text-xs text-muted-foreground">
+              Current Period: {periodHeaders[currentIdx] ?? '—'}
+            </span>
+          </div>
+
+          {/* KPI tiles — current-period totals across all rows. */}
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <QsKpiTile
+              label="Tickets Received"
+              value={fmtInt(kpis.tickets)}
+              accent={QS_COLORS[0]}
+              icon={<Ticket size={18} />}
+            />
+            <QsKpiTile
+              label="Total Revenue"
+              value={`₹${fmtInt(kpis.revenue)}`}
+              accent={QS_SEMANTIC.good}
+              icon={<IndianRupee size={18} />}
+            />
+            <QsKpiTile
+              label="Avg Ticket Size"
+              value={`₹${fmtInt(kpis.avgTicketSize)}`}
+              accent={QS_COLORS[2]}
+              icon={<Receipt size={18} />}
+            />
+            <QsKpiTile
+              label="Active Clients"
+              value={fmtInt(kpis.clients)}
+              accent={QS_COLORS[5]}
+              icon={<Users size={18} />}
+            />
+          </div>
+
+          {/* Charts grid. */}
+          <div className="grid gap-4 md:grid-cols-2">
+            <ChartCard
+              title="Tickets Received By Client"
+              subtitle="Top Clients — Current Period"
+            >
+              {ticketsByClient.length > 0 ? (
+                <QsBarChart
+                  data={ticketsByClient}
+                  xKey="client"
+                  layout="vertical"
+                  series={[{ key: 'tickets', label: 'Tickets Received', color: QS_COLORS[0] }]}
+                  height={300}
+                />
+              ) : (
+                <EmptyChart label="No tickets in the current period." />
+              )}
+            </ChartCard>
+
+            <ChartCard
+              title="Revenue Trend"
+              subtitle={`Total Revenue Across ${period === 'monthly' ? 'Months' : 'Weeks'}`}
+            >
+              {revenueTrend.length > 0 ? (
+                <QsLineChart
+                  data={revenueTrend}
+                  xKey="period"
+                  area
+                  series={[{ key: 'revenue', label: 'Revenue', color: QS_SEMANTIC.good }]}
+                  height={300}
+                />
+              ) : (
+                <EmptyChart label="No revenue to plot." />
+              )}
+            </ChartCard>
+          </div>
+        </section>
+      )}
+
       <div className="overflow-x-auto rounded-md border">
         <table className="data-table w-full">
           <thead>
@@ -355,6 +511,16 @@ export default function ClientPerformancePage() {
         </table>
       </div>
     </ReportPageScaffold>
+  );
+}
+
+/* Tiny in-card empty state so a chart with no plottable data never crashes
+ * (recharts on an empty array renders a bare axis box). */
+function EmptyChart({ label }: { label: string }) {
+  return (
+    <div className="flex h-[300px] items-center justify-center text-sm text-muted-foreground">
+      {label}
+    </div>
   );
 }
 

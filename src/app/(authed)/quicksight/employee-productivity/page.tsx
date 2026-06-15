@@ -35,8 +35,15 @@
  */
 
 import { useMemo, useState } from 'react';
-import { Users } from 'lucide-react';
+import { Users, CalendarCheck, CheckCircle2, IndianRupee, XCircle } from 'lucide-react';
 import { ReportPageScaffold } from '@/components/quicksight/ReportPageScaffold';
+import {
+  ChartCard,
+  QsBarChart,
+  QsKpiTile,
+  QS_COLORS,
+  QS_SEMANTIC,
+} from '@/components/quicksight/charts';
 import { DateRangePopover } from '@/components/ui/date-range-popover';
 import { SearchSelect, type SearchOption } from '@/components/ui/search-select';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
@@ -215,6 +222,53 @@ export default function EmployeeProductivityPage() {
 
   const rows = tableData?.data ?? [];
   const total = tableData?.totalRecords ?? 0;
+
+  /* ── Chart transforms (derived from the SAME page rows — no new fetch) ──
+   * The table is server-paginated, so charts reflect the CURRENT page slice.
+   * A muted note is rendered alongside the Graphical View to make that clear. */
+
+  // Page-level aggregate KPIs (sum across the current page's rows).
+  const pageTotals = useMemo(() => {
+    return rows.reduce(
+      (acc, r) => {
+        acc.booked += r.booked ?? 0;
+        acc.scheduled += r.scheduled ?? 0;
+        acc.closed += r.closedCount ?? 0;
+        acc.revenue += r.revenue ?? 0;
+        acc.cancelled += r.cancelCount ?? 0;
+        return acc;
+      },
+      { booked: 0, scheduled: 0, closed: 0, revenue: 0, cancelled: 0 },
+    );
+  }, [rows]);
+
+  // Top employees by activity (booked + scheduled + closed), capped for legibility.
+  const TOP_N = 10;
+  const activityByEmployee = useMemo(() => {
+    return [...rows]
+      .map((r) => ({
+        name: r.userName || '—',
+        booked: r.booked ?? 0,
+        scheduled: r.scheduled ?? 0,
+        closed: r.closedCount ?? 0,
+      }))
+      .sort(
+        (a, b) =>
+          b.booked + b.scheduled + b.closed - (a.booked + a.scheduled + a.closed),
+      )
+      .slice(0, TOP_N);
+  }, [rows]);
+
+  // Top employees by revenue (horizontal bars read best for a single ranked metric).
+  const revenueByEmployee = useMemo(() => {
+    return [...rows]
+      .filter((r) => (r.revenue ?? 0) > 0)
+      .map((r) => ({ name: r.userName || '—', revenue: r.revenue ?? 0 }))
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, TOP_N);
+  }, [rows]);
+
+  const hasCharts = rows.length > 0;
 
   // 403 → access panel. useFetch flattens the error to a string.
   const accessDenied =
@@ -406,6 +460,80 @@ export default function EmployeeProductivityPage() {
       <div className="space-y-4">
         {/* KRA tile strip */}
         {kra && <KraTiles kra={kra} />}
+
+        {/* Graphical View — derived from the current page of rows. */}
+        {hasCharts && (
+          <section className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-slate-800">Graphical View</h2>
+              <span className="text-xs text-muted-foreground">Charts reflect the current page.</span>
+            </div>
+
+            {/* Aggregate KPI row (sum of the current page). */}
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              <QsKpiTile
+                label="Booked"
+                value={fmtNum(pageTotals.booked)}
+                accent={QS_COLORS[0]}
+                icon={<CalendarCheck className="h-5 w-5" />}
+              />
+              <QsKpiTile
+                label="Closed"
+                value={fmtNum(pageTotals.closed)}
+                accent={QS_SEMANTIC.good}
+                icon={<CheckCircle2 className="h-5 w-5" />}
+              />
+              <QsKpiTile
+                label="Revenue"
+                value={fmtNum(pageTotals.revenue)}
+                accent={QS_COLORS[2]}
+                icon={<IndianRupee className="h-5 w-5" />}
+              />
+              <QsKpiTile
+                label="Cancelled"
+                value={fmtNum(pageTotals.cancelled)}
+                accent={QS_SEMANTIC.bad}
+                icon={<XCircle className="h-5 w-5" />}
+              />
+            </div>
+
+            {/* Charts grid. */}
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <ChartCard
+                title="Activity By Employee"
+                subtitle={`Top ${Math.min(TOP_N, activityByEmployee.length)} by Booked + Scheduled + Closed`}
+              >
+                <QsBarChart
+                  data={activityByEmployee}
+                  xKey="name"
+                  series={[
+                    { key: 'booked', label: 'Booked', color: QS_COLORS[0] },
+                    { key: 'scheduled', label: 'Scheduled', color: QS_COLORS[4] },
+                    { key: 'closed', label: 'Closed', color: QS_SEMANTIC.good },
+                  ]}
+                />
+              </ChartCard>
+
+              <ChartCard
+                title="Revenue By Employee"
+                subtitle={`Top ${Math.min(TOP_N, revenueByEmployee.length)} by Revenue`}
+              >
+                {revenueByEmployee.length > 0 ? (
+                  <QsBarChart
+                    data={revenueByEmployee}
+                    xKey="name"
+                    layout="vertical"
+                    series={[{ key: 'revenue', label: 'Revenue', color: QS_COLORS[2] }]}
+                  />
+                ) : (
+                  <div className="flex h-[280px] items-center justify-center text-sm text-muted-foreground">
+                    No Revenue On This Page
+                  </div>
+                )}
+              </ChartCard>
+            </div>
+          </section>
+        )}
 
         {/* Productivity table */}
         <div className="overflow-x-auto rounded-md border">

@@ -29,7 +29,8 @@
  */
 
 import type { ReactNode } from 'react';
-import { AlertTriangle, Inbox, Loader2, Lock, type LucideIcon } from 'lucide-react';
+import Link from 'next/link';
+import { AlertTriangle, ArrowLeft, Inbox, Loader2, Lock, type LucideIcon } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { DownloadButton } from '@/components/ui/download-button';
 
@@ -106,6 +107,17 @@ export function ReportPageScaffold({
           row when an onDownload handler is supplied. */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
+          {/* Back link — QuickSight is not a sidebar menu (it's the dashboard
+              header button → /quicksight landing), so every report needs an
+              explicit way back to the landing. Lives in the shared scaffold so
+              all 10 reports get it from one place. */}
+          <Link
+            href="/quicksight"
+            className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors mb-1"
+          >
+            <ArrowLeft className="size-4" />
+            QuickSight Reports
+          </Link>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             {Icon && <Icon className="size-6 shrink-0" />}
             <span className="truncate">{title}</span>

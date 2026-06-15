@@ -29,8 +29,16 @@
  */
 
 import { useMemo, useState } from 'react';
-import { Layers } from 'lucide-react';
+import { Layers, FileQuestion, FolderOpen, AlertTriangle, Percent } from 'lucide-react';
 import { ReportPageScaffold } from '@/components/quicksight/ReportPageScaffold';
+import {
+  ChartCard,
+  QsBarChart,
+  QsDonut,
+  QsKpiTile,
+  QS_COLORS,
+  QS_SEMANTIC,
+} from '@/components/quicksight/charts';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { useFetch } from '@/lib/hooks';
@@ -156,6 +164,47 @@ export default function VerticalOrdersPage() {
     [data],
   );
 
+  // ── Chart transforms (derived from the SAME fetched data) ──────────
+  // Grouped bar: one X-category per age bucket, one series per vertical
+  // (skip the synthetic Total row so it reads as Retail vs OEM per bucket).
+  const verticalRows = useMemo(() => rows.filter((r) => !r.isTotal), [rows]);
+  const ageBarData = useMemo(
+    () =>
+      AGE_COLUMNS.map((col) => {
+        const point: Record<string, unknown> = { age: col.label };
+        for (const r of verticalRows) point[r.verticalCategory] = r[col.key];
+        return point;
+      }),
+    [verticalRows],
+  );
+  const barSeries = useMemo(
+    () =>
+      verticalRows.map((r, i) => ({
+        key: r.verticalCategory,
+        label: r.verticalCategory,
+        color: QS_COLORS[i % QS_COLORS.length],
+      })),
+    [verticalRows],
+  );
+
+  // Donut: jobs by age category (totals across verticals = the Total row).
+  const totalRow = useMemo(() => rows.find((r) => r.isTotal), [rows]);
+  const ageDonutData = useMemo(
+    () =>
+      totalRow
+        ? AGE_COLUMNS.map((col) => ({ name: col.label, value: totalRow[col.key] }))
+        : [],
+    [totalRow],
+  );
+  const hasDonutData = useMemo(
+    () => ageDonutData.some((d) => d.value > 0),
+    [ageDonutData],
+  );
+  const hasBarData = useMemo(
+    () => verticalRows.some((r) => AGE_COLUMNS.some((c) => r[c.key] > 0)),
+    [verticalRows],
+  );
+
   function toggleFlag(flag: string) {
     setSelected((prev) =>
       prev.includes(flag) ? prev.filter((f) => f !== flag) : [...prev, flag],
@@ -225,6 +274,73 @@ export default function VerticalOrdersPage() {
         </div>
       }
     >
+      {/* ── Graphical View — derived from the same fetched data ───────── */}
+      <div className="space-y-3 mb-6">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold">Graphical View</h2>
+          <span className="text-xs text-muted-foreground">
+            Charts Reflect The Current Selection
+          </span>
+        </div>
+
+        {/* KPI row — the 3 unconditional counts + the escalation percentage. */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <QsKpiTile
+            label="Unconfirmed Orders"
+            value={data?.countOfUnconfirmedOrders ?? 0}
+            accent={QS_COLORS[0]}
+            icon={<FileQuestion className="h-5 w-5" />}
+          />
+          <QsKpiTile
+            label="Open Orders"
+            value={data?.countOfOpenOrders ?? 0}
+            accent={QS_SEMANTIC.info}
+            icon={<FolderOpen className="h-5 w-5" />}
+          />
+          <QsKpiTile
+            label="Open Escalation"
+            value={data?.countOfEscalatedOrders ?? 0}
+            accent={QS_SEMANTIC.bad}
+            icon={<AlertTriangle className="h-5 w-5" />}
+          />
+          <QsKpiTile
+            label="Escalation Percentage"
+            value={`${data?.escalatedOrderPercentage ?? 0}%`}
+            accent={QS_SEMANTIC.warn}
+            icon={<Percent className="h-5 w-5" />}
+          />
+        </div>
+
+        {/* Bar + Donut grid. */}
+        <div className="grid md:grid-cols-2 gap-3">
+          <ChartCard
+            title="Open Orders By Age Category"
+            subtitle="Job Count Per Vertical Across Aging Buckets"
+          >
+            {hasBarData ? (
+              <QsBarChart data={ageBarData} xKey="age" series={barSeries} height={280} />
+            ) : (
+              <div className="flex h-[280px] items-center justify-center text-sm text-muted-foreground">
+                No Open Orders For The Current Selection
+              </div>
+            )}
+          </ChartCard>
+
+          <ChartCard
+            title="Jobs By Age Category"
+            subtitle="Share Of Open Orders Across Aging Buckets"
+          >
+            {hasDonutData ? (
+              <QsDonut data={ageDonutData} nameKey="name" valueKey="value" height={280} />
+            ) : (
+              <div className="flex h-[280px] items-center justify-center text-sm text-muted-foreground">
+                No Open Orders For The Current Selection
+              </div>
+            )}
+          </ChartCard>
+        </div>
+      </div>
+
       <div className="space-y-2">
         <h2 className="text-base font-semibold">Vertical-Wise Job Count Analysis</h2>
         <div className="overflow-x-auto">
