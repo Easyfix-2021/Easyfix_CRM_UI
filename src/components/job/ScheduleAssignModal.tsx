@@ -33,7 +33,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle, CheckCircle2, XCircle, Info, Search, X, MapPin,
-  Calendar, Phone,
+  Calendar, Phone, UserCheck, Loader2,
 } from 'lucide-react';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -430,7 +430,7 @@ export function ScheduleAssignModal({
               <div className="relative w-80 max-w-full">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
-                  placeholder="Search Any Technician by Efr Id / Name / Mobile…"
+                  placeholder="Search Any Technician by Name or Id"
                   className="pl-9 pr-9"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
@@ -526,7 +526,7 @@ function CandidateTable({
   onAssign: (c: ScheduleCandidate) => void;
   onOpenPincodes: (c: ScheduleCandidate) => void;
 }) {
-  const COLS = 15;
+  const COLS = 13;
   return (
     <div className="border rounded max-h-[48vh] overflow-auto thin-scroll">
       <table
@@ -535,28 +535,26 @@ function CandidateTable({
       >
         <thead className="sticky top-0 bg-background z-20 shadow-sm">
           <tr>
-            <th className="!text-left sticky left-0 bg-white z-40 shadow-[2px_0_0_0_var(--border)] min-w-[170px]">
+            <th className="!text-left sticky left-0 bg-white z-40 shadow-[2px_0_0_0_var(--border)] min-w-[190px]">
               Technician
             </th>
             <th className="!text-center">Attendance for Job Date</th>
+            <th className="!text-center">Current Pincode</th>
+            <th className="!text-left min-w-[160px]">Serviceable Pincodes</th>
             <th className="!text-center">
               <span className="inline-flex items-center gap-1">
                 Distance
                 <DistanceTierInfo />
               </span>
             </th>
-            <th className="!text-left min-w-[160px]">Serviceable Pincodes</th>
-            <th className="!text-center">Current Pincode</th>
             <th className="!text-left">Zone Name</th>
-            <th className="!text-left">Masked Mobile</th>
             <th className="!text-left min-w-[180px]">Deep Skill Status</th>
             <th className="!text-center">Deep Skill Match</th>
             <th className="!text-center">Worked in Category?</th>
-            <th className="!text-center">Payment Mode</th>
-            <th className="!text-right">Easyfixer Account Balance</th>
+            <th className="!text-center">Worked for Client?</th>
             <th className="!text-center">Concurrent Jobs Count</th>
-            <th className="!text-center">Worked for Client</th>
-            <th className="!text-right">Action</th>
+            <th className="!text-right">Easyfixer Account Balance</th>
+            <th className="!text-left">Masked Mobile</th>
           </tr>
         </thead>
         <tbody>
@@ -575,12 +573,44 @@ function CandidateTable({
               </td>
             </tr>
           )}
-          {!loading && !error && rows.map((c) => (
+          {!loading && !error && rows.map((c) => {
+            const isAssigningThis = assigning === c.efr_id;
+            return (
             <tr key={c.efr_id} className="group hover:bg-muted/40">
-              {/* Technician (efr_id - name) — sticky left identifier. */}
-              <td className="!text-left sticky left-0 z-20 bg-white group-hover:bg-slate-100 shadow-[2px_0_0_0_var(--border)] min-w-[170px]">
-                <div className="font-medium" title={c.efr_name}>{c.efr_name}</div>
-                <div className="text-[10px] text-muted-foreground">Efr #{c.efr_id}</div>
+              {/* Technician (name + efr_id) — sticky left identifier. The
+                  Assign action lives HERE (no separate Action column): an
+                  icon button revealed on row hover, with an "Assign" tooltip,
+                  so it stays reachable no matter how far the wide table is
+                  scrolled horizontally. */}
+              <td className="!text-left sticky left-0 z-20 bg-white group-hover:bg-slate-100 shadow-[2px_0_0_0_var(--border)] min-w-[190px]">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="font-medium truncate" title={c.efr_name}>{c.efr_name}</div>
+                    <div className="text-[10px] text-muted-foreground">Efr #{c.efr_id}</div>
+                  </div>
+                  {canCommit && (
+                    <button
+                      type="button"
+                      onClick={() => onAssign(c)}
+                      disabled={assigning != null}
+                      title="Assign"
+                      aria-label={`Assign Job to ${c.efr_name}`}
+                      className={
+                        'shrink-0 inline-flex items-center justify-center size-7 rounded-full ' +
+                        'bg-primary text-primary-foreground shadow-sm transition-opacity ' +
+                        'hover:bg-primary/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ' +
+                        'disabled:cursor-not-allowed disabled:opacity-40 ' +
+                        (isAssigningThis
+                          ? 'opacity-100'
+                          : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100')
+                      }
+                    >
+                      {isAssigningThis
+                        ? <Loader2 className="size-3.5 animate-spin" />
+                        : <UserCheck className="size-3.5" />}
+                    </button>
+                  )}
+                </div>
               </td>
 
               {/* Attendance for Job Date — green tick / red cross. */}
@@ -590,9 +620,9 @@ function CandidateTable({
                   : <XCircle className="inline h-4 w-4 text-red-500" aria-label="No attendance for job date" />}
               </td>
 
-              {/* Distance — km on top, tier label muted underneath. */}
+              {/* Current Pincode. */}
               <td className="!text-center">
-                <DistanceCell km={c.distance_km} tier={c.distance_tier} />
+                {c.current_pincode || <span className="text-muted-foreground">—</span>}
               </td>
 
               {/* Serviceable Pincodes — truncated, hover list, click-to-open. */}
@@ -600,12 +630,33 @@ function CandidateTable({
                 <ServiceablePincodesCell candidate={c} onOpen={() => onOpenPincodes(c)} />
               </td>
 
+              {/* Distance — km on top, tier label muted underneath. */}
               <td className="!text-center">
-                {c.current_pincode || <span className="text-muted-foreground">—</span>}
+                <DistanceCell km={c.distance_km} tier={c.distance_tier} />
               </td>
+
+              {/* Zone Name. */}
               <td className="!text-left">
                 {c.zone_name || <span className="text-muted-foreground">—</span>}
               </td>
+
+              {/* Deep Skill Status — 3-state enum → label. */}
+              <td className="!text-left">{deepSkillStatusLabel(c.deep_skill_status)}</td>
+
+              {/* Deep Skill Match. */}
+              <td className="!text-center"><YesNo value={c.deep_skill_match} /></td>
+
+              {/* Worked in Category? */}
+              <td className="!text-center"><YesNo value={c.worked_in_category} /></td>
+
+              {/* Worked for Client? */}
+              <td className="!text-center"><YesNo value={c.worked_for_client} /></td>
+
+              {/* Concurrent Jobs Count. */}
+              <td className="!text-center tabular-nums">{c.concurrent_jobs_count ?? 0}</td>
+
+              {/* Easyfixer Account Balance. */}
+              <td className="!text-right font-mono">₹{(c.account_balance ?? 0).toLocaleString('en-IN')}</td>
 
               {/* Masked Mobile — click-to-call via the shared CallableMobile
                   (resolves unmasked digits server-side from efr_id). */}
@@ -618,30 +669,9 @@ function CandidateTable({
                   )
                   : <span className="text-muted-foreground inline-flex items-center gap-1"><Phone className="h-3 w-3" />—</span>}
               </td>
-
-              {/* Deep Skill Status — 3-state enum → label. */}
-              <td className="!text-left">{deepSkillStatusLabel(c.deep_skill_status)}</td>
-
-              <td className="!text-center"><YesNo value={c.deep_skill_match} /></td>
-              <td className="!text-center"><YesNo value={c.worked_in_category} /></td>
-              <td className="!text-center">
-                {c.payment_mode || <span className="text-muted-foreground">—</span>}
-              </td>
-              <td className="!text-right font-mono">₹{(c.account_balance ?? 0).toLocaleString('en-IN')}</td>
-              <td className="!text-center tabular-nums">{c.concurrent_jobs_count ?? 0}</td>
-              <td className="!text-center"><YesNo value={c.worked_for_client} /></td>
-
-              <td className="!text-right">
-                {canCommit ? (
-                  <Button size="sm" disabled={assigning != null} onClick={() => onAssign(c)}>
-                    {assigning === c.efr_id ? 'Assigning…' : 'Assign'}
-                  </Button>
-                ) : (
-                  <span className="text-[10px] text-muted-foreground">view-only</span>
-                )}
-              </td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>

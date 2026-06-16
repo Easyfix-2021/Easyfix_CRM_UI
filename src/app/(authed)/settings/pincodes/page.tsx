@@ -21,13 +21,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   MapPin, Search, Plus, Upload, Download,
-  AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Info, Users,
+  AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Info, Users, Map,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Switch } from '@/components/ui/switch';
+import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
+import { cycleSort, SortHeader, type SortDir } from '@/lib/use-sort';
 import { api, ApiError } from '@/lib/api';
 import { useFetch, useDebouncedValue, invalidateFetch } from '@/lib/hooks';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
@@ -57,7 +60,17 @@ type ListResponse = {
 };
 
 type StatusFilter = 'ALL' | 'LOCAL' | 'TRAVEL';
-const PAGE_SIZE = 100;
+
+// Column keys eligible for the 3-state client-side sort cycle. `status` is a
+// virtual string; numeric columns (lat/lng/zone_count) sort numerically via
+// the shared comparator's Number()-detection.
+type SortKey =
+  | 'pincode' | 'city_name' | 'district' | 'state_name'
+  | 'lat' | 'lng' | 'zone_count' | 'status';
+
+// BE Joi cap on /admin/pincodes `limit` is 200000; pass it so 'All' maps to
+// the endpoint's true ceiling rather than pageSizeToLimit's 1000 default.
+const PINCODES_LIMIT_CAP = 200000;
 
 export default function ManagePincodesPage() {
   const lookup  = useLookup();
@@ -69,12 +82,30 @@ export default function ManagePincodesPage() {
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
+  // Serviceable filter: by default the list shows only Serviceable pincodes
+  // (pincode_status = 1). Toggle on to ALSO show Non-Serviceable (0) rows so
+  // they can be re-marked Serviceable.
+  const [showNonServiceable, setShowNonServiceable] = useState(false);
+  const [serviceableBusy, setServiceableBusy] = useState<number | null>(null);
+  // Server-side pagination state. Page is 0-indexed (offset = page * size).
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState<TablePageSize>(50);
+
+  // Sort state — client-side over the loaded page. Mirrors Manage Clients:
+  // own sortBy/sortDir directly and use cycleSort to compute next state.
+  const [sortBy, setSortBy] = useState<SortKey | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>('asc');
+  function onSortToggle(col: SortKey) {
+    const next = cycleSort<SortKey>(col, { sortBy, sortDir });
+    setSortBy(next.sortBy);
+    setSortDir(next.sortDir);
+  }
 
   const [editing, setEditing] = useState<Pincode | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [techModalPincode, setTechModalPincode] = useState<Pincode | null>(null);
+  const [zoneEditPincode, setZoneEditPincode] = useState<Pincode | null>(null);
 
   // Help panel — collapsed by default (operator-confirmed: most uses of
   // this page are routine, not first-time onboarding). Persisted state
@@ -91,17 +122,41 @@ export default function ManagePincodesPage() {
   // Debounced server-side search to keep payloads small even as the catalog grows.
   const debouncedSearch = useDebouncedValue(search, 300);
   // Reset page to 0 whenever filters change (debouncedSearch handles its own delay).
-  useEffect(() => { setPage(0); }, [debouncedSearch, statusFilter]);
+  useEffect(() => { setPage(0); }, [debouncedSearch, statusFilter, showNonServiceable]);
 
+  // Translate the shared page-size sentinel into the BE limit/offset.
+  const limit = pageSizeToLimit(pageSize, PINCODES_LIMIT_CAP);
   const urlParams = new URLSearchParams();
   if (debouncedSearch.trim()) urlParams.set('q', debouncedSearch.trim());
   if (statusFilter !== 'ALL') urlParams.set('status', statusFilter);
-  urlParams.set('limit', String(PAGE_SIZE));
-  urlParams.set('offset', String(page * PAGE_SIZE));
+  if (showNonServiceable) urlParams.set('includeInactive', 'true');
+  urlParams.set('limit', String(limit));
+  urlParams.set('offset', String(page * (pageSize === 'all' ? limit : Number(pageSize))));
   const listUrl = `/admin/pincodes?${urlParams.toString()}`;
   const { data: listData, loading, error: fetchError, refetch } = useFetch<ListResponse>(listUrl);
-  const items: Pincode[] = listData?.items ?? [];
   const total = listData?.total ?? 0;
+
+  // Sort the loaded page client-side (same comparator as Manage Clients):
+  // numeric columns sort numerically, text columns alphabetically (locale,
+  // numeric-aware). Null sortBy (3rd click) preserves the BE's pincode-ASC order.
+  const items: Pincode[] = useMemo(() => {
+    const arr = (listData?.items ?? []).slice();
+    if (!sortBy) return arr;
+    arr.sort((a, b) => {
+      const av: unknown = (a as Record<string, unknown>)[sortBy];
+      const bv: unknown = (b as Record<string, unknown>)[sortBy];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      const na = Number(av), nb = Number(bv);
+      const cmp = (!Number.isNaN(na) && !Number.isNaN(nb) && typeof av !== 'string')
+        ? na - nb
+        : String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' });
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+    return arr;
+  }, [listData?.items, sortBy, sortDir]);
+
   const [error, setError] = useState<string | null>(null);
   useEffect(() => { setError(fetchError); }, [fetchError]);
 
@@ -109,6 +164,23 @@ export default function ManagePincodesPage() {
   function refreshList() {
     invalidateFetch((k) => k.startsWith('/admin/pincodes'));
     refetch();
+  }
+
+  // Flip a pincode between Serviceable (pincode_status=1) and Non-Serviceable
+  // (0) via the existing PATCH is_active → pincode_status mapping. With the
+  // "Show Non-Serviceable" filter OFF, marking one Non-Serviceable drops it from
+  // the visible list (it's filtered out) — toggle that filter on to see/restore.
+  async function toggleServiceable(p: Pincode) {
+    setServiceableBusy(p.pincode_id);
+    setError(null);
+    try {
+      await api.patch(`/admin/pincodes/${p.pincode_id}`, { is_active: !p.is_active });
+      refreshList();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Status update failed');
+    } finally {
+      setServiceableBusy(null);
+    }
   }
 
   async function downloadTemplate() {
@@ -130,8 +202,6 @@ export default function ManagePincodesPage() {
       setError(e instanceof Error ? e.message : 'Download failed');
     }
   }
-
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
     <div className="space-y-4">
@@ -174,7 +244,7 @@ export default function ManagePincodesPage() {
           >
             {howOpen ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
             <Info className="size-4 shrink-0 text-blue-600" />
-            <span className="font-medium">How Pincode management works</span>
+            <span className="font-medium">How Pincode Management Works?</span>
             <span className="ml-auto text-xs text-muted-foreground">{howOpen ? 'Hide' : 'Show'}</span>
           </button>
           {howOpen && (
@@ -293,6 +363,14 @@ export default function ManagePincodesPage() {
               </Button>
             ))}
           </div>
+          <label className="flex items-center gap-1.5 text-xs whitespace-nowrap cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showNonServiceable}
+              onChange={(e) => setShowNonServiceable(e.target.checked)}
+            />
+            Show Non-Serviceable
+          </label>
         </CardContent>
       </Card>
 
@@ -306,26 +384,32 @@ export default function ManagePincodesPage() {
 
       <Card>
         <CardContent className="p-0">
+          <div className="overflow-x-auto">
           <table className="data-table w-full">
             <thead>
               <tr>
-                <th className="!text-left">Pincode</th>
+                <SortHeader col={'pincode'    as SortKey} align="left"   sortBy={sortBy} sortDir={sortDir} onSort={onSortToggle}>Pincode</SortHeader>
                 <th className="!text-left">Location</th>
-                <th className="!text-left">City</th>
-                <th className="!text-left">District</th>
-                <th className="!text-left">State</th>
-                <th className="!text-right">Latitude</th>
-                <th className="!text-right">Longitude</th>
-                <th className="!text-center">Zones</th>
+                <SortHeader col={'city_name'  as SortKey} align="left"   sortBy={sortBy} sortDir={sortDir} onSort={onSortToggle}>City</SortHeader>
+                <SortHeader col={'district'   as SortKey} align="left"   sortBy={sortBy} sortDir={sortDir} onSort={onSortToggle}>District</SortHeader>
+                <SortHeader col={'state_name' as SortKey} align="left"   sortBy={sortBy} sortDir={sortDir} onSort={onSortToggle}>State</SortHeader>
+                <SortHeader col={'lat'        as SortKey} align="right"  sortBy={sortBy} sortDir={sortDir} onSort={onSortToggle}>Latitude</SortHeader>
+                <SortHeader col={'lng'        as SortKey} align="right"  sortBy={sortBy} sortDir={sortDir} onSort={onSortToggle}>Longitude</SortHeader>
+                <SortHeader col={'zone_count' as SortKey} align="center" sortBy={sortBy} sortDir={sortDir} onSort={onSortToggle}>Zones</SortHeader>
+                {/* Status = Serviceable / Non-Serviceable (read-only label). */}
                 <th className="!text-center">Status</th>
+                {/* Mapping = Local / Travel (live technician availability). */}
+                <SortHeader col={'status'     as SortKey} align="center" sortBy={sortBy} sortDir={sortDir} onSort={onSortToggle}>Mapping</SortHeader>
+                {/* Action = frozen right column; switch to flip Serviceable status. */}
+                <th className="!text-center sticky right-0 bg-background shadow-[-2px_0_0_0_var(--border)]">Action</th>
               </tr>
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={9} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
+                <tr><td colSpan={11} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
               )}
               {!loading && items.length === 0 && (
-                <tr><td colSpan={9} className="!text-center text-muted-foreground py-6">No pincodes match the current filters.</td></tr>
+                <tr><td colSpan={11} className="!text-center text-muted-foreground py-6">No pincodes match the current filters.</td></tr>
               )}
               {!loading && items.map((p) => (
                 <tr key={p.pincode_id}>
@@ -340,7 +424,33 @@ export default function ManagePincodesPage() {
                   <td className="!text-right font-mono text-sm">
                     {p.lng != null ? p.lng.toFixed(5) : <span className="text-muted-foreground">—</span>}
                   </td>
-                  <td className="!text-center tabular-nums">{p.zone_count}</td>
+                  <td className="!text-center tabular-nums">
+                    {can.isPincodeAddNew ? (
+                      <button
+                        type="button"
+                        onClick={() => setZoneEditPincode(p)}
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border transition-colors cursor-pointer ${
+                          p.zone_count > 0
+                            ? 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'
+                            : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                        }`}
+                        title={p.zone_count > 0 ? 'Edit Zone Mapping' : 'Map Zones (None Assigned)'}
+                      >
+                        <MapPin className="size-3 shrink-0" />
+                        <span className="tabular-nums">{p.zone_count}</span>
+                        <span className="hidden sm:inline">{p.zone_count > 0 ? 'Edit' : 'Map'}</span>
+                      </button>
+                    ) : (
+                      p.zone_count
+                    )}
+                  </td>
+                  {/* Status — Serviceable / Non-Serviceable (read-only label). */}
+                  <td className="!text-center">
+                    <span className={`text-xs font-medium ${p.is_active ? 'text-emerald-700' : 'text-amber-700'}`}>
+                      {p.is_active ? 'Serviceable' : 'Non-Serviceable'}
+                    </span>
+                  </td>
+                  {/* Mapping — Local / Travel (live technician availability). */}
                   <td className="!text-center">
                     <StatusPill
                       status={p.status}
@@ -348,24 +458,36 @@ export default function ManagePincodesPage() {
                       onClick={p.active_efr_count > 0 ? () => setTechModalPincode(p) : undefined}
                     />
                   </td>
+                  {/* Action — frozen right; switch flips Serviceable status. */}
+                  <td className="!text-center sticky right-0 bg-background shadow-[-2px_0_0_0_var(--border)]">
+                    {can.isPincodeAddNew ? (
+                      <Switch
+                        checked={p.is_active}
+                        onCheckedChange={() => toggleServiceable(p)}
+                        disabled={serviceableBusy === p.pincode_id}
+                        ariaLabel={p.is_active ? 'Mark Non-Serviceable' : 'Mark Serviceable'}
+                      />
+                    ) : (
+                      <span className="text-[10px] text-muted-foreground">—</span>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
+          </div>
+          {/* Pagination band — shared component, server-side paged. */}
+          <div className="px-3 py-2 border-t">
+            <TablePagination
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onPageChange={setPage}
+              onPageSizeChange={(s) => { setPageSize(s); setPage(0); }}
+            />
+          </div>
         </CardContent>
       </Card>
-
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-muted-foreground">
-            Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, total)} of {total}
-          </span>
-          <div className="flex gap-1">
-            <Button size="sm" variant="outline" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>Previous</Button>
-            <Button size="sm" variant="outline" disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)}>Next</Button>
-          </div>
-        </div>
-      )}
 
       <PincodeFormModal
         open={modalOpen}
@@ -384,6 +506,12 @@ export default function ManagePincodesPage() {
       <PincodeTechniciansModal
         pincode={techModalPincode}
         onClose={() => setTechModalPincode(null)}
+      />
+
+      <PincodeZonesModal
+        pincode={zoneEditPincode}
+        onClose={() => setZoneEditPincode(null)}
+        onSaved={() => { setZoneEditPincode(null); refreshList(); }}
       />
     </div>
   );
@@ -860,6 +988,173 @@ function PincodeTechniciansModal({
               ))}
             </tbody>
           </table>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Pincode → Zones Mapping Modal ───────────────────────────────────
+type ZoneOption = { zone_id: number; zone_name: string };
+type PincodeDetail = Pincode & { zones?: ZoneOption[] };
+
+/*
+ * PincodeZonesModal — reverse of the Manage Zones zone→pincodes editor.
+ * Assigns THIS pincode to one or more zones (many-to-many junction
+ * tbl_zone_pincode_mapping). All active zones come from
+ * GET /shared/lookup/zones; the pre-checked set comes from the pincode's
+ * own detail (GET /admin/pincodes/:id → zones[]). Save PUTs the chosen
+ * zone-id set to PUT /admin/pincodes/:id/zones.
+ */
+function PincodeZonesModal({
+  pincode,
+  onClose,
+  onSaved,
+}: {
+  pincode: Pincode | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  // All active zones (multi-select source). useFetch — no raw useEffect+api.get.
+  const { data: allZones, loading: zonesLoading } = useFetch<ZoneOption[]>('/shared/lookup/zones');
+  // This pincode's current zones (pre-checked state).
+  const detailKey = pincode ? `/admin/pincodes/${pincode.pincode_id}` : null;
+  const { data: detail, loading: detailLoading } = useFetch<PincodeDetail>(detailKey);
+
+  const [search, setSearch] = useState('');
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [initial, setInitial] = useState<Set<number>>(new Set());
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Seed the selection from the pincode's current zones once they load.
+  useEffect(() => {
+    if (!pincode) { setSelected(new Set()); setInitial(new Set()); setSearch(''); setError(null); return; }
+    if (detail?.zones) {
+      const ids = new Set(detail.zones.map((z) => z.zone_id));
+      setSelected(ids);
+      setInitial(new Set(ids));
+    }
+  }, [pincode, detail]);
+
+  const debouncedZoneSearch = useDebouncedValue(search, 200);
+  const filteredZones = useMemo(() => {
+    const list = allZones ?? [];
+    const q = debouncedZoneSearch.trim().toLowerCase();
+    if (!q) return list;
+    return list.filter((z) => z.zone_name.toLowerCase().includes(q));
+  }, [allZones, debouncedZoneSearch]);
+
+  // Dirty = selection differs from the originally-loaded set.
+  const isDirty = useMemo(() => {
+    if (selected.size !== initial.size) return true;
+    for (const id of selected) if (!initial.has(id)) return true;
+    return false;
+  }, [selected, initial]);
+
+  function toggleZone(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  async function handleSave() {
+    if (!pincode) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await api.put(`/admin/pincodes/${pincode.pincode_id}/zones`, {
+        zoneIds: Array.from(selected),
+      });
+      onSaved();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Save failed');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // Guard the dialog close while the selection is dirty (ESLint rule bans
+  // inline onOpenChange lambdas on <Dialog>).
+  const guardedOpenChange = useFormDirtyGuard(onClose, {
+    when: () => !submitting && isDirty,
+  });
+
+  if (!pincode) return null;
+
+  const headerSub = pincode.city_name
+    ? `${pincode.pincode} · ${pincode.city_name}`
+    : pincode.pincode;
+  const loading = zonesLoading || detailLoading;
+
+  return (
+    <Dialog open={!!pincode} onOpenChange={guardedOpenChange}>
+      <DialogContent className="max-w-lg p-0 overflow-hidden flex flex-col max-h-[80vh]">
+        <DialogHeader className="!mx-0 !mt-0 px-6 py-4 mb-0">
+          <DialogTitle className="flex items-center gap-2">
+            <Map className="size-4" /> Assign Zones
+          </DialogTitle>
+          <div className="text-[12px] text-slate-300/85 mt-0.5">
+            {headerSub}{' '}·{' '}
+            {loading ? 'Loading…' : `${selected.size} Selected`}
+          </div>
+        </DialogHeader>
+
+        <div className="px-4 pt-3 pb-2">
+          <div className="relative">
+            <Search className="size-4 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              placeholder="Search Zones…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-8"
+              autoFocus
+            />
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-auto px-4 pb-2 min-h-[8rem]">
+          {loading ? (
+            <div className="py-8 text-center text-sm text-muted-foreground">Loading…</div>
+          ) : filteredZones.length === 0 ? (
+            <div className="py-8 text-center text-sm text-muted-foreground">
+              {debouncedZoneSearch.trim() ? 'No Zones Match The Search.' : 'No Zones Available.'}
+            </div>
+          ) : (
+            <div className="border rounded bg-background divide-y" role="listbox" aria-label="Zones">
+              {filteredZones.map((z) => {
+                const checked = selected.has(z.zone_id);
+                return (
+                  <label
+                    key={z.zone_id}
+                    className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted/50 cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleZone(z.zone_id)}
+                    />
+                    <span className={checked ? 'font-medium text-foreground' : ''}>{z.zone_name}</span>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {error && (
+          <div className="px-4 text-sm text-red-600 flex items-center gap-1">
+            <AlertTriangle className="size-4" /> {error}
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2 px-4 py-3 border-t">
+          <CancelButton onCancel={onClose} disabled={submitting} />
+          <Button onClick={handleSave} disabled={submitting || loading}>
+            {submitting ? 'Saving…' : 'Save Zones'}
+          </Button>
         </div>
       </DialogContent>
     </Dialog>

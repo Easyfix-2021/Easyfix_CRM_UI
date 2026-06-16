@@ -11,18 +11,20 @@
  * Soft-delete only — see service comment for why.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Building2, Search, Plus, Pencil, Trash2,
   AlertTriangle, ChevronDown, ChevronRight, Info,
-  ArrowUp, ArrowDown, ArrowUpDown,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
 import { api, ApiError } from '@/lib/api';
+import { useFetch, useDebouncedValue, invalidateFetch } from '@/lib/hooks';
+import { useSort, SortHeader } from '@/lib/use-sort';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useLookup } from '@/lib/use-lookup';
 import { useMe } from '@/lib/auth-context';
@@ -45,15 +47,13 @@ type City = {
 
 type ListResponse = { items: City[]; total: number };
 
-// Must mirror SORTABLE_COLUMNS in services/city.service.js — the backend
-// whitelists by name. Keep this list in sync if a new sortable column is
-// added on either side.
-type SortKey =
-  | 'city_id' | 'city_name' | 'state_name' | 'district' | 'tier'
-  | 'zone_count' | 'pincode_count' | 'technician_count' | 'city_status';
-type SortDir = 'asc' | 'desc';
+// Sorting is client-side over the loaded page via the shared useSort hook
+// (3-state asc → desc → unsorted), matching Manage Zones / Pincodes.
 
-const PAGE_SIZE = 100;
+// BE Joi cap on /admin/cities `limit` is 1000 (routes/admin/cities.js); pass
+// it so the shared "All" page-size maps to the endpoint's true ceiling rather
+// than relying on the pageSizeToLimit default (which is also 1000).
+const CITIES_LIMIT_CAP = 1000;
 
 export default function ManageCitiesPage() {
   const confirm = useConfirm();
@@ -66,36 +66,17 @@ export default function ManageCitiesPage() {
   // a city upload page yet — gate that one when it ships.
   const can = actionFlags(me, ['isCityAddNew', 'isCityEdit']);
 
-  const [items, setItems] = useState<City[]>([]);
-  const [total, setTotal] = useState(0);
   const [search, setSearch] = useState('');
   const [stateFilter, setStateFilter] = useState<number | ''>('');
   const [includeInactive, setIncludeInactive] = useState(false);
+  // Server-side pagination state. Page is 0-indexed (offset = page * size).
   const [page, setPage] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [pageSize, setPageSize] = useState<TablePageSize>(50);
+  // Mutation-only error (deactivate). Fetch errors come from useFetch below.
+  const [mutationError, setMutationError] = useState<string | null>(null);
 
   const [editing, setEditing] = useState<City | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
-
-  // Sort state — server-side. Default sort: city_name ASC (matches the
-  // backend default, so the initial render and a subsequent click on
-  // City Name produce identical results).
-  const [sortBy,  setSortBy]  = useState<SortKey>('city_name');
-  const [sortDir, setSortDir] = useState<SortDir>('asc');
-
-  // Click handler: same column → flip direction; different column →
-  // switch column, reset to ASC. Reset page to 0 because sort changes
-  // the row order globally.
-  function onSort(col: SortKey) {
-    if (sortBy === col) {
-      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-    } else {
-      setSortBy(col);
-      setSortDir('asc');
-    }
-    setPage(0);
-  }
 
   const [howOpen, setHowOpen] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
@@ -106,43 +87,38 @@ export default function ManageCitiesPage() {
     localStorage.setItem('cities-help-collapsed', howOpen ? '0' : '1');
   }, [howOpen]);
 
-  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-    searchTimerRef.current = setTimeout(() => {
-      setPage(0);
-      void fetchList();
-    }, 300);
-    return () => {
-      if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, stateFilter, includeInactive]);
+  // Debounced server-side search to keep payloads small as the catalog grows.
+  const debouncedSearch = useDebouncedValue(search, 300);
+  // Reset to page 0 whenever a filter changes (debouncedSearch self-delays).
+  useEffect(() => { setPage(0); }, [debouncedSearch, stateFilter, includeInactive]);
 
-  // Page change OR sort change → re-fetch immediately (no debounce since
-  // these are explicit clicks, not typing).
-  useEffect(() => { void fetchList(); /* eslint-disable-next-line */ }, [page, sortBy, sortDir]);
+  // Build the list URL — every input that affects the result set is part of
+  // the key, so useFetch re-fires automatically on search/filter/sort/page
+  // changes (no manual fetchList()/useEffect orchestration). 'all' maps to
+  // the endpoint's Joi cap; numeric sizes map 1:1.
+  const limit = pageSizeToLimit(pageSize, CITIES_LIMIT_CAP);
+  const offset = page * (pageSize === 'all' ? limit : Number(pageSize));
+  const params = new URLSearchParams();
+  if (debouncedSearch.trim()) params.set('q', debouncedSearch.trim());
+  if (stateFilter)            params.set('stateId', String(stateFilter));
+  if (includeInactive)        params.set('includeInactive', 'true');
+  params.set('limit',   String(limit));
+  params.set('offset',  String(offset));
+  const listUrl = `/admin/cities?${params.toString()}`;
 
-  async function fetchList() {
-    setLoading(true);
-    setError(null);
-    try {
-      const params = new URLSearchParams();
-      if (search.trim()) params.set('q', search.trim());
-      if (stateFilter)   params.set('stateId', String(stateFilter));
-      if (includeInactive) params.set('includeInactive', 'true');
-      params.set('limit',   String(PAGE_SIZE));
-      params.set('offset',  String(page * PAGE_SIZE));
-      params.set('sortBy',  sortBy);
-      params.set('sortDir', sortDir);
-      const data = await api.get<ListResponse>(`/admin/cities?${params}`);
-      setItems(data.items);
-      setTotal(data.total);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Failed to load cities');
-    } finally {
-      setLoading(false);
-    }
+  const { data: listData, loading, error: fetchError, refetch } = useFetch<ListResponse>(listUrl);
+  const items: City[] = listData?.items ?? [];
+  const total = listData?.total ?? 0;
+
+  // Client-side 3-state sort over the loaded page (asc → desc → unsorted),
+  // same shared hook as Manage Zones / Pincodes. When unsorted, `sorted`
+  // preserves the BE's default city_name-ASC order.
+  const { sorted, sortKey, sortDir, toggle } = useSort<City>(items);
+
+  // Invalidate the 30s module cache for ALL city list pages, then refetch.
+  function refreshList() {
+    invalidateFetch((k) => k.startsWith('/admin/cities'));
+    refetch();
   }
 
   async function handleDeactivate(c: City) {
@@ -159,15 +135,14 @@ export default function ManageCitiesPage() {
       variant: 'destructive',
     });
     if (!ok) return;
+    setMutationError(null);
     try {
       await api.delete(`/admin/cities/${c.city_id}`);
-      void fetchList();
+      refreshList();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Deactivate failed');
+      setMutationError(e instanceof ApiError ? e.message : 'Deactivate failed');
     }
   }
-
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
     <div className="space-y-4">
@@ -200,7 +175,7 @@ export default function ManageCitiesPage() {
           >
             {howOpen ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
             <Info className="size-4 shrink-0 text-blue-600" />
-            <span className="font-medium">How City management works</span>
+            <span className="font-medium">How City Management Works?</span>
             <span className="ml-auto text-xs text-muted-foreground">{howOpen ? 'Hide' : 'Show'}</span>
           </button>
           {howOpen && (
@@ -272,10 +247,10 @@ export default function ManageCitiesPage() {
         </CardContent>
       </Card>
 
-      {error && (
+      {(fetchError || mutationError) && (
         <Card>
           <CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
-            <AlertTriangle className="size-4" /> {error}
+            <AlertTriangle className="size-4" /> {fetchError || mutationError}
           </CardContent>
         </Card>
       )}
@@ -309,15 +284,15 @@ export default function ManageCitiesPage() {
             </colgroup>
             <thead>
               <tr>
-                <SortHeader col="city_id"          align="center" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>City ID</SortHeader>
-                <SortHeader col="city_name"        align="left"   sortBy={sortBy} sortDir={sortDir} onSort={onSort}>City Name</SortHeader>
-                <SortHeader col="state_name"       align="left"   sortBy={sortBy} sortDir={sortDir} onSort={onSort}>State</SortHeader>
-                <SortHeader col="district"         align="left"   sortBy={sortBy} sortDir={sortDir} onSort={onSort}>District</SortHeader>
-                <SortHeader col="tier"             align="center" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Tier</SortHeader>
-                <SortHeader col="zone_count"       align="center" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Zones</SortHeader>
-                <SortHeader col="pincode_count"    align="center" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Pincodes</SortHeader>
-                <SortHeader col="technician_count" align="center" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Technicians</SortHeader>
-                <SortHeader col="city_status"      align="center" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Status</SortHeader>
+                <SortHeader col={'city_id'          as keyof City} align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>City ID</SortHeader>
+                <SortHeader col={'city_name'        as keyof City} align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>City Name</SortHeader>
+                <SortHeader col={'state_name'       as keyof City} align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>State</SortHeader>
+                <SortHeader col={'district'         as keyof City} align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>District</SortHeader>
+                <SortHeader col={'tier'             as keyof City} align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Tier</SortHeader>
+                <SortHeader col={'zone_count'       as keyof City} align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Zones</SortHeader>
+                <SortHeader col={'pincode_count'    as keyof City} align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Pincodes</SortHeader>
+                <SortHeader col={'technician_count' as keyof City} align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Technicians</SortHeader>
+                <SortHeader col={'city_status'      as keyof City} align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Status</SortHeader>
                 <th className="!text-right whitespace-nowrap">Actions</th>
               </tr>
             </thead>
@@ -328,7 +303,7 @@ export default function ManageCitiesPage() {
               {!loading && items.length === 0 && (
                 <tr><td colSpan={10} className="!text-center text-muted-foreground py-6">No cities match the current filters.</td></tr>
               )}
-              {!loading && items.map((c) => (
+              {!loading && sorted.map((c) => (
                 <tr key={c.city_id}>
                   <td className="!text-center font-mono text-xs truncate">{c.city_id}</td>
                   <td className="!text-left font-medium truncate" title={c.city_name}>{c.city_name}</td>
@@ -374,74 +349,27 @@ export default function ManageCitiesPage() {
               ))}
             </tbody>
           </table>
+          {/* Pagination band — shared component, server-side paged. */}
+          <div className="px-3 py-2 border-t">
+            <TablePagination
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onPageChange={setPage}
+              onPageSizeChange={(s) => { setPageSize(s); setPage(0); }}
+            />
+          </div>
         </CardContent>
       </Card>
-
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-muted-foreground">
-            Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, total)} of {total}
-          </span>
-          <div className="flex gap-1">
-            <Button size="sm" variant="outline" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>Previous</Button>
-            <Button size="sm" variant="outline" disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)}>Next</Button>
-          </div>
-        </div>
-      )}
 
       <CityFormModal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
         editing={editing}
         states={lookup.states}
-        onSaved={() => { setModalOpen(false); void fetchList(); }}
+        onSaved={() => { setModalOpen(false); refreshList(); }}
       />
     </div>
-  );
-}
-
-// ─── Sortable column header ─────────────────────────────────────────
-/*
- * Click-to-sort header. Same column → flip direction. Different column →
- * switch column, default to ascending. The active column shows an up/down
- * arrow; inactive columns show a faint two-direction arrow as an
- * affordance that the column IS sortable. Without the inactive icon,
- * users wouldn't know clicking does anything.
- */
-function SortHeader({
-  col, align, sortBy, sortDir, onSort, children,
-}: {
-  col: SortKey;
-  align: 'left' | 'center' | 'right';
-  sortBy: SortKey;
-  sortDir: SortDir;
-  onSort: (col: SortKey) => void;
-  children: React.ReactNode;
-}) {
-  const isActive = sortBy === col;
-  const alignCls = align === 'left' ? '!text-left'
-                 : align === 'right' ? '!text-right'
-                 : '!text-center';
-  const justify  = align === 'left' ? 'justify-start'
-                 : align === 'right' ? 'justify-end'
-                 : 'justify-center';
-
-  const Icon = !isActive ? ArrowUpDown
-             : sortDir === 'asc' ? ArrowUp
-             : ArrowDown;
-
-  return (
-    <th
-      className={`${alignCls} cursor-pointer select-none hover:bg-muted/40 transition-colors whitespace-nowrap overflow-hidden`}
-      onClick={() => onSort(col)}
-      role="button"
-      aria-sort={isActive ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
-    >
-      <span className={`inline-flex items-center gap-1 whitespace-nowrap ${justify}`}>
-        {children}
-        <Icon className={`size-3 shrink-0 ${isActive ? 'text-foreground' : 'text-muted-foreground/40'}`} />
-      </span>
-    </th>
   );
 }
 

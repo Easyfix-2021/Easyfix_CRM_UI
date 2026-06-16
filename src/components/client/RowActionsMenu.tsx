@@ -31,7 +31,6 @@ import { createPortal } from 'react-dom';
 import {
   Pencil, MoreHorizontal, Download, Layers, Calculator, Users, MapPin, Phone, X, RotateCw,
 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
 import { showToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { api, ApiError } from '@/lib/api';
@@ -167,51 +166,50 @@ export function RowActionsMenu({ clientId, clientName, isActive, canEdit, onOpen
     else if (item.tab) onOpen(item.tab);
   }
 
-  // Tight icon-button row — matches the inline action style on
-  // Unconfirmed Orders (px-1.5, no gap between the two icons). The
-  // operator's eye reads the two buttons as ONE compact cluster.
+  // Naked colored-icon action cluster — matches the Unconfirmed Orders
+  // table convention (UnconfirmedJobsTable.tsx): plain <button>s sized to
+  // the icon itself with `inline-flex items-center gap-1 text-{color}
+  // text-xs hover:underline`, NOT shadcn <Button> `size-7` squares. The
+  // old <Button variant="ghost" size-7 p-0> rendered each action as a
+  // 28×28 rounded box that filled gray on hover; the naked icons remove
+  // that "box" and the wide hit-area spacing between actions.
   return (
-    <div className="inline-flex items-center" onClick={(e) => e.stopPropagation()}>
+    <div className="inline-flex items-center gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
       {canEdit && (
-        <Button
-          size="sm"
-          variant="ghost"
+        <button
+          type="button"
           onClick={() => onOpen('overview')}
           title="Edit Client"
-          className="size-7 p-0"
+          className="inline-flex items-center text-primary text-xs hover:underline"
         >
           <Pencil className="size-3.5" />
-        </Button>
+        </button>
       )}
       {canEdit && (
-        <Button
-          size="sm"
-          variant="ghost"
+        <button
+          type="button"
           onClick={toggleStatus}
           disabled={toggling}
           title={isActive ? 'Deactivate Client' : 'Reactivate Client'}
           className={
-            'size-7 p-0 ' +
-            (isActive
-              ? 'text-red-500 hover:text-red-600 hover:bg-red-50'
-              : 'text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50')
+            'inline-flex items-center text-xs hover:underline disabled:opacity-50 ' +
+            (isActive ? 'text-red-600' : 'text-emerald-600')
           }
         >
           {isActive ? <X className="size-3.5" /> : <RotateCw className="size-3.5" />}
-        </Button>
+        </button>
       )}
-      <Button
-        ref={triggerRef as React.RefObject<HTMLButtonElement>}
-        size="sm"
-        variant="ghost"
+      <button
+        ref={triggerRef}
+        type="button"
         onClick={() => setOpen((o) => !o)}
         title="More Actions"
         aria-haspopup="menu"
         aria-expanded={open}
-        className="size-7 p-0"
+        className="inline-flex items-center text-slate-600 text-xs hover:underline"
       >
         <MoreHorizontal className="size-3.5" />
-      </Button>
+      </button>
 
       {open && typeof document !== 'undefined' && createPortal(
         /*

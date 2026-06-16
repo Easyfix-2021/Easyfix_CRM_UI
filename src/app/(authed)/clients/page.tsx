@@ -264,7 +264,7 @@ export default function ClientsPage() {
                       ? <span className="text-emerald-700 text-xs">Active</span>
                       : <span className="text-muted-foreground text-xs">Inactive</span>}
                   </td>
-                  <td className="!text-right">
+                  <td className="!text-right whitespace-nowrap">
                     {/* Row actions — pencil (Edit) for the most-common
                         action, kebab menu for tab-jumps (Services /
                         Rate Cards / Tech Mapping / Billing / Contacts)

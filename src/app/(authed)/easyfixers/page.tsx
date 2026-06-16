@@ -236,7 +236,7 @@ const DEFAULT_FILTERS = {
   activeToDate: '',
   zonalManagerId: '',
   attendance: '',        // present | absent | on_leave | no_information
-  deepSkillMapped: 'mapped', // mapped | not_mapped — default Mapped per screenshot
+  deepSkillMapped: '',   // '' = All (no filter) | mapped | not_mapped
 };
 
 type Filters = typeof DEFAULT_FILTERS;
@@ -766,12 +766,13 @@ export default function EasyfixersPage() {
         }
         if (missing.length > 0) {
           void api
-            .post<{ rows: AggregateRow[] }>('/admin/easyfixers/aggregates', { efrIds: missing })
+            .post<{ items: AggregateRow[] }>('/admin/easyfixers/aggregates', { efrIds: missing })
             .then((resp) => {
               // Persist into the module-level cache so a later page-flip
-              // / search-back picks them up instantly.
-              writeAggregatesToCache(resp.rows);
-              const map = new Map(resp.rows.map((a) => [a.efr_id, a]));
+              // / search-back picks them up instantly. (BE wraps under `items`,
+              // matching the rest of the API — not `rows`.)
+              writeAggregatesToCache(resp.items);
+              const map = new Map(resp.items.map((a) => [a.efr_id, a]));
               setRows((prev) => prev.map((row) => {
                 // Only flip rows that were in the `missing` set this call.
                 // Cached rows were already flipped synchronously above; rows
@@ -795,9 +796,9 @@ export default function EasyfixersPage() {
             .catch(() => { /* keep placeholders on failure */ });
         }
         void api
-          .post<{ rows: AttendanceRow[] }>('/admin/easyfixers/attendance', { efrIds })
+          .post<{ items: AttendanceRow[] }>('/admin/easyfixers/attendance', { efrIds })
           .then((resp) => {
-            const map = new Map(resp.rows.map((a) => [a.efr_id, a]));
+            const map = new Map(resp.items.map((a) => [a.efr_id, a]));
             setRows((prev) => prev.map((row) => {
               const att = map.get(row.efr_id);
               if (!att) return { ...row, _attendanceLoaded: true };
@@ -1029,6 +1030,7 @@ export default function EasyfixersPage() {
                 value={filters.status}
                 onChange={(v) => setFilters({ ...filters, status: v })}
                 options={[
+                  { value: '0', label: 'All' },
                   { value: '1', label: 'Active' },
                   { value: '2', label: 'Inactive' },
                   { value: '3', label: 'Idle' },
@@ -1135,10 +1137,11 @@ export default function EasyfixersPage() {
             </Field>
             <Field label="DeepSkill Mapped">
               <SearchSelect
-                placeholder="Mapped To DS"
+                placeholder="All"
                 value={filters.deepSkillMapped}
                 onChange={(v) => setFilters({ ...filters, deepSkillMapped: v })}
                 options={[
+                  { value: '', label: 'All' },
                   { value: 'mapped', label: 'Mapped To DS' },
                   { value: 'not_mapped', label: 'Not Mapped To DS' },
                 ]}

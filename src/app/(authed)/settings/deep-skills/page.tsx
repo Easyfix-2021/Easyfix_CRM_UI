@@ -70,6 +70,9 @@ import { useLookup } from '@/lib/use-lookup';
 import { cn } from '@/lib/utils';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
+// Shared 3-click sort cycle (asc → desc → none) + clickable header.
+// Same primitives Manage Clients / Manage Users drive their tables with.
+import { cycleSort, SortHeader, type SortDir } from '@/lib/use-sort';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { showToast } from '@/components/ui/toast';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
@@ -194,9 +197,12 @@ export default function DeepSkillsSettingsPage() {
 
   // Service types narrowed to the chosen category so the picker stays focused.
   // Only display === 2 types are deep-skill types; non-deep-skill types must never appear here.
+  // Compare via Number() on BOTH the display flag and the category id so a
+  // string-typed value from the lookup/SearchSelect (e.g. "2" / "21") still
+  // matches — a `===` against a string silently returns nothing.
   const filteredServiceTypes = useMemo(() => {
-    if (!categoryId) return lk.serviceTypes.filter((t) => t.display === 2);
-    return lk.serviceTypes.filter((t) => t.service_catg_id === Number(categoryId) && t.display === 2);
+    if (!categoryId) return lk.serviceTypes.filter((t) => Number(t.display) === 2);
+    return lk.serviceTypes.filter((t) => Number(t.service_catg_id) === Number(categoryId) && Number(t.display) === 2);
   }, [lk.serviceTypes, categoryId]);
 
   // Clear service-type when category changes so it can't dangle invalidly.
@@ -279,6 +285,62 @@ export default function DeepSkillsSettingsPage() {
     return rows;
   }, [skills, search, statusFilter]);
 
+  /*
+   * Client-side column sort (2026-06-15). 3-click cycle (asc → desc →
+   * none) over the already-loaded list, via the shared `cycleSort`
+   * helper + `<SortHeader>` — same primitives Manage Clients uses.
+   * `useSort<T>` (the keyof-T hook) doesn't fit here because two
+   * columns sort on DERIVED values rather than raw row fields:
+   *   - 'options'  → active-option count parsed from `option_labels`
+   *   - 'mapped'   → the per-row count held in the external
+   *                  `mappedCounts` Map, not on the row object
+   * so we own the comparator and map each SortKey to its sort value.
+   * Sorting runs BEFORE pagination so it orders the whole filtered
+   * set, not just the visible page.
+   */
+  type SortKey = 'deepskill_id' | 'category_name' | 'service_type_name'
+    | 'deepskill_name' | 'options' | 'mapped' | 'status';
+  const [sortBy, setSortBy] = useState<SortKey | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>('asc');
+  function onSortToggle(col: SortKey) {
+    const next = cycleSort<SortKey>(col, { sortBy, sortDir });
+    setSortBy(next.sortBy);
+    setSortDir(next.sortDir);
+  }
+
+  // Resolve a row to its comparable value for the active sort column.
+  // Numeric columns return numbers (sorted numerically); text columns
+  // return strings (locale-compared, numeric-aware). 'mapped' reads the
+  // external counts Map — an undefined count (still loading) sorts last
+  // in asc by treating it as -1 so loaded rows surface first.
+  function sortValue(s: DeepSkill, key: SortKey): number | string {
+    switch (key) {
+      case 'deepskill_id': return s.deepskill_id;
+      case 'options':      return s.option_labels ? s.option_labels.split('||').length : 0;
+      case 'mapped':       return mappedCounts.get(s.deepskill_id) ?? -1;
+      case 'status':       return Number(s.status);
+      case 'category_name':     return s.category_name ?? '';
+      case 'service_type_name': return s.service_type_name ?? '';
+      case 'deepskill_name':    return s.deepskill_name ?? '';
+    }
+  }
+
+  const sortedSkills = useMemo(() => {
+    if (!sortBy) return filteredSkills;
+    const arr = filteredSkills.slice();
+    arr.sort((a, b) => {
+      const av = sortValue(a, sortBy);
+      const bv = sortValue(b, sortBy);
+      const cmp = (typeof av === 'number' && typeof bv === 'number')
+        ? av - bv
+        : String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' });
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+    return arr;
+    // mappedCounts is intentionally a dep: re-sort once 'mapped' counts arrive.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredSkills, sortBy, sortDir, mappedCounts]);
+
   // Reset to first page only when the filter set changes — otherwise we'd
   // land on a now-empty page (e.g. you're on page 4 of 5, type a search
   // that narrows to 12 rows). Refetches of the same filter set (10s
@@ -294,9 +356,12 @@ export default function DeepSkillsSettingsPage() {
     : pageSizeToLimit(pageSize);
   const totalPages = Math.max(1, Math.ceil(filteredSkills.length / effectiveLimit));
   const safePage = Math.min(page, totalPages - 1);
+  // Slice the SORTED list (sortedSkills === filteredSkills when no column
+  // is active, so unsorted behaviour is unchanged). Counts/limits stay
+  // driven off filteredSkills.length — identical length, no extra recompute.
   const visibleSkills = useMemo(
-    () => filteredSkills.slice(safePage * effectiveLimit, safePage * effectiveLimit + effectiveLimit),
-    [filteredSkills, safePage, effectiveLimit]
+    () => sortedSkills.slice(safePage * effectiveLimit, safePage * effectiveLimit + effectiveLimit),
+    [sortedSkills, safePage, effectiveLimit]
   );
 
   /*
@@ -496,12 +561,22 @@ export default function DeepSkillsSettingsPage() {
               * was the previous failure mode at narrow widths).
               */}
             <thead>
+              {/*
+                * Sortable headers (2026-06-15). Each <SortHeader> drives the
+                * shared 3-click cycle (asc → desc → none) via `onSortToggle`.
+                * `align` applies the `!text-{left|right|center}` specificity
+                * override required to beat `.data-table th/td` (per
+                * feedback_data_table_alignment) — numeric/status columns are
+                * right/center aligned to match their <td>s below. Action is a
+                * plain <th> (nothing to sort by).
+                */}
               <tr>
-                <th className="whitespace-nowrap">Id</th>
-                <th className="whitespace-nowrap">Category Name</th>
-                <th className="whitespace-nowrap">Service Type</th>
-                <th className="whitespace-nowrap">Deep Skill Name</th>
-                <th className="whitespace-nowrap">Skill Options</th>
+                <SortHeader col="deepskill_id" align="left" sortBy={sortBy} sortDir={sortDir} onSort={onSortToggle}>Id</SortHeader>
+                <SortHeader col="category_name" align="left" sortBy={sortBy} sortDir={sortDir} onSort={onSortToggle}>Category Name</SortHeader>
+                <SortHeader col="service_type_name" align="left" sortBy={sortBy} sortDir={sortDir} onSort={onSortToggle}>Service Type</SortHeader>
+                <SortHeader col="deepskill_name" align="left" sortBy={sortBy} sortDir={sortDir} onSort={onSortToggle}>Deep Skill Name</SortHeader>
+                {/* Sorts by active-option count (parsed from option_labels). */}
+                <SortHeader col="options" align="left" sortBy={sortBy} sortDir={sortDir} onSort={onSortToggle}>Skill Options</SortHeader>
                 {/*
                   * Mapped Easyfixers count column (2026-06-08). Aggregate
                   * of distinct techs mapped to ANY option under this
@@ -509,9 +584,11 @@ export default function DeepSkillsSettingsPage() {
                   * side-endpoint POST keyed on the visible page's IDs;
                   * counts cached client-side for 30s. Clicking the count
                   * opens the same modal as the Users icon in Action.
+                  * Sorting reads the same client-side counts Map; rows
+                  * whose count hasn't loaded yet sort last in ascending.
                   */}
-                <th className="whitespace-nowrap text-right">Mapped</th>
-                <th className="whitespace-nowrap text-center">Status</th>
+                <SortHeader col="mapped" align="right" sortBy={sortBy} sortDir={sortDir} onSort={onSortToggle}>Mapped</SortHeader>
+                <SortHeader col="status" align="center" sortBy={sortBy} sortDir={sortDir} onSort={onSortToggle}>Status</SortHeader>
                 <th className="whitespace-nowrap text-right">Action</th>
               </tr>
             </thead>
@@ -809,8 +886,8 @@ function DeepSkillEditor({
   }, [previewUrl]);
 
   const filteredTypes = useMemo(() => {
-    if (!f.category_id) return lk.serviceTypes.filter((t) => t.display === 2);
-    return lk.serviceTypes.filter((t) => t.service_catg_id === Number(f.category_id) && t.display === 2);
+    if (!f.category_id) return lk.serviceTypes.filter((t) => Number(t.display) === 2);
+    return lk.serviceTypes.filter((t) => Number(t.service_catg_id) === Number(f.category_id) && Number(t.display) === 2);
   }, [lk.serviceTypes, f.category_id]);
 
   /*

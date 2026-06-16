@@ -41,11 +41,14 @@ type PincodeSearchResult = {
 };
 
 export default function EasyfixerZonesPage() {
-  const { data: zonesData, error: zonesError } = useFetchOnce<Zone[]>('/admin/zones');
+  // GET /admin/zones now returns { items, total } (paginated). Request a high
+  // limit so this lookup-style page still sees every zone, and unwrap `.items`.
+  const { data: zonesData, error: zonesError } =
+    useFetchOnce<{ items: Zone[]; total: number }>('/admin/zones?limit=5000');
   // Original code substituted `[]` on fetch failure (treated as "no zones").
   // Preserve that observable behaviour so downstream `useMemo` filtering /
   // count rendering stays identical.
-  const zones: Zone[] | null = zonesData ?? (zonesError ? [] : null);
+  const zones: Zone[] | null = zonesData?.items ?? (zonesError ? [] : null);
   const [zoneSearch, setZoneSearch] = useState('');
   const [selectedZoneId, setSelectedZoneId] = useState<number | null>(null);
 

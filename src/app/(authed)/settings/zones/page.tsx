@@ -17,19 +17,24 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
-  MapPin, Users, Building2, Search, Plus, Pencil, LayoutGrid, List,
+  MapPin, MapPinned, Users, Building2, Search, Plus, Pencil, LayoutGrid, List,
   Upload, Download, AlertTriangle, CheckCircle2, ToggleLeft, ToggleRight,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
 import { api, ApiError } from '@/lib/api';
+import { useFetch, useDebouncedValue, invalidateFetch } from '@/lib/hooks';
+import { useSort, SortHeader } from '@/lib/use-sort';
 import { useLookup } from '@/lib/use-lookup';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { showToast } from '@/components/ui/toast';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
+import { Switch } from '@/components/ui/switch';
 
 type Zone = {
   zone_id: number;
@@ -42,7 +47,16 @@ type Zone = {
   technician_count: number;
 };
 
+type ZoneListResponse = {
+  items: Zone[];
+  total: number;
+};
+
 type View = 'cards' | 'table';
+
+// BE Joi cap on /admin/zones `limit` is 5000; pass it so the 'All' sentinel
+// maps to the endpoint's true ceiling rather than pageSizeToLimit's 1000 default.
+const ZONES_LIMIT_CAP = 5000;
 const VIEW_LS_KEY = 'manage-zones:view';
 
 export default function ManageZonesPage() {
@@ -50,9 +64,11 @@ export default function ManageZonesPage() {
   // Permission gating — legacy `is{Entity}{Verb}` convention. Production
   // rollout needs corresponding rows in `menu_action` assigned to Admin.
   const can = actionFlags(me, ['isZoneAddNew', 'isZoneEdit', 'isZoneUpload']);
-  const [zones, setZones]   = useState<Zone[] | null>(null);
+  const confirm = useConfirm();
   const [search, setSearch] = useState('');
   const [view, setView]     = useState<View>('cards');
+  // Active-by-default; opt in to see inactive zones (e.g. to reactivate them).
+  const [showInactive, setShowInactive] = useState(false);
   useEffect(() => {
     const saved = (typeof window !== 'undefined' ? localStorage.getItem(VIEW_LS_KEY) : null) as View | null;
     if (saved === 'table' || saved === 'cards') setView(saved);
@@ -63,21 +79,69 @@ export default function ManageZonesPage() {
   const [editTarget, setEditTarget] = useState<Zone | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
 
-  async function load() {
-    try { setZones(await api.get<Zone[]>('/admin/zones')); }
-    catch { setZones([]); }
-  }
-  useEffect(() => { load(); }, []);
+  // Server-side pagination state. Page is 0-indexed (offset = page * size).
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState<TablePageSize>(20);
 
-  const filtered = useMemo(() => {
-    if (!zones) return [];
-    if (!search) return zones;
-    const q = search.toLowerCase();
-    return zones.filter((z) =>
-      z.zone_name.toLowerCase().includes(q) ||
-      (z.city_name ?? '').toLowerCase().includes(q)
-    );
-  }, [zones, search]);
+  // Debounced server-side search keeps the payload small as zones grow.
+  const debouncedSearch = useDebouncedValue(search, 300);
+  // Reset to the first page whenever a filter changes.
+  useEffect(() => { setPage(0); }, [debouncedSearch, showInactive]);
+
+  // Build the list URL: q + limit/offset (+ includeInactive). 'All' maps to
+  // the BE's true cap.
+  const limit = pageSizeToLimit(pageSize, ZONES_LIMIT_CAP);
+  const urlParams = new URLSearchParams();
+  if (debouncedSearch.trim()) urlParams.set('q', debouncedSearch.trim());
+  if (showInactive) urlParams.set('includeInactive', 'true');
+  urlParams.set('limit', String(limit));
+  urlParams.set('offset', String(page * (pageSize === 'all' ? limit : Number(pageSize))));
+  const listUrl = `/admin/zones?${urlParams.toString()}`;
+  const { data: listData, loading, refetch } = useFetch<ZoneListResponse>(listUrl);
+  const zones = listData?.items ?? null;
+  const total = listData?.total ?? 0;
+
+  // Invalidate the module cache for ALL zone list pages, then refetch.
+  function load() {
+    invalidateFetch((k) => k.startsWith('/admin/zones'));
+    refetch();
+  }
+
+  // Toggle a zone's active status directly from the list row / card. The BE
+  // 409s on deactivating a zone that still has pincodes mapped; we pre-empt
+  // that with a clear toast (and disable the control) so it never round-trips.
+  async function toggleStatus(z: Zone) {
+    const deactivating = !!z.zone_status;
+    if (deactivating && (z.pincode_count ?? 0) > 0) {
+      showToast({ variant: 'error', message: `Remove its ${z.pincode_count} mapped pincode(s) before deactivating "${z.zone_name}".` });
+      return;
+    }
+    if (deactivating) {
+      const ok = await confirm({
+        title: 'Deactivate Zone',
+        description: `Mark "${z.zone_name}" inactive? It will be hidden from the default list and excluded from auto-allocation.`,
+        confirmLabel: 'Deactivate',
+        variant: 'destructive',
+      });
+      if (!ok) return;
+    }
+    try {
+      await api.patch(`/admin/zones/${z.zone_id}`, { zone_status: !deactivating });
+      showToast({ variant: 'success', message: deactivating ? 'Zone deactivated.' : 'Zone reactivated.' });
+      load();
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Status update failed.' });
+    }
+  }
+
+  // Loaded page rows (already filtered + paginated server-side).
+  const filtered = useMemo(() => zones ?? [], [zones]);
+
+  // Client-side 3-state sort over the loaded page (table view) — same pattern
+  // as Manage Pincodes. useSort picks numeric vs alphabetical per the actual
+  // cell value, so count/ID/status columns sort numerically and name/city
+  // alphabetically. `sorted === filtered` (server order) when sortKey is null.
+  const { sorted, sortKey, sortDir, toggle } = useSort<Zone>(filtered);
 
   async function downloadTemplate() {
     const base  = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5100/api';
@@ -129,14 +193,24 @@ export default function ManageZonesPage() {
       <Card>
         <CardContent className="p-3">
           <div className="flex items-center justify-between gap-3 flex-wrap">
-            <div className="relative w-72">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Filter by zone name or city…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="pl-9"
-              />
+            <div className="flex items-center gap-3 flex-wrap">
+              <div className="relative w-72">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Filter by zone name or city…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="pl-9"
+                />
+              </div>
+              <label className="flex items-center gap-1.5 text-xs whitespace-nowrap cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showInactive}
+                  onChange={(e) => setShowInactive(e.target.checked)}
+                />
+                Show Inactive Zones
+              </label>
             </div>
             <div className="inline-flex border rounded-md overflow-hidden">
               <button type="button" onClick={() => pickView('cards')}
@@ -153,10 +227,10 @@ export default function ManageZonesPage() {
       </Card>
 
       {/* ── Body ─ */}
-      {zones === null && <Card><CardContent className="p-8 text-center text-muted-foreground">Loading zones…</CardContent></Card>}
+      {loading && zones === null && <Card><CardContent className="p-8 text-center text-muted-foreground">Loading Zones…</CardContent></Card>}
       {zones && filtered.length === 0 && (
         <Card><CardContent className="p-8 text-center text-muted-foreground">
-          {search ? 'No zones match your filter.' : 'No zones yet — click "Add Zone" to create the first one.'}
+          {debouncedSearch ? 'No Zones Match Your Filter.' : 'No Zones Yet — Click "Add Zone" To Create The First One.'}
         </CardContent></Card>
       )}
 
@@ -166,7 +240,7 @@ export default function ManageZonesPage() {
             // canEdit controls the "Edit" affordance inside ZoneCard. When
             // false, the card still navigates to /settings/zones/:id (read-
             // only manage view) but the inline Edit button is suppressed.
-            <ZoneCard key={z.zone_id} zone={z} canEdit={can.isZoneEdit} onEdit={() => setEditTarget(z)} />
+            <ZoneCard key={z.zone_id} zone={z} canEdit={can.isZoneEdit} onEdit={() => setEditTarget(z)} onToggleStatus={() => toggleStatus(z)} />
           ))}
         </div>
       )}
@@ -177,17 +251,17 @@ export default function ManageZonesPage() {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th className="!text-center">Zone ID</th>
-                  <th className="!text-left">Zone Name</th>
-                  <th className="!text-left">City</th>
-                  <th className="!text-center">Pincodes</th>
-                  <th className="!text-center">Technicians</th>
-                  <th className="!text-center">Status</th>
+                  <SortHeader col={'zone_id'          as keyof Zone} align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Zone ID</SortHeader>
+                  <SortHeader col={'zone_name'        as keyof Zone} align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Zone Name</SortHeader>
+                  <SortHeader col={'city_name'        as keyof Zone} align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>City</SortHeader>
+                  <SortHeader col={'pincode_count'    as keyof Zone} align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Pincodes</SortHeader>
+                  <SortHeader col={'technician_count' as keyof Zone} align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Technicians</SortHeader>
+                  <SortHeader col={'zone_status'      as keyof Zone} align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Status</SortHeader>
                   <th className="!text-right">Action</th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((z) => (
+                {sorted.map((z) => (
                   <tr key={z.zone_id} className="hover:bg-muted/40">
                     <td className="!text-center font-mono text-xs">{z.zone_id}</td>
                     <td className="!text-left font-medium">
@@ -197,22 +271,64 @@ export default function ManageZonesPage() {
                     <td className="!text-center">{z.pincode_count}</td>
                     <td className="!text-center">{z.technician_count}</td>
                     <td className="!text-center">
-                      {z.zone_status
-                        ? <span className="text-emerald-700 text-xs">Active</span>
-                        : <span className="text-muted-foreground text-xs">Inactive</span>}
+                      <div
+                        className="inline-flex items-center gap-2"
+                        title={z.zone_status ? ((z.pincode_count ?? 0) > 0 ? 'Remove pincodes to deactivate' : 'Active — toggle to deactivate') : 'Inactive — toggle to activate'}
+                      >
+                        <Switch
+                          checked={!!z.zone_status}
+                          onCheckedChange={() => toggleStatus(z)}
+                          disabled={!can.isZoneEdit || (!!z.zone_status && (z.pincode_count ?? 0) > 0)}
+                          ariaLabel={z.zone_status ? 'Deactivate Zone' : 'Activate Zone'}
+                        />
+                        <span className={`text-xs ${z.zone_status ? 'text-emerald-700' : 'text-muted-foreground'}`}>
+                          {z.zone_status ? 'Active' : 'Inactive'}
+                        </span>
+                      </div>
                     </td>
                     <td className="!text-right whitespace-nowrap">
-                      <Link href={`/settings/zones/${z.zone_id}`} className="text-primary text-xs hover:underline mr-3">Manage</Link>
-                      {can.isZoneEdit && (
-                        <button type="button" onClick={() => setEditTarget(z)} className="text-xs text-muted-foreground hover:underline">
-                          <Pencil className="inline h-3 w-3 mr-0.5" />Edit
-                        </button>
-                      )}
+                      <div className="inline-flex items-center gap-3 justify-end">
+                        <Link
+                          href={`/settings/zones/${z.zone_id}`}
+                          title="Manage Pincodes"
+                          aria-label="Manage Pincodes"
+                          className="inline-flex items-center text-primary hover:text-primary/80"
+                        >
+                          <MapPinned className="h-4 w-4" />
+                        </Link>
+                        {can.isZoneEdit && (
+                          <button
+                            type="button"
+                            onClick={() => setEditTarget(z)}
+                            title="Edit Zone"
+                            aria-label="Edit Zone"
+                            className="inline-flex items-center text-slate-600 hover:text-slate-800"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Pagination band — shared component, server-side paged. Shown for both
+          card and table views whenever there are rows on the current page. */}
+      {filtered.length > 0 && (
+        <Card>
+          <CardContent className="px-3 py-2">
+            <TablePagination
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onPageChange={setPage}
+              onPageSizeChange={(s) => { setPageSize(s); setPage(0); }}
+            />
           </CardContent>
         </Card>
       )}
@@ -239,7 +355,7 @@ export default function ManageZonesPage() {
 }
 
 // ─── Card ────────────────────────────────────────────────────────────
-function ZoneCard({ zone, canEdit, onEdit }: { zone: Zone; canEdit: boolean; onEdit: () => void }) {
+function ZoneCard({ zone, canEdit, onEdit, onToggleStatus }: { zone: Zone; canEdit: boolean; onEdit: () => void; onToggleStatus: () => void }) {
   return (
     <Card className="hover:shadow-md transition-shadow">
       <CardContent className="p-4 space-y-3">
@@ -264,10 +380,28 @@ function ZoneCard({ zone, canEdit, onEdit }: { zone: Zone; canEdit: boolean; onE
           <span><Users  className="inline h-3.5 w-3.5 mr-1 text-emerald-700" />{zone.technician_count} technicians</span>
         </div>
         <div className="flex items-center justify-between text-xs">
-          {zone.zone_status
-            ? <span className="text-emerald-700">● Active</span>
-            : <span className="text-muted-foreground">○ Inactive</span>}
-          <Link href={`/settings/zones/${zone.zone_id}`} className="text-primary hover:underline">Manage pincodes →</Link>
+          <div
+            className="inline-flex items-center gap-2"
+            title={zone.zone_status ? ((zone.pincode_count ?? 0) > 0 ? 'Remove pincodes to deactivate' : 'Active — toggle to deactivate') : 'Inactive — toggle to activate'}
+          >
+            <Switch
+              checked={!!zone.zone_status}
+              onCheckedChange={onToggleStatus}
+              disabled={!canEdit || (!!zone.zone_status && (zone.pincode_count ?? 0) > 0)}
+              ariaLabel={zone.zone_status ? 'Deactivate Zone' : 'Activate Zone'}
+            />
+            <span className={zone.zone_status ? 'text-emerald-700' : 'text-muted-foreground'}>
+              {zone.zone_status ? 'Active' : 'Inactive'}
+            </span>
+          </div>
+          <Link
+            href={`/settings/zones/${zone.zone_id}`}
+            title="Manage Pincodes"
+            aria-label="Manage Pincodes"
+            className="inline-flex items-center text-primary hover:text-primary/80"
+          >
+            <MapPinned className="h-4 w-4" />
+          </Link>
         </div>
       </CardContent>
     </Card>
@@ -382,12 +516,29 @@ function ZoneAddEditDialog({ open, zone, onClose, onSaved }: {
           </div>
 
           {zone && (
-            <button type="button" onClick={() => setActive((s) => !s)} className="flex items-center gap-2 text-sm">
-              {active
-                ? <ToggleRight className="h-5 w-5 text-emerald-600" />
-                : <ToggleLeft  className="h-5 w-5 text-muted-foreground" />}
-              {active ? 'Active' : 'Inactive'} — toggle to {active ? 'deactivate' : 'reactivate'}
-            </button>
+            <div className="space-y-1">
+              <button
+                type="button"
+                onClick={() => {
+                  // A zone with pincodes mapped can't be deactivated (the BE
+                  // also enforces this with a 409).
+                  if (active && (zone.pincode_count ?? 0) > 0) return;
+                  setActive((s) => !s);
+                }}
+                disabled={active && (zone.pincode_count ?? 0) > 0}
+                className="flex items-center gap-2 text-sm disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {active
+                  ? <ToggleRight className="h-5 w-5 text-emerald-600" />
+                  : <ToggleLeft  className="h-5 w-5 text-muted-foreground" />}
+                {active ? 'Active' : 'Inactive'} — toggle to {active ? 'deactivate' : 'reactivate'}
+              </button>
+              {active && (zone.pincode_count ?? 0) > 0 && (
+                <p className="text-[11px] text-amber-700">
+                  Remove its {zone.pincode_count} mapped pincode{zone.pincode_count === 1 ? '' : 's'} before deactivating.
+                </p>
+              )}
+            </div>
           )}
           {err && <div className="text-sm text-destructive">{err}</div>}
           <div className="flex justify-end gap-2 pt-2">
