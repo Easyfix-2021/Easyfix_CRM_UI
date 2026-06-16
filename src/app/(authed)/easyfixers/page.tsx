@@ -33,6 +33,7 @@ import { EasyfixerModal, type EasyfixerModalMode } from '@/components/easyfixer/
 import { EasyfixerActionMenu } from '@/components/easyfixer/EasyfixerActionMenu';
 import { EasyfixerTransactionsModal } from '@/components/easyfixer/EasyfixerTransactionsModal';
 import { EasyfixerClientMappingModal } from '@/components/easyfixer/EasyfixerClientMappingModal';
+import { EasyfixerDeepSkillModal } from '@/components/easyfixer/EasyfixerDeepSkillModal';
 import { useSort, SortHeader } from '@/lib/use-sort';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
@@ -94,6 +95,7 @@ type Ef = {
    */
   profile_update_sent_at: string | null;
   profile_update_send_count: number;
+  serviceable_pincodes_csv?: string;
 };
 type Resp = { items: Ef[]; total: number; limit: number; offset: number };
 
@@ -121,6 +123,7 @@ type AggregateRow = {
   // Profile-update magic-link audit (2026-06-11).
   profile_update_sent_at: string | null;
   profile_update_send_count: number;
+  serviceable_pincodes_csv: string;
 };
 /*
  * Aggregates cache (2026-06-08). Pagination back-and-forth, search-and-back,
@@ -484,6 +487,7 @@ export default function EasyfixersPage() {
   }>({ open: false, title: '', items: [] });
   const [clientMappingFor, setClientMappingFor] = useState<Ef | null>(null);
   const [transactionsFor, setTransactionsFor] = useState<Ef | null>(null);
+  const [deepSkillFor, setDeepSkillFor] = useState<Ef | null>(null);
   /*
    * Per-row spinner state for the "Send Profile Update Link" action.
    * Tracks efr_ids whose POST is currently in flight so multiple rows
@@ -556,6 +560,10 @@ export default function EasyfixersPage() {
 
   const openTransactions = useCallback((e: Ef) => {
     setTimeout(() => setTransactionsFor(e), 0);
+  }, []);
+
+  const openDeepSkillModal = useCallback((e: Ef) => {
+    setTimeout(() => setDeepSkillFor(e), 0);
   }, []);
 
   // Stable row-action navigation callbacks for the memoised <EfRow>.
@@ -760,6 +768,7 @@ export default function EasyfixersPage() {
               options_mapped_count: agg.options_mapped_count,
               profile_update_sent_at: agg.profile_update_sent_at ?? null,
               profile_update_send_count: agg.profile_update_send_count ?? 0,
+              serviceable_pincodes_csv: agg.serviceable_pincodes_csv ?? '',
               _aggregatesLoaded: true,
             };
           }));
@@ -789,6 +798,7 @@ export default function EasyfixersPage() {
                   options_mapped_count: agg.options_mapped_count,
                   profile_update_sent_at: agg.profile_update_sent_at ?? null,
                   profile_update_send_count: agg.profile_update_send_count ?? 0,
+                  serviceable_pincodes_csv: agg.serviceable_pincodes_csv ?? '',
                   _aggregatesLoaded: true,
                 };
               }));
@@ -1200,7 +1210,7 @@ export default function EasyfixersPage() {
             *   - SortHeader rendered with `align` so the header aligns to
             *     the cell content direction.
             */}
-          <table className="data-table" style={{ tableLayout: 'fixed', minWidth: '2530px' }}>
+          <table className="data-table" style={{ tableLayout: 'fixed', minWidth: '2900px' }}>
             {/*
               * Explicit px widths (not percentages) so the table has a
               * deterministic intrinsic width that exceeds the viewport,
@@ -1208,9 +1218,9 @@ export default function EasyfixersPage() {
               * `overflow-x-auto` div. Sticky ID + Action cols pin to
               * viewport edges; everything else scrolls between them.
               *
-              * Sum of widths = 2370px. Content-heavy cells (Name,
-              * Email, Service Cat/Type) get the lion's share; numeric
-              * + status cells stay narrow.
+              * Sum of widths = 2752px (+220px Serviceable Pincodes col,
+              * +widened Clients Mapped/Total Earnings/Job Count/Options
+              * Mapped/A/C Balance/Rating/Last Link Sent cols).
               */}
             <colgroup>
               <col style={{ width: '70px'  }} />{/* ID — sticky-left */}
@@ -1223,13 +1233,14 @@ export default function EasyfixersPage() {
               <col style={{ width: '200px' }} />{/* Email */}
               <col style={{ width: '140px' }} />{/* Service Category */}
               <col style={{ width: '140px' }} />{/* Service Type */}
-              <col style={{ width: '90px'  }} />{/* Clients Mapped */}
-              <col style={{ width: '110px' }} />{/* Total Earnings */}
-              <col style={{ width: '80px'  }} />{/* Job Count */}
-              <col style={{ width: '110px' }} />{/* Options Mapped */}
-              <col style={{ width: '110px' }} />{/* A/C Balance */}
-              <col style={{ width: '80px'  }} />{/* Rating */}
-              <col style={{ width: '160px' }} />{/* Last Link Sent */}
+              <col style={{ width: '220px' }} />{/* Serviceable Pincodes */}
+              <col style={{ width: '125px' }} />{/* Clients Mapped */}
+              <col style={{ width: '125px' }} />{/* Total Earnings */}
+              <col style={{ width: '100px' }} />{/* Job Count */}
+              <col style={{ width: '155px' }} />{/* Mapped Deep Skill */}
+              <col style={{ width: '120px' }} />{/* A/C Balance */}
+              <col style={{ width: '90px'  }} />{/* Rating */}
+              <col style={{ width: '175px' }} />{/* Last Link Sent */}
               <col style={{ width: '80px'  }} />{/* Profile % */}
               <col style={{ width: '70px'  }} />{/* Verified */}
               <col style={{ width: '120px' }} />{/* Registered */}
@@ -1248,10 +1259,11 @@ export default function EasyfixersPage() {
                 <SortHeader col="efr_email"              align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Email</SortHeader>
                 <SortHeader col="efr_service_category"   align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Service Category</SortHeader>
                 <SortHeader col="efr_service_type"       align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Service Type</SortHeader>
+                <th className="!text-left">Serviceable Pincodes</th>
                 <SortHeader col="clients_mapped"         align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Clients Mapped</SortHeader>
                 <SortHeader col="total_earnings"         align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Total Earnings</SortHeader>
                 <SortHeader col="job_count"              align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Job Count</SortHeader>
-                <SortHeader col="options_mapped_count"   align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Options Mapped</SortHeader>
+                <SortHeader col="options_mapped_count"   align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Mapped Deep Skill</SortHeader>
                 <SortHeader col="current_balance"        align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>A/C Balance</SortHeader>
                 <SortHeader col="avg_rating"             align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Rating</SortHeader>
                 <SortHeader col="profile_update_sent_at" align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Last Link Sent</SortHeader>
@@ -1268,10 +1280,10 @@ export default function EasyfixersPage() {
                   200ms server round-trip — only show "Loading…" on the
                   cold first paint when there's nothing to keep. */}
               {loading && sorted.length === 0 && (
-                <tr><td colSpan={22} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
+                <tr><td colSpan={23} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
               )}
               {!loading && sorted.length === 0 && (
-                <tr><td colSpan={22} className="!text-center text-muted-foreground py-6">No easyfixers match the current filters.</td></tr>
+                <tr><td colSpan={23} className="!text-center text-muted-foreground py-6">No easyfixers match the current filters.</td></tr>
               )}
               {!loading && displayRows.map((row) => (
                 <EfRow
@@ -1289,6 +1301,7 @@ export default function EasyfixersPage() {
                   onSendProfileUpdateLink={openSendDialog}
                   onCopyDevUrl={copyDevUrl}
                   onOpenCsvModal={openCsvModal}
+                  onOpenDeepSkillModal={openDeepSkillModal}
                 />
               ))}
             </tbody>
@@ -1335,6 +1348,21 @@ export default function EasyfixersPage() {
         onClose={() => setClientMappingFor(null)}
         easyfixerId={clientMappingFor?.efr_id ?? null}
         easyfixerName={clientMappingFor?.efr_name ?? null}
+      />
+
+      <EasyfixerDeepSkillModal
+        open={deepSkillFor != null}
+        onClose={() => setDeepSkillFor(null)}
+        easyfixerId={deepSkillFor?.efr_id ?? null}
+        easyfixerName={deepSkillFor?.efr_name ?? null}
+        onUnmapped={(efrId, count) => {
+          // Recompute (not decrement): the modal hands back the technician's
+          // NEW distinct-deep-skill count after the unmap. Bust the aggregate
+          // cache + set the row's count to that exact value.
+          aggregateCache.delete(efrId);
+          setRows((prev) => prev.map((r) =>
+            r.efr_id === efrId ? { ...r, options_mapped_count: count } : r));
+        }}
       />
 
       <EasyfixerTransactionsModal
@@ -1385,7 +1413,7 @@ type DisplayRow = {
 const EfRow = memo(function EfRow({
   row, canEdit, canSend, isProd, isSending, isCopyingDevUrl,
   onEdit, onClientMapping, onTransactions, onAssessment,
-  onSendProfileUpdateLink, onCopyDevUrl, onOpenCsvModal,
+  onSendProfileUpdateLink, onCopyDevUrl, onOpenCsvModal, onOpenDeepSkillModal,
 }: {
   row: DisplayRow;
   canEdit: boolean;
@@ -1400,6 +1428,7 @@ const EfRow = memo(function EfRow({
   onSendProfileUpdateLink: (e: Ef) => void;
   onCopyDevUrl: (e: Ef) => void;
   onOpenCsvModal: (title: string, items: CsvCellItem[]) => void;
+  onOpenDeepSkillModal: (e: Ef) => void;
 }) {
   const { e, catItems, typeItems, efName } = row;
   return (
@@ -1424,6 +1453,13 @@ const EfRow = memo(function EfRow({
           onOpen={() => onOpenCsvModal(`Service Types — ${efName}`, typeItems)}
         />
       </td>
+      <td className="!text-left text-xs truncate">
+        <PincodesCell
+          csv={e.serviceable_pincodes_csv ?? ''}
+          efName={efName}
+          onOpen={onOpenCsvModal}
+        />
+      </td>
       <td className="!text-right tabular-nums truncate">
         {e._aggregatesLoaded
           ? (e.clients_mapped ?? 0)
@@ -1442,7 +1478,12 @@ const EfRow = memo(function EfRow({
       <td className="!text-right tabular-nums truncate">
         {e._aggregatesLoaded
           ? (e.options_mapped_count > 0
-            ? <span className="font-semibold text-primary">{e.options_mapped_count}</span>
+            ? <button
+                type="button"
+                onClick={() => onOpenDeepSkillModal(e)}
+                className="font-semibold text-primary hover:underline tabular-nums"
+                title="View / unmap mapped deep skills"
+              >{e.options_mapped_count}</button>
             : <span className="text-muted-foreground">0</span>)
           : <span className="text-muted-foreground">…</span>}
       </td>
@@ -1542,6 +1583,49 @@ function CsvCellButton({ items, onOpen }: { items: CsvCellItem[]; onOpen: () => 
       <span className="truncate">
         {first.name} <span className="text-muted-foreground">(Id: {first.id})</span>
       </span>
+      {more > 0 && (
+        <span className="text-[10px] font-medium rounded bg-muted px-1.5 py-0.5 text-muted-foreground shrink-0">
+          +{more}
+        </span>
+      )}
+    </button>
+  );
+}
+
+/*
+ * PincodesCell — inline cell for the Serviceable Pincodes column.
+ * Splits the `serviceable_pincodes_csv` string (e.g. "560001,560002,560003")
+ * into an array, shows the first 3 joined with commas + "+N more" badge,
+ * and opens the shared CsvCellModal on click (reusing the same search UX
+ * as Service Category / Service Type).
+ */
+function PincodesCell({
+  csv,
+  efName,
+  onOpen,
+}: {
+  csv: string;
+  efName: string;
+  onOpen: (title: string, items: CsvCellItem[]) => void;
+}) {
+  const pincodes = (csv || '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (pincodes.length === 0) return <span className="text-muted-foreground">—</span>;
+
+  const PREVIEW = 3;
+  const preview = pincodes.slice(0, PREVIEW).join(', ');
+  const more = pincodes.length - PREVIEW;
+  const full = pincodes.join(', ');
+  // Build CsvCellItem[] for the modal: use the pincode string as both id and name.
+  const items: CsvCellItem[] = pincodes.map((p) => ({ id: p, name: p }));
+
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(`Serviceable Pincodes — ${efName}`, items)}
+      title={full}
+      className="text-left text-xs hover:underline hover:text-primary truncate max-w-full inline-flex items-center gap-1"
+    >
+      <span className="truncate">{preview}</span>
       {more > 0 && (
         <span className="text-[10px] font-medium rounded bg-muted px-1.5 py-0.5 text-muted-foreground shrink-0">
           +{more}

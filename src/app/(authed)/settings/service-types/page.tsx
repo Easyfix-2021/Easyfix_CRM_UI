@@ -194,7 +194,11 @@ export default function ManageServiceTypePage() {
                     {t.service_catg_name ?? <span className="text-muted-foreground">—</span>}
                   </td>
                   <td className="!text-center text-xs">
-                    {t.display === 1 ? 'All' : <span className="text-muted-foreground">CRM only</span>}
+                    {t.display === 1
+                      ? 'All'
+                      : t.display === 2
+                        ? 'Tx App'
+                        : <span className="text-muted-foreground">CRM</span>}
                   </td>
                   <td className="!text-center whitespace-nowrap">
                     {t.service_type_status === 1
@@ -336,7 +340,7 @@ function TypeFormModal({ open, onClose, editing, categories, onSaved }: {
         service_type_name: name.trim(),
         service_type_desc: desc.trim() || null,
         service_catg_id:   Number(catgId),
-        display:           display === 1 ? 1 : 0,
+        display,
         service_type_tools: toolIdsCsv,
         service_type_tool_names: toolNamesCsv,
         ...(isEdit ? { is_active: active } : {}),
@@ -387,8 +391,9 @@ function TypeFormModal({ open, onClose, editing, categories, onSaved }: {
               onChange={(e) => setDisplay(Number(e.target.value))}
               className="border rounded h-9 px-2 text-sm bg-background w-full"
             >
-              <option value={1}>Display To All</option>
-              <option value={0}>Display Only To CRM</option>
+              <option value={1}>Display to All</option>
+              <option value={0}>Display on CRM - Rate Card Level</option>
+              <option value={2}>Display to Tx App - Deep Skill</option>
             </select>
           </div>
           {/* Tools — multi-select sourced from /admin/tools. Stored as CSV

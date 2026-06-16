@@ -35,6 +35,8 @@ import * as React from 'react';
 import type { PrefillResponse, SubmitPayload } from '@/lib/magic-link-types';
 // Pure presentational chip — no auth dependency, safe on the public page.
 import { StatusChip, type StatusChipTone } from '@/components/ui/StatusChip';
+// Searchable city/long-list select — shared, no auth dependency → safe public.
+import { SearchSelect } from '@/components/ui/search-select';
 // Shared masked from→to preview (also used by the CRM operator click-to-call).
 import { CallLegsPreview } from '@/components/ui/CallLegsPreview';
 // Shared presentational Button (cva-based, no auth dependency → safe on the
@@ -1759,11 +1761,13 @@ function AddressMapWidget({
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Field label="City" required>
-          <select value={form.city_id} required
-            onChange={(e) => patch({ city_id: e.target.value })} className={inputClass}>
-            <option value="">— Select city —</option>
-            {cityOptions.map((c) => (<option key={c.value} value={c.value}>{c.label}</option>))}
-          </select>
+          <SearchSelect
+            value={form.city_id}
+            onChange={(v) => patch({ city_id: v })}
+            options={cityOptions}
+            placeholder="— Select city —"
+            required
+          />
         </Field>
         <Field label="PIN Code" required>
           {/* inputMode="numeric" pops the numeric keyboard on iOS/Android
