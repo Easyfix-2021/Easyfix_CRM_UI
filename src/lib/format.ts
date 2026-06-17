@@ -76,6 +76,28 @@ export function maskMobile(s: unknown, visible = 4): string {
 }
 
 /*
+ * fmtDuration — render a number of seconds as a clock-style mm:ss string.
+ *
+ *   fmtDuration(0)   → '0:00'
+ *   fmtDuration(75)  → '1:15'
+ *   fmtDuration(605) → '10:05'
+ *   fmtDuration(null)→ '0:00'
+ *
+ * Minutes are NOT zero-padded (so a sub-10-minute call reads "1:15", not
+ * "01:15"); seconds always are. Used by the live-call timer and the
+ * "Call Ended · m:ss" outcome line in LiveCallPanel.
+ *
+ * Distinct from ClickToCallTab's private "1m 15s" duration formatter, which
+ * targets a history-table column — this one is the running-clock format.
+ */
+export function fmtDuration(sec: number | null): string {
+  const total = sec == null || !Number.isFinite(sec) || sec < 0 ? 0 : Math.floor(sec);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+/*
  * Title-case a display label coming from a DB key that may arrive as
  * lower-snake ("store_name"), lower-space ("store name"), or already
  * Title Case ("Store Name"). Normalises separators (_ / - / spaces) to

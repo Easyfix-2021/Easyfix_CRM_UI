@@ -7,6 +7,8 @@ import { Navbar } from '@/components/layout/Navbar';
 import { AuthProvider } from '@/lib/auth-context';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog';
 import { ToastHost } from '@/components/ui/toast';
+import { LiveCallProvider } from '@/components/calls/LiveCallContext';
+import { LiveCallPanel } from '@/components/calls/LiveCallPanel';
 
 /*
  * Client-side auth gate.
@@ -50,21 +52,32 @@ export default function AuthedLayout({ children }: { children: React.ReactNode }
   return (
     <AuthProvider>
       <ConfirmDialogProvider>
-        <div className="flex h-screen bg-background">
-          <Sidebar />
-          <div className="flex-1 flex flex-col min-w-0">
-            <Navbar />
-            {/* Horizontal 16px (px-4) gives content breathing room from the sidebar
-                border without looking sparse; vertical 12px (py-3) keeps the page
-                density tight. Previous p-2 (8px) was flush against the sidebar and
-                felt cramped; p-5 (20px) gave too much whitespace. */}
-            <main className="flex-1 overflow-y-auto px-4 py-3">{children}</main>
+        {/* LiveCallProvider holds the single active click-to-call so the
+            fixed-position LiveCallPanel (mounted below, next to ToastHost)
+            can poll + render it. Wraps the whole authed tree so every
+            CallButton / CallableMobile instance is inside the provider and
+            can open the panel via useLiveCall().startCall(). Dormant unless
+            a provider returns supportsLiveStatus (the Plivo path). */}
+        <LiveCallProvider>
+          <div className="flex h-screen bg-background">
+            <Sidebar />
+            <div className="flex-1 flex flex-col min-w-0">
+              <Navbar />
+              {/* Horizontal 16px (px-4) gives content breathing room from the sidebar
+                  border without looking sparse; vertical 12px (py-3) keeps the page
+                  density tight. Previous p-2 (8px) was flush against the sidebar and
+                  felt cramped; p-5 (20px) gave too much whitespace. */}
+              <main className="flex-1 overflow-y-auto px-4 py-3">{children}</main>
+            </div>
           </div>
-        </div>
-        {/* ToastHost subscribes to the custom-event bus from
-            components/ui/toast.tsx. Mounted once at the authed root so
-            any descendant can fire showToast() without prop-drilling. */}
-        <ToastHost />
+          {/* ToastHost subscribes to the custom-event bus from
+              components/ui/toast.tsx. Mounted once at the authed root so
+              any descendant can fire showToast() without prop-drilling.
+              LiveCallPanel sits alongside it — both are portal/fixed
+              overlays, rendered once at the root. */}
+          <ToastHost />
+          <LiveCallPanel />
+        </LiveCallProvider>
       </ConfirmDialogProvider>
     </AuthProvider>
   );

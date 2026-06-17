@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Phone, Loader2, CheckCircle2, AlertTriangle, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -12,6 +12,7 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useFetchOnce } from '@/lib/hooks';
 import { CallCustomNumbersDialog } from './CallCustomNumbersDialog';
 import { CallLegsPreview } from '@/components/ui/CallLegsPreview';
+import { useLiveCall } from './LiveCallContext';
 
 /*
  * Click-to-call surface — two exports:
@@ -95,6 +96,63 @@ function CallToast({ variant, message, onDismiss }: {
   );
 }
 
+// ─── Provider constants (BE contract) ─────────────────────────────────
+type CallProvider = 'kaleyra' | 'plivo';
+
+const PROVIDER_LABEL: Record<CallProvider, string> = {
+  kaleyra: 'Via Kaleyra',
+  plivo:   'Via Plivo',
+};
+
+// localStorage key for the operator's last-chosen provider. Persisted so a
+// multi-provider operator's preference sticks across sessions/page loads.
+const PROVIDER_LS_KEY = 'ef-call-provider';
+
+// ─── Provider radio (rendered inside the confirm dialog description) ───
+//
+// confirm() captures the `description` JSX ONCE, so a value held only in the
+// hook's React state wouldn't re-render the radio when the operator clicks a
+// different option. This tiny sub-component therefore owns its OWN local
+// state (seeded from the hook's current choice) and reports each change back
+// via onChange — which updates the hook state + persists to localStorage.
+// Because the dialog re-renders THIS component (not the captured tree) on its
+// internal state change, the selected radio reflects the click immediately,
+// and the up-to-date value is already in the hook by the time the operator
+// confirms. Kept deliberately simple and self-contained.
+function ProviderRadioGroup({
+  options,
+  initial,
+  onChange,
+}: {
+  options: CallProvider[];
+  initial: CallProvider;
+  onChange: (p: CallProvider) => void;
+}) {
+  const [value, setValue] = useState<CallProvider>(initial);
+  return (
+    <div className="mt-3">
+      <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        Calling Provider
+      </p>
+      <div className="flex flex-wrap gap-4">
+        {options.map((p) => (
+          <label key={p} className="inline-flex cursor-pointer items-center gap-2 text-sm text-foreground/90">
+            <input
+              type="radio"
+              name="ef-call-provider"
+              value={p}
+              checked={value === p}
+              onChange={() => { setValue(p); onChange(p); }}
+              className="h-4 w-4 accent-emerald-600"
+            />
+            {PROVIDER_LABEL[p]}
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Calling config + preview types (BE contract) ─────────────────────
 type CallConfig = {
   mode: 'qa' | 'dev' | 'prod';
@@ -102,6 +160,12 @@ type CallConfig = {
   /* QA-only — env defaults to pre-fill the custom-numbers dialog.
      Unmasked because env config is operator-known, not user PII. */
   qaDefaults: { from: string | null; to: string | null } | null;
+  /* Multi-provider fields (BE contract, 2026-06). When more than one
+     provider is enabled, the confirm dialog exposes a radio to pick the
+     leg. With Plivo OFF, enabledProviders === ['kaleyra'] → the radio stays
+     hidden and behaviour is identical to today. */
+  enabledProviders?: CallProvider[];
+  defaultProvider?: CallProvider;
 };
 
 type CallPreview = {
@@ -142,6 +206,7 @@ function pickTargetKey(t: CallTarget): Exclude<keyof CallTarget, 'useAlt'> | nul
 // ─── Shared hook — owns the confirm, POST, busy state, and toast lifecycle
 function useClickToCall(target: CallTarget) {
   const { me } = useMe();
+  const liveCall = useLiveCall();
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ variant: ToastVariant; message: string } | null>(null);
   const [customOpen, setCustomOpen] = useState(false);
@@ -155,6 +220,41 @@ function useClickToCall(target: CallTarget) {
   const cfg = useFetchOnce<CallConfig>('/admin/calls/config');
   const promptForNumbers = cfg.data?.promptForNumbers === true;
   const qaDefaults = cfg.data?.qaDefaults ?? null;
+
+  // Multi-provider config. With Plivo off, enabledProviders === ['kaleyra']
+  // → showProviderPicker stays false and the radio never renders, so the
+  // confirm dialog (and the whole flow) is identical to today.
+  const enabledProviders = cfg.data?.enabledProviders;
+  const defaultProvider: CallProvider = cfg.data?.defaultProvider ?? 'kaleyra';
+  const showProviderPicker = (enabledProviders?.length ?? 0) > 1;
+
+  // Chosen provider. Initialised from localStorage IF it's a currently-
+  // enabled provider, else the BE default (else kaleyra). SSR-guarded.
+  const [provider, setProvider] = useState<CallProvider>(defaultProvider);
+
+  // Re-sync the initial choice once config arrives (the first render runs
+  // before useFetchOnce resolves, so defaultProvider is 'kaleyra' then).
+  // Only seeds — once the operator has picked, their choice owns the value.
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (seededRef.current) return;
+    if (!enabledProviders || enabledProviders.length === 0) return;
+    seededRef.current = true;
+    let next: CallProvider = defaultProvider;
+    if (typeof window !== 'undefined') {
+      const saved = window.localStorage.getItem(PROVIDER_LS_KEY) as CallProvider | null;
+      if (saved && enabledProviders.includes(saved)) next = saved;
+    }
+    setProvider(next);
+  }, [enabledProviders, defaultProvider]);
+
+  // Update + persist the operator's choice (from the radio in the dialog).
+  const chooseProvider = useCallback((p: CallProvider) => {
+    setProvider(p);
+    if (typeof window !== 'undefined') {
+      try { window.localStorage.setItem(PROVIDER_LS_KEY, p); } catch { /* quota / private mode — non-fatal */ }
+    }
+  }, []);
 
   // Success auto-dismiss; errors stay until explicitly closed.
   useEffect(() => {
@@ -196,7 +296,16 @@ function useClickToCall(target: CallTarget) {
    * callTo are sent ONLY in QA mode; the BE rejects them otherwise (see
    * routes/admin/calls.js for the anti-spoofing guard).
    */
-  const performCall = useCallback(async (callFrom?: string, callTo?: string) => {
+  // previewLegs carries the masked from/to from the just-fetched /preview
+  // so a successful live-status (Plivo) call can seed the LiveCallPanel
+  // header without re-deriving them. Undefined on the QA custom-numbers
+  // path (which never opens the live panel anyway).
+  const performCall = useCallback(async (
+    callFrom?: string,
+    callTo?: string,
+    previewLegs?: { from: string | null; to: string | null },
+    providerOverride?: CallProvider,
+  ) => {
     if (busy || !targetBody) return;
     setBusy(true); setToast(null);
     try {
@@ -205,8 +314,32 @@ function useClickToCall(target: CallTarget) {
       const body: Record<string, number | string | boolean> = { ...targetBody };
       if (callFrom) body.callFrom = callFrom;
       if (callTo)   body.callTo   = callTo;
-      await api.post<{ delivered: boolean; message?: string }>('/admin/calls/click-to-call', body);
-      setToast({ variant: 'success', message: 'Call initiated Successfully' });
+      // Always send the chosen provider. providerOverride wins when the
+      // caller threaded the dialog's freshly-picked value (avoids the
+      // stale-closure trap on the radio); otherwise fall back to state.
+      // With Plivo off it's 'kaleyra' (the default) — the BE ignores/
+      // validates it and the flow is unchanged.
+      body.provider = providerOverride ?? provider;
+      const resp = await api.post<{
+        delivered: boolean;
+        jobCallerInfoId?: number;
+        provider?: string;
+        supportsLiveStatus?: boolean;
+        message?: string;
+      }>('/admin/calls/click-to-call', body);
+
+      // Live-status path (Plivo): open the bottom-right live panel instead
+      // of the fire-and-forget toast. Falls back to the toast if the BE
+      // didn't return a call id to poll.
+      if (resp.supportsLiveStatus && resp.jobCallerInfoId) {
+        liveCall.startCall({
+          id: resp.jobCallerInfoId,
+          fromMasked: previewLegs?.from ?? null,
+          toMasked: previewLegs?.to ?? null,
+        });
+      } else {
+        setToast({ variant: 'success', message: 'Call initiated Successfully' });
+      }
     } catch (err) {
       // formatApiError unpacks `ApiError.details` (Joi 400 field-level
       // messages) so operators see "Validation failed — useAlt must be
@@ -217,7 +350,7 @@ function useClickToCall(target: CallTarget) {
     } finally {
       setBusy(false);
     }
-  }, [busy, targetBody]);
+  }, [busy, targetBody, provider, liveCall]);
 
   const placeCall = useCallback(async (e?: React.MouseEvent) => {
     // Stop propagation in case the surface is inside a clickable row.
@@ -249,6 +382,10 @@ function useClickToCall(target: CallTarget) {
       if (typeof v === 'boolean') previewQuery[k] = v ? 1 : 0;
       else if (typeof v === 'number' || typeof v === 'string') previewQuery[k] = v;
     }
+    // Pass the chosen provider so the BE can preview the correct caller leg
+    // (some providers dial from a different number). Harmless with one
+    // provider — the BE just previews kaleyra's leg as before.
+    previewQuery.provider = provider;
     setBusy(true);
     let preview: CallPreview | null = null;
     try {
@@ -258,6 +395,13 @@ function useClickToCall(target: CallTarget) {
     } finally {
       setBusy(false);
     }
+
+    // Local, mutable copy of the provider the operator confirms with. The
+    // radio sub-component reports changes here (and into hook state via
+    // chooseProvider). Threading this value explicitly into performCall
+    // sidesteps the stale-closure trap (confirm() captures the description
+    // tree once; performCall closed over the pre-radio provider value).
+    let chosenProvider: CallProvider = provider;
 
     // Build a description with two clearly separated zones:
     //   1. Prose paragraph explaining the bridge mechanic (operator's
@@ -278,6 +422,17 @@ function useClickToCall(target: CallTarget) {
             A call will be placed. Your registered mobile rings first; once you pick up,
             the customer’s line is dialled and bridged.
           </p>
+          {/* Provider radio — only when more than one provider is enabled.
+              With Plivo off (enabledProviders === ['kaleyra']) this is
+              false, so the radio never renders and the dialog is identical
+              to today. */}
+          {showProviderPicker && enabledProviders && (
+            <ProviderRadioGroup
+              options={enabledProviders}
+              initial={chosenProvider}
+              onChange={(p) => { chosenProvider = p; chooseProvider(p); }}
+            />
+          )}
           {hasPreview && (
             // Shared masked from→to preview — same component the public
             // magic-link "Need Help" / "Contact Support" confirmations use, so
@@ -293,8 +448,16 @@ function useClickToCall(target: CallTarget) {
       iconAccent: 'emerald',
     });
     if (!ok) return;
-    await performCall();
-  }, [busy, targetBody, confirm, promptForNumbers, performCall]);
+    await performCall(
+      undefined,
+      undefined,
+      preview ? { from: preview.dialFrom, to: preview.dialTo } : undefined,
+      chosenProvider,
+    );
+  }, [
+    busy, targetBody, confirm, promptForNumbers, performCall,
+    provider, showProviderPicker, enabledProviders, chooseProvider,
+  ]);
 
   // The custom-numbers dialog (QA mode only) lives as a sibling node
   // returned by the hook. Pre-fill precedence:
