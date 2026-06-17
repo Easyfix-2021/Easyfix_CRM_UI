@@ -264,12 +264,6 @@ function buildQuery(f: Filters, extras: Record<string, string | number | undefin
   return q;
 }
 
-function efAccountTone(v: Ef['ef_account']): StatusChipTone {
-  if (v === 'Master') return 'sky';
-  if (v === 'Under Master') return 'emerald';
-  return 'slate';
-}
-
 /*
  * Status pill tone per the 6-status enum (2026-06-08). Mirrors the
  * legacy CRM colour convention: green for happy-path Active, slate
@@ -1210,7 +1204,7 @@ export default function EasyfixersPage() {
             *   - SortHeader rendered with `align` so the header aligns to
             *     the cell content direction.
             */}
-          <table className="data-table" style={{ tableLayout: 'fixed', minWidth: '2900px' }}>
+          <table className="data-table" style={{ tableLayout: 'fixed', minWidth: '2950px' }}>
             {/*
               * Explicit px widths (not percentages) so the table has a
               * deterministic intrinsic width that exceeds the viewport,
@@ -1218,58 +1212,58 @@ export default function EasyfixersPage() {
               * `overflow-x-auto` div. Sticky ID + Action cols pin to
               * viewport edges; everything else scrolls between them.
               *
-              * Sum of widths = 2752px (+220px Serviceable Pincodes col,
-              * +widened Clients Mapped/Total Earnings/Job Count/Options
-              * Mapped/A/C Balance/Rating/Last Link Sent cols).
+              * Column order follows the user-specified sequence (2026-06-17).
+              * EF Account column removed from the UI (BE still returns the
+              * field). Widths sized to the CONTENT/header + ~16px headroom so
+              * the active-sort arrow (SortHeader is whitespace-nowrap +
+              * overflow-hidden) is never clipped. Sum ≈ 2937px.
               */}
             <colgroup>
               <col style={{ width: '70px'  }} />{/* ID — sticky-left */}
               <col style={{ width: '160px' }} />{/* Name */}
-              <col style={{ width: '130px' }} />{/* User Mapped To City */}
-              <col style={{ width: '130px' }} />{/* EF Account */}
-              <col style={{ width: '110px' }} />{/* State */}
-              <col style={{ width: '110px' }} />{/* City */}
               <col style={{ width: '110px' }} />{/* Mobile */}
               <col style={{ width: '200px' }} />{/* Email */}
-              <col style={{ width: '140px' }} />{/* Service Category */}
+              <col style={{ width: '110px' }} />{/* State */}
+              <col style={{ width: '110px' }} />{/* City */}
+              <col style={{ width: '160px' }} />{/* Service Category */}
               <col style={{ width: '140px' }} />{/* Service Type */}
               <col style={{ width: '220px' }} />{/* Serviceable Pincodes */}
-              <col style={{ width: '125px' }} />{/* Clients Mapped */}
-              <col style={{ width: '125px' }} />{/* Total Earnings */}
-              <col style={{ width: '100px' }} />{/* Job Count */}
-              <col style={{ width: '155px' }} />{/* Mapped Deep Skill */}
+              <col style={{ width: '165px' }} />{/* Mapped Deep Skill */}
+              <col style={{ width: '185px' }} />{/* User Mapped to Client */}
+              <col style={{ width: '130px' }} />{/* Clients Mapped */}
+              <col style={{ width: '105px' }} />{/* Job Count */}
+              <col style={{ width: '130px' }} />{/* Total Earnings */}
               <col style={{ width: '120px' }} />{/* A/C Balance */}
-              <col style={{ width: '90px'  }} />{/* Rating */}
+              <col style={{ width: '95px'  }} />{/* Profile % */}
               <col style={{ width: '175px' }} />{/* Last Link Sent */}
-              <col style={{ width: '80px'  }} />{/* Profile % */}
-              <col style={{ width: '70px'  }} />{/* Verified */}
-              <col style={{ width: '120px' }} />{/* Registered */}
-              <col style={{ width: '90px'  }} />{/* Status */}
+              <col style={{ width: '175px' }} />{/* Registered on — sized to date+time content */}
+              <col style={{ width: '95px'  }} />{/* Verified */}
+              <col style={{ width: '95px'  }} />{/* Rating */}
+              <col style={{ width: '115px' }} />{/* Status */}
               <col style={{ width: '72px' }} />{/* Action — sticky-right; kebab menu only (was 130px when 6 inline icons) */}
             </colgroup>
             <thead>
               <tr>
                 <SortHeader col="efr_id"                 align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="stick-col-head stick-left">ID</SortHeader>
                 <SortHeader col="efr_name"               align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Name</SortHeader>
-                <SortHeader col="user_mapped_to_city"    align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>User Mapped To City</SortHeader>
-                <SortHeader col="ef_account"             align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>EF Account</SortHeader>
-                <SortHeader col="state_name"             align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>State</SortHeader>
-                <SortHeader col="city_name"              align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>City</SortHeader>
                 <SortHeader col="efr_no"                 align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Mobile</SortHeader>
                 <SortHeader col="efr_email"              align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Email</SortHeader>
+                <SortHeader col="state_name"             align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>State</SortHeader>
+                <SortHeader col="city_name"              align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>City</SortHeader>
                 <SortHeader col="efr_service_category"   align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Service Category</SortHeader>
                 <SortHeader col="efr_service_type"       align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Service Type</SortHeader>
                 <th className="!text-left">Serviceable Pincodes</th>
-                <SortHeader col="clients_mapped"         align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Clients Mapped</SortHeader>
-                <SortHeader col="total_earnings"         align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Total Earnings</SortHeader>
-                <SortHeader col="job_count"              align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Job Count</SortHeader>
                 <SortHeader col="options_mapped_count"   align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Mapped Deep Skill</SortHeader>
+                <SortHeader col="user_mapped_to_city"    align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>User Mapped to Client</SortHeader>
+                <SortHeader col="clients_mapped"         align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Clients Mapped</SortHeader>
+                <SortHeader col="job_count"              align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Job Count</SortHeader>
+                <SortHeader col="total_earnings"         align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Total Earnings</SortHeader>
                 <SortHeader col="current_balance"        align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>A/C Balance</SortHeader>
-                <SortHeader col="avg_rating"             align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Rating</SortHeader>
-                <SortHeader col="profile_update_sent_at" align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Last Link Sent</SortHeader>
                 <SortHeader col="efr_profile_perc"       align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Profile %</SortHeader>
+                <SortHeader col="profile_update_sent_at" align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Last Link Sent</SortHeader>
+                <SortHeader col="insert_date"            align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Registered on</SortHeader>
                 <SortHeader col="is_technician_verified" align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Verified</SortHeader>
-                <SortHeader col="insert_date"            align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Registered</SortHeader>
+                <SortHeader col="avg_rating"             align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Rating</SortHeader>
                 <SortHeader col="efr_status_label"       align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Status</SortHeader>
                 <th className="!text-right whitespace-nowrap stick-col-head stick-right">Action</th>
               </tr>
@@ -1280,10 +1274,10 @@ export default function EasyfixersPage() {
                   200ms server round-trip — only show "Loading…" on the
                   cold first paint when there's nothing to keep. */}
               {loading && sorted.length === 0 && (
-                <tr><td colSpan={23} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
+                <tr><td colSpan={22} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
               )}
               {!loading && sorted.length === 0 && (
-                <tr><td colSpan={23} className="!text-center text-muted-foreground py-6">No easyfixers match the current filters.</td></tr>
+                <tr><td colSpan={22} className="!text-center text-muted-foreground py-6">No easyfixers match the current filters.</td></tr>
               )}
               {!loading && displayRows.map((row) => (
                 <EfRow
@@ -1435,12 +1429,10 @@ const EfRow = memo(function EfRow({
     <tr>
       <td className="!text-center font-mono text-xs truncate stick-col stick-left">{e.efr_id}</td>
       <td className="!text-left font-medium truncate" title={efName}>{efName}</td>
-      <td className="!text-left truncate" title={e.user_mapped_to_city ?? ''}>{e.user_mapped_to_city ?? <span className="text-muted-foreground">—</span>}</td>
-      <td className="!text-left truncate">{e.ef_account ? <StatusChip tone={efAccountTone(e.ef_account)} size="sm">{e.ef_account}</StatusChip> : <span className="text-muted-foreground">—</span>}</td>
-      <td className="!text-left truncate" title={e.state_name ?? ''}>{e.state_name ?? <span className="text-muted-foreground">—</span>}</td>
-      <td className="!text-left truncate" title={e.city_name ?? ''}>{e.city_name ?? <span className="text-muted-foreground">—</span>}</td>
       <td className="!text-left font-mono text-xs truncate" title={e.efr_no}>{e.efr_no}</td>
       <td className="!text-left text-xs truncate" title={e.efr_email ?? ''}>{e.efr_email ?? <span className="text-muted-foreground">—</span>}</td>
+      <td className="!text-left truncate" title={e.state_name ?? ''}>{e.state_name ?? <span className="text-muted-foreground">—</span>}</td>
+      <td className="!text-left truncate" title={e.city_name ?? ''}>{e.city_name ?? <span className="text-muted-foreground">—</span>}</td>
       <td className="!text-left text-xs truncate">
         <CsvCellButton
           items={catItems}
@@ -1462,21 +1454,6 @@ const EfRow = memo(function EfRow({
       </td>
       <td className="!text-right tabular-nums truncate">
         {e._aggregatesLoaded
-          ? (e.clients_mapped ?? 0)
-          : <span className="text-muted-foreground">…</span>}
-      </td>
-      <td className="!text-right tabular-nums truncate">
-        {e._aggregatesLoaded
-          ? (e.total_earnings != null ? `₹${Number(e.total_earnings).toLocaleString('en-IN')}` : '—')
-          : <span className="text-muted-foreground">…</span>}
-      </td>
-      <td className="!text-right tabular-nums truncate">
-        {e._aggregatesLoaded
-          ? (e.job_count ?? 0)
-          : <span className="text-muted-foreground">…</span>}
-      </td>
-      <td className="!text-right tabular-nums truncate">
-        {e._aggregatesLoaded
           ? (e.options_mapped_count > 0
             ? <button
                 type="button"
@@ -1487,12 +1464,24 @@ const EfRow = memo(function EfRow({
             : <span className="text-muted-foreground">0</span>)
           : <span className="text-muted-foreground">…</span>}
       </td>
-      <td className="!text-right tabular-nums truncate">{e.current_balance != null ? `₹${Number(e.current_balance).toLocaleString('en-IN')}` : '—'}</td>
+      <td className="!text-left truncate" title={e.user_mapped_to_city ?? ''}>{e.user_mapped_to_city ?? <span className="text-muted-foreground">—</span>}</td>
       <td className="!text-right tabular-nums truncate">
         {e._aggregatesLoaded
-          ? (e.avg_rating != null ? `${Number(e.avg_rating).toFixed(1)} ★` : '—')
+          ? (e.clients_mapped ?? 0)
           : <span className="text-muted-foreground">…</span>}
       </td>
+      <td className="!text-right tabular-nums truncate">
+        {e._aggregatesLoaded
+          ? (e.job_count ?? 0)
+          : <span className="text-muted-foreground">…</span>}
+      </td>
+      <td className="!text-right tabular-nums truncate">
+        {e._aggregatesLoaded
+          ? (e.total_earnings != null ? `₹${Number(e.total_earnings).toLocaleString('en-IN')}` : '—')
+          : <span className="text-muted-foreground">…</span>}
+      </td>
+      <td className="!text-right tabular-nums truncate">{e.current_balance != null ? `₹${Number(e.current_balance).toLocaleString('en-IN')}` : '—'}</td>
+      <td className="!text-right text-xs tabular-nums truncate">{e.efr_profile_perc != null ? `${Math.round(Number(e.efr_profile_perc))}%` : '—'}</td>
       {/*
         * Last Link Sent — profile-update magic-link audit
         * (2026-06-11). Date + a slate "N×" pill showing
@@ -1518,9 +1507,13 @@ const EfRow = memo(function EfRow({
           <span className="text-muted-foreground">…</span>
         )}
       </td>
-      <td className="!text-right text-xs tabular-nums truncate">{e.efr_profile_perc != null ? `${Math.round(Number(e.efr_profile_perc))}%` : '—'}</td>
-      <td className="!text-center truncate">{e.is_technician_verified ? '✓' : <span className="text-muted-foreground">—</span>}</td>
       <td className="!text-left text-xs whitespace-nowrap text-muted-foreground truncate" title={formatDate(e.insert_date)}>{formatDate(e.insert_date)}</td>
+      <td className="!text-center truncate">{e.is_technician_verified ? '✓' : <span className="text-muted-foreground">—</span>}</td>
+      <td className="!text-right tabular-nums truncate">
+        {e._aggregatesLoaded
+          ? (e.avg_rating != null ? `${Number(e.avg_rating).toFixed(1)} ★` : '—')
+          : <span className="text-muted-foreground">…</span>}
+      </td>
       <td className="!text-center truncate">
         {e.efr_status_label
           ? <StatusChip tone={statusLabelTone(e.efr_status_label)} size="sm">{e.efr_status_label}</StatusChip>
