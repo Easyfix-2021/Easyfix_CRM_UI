@@ -15,7 +15,7 @@ import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
-  ShieldCheck, Webhook, FileSpreadsheet, ShieldAlert, Workflow, Database, FileText, Globe,
+  ShieldCheck, Webhook, FileSpreadsheet, ShieldAlert, Workflow, Database, FileText,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -29,7 +29,6 @@ import { useLookup } from '@/lib/use-lookup';
 import { api } from '@/lib/api';
 import { showToast } from '@/components/ui/toast';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
-import { SeedIndiaLocationsModal } from '@/components/admin-actions/SeedIndiaLocationsModal';
 
 const ACTIONS = [
   {
@@ -90,10 +89,6 @@ export default function AdminActionsPage() {
   const wantsInvoice = sp.get('focus') === 'generate-invoice';
   const [invoiceOpen, setInvoiceOpen] = useState(false);
   const invoiceCardRef = useRef<HTMLDivElement | null>(null);
-  // Seed India Locations — modal-driven importer that wraps the
-  // scripts/seed-india-locations.js CLI behind an HTTP endpoint. Open
-  // state owned here so the card click can flip it.
-  const [seedIndiaOpen, setSeedIndiaOpen] = useState(false);
   useEffect(() => {
     // Only auto-open the dialog when the user actually has the permission.
     // Otherwise deep-linking ?focus=generate-invoice would silently open
@@ -149,29 +144,6 @@ export default function AdminActionsPage() {
             a dialog that POSTs to /admin/finance/invoices/generate
             with { clientId, from, to }. Sidebar deep-link supported
             via ?focus=generate-invoice (auto-opens the dialog). */}
-        {/* Seed India Locations — opens the bulk-import modal. No RBAC
-            gate (admin role already gates the page); the modal itself
-            warns + confirms if a seed has already run. */}
-        <button
-          type="button"
-          onClick={() => setSeedIndiaOpen(true)}
-          className="w-full text-left"
-        >
-          <Card className="hover:border-primary hover:shadow-sm transition-colors h-full">
-            <CardContent className="p-4 space-y-2">
-              <div className="flex items-center gap-2">
-                <div className="h-8 w-8 rounded-md bg-primary/10 text-primary grid place-items-center">
-                  <Globe className="h-4 w-4" />
-                </div>
-                <h2 className="font-medium flex-1">Seed India Locations</h2>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Bulk-import the canonical India pincode / city / state / country dataset from
-                the data.gov.in CSV. Idempotent — re-runs are safe.
-              </p>
-            </CardContent>
-          </Card>
-        </button>
         {canFinance && (
           <div ref={invoiceCardRef}>
             <button
@@ -201,7 +173,6 @@ export default function AdminActionsPage() {
         )}
       </div>
       {canFinance && <GenerateInvoiceDialog open={invoiceOpen} onClose={() => setInvoiceOpen(false)} />}
-      <SeedIndiaLocationsModal open={seedIndiaOpen} onClose={() => setSeedIndiaOpen(false)} />
     </div>
   );
 }
