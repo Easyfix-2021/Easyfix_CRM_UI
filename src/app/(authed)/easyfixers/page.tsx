@@ -34,7 +34,7 @@ import { EasyfixerActionMenu } from '@/components/easyfixer/EasyfixerActionMenu'
 import { EasyfixerTransactionsModal } from '@/components/easyfixer/EasyfixerTransactionsModal';
 import { EasyfixerClientMappingModal } from '@/components/easyfixer/EasyfixerClientMappingModal';
 import { EasyfixerDeepSkillModal } from '@/components/easyfixer/EasyfixerDeepSkillModal';
-import { useSort, SortHeader } from '@/lib/use-sort';
+import { cycleSort, SortHeader, type SortDir } from '@/lib/use-sort';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 
@@ -79,7 +79,7 @@ type Ef = {
   profile_activation_date_time: string | null;
   clients_mapped: number;
   total_earnings: number;
-  job_count: number;
+  job_count: number; // completed jobs (status 3/5); < 5 => "Fresher" chip
   avg_rating: number | null;
   options_mapped_count: number;
   ef_account: 'Under Master' | 'Master' | 'Individual';
@@ -457,6 +457,11 @@ export default function EasyfixersPage() {
   // TablePagination is 0-indexed; we keep the same convention here.
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState<TablePageSize>(50);
+  // Server-side sort (2026-06-17). sortKey=null => BE default order (efr_id
+  // DESC). A column click reloads the COMPLETE filtered list sorted on the
+  // server, not just the current page.
+  const [sortKey, setSortKey] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
   // Monotonic sequence per load() call — a superseded load (older seq)
@@ -694,12 +699,20 @@ export default function EasyfixersPage() {
     overrideFilters?: Filters,
     overridePage?: number,
     overridePageSize?: TablePageSize,
+    overrideSortBy?: string | null,
+    overrideSortDir?: SortDir,
   ) {
     const seq = ++loadSeqRef.current;
     setLoading(true);
     const f = overrideFilters ?? filters;
     const pg = reset ? 0 : (overridePage ?? page);
     const ps = overridePageSize ?? pageSize;
+    // Sort: a null sortKey (initial / cleared on 3rd click) sends no sort
+    // params, so the BE applies its default (efr_id DESC). Overrides let the
+    // onSort handler reload with the new sort before state has flushed.
+    const sKey = overrideSortBy !== undefined ? overrideSortBy : sortKey;
+    const sDir = overrideSortDir ?? sortDir;
+    const sortParams = sKey ? { sortBy: sKey, sortDir: sDir } : {};
     // BE Joi cap on /admin/easyfixers is 500; pass it explicitly so
     // "All" maps to the true ceiling rather than the helper's 1000
     // default (which would 400).
@@ -725,6 +738,7 @@ export default function EasyfixersPage() {
 
       const r = await fetchListOnce({
         limit, offset,
+        ...sortParams,
         ...buildQuery(f),
       });
       if (seq !== loadSeqRef.current) return; // superseded by a newer load — discard
@@ -893,7 +907,19 @@ export default function EasyfixersPage() {
     } finally { setDownloading(false); }
   }
 
-  const { sorted, sortKey, sortDir, toggle } = useSort<EnrichedEf>(rows);
+  /*
+   * Server-side sort handler (2026-06-17). Cycles asc → desc → cleared via
+   * cycleSort, then reloads page 0 so the BE sorts the COMPLETE filtered list
+   * (cleared => BE default efr_id DESC). Replaces the old client-side useSort,
+   * which only reordered the rows already loaded for the current page.
+   */
+  function onSort(col: string) {
+    const next = cycleSort<string>(col, { sortBy: sortKey, sortDir });
+    setSortKey(next.sortBy);
+    setSortDir(next.sortDir);
+    setPage(0);
+    load(false, undefined, 0, undefined, next.sortBy, next.sortDir);
+  }
 
   /*
    * Service Category / Service Type CSV cell helpers.
@@ -934,12 +960,14 @@ export default function EasyfixersPage() {
    * rows via the memoised <EfRow>) means typing in a filter input no
    * longer re-reconciles 500 rows × 22 cells.
    */
-  const displayRows = useMemo(() => sorted.map((e) => ({
+  // Rows arrive already sorted from the server (full-list sort), so we map the
+  // raw `rows` directly — no client-side re-sort of the current page.
+  const displayRows = useMemo(() => rows.map((e) => ({
     e,
     catItems: parseCsvCell(e.efr_service_category, categoryById),
     typeItems: parseCsvCell(e.efr_service_type, serviceTypeById),
     efName: formatEasyfixerName(e.efr_name),
-  })), [sorted, categoryById, serviceTypeById]);
+  })), [rows, categoryById, serviceTypeById]);
 
   return (
     <div className="space-y-5">
@@ -1244,39 +1272,40 @@ export default function EasyfixersPage() {
             </colgroup>
             <thead>
               <tr>
-                <SortHeader col="efr_id"                 align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="stick-col-head stick-left">ID</SortHeader>
-                <SortHeader col="efr_name"               align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Name</SortHeader>
-                <SortHeader col="efr_no"                 align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Mobile</SortHeader>
-                <SortHeader col="efr_email"              align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Email</SortHeader>
-                <SortHeader col="state_name"             align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>State</SortHeader>
-                <SortHeader col="city_name"              align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>City</SortHeader>
-                <SortHeader col="efr_service_category"   align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Service Category</SortHeader>
-                <SortHeader col="efr_service_type"       align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Service Type</SortHeader>
+                <SortHeader col="efr_id"                 align="center" sortBy={sortKey} sortDir={sortDir} onSort={onSort} className="stick-col-head stick-left">ID</SortHeader>
+                <SortHeader col="efr_name"               align="left"   sortBy={sortKey} sortDir={sortDir} onSort={onSort}>Name</SortHeader>
+                <SortHeader col="efr_no"                 align="left"   sortBy={sortKey} sortDir={sortDir} onSort={onSort}>Mobile</SortHeader>
+                <SortHeader col="efr_email"              align="left"   sortBy={sortKey} sortDir={sortDir} onSort={onSort}>Email</SortHeader>
+                <SortHeader col="state_name"             align="left"   sortBy={sortKey} sortDir={sortDir} onSort={onSort}>State</SortHeader>
+                <SortHeader col="city_name"              align="left"   sortBy={sortKey} sortDir={sortDir} onSort={onSort}>City</SortHeader>
+                <SortHeader col="efr_service_category"   align="left"   sortBy={sortKey} sortDir={sortDir} onSort={onSort}>Service Category</SortHeader>
+                <SortHeader col="efr_service_type"       align="left"   sortBy={sortKey} sortDir={sortDir} onSort={onSort}>Service Type</SortHeader>
                 <th className="!text-left">Serviceable Pincodes</th>
-                <SortHeader col="options_mapped_count"   align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Mapped Deep Skill</SortHeader>
-                <SortHeader col="user_mapped_to_city"    align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>User Mapped to Client</SortHeader>
-                <SortHeader col="clients_mapped"         align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Clients Mapped</SortHeader>
-                <SortHeader col="job_count"              align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Job Count</SortHeader>
-                <SortHeader col="total_earnings"         align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Total Earnings</SortHeader>
-                <SortHeader col="current_balance"        align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>A/C Balance</SortHeader>
-                <SortHeader col="efr_profile_perc"       align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Profile %</SortHeader>
-                <SortHeader col="profile_update_sent_at" align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Last Link Sent</SortHeader>
-                <SortHeader col="insert_date"            align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Registered on</SortHeader>
-                <SortHeader col="is_technician_verified" align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Verified</SortHeader>
-                <SortHeader col="avg_rating"             align="right"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Rating</SortHeader>
-                <SortHeader col="efr_status_label"       align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Status</SortHeader>
+                <SortHeader col="options_mapped_count"   align="right"  sortBy={sortKey} sortDir={sortDir} onSort={onSort}>Mapped Deep Skill</SortHeader>
+                <SortHeader col="user_mapped_to_city"    align="left"   sortBy={sortKey} sortDir={sortDir} onSort={onSort}>User Mapped to Client</SortHeader>
+                <SortHeader col="clients_mapped"         align="right"  sortBy={sortKey} sortDir={sortDir} onSort={onSort}>Clients Mapped</SortHeader>
+                <SortHeader col="job_count"              align="right"  sortBy={sortKey} sortDir={sortDir} onSort={onSort}>Job Count</SortHeader>
+                <SortHeader col="total_earnings"         align="right"  sortBy={sortKey} sortDir={sortDir} onSort={onSort}>Total Earnings</SortHeader>
+                <SortHeader col="current_balance"        align="right"  sortBy={sortKey} sortDir={sortDir} onSort={onSort}>A/C Balance</SortHeader>
+                <SortHeader col="efr_profile_perc"       align="right"  sortBy={sortKey} sortDir={sortDir} onSort={onSort}>Profile %</SortHeader>
+                <SortHeader col="profile_update_sent_at" align="left"   sortBy={sortKey} sortDir={sortDir} onSort={onSort}>Last Link Sent</SortHeader>
+                <SortHeader col="insert_date"            align="left"   sortBy={sortKey} sortDir={sortDir} onSort={onSort}>Registered on</SortHeader>
+                <SortHeader col="is_technician_verified" align="center" sortBy={sortKey} sortDir={sortDir} onSort={onSort}>Verified</SortHeader>
+                <SortHeader col="avg_rating"             align="right"  sortBy={sortKey} sortDir={sortDir} onSort={onSort}>Rating</SortHeader>
+                <SortHeader col="efr_status_label"       align="center" sortBy={sortKey} sortDir={sortDir} onSort={onSort}>Status</SortHeader>
                 <th className="!text-right whitespace-nowrap stick-col-head stick-right">Action</th>
               </tr>
             </thead>
             <tbody>
-              {/* Manage-Users semantic: keep existing rows visible during
-                  a refetch so the table doesn't flash empty during the
-                  200ms server round-trip — only show "Loading…" on the
-                  cold first paint when there's nothing to keep. */}
-              {loading && sorted.length === 0 && (
+              {/* Show "Loading…" on EVERY in-flight fetch — initial, search,
+                  pagination AND sort. Sort reloads the full list server-side
+                  and can take ~1-2s for aggregate columns, so a clear loading
+                  state matters (the rows are gated on !loading below, so
+                  without this the body would sit blank during the sort). */}
+              {loading && (
                 <tr><td colSpan={22} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
               )}
-              {!loading && sorted.length === 0 && (
+              {!loading && rows.length === 0 && (
                 <tr><td colSpan={22} className="!text-center text-muted-foreground py-6">No easyfixers match the current filters.</td></tr>
               )}
               {!loading && displayRows.map((row) => (
@@ -1428,7 +1457,14 @@ const EfRow = memo(function EfRow({
   return (
     <tr>
       <td className="!text-center font-mono text-xs truncate stick-col stick-left">{e.efr_id}</td>
-      <td className="!text-left font-medium truncate" title={efName}>{efName}</td>
+      <td className="!text-left font-medium" title={efName}>
+        <span className="inline-flex items-center gap-1.5 max-w-full align-middle">
+          <span className="truncate">{efName}</span>
+          {e._aggregatesLoaded && e.job_count != null && e.job_count < 5 && (
+            <StatusChip tone="sky" size="sm" className="shrink-0" title="Completed Less Than 5 Jobs Till Now">Fresher</StatusChip>
+          )}
+        </span>
+      </td>
       <td className="!text-left font-mono text-xs truncate" title={e.efr_no}>{e.efr_no}</td>
       <td className="!text-left text-xs truncate" title={e.efr_email ?? ''}>{e.efr_email ?? <span className="text-muted-foreground">—</span>}</td>
       <td className="!text-left truncate" title={e.state_name ?? ''}>{e.state_name ?? <span className="text-muted-foreground">—</span>}</td>

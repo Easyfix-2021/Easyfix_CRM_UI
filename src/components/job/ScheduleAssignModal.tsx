@@ -48,6 +48,7 @@ import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
 import { formatDate } from '@/lib/utils';
 import { CallableMobile } from '@/components/calls/CallButton';
+import { StatusChip } from '@/components/ui/StatusChip';
 
 /* ── Time-slot options — mirror the values used in JobModal's Confirm
    form so a re-fetch against an edited slot keys on the same labels the
@@ -113,6 +114,8 @@ export type ScheduleCandidate = {
   account_balance: number;
   concurrent_jobs_count: number;
   same_slot_conflict: boolean;
+  /** Completed jobs (status 3/5) — mirrors Manage Easyfixers job_count. < 5 => "Fresher". */
+  job_count?: number;
   // Existing ranking fields — optional so the search endpoint (which
   // skips ranking) can omit them.
   score?: number;
@@ -585,7 +588,12 @@ function CandidateTable({
               <td className="!text-left sticky left-0 z-20 bg-white group-hover:bg-slate-100 shadow-[2px_0_0_0_var(--border)] min-w-[190px]">
                 <div className="flex items-center justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="font-medium truncate" title={c.efr_name}>{c.efr_name}</div>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="font-medium truncate" title={c.efr_name}>{c.efr_name}</span>
+                      {c.job_count != null && c.job_count < 5 && (
+                        <StatusChip tone="sky" size="sm" className="shrink-0" title="Completed Less Than 5 Jobs Till Now">Fresher</StatusChip>
+                      )}
+                    </div>
                     <div className="text-[10px] text-muted-foreground">Efr #{c.efr_id}</div>
                   </div>
                   {canCommit && (
