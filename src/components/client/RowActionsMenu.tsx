@@ -29,8 +29,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  Pencil, MoreHorizontal, Download, Layers, Calculator, Users, MapPin, Phone, X, RotateCw,
+  Pencil, MoreHorizontal, Download, Layers, Calculator, Users, MapPin, Phone, XCircle, CheckCircle2,
 } from 'lucide-react';
+import { IconButton } from '@/components/ui/icon-button';
 import { showToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { api, ApiError } from '@/lib/api';
@@ -74,7 +75,7 @@ type MenuItem = {
 export function RowActionsMenu({ clientId, clientName, isActive, canEdit, onOpen, onStatusChanged }: Props) {
   const [open, setOpen] = useState(false);
   const [toggling, setToggling] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement>(null);
+  const triggerRef = useRef<HTMLSpanElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
   const confirm = useConfirm();
   const { style } = usePopoverPosition(open, triggerRef, popRef, {
@@ -166,50 +167,42 @@ export function RowActionsMenu({ clientId, clientName, isActive, canEdit, onOpen
     else if (item.tab) onOpen(item.tab);
   }
 
-  // Naked colored-icon action cluster — matches the Unconfirmed Orders
-  // table convention (UnconfirmedJobsTable.tsx): plain <button>s sized to
-  // the icon itself with `inline-flex items-center gap-1 text-{color}
-  // text-xs hover:underline`, NOT shadcn <Button> `size-7` squares. The
-  // old <Button variant="ghost" size-7 p-0> rendered each action as a
-  // 28×28 rounded box that filled gray on hover; the naked icons remove
-  // that "box" and the wide hit-area spacing between actions.
+  // Canonical IconButton action cluster — every affordance (Edit,
+  // activate/deactivate toggle, AND the More-Actions kebab) uses the
+  // shared <IconButton> so the cell reads identically to Manage Pincodes
+  // (same 28px hit area, same intent colors, same hover tint). The kebab
+  // is anchored via a ref'd <span> wrapper because IconButton renders a
+  // self-contained <button> and doesn't forward a ref/ARIA props.
   return (
-    <div className="inline-flex items-center gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
+    <div className="inline-flex items-center gap-0.5 justify-end" onClick={(e) => e.stopPropagation()}>
       {canEdit && (
-        <button
-          type="button"
+        <IconButton
+          icon={Pencil}
+          intent="primary"
+          label="Edit Client"
           onClick={() => onOpen('overview')}
-          title="Edit Client"
-          className="inline-flex items-center text-primary text-xs hover:underline"
-        >
-          <Pencil className="size-3.5" />
-        </button>
+        />
       )}
       {canEdit && (
-        <button
-          type="button"
+        <IconButton
+          icon={isActive ? XCircle : CheckCircle2}
+          intent={isActive ? 'danger' : 'success'}
+          label={isActive ? 'Deactivate Client' : 'Reactivate Client'}
           onClick={toggleStatus}
-          disabled={toggling}
-          title={isActive ? 'Deactivate Client' : 'Reactivate Client'}
-          className={
-            'inline-flex items-center text-xs hover:underline disabled:opacity-50 ' +
-            (isActive ? 'text-red-600' : 'text-emerald-600')
-          }
-        >
-          {isActive ? <X className="size-3.5" /> : <RotateCw className="size-3.5" />}
-        </button>
+          busy={toggling}
+        />
       )}
-      <button
-        ref={triggerRef}
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        title="More Actions"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        className="inline-flex items-center text-slate-600 text-xs hover:underline"
-      >
-        <MoreHorizontal className="size-3.5" />
-      </button>
+      {/* Anchor span carries the popover ref + ARIA disclosure
+          semantics so the trigger itself can be the canonical
+          <IconButton> (matching Edit / toggle and Manage Pincodes). */}
+      <span ref={triggerRef} aria-haspopup="menu" aria-expanded={open} className="inline-flex">
+        <IconButton
+          icon={MoreHorizontal}
+          intent="default"
+          label="More Actions"
+          onClick={() => setOpen((o) => !o)}
+        />
+      </span>
 
       {open && typeof document !== 'undefined' && createPortal(
         /*

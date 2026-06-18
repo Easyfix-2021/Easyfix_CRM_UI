@@ -52,6 +52,20 @@ type Props = {
   cities: CityOption[];
   /** When false, all inputs render disabled (read-only view). */
   editable?: boolean;
+  /*
+   * OPT-IN: when true AND the PIN field reaches a valid 6 digits, the picker
+   * SILENTLY (debounced ~600ms) calls POST /admin/pincodes/ensure { pincode }
+   * to idempotently add the pincode to the system. On success it back-fills
+   * city_id from the response IF the picker's city is still empty, and shows a
+   * tiny inline note ("Pincode added to system" / spinner). A 400 (non-India /
+   * ungeocodable) surfaces a small inline warning but NEVER blocks the form —
+   * this is a customer address, not master-data entry.
+   *
+   * Scoped to CRM-admin call sites (Book New Call + Confirm & Schedule). Left
+   * off (default false) everywhere else so it never fires in read-only views,
+   * the address-edit dialog, or any Client/public surface.
+   */
+  autoCreatePincode?: boolean;
 };
 
 /*
@@ -125,7 +139,7 @@ function loadGoogleMaps(): Promise<GMaps> {
   return mapsLoader;
 }
 
-export function AddressPickerWithMap({ value, onChange, cities, editable = true }: Props) {
+export function AddressPickerWithMap({ value, onChange, cities, editable = true, autoCreatePincode = false }: Props) {
   const mapRef = React.useRef<HTMLDivElement | null>(null);
   // The map + marker types are minimal at the call site — we only
   // need .panTo / .setZoom on the map and .setPosition on the marker.
@@ -134,6 +148,29 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const markerInstance = React.useRef<any>(null);
   const [mapsError, setMapsError] = React.useState<string | null>(null);
+
+  /*
+   * Inline status for the OPT-IN silent pincode ensure (see `autoCreatePincode`
+   * prop docblock). `pinEnsureState` drives the tiny note under the PIN field:
+   *   - 'validating' → spinner + "Validating pincode…"
+   *   - 'added'      → "Pincode added to system"
+   *   - 'present'    → (no note — already in system, nothing to announce)
+   *   - 'warn'       → small amber warning (non-India / ungeocodable); does NOT
+   *                    block the form.
+   * `pinEnsureMsg` carries the BE-returned message for the warn case.
+   */
+  const [pinEnsureState, setPinEnsureState] =
+    React.useState<'idle' | 'validating' | 'added' | 'present' | 'warn'>('idle');
+  const [pinEnsureMsg, setPinEnsureMsg] = React.useState<string>('');
+  // The last 6-digit pincode we already ensured (any outcome) — dedupes so the
+  // debounced effect doesn't re-POST the same pincode on unrelated re-renders.
+  const lastEnsuredPinRef = React.useRef<string>('');
+  // Mirror of the latest city_id so the debounced ensure callback can read the
+  // CURRENT city (to decide whether to back-fill) without being a dep of the
+  // effect — depending on value.city_id would re-arm the timer on every city
+  // change and risk re-firing the ensure.
+  const cityIdRef = React.useRef<string | number>(value.city_id);
+  React.useEffect(() => { cityIdRef.current = value.city_id; }, [value.city_id]);
 
   // City name → city_id lookup, used after a reverse-geocode pick to
   // try to match the Google "city" string against an active EasyFix
@@ -349,6 +386,75 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value.gps_location, editable]);
 
+  /*
+   * OPT-IN silent pincode ensure (2026-06-18).
+   *
+   * Gated on the `autoCreatePincode` prop — only the CRM-admin JobModal call
+   * sites (Book New Call + Confirm & Schedule) pass it. When the PIN field
+   * reaches a valid 6 digits we debounce ~600ms then POST
+   * /admin/pincodes/ensure { pincode } so the customer's pincode is registered
+   * in the system before the job is booked.
+   *
+   * Behaviour:
+   *   - idempotent on the BE: an already-present pincode returns created:false
+   *     with no write — we render no note for that case.
+   *   - on a freshly-created pincode (created:true) we show "Pincode added to
+   *     system" AND, IF the picker's city is still empty, back-fill city_id
+   *     from the response so the new pincode's city is reflected. We never
+   *     overwrite a city the operator (or geocode) already chose.
+   *   - a 400 (non-India / ungeocodable) shows a small amber inline warning but
+   *     DOES NOT block the form — this is a customer address, not master data.
+   *
+   * Deduped via `lastEnsuredPinRef` so the same pincode isn't re-POSTed on
+   * unrelated re-renders. Stale-response guarded via the cleanup `cancelled`
+   * flag so a slow response for an old pincode can't clobber a newer one.
+   */
+  React.useEffect(() => {
+    if (!autoCreatePincode || !editable) return;
+    const pin = String(value.pin_code || '').trim();
+    if (!/^\d{6}$/.test(pin)) { setPinEnsureState('idle'); setPinEnsureMsg(''); return; }
+    if (pin === lastEnsuredPinRef.current) return;
+    let cancelled = false;
+    const handle = setTimeout(async () => {
+      lastEnsuredPinRef.current = pin;
+      setPinEnsureState('validating');
+      setPinEnsureMsg('');
+      try {
+        const r = await api.post<{
+          pincode_id: number;
+          pincode: string;
+          city_id: number | null;
+          city_name: string | null;
+          created: boolean;
+        }>('/admin/pincodes/ensure', { pincode: pin });
+        if (cancelled) return;
+        // Back-fill city ONLY when the picker has no city yet — never stomp a
+        // city the operator or a geocode already resolved.
+        const hasCity = String(cityIdRef.current || '').trim() !== '';
+        if (r.city_id != null && !hasCity) {
+          patch({ city_id: String(r.city_id) });
+        }
+        setPinEnsureState(r.created ? 'added' : 'present');
+      } catch (e) {
+        if (cancelled) return;
+        // 400 (non-India / ungeocodable) → inline warn, never block. Any other
+        // failure (network, 5xx) is treated the same way silently — the
+        // operator can still book the job; the pincode just isn't auto-added.
+        // Allow a retry by clearing the dedupe ref so editing+re-entering the
+        // same value can re-attempt.
+        lastEnsuredPinRef.current = '';
+        setPinEnsureState('warn');
+        setPinEnsureMsg(
+          e instanceof ApiError && e.status === 400 && e.message
+            ? e.message
+            : 'Could not auto-add this pincode — you can still book the call.'
+        );
+      }
+    }, 600);
+    return () => { cancelled = true; clearTimeout(handle); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value.pin_code, autoCreatePincode, editable]);
+
   // Map bootstrap — loads JS API + instantiates map + marker on first
   // mount. Re-uses the existing marker instance on rerenders.
   React.useEffect(() => {
@@ -484,6 +590,20 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true 
               pattern="[0-9]{6}"
               disabled={!editable}
             />
+            {/* OPT-IN silent ensure status (autoCreatePincode call sites only).
+                Unobtrusive single-line note; never blocks the form. */}
+            {autoCreatePincode && pinEnsureState === 'validating' && (
+              <p className="text-[10px] text-muted-foreground mt-1 flex items-center gap-1">
+                <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border border-current border-t-transparent" />
+                Validating pincode…
+              </p>
+            )}
+            {autoCreatePincode && pinEnsureState === 'added' && (
+              <p className="text-[10px] text-emerald-600 mt-1">Pincode added to system</p>
+            )}
+            {autoCreatePincode && pinEnsureState === 'warn' && (
+              <p className="text-[10px] text-amber-600 mt-1">{pinEnsureMsg}</p>
+            )}
           </div>
         </div>
         <div>

@@ -1468,11 +1468,27 @@ type PincodeSearchRow = PincodeChip & {
   location?: string | null;
 };
 
+// Canonical label for both the picker OPTIONS and the selected chips (#8):
+// "<pincode> - <city_name>". Falls back to just the pincode when the city is
+// unknown (e.g. a freshly auto-created pincode whose city row is still blank).
+function pincodeLabel(p: { pincode: string; city_name?: string | null }): string {
+  const city = (p.city_name ?? '').trim();
+  return city ? `${p.pincode} - ${city}` : String(p.pincode);
+}
+
 function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: () => Promise<void> }) {
   const [selected, setSelected] = useState<Map<number, PincodeChip>>(new Map());
   const [original, setOriginal] = useState<Map<number, PincodeChip>>(new Map());
   const [search, setSearch] = useState('');
   const [bulkLookupBusy, setBulkLookupBusy] = useState(false);
+  // Auto-create-on-no-match (#6): which 6-digit term is being ensured right now
+  // (drives the in-dropdown "Adding…" copy) + a transient "Added <pincode>" hint
+  // shown briefly after a successful silent create. `ensuredCodes` memoises the
+  // codes we've already attempted this session so the no-match effect fires at
+  // most once per code (prevents a debounce re-render from re-POSTing).
+  const [ensuringCode, setEnsuringCode] = useState<string | null>(null);
+  const [ensuredHint, setEnsuredHint] = useState<string | null>(null);
+  const ensuredCodes = useRef<Set<string>>(new Set());
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -1625,6 +1641,67 @@ function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: ()
     }
   }
 
+  // #6 — Auto-create a missing pincode on no-match. Silently POSTs
+  // /admin/pincodes/ensure { pincode }; the BE is idempotent (returns the
+  // existing row if it already exists) and geocodes + find-or-creates the city/
+  // state for a brand-new Indian pincode. On success the returned row is merged
+  // into `selected` (same shape as toggle()) and a brief "Added <pincode>" hint
+  // is shown. A 400 (non-Indian / ungeocodable) surfaces inline via `error`.
+  const ensureAndAdd = useCallback(async (code: string) => {
+    const pin = String(code).trim();
+    if (!/^\d{6}$/.test(pin)) return;
+    // Fire at most once per code per session.
+    if (ensuredCodes.current.has(pin)) return;
+    ensuredCodes.current.add(pin);
+    setEnsuringCode(pin);
+    setError(null);
+    try {
+      const resp = await api.post<{
+        pincode_id: number; pincode: string;
+        city_name: string | null; state_name: string | null; created: boolean;
+      }>(`/admin/pincodes/ensure`, { pincode: pin });
+      if (!resp?.pincode_id) return;
+      const id = Number(resp.pincode_id);
+      setSelected((prev) => {
+        const next = new Map(prev);
+        next.set(id, {
+          pincode_id: id,
+          pincode: String(resp.pincode),
+          city_name: resp.city_name ?? null,
+          state_name: resp.state_name ?? null,
+        });
+        return next;
+      });
+      setSearch('');
+      setOpen(false);
+      setEnsuredHint(`Added ${resp.pincode}`);
+    } catch (e) {
+      // Allow a retry on transient failure: drop the memo so the operator can
+      // re-trigger by re-typing the same code.
+      ensuredCodes.current.delete(pin);
+      setError(e instanceof ApiError ? e.message : `Could not add pincode ${pin}`);
+    } finally {
+      setEnsuringCode(null);
+    }
+  }, []);
+
+  // No-match watcher: once the debounced query is a complete 6-digit pincode and
+  // the (settled) typeahead returned zero rows, silently ensure it. Guards:
+  // dropdown open, not a bulk paste, search has finished loading, and no result.
+  useEffect(() => {
+    if (!open || isBulkInput || searchLoading) return;
+    if (!/^\d{6}$/.test(dq)) return;
+    if (filteredResults.length > 0) return;
+    void ensureAndAdd(dq);
+  }, [open, isBulkInput, searchLoading, dq, filteredResults.length, ensureAndAdd]);
+
+  // Auto-dismiss the "Added <pincode>" hint after a short beat.
+  useEffect(() => {
+    if (!ensuredHint) return;
+    const t = setTimeout(() => setEnsuredHint(null), 3000);
+    return () => clearTimeout(t);
+  }, [ensuredHint]);
+
   function onSearchKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === 'Enter' && isBulkInput) {
       e.preventDefault();
@@ -1733,13 +1810,18 @@ function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: ()
                     <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading Pincodes…
                   </div>
                 ) : filteredResults.length === 0 ? (
-                  <div className="px-3 py-2 text-xs text-slate-500">No Pincodes Match.</div>
+                  ensuringCode && /^\d{6}$/.test(dq) ? (
+                    <div className="px-3 py-3 text-xs text-slate-500 inline-flex items-center gap-2">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" /> Adding Pincode {ensuringCode}…
+                    </div>
+                  ) : (
+                    <div className="px-3 py-2 text-xs text-slate-500">No Pincodes Match.</div>
+                  )
                 ) : (
                   <>
                     {filteredResults.map((r) => {
                       const id = Number(r.pincode_id);
                       const isSelected = selected.has(id);
-                      const sub = [r.city_name, r.state_name].filter(Boolean).join(', ');
                       return (
                         <button
                           type="button"
@@ -1754,8 +1836,7 @@ function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: ()
                               checked={isSelected}
                               className="h-4 w-4 accent-emerald-600 pointer-events-none"
                             />
-                            <span className="font-medium text-slate-800">{r.pincode}</span>
-                            {sub && <span className="text-xs text-slate-500">· {sub}</span>}
+                            <span className="font-medium text-slate-800">{pincodeLabel(r)}</span>
                           </span>
                           {isSelected && <Check className="h-4 w-4 text-emerald-600 shrink-0" />}
                         </button>
@@ -1790,7 +1871,7 @@ function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: ()
                   className="inline-flex items-center gap-1.5 rounded-full bg-sky-50 border border-sky-200 text-sky-700 pl-3 pr-1.5 py-0.5 text-xs"
                   title={[c.city_name, c.state_name].filter(Boolean).join(', ') || undefined}
                 >
-                  <span className="font-medium">{c.pincode}</span>
+                  <span className="font-medium">{pincodeLabel(c)}</span>
                   <button
                     type="button"
                     onClick={() => removeChip(c.pincode_id)}
@@ -1804,6 +1885,11 @@ function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: ()
             </div>
           )}
 
+          {ensuredHint && (
+            <div className="text-xs text-emerald-600 inline-flex items-center gap-1">
+              <Check className="h-3.5 w-3.5" /> {ensuredHint}
+            </div>
+          )}
           {error && <div className="text-xs text-rose-600">{error}</div>}
 
           <div className="flex justify-end gap-2 pt-1">

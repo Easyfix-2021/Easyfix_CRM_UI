@@ -1172,10 +1172,17 @@ function SkillsMappingPicker({
           {error ? (
             <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>
           ) : null}
+          {/* Mandate ≥1 skill before saving — a technician can't submit an
+              empty skills set (and can't clear all skills to nothing). */}
+          {selected.size === 0 ? (
+            <p className="mb-2 text-right text-xs font-medium text-amber-700">
+              Map at least one skill to save.
+            </p>
+          ) : null}
           <div className="flex justify-end">
             <Button
               onClick={() => { setError(null); setOtpGateOpen(true); }}
-              disabled={!dirty || saving}
+              disabled={!dirty || saving || selected.size === 0}
               className="h-11 sm:h-9 w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white"
             >
               {saved && !dirty ? 'Saved · Tap To Re-Save' : 'Save Skills Mapping'}
@@ -1245,6 +1252,13 @@ function PincodePicker({
   const [error, setError] = React.useState<string | null>(null);
   // OTP gate state for the Service Area save flow.
   const [otpGateOpen, setOtpGateOpen] = React.useState(false);
+  // "Ensure pincode" (on-the-fly create) state for the No-Matches branch.
+  // `ensuring` blocks a double-tap while the POST is in flight; `ensureHint`
+  // is the brief "Added <pincode>" confirmation; `ensureError` is the inline
+  // 400 message (e.g. "not a valid Indian pincode").
+  const [ensuring, setEnsuring] = React.useState(false);
+  const [ensureHint, setEnsureHint] = React.useState<string | null>(null);
+  const [ensureError, setEnsureError] = React.useState<string | null>(null);
 
   // Debounce the input so we don't fire one request per keystroke. 300ms is
   // the project-standard debounce (see useDebouncedValue docblock).
@@ -1266,6 +1280,9 @@ function PincodePicker({
   React.useEffect(() => {
     let cancelled = false;
     const q = debouncedSearch.trim();
+    // A new search term invalidates any prior on-the-fly ensure feedback.
+    setEnsureHint(null);
+    setEnsureError(null);
     const now = Date.now();
     const cached = pincodeSearchCache.get(q);
     const isFresh = cached && cached.expiresAt > now;
@@ -1350,6 +1367,62 @@ function PincodePicker({
     setSelected(next);
   }
 
+  /*
+   * On-the-fly pincode create (#6). When a searched 6-digit pincode returns
+   * NO catalog match, the technician can still add it: we silently POST it to
+   * `/ensure-pincode`, which geocodes it (India-only gate) and find-or-creates
+   * the row, then merge the returned pincode into `selected` exactly like a
+   * normal toggle so the Save flow (serviceable_pincode_ids) picks it up
+   * unchanged. A brief hint confirms the add; a 400 surfaces inline.
+   *
+   * The pincode is also seeded into the module-scope search cache under its own
+   * 6-digit key so re-typing the same pincode shows it as a real match (with a
+   * checked box) instead of "No Matches." again.
+   */
+  async function ensurePincode(pincode: string) {
+    const pin = pincode.trim();
+    if (!/^\d{6}$/.test(pin)) return;
+    setEnsuring(true);
+    setEnsureError(null);
+    setEnsureHint(null);
+    try {
+      const row = await publicFetch<CatalogPincode>(
+        `/public/easyfixer-profile-update/ensure-pincode?token=${encodeURIComponent(token)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pincode: pin }),
+        }
+      );
+      const id = Number(row.pincode_id);
+      // Merge into the selection (same shape as toggle's add-branch).
+      setSelected((prev) => {
+        const next = new Map(prev);
+        next.set(id, {
+          pincode_id: id,
+          pincode: String(row.pincode),
+          city_name: row.city_name ?? null,
+          state_name: row.state_name ?? null,
+        });
+        return next;
+      });
+      // Seed the search cache so re-searching this pincode lists it as a match.
+      pincodeSearchCache.set(pin, {
+        items: [row],
+        expiresAt: Date.now() + PINCODE_CACHE_TTL_MS,
+      });
+      setResults([row]);
+      setEnsureHint(
+        `Added ${row.pincode}${row.city_name ? ` · ${row.city_name}` : ''} to your service area`
+      );
+    } catch (e) {
+      const err = e as { message?: string };
+      setEnsureError(err?.message || 'Could not add this pincode');
+    } finally {
+      setEnsuring(false);
+    }
+  }
+
   const dirty = React.useMemo(() => {
     if (selected.size !== original.size) return true;
     for (const k of selected.keys()) if (!original.has(k)) return true;
@@ -1403,7 +1476,7 @@ function PincodePicker({
               className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 border border-emerald-200 px-2.5 py-1 text-xs text-emerald-800"
             >
               <span className="font-semibold tabular-nums">{p.pincode}</span>
-              {p.city_name ? <span className="text-emerald-600">· {p.city_name}</span> : null}
+              {p.city_name ? <span className="text-emerald-600">- {p.city_name}</span> : null}
               <button
                 type="button"
                 onClick={() => removeChip(p.pincode_id)}
@@ -1460,7 +1533,27 @@ function PincodePicker({
           {!searching && searchError ? (
             <div className="p-3 text-xs text-rose-600">{searchError}</div>
           ) : !searching && results.length === 0 ? (
-            <div className="p-3 text-xs text-slate-500">No Matches.</div>
+            <div className="p-3 space-y-2">
+              <div className="text-xs text-slate-500">No Matches.</div>
+              {/*
+                * On-the-fly create (#6): only when the term is a clean 6-digit
+                * pincode. We add it silently to the catalog + selection. The
+                * hint / error render below the button.
+                */}
+              {/^\d{6}$/.test(debouncedSearch.trim()) ? (
+                <Button
+                  type="button"
+                  onClick={() => ensurePincode(debouncedSearch.trim())}
+                  disabled={ensuring}
+                  className="h-9 w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white text-xs"
+                >
+                  {ensuring ? 'Adding…' : `Add Pincode ${debouncedSearch.trim()}`}
+                </Button>
+              ) : null}
+              {ensureError ? (
+                <div className="text-xs text-rose-600">{ensureError}</div>
+              ) : null}
+            </div>
           ) : results.map((row) => {
             const id = Number(row.pincode_id);
             const isSelected = selected.has(id);
@@ -1478,7 +1571,7 @@ function PincodePicker({
                 <span className="flex-1 min-w-0">
                   <span className="font-semibold text-slate-800 tabular-nums">{row.pincode}</span>
                   {row.city_name ? (
-                    <span className="text-slate-500 ml-2">{row.city_name}{row.state_name ? `, ${row.state_name}` : ''}</span>
+                    <span className="text-slate-500 ml-2">- {row.city_name}</span>
                   ) : null}
                 </span>
               </label>
@@ -1494,6 +1587,15 @@ function PincodePicker({
             <div className="p-3 text-xs text-slate-400">Loading initial pincodes…</div>
           ) : null}
         </div>
+
+        {/* Brief confirmation after an on-the-fly pincode add (#6). Sits
+          * outside the results box so it persists once the row appears as a
+          * real (checked) match. */}
+        {ensureHint ? (
+          <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+            {ensureHint}
+          </div>
+        ) : null}
       </div>
 
       <AnimatedLoadingBar visible={saving} message="Saving Service Area…" tone="sky" />
@@ -1512,10 +1614,17 @@ function PincodePicker({
           {error ? (
             <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>
           ) : null}
+          {/* Mandate ≥1 service-area pincode before saving — a technician can't
+              submit an empty service area (and can't clear it to nothing). */}
+          {selected.size === 0 ? (
+            <p className="mb-2 text-right text-xs font-medium text-amber-700">
+              Add at least one service-area pincode to save.
+            </p>
+          ) : null}
           <div className="flex justify-end">
             <Button
               onClick={() => { setError(null); setOtpGateOpen(true); }}
-              disabled={!dirty || saving}
+              disabled={!dirty || saving || selected.size === 0}
               className="h-11 sm:h-9 w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white"
             >
               {saved && !dirty ? 'Saved · Tap To Re-Save' : 'Save Service Area'}

@@ -178,6 +178,13 @@
   .data-table tr:hover .stick-col {
     background-color: #f5f6f8;          /* matches tr:hover > td */
   }
+  /* Frozen header cells that are ALSO sortable (SortHeader) get a translucent
+     `hover:bg-muted/40` from the shared component. At 40% alpha that hover layer
+     lets horizontally-scrolled header cells bleed through the otherwise-opaque
+     #eef0f3. Re-assert an opaque hover bg so the frozen header stays solid. */
+  .data-table th.stick-col-head:hover {
+    background-color: #eef0f3;          /* same opaque shade as the idle state */
+  }
   .data-table .stick-left  { left: 0; }
   .data-table .stick-right { right: 0; }
   .data-table .stick-left.stick-col,

@@ -24,6 +24,8 @@ import { CancelButton } from '@/components/ui/cancel-button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { api, ApiError } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { useMe } from '@/lib/auth-context';
+import { actionFlags } from '@/lib/permissions';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
 type MenuRow = {
@@ -40,6 +42,16 @@ type MenuRow = {
 
 export default function MenuAdminPage() {
   const confirm = useConfirm();
+  const { me } = useMe();
+  // Permission gating mirrors the sibling Settings pages (Manage Cities /
+  // Zones / Pincodes), keyed off legacy CRM Constants.actionPermissions:
+  //   - isMenuAddNew : Add Menu button visibility.
+  //   - isMenuEdit   : Edit + Hide (soft-delete) per-row buttons.
+  // NOTE: the `isMenuAddNew` / `isMenuEdit` menu_action rows are NOT yet
+  // seeded (no migration exists), and this page also lacks a tbl_menu row of
+  // its own — so until that seed lands these flags resolve falsey and the
+  // page renders view-only. See the response summary for the seed checklist.
+  const can = actionFlags(me, ['isMenuAddNew', 'isMenuEdit']);
   const [rows, setRows] = useState<MenuRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -83,9 +95,11 @@ export default function MenuAdminPage() {
             next page load (sidebar fetches via <code>/shared/lookup/menus</code>).
           </p>
         </div>
-        <Button size="sm" onClick={() => { setEditing(null); setModalOpen(true); }}>
-          <Plus className="size-4 mr-1" /> Add Menu
-        </Button>
+        {can.isMenuAddNew && (
+          <Button size="sm" onClick={() => { setEditing(null); setModalOpen(true); }}>
+            <Plus className="size-4 mr-1" /> Add Menu
+          </Button>
+        )}
       </div>
 
       {error && (
@@ -128,13 +142,19 @@ export default function MenuAdminPage() {
                         : <span className="text-muted-foreground text-xs">Hidden</span>}
                     </td>
                     <td className="!text-right whitespace-nowrap">
-                      <Button size="sm" variant="ghost" onClick={() => { setEditing(r); setModalOpen(true); }}>
-                        <Pencil className="size-3.5" />
-                      </Button>
-                      {r.menu_status === 1 && (
-                        <Button size="sm" variant="ghost" onClick={() => deactivate(r)}>
-                          <Trash2 className="size-3.5 text-red-600" />
-                        </Button>
+                      {can.isMenuEdit ? (
+                        <div className="inline-flex items-center justify-end gap-1">
+                          <Button size="sm" variant="ghost" onClick={() => { setEditing(r); setModalOpen(true); }}>
+                            <Pencil className="size-3.5" />
+                          </Button>
+                          {r.menu_status === 1 && (
+                            <Button size="sm" variant="ghost" onClick={() => deactivate(r)}>
+                              <Trash2 className="size-3.5 text-red-600" />
+                            </Button>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-[10px] text-muted-foreground">—</span>
                       )}
                     </td>
                   </tr>

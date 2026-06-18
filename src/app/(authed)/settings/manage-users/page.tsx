@@ -26,6 +26,7 @@ import { BulkUpdateUsersDialog } from '@/components/users/BulkUpdateUsersDialog'
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { SearchSelect, type SearchOption } from '@/components/ui/search-select';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
@@ -469,20 +470,20 @@ export default function ManageUsersPage() {
                   </td>
                   <td className="!text-right whitespace-nowrap">
                     {/*
-                      * Icon-only row actions: tight cluster, no per-
-                      * button hover background. Previously each icon
-                      * sat inside `<Button size="sm" variant="ghost">`
-                      * which gave them `px-3` (12px) of horizontal
-                      * padding plus a hover bg, making the two icons
-                      * look ~50px apart. Plain `<button>` with `p-1`
-                      * compresses the cluster while keeping a
-                      * touch-friendly 24px tap target and just a
-                      * subtle hover ring on the icon itself.
+                      * Icon-only row actions via the shared <IconButton>
+                      * (src/components/ui/icon-button.tsx) — the single
+                      * canonical per-row action icon for the CRM. It owns
+                      * the uniform size/padding/intent-colour + subtle
+                      * hover tint; this cell just owns the right-aligned
+                      * flex wrapper. Edit → intent="primary" (blue),
+                      * Deactivate → intent="danger" (red).
                       */}
                     <div className="inline-flex items-center justify-end">
                       {can.isUserEdit && (
-                        <button
-                          type="button"
+                        <IconButton
+                          icon={Pencil}
+                          intent="primary"
+                          label="Edit user"
                           onClick={async () => {
                             // The list row's `alternate_no` is BE-masked
                             // ("9876••••••"). Pre-filling the edit form
@@ -507,23 +508,15 @@ export default function ManageUsersPage() {
                             }
                             setModalOpen(true);
                           }}
-                          className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors"
-                          aria-label="Edit user"
-                          title="Edit user"
-                        >
-                          <Pencil className="size-3.5" />
-                        </button>
+                        />
                       )}
                       {can.isUserEdit && u.user_status === 1 && (
-                        <button
-                          type="button"
+                        <IconButton
+                          icon={Trash2}
+                          intent="danger"
+                          label="Deactivate user"
                           onClick={() => handleDeactivate(u)}
-                          className="p-1 rounded text-red-600 hover:text-red-700 transition-colors"
-                          aria-label="Deactivate user"
-                          title="Deactivate user"
-                        >
-                          <Trash2 className="size-3.5" />
-                        </button>
+                        />
                       )}
                       {!can.isUserEdit && (
                         <span className="text-[10px] text-muted-foreground">view-only</span>

@@ -20,12 +20,13 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ShieldCheck, Search, Plus, Pencil, Trash2,
+  ShieldCheck, Search, Plus, Pencil, XCircle,
   AlertTriangle, ChevronDown, ChevronRight, Info, X,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Switch } from '@/components/ui/switch';
 import { useCancelConfirm } from '@/lib/use-cancel-confirm';
@@ -482,28 +483,22 @@ export default function ManageRolesPage() {
                           * apart and gave each its own "button card"
                           * feel on hover.
                           */}
-                        <div className="inline-flex items-center justify-end">
+                        <div className="inline-flex items-center justify-end gap-0.5">
                           {can.isRollEdit && (
-                            <button
-                              type="button"
+                            <IconButton
+                              icon={Pencil}
+                              label="Edit Role"
+                              intent="primary"
                               onClick={() => { setEditing(r); setModalOpen(true); }}
-                              className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors"
-                              aria-label="Edit role"
-                              title="Edit role"
-                            >
-                              <Pencil className="size-3.5" />
-                            </button>
+                            />
                           )}
                           {can.isRollEdit && r.role_status === 1 && (
-                            <button
-                              type="button"
+                            <IconButton
+                              icon={XCircle}
+                              label="Deactivate Role"
+                              intent="danger"
                               onClick={() => handleDeactivate(r)}
-                              className="p-1 rounded text-red-600 hover:text-red-700 transition-colors"
-                              aria-label="Deactivate role"
-                              title="Deactivate role"
-                            >
-                              <Trash2 className="size-3.5" />
-                            </button>
+                            />
                           )}
                           {!can.isRollEdit && (
                             <span className="text-[10px] text-muted-foreground">view-only</span>

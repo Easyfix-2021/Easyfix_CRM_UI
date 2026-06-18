@@ -8,6 +8,7 @@ import {
   // Row-level quick-action icons (mirror the legacy Manage Jobs action column)
   Eye, CalendarClock, PlayCircle, CheckCircle2, CalendarCheck,
 } from 'lucide-react';
+import { IconButton } from '@/components/ui/icon-button';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
@@ -1061,68 +1062,50 @@ export default function JobsPage() {
                       * The quickStatusChange() handler confirms + PATCHes /status
                       * + refreshes both list + counts so badges stay coherent.
                       */}
-                    <div className="inline-flex items-center gap-1 justify-end">
-                      <button
-                        type="button"
+                    <div className="inline-flex items-center gap-0.5 justify-end">
+                      <IconButton
+                        icon={Eye}
+                        intent="default"
+                        label="View details"
                         onClick={() => openView(j.job_id)}
-                        className="inline-flex items-center gap-1 text-primary text-xs hover:underline"
-                        title="View details"
-                      >
-                        <Eye className="h-3.5 w-3.5" />
-                      </button>
-                      {/* Outbound call now lives on the customer mobile cell
-                          itself (see the Mobile column above). Operator's
-                          stated mental model: "click the number to dial". */}
-                      {/* Unconfirmed (status=9) → opens JobModal which exposes
-                          the "Confirm & Schedule" action that moves the job
-                          to BOOKED, mirroring legacy `addEditJob → Book Call`.
-                          Gate: isJobConfirm. */}
+                      />
+                      {/* Outbound call lives on the customer mobile cell (Mobile column). */}
+                      {/* Unconfirmed (status=9) → Confirm & Schedule. Gate: isJobConfirm. */}
                       {j.job_status === 9 && canJob.isJobConfirm && (
-                        <button
-                          type="button"
+                        <IconButton
+                          icon={CalendarCheck}
+                          intent="primary"
+                          label="Confirm — fill details, pick services, and move to Scheduled"
                           onClick={() => openConfirm(j.job_id)}
-                          className="inline-flex items-center gap-1 text-purple-700 text-xs hover:underline"
-                          title="Confirm — fill details, pick services, and move to Scheduled"
-                        >
-                          <CalendarCheck className="h-3.5 w-3.5" />
-                        </button>
+                        />
                       )}
-                      {/* Schedule (status=0): opens JobModal for tech
-                          assignment. Gate: isJobAssign — same key
-                          /my-orders uses. */}
+                      {/* Schedule (status=0): assign a technician. Gate: isJobAssign. */}
                       {j.job_status === 0 && canJob.isJobAssign && (
-                        <button
-                          type="button"
+                        <IconButton
+                          icon={CalendarClock}
+                          intent="primary"
+                          label="Schedule — opens modal to assign a technician"
                           onClick={() => openView(j.job_id)}
-                          className="inline-flex items-center gap-1 text-sky-700 text-xs hover:underline"
-                          title="Schedule — opens modal to assign a technician"
-                        >
-                          <CalendarClock className="h-3.5 w-3.5" />
-                        </button>
+                        />
                       )}
-                      {/* Check-In + Check-Out are both status mutations →
-                          isJobStatusChange. */}
+                      {/* Check-In + Check-Out are status mutations → isJobStatusChange. */}
                       {j.job_status === 1 && canJob.isJobStatusChange && (
-                        <button
-                          type="button"
-                          disabled={rowBusy === j.job_id}
+                        <IconButton
+                          icon={PlayCircle}
+                          intent="primary"
+                          label="Check-In — technician on-site, move to In Progress"
+                          busy={rowBusy === j.job_id}
                           onClick={() => quickStatusChange(j.job_id, 2, 'Check in')}
-                          className="inline-flex items-center gap-1 text-amber-700 text-xs hover:underline disabled:opacity-50"
-                          title="Check-In — technician on-site, move to In Progress"
-                        >
-                          <PlayCircle className="h-3.5 w-3.5" />
-                        </button>
+                        />
                       )}
                       {(j.job_status === 2 || j.job_status === 20) && canJob.isJobStatusChange && (
-                        <button
-                          type="button"
-                          disabled={rowBusy === j.job_id}
+                        <IconButton
+                          icon={CheckCircle2}
+                          intent="success"
+                          label="Check-Out — close the job"
+                          busy={rowBusy === j.job_id}
                           onClick={() => quickStatusChange(j.job_id, 3, 'Check out & complete')}
-                          className="inline-flex items-center gap-1 text-emerald-700 text-xs hover:underline disabled:opacity-50"
-                          title="Check-Out — close the job"
-                        >
-                          <CheckCircle2 className="h-3.5 w-3.5" />
-                        </button>
+                        />
                       )}
                     </div>
                   </td>

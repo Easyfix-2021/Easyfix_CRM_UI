@@ -1778,6 +1778,10 @@ function SendProfileUpdateLinkDialog({
     }
   }, [open, easyfixer, realMobile]);
 
+  // Timestamp of the last open — drives the race-close swallow below.
+  const openedAtRef = useRef(0);
+  useEffect(() => { if (open) openedAtRef.current = Date.now(); }, [open]);
+
   function maskMobile(m: string): string {
     if (!m) return '—';
     const clean = m.replace(/[^\d]/g, '');
@@ -1807,6 +1811,17 @@ function SendProfileUpdateLinkDialog({
     when: () => !isSending,
   });
 
+  // Bulletproof fix for the "opens and closes in a blink" race: Radix's
+  // DismissableLayer fires onOpenChange(false) from the SAME pointer
+  // interaction that opened this dialog (it was launched from a DropdownMenu
+  // item). Since isDirty:false closes with no prompt, that phantom close
+  // dismisses the dialog instantly. Swallow ANY close fired within 400ms of
+  // opening; genuine Esc / X / Cancel / outside-clicks always arrive later.
+  function handleOpenChange(next: boolean) {
+    if (!next && Date.now() - openedAtRef.current < 400) return;
+    guardedOpenChange(next);
+  }
+
   // Fragment instead of null (2026-06-11) — keeps the render shape
   // consistent across all render paths so React's reconciliation
   // doesn't flag a shape-change. Functionally identical for the user.
@@ -1816,7 +1831,7 @@ function SendProfileUpdateLinkDialog({
   const overrideInvalid = !isProd && cleanedOverride.length < 10;
 
   return (
-    <Dialog open={open} onOpenChange={guardedOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Send Profile Update Link</DialogTitle>

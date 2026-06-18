@@ -13,12 +13,13 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Building2, Search, Plus, Pencil, Trash2,
+  Building2, Search, Plus, Pencil, XCircle,
   AlertTriangle, ChevronDown, ChevronRight, Info,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { CancelButton } from '@/components/ui/cancel-button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
@@ -329,16 +330,22 @@ export default function ManageCitiesPage() {
                       * default `Button` block-display can stack vertically
                       * when the cell is narrower than ~80px.
                       */}
-                    <div className="inline-flex items-center justify-end gap-1">
+                    <div className="inline-flex items-center justify-end gap-0.5">
                       {can.isCityEdit && (
-                        <Button size="sm" variant="ghost" onClick={() => { setEditing(c); setModalOpen(true); }}>
-                          <Pencil className="size-3.5" />
-                        </Button>
+                        <IconButton
+                          icon={Pencil}
+                          label="Edit City"
+                          intent="primary"
+                          onClick={() => { setEditing(c); setModalOpen(true); }}
+                        />
                       )}
                       {can.isCityEdit && c.city_status === 1 && (
-                        <Button size="sm" variant="ghost" onClick={() => handleDeactivate(c)}>
-                          <Trash2 className="size-3.5 text-red-600" />
-                        </Button>
+                        <IconButton
+                          icon={XCircle}
+                          label="Deactivate City"
+                          intent="danger"
+                          onClick={() => handleDeactivate(c)}
+                        />
                       )}
                       {!can.isCityEdit && (
                         <span className="text-[10px] text-muted-foreground">view-only</span>

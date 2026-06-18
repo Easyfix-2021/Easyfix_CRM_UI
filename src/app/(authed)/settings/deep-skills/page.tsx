@@ -43,7 +43,7 @@ function writeMappedCountsToCache(rows: Array<{ deepskill_id: number; count: num
 }
 import Link from 'next/link';
 import {
-  Plus, Pencil, Trash2, Wrench, X as XIcon,
+  Plus, Pencil, XCircle, Wrench, X as XIcon,
   Image as ImageIcon, UploadCloud, Users, RefreshCw, Sparkles,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -61,6 +61,7 @@ import {
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
 // Shared status pill — one shape across the CRM, no per-page colour drift.
 import { StatusChip } from '@/components/ui/StatusChip';
+import { IconButton } from '@/components/ui/icon-button';
 // Shared animated info strip — used for the "image will be auto-generated"
 // notice in the deep-skill editor footer. Same component the Profile Update
 // form uses for inline progress hints.
@@ -677,35 +678,36 @@ export default function DeepSkillsSettingsPage() {
                       : <StatusChip tone="slate">Inactive</StatusChip>}
                   </td>
                   <td className="text-right whitespace-nowrap">
-                    {/* View Mapped Easyfixers — read-only affordance, always
-                        visible (no edit-permission gate). Mirrors the
-                        muted-foreground icon style used elsewhere for
-                        secondary row actions. */}
-                    <button
-                      onClick={() => setMappedFor({ id: s.deepskill_id, name: s.deepskill_name })}
-                      className="text-muted-foreground hover:text-primary inline-flex items-center gap-1 text-xs mr-3"
-                      title="View Mapped Easyfixers"
-                    >
-                      <Users className="h-3.5 w-3.5" />
-                    </button>
-                    {can.isDeepSkillEdit ? (
-                      <>
-                        <button onClick={() => openEdit(s)}
-                          className="text-primary hover:underline inline-flex items-center gap-1 text-xs mr-3"
-                          title="Edit deep skill">
-                          <Pencil className="h-3.5 w-3.5" />
-                        </button>
-                        {Number(s.status) ? (
-                          <button onClick={() => deactivate(s)}
-                            className="text-destructive hover:underline inline-flex items-center gap-1 text-xs"
-                            title="Deactivate">
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                        ) : null}
-                      </>
-                    ) : (
-                      <span className="text-[10px] text-muted-foreground">view-only</span>
-                    )}
+                    <div className="inline-flex items-center justify-end gap-0.5">
+                      {/* View Mapped Easyfixers — read-only affordance, always
+                          visible (no edit-permission gate). */}
+                      <IconButton
+                        icon={Users}
+                        label="View Mapped Easyfixers"
+                        intent="default"
+                        onClick={() => setMappedFor({ id: s.deepskill_id, name: s.deepskill_name })}
+                      />
+                      {can.isDeepSkillEdit ? (
+                        <>
+                          <IconButton
+                            icon={Pencil}
+                            label="Edit Deep Skill"
+                            intent="primary"
+                            onClick={() => openEdit(s)}
+                          />
+                          {Number(s.status) ? (
+                            <IconButton
+                              icon={XCircle}
+                              label="Deactivate"
+                              intent="danger"
+                              onClick={() => deactivate(s)}
+                            />
+                          ) : null}
+                        </>
+                      ) : (
+                        <span className="text-[10px] text-muted-foreground">view-only</span>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}

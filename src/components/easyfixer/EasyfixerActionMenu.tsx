@@ -92,7 +92,13 @@ export function EasyfixerActionMenu({
 }) {
   const hasWriteGroup = (canSend && onSendProfileUpdateLink) || (canCopyDevUrl && onCopyDevUrl);
   return (
-    <DropdownMenu>
+    // modal={false}: Radix's default modal dropdown locks document.body
+    // pointer-events while open/closing; that lock races a Dialog opened from
+    // an item's onClick (Send Profile Update Link etc.) so the just-mounted
+    // dialog can't take interaction / gets dismissed. Disabling modal removes
+    // the lock — combined with onCloseAutoFocus (below) + the parent's
+    // setTimeout-deferred open, the menu→dialog handoff is reliable.
+    <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
@@ -106,7 +112,13 @@ export function EasyfixerActionMenu({
           <MoreVertical className="h-4 w-4" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-56">
+      {/* Prevent Radix's focus-return-to-trigger on close: that focus shuffle
+          races the Dialog opened from an item's onClick (Send Profile Update
+          Link etc.), and the just-mounted Dialog's DismissableLayer reads it as
+          a click-outside → instant dismiss ("nothing happens"). Suppressing the
+          auto-focus removes that half of the race; the parent also defers the
+          open via setTimeout(0). */}
+      <DropdownMenuContent align="end" className="w-56" onCloseAutoFocus={(e) => e.preventDefault()}>
         {canEdit && (
           <DropdownMenuItem onClick={onEdit}>
             <Pencil className="mr-2 h-4 w-4" />

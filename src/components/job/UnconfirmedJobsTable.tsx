@@ -5,6 +5,7 @@ import { formatDate, statusLabel, statusTone } from '@/lib/utils';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { MagicLinkActionPopup } from '@/components/job/MagicLinkActionPopup';
 import { StatusChip } from '@/components/ui/StatusChip';
+import { IconButton } from '@/components/ui/icon-button';
 
 /*
  * UnconfirmedJobsTable — the focused column set ops requested for the
@@ -300,24 +301,20 @@ export function UnconfirmedJobsTable({
               </td>
               <td className="text-xs text-muted-foreground">{j.source_type ?? '—'}</td>
               <td className="stick-col stick-right text-right whitespace-nowrap">
-                <div className="inline-flex items-center gap-1 justify-end">
-                  <button
-                    type="button"
+                <div className="inline-flex items-center gap-0.5 justify-end">
+                  <IconButton
+                    icon={Eye}
+                    intent="default"
+                    label="View details"
                     onClick={() => openView(j.job_id)}
-                    className="inline-flex items-center gap-1 text-primary text-xs hover:underline"
-                    title="View details"
-                  >
-                    <Eye className="h-3.5 w-3.5" />
-                  </button>
+                  />
                   {canConfirm && (
-                    <button
-                      type="button"
+                    <IconButton
+                      icon={CalendarCheck}
+                      intent="primary"
+                      label="Confirm — fill details, pick services, and move to Scheduled"
                       onClick={() => openConfirm(j.job_id)}
-                      className="inline-flex items-center gap-1 text-purple-700 text-xs hover:underline"
-                      title="Confirm — fill details, pick services, and move to Scheduled"
-                    >
-                      <CalendarCheck className="h-3.5 w-3.5" />
-                    </button>
+                    />
                   )}
                   {/*
                     Send / Re-send Magic Link.
@@ -344,14 +341,12 @@ export function UnconfirmedJobsTable({
                   {canSendMagicLink
                     && !j.customer_submitted_at
                     && j.pending_request_type == null && (
-                    <button
-                      type="button"
+                    <IconButton
+                      icon={Send}
+                      intent="default"
+                      label={j.magic_link_sent_at ? 'Re-send Magic Link' : 'Send Magic Link'}
                       onClick={() => setMagicLinkRow(j)}
-                      className="inline-flex items-center gap-1 text-sky-700 text-xs hover:underline"
-                      title={j.magic_link_sent_at ? 'Re-send' : 'Send Magic Link'}
-                    >
-                      <Send className="h-3.5 w-3.5" />
-                    </button>
+                    />
                   )}
                 </div>
               </td>

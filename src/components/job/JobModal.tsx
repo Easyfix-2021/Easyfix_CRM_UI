@@ -6060,6 +6060,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                   set('address_instruction' as keyof typeof f, (next.address_instruction || '') as never);
                 }}
                 cities={lk.toOpts.cities.map((o) => ({ value: String(o.value), label: String(o.label) }))}
+                autoCreatePincode
               />
             </div>
           </div>
@@ -7700,6 +7701,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 }));
               }}
               cities={lk.toOpts.cities.map((o) => ({ value: String(o.value), label: String(o.label) }))}
+              autoCreatePincode
             />
             </div>
             <div className="mt-4 flex justify-between">

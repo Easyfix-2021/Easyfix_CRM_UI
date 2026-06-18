@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, ChevronDown, Search, X } from 'lucide-react';
+import { Check, ChevronDown, Minus, Plus, Search, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { usePopoverPosition } from '@/lib/use-popover-position';
 import { PORTAL_POPOVER_ATTR } from '@/lib/portal-markers';
@@ -45,6 +45,7 @@ export function SearchMultiSelect({
   emptyText = 'No matches',
   summarize,
   selectedLabel,
+  indicator = 'checkbox',
 }: {
   value: Array<string | number>;
   onChange: (next: Array<string | number>) => void;
@@ -57,6 +58,13 @@ export function SearchMultiSelect({
   summarize?: (count: number) => string;
   /* Word for the selected unit, e.g. "cities" → "12 cities selected". */
   selectedLabel?: string;
+  /*
+   * Left-of-row affordance. 'checkbox' (default) = the square tick used by
+   * Manage Users etc. 'plusminus' = a + (add, unselected) / − (remove,
+   * selected) icon — clearer when the picker is paired with a chip list and
+   * the action is "add this / drop this" rather than "tick this".
+   */
+  indicator?: 'checkbox' | 'plusminus';
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -308,19 +316,39 @@ export function SearchMultiSelect({
                     onClick={() => toggle(opt)}
                     className={cn(
                       'flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-muted',
-                      isSel && 'bg-muted/40',
+                      // Selected rows read as clearly picked: a tinted bg +
+                      // solid foreground text + medium weight, not the old
+                      // barely-there bg-muted/40 wash.
+                      isSel && 'bg-primary/10 text-foreground font-medium hover:bg-primary/15',
                     )}
                   >
-                    {/* Checkbox-style left indicator. Click target is
-                        the whole row, not just the box. */}
-                    <span
-                      className={cn(
-                        'h-4 w-4 shrink-0 rounded-sm border flex items-center justify-center',
-                        isSel ? 'bg-primary border-primary text-white' : 'border-muted-foreground/40',
-                      )}
-                    >
-                      {isSel && <Check className="h-3 w-3" />}
-                    </span>
+                    {/* Left indicator. 'plusminus' = +/- (add / drop), used by
+                        chip-paired pickers; otherwise the checkbox tick. Click
+                        target is the whole row, not just the indicator. */}
+                    {indicator === 'plusminus' ? (
+                      <span
+                        className={cn(
+                          'h-4 w-4 shrink-0 flex items-center justify-center rounded-full',
+                          // Selected: a filled red "remove" chip so the minus
+                          // unmistakably reads as "click to drop". Unselected:
+                          // a quiet outlined + "add".
+                          isSel
+                            ? 'bg-red-600 text-white'
+                            : 'border border-muted-foreground/40 text-muted-foreground',
+                        )}
+                      >
+                        {isSel ? <Minus className="h-3 w-3" /> : <Plus className="h-3 w-3" />}
+                      </span>
+                    ) : (
+                      <span
+                        className={cn(
+                          'h-4 w-4 shrink-0 rounded-sm border flex items-center justify-center',
+                          isSel ? 'bg-primary border-primary text-white' : 'border-muted-foreground/40',
+                        )}
+                      >
+                        {isSel && <Check className="h-3 w-3" />}
+                      </span>
+                    )}
                     <span className="truncate flex-1">{opt.label}</span>
                   </li>
                 );

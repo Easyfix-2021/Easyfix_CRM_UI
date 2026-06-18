@@ -24,6 +24,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { IconButton } from '@/components/ui/icon-button';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
 import { api, ApiError } from '@/lib/api';
 import { useFetch, useDebouncedValue, invalidateFetch } from '@/lib/hooks';
@@ -287,25 +288,22 @@ export default function ManageZonesPage() {
                       </div>
                     </td>
                     <td className="!text-right whitespace-nowrap">
-                      <div className="inline-flex items-center gap-3 justify-end">
+                      <div className="inline-flex items-center gap-1 justify-end">
                         <Link
                           href={`/settings/zones/${z.zone_id}`}
                           title="Manage Pincodes"
                           aria-label="Manage Pincodes"
-                          className="inline-flex items-center text-primary hover:text-primary/80"
+                          className="inline-flex size-7 shrink-0 items-center justify-center rounded text-blue-600 transition-colors hover:bg-muted/60 hover:text-blue-700"
                         >
-                          <MapPinned className="h-4 w-4" />
+                          <MapPinned className="size-4" aria-hidden="true" />
                         </Link>
                         {can.isZoneEdit && (
-                          <button
-                            type="button"
+                          <IconButton
+                            icon={Pencil}
+                            label="Edit Zone"
+                            intent="primary"
                             onClick={() => setEditTarget(z)}
-                            title="Edit Zone"
-                            aria-label="Edit Zone"
-                            className="inline-flex items-center text-slate-600 hover:text-slate-800"
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </button>
+                          />
                         )}
                       </div>
                     </td>
