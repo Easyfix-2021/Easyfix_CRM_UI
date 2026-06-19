@@ -328,10 +328,16 @@ function useClickToCall(target: CallTarget) {
         message?: string;
       }>('/admin/calls/click-to-call', body);
 
-      // Live-status path (Plivo): open the bottom-right live panel instead
-      // of the fire-and-forget toast. Falls back to the toast if the BE
-      // didn't return a call id to poll.
-      if (resp.supportsLiveStatus && resp.jobCallerInfoId) {
+      // Guard FIRST: the BE returns HTTP 200 with delivered:false when it
+      // ACCEPTED the request but did NOT place a call (provider disabled,
+      // QA-suppressed, missing creds, caller==receiver, …). Surface the reason
+      // instead of a misleading green "success" toast (or, for Plivo, opening
+      // an empty live panel for a call that never happened).
+      if (resp.delivered === false) {
+        setToast({ variant: 'error', message: resp.message || 'Call was not placed' });
+      } else if (resp.supportsLiveStatus && resp.jobCallerInfoId) {
+        // Live-status path (Plivo): open the bottom-right live panel instead
+        // of the fire-and-forget toast.
         liveCall.startCall({
           id: resp.jobCallerInfoId,
           fromMasked: previewLegs?.from ?? null,
