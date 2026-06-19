@@ -29,6 +29,7 @@ import { useLookup } from '@/lib/use-lookup';
 import { api } from '@/lib/api';
 import { showToast } from '@/components/ui/toast';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
+import { CallingModeToggle } from './CallingModeToggle';
 
 const ACTIONS = [
   {
@@ -113,6 +114,10 @@ export default function AdminActionsPage() {
           implementation.
         </p>
       </div>
+
+      {/* Click-to-call mode switch (Web ⇄ Mobile) — Admin only; self-hides otherwise. */}
+      <CallingModeToggle />
+
       {visible.length === 0 && (
         <Card>
           <CardContent className="p-8 text-center text-sm text-muted-foreground">

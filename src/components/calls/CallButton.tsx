@@ -13,6 +13,7 @@ import { useFetchOnce } from '@/lib/hooks';
 import { CallCustomNumbersDialog } from './CallCustomNumbersDialog';
 import { CallLegsPreview } from '@/components/ui/CallLegsPreview';
 import { useLiveCall } from './LiveCallContext';
+import { useWebCall } from './WebCallContext';
 
 /*
  * Click-to-call surface — two exports:
@@ -166,6 +167,16 @@ type CallConfig = {
      hidden and behaviour is identical to today. */
   enabledProviders?: CallProvider[];
   defaultProvider?: CallProvider;
+  /* Call topology: 'web' = operator talks from the browser (Plivo WebRTC);
+     'mobile' = phone bridge (default). Drives which flow CallButton uses. */
+  callMode?: 'web' | 'mobile';
+  /* Per-provider QA config (2026-06-19): each enabled provider's own
+     promptForNumbers + qaDefaults, so the QA "Place Call" dialog pre-fills the
+     SELECTED provider's *_CALL_FROM/TO instead of always Kaleyra's. */
+  providers?: Partial<Record<CallProvider, {
+    promptForNumbers: boolean;
+    qaDefaults: { from: string | null; to: string | null } | null;
+  }>>;
 };
 
 type CallPreview = {
@@ -207,9 +218,11 @@ function pickTargetKey(t: CallTarget): Exclude<keyof CallTarget, 'useAlt'> | nul
 function useClickToCall(target: CallTarget) {
   const { me } = useMe();
   const liveCall = useLiveCall();
+  const webCall = useWebCall();
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ variant: ToastVariant; message: string } | null>(null);
   const [customOpen, setCustomOpen] = useState(false);
+  const [webPromptOpen, setWebPromptOpen] = useState(false);
   const confirm = useConfirm();
 
   // Fetch the calling-mode config once (module-level dedupe inside
@@ -218,8 +231,7 @@ function useClickToCall(target: CallTarget) {
   // fails or hasn't returned yet — production-safe (operators see the
   // simple confirm, no spurious form prompt).
   const cfg = useFetchOnce<CallConfig>('/admin/calls/config');
-  const promptForNumbers = cfg.data?.promptForNumbers === true;
-  const qaDefaults = cfg.data?.qaDefaults ?? null;
+  const providersCfg = cfg.data?.providers;
 
   // Multi-provider config. With Plivo off, enabledProviders === ['kaleyra']
   // → showProviderPicker stays false and the radio never renders, so the
@@ -227,6 +239,16 @@ function useClickToCall(target: CallTarget) {
   const enabledProviders = cfg.data?.enabledProviders;
   const defaultProvider: CallProvider = cfg.data?.defaultProvider ?? 'kaleyra';
   const showProviderPicker = (enabledProviders?.length ?? 0) > 1;
+  const callMode = cfg.data?.callMode ?? 'mobile';
+
+  // Providers in QA "prompt for numbers" mode + their per-provider pre-fill
+  // pairs. The QA dialog appears when ANY enabled provider prompts; inside it
+  // the operator picks a provider (radio) and the inputs seed from THAT
+  // provider's *_CALL_FROM/TO — fixing the bug where it always used Kaleyra's.
+  const qaProviders = (enabledProviders ?? []).filter((p) => providersCfg?.[p]?.promptForNumbers);
+  const qaByProvider: Record<string, { from: string | null; to: string | null } | null> = {};
+  for (const p of qaProviders) qaByProvider[p] = providersCfg?.[p]?.qaDefaults ?? null;
+  const promptForNumbers = qaProviders.length > 0 || cfg.data?.promptForNumbers === true;
 
   // Chosen provider. Initialised from localStorage IF it's a currently-
   // enabled provider, else the BE default (else kaleyra). SSR-guarded.
@@ -363,6 +385,43 @@ function useClickToCall(target: CallTarget) {
     if (e) { e.stopPropagation(); e.preventDefault(); }
     if (busy || !targetBody) return; // missing or ambiguous target → fail silently
 
+    // One call at a time (app-wide): block a new call if either a mobile-bridge
+    // live call (liveCall.active) OR a browser/WebRTC call (webCall.active) is
+    // already in progress. The operator must hang up the current one first.
+    if (liveCall.active || webCall.active) {
+      setToast({
+        variant: 'error',
+        message: 'A call is already in progress — hang up the current call before starting another.',
+      });
+      return;
+    }
+
+    // Web Call mode: the operator talks from the browser via the Plivo Browser
+    // SDK (WebCallContext) — no bridge/preview.
+    if (callMode === 'web') {
+      // QA (PLIVO_CALLING_CUSTOM_NUMBER): ALWAYS prompt for the number to dial
+      // (prefilled from PLIVO_CALL_TO); the BE dials exactly that, never the
+      // real customer. Non-QA: a simple confirm, then dial the real customer.
+      if (providersCfg?.plivo?.promptForNumbers) { setWebPromptOpen(true); return; }
+      const ok = await confirm({
+        title: 'Call this Customer?',
+        description: (
+          <p className="text-foreground/85">
+            You’ll be connected to the customer from your browser. Allow microphone
+            access if prompted.
+          </p>
+        ),
+        confirmLabel: 'Yes, call now',
+        cancelLabel: 'Cancel',
+        variant: 'default',
+        icon: <Phone className="h-4 w-4" />,
+        iconAccent: 'emerald',
+      });
+      if (!ok) return;
+      await webCall.placeWebCall(target);
+      return;
+    }
+
     // ── Branch on environment mode ──
     // QA prompt mode → custom-numbers dialog with two text inputs.
     // Everywhere else → fetch the masked preview, then show simple confirm
@@ -462,25 +521,45 @@ function useClickToCall(target: CallTarget) {
     );
   }, [
     busy, targetBody, confirm, promptForNumbers, performCall,
-    provider, showProviderPicker, enabledProviders, chooseProvider,
+    provider, showProviderPicker, enabledProviders, chooseProvider, liveCall,
+    callMode, webCall, target, providersCfg,
   ]);
 
-  // The custom-numbers dialog (QA mode only) lives as a sibling node
-  // returned by the hook. Pre-fill precedence:
-  //   1. qaDefaults.from / qaDefaults.to from BE (env vars)
-  //   2. Operator's own mobile (only for Call From; To is left blank)
-  // qaDefaults are unmasked because they're operator-managed config.
+  // The custom-numbers dialog (QA mode only) lives as a sibling node returned
+  // by the hook. Provider-aware: it offers a radio across the QA providers and
+  // pre-fills Call From / Call To from the SELECTED provider's *_CALL_FROM/TO
+  // (falling back to the operator's own mobile for Call From). The chosen
+  // provider is threaded into performCall so the call is placed through it.
   const customNode = (
-    <CallCustomNumbersDialog
-      open={customOpen}
-      defaultFrom={qaDefaults?.from || String(me?.user?.mobile_no || '')}
-      defaultTo={qaDefaults?.to || ''}
-      onCancel={() => setCustomOpen(false)}
-      onConfirm={(callFrom, callTo) => {
-        setCustomOpen(false);
-        void performCall(callFrom, callTo);
-      }}
-    />
+    <>
+      <CallCustomNumbersDialog
+        open={customOpen}
+        providers={qaProviders.length ? qaProviders : (enabledProviders ?? [provider])}
+        qaByProvider={qaByProvider}
+        initialProvider={qaProviders.includes(provider) ? provider : (qaProviders[0] ?? provider)}
+        fallbackFrom={String(me?.user?.mobile_no || '')}
+        onCancel={() => setCustomOpen(false)}
+        onConfirm={(callFrom, callTo, chosen) => {
+          setCustomOpen(false);
+          chooseProvider(chosen as CallProvider);
+          void performCall(callFrom, callTo, undefined, chosen as CallProvider);
+        }}
+      />
+      {/* Web Call QA: prompt ONLY for the number to dial (prefilled PLIVO_CALL_TO);
+          web has no "Call From" leg (the browser is the caller). */}
+      <CallCustomNumbersDialog
+        open={webPromptOpen}
+        toOnly
+        providers={['plivo']}
+        qaByProvider={{ plivo: providersCfg?.plivo?.qaDefaults ?? null }}
+        initialProvider="plivo"
+        onCancel={() => setWebPromptOpen(false)}
+        onConfirm={(_callFrom, callTo) => {
+          setWebPromptOpen(false);
+          void webCall.placeWebCall(target, { callTo });
+        }}
+      />
+    </>
   );
 
   const toastNode = toast

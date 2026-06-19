@@ -3,21 +3,19 @@
 /*
  * CallCustomNumbersDialog — QA-mode confirmation with two number inputs.
  *
- * Used only when the backend's GET /admin/calls/config returns
- * { promptForNumbers: true } (which mirrors the env flag
- * KALEYRA_CALLING_CUSTOM_NUMBER=true). For dev + production the simpler
+ * Shown when the chosen provider is in QA mode (its
+ * `<PROVIDER>_CALLING_CUSTOM_NUMBER=true`). For dev + production the simpler
  * useConfirm dialog runs instead.
  *
- * Why this exists: in QA we need to dial test-network numbers (one phone
- * a QA can answer for the operator leg, another for the receiver leg)
- * regardless of the logged-in operator's profile or the customer record.
- * Putting that prompt in a dedicated dialog keeps the simple consumer
- * flow (one-click confirm) untouched everywhere else.
+ * Why this exists: in QA we dial test-network numbers (one phone a QA can
+ * answer for the operator leg, another for the receiver leg) regardless of the
+ * logged-in operator's profile or the customer record.
  *
- * Visual treatment mirrors the upgraded ConfirmDialog primitive:
- *   - Dark slate header band with phone icon in an emerald-tinted plate
- *   - White body with form inputs and proper spacing
- *   - Footer bar: Cancel left, primary CTA right (portal-wide convention)
+ * Provider-aware (2026-06-19): when more than one provider is enabled the dialog
+ * shows a provider radio FIRST, and the Call From / Call To fields pre-fill from
+ * the SELECTED provider's defaults (KALEYRA_CALL_FROM/TO vs PLIVO_CALL_FROM/TO).
+ * Switching the provider re-seeds the inputs. The chosen provider is returned to
+ * the caller so the call is placed through it.
  */
 
 import * as React from 'react';
@@ -30,20 +28,29 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
+type ProviderDefaults = { from: string | null; to: string | null } | null;
+
 type Props = {
   open: boolean;
-  /** Default for the Call From field — usually qaDefaults.from from /config
-   *  (env var KALEYRA_CALL_FROM) or falling back to the logged-in user's
-   *  mobile. Operator can edit. */
-  defaultFrom?: string;
-  /** Default for the Call To field — usually qaDefaults.to from /config
-   *  (env var KALEYRA_CALL_TO). Empty if the env var isn't set, in which
-   *  case the operator must type from scratch. */
-  defaultTo?: string;
+  /** Providers the operator may pick from (those in QA mode). A radio renders
+   *  only when length > 1; with one provider the call is single-provider. */
+  providers: string[];
+  /** Per-provider pre-fill numbers (env *_CALL_FROM / *_CALL_TO), keyed by
+   *  provider name. Used to seed the inputs for the selected provider. */
+  qaByProvider: Record<string, ProviderDefaults>;
+  /** Provider selected on open. */
+  initialProvider: string;
+  /** Fallback for Call From when the selected provider has no *_CALL_FROM
+   *  (e.g. the logged-in operator's own mobile). */
+  fallbackFrom?: string;
+  /** Web Call QA mode: there is no "Call From" leg (the browser is the caller),
+   *  so hide the From field + provider radio and prompt ONLY for the number to
+   *  dial (prefilled from PLIVO_CALL_TO). */
+  toOnly?: boolean;
   /** Called when operator clicks Cancel / closes / hits Esc. */
   onCancel: () => void;
-  /** Called when operator confirms with two valid numbers. */
-  onConfirm: (callFrom: string, callTo: string) => void;
+  /** Called when operator confirms with two valid numbers + the chosen provider. */
+  onConfirm: (callFrom: string, callTo: string, provider: string) => void;
 };
 
 /* Indian-phone shape acceptable to the backend's Joi validator. */
@@ -53,45 +60,58 @@ function sanitize(v: string): string {
   return String(v || '').replace(/\D/g, '').slice(0, 12);
 }
 
+function label(provider: string): string {
+  return provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : 'the provider';
+}
+
 export function CallCustomNumbersDialog({
-  open, defaultFrom = '', defaultTo = '', onCancel, onConfirm,
+  open, providers, qaByProvider, initialProvider, fallbackFrom = '', toOnly = false, onCancel, onConfirm,
 }: Props) {
-  // Inputs are seeded on every open so reopening the dialog resets cleanly.
-  // Both pre-fills come from props — typically qaDefaults from /config. When
-  // KALEYRA_CALL_TO isn't set in env, defaultTo is empty and the operator
-  // types from scratch (the explicit ask: "if KALEYRA_CALL_FROM/CALL_TO is
-  // set, prefill it in modal").
-  const [callFrom, setCallFrom] = React.useState(defaultFrom);
-  const [callTo, setCallTo]     = React.useState(defaultTo);
+  const [provider, setProvider] = React.useState(initialProvider);
+  const [callFrom, setCallFrom] = React.useState('');
+  const [callTo, setCallTo]     = React.useState('');
   const [touched, setTouched]   = React.useState(false);
+
+  // Seed the inputs from the SELECTED provider's defaults — on open, and again
+  // whenever the operator switches provider (so the pre-fill always matches the
+  // provider that will actually dial). Call From falls back to the operator's
+  // own mobile when that provider has no *_CALL_FROM configured.
+  const seedFor = React.useCallback((p: string) => {
+    const d = qaByProvider[p] ?? null;
+    setCallFrom(d?.from || fallbackFrom || '');
+    setCallTo(d?.to || '');
+    setTouched(false);
+  }, [qaByProvider, fallbackFrom]);
 
   React.useEffect(() => {
     if (open) {
-      setCallFrom(defaultFrom);
-      setCallTo(defaultTo);
-      setTouched(false);
+      setProvider(initialProvider);
+      seedFor(initialProvider);
     }
-  }, [open, defaultFrom, defaultTo]);
+  }, [open, initialProvider, seedFor]);
+
+  function changeProvider(p: string) {
+    setProvider(p);
+    seedFor(p);
+  }
 
   const fromOk = PHONE_RX.test(callFrom);
   const toOk   = PHONE_RX.test(callTo);
-  const sameNumber = callFrom && callTo && callFrom === callTo;
-  const canSubmit = fromOk && toOk && !sameNumber;
+  const sameNumber = !toOnly && callFrom && callTo && callFrom === callTo;
+  const canSubmit = toOnly ? toOk : (fromOk && toOk && !sameNumber);
 
   function submit(e?: React.FormEvent) {
     if (e) e.preventDefault();
     setTouched(true);
     if (!canSubmit) return;
-    onConfirm(callFrom, callTo);
+    onConfirm(callFrom, callTo, provider);
   }
 
   const guardedOpenChange = useFormDirtyGuard(onCancel);
+  const showProviderPicker = providers.length > 1;
 
   return (
     <Dialog open={open} onOpenChange={guardedOpenChange}>
-      {/* `!p-0 !gap-0` opt-out of DialogContent defaults — same pattern as
-          the upgraded ConfirmDialog primitive (see confirm-dialog.tsx).
-          Lets each section own its padding instead of stacking 24+16+24px. */}
       <DialogContent className="sm:max-w-md !p-0 !gap-0 overflow-hidden">
         <DialogHeader className="!mx-0 !mt-0 !mb-0 !py-4">
           <div className="flex items-center gap-3">
@@ -102,40 +122,58 @@ export function CallCustomNumbersDialog({
           </div>
         </DialogHeader>
 
-        {/* asChild here for symmetry with the ConfirmDialog primitive
-            (same HTML-validity reasoning — keeps aria-describedby wiring
-            intact while allowing block-level children if ever added).
-            `!` modifiers force-override the shared DialogDescription
-            wrapper's dark-band defaults (text-[12px] + text-slate-300/85)
-            so body text reads on the white surface. Same rationale as
-            confirm-dialog.tsx — Radix Slot doesn't tailwind-merge, so
-            same-property utilities collide on CSS source order. */}
         <DialogDescription asChild>
           <div className="px-6 pt-5 !text-[0.95rem] leading-relaxed !text-foreground">
-            Specify the Call From and Call To numbers for this call. Both legs will be
-            dialled by Kaleyra and bridged.
+            {toOnly
+              ? 'QA mode — enter the number to dial for this web call (prefilled from PLIVO_CALL_TO). The real customer is never called.'
+              : `Specify the Call From and Call To numbers for this call. Both legs will be dialled by ${label(provider)} and bridged.`}
           </div>
         </DialogDescription>
 
         <form onSubmit={submit} className="px-6 pt-4 pb-5 space-y-3">
-          <div className="space-y-1">
-            <Label htmlFor="call-from" className="text-xs uppercase tracking-wide text-muted-foreground">
-              Call From
-            </Label>
-            <Input
-              id="call-from"
-              value={callFrom}
-              onChange={(e) => setCallFrom(sanitize(e.target.value))}
-              placeholder="10-12 digit Indian mobile"
-              inputMode="numeric"
-              autoComplete="off"
-              autoFocus
-              aria-invalid={touched && !fromOk}
-            />
-            {touched && callFrom && !fromOk && (
-              <p className="text-xs text-rose-600">Enter 10 to 12 digits (optionally 91-prefixed).</p>
-            )}
-          </div>
+          {!toOnly && showProviderPicker && (
+            <div className="space-y-1">
+              <Label className="text-xs uppercase tracking-wide text-muted-foreground">
+                Calling Provider
+              </Label>
+              <div className="flex flex-wrap gap-4 pt-0.5">
+                {providers.map((p) => (
+                  <label key={p} className="inline-flex cursor-pointer items-center gap-2 text-sm text-foreground/90">
+                    <input
+                      type="radio"
+                      name="ef-qa-call-provider"
+                      value={p}
+                      checked={provider === p}
+                      onChange={() => changeProvider(p)}
+                      className="h-4 w-4 accent-emerald-600"
+                    />
+                    Via {label(p)}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {!toOnly && (
+            <div className="space-y-1">
+              <Label htmlFor="call-from" className="text-xs uppercase tracking-wide text-muted-foreground">
+                Call From
+              </Label>
+              <Input
+                id="call-from"
+                value={callFrom}
+                onChange={(e) => setCallFrom(sanitize(e.target.value))}
+                placeholder="10-12 digit Indian mobile"
+                inputMode="numeric"
+                autoComplete="off"
+                autoFocus
+                aria-invalid={touched && !fromOk}
+              />
+              {touched && callFrom && !fromOk && (
+                <p className="text-xs text-rose-600">Enter 10 to 12 digits (optionally 91-prefixed).</p>
+              )}
+            </div>
+          )}
 
           <div className="space-y-1">
             <Label htmlFor="call-to" className="text-xs uppercase tracking-wide text-muted-foreground">
@@ -155,7 +193,7 @@ export function CallCustomNumbersDialog({
             )}
             {sameNumber && (
               <p className="text-xs text-amber-700">
-                Call From and Call To must be different — Kaleyra cannot bridge a line to itself.
+                Call From and Call To must be different — {label(provider)} cannot bridge a line to itself.
               </p>
             )}
           </div>

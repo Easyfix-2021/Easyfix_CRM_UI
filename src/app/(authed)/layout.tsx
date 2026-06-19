@@ -9,6 +9,8 @@ import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog';
 import { ToastHost } from '@/components/ui/toast';
 import { LiveCallProvider } from '@/components/calls/LiveCallContext';
 import { LiveCallPanel } from '@/components/calls/LiveCallPanel';
+import { WebCallProvider } from '@/components/calls/WebCallContext';
+import { WebCallPanel } from '@/components/calls/WebCallPanel';
 
 /*
  * Client-side auth gate.
@@ -59,6 +61,7 @@ export default function AuthedLayout({ children }: { children: React.ReactNode }
             can open the panel via useLiveCall().startCall(). Dormant unless
             a provider returns supportsLiveStatus (the Plivo path). */}
         <LiveCallProvider>
+         <WebCallProvider>
           <div className="flex h-screen bg-background">
             <Sidebar />
             <div className="flex-1 flex flex-col min-w-0">
@@ -77,6 +80,8 @@ export default function AuthedLayout({ children }: { children: React.ReactNode }
               overlays, rendered once at the root. */}
           <ToastHost />
           <LiveCallPanel />
+          <WebCallPanel />
+         </WebCallProvider>
         </LiveCallProvider>
       </ConfirmDialogProvider>
     </AuthProvider>
