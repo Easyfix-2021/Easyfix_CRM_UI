@@ -117,12 +117,18 @@ export function WebCallProvider({ children }: { children: React.ReactNode }) {
     client.on('onCallFailed', (reason: any) => {
       // A hangup before the call connects surfaces here as 'Cancelled' — and an
       // operator-initiated hangup too. Neither is a failure → show "Call Ended".
-      if (endedByUserRef.current || /cancel/i.test(String(reason || ''))) {
+      const r = String(reason || '');
+      if (endedByUserRef.current || /cancel/i.test(r)) {
         setStatus('ended');
         return;
       }
+      // Normalise the reason to a clean chip label (shown AS the red chip).
+      const pretty = /busy/i.test(r) ? 'Busy'
+        : /no.?answer|noanswer|timeout|no.?user/i.test(r) ? 'No Answer'
+        : /reject|declin/i.test(r) ? 'Declined'
+        : (r || 'Failed');
       setStatus('failed');
-      setActive((a) => (a ? { ...a, endedReason: String(reason || 'Call failed') } : a));
+      setActive((a) => (a ? { ...a, endedReason: pretty } : a));
     });
 
     loginRef.current = new Promise((resolve, reject) => {

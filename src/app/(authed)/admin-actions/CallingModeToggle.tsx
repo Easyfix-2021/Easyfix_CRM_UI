@@ -15,6 +15,7 @@ import { api } from '@/lib/api';
 import { formatApiError } from '@/lib/api-errors';
 import { showToast } from '@/components/ui/toast';
 import { useMe } from '@/lib/auth-context';
+import { invalidateFetch } from '@/lib/hooks';
 
 type Cfg = { callMode?: 'web' | 'mobile'; enabledProviders?: string[] };
 
@@ -43,6 +44,9 @@ export function CallingModeToggle() {
     try {
       const r = await api.post<{ callMode: 'web' | 'mobile' }>('/admin/calls/mode', { mode: next });
       setMode(r.callMode);
+      // Evict the shared /admin/calls/config cache so CallButton (on My Orders /
+      // Jobs / …) picks up the new mode on its next mount — no full page reload.
+      invalidateFetch((k) => k.startsWith('/admin/calls/config'));
       showToast({ variant: 'success', message: `Calling mode set to ${r.callMode === 'web' ? 'Web Call' : 'Mobile Call'}.` });
     } catch (err) {
       showToast({ variant: 'error', message: formatApiError(err, { fallback: 'Could not change calling mode.' }) });

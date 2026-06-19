@@ -111,9 +111,13 @@ export function WebCallPanel() {
               </span>
             </div>
 
-            {/* Status + live timer */}
+            {/* Status + live timer. On a failed/declined call show the SPECIFIC
+                outcome (Busy / No Answer / …) AS the single red chip — no extra
+                "Failed" chip + duplicate reason line. */}
             <div className="flex items-center justify-between gap-2">
-              <StatusChip tone={TONE[status]}>{LABEL[status]}</StatusChip>
+              <StatusChip tone={TONE[status]}>
+                {status === 'failed' ? (active.endedReason || 'Failed') : LABEL[status]}
+              </StatusChip>
               <div className="flex items-center gap-1.5 text-sm">
                 {connecting && <Loader2 className="h-4 w-4 animate-spin text-slate-400" aria-hidden />}
                 {active.startedAt != null && (
@@ -121,10 +125,6 @@ export function WebCallPanel() {
                 )}
               </div>
             </div>
-
-            {status === 'failed' && active.endedReason && (
-              <div className="text-xs text-rose-700">{active.endedReason}</div>
-            )}
 
             {/* Controls — only while the call is live */}
             {nonTerminal && (
