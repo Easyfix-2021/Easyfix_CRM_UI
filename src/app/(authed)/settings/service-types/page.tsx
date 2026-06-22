@@ -6,26 +6,34 @@
  * Operates on tbl_service_type via /api/admin/service-types. Mirrors the
  * legacy /pages/settings/manageServiceType.vm + addEditServicesType.vm.
  *
- * Legacy fields supported: name, description, parent service category
- * (required FK), display flag (1=show to all, 0=CRM only), status.
+ * Legacy fields supported (full parity with addEditServicesType.vm):
+ *   name, description, parent service category (required FK), display flag
+ *   (1=show to all, 0=CRM rate-card, 2=Tx App deep-skill), status,
+ *   Tools multi-select (service_type_tools CSV + tool-names CSV), and
+ *   Service Type Image (service_type_image — uploaded via /shared/upload,
+ *   served from /easydoc).
  *
- * Tools multi-select (service_type_tools CSV) is deferred — production
- * data still flows through if you set it via API directly. Will surface
- * a UI picker once the tools lookup endpoint exists.
+ * Delete (trash) soft-deletes to status 3 (the row leaves every list),
+ * mirroring the legacy CRM trash action. The edit modal's Active toggle is a
+ * separate 1↔0 deactivate (inactive rows still surface under "include inactive").
  */
 
 import { useEffect, useState } from 'react';
 import {
-  Hash, Search, Plus, Pencil, Trash2,
-  AlertTriangle, ChevronDown, ChevronRight, Info,
+  Hash, Search, Plus, Pencil, CheckCircle2, XCircle,
+  AlertTriangle,
   ArrowUp, ArrowDown, ArrowUpDown,
+  Image as ImageIcon, UploadCloud,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { CancelButton } from '@/components/ui/cancel-button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
+import { Switch } from '@/components/ui/switch';
+import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
 import { api, ApiError } from '@/lib/api';
 import { useFetch, useDebouncedValue } from '@/lib/hooks';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -44,23 +52,27 @@ type ServiceType = {
   display: number;
   service_type_tools: string | null;
   service_type_tool_names: string | null;
+  service_type_image: string | null;
 };
 type ListResponse = { items: ServiceType[]; total: number };
 type SortKey = 'service_type_id' | 'service_type_name' | 'service_catg_name' | 'service_type_status' | 'display';
 type SortDir = 'asc' | 'desc';
 
-const PAGE_SIZE = 100;
+// BE Joi cap on /admin/service-types `limit` is 1000 (routes/admin/service-types.js);
+// pass it so the shared "All" page-size maps to the endpoint's true ceiling.
+const SERVICE_TYPES_LIMIT_CAP = 1000;
 
 export default function ManageServiceTypePage() {
   const confirm = useConfirm();
   const lookup = useLookup();
   const { me } = useMe();
-  const can = actionFlags(me, ['isServiceTypeAddNew', 'isServiceTypeEdit', 'isServiceTypeDelete']);
+  const can = actionFlags(me, ['isServiceTypeAddNew', 'isServiceTypeEdit']);
 
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<number | ''>('');
   const [includeInactive, setIncludeInactive] = useState(false);
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState<TablePageSize>(50);
   const [editing, setEditing] = useState<ServiceType | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [sortBy, setSortBy] = useState<SortKey>('service_type_name');
@@ -82,8 +94,10 @@ export default function ManageServiceTypePage() {
   if (debouncedSearch.trim()) urlParams.set('q', debouncedSearch.trim());
   if (categoryFilter) urlParams.set('categoryId', String(categoryFilter));
   if (includeInactive) urlParams.set('includeInactive', 'true');
-  urlParams.set('limit', String(PAGE_SIZE));
-  urlParams.set('offset', String(page * PAGE_SIZE));
+  const limit = pageSizeToLimit(pageSize, SERVICE_TYPES_LIMIT_CAP);
+  const offset = page * (pageSize === 'all' ? limit : Number(pageSize));
+  urlParams.set('limit', String(limit));
+  urlParams.set('offset', String(offset));
   urlParams.set('sortBy', sortBy);
   urlParams.set('sortDir', sortDir);
   const listUrl = `/admin/service-types?${urlParams.toString()}`;
@@ -93,20 +107,25 @@ export default function ManageServiceTypePage() {
   const [error, setError] = useState<string | null>(null);
   useEffect(() => { setError(fetchError); }, [fetchError]);
 
+  // Deactivate an active row → status 0 (Inactive, still listable under
+  // "include inactive"). Distinct from Delete (status 3, removed from all lists).
   async function handleDeactivate(t: ServiceType) {
     const ok = await confirm({
       title: 'Deactivate service type?',
-      description: `${t.service_type_name} will be hidden from default lists. Existing references stay intact. Reactivate by editing.`,
+      description: `"${t.service_type_name}" will be marked Inactive and hidden from default lists. You can reactivate it anytime.`,
       confirmLabel: 'Deactivate', variant: 'destructive',
     });
     if (!ok) return;
-    try { await api.delete(`/admin/service-types/${t.service_type_id}`); refetch(); }
+    try { await api.patch(`/admin/service-types/${t.service_type_id}`, { is_active: false }); refetch(); }
     catch (e) { setError(e instanceof ApiError ? e.message : 'Deactivate failed'); }
+  }
+  // One-click reactivate for inactive (status 0) rows — flips back to Active.
+  async function handleReactivate(t: ServiceType) {
+    try { await api.patch(`/admin/service-types/${t.service_type_id}`, { is_active: true }); refetch(); }
+    catch (e) { setError(e instanceof ApiError ? e.message : 'Reactivate failed'); }
   }
   // Alias so the existing TypeFormModal `onSaved` prop continues to work.
   const fetchList = refetch;
-
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
     <div className="space-y-4">
@@ -186,7 +205,12 @@ export default function ManageServiceTypePage() {
               {!loading && items.map((t) => (
                 <tr key={t.service_type_id}>
                   <td className="!text-center font-mono text-xs truncate">{t.service_type_id}</td>
-                  <td className="!text-left font-medium truncate" title={t.service_type_name}>{t.service_type_name}</td>
+                  <td className="!text-left font-medium truncate" title={t.service_type_name}>
+                    <span className="inline-flex items-center gap-1.5">
+                      {t.service_type_image && <ImageIcon className="size-3.5 text-muted-foreground shrink-0" />}
+                      <span className="truncate">{t.service_type_name}</span>
+                    </span>
+                  </td>
                   <td className="!text-left truncate text-muted-foreground" title={t.service_type_desc ?? ''}>
                     {t.service_type_desc ?? <span>—</span>}
                   </td>
@@ -206,16 +230,18 @@ export default function ManageServiceTypePage() {
                       : <span className="text-muted-foreground text-xs">Inactive</span>}
                   </td>
                   <td className="!text-right whitespace-nowrap">
-                    <div className="inline-flex items-center justify-end gap-1">
+                    <div className="inline-flex items-center justify-end gap-0.5">
                       {can.isServiceTypeEdit && (
-                        <Button size="sm" variant="ghost" onClick={() => { setEditing(t); setModalOpen(true); }}>
-                          <Pencil className="size-3.5" />
-                        </Button>
+                        <IconButton icon={Pencil} label="Edit Service Type" intent="primary"
+                          onClick={() => { setEditing(t); setModalOpen(true); }} />
                       )}
                       {can.isServiceTypeEdit && t.service_type_status === 1 && (
-                        <Button size="sm" variant="ghost" onClick={() => handleDeactivate(t)}>
-                          <Trash2 className="size-3.5 text-red-600" />
-                        </Button>
+                        <IconButton icon={XCircle} label="Deactivate Service Type" intent="danger"
+                          onClick={() => handleDeactivate(t)} />
+                      )}
+                      {can.isServiceTypeEdit && t.service_type_status !== 1 && (
+                        <IconButton icon={CheckCircle2} label="Reactivate Service Type" intent="success"
+                          onClick={() => handleReactivate(t)} />
                       )}
                       {!can.isServiceTypeEdit && <span className="text-[10px] text-muted-foreground">view-only</span>}
                     </div>
@@ -224,20 +250,18 @@ export default function ManageServiceTypePage() {
               ))}
             </tbody>
           </table>
+          {/* Pagination band — shared component, server-side paged. */}
+          <div className="px-3 py-2 border-t">
+            <TablePagination
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onPageChange={setPage}
+              onPageSizeChange={(s) => { setPageSize(s); setPage(0); }}
+            />
+          </div>
         </CardContent>
       </Card>
-
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-muted-foreground">
-            Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, total)} of {total}
-          </span>
-          <div className="flex gap-1">
-            <Button size="sm" variant="outline" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>Previous</Button>
-            <Button size="sm" variant="outline" disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)}>Next</Button>
-          </div>
-        </div>
-      )}
 
       <TypeFormModal
         open={modalOpen}
@@ -281,7 +305,9 @@ function TypeFormModal({ open, onClose, editing, categories, onSaved }: {
   const [catgId, setCatgId] = useState<number | ''>('');
   const [display, setDisplay] = useState<number>(1);
   const [active, setActive] = useState(true);
+  const [img, setImg] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !submitting });
   /* Tools multi-select (2026-05-26) — closes the deferred field. The
@@ -315,11 +341,26 @@ function TypeFormModal({ open, onClose, editing, categories, onSaved }: {
       setCatgId(editing?.service_catg_id ?? '');
       setDisplay(editing?.display ?? 1);
       setActive(editing ? editing.service_type_status === 1 : true);
+      setImg(editing?.service_type_image ?? null);
       const csv = (editing?.service_type_tools ?? '').split(',').map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0);
       setSelectedToolIds(csv);
       setError(null);
     }
   }, [open, editing]);
+
+  async function handleImage(file: File | null) {
+    if (!file) return;
+    setUploading(true); setError(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('category', 'easyfixer_documents');
+      const res = await api.post<{ filename: string }>('/shared/upload', fd);
+      setImg(res.filename);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Upload failed');
+    } finally { setUploading(false); }
+  }
 
   async function handleSubmit() {
     setError(null);
@@ -343,6 +384,7 @@ function TypeFormModal({ open, onClose, editing, categories, onSaved }: {
         display,
         service_type_tools: toolIdsCsv,
         service_type_tool_names: toolNamesCsv,
+        service_type_image: img || null,
         ...(isEdit ? { is_active: active } : {}),
       };
       if (isEdit) await api.patch(`/admin/service-types/${editing!.service_type_id}`, body);
@@ -355,11 +397,12 @@ function TypeFormModal({ open, onClose, editing, categories, onSaved }: {
 
   return (
     <Dialog open={open} onOpenChange={guardedOpenChange}>
-      <DialogContent>
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{isEdit ? `Edit "${editing!.service_type_name}"` : 'Add Service Type'}</DialogTitle>
         </DialogHeader>
-        <div className="space-y-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3">
+          {/* Row 1 — Service Category | Service Type Name */}
           <div>
             <label className="text-sm font-medium block mb-1">Service Category *</label>
             <select
@@ -377,13 +420,17 @@ function TypeFormModal({ open, onClose, editing, categories, onSaved }: {
             <label className="text-sm font-medium block mb-1">Service Type Name *</label>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder='e.g. "Split AC Installation"' />
           </div>
-          <div>
+
+          {/* Row 2 — Description (full width) */}
+          <div className="sm:col-span-2">
             <label className="text-sm font-medium block mb-1">Description *</label>
             <textarea value={desc} onChange={(e) => setDesc(e.target.value)}
               placeholder="What this service type covers"
               className="w-full border rounded px-2 py-1 text-sm bg-background min-h-[80px]"
               maxLength={500} />
           </div>
+
+          {/* Row 3 — Display | Tools */}
           <div>
             <label className="text-sm font-medium block mb-1">Display</label>
             <select
@@ -397,9 +444,8 @@ function TypeFormModal({ open, onClose, editing, categories, onSaved }: {
             </select>
           </div>
           {/* Tools — multi-select sourced from /admin/tools. Stored as CSV
-              of tool_ids in `service_type_tools`; the legacy display
-              column `service_type_tool_names` is rebuilt at save time
-              from the picked rows so reports stay readable. */}
+              of tool_ids in `service_type_tools`; the legacy display column
+              `service_type_tool_names` is rebuilt at save time. */}
           <div>
             <label className="text-sm font-medium block mb-1">Tools</label>
             <SearchMultiSelect
@@ -410,19 +456,57 @@ function TypeFormModal({ open, onClose, editing, categories, onSaved }: {
               options={tools.map((t) => ({ value: String(t.tool_id), label: t.tool_name }))}
             />
           </div>
-          {isEdit && (
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
-              <span>Active</span>
+
+          {/* Row 4 left — Service Type Image (upload trigger, preview stacked
+              beneath it within this half). Uploaded via /shared/upload, stored
+              as a filename in the legacy service_type_image column. */}
+          <div>
+            <label className="text-sm font-medium block mb-1">Service Type Image</label>
+            <label className="flex items-center justify-center gap-2 h-9 rounded-md border border-dashed border-input bg-background px-3 text-sm cursor-pointer hover:bg-muted/40 transition-colors">
+              <UploadCloud className="size-4 text-muted-foreground" />
+              <span className="text-muted-foreground truncate">
+                {uploading ? 'Uploading…' : (img || 'Upload Image')}
+              </span>
+              <input type="file" accept="image/*" className="hidden"
+                onChange={(e) => handleImage(e.target.files?.[0] ?? null)} />
             </label>
-          )}
-          {error && <div className="text-sm text-red-600 flex items-center gap-1"><AlertTriangle className="size-4" /> {error}</div>}
-          <div className="flex justify-end gap-2 pt-2">
-            <CancelButton onCancel={onClose} disabled={submitting} />
-            <Button onClick={handleSubmit} disabled={submitting}>
-              {submitting ? 'Saving…' : isEdit ? 'Save Changes' : 'Add Service Type'}
-            </Button>
+            {img && (
+              <div className="mt-2 flex items-center gap-3">
+                <img
+                  src={`/easydoc/easyfixer_documents/${img}`}
+                  alt={img}
+                  className="size-16 object-cover rounded border bg-muted"
+                  onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = 'hidden'; }}
+                />
+                <Button type="button" size="sm" variant="ghost"
+                  onClick={() => setImg(null)} disabled={uploading || submitting}>
+                  Clear
+                </Button>
+              </div>
+            )}
           </div>
+
+          {/* Row 4 right — Status toggle, right-aligned. Edit-only; a new
+              Service Type is always created Active. */}
+          {isEdit && (
+            <div className="flex flex-col items-end">
+              <label className="text-sm font-medium block mb-1">Status</label>
+              <div className="flex items-center gap-2 h-9">
+                <span className={`text-sm ${active ? 'text-emerald-700' : 'text-muted-foreground'}`}>
+                  {active ? 'Active' : 'Inactive'}
+                </span>
+                <Switch checked={active} onCheckedChange={setActive} ariaLabel="Active status" />
+              </div>
+            </div>
+          )}
+        </div>
+
+        {error && <div className="text-sm text-red-600 flex items-center gap-1 mt-3"><AlertTriangle className="size-4" /> {error}</div>}
+        <div className="flex justify-end gap-2 pt-3">
+          <CancelButton onCancel={onClose} disabled={submitting} />
+          <Button onClick={handleSubmit} disabled={submitting || uploading}>
+            {submitting ? 'Saving…' : isEdit ? 'Save Changes' : 'Add Service Type'}
+          </Button>
         </div>
       </DialogContent>
     </Dialog>
