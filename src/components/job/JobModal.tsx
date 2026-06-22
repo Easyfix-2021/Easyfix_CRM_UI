@@ -26,7 +26,7 @@ import { StatusChip } from '@/components/ui/StatusChip';
 import { api, ApiError } from '@/lib/api';
 import { resolveParentAddressId, buildJobAddressPayload } from '@/lib/job-address';
 import { useLookup } from '@/lib/use-lookup';
-import { formatDate, formatEasyfixerName, statusLabel, statusTone } from '@/lib/utils';
+import { formatDate, formatEasyfixerName, statusLabel, statusTone, toIstClockTime } from '@/lib/utils';
 import { maskMobile, INDIAN_MOBILE_REGEX, INDIAN_MOBILE_ERROR, isValidIndianMobile } from '@/lib/format';
 
 /*
@@ -4704,11 +4704,14 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
           if (f.requested_date_time) {
             setIf('original_appointment_date_time',
               new Date(f.requested_date_time).toISOString());
-            // The legacy companion time column stores HH:MM. The BE's
-            // formatTimeIST handles ISO → IST conversion, so we can
-            // pass the same ISO and let the server own the projection.
+            // The legacy companion time column stores "HH:MM". Send the
+            // already-derived IST clock time rather than a full ISO datetime:
+            // it's exactly what the column persists (no server projection
+            // needed) and it can't trip the validator's length cap. The
+            // datetime-local value is naive IST wall-clock, so toIstClockTime
+            // extracts HH:MM verbatim — correct regardless of browser tz.
             setIf('original_appointment_time',
-              new Date(f.requested_date_time).toISOString());
+              toIstClockTime(f.requested_date_time));
           }
         }
 

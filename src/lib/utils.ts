@@ -16,6 +16,37 @@ export function formatDate(d: string | Date | null | undefined): string {
 }
 
 /*
+ * toIstClockTime(d) → "HH:MM" (IST 24-hour clock).
+ *
+ * Produces the value the legacy companion time-text columns store
+ * (`requested_time`, `original_appointment_time` on tbl_job). Use it when
+ * submitting those fields instead of shipping a full ISO datetime — the
+ * column only holds HH:MM, and a 24-char ISO trips the backend validator's
+ * length cap (see EasyFix_Backend/validators/job.validator.js).
+ *
+ * Inputs from <input type="datetime-local"> are NAIVE wall-clock strings
+ * ("YYYY-MM-DDTHH:MM", no timezone) — already IST as the operator typed
+ * them. We take that HH:MM verbatim so the result is correct regardless of
+ * the browser's timezone (no Date parsing, no UTC round-trip). Only when a
+ * caller passes a real instant (ISO with a Z/offset, or a Date) do we
+ * project into Asia/Kolkata.
+ */
+export function toIstClockTime(d: string | Date | null | undefined): string {
+  if (!d) return '';
+  if (typeof d === 'string') {
+    const hasExplicitZone = /[Zz]$|[+-]\d{2}:?\d{2}$/.test(d.trim());
+    const naive = d.match(/T(\d{2}):(\d{2})/);
+    if (!hasExplicitZone && naive) return `${naive[1]}:${naive[2]}`;
+  }
+  const date = typeof d === 'string' ? new Date(d) : d;
+  if (isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('en-GB', {
+    hour: '2-digit', minute: '2-digit', hour12: false,
+    timeZone: 'Asia/Kolkata',
+  }).format(date);
+}
+
+/*
  * Canonical job_status labels — sourced from the DB truth documented in
  * EasyFix_Backend/services/job.service.js (updated 2026-04-20) and matching
  * the legacy `HomeAction.getJobUIStatus()` classifier 1:1.
