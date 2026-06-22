@@ -146,6 +146,11 @@ export default function ManageRolesPage() {
   const actionsByMenu = useMemo(() => {
     const map = new Map<number, MenuActionRow[]>();
     for (const a of allActions) {
+      // Hide the legacy-only `isQuicksight` (lowercase 's') Home button key — it
+      // duplicates the New-CRM `ef-QuickSight` in the Home group ("2 QuickSight"
+      // checkboxes). The New CRM never gates on `isQuicksight`; Legacy CRM still
+      // uses + manages it independently, so hiding it here doesn't affect Legacy.
+      if (a.action_name === 'isQuicksight') continue;
       if (!map.has(a.menu_id)) map.set(a.menu_id, []);
       map.get(a.menu_id)!.push(a);
     }
@@ -818,6 +823,11 @@ function RoleFormModal({
   const actionsByMenu = useMemo(() => {
     const map = new Map<number, MenuActionRow[]>();
     for (const a of allActions) {
+      // Hide the legacy-only `isQuicksight` (lowercase 's') Home button key — it
+      // duplicates the New-CRM `ef-QuickSight` in the Home group ("2 QuickSight"
+      // checkboxes). The New CRM never gates on `isQuicksight`; Legacy CRM still
+      // uses + manages it independently, so hiding it here doesn't affect Legacy.
+      if (a.action_name === 'isQuicksight') continue;
       if (!map.has(a.menu_id)) map.set(a.menu_id, []);
       map.get(a.menu_id)!.push(a);
     }
