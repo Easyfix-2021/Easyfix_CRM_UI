@@ -49,6 +49,10 @@ import { hasAction } from '@/lib/permissions';
 import { formatDate } from '@/lib/utils';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { StatusChip } from '@/components/ui/StatusChip';
+import { showToast } from '@/components/ui/toast';
+import { AddRemarksDialog } from './AddRemarksDialog';
+import { CancelWithReasonDialog } from './CancelWithReasonDialog';
+import { ST } from './JobModal';
 
 /* ── Time-slot options — mirror the values used in JobModal's Confirm
    form so a re-fetch against an edited slot keys on the same labels the
@@ -193,7 +197,15 @@ export function ScheduleAssignModal({
   // entry icon on /my-orders. View-only users see the table but no
   // Assign buttons.
   const canCommit = hasAction(me, 'isJobAssign');
+  // Cancel Job mirrors JobModal's ActionBar gate (the destructive
+  // `isJobCancel` key). Add Remarks is NOT permission-gated in JobModal
+  // (status-gated only), so we render it unconditionally here too.
+  const canCancel = hasAction(me, 'isJobCancel');
   const confirmAction = useConfirm();
+
+  // Footer action dialogs — reuse the SAME extracted dialogs JobModal uses.
+  const [remarksOpen, setRemarksOpen] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
 
   // Proposed schedule — seeded from the job's current values once it
   // loads, then operator-editable. `seeded` guards the one-time seed so
@@ -395,8 +407,12 @@ export function ScheduleAssignModal({
                     </label>
                     <Input
                       type="datetime-local"
+                      min={isoToLocalInput(new Date().toISOString())}
                       value={jobDateLocal}
-                      onChange={(e) => setJobDateLocal(e.target.value)}
+                      onChange={(e) => {
+                        const minStr = isoToLocalInput(new Date().toISOString());
+                        setJobDateLocal(e.target.value && e.target.value < minStr ? minStr : e.target.value);
+                      }}
                     />
                   </div>
                   {/* Auto-derived Time Slot chip — read-only; derived from the Job Date's hour. */}
@@ -489,8 +505,33 @@ export function ScheduleAssignModal({
           </section>
         </div>
 
-        <DialogFooter className="px-6">
-          <Button variant="outline" onClick={onClose}>Close</Button>
+        <DialogFooter className="px-6 sm:justify-between">
+          {/* LEFT — Add Remarks. Reuses JobModal's extracted dialogs
+              (./AddRemarksDialog, ./CancelWithReasonDialog) so behaviour
+              stays identical. */}
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              className="bg-teal-500 hover:bg-teal-600 text-white border-teal-500 hover:text-white"
+              onClick={() => setRemarksOpen(true)}
+              disabled={!jobId}
+            >
+              Add Remarks
+            </Button>
+          </div>
+          {/* RIGHT — destructive Cancel (cancels the job) next to Close. */}
+          <div className="flex items-center gap-2">
+            {canCancel && (
+              <Button
+                variant="destructive"
+                onClick={() => setCancelOpen(true)}
+                disabled={!jobId}
+              >
+                Cancel
+              </Button>
+            )}
+            <Button variant="outline" onClick={onClose}>Close</Button>
+          </div>
         </DialogFooter>
       </DialogContent>
 
@@ -499,6 +540,37 @@ export function ScheduleAssignModal({
         candidate={pincodeModalFor}
         onClose={() => setPincodeModalFor(null)}
       />
+
+      {/* Add Remarks — legacy path (no optimistic callbacks); the dialog
+          POSTs to /admin/jobs/:id/comments then calls onSaved. */}
+      {jobId && (
+        <AddRemarksDialog
+          open={remarksOpen}
+          jobId={jobId}
+          onClose={() => setRemarksOpen(false)}
+          onSaved={() => {
+            showToast({ variant: 'success', message: 'Remark Added' });
+            setRemarksOpen(false);
+          }}
+        />
+      )}
+
+      {/* Cancel Job — same PATCH /:id/status contract JobModal uses
+          (status=ST.CANCELLED + reasonId + comment). */}
+      {jobId && (
+        <CancelWithReasonDialog
+          open={cancelOpen}
+          onClose={() => setCancelOpen(false)}
+          onSubmit={async (reasonId, comment) => {
+            await api.patch(`/admin/jobs/${jobId}/status`, {
+              status: ST.CANCELLED, reasonId, comment,
+            });
+            showToast({ variant: 'success', message: 'Job Cancelled' });
+            setCancelOpen(false);
+            onClose();
+          }}
+        />
+      )}
     </Dialog>
   );
 }

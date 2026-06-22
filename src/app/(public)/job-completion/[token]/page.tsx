@@ -923,10 +923,14 @@ export default function JobCompletionMagicLinkPage() {
                 follow the picked time. The old read-only echo line was
                 removed (the picker itself shows the value). */}
             <input type="datetime-local" required value={form.requested_date_time}
-              onChange={(e) => patch({
-                requested_date_time: e.target.value,
-                time_slot: deriveTimeSlot(e.target.value),
-              })} className={inputClass} />
+              min={toDatetimeLocal(new Date().toISOString())}
+              onChange={(e) => {
+                // Hard-block a past time today: native `min` only flags it invalid,
+                // so clamp anything earlier than now up to now.
+                const minStr = toDatetimeLocal(new Date().toISOString());
+                const v = e.target.value && e.target.value < minStr ? minStr : e.target.value;
+                patch({ requested_date_time: v, time_slot: deriveTimeSlot(v) });
+              }} className={inputClass} />
           </Field>
           <Field label="Time Slot" required>
             {/* DISPLAY-ONLY slot indicators — the derived slot is highlighted;
@@ -1437,7 +1441,11 @@ function RescheduleDialog({
       </Field>
       <Field label="Preferred Date & Time">
         <input type="datetime-local" value={preferred}
-          onChange={(e) => setPreferred(e.target.value)} className={inputClass} />
+          min={toDatetimeLocal(new Date().toISOString())}
+          onChange={(e) => {
+            const minStr = toDatetimeLocal(new Date().toISOString());
+            setPreferred(e.target.value && e.target.value < minStr ? minStr : e.target.value);
+          }} className={inputClass} />
       </Field>
       <Field label="Remarks">
         <textarea value={remarks} onChange={(e) => setRemarks(e.target.value)}

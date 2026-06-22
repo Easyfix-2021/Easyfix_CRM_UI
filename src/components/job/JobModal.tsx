@@ -17,6 +17,10 @@ import { AddressPickerWithMap, type AddressValue } from '@/components/ui/address
 import { AddressEditDialog, type EditableAddress } from './AddressEditDialog';
 import { JobTransactionView } from './JobTransactionView';
 import { CustomerSubmissionPanel } from './CustomerSubmissionPanel';
+import { AddRemarksDialog } from './AddRemarksDialog';
+import { CancelWithReasonDialog } from './CancelWithReasonDialog';
+import { fetchReasonsCached } from './jobActionReasons';
+import type { JobComment } from './jobTypes';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { api, ApiError } from '@/lib/api';
@@ -62,7 +66,7 @@ import { actionFlags } from '@/lib/permissions';
  * behaviour is identical whether the user enters via direct URL or the modal.
  */
 
-const ST = { BOOKED: 0, SCHEDULED: 1, IN_PROGRESS: 2, COMPLETED: 3, COMPLETED_ALT: 5, CANCELLED: 6, ENQUIRY: 7, CALL_LATER: 9, REVISIT: 10 } as const;
+export const ST = { BOOKED: 0, SCHEDULED: 1, IN_PROGRESS: 2, COMPLETED: 3, COMPLETED_ALT: 5, CANCELLED: 6, ENQUIRY: 7, CALL_LATER: 9, REVISIT: 10 } as const;
 
 /*
  * PII masking helper — show only the first 4 digits of any mobile
@@ -785,6 +789,7 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
               comment_on: 2,                 // legacy "reschedule" comment code
               appointment_on: date,          // anchors the trail row
             });
+            showToast({ variant: 'success', message: `Job Rescheduled to ${date}${slot ? ` (${slot})` : ''}` });
           } catch (e) {
             // Non-fatal — the PATCH already succeeded. Surface a soft
             // warning so the operator knows the history won't show
@@ -813,6 +818,7 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
           await api.patch(`/admin/jobs/${jobId}/status`, {
             status: ST.CANCELLED, reasonId, comment,
           });
+          showToast({ variant: 'success', message: 'Job Cancelled' });
           setCancelOpen(false); onChanged();
         }}
       />
@@ -2750,20 +2756,8 @@ function AddMaterialDialog({ open, onClose, onSubmit }: {
 //   created_on (auto-stamp), commented_by (FK tbl_user.user_id),
 //   appointment_on, enum_reason_id, efr_id.
 // `user_name` comes from the LEFT JOIN on tbl_user.
-type JobComment = {
-  id: number;
-  job_id: number;
-  comments: string;
-  comment_on: number;
-  stage: string;
-  created_on: string;
-  appointment_on: string | null;
-  commented_by: number | null;
-  user_name: string | null;
-  efr_id: number | null;
-  enum_reason_id: number | null;
-  enum_desc: string | null;
-};
+// JobComment type moved to ./jobTypes (imported at top) so the extracted
+// AddRemarksDialog can share the exact same shape.
 
 const COMMENT_STAGE_LABEL: Record<number, string> = {
   1: 'On Creation',
@@ -6014,10 +6008,14 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 <Label>Requested Date/Time *</Label>
                 <Input
                   required type="datetime-local"
+                  min={nowLocalIso()}
                   value={f.requested_date_time}
                   onChange={(e) => {
-                    set('requested_date_time', e.target.value);
-                    const slot = inferSlotFromTime(e.target.value);
+                    // Hard-block a past time today (native min only flags invalid).
+                    const minStr = nowLocalIso();
+                    const v = e.target.value && e.target.value < minStr ? minStr : e.target.value;
+                    set('requested_date_time', v);
+                    const slot = inferSlotFromTime(v);
                     if (slot) set('time_slot', slot);
                   }}
                 />
@@ -9889,389 +9887,16 @@ function ChangeDescriptionDialog({ open, onClose, initialDesc, onSubmit }: {
 }
 
 /*
- * AddRemarksDialog — legacy "Job CheckOut Remarks" layout (refreshed
- * 2026-05-19). Mirrors the JobOutcomeDialog structure pixel-for-pixel:
- *
- *   ┌──────────────────────────────────────────────────────┐
- *   │ Job CheckOut Remarks                                 │  ← dark band
- *   ├──────────────────────────────────────────────────────┤
- *   │ Open Due To *  ◉ By Customer  ○ Client …             │
- *   │ Reason *       [SearchSelect dropdown ▾]             │
- *   │ Remarks *      [textarea…]                           │
- *   │                       [Submit]      [Cancel]         │
- *   └──────────────────────────────────────────────────────┘
- *
- * Submit POSTs to /admin/jobs/:id/comments with:
- *   {
- *     comments:        "[Open Due To: Client · Reason: <label>] <ops remark>",
- *     comment_on:      1,    // legacy "created" stage code
- *     enum_reason_id:  <id>  // picked from the reason dropdown
- *   }
- *
- * Reason list comes from GET /admin/jobs/comment-reasons which
- * returns `tbl_enum_reason` rows for the legacy "Others" pool
- * (enum_type=4 default). Operators see the same dropdown legacy
- * surfaces; new and old apps remain readable from each other.
+ * AddRemarksDialog + the shared reason-dropdown cache (fetchReasonsCached)
+ * were extracted to ./AddRemarksDialog and ./jobActionReasons on 2026-06-22
+ * so the Schedule & Assign modal can reuse the same dialog. AddRemarksDialog
+ * is imported at the top of this file; JobOutcomeDialog imports
+ * fetchReasonsCached directly from ./jobActionReasons.
  */
-const REMARK_DUE_TO_OPTIONS: Array<'Customer' | 'Client' | 'EasyFix' | 'Technician'> = [
-  'Customer', 'Client', 'EasyFix', 'Technician',
-];
-
-/*
- * Module-level cache for the reason dropdowns (Add Remarks +
- * JobOutcomeDialog). Keyed by `${endpoint}|${dueTo}` so each popup +
- * radio combination caches independently. 60s TTL — the
- * `action_taken_reason` table is admin-edited maybe-once-a-month so
- * stale data for up to a minute is well within tolerance, and the
- * cache kills the "fetch every time the radio changes" pattern ops
- * flagged on 2026-06-05.
- *
- * Reusing one shared map across both dialogs means switching radios
- * back-and-forth (Customer → Client → Customer) returns the second
- * Customer fetch instantly from cache. Module scope persists for the
- * tab's lifetime; refresh clears it.
- */
-type CachedReasonRow = { id: number | null; label: string };
-const _reasonsCache = new Map<string, { rows: CachedReasonRow[]; expires: number }>();
-const REASONS_TTL_MS = 60_000;
-
-async function fetchReasonsCached(
-  endpoint: string,
-  params: Record<string, string>,
-): Promise<CachedReasonRow[]> {
-  // Stable cache key — endpoint distinguishes Add Remarks (`comment-reasons`)
-  // from Outcome (`action-reasons`); `type` distinguishes
-  // unreachable vs enquiry on the outcome side; `dueTo` is the radio.
-  const cacheKey = `${endpoint}|${params.type || '-'}|${params.dueTo || '-'}`;
-  const now = Date.now();
-  const hit = _reasonsCache.get(cacheKey);
-  if (hit && hit.expires > now) return hit.rows;
-  try {
-    const rows = (await api.get<CachedReasonRow[]>(endpoint, params)) || [];
-    _reasonsCache.set(cacheKey, { rows, expires: now + REASONS_TTL_MS });
-    return rows;
-  } catch {
-    // Don't poison the cache on a network error — let the next call retry.
-    return [];
-  }
-}
-function AddRemarksDialog({ open, jobId, onClose, onSaved, currentUserName = 'You', onOptimisticAdd, onPendingFailed }: {
-  open: boolean; jobId: number;
-  onClose: () => void; onSaved: () => void;
-  // Display name to stamp on the optimistic comment row. Defaults to "You"
-  // when the parent doesn't have a resolved user (shouldn't happen in
-  // practice — `useMe()` is available everywhere this dialog opens).
-  currentUserName?: string;
-  // Called the MOMENT Save is clicked (before the POST resolves) with a
-  // fully-shaped JobComment row carrying a negative `id` (tempId). The
-  // parent prepends it to its `pendingComments` list which the
-  // JobCommentsTab renders at the top with a "Sending…" pill. Both this
-  // and `onPendingFailed` are optional — when omitted the dialog falls
-  // back to the legacy "wait for POST, then close" behaviour.
-  onOptimisticAdd?: (row: JobComment & { _pending?: true }) => void;
-  onPendingFailed?: (tempId: number) => void;
-}) {
-  const [dueTo, setDueTo] = useState<string>('Customer');
-  const [reasonId, setReasonId] = useState<string>('');
-  const [text, setText] = useState('');
-  const [reasons, setReasons] = useState<Array<{ id: number; label: string }>>([]);
-  const [reasonsLoading, setReasonsLoading] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  // Reset on each open.
-  useEffect(() => {
-    if (open) { setDueTo('Customer'); setReasonId(''); setText(''); setErr(null); }
-  }, [open]);
-
-  // Fetch the reason list filtered by Open-Due-To. Legacy CRM's
-  // dropdown narrows dynamically as the operator switches the radio
-  // (verified against the screenshot's exact labels — those rows
-  // live under user_type=2 / "Client" in action_taken_reason). The
-  // refetch resets the picked reason since a stale id from a
-  // different bucket would render as an opaque number.
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    setReasonsLoading(true);
-    setReasonId('');
-    // Module-level 60s cache (see fetchReasonsCached above) reduces
-    // BE round-trips when the operator toggles the radio multiple times.
-    fetchReasonsCached('/admin/jobs/comment-reasons', { dueTo: dueTo.toLowerCase() })
-      .then((rows) => {
-        if (cancelled) return;
-        // AddRemarksDialog needs id as a non-null number; cached helper
-        // returns id|null for compatibility with JobOutcomeDialog. Cast
-        // here — comment-reasons never returns null ids by contract.
-        setReasons((rows || []).filter((r) => r.id != null).map((r) => ({ id: Number(r.id), label: r.label })));
-      })
-      .catch(() => { if (!cancelled) setReasons([]); })
-      .finally(() => { if (!cancelled) setReasonsLoading(false); });
-    return () => { cancelled = true; };
-  }, [open, dueTo]);
-
-  const reasonOptions = React.useMemo(
-    () => reasons.map((r) => ({ value: String(r.id), label: r.label })),
-    [reasons],
-  );
-
-  async function go() {
-    const remark = text.trim();
-    if (!reasonId) { setErr('Please pick a reason.'); return; }
-    if (!remark) { setErr('Please enter a remark before saving.'); return; }
-    // Comment column stores ONLY the operator's typed remark (2026-06-04 —
-    // dropped the legacy "[Open Due To: X · Reason: Y]" structured prefix
-    // per ops). Reason is canonically in enum_reason_id below; the
-    // Comments tab joins back to `tbl_enum_reason` for the label on render.
-    const reasonLabel = reasons.find((r) => String(r.id) === reasonId)?.label || null;
-    const payload = {
-      comments: remark,
-      comment_on: 1, // legacy "created" stage — see commentBody Joi schema
-      enum_reason_id: Number(reasonId),
-    };
-    // Optimistic flow (2026-06-05). Stamp a pending row + close the dialog
-    // immediately so the operator sees their comment at the top of the
-    // Comments tab WHILE the POST is in flight. Negative `id` is the
-    // sentinel so the parent can match it on success/failure callbacks.
-    const tempId = -Date.now() - Math.floor(Math.random() * 1000);
-    const optimistic: JobComment & { _pending?: true } = {
-      id: tempId,
-      job_id: jobId,
-      comments: remark,
-      comment_on: 1,
-      stage: 'created',
-      created_on: new Date().toISOString(),
-      appointment_on: null,
-      commented_by: null,
-      user_name: currentUserName,
-      efr_id: null,
-      enum_reason_id: Number(reasonId),
-      enum_desc: reasonLabel,
-      _pending: true,
-    };
-    if (onOptimisticAdd) {
-      // Optimistic-mode path: dialog closes synchronously; POST runs as a
-      // background task; reconciliation happens inside JobCommentsTab.
-      onOptimisticAdd(optimistic);
-      api.post(`/admin/jobs/${jobId}/comments`, payload)
-        .then(() => onSaved())
-        .catch((e: unknown) => {
-          onPendingFailed?.(tempId);
-          const msg = e instanceof ApiError ? e.message : 'Failed to save remark';
-          showToast({ variant: 'error', message: msg });
-        });
-      return;
-    }
-    // Legacy path — kept for any future caller that doesn't wire the
-    // optimistic callbacks. Dialog stays open with a spinner until POST
-    // resolves, then closes on success.
-    setLoading(true); setErr(null);
-    try {
-      await api.post(`/admin/jobs/${jobId}/comments`, payload);
-      onSaved();
-    } catch (e) {
-      setErr(e instanceof ApiError ? e.message : 'Failed to save remark');
-    } finally { setLoading(false); }
-  }
-  return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="!max-w-xl p-0 gap-0 overflow-hidden">
-        {/* Dark-slate band header matching JobOutcomeDialog. */}
-        <div className="px-6 py-4 bg-gradient-to-r from-slate-900 via-slate-700 to-slate-900 text-white flex items-center gap-2.5 shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]">
-          <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-sky-500/20 ring-1 ring-sky-400/40">
-            <Pencil className="h-3.5 w-3.5 text-sky-300" />
-          </span>
-          <DialogTitle className="text-[15px] font-semibold tracking-tight">Job CheckOut Remarks</DialogTitle>
-        </div>
-        {/* Screen-reader-only description — required by Radix to satisfy
-            aria-describedby. Without it, modern Radix emits a console
-            warning AND nested dialogs (this one mounted inside JobModal)
-            can be unreachable because the parent stays focus-trapped.
-            Visible header above already conveys intent to sighted users,
-            so we keep this off-screen rather than adding visual noise. */}
-        <DialogDescription className="sr-only">
-          Capture a remark with a reason for this job — saved to the job timeline and visible to ops.
-        </DialogDescription>
-        <div className="p-5 space-y-4">
-          <div className="grid grid-cols-[150px_1fr] items-center gap-3">
-            <label className="text-sm font-medium text-right">
-              Open Due To<span className="text-rose-600">*</span>
-            </label>
-            <div className="flex flex-wrap items-center gap-4">
-              {REMARK_DUE_TO_OPTIONS.map((opt) => (
-                <label key={opt} className="inline-flex items-center gap-1.5 text-sm cursor-pointer">
-                  <input
-                    type="radio"
-                    name="add-remarks-due-to"
-                    value={opt}
-                    checked={dueTo === opt}
-                    onChange={() => setDueTo(opt)}
-                    className="accent-purple-600"
-                  />
-                  {opt === 'Customer' ? 'By Customer' : opt}
-                </label>
-              ))}
-            </div>
-          </div>
-          <div className="grid grid-cols-[150px_1fr] items-center gap-3">
-            <label className="text-sm font-medium text-right">
-              Reason<span className="text-rose-600">*</span>
-            </label>
-            <SearchSelect
-              value={reasonId}
-              onChange={setReasonId}
-              options={reasonOptions}
-              placeholder={reasonsLoading ? 'Loading reasons…' : 'Select Reason'}
-              disabled={reasonsLoading}
-              required
-            />
-          </div>
-          <div className="grid grid-cols-[150px_1fr] items-start gap-3">
-            <label className="text-sm font-medium text-right pt-2">
-              Remarks<span className="text-rose-600">*</span>
-            </label>
-            <textarea
-              required
-              rows={3}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder="Write Comment…"
-              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus-visible:border-foreground/40 resize-y"
-              maxLength={2000}
-            />
-          </div>
-          {err && <div className="text-sm text-red-600 text-right">{err}</div>}
-          <div className="flex justify-end gap-2 pt-2 border-t">
-            <Button
-              onClick={go}
-              disabled={loading || !reasonId || !text.trim()}
-              className="bg-teal-500 hover:bg-teal-600 text-white"
-            >
-              {loading ? 'Saving…' : 'Submit'}
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              className="bg-rose-500 hover:bg-rose-600 text-white border-rose-500 hover:text-white"
-              onClick={onClose}
-            >
-              Cancel
-            </Button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 // ─── Cancel With Reason dialog ──────────────────────────────────────
-// Legacy `jobCancel.vm`. Reason picker comes from /api/shared/lookup/cancel-reasons
-// (tbl_cancel_reason / job_cancel_reason_by_easyfixer_app per CLAUDE.md).
-// PATCH /:id/status with status=6 + reasonId + comment.
-function CancelWithReasonDialog({ open, onClose, onSubmit }: {
-  open: boolean; onClose: () => void;
-  onSubmit: (reasonId: number, comment: string) => Promise<void>;
-}) {
-  const lk = useLookup();
-  const [reasonId, setReasonId] = useState('');
-  const [customReason, setCustomReason] = useState('');
-  /*
-   * `customMode` swaps the SearchSelect for a free-text input when the
-   * operator can't find a matching DB reason. The cancel-reasons list
-   * IS DB-sourced (tbl_cancel_reason / job_cancel_reason_by_easyfixer_app
-   * — see CLAUDE.md table-name notes), so we don't pollute it with
-   * ad-hoc entries. Instead, custom reasons are submitted with the
-   * smallest valid reason_id as the FK (accounting buckets all "other"
-   * cancellations under the same code) and the typed string is prepended
-   * to the comment as `[Custom] <reason> — <operator comment>`, so the
-   * audit trail still captures the operator's intent.
-   */
-  const [customMode, setCustomMode] = useState(false);
-  const [comment, setComment] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  useEffect(() => {
-    if (open) {
-      setReasonId(''); setCustomReason(''); setCustomMode(false);
-      setComment(''); setErr(null);
-    }
-  }, [open]);
-  async function go() {
-    let resolvedId: number;
-    let resolvedComment = comment.trim();
-    if (customMode) {
-      if (!customReason.trim()) { setErr('Enter a custom reason'); return; }
-      // Use the smallest reason id as the FK fallback. Audit detail
-      // lives in the comment column, prefixed [Custom] for filtering.
-      const fallback = (lk.cancelReasons[0]?.id) ?? 0;
-      if (!fallback) { setErr('No cancel-reason rows seeded — ask ops to add one'); return; }
-      resolvedId = fallback;
-      resolvedComment = `[Custom] ${customReason.trim()}${resolvedComment ? ' — ' + resolvedComment : ''}`;
-    } else {
-      resolvedId = Number(reasonId);
-      if (!resolvedId) { setErr('Cancel reason is required'); return; }
-    }
-    setLoading(true); setErr(null);
-    try { await onSubmit(resolvedId, resolvedComment); }
-    catch (e) { setErr(e instanceof ApiError ? e.message : 'Cancel failed'); }
-    finally { setLoading(false); }
-  }
-  return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
-        <DialogHeader><DialogTitle>Cancel Job</DialogTitle></DialogHeader>
-        <div className="space-y-3">
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <Label className="text-sm font-medium">Cancellation Reason *</Label>
-              <button
-                type="button"
-                className="text-xs text-primary hover:underline"
-                onClick={() => { setCustomMode((m) => !m); setReasonId(''); setCustomReason(''); }}
-              >
-                {customMode ? 'Pick from list instead' : 'Reason not in list? Add custom'}
-              </button>
-            </div>
-            {customMode ? (
-              <Input
-                value={customReason}
-                onChange={(e) => setCustomReason(e.target.value)}
-                placeholder="Describe the cancellation reason…"
-                maxLength={200}
-              />
-            ) : (
-              /* SearchSelect — already searchable. Operator types to
-                 filter; arrow keys + Enter to pick. */
-              <SearchSelect
-                value={reasonId}
-                onChange={(v) => setReasonId(v)}
-                options={lk.cancelReasons.map((r) => ({ value: r.id, label: r.reason }))}
-                placeholder="Select a reason…"
-              />
-            )}
-          </div>
-          <div>
-            <Label className="text-sm font-medium block mb-1">Comment (optional)</Label>
-            <textarea
-              value={comment}
-              onChange={(e) => setComment(e.target.value)}
-              className="w-full border rounded px-2 py-1 text-sm bg-background min-h-[80px]"
-              placeholder="Additional context for the cancellation…"
-              maxLength={500}
-            />
-          </div>
-          {err && <div className="text-sm text-red-600">{err}</div>}
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={onClose} disabled={loading}>Back</Button>
-            <Button variant="destructive" onClick={go} disabled={loading}>
-              {loading ? 'Cancelling…' : 'Cancel Job'}
-            </Button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
+// Extracted to ./CancelWithReasonDialog on 2026-06-22 so the Schedule &
+// Assign modal can reuse it. Imported at the top of this file.
 
 // ─── Feedback dialog ────────────────────────────────────────────────
 // Legacy `feedback.vm`. Backend GET/PUT /admin/jobs/:id/feedback writes

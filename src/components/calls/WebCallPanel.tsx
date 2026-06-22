@@ -25,7 +25,7 @@ const TONE: Record<WebCallStatus, StatusChipTone> = {
 const LABEL: Record<WebCallStatus, string> = {
   idle: 'Idle', connecting: 'Connecting…', ringing: 'Ringing', in_progress: 'In Progress', ended: 'Call Ended', failed: 'Failed',
 };
-const AUTO_DISMISS_MS = 4000;
+const AUTO_DISMISS_MS = 10000;
 
 function useElapsed(startedAt: number | null, running: boolean): number {
   const [s, setS] = React.useState(0);
@@ -50,12 +50,15 @@ export function WebCallPanel() {
   // Live timer from the answered-at epoch; freezes once terminal.
   const elapsed = useElapsed(active?.startedAt ?? null, !terminal);
 
-  // Auto-dismiss after a call ends.
+  // Auto-dismiss 10s after the call ends (terminal) OR on a pre-call error (no
+  // active call). A live/connecting call is NOT auto-hidden — only the X closes
+  // it (handleClose hangs up first if still connected).
   React.useEffect(() => {
-    if (!active || !terminal) return;
+    const shouldAutoHide = (active && terminal) || (!active && !!error);
+    if (!shouldAutoHide) return;
     const t = setTimeout(dismiss, AUTO_DISMISS_MS);
     return () => clearTimeout(t);
-  }, [active, terminal, dismiss]);
+  }, [active, terminal, error, dismiss]);
 
   if (typeof document === 'undefined') return null;
   // Nothing to show: no active call and no pre-call error.
