@@ -567,6 +567,16 @@ export default function AutoAllocationPage() {
                 open={showWeights}
                 onToggle={() => setShowWeights((s) => !s)}
               >
+                {/* Not-yet-consumed notice — the live ranking pipeline
+                    (services/candidate-ranking.service.js) currently uses a
+                    FIXED weight model, NOT these configurable sliders. */}
+                <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 flex items-start gap-2">
+                  <AlertCircle className="size-4 shrink-0 mt-0.5" />
+                  <div>
+                    <strong>Not in use yet.</strong> These weights are saved, but are <strong>not currently consumed by the live ranking engine</strong> — it ranks on a fixed model (see &ldquo;How It Works&rdquo; → Step 4: Performance 70%, Worked-for-Client 10%, Worked-in-Vertical 10%, Attendance 10%). They are kept configurable here so values can be set ahead of a future update that wires them in.
+                  </div>
+                </div>
+
                 {/* Header strip — live dimension Ws + cross-bucket validation */}
                 <div className={cn(
                   'mb-4 rounded-md border px-3 py-2 text-xs flex flex-wrap items-center gap-x-4 gap-y-1.5',
@@ -679,8 +689,11 @@ export default function AutoAllocationPage() {
 /*
  * Single source of truth for "what does the engine actually do?" displayed
  * inline so ops can self-serve answers without pinging engineering. Mirrors
- * the backend service docstring in services/auto-assign.service.js — keep
- * the two in sync when the pipeline changes.
+ * the LIVE ranking pipeline in services/candidate-ranking.service.js
+ * (rankCandidatesForJob — the shared pipeline both auto-assign and the
+ * Schedule & Assign modal use). Keep the two in sync when the pipeline
+ * changes. The same summary is shown in the Schedule & Assign "Top 10"
+ * tooltip (components/job/ScheduleAssignModal.tsx).
  */
 function HowItWorks({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   const Chev = open ? ChevronDown : ChevronRight;
@@ -697,61 +710,58 @@ function HowItWorks({ open, onToggle }: { open: boolean; onToggle: () => void })
       </button>
       {open && (
         <CardContent className="space-y-4 text-[13px] text-foreground/90 leading-relaxed">
-          <Section title="Layer 1 — Eligibility Filter (who CAN'T do this job)">
+          <Section title="Step 1 — Eligibility (who is allowed to take this job)">
             <ol className="list-decimal ml-5 space-y-1 mt-1">
-              <li>Remove Inactive Technicians</li>
-              <li>Remove Technicians already rejected or rescheduled off this exact job earlier</li>
-              <li>Remove those who don&apos;t hold a &ldquo;Service Category&rdquo; matching the job&apos;s service</li>
+              <li>Only <strong>Active</strong> technicians (suspended / inactive are removed).</li>
+              <li>Only technicians with a <strong>Verified profile</strong>.</li>
+              <li>Remove anyone who already <strong>rejected, or was rescheduled off, this exact job</strong> earlier.</li>
+              <li>
+                Must hold an <strong>active Deep Skill whose Service Category AND Service Type exactly match</strong> the job.
+                <div className="ml-5 mt-1 text-foreground/75">If no technician has an exact skill match, the skill requirement is relaxed for that job and the list is flagged &ldquo;no exact skill match&rdquo; so you can decide.</div>
+              </li>
+            </ol>
+            <div className="ml-5 mt-2 text-foreground/75 italic">Scope: technicians in the job&apos;s city (widened to zones in Step 3 if too few qualify).</div>
+          </Section>
+
+          <Section title="Step 2 — Availability (who should actually be offered this job)">
+            <ol className="list-decimal ml-5 space-y-1 mt-1">
+              <li>Not already <strong>booked on the same date &amp; time slot</strong> (always excluded).</li>
+              <li><strong>Present for the job date</strong> — attendance marked (morning or evening slot) and not on leave. <em>This check applies only when the job is scheduled <strong>today or tomorrow</strong></em> (the window technicians can mark attendance for); for later dates it is skipped.</li>
+              <li>Below the client&apos;s <strong>Max Concurrent Jobs</strong> cap, counting active jobs (Booked, Scheduled, In-Progress). This cap is <strong>configurable per client</strong>.</li>
+              <li>For <strong>COD (customer-paid) jobs</strong> only: account balance at least the cash floor (₹500) so the technician can cover travel out-of-pocket.</li>
             </ol>
           </Section>
 
-          <Section title="Layer 2 — Availability Filter (who SHOULDN'T get more work right now)">
-            <ol className="list-decimal ml-5 space-y-1 mt-1">
-              <li>Have less than Max Concurrent Jobs allowed</li>
-              <li>Does not have a Booking Conflict on the same Date and Time Slot</li>
-              <li>
-                Technicians available for Job Pincode with or without Travel
-                <div className="ml-5 mt-1 space-y-0.5">
-                  <div>A) <strong>Local</strong>: Technician&apos;s Pincode is same as Job Pincode</div>
-                  <div>B) <strong>Travel</strong>: Technician&apos;s Pincode is within the Job Zone</div>
-                </div>
-              </li>
-            </ol>
-            <div className="ml-5 mt-2 text-foreground/75 italic">
-              If list size is less than 5, reiterate Layers (1 and 2) with Incremental Configs.
+          <Section title="Step 3 — Zone widening (only if too few qualify)">
+            <div className="ml-5 mt-1">
+              If fewer than <strong>10 technicians</strong> remain after Steps 1–2, the search widens from the city to the <strong>job pincode&apos;s zone(s)</strong> and the <em>same</em> filters are applied again, adding any new matches to the list.
             </div>
           </Section>
 
           <div className="text-[12px] text-blue-900/80 italic">
-            → All Technicians filtered till here will be in the List, sorted on the ranking below.
+            → Everyone who clears the steps above is ranked by the score below, highest first.
           </div>
 
-          <Section title="Layer 3 — Scoring and Ranking on Performance Score (Technician Quality Index)">
-            <div className="ml-5 mb-2">
-              <span className="font-medium">Technician Quality Index:</span>{' '}
-              A+: &ge;95, A: &ge;90, B: &ge;80, C: &ge;70, D: &ge;60, E: &lt;60
-            </div>
+          <Section title="Step 4 — Ranking (priority order, not a weighted score)">
+            <div className="ml-5 mb-1">Technicians who clear every filter are ordered by:</div>
             <ol className="list-decimal ml-5 space-y-1 mt-1">
-              <li>
-                <strong>Past Performance (60%)</strong>
+              <li><strong>Worked in this Vertical</strong> (service category) before — existing technicians surface first.</li>
+              <li>then <strong>Worked for this Client</strong> before.</li>
+              <li>then <strong>Past Performance</strong> as the tiebreaker:
                 <ul className="list-disc ml-5 mt-1">
-                  <li>TAT: 30%</li>
-                  <li>SDA: 40%</li>
-                  <li>Rating: 30%</li>
-                </ul>
-              </li>
-              <li>
-                <strong>Experience and Preference (40%)</strong>
-                <ul className="list-disc ml-5 mt-1">
-                  <li>Marked Attendance</li>
-                  <li>Matching Deep Skills</li>
-                  <li>Worked for the Client</li>
-                  <li>Worked for the Vertical</li>
-                  <li>Worked for the same Customer</li>
-                  <li>Worked for the same Pincode</li>
+                  <li>Customer Rating</li>
+                  <li>TAT — turnaround time vs the category / city target</li>
+                  <li>SDA — same-day-attempt rate</li>
                 </ul>
               </li>
             </ol>
+            <div className="ml-5 mt-2">
+              <span className="font-medium">Performance grade (Quality Index):</span>{' '}
+              A+: &ge;95, A: &ge;90, B: &ge;80, C: &ge;70, D: &ge;60, E: &lt;60.
+            </div>
+            <div className="ml-5 mt-2 text-foreground/75">
+              <strong>New technicians</strong> with no completed-job history get neutral default performance (Rating 3.0 / 5, TAT &amp; SDA 0.5) so they compete fairly within their group. <strong>Attendance</strong> is a filter (Step 2), not a ranking signal. <strong>Account balance</strong> is shown but does not change the ranking.
+            </div>
           </Section>
 
           <Section title="Dispatch — Selection &amp; Notification">

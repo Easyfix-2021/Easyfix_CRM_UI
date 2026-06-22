@@ -49,6 +49,7 @@ import { hasAction } from '@/lib/permissions';
 import { formatDate } from '@/lib/utils';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { StatusChip } from '@/components/ui/StatusChip';
+import { InfoTooltip } from '@/components/ui/tooltip';
 import { showToast } from '@/components/ui/toast';
 import { AddRemarksDialog } from './AddRemarksDialog';
 import { CancelWithReasonDialog } from './CancelWithReasonDialog';
@@ -443,8 +444,34 @@ export function ScheduleAssignModal({
           {/* ───────── (c) SEARCH TECHNICIAN ───────── */}
           <section>
             <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
-              <h3 className="text-sm font-semibold">
+              <h3 className="text-sm font-semibold flex items-center gap-1.5">
                 {showingSearch ? 'Search Results' : 'Top 10 Technicians'}
+                {!showingSearch && (
+                  <InfoTooltip label="How the Top 10 is ranked">
+                    <div className="space-y-2">
+                      <div className="font-semibold text-slate-900">How the Top 10 is ranked</div>
+                      <div>Technicians must clear every filter, then are ranked in priority order.</div>
+                      <div className="font-medium text-slate-900">Filters</div>
+                      <ul className="list-disc ml-4 space-y-0.5">
+                        <li><strong>Active</strong> &amp; <strong>Verified</strong> profile</li>
+                        <li>Not already <strong>rejected / rescheduled off</strong> this job</li>
+                        <li><strong>Present</strong> (attendance marked) — applies when the job is <strong>today or tomorrow</strong></li>
+                        <li>Holds an <strong>active Deep Skill</strong> matching the job&apos;s <strong>Service Category &amp; Type</strong></li>
+                        <li><strong>Serviceable</strong> for the job&apos;s area — its <strong>city</strong>, widening to the pincode&apos;s <strong>zone(s)</strong> if fewer than 10 qualify</li>
+                        <li>No other <strong>booking in the same date &amp; time slot</strong></li>
+                        <li>Under the client&apos;s <strong>Max Concurrent Jobs</strong> (Booked / Scheduled / In-Progress)</li>
+                        <li><strong>COD</strong> jobs: account balance <strong>₹500+</strong></li>
+                      </ul>
+                      <div className="font-medium text-slate-900">Ranked in this order</div>
+                      <ol className="list-decimal ml-4 space-y-0.5">
+                        <li><strong>Worked in this Vertical</strong> before — existing techs first</li>
+                        <li>then <strong>Worked for this Client</strong> before</li>
+                        <li>then <strong>Past performance</strong> — Rating, TAT &amp; Same-Day-Attempt (tiebreaker)</li>
+                      </ol>
+                      <div className="text-slate-500">New technicians get neutral default performance so they still compete fairly within each group. Account balance is shown but doesn&apos;t affect rank.</div>
+                    </div>
+                  </InfoTooltip>
+                )}
               </h3>
               <div className="relative w-80 max-w-full">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
