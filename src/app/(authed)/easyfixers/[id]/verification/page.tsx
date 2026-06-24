@@ -341,10 +341,20 @@ function VerificationView({ data, onReload }: { data: VerificationPayload; onRel
               <ReadField label="City"          value={data.lead.eligibility.city_name} verifiedTick={data.lead.status.personal_details_filled === 1} />
             </div>
 
-            {/* Lead accept/deny actions — only when not yet processed */}
-            {data.lead.status.personal_details_filled !== 1 && (
+            {/* Lead accept/deny actions. Hidden once the lead is processed:
+                accepted (1) advances to the verification stage below; denied (2)
+                shows a read-only notice instead of the action buttons — legacy
+                likewise hides Accept/Deny/Send Back at status 2 (it offers only
+                a separate "Send Back to New Lead" flow, not built here). The
+                buttons stay only for sent-back (0) and brand-new (null) leads. */}
+            {data.lead.status.personal_details_filled === 2 ? (
+              <div className="mt-4 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                This technician lead was <span className="font-semibold">denied</span>.
+                See the rejection details and comments in the panel on the right.
+              </div>
+            ) : data.lead.status.personal_details_filled !== 1 ? (
               <LeadActions efrId={efrId} onReload={onReload} />
-            )}
+            ) : null}
           </div>
 
           {/* Sidebar */}
@@ -447,7 +457,7 @@ function VerificationView({ data, onReload }: { data: VerificationPayload; onRel
                     await api.post(`/admin/easyfixers/${efrId}/verification/proceed-to-activation`, {});
                     setActiveSection('activation');
                   } catch (e) {
-                    alert(e instanceof ApiError ? e.message : 'Cannot proceed');
+                    showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Cannot proceed' });
                   }
                 }}
               >
@@ -506,7 +516,7 @@ function LeadActions({ efrId, onReload }: { efrId: number; onReload: () => Promi
 
   async function call(personal_details_filled: 0 | 1 | 2) {
     if (personal_details_filled !== 1 && reason.trim().length === 0) {
-      alert('Remark is required');
+      showToast({ variant: 'error', message: 'Remark is required' });
       return;
     }
     setBusy(true);
@@ -532,7 +542,7 @@ function LeadActions({ efrId, onReload }: { efrId: number; onReload: () => Promi
         router.push('/easyfixers/registrations');
       }
     } catch (e) {
-      alert(e instanceof ApiError ? e.message : 'Failed');
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Failed' });
     } finally { setBusy(false); }
   }
 
@@ -580,7 +590,7 @@ function ProfessionalSection({ efrId, d, onReload, addComment }: {
       await api.put(`/admin/easyfixers/${efrId}/verification/professional`, form);
       await onReload();
     } catch (e) {
-      alert(e instanceof ApiError ? e.message : 'Failed');
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Failed' });
     } finally { setSaving(false); }
   }
 
@@ -658,7 +668,7 @@ function PersonalSection({ efrId, d, onReload, addComment }: {
         is_verified: true, verification_comment: comment,
       });
       await onReload();
-    } catch (e) { alert(e instanceof ApiError ? e.message : 'Failed'); }
+    } catch (e) { showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Failed' }); }
     finally { setSaving(false); }
   }
 
@@ -719,7 +729,7 @@ function BankingSection({ efrId, d, onReload, addComment }: {
 
   async function setStatus(verification_status: 1 | 2) {
     if (verification_status === 2 && invalidReason.trim().length === 0) {
-      alert('Please specify the reason for invalid banking details');
+      showToast({ variant: 'error', message: 'Please specify the reason for invalid banking details' });
       return;
     }
     setBusy(true);
@@ -729,7 +739,7 @@ function BankingSection({ efrId, d, onReload, addComment }: {
         verification_comment: verification_status === 2 ? invalidReason : undefined,
       });
       await onReload();
-    } catch (e) { alert(e instanceof ApiError ? e.message : 'Failed'); }
+    } catch (e) { showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Failed' }); }
     finally { setBusy(false); }
   }
 
@@ -804,13 +814,13 @@ function IdentitySection({ efrId, d, onReload, addComment }: {
         pan_card_number: pan || undefined,
       });
       await onReload();
-    } catch (e) { alert(e instanceof ApiError ? e.message : 'Failed'); }
+    } catch (e) { showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Failed' }); }
     finally { setSavingNumbers(false); }
   }
 
   async function setStatus(verification_status: 1 | 2) {
     if (verification_status === 2 && rejectReason.trim().length === 0) {
-      alert('Please write a reason to reject');
+      showToast({ variant: 'error', message: 'Please write a reason to reject' });
       return;
     }
     setSavingStatus(true);
@@ -820,7 +830,7 @@ function IdentitySection({ efrId, d, onReload, addComment }: {
         rejected_reason: verification_status === 2 ? rejectReason : undefined,
       });
       await onReload();
-    } catch (e) { alert(e instanceof ApiError ? e.message : 'Failed'); }
+    } catch (e) { showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Failed' }); }
     finally { setSavingStatus(false); }
   }
 
@@ -938,12 +948,12 @@ function ActivationSection({
         beneficiary_id: beneficiary || null,
       });
       await onReload();
-    } catch (e) { alert(e instanceof ApiError ? e.message : 'Failed'); }
+    } catch (e) { showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Failed' }); }
     finally { setSavingFinance(false); }
   }
 
   async function activate() {
-    if (!activateComment.trim()) { alert('Comment is required'); return; }
+    if (!activateComment.trim()) { showToast({ variant: 'error', message: 'Comment is required' }); return; }
     setActivating(true);
     try {
       await api.put(`/admin/easyfixers/${efrId}/verification/activation`, {
@@ -953,7 +963,7 @@ function ActivationSection({
         is_eligible_for_offline_orders: tempFlag ? 1 : 0,
       });
       await onReload();
-    } catch (e) { alert(e instanceof ApiError ? e.message : 'Failed'); }
+    } catch (e) { showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Failed' }); }
     finally { setActivating(false); }
   }
 

@@ -48,6 +48,7 @@ import { DateRangePopover } from '@/components/ui/date-range-popover';
 import { SearchSelect, type SearchOption } from '@/components/ui/search-select';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
 import { Button } from '@/components/ui/button';
+import { showToast } from '@/components/ui/toast';
 import { useFetch, useFetchOnce } from '@/lib/hooks';
 import { api } from '@/lib/api';
 import { downloadXlsx } from '@/lib/download-xlsx';
@@ -328,8 +329,7 @@ export default function EmployeeProductivityPage() {
         filename: `employee-productivity-${new Date().toISOString().slice(0, 10)}.xlsx`,
       });
     } catch {
-      // eslint-disable-next-line no-alert
-      alert('Could not download the report. Please retry.');
+      showToast({ variant: 'error', message: 'Could not download the report. Please retry.' });
     } finally {
       setDownloading(false);
     }
@@ -362,12 +362,10 @@ export default function EmployeeProductivityPage() {
       const text = lines.join('\n');
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(text);
-        // eslint-disable-next-line no-alert
-        alert('Employee productivity data copied to clipboard');
+        showToast({ variant: 'success', message: 'Employee productivity data copied to clipboard' });
       }
     } catch {
-      // eslint-disable-next-line no-alert
-      alert('Could not copy the data. Please retry.');
+      showToast({ variant: 'error', message: 'Could not copy the data. Please retry.' });
     } finally {
       setCopying(false);
     }

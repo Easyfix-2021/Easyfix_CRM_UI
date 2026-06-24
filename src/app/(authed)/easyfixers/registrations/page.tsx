@@ -9,6 +9,7 @@ import { SearchSelect } from '@/components/ui/search-select';
 import { DownloadButton } from '@/components/ui/download-button';
 import { StatusChip, type StatusChipTone } from '@/components/ui/StatusChip';
 import { IconButton } from '@/components/ui/icon-button';
+import { showToast } from '@/components/ui/toast';
 import {
   TablePagination,
   type TablePageSize,
@@ -404,7 +405,7 @@ export default function RegisteredEasyfixersPage() {
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : (e as Error).message || 'Unknown error';
       console.error('Download failed', e);
-      alert(`Download failed: ${msg}`);
+      showToast({ variant: 'error', message: `Download failed: ${msg}` });
     } finally {
       setDownloading(false);
     }

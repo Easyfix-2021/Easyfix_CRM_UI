@@ -36,6 +36,7 @@ import {
 } from '@/components/quicksight/charts';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
+import { showToast } from '@/components/ui/toast';
 import { useFetch, useFetchOnce } from '@/lib/hooks';
 import { downloadXlsx } from '@/lib/download-xlsx';
 import { useMe } from '@/lib/auth-context';
@@ -285,11 +286,9 @@ export default function ClientPerformancePage() {
         filename: `client-performance-${period}-${new Date().toISOString().slice(0, 10)}.xlsx`,
       });
     } catch {
-      // downloadXlsx throws a human-readable Error; surfaced via alert for
-      // parity with the legacy clipboard alert. A toast system isn't wired
-      // into this scaffold.
-      // eslint-disable-next-line no-alert
-      alert('Could not download the report. Please retry.');
+      // downloadXlsx throws a human-readable Error; surfaced via toast for
+      // parity with the legacy clipboard alert.
+      showToast({ variant: 'error', message: 'Could not download the report. Please retry.' });
     } finally {
       setDownloading(false);
     }
@@ -321,10 +320,8 @@ export default function ClientPerformancePage() {
     const text = lines.join('\n');
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(text).then(
-        // eslint-disable-next-line no-alert
-        () => alert('Job data copied to clipboard'),
-        // eslint-disable-next-line no-alert
-        () => alert('Could not copy to clipboard'),
+        () => showToast({ variant: 'success', message: 'Job data copied to clipboard' }),
+        () => showToast({ variant: 'error', message: 'Could not copy to clipboard' }),
       );
     }
   }

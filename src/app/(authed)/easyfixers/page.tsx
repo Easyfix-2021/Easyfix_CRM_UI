@@ -903,7 +903,7 @@ export default function EasyfixersPage() {
       // Surface a minimal error — operators already see browser-level
       // download failure UI; this is a best-effort backstop.
       console.error('Download failed', e);
-      alert(`Download failed: ${(e as Error).message || 'Unknown error'}`);
+      showToast({ variant: 'error', message: `Download failed: ${(e as Error).message || 'Unknown error'}` });
     } finally { setDownloading(false); }
   }
 

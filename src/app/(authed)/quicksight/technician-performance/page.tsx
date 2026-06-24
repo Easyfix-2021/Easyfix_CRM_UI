@@ -30,6 +30,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
 import { SearchSelect, type SearchOption } from '@/components/ui/search-select';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
+import { showToast } from '@/components/ui/toast';
 import { useFetch, useFetchOnce } from '@/lib/hooks';
 import { useLookup } from '@/lib/use-lookup';
 import { downloadXlsx } from '@/lib/download-xlsx';
@@ -275,8 +276,7 @@ export default function TechnicianPerformancePage() {
   async function handleDownload() {
     if (!exportFiltersValid) {
       // Legacy areFiltersValid alert — at least one scope filter is required.
-      // eslint-disable-next-line no-alert
-      alert('Select at least one of State, Client, City, or Zonal Manager to export.');
+      showToast({ variant: 'error', message: 'Select at least one of State, Client, City, or Zonal Manager to export.' });
       return;
     }
     setDownloading(true);
@@ -292,8 +292,7 @@ export default function TechnicianPerformancePage() {
         filename: `technician-performance-${flag}-${new Date().toISOString().slice(0, 10)}.xlsx`,
       });
     } catch {
-      // eslint-disable-next-line no-alert
-      alert('Could not download the report. Please retry.');
+      showToast({ variant: 'error', message: 'Could not download the report. Please retry.' });
     } finally {
       setDownloading(false);
     }

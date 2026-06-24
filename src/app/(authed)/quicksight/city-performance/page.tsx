@@ -40,6 +40,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent } from '@/components/ui/card';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
 import { TablePagination, pageSizeToLimit, type TablePageSize } from '@/components/ui/table-pagination';
+import { showToast } from '@/components/ui/toast';
 import { useFetch, useFetchOnce } from '@/lib/hooks';
 import { downloadXlsx } from '@/lib/download-xlsx';
 import { useMe } from '@/lib/auth-context';
@@ -442,8 +443,7 @@ export default function CityPerformancePage() {
         filename: `city-performance-${flag}-${new Date().toISOString().slice(0, 10)}.xlsx`,
       });
     } catch {
-      // eslint-disable-next-line no-alert
-      alert('Could not download the report. Please retry.');
+      showToast({ variant: 'error', message: 'Could not download the report. Please retry.' });
     } finally {
       setDownloading(false);
     }
