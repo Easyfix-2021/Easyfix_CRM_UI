@@ -15,7 +15,7 @@ import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
-  ShieldCheck, Webhook, FileSpreadsheet, ShieldAlert, Workflow, Database, FileText,
+  ShieldCheck, Webhook, FileSpreadsheet, ShieldAlert, Workflow, Database, FileText, Trash2,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -30,6 +30,8 @@ import { api } from '@/lib/api';
 import { showToast } from '@/components/ui/toast';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { CallingModeToggle } from './CallingModeToggle';
+import { DeleteEntityDialog } from './DeleteEntityDialog';
+import { DeletedRecordsDialog } from './DeletedRecordsDialog';
 
 const ACTIONS = [
   {
@@ -84,6 +86,14 @@ export default function AdminActionsPage() {
   // the dialog auto-open below short-circuits to a no-op because the
   // card isn't rendered.
   const canFinance = hasAction(me, 'isFinanceView') || hasAction(me, 'isInvoiceGenerate');
+  // The OTP-gated Delete / Restore feature is HARD-GATED to the Admin role
+  // (role_id 2), matching the BE roleByName(['Admin']) gate — intentionally
+  // Admin-only, NOT exposed via per-action RBAC grants.
+  const isAdmin = Number(me?.role?.role_id) === 2;
+  const canDelete = isAdmin;
+  const canRestore = isAdmin;
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deletedRecordsOpen, setDeletedRecordsOpen] = useState(false);
   // Legacy sidebar URL_MAP routes generateClientInvoice → /admin-actions?focus=generate-invoice
   // — auto-open the dialog when that param is present.
   const sp = useSearchParams();
@@ -176,8 +186,58 @@ export default function AdminActionsPage() {
             </button>
           </div>
         )}
+        {/* Delete Easyfixer / User — OTP-gated hard-delete with an
+            impact pre-check (blocks records that still have operational
+            history). Opens DeleteEntityDialog. */}
+        {canDelete && (
+          <button
+            type="button"
+            onClick={() => setDeleteOpen(true)}
+            className="w-full text-left"
+          >
+            <Card className="hover:border-primary hover:shadow-sm transition-colors h-full">
+              <CardContent className="p-4 space-y-2">
+                <div className="flex items-center gap-2">
+                  <div className="h-8 w-8 rounded-md bg-rose-100 text-rose-600 grid place-items-center">
+                    <ShieldAlert className="h-4 w-4" />
+                  </div>
+                  <h2 className="font-medium flex-1">Delete Easyfixer / User</h2>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  OTP-gated hard-delete. Checks for linked operational history first and blocks the
+                  delete if any exists (deactivate instead). Deleted records are archived and restorable.
+                </p>
+              </CardContent>
+            </Card>
+          </button>
+        )}
+        {/* Deleted Records — archive browser + OTP-gated restore. */}
+        {canRestore && (
+          <button
+            type="button"
+            onClick={() => setDeletedRecordsOpen(true)}
+            className="w-full text-left"
+          >
+            <Card className="hover:border-primary hover:shadow-sm transition-colors h-full">
+              <CardContent className="p-4 space-y-2">
+                <div className="flex items-center gap-2">
+                  <div className="h-8 w-8 rounded-md bg-primary/10 text-primary grid place-items-center">
+                    <Trash2 className="h-4 w-4" />
+                  </div>
+                  <h2 className="font-medium flex-1">Deleted Records</h2>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Browse archived (hard-deleted) easyfixers and users. Restore any record via an
+                  OTP-confirmed flow.
+                </p>
+              </CardContent>
+            </Card>
+          </button>
+        )}
       </div>
       {canFinance && <GenerateInvoiceDialog open={invoiceOpen} onClose={() => setInvoiceOpen(false)} />}
+      {canDelete && <DeleteEntityDialog open={deleteOpen} onClose={() => setDeleteOpen(false)} />}
+      {canRestore && <DeletedRecordsDialog open={deletedRecordsOpen} onClose={() => setDeletedRecordsOpen(false)} />}
     </div>
   );
 }
