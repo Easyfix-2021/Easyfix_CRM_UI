@@ -499,6 +499,7 @@ function VerificationView({ data, onReload }: { data: VerificationPayload; onRel
 /* ───────── Sub-section components ───────── */
 
 function LeadActions({ efrId, onReload }: { efrId: number; onReload: () => Promise<void> }) {
+  const router = useRouter();
   const [checked, setChecked] = useState(false);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
@@ -511,7 +512,25 @@ function LeadActions({ efrId, onReload }: { efrId: number; onReload: () => Promi
     setBusy(true);
     try {
       await api.put(`/admin/easyfixers/${efrId}/verification/lead`, { personal_details_filled, reason });
-      await onReload();
+      if (personal_details_filled === 1) {
+        // Accept → the lead stays in active verification; refetch in place so
+        // the Registration Verification stage unlocks below.
+        await onReload();
+      } else {
+        // Deny (2) / Send Back To Technician (0) → the lead leaves the
+        // operator's hands, so navigate back to the queue instead of
+        // refetching in place. Legacy "Send Back" redirected to the
+        // efer-registration list; "Deny" is sent to the same queue here.
+        // (Without leaving, the lead-action buttons re-render — their gate is
+        // `personal_details_filled !== 1` — so the screen looked unchanged.)
+        showToast({
+          variant: 'success',
+          message: personal_details_filled === 0
+            ? 'Lead sent back to technician.'
+            : 'Technician lead denied.',
+        });
+        router.push('/easyfixers/registrations');
+      }
     } catch (e) {
       alert(e instanceof ApiError ? e.message : 'Failed');
     } finally { setBusy(false); }
