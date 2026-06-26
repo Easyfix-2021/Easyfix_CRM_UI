@@ -130,5 +130,5 @@ export async function middleware(req: NextRequest) {
 // redirect loops), and the public job-completion magic-link page (different
 // auth model, has its own token gate).
 export const config = {
-  matcher: ['/((?!_next|api|favicon\\.ico|login|coming-soon|job-completion).*)'],
+  matcher: ['/((?!_next|api|favicon\\.ico|login|coming-soon|job-completion|public).*)'],
 };

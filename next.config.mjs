@@ -50,6 +50,23 @@ const nextConfig = {
       },
     ];
   },
+
+  async redirects() {
+    /*
+     * Back-compat for magic-link short URLs already sent in the wild BEFORE the
+     * public flows moved under /public/*. Keeps every old WhatsApp link alive:
+     *   /book/<code>          → /public/book/<code>          (short-link resolver)
+     *   /job-completion/<jwt> → /public/job-completion/<jwt> (old long_url target)
+     *   /profile-update/<jwt> → /public/profile-update/<jwt> (old long_url target)
+     * permanent:false (307) so these one-time links aren't cached aggressively
+     * by browsers / the WhatsApp in-app webview.
+     */
+    return [
+      { source: '/book/:code', destination: '/public/book/:code', permanent: false },
+      { source: '/job-completion/:token', destination: '/public/job-completion/:token', permanent: false },
+      { source: '/profile-update/:token', destination: '/public/profile-update/:token', permanent: false },
+    ];
+  },
 };
 
 export default nextConfig;
