@@ -29,6 +29,7 @@ import { useLookup } from '@/lib/use-lookup';
 import { api } from '@/lib/api';
 import { showToast } from '@/components/ui/toast';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
+import { useFetchOnce } from '@/lib/hooks';
 import { CallingModeToggle } from './CallingModeToggle';
 import { DeleteEntityDialog } from './DeleteEntityDialog';
 import { DeletedRecordsDialog } from './DeletedRecordsDialog';
@@ -86,12 +87,16 @@ export default function AdminActionsPage() {
   // the dialog auto-open below short-circuits to a no-op because the
   // card isn't rendered.
   const canFinance = hasAction(me, 'isFinanceView') || hasAction(me, 'isInvoiceGenerate');
-  // The OTP-gated Delete / Restore feature is HARD-GATED to the Admin role
-  // (role_id 2), matching the BE roleByName(['Admin']) gate — intentionally
-  // Admin-only, NOT exposed via per-action RBAC grants.
-  const isAdmin = Number(me?.role?.role_id) === 2;
-  const canDelete = isAdmin;
-  const canRestore = isAdmin;
+  // Property-gated Admin capabilities (Switch Call Mode, Delete/Restore) — driven
+  // by a per-user easyfix_properties allowlist, NOT the user's role/RBAC. The BE
+  // enforces the same allowlist on every gated route; these flags only show/hide
+  // the cards. GET /admin/access/features → { canSwitchCallMode, canDeleteEntities }.
+  const featureAccess = useFetchOnce<{ canSwitchCallMode: boolean; canDeleteEntities: boolean }>(
+    '/admin/access/features',
+  );
+  const canSwitchCallMode = featureAccess.data?.canSwitchCallMode === true;
+  const canDelete = featureAccess.data?.canDeleteEntities === true;
+  const canRestore = canDelete;
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deletedRecordsOpen, setDeletedRecordsOpen] = useState(false);
   // Legacy sidebar URL_MAP routes generateClientInvoice → /admin-actions?focus=generate-invoice
@@ -126,7 +131,7 @@ export default function AdminActionsPage() {
       </div>
 
       {/* Click-to-call mode switch (Web ⇄ Mobile) — Admin only; self-hides otherwise. */}
-      <CallingModeToggle />
+      {canSwitchCallMode && <CallingModeToggle />}
 
       {visible.length === 0 && (
         <Card>

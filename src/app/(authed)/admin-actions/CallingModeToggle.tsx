@@ -23,7 +23,6 @@ import { Card, CardContent } from '@/components/ui/card';
 import { api } from '@/lib/api';
 import { formatApiError } from '@/lib/api-errors';
 import { showToast } from '@/components/ui/toast';
-import { useMe } from '@/lib/auth-context';
 import { invalidateFetch } from '@/lib/hooks';
 
 type Provider = '' | 'plivo' | 'kaleyra';
@@ -36,16 +35,16 @@ const PROVIDER_CHOICES: { value: Provider; label: string }[] = [
 ];
 
 export function CallingModeToggle() {
-  const { me } = useMe();
-  const isAdmin = Number(me?.role?.role_id) === 2; // role_id 2 = Admin
-
+  // Visibility is gated by the parent (admin-actions page) on the
+  // canSwitchCallMode property flag, and the BE enforces the same
+  // easyfix_properties allowlist on /admin/calls/mode + /default-provider — so
+  // this component simply renders whenever it is mounted.
   const [mode, setMode] = React.useState<'web' | 'mobile' | null>(null);
   const [plivoOn, setPlivoOn] = React.useState(false);
   const [defaultProvider, setDefaultProvider] = React.useState<Provider>('');
   const [saving, setSaving] = React.useState(false);
 
   React.useEffect(() => {
-    if (!isAdmin) return;
     let alive = true;
     api.get<Cfg>('/admin/calls/config')
       .then((c) => {
@@ -56,9 +55,7 @@ export function CallingModeToggle() {
       })
       .catch(() => { if (alive) setMode('mobile'); });
     return () => { alive = false; };
-  }, [isAdmin]);
-
-  if (!isAdmin) return null;
+  }, []);
 
   const chooseMode = async (next: 'web' | 'mobile') => {
     if (saving || next === mode) return;
