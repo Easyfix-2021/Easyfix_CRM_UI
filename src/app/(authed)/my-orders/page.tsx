@@ -84,6 +84,12 @@ type JobRow = {
   // "Booked with no active services" anomaly. Same usage pattern as
   // /jobs and /customers/[id].
   service_count?: number;
+  // Offer-model fields (the offer flow keeps the job at status 0 BOOKED
+  // with an OFFERED tbl_job_offer row while the technician decides).
+  // is_offered is truthy when an active OFFERED offer row exists;
+  // offered_efr_name is that technician's name (may be null).
+  is_offered?: number | boolean;
+  offered_efr_name?: string | null;
 };
 type Resp = { items: JobRow[]; total: number; limit: number; offset: number };
 
@@ -480,9 +486,18 @@ export default function MyOrdersPage() {
                     </div>
                   </td>
                   <td>
-                    <StatusChip tone={statusTone(j.job_status)}>
-                      {statusLabel(j.job_status, { assigned: j.fk_easyfixter_id != null })}
-                    </StatusChip>
+                    {j.job_status === 0 && (j.is_offered === 1 || j.is_offered === true) ? (
+                      <StatusChip
+                        tone="orange"
+                        title={j.offered_efr_name ? `Offered to ${j.offered_efr_name}` : 'Offered to technician'}
+                      >
+                        Offered to Tx
+                      </StatusChip>
+                    ) : (
+                      <StatusChip tone={statusTone(j.job_status)}>
+                        {statusLabel(j.job_status, { assigned: j.fk_easyfixter_id != null })}
+                      </StatusChip>
+                    )}
                   </td>
                   <td className="max-w-[16rem] truncate" title={j.remarks ?? undefined}>{j.remarks || '—'}</td>
                   <td className="stick-col stick-right text-right whitespace-nowrap">
