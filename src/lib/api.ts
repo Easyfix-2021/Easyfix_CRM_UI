@@ -69,4 +69,48 @@ export const api = {
   put:    <T>(p: string, body?: Json) => request<T>(p, { method: 'PUT', body }),
   patch:  <T>(p: string, body?: Json) => request<T>(p, { method: 'PATCH', body }),
   delete: <T>(p: string) => request<T>(p, { method: 'DELETE' }),
+
+  /*
+   * Live-technician GPS location.
+   *
+   * Two BE endpoints share one envelope ({ success, data }) and the same
+   * admin-JWT auth as every other /admin call:
+   *   - getJobLocation(jobId)       → latest ping + breadcrumb track for the
+   *                                    technician assigned to a specific job.
+   *   - getEasyfixerLocation(efrId) → just the latest ping for a technician
+   *                                    (no per-job track).
+   * `latest` is null when the technician has sent no GPS ping yet (GPS off /
+   * no active job). Both are typed against LiveLocation* below so the shared
+   * LiveLocationPopover can render either source uniformly.
+   */
+  getJobLocation: (jobId: number) =>
+    request<JobLocationResponse>(`/admin/jobs/${jobId}/location`, { method: 'GET' }),
+  getEasyfixerLocation: (efrId: number) =>
+    request<EasyfixerLocationResponse>(`/admin/easyfixers/${efrId}/location`, { method: 'GET' }),
+};
+
+/*
+ * One GPS ping. `captured_at` is a server datetime string (the popover renders
+ * it as a "last updated" relative time). `job_id` / `efr_id` are present on the
+ * job-location payload; the easyfixer-location latest carries the same shape.
+ */
+export type LiveLocationPing = {
+  id: number;
+  job_id: number | null;
+  efr_id: number | null;
+  latitude: number;
+  longitude: number;
+  accuracy: number | null;
+  captured_at: string;
+};
+
+/* GET /admin/jobs/:id/location → latest ping + recent breadcrumb track. */
+export type JobLocationResponse = {
+  latest: LiveLocationPing | null;
+  track: Array<Pick<LiveLocationPing, 'id' | 'latitude' | 'longitude' | 'accuracy' | 'captured_at'>>;
+};
+
+/* GET /admin/easyfixers/:id/location → latest ping only (no track). */
+export type EasyfixerLocationResponse = {
+  latest: LiveLocationPing | null;
 };

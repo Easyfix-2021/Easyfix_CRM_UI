@@ -30,6 +30,11 @@ import {
  * `isEasyfixerEdit` action permission don't see it. Read-only roles
  * still get Client Mapping, Transactions, Assessment.
  *
+ * Live Location is NOT in this menu — it lives as a sibling location-pin
+ * IconButton next to the trigger (see easyfixers/page.tsx). Opening it from
+ * a DropdownMenuItem race'd the menu's close pointer/focus event against the
+ * just-mounted Dialog (instant-dismiss); a plain button is race-free.
+ *
  * The Send action is gated by `canSend` (`isProfileUpdateLinkSend`
  * permission). While a send is in flight (`isSending`), the icon swaps
  * to a spinning Loader2 and the item is disabled to prevent double-fires.

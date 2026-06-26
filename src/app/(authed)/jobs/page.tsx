@@ -6,7 +6,7 @@ import { useJobActionParams, useJobActionNav } from '@/lib/job-action-url';
 import {
   Plus, Upload, ChevronDown, ChevronUp, Repeat,
   // Row-level quick-action icons (mirror the legacy Manage Jobs action column)
-  Eye, CalendarClock, PlayCircle, CheckCircle2, CalendarCheck,
+  Eye, CalendarClock, PlayCircle, CheckCircle2, CalendarCheck, MapPin,
 } from 'lucide-react';
 import { IconButton } from '@/components/ui/icon-button';
 import { Button } from '@/components/ui/button';
@@ -29,6 +29,7 @@ import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
+import { LiveLocationPopover } from '@/components/location/LiveLocationPopover';
 
 // `/admin/jobs` Joi caps limit at 500 — pass to pageSizeToLimit so
 // "All" sends 500 instead of the default 1000 (which would 400).
@@ -566,6 +567,10 @@ export default function JobsPage() {
    */
   const [rowBusy, setRowBusy] = useState<number | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  // Live-location popover — the job whose technician location is being viewed
+  // (null = closed). Shown for "Pending App Ack" (status 0, assigned) and
+  // "Pending to Close" (status 2/20) rows, which always carry a tech.
+  const [locationJob, setLocationJob] = useState<JobRow | null>(null);
   const confirmAction = useConfirm();
   // Shared factory (lib/job-tabs.ts). /jobs keeps the short confirm copy and
   // refreshes the dashboard counts after reload (afterReload: refreshCounts).
@@ -1069,6 +1074,23 @@ export default function JobsPage() {
                         label="View details"
                         onClick={() => openView(j.job_id)}
                       />
+                      {/*
+                        * Live Technician Location (📍). Shown where a tech is
+                        * already assigned + en-route / on-site:
+                        *   - Pending App Ack  → status 0 + fk_easyfixter_id
+                        *   - Pending to Close → status 2 or 20
+                        * Opens LiveLocationPopover (polls /admin/jobs/:id/location
+                        * every 15s while open). Read-only — screen access only.
+                        */}
+                      {((j.job_status === 0 && j.fk_easyfixter_id != null) ||
+                        j.job_status === 2 || j.job_status === 20) && (
+                        <IconButton
+                          icon={MapPin}
+                          intent="primary"
+                          label="Live technician location"
+                          onClick={() => setLocationJob(j)}
+                        />
+                      )}
                       {/* Outbound call lives on the customer mobile cell (Mobile column). */}
                       {/* Unconfirmed (status=9) → Confirm & Schedule. Gate: isJobConfirm. */}
                       {j.job_status === 9 && canJob.isJobConfirm && (
@@ -1127,6 +1149,21 @@ export default function JobsPage() {
         // deep-link) can land the operator straight on a specific tab.
         // See useJobActionNav.openJobAction(_, _, { tab }).
         initialTab={searchParams.get('viewTab') || undefined}
+      />
+
+      {/*
+        * Live technician location — Pending App Ack / Pending to Close rows.
+        * Polls GET /admin/jobs/:id/location every 15s while open; the interval
+        * cleanup lives inside LiveLocationPopover.
+        */}
+      <LiveLocationPopover
+        open={locationJob != null}
+        onClose={() => setLocationJob(null)}
+        source="job"
+        id={locationJob?.job_id ?? null}
+        title={locationJob
+          ? `Job #${locationJob.job_id}${locationJob.easyfixer_name ? ` · ${formatEasyfixerName(locationJob.easyfixer_name)}` : ''}`
+          : undefined}
       />
 
       {canJob.isTransferJobOwnership && (

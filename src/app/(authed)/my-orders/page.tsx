@@ -5,7 +5,7 @@ import { useJobActionParams, useJobActionNav } from '@/lib/job-action-url';
 import {
   Search, Eye,
   CalendarClock, PlayCircle, CheckCircle2, CalendarCheck,
-  RefreshCw,
+  RefreshCw, MapPin,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -25,6 +25,7 @@ import { useSort, SortHeader } from '@/lib/use-sort';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
 import { useDebouncedValue } from '@/lib/hooks';
+import { LiveLocationPopover } from '@/components/location/LiveLocationPopover';
 
 // `/admin/jobs` Joi caps limit at 500 — pass to pageSizeToLimit so
 // "All" sends 500 instead of the default 1000 (which would 400).
@@ -297,6 +298,10 @@ export default function MyOrdersPage() {
   // busts cache, refetches list + counts so badges stay coherent.
   const [rowBusy, setRowBusy] = useState<number | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  // Live-location popover state — the job whose technician location is being
+  // viewed (null = closed). Shown for "Pending App Ack" (status 0, assigned)
+  // and "Pending to Close" (status 2/20) rows, which always have a tech.
+  const [locationJob, setLocationJob] = useState<JobRow | null>(null);
   const confirmAction = useConfirm();
   // Shared factory (lib/job-tabs.ts). /my-orders keeps its longer "continue
   // working" confirm copy and does NOT refresh counts (no pill bar here — see
@@ -589,6 +594,28 @@ export default function MyOrdersPage() {
                           <Eye className="h-3.5 w-3.5" />
                         </button>
                       )}
+                      {/*
+                        * Live Technician Location (📍). Shown for the two
+                        * buckets where a technician is already assigned and
+                        * actively heading to / on the job:
+                        *   - Pending App Ack  → status 0 + fk_easyfixter_id
+                        *   - Pending to Close → status 2 or 20
+                        * Opens LiveLocationPopover (polls the job-location
+                        * endpoint every 15s while open). Read-only — no
+                        * permission gate beyond screen access.
+                        */}
+                      {((j.job_status === 0 && j.fk_easyfixter_id != null) ||
+                        j.job_status === 2 || j.job_status === 20) && (
+                        <button
+                          type="button"
+                          onClick={() => setLocationJob(j)}
+                          className="inline-flex items-center gap-1 text-sky-700 text-xs hover:underline"
+                          title="Live technician location"
+                          aria-label="Live technician location"
+                        >
+                          <MapPin className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                       {/* Outbound call now lives on the customer mobile cell
                           (see Mobile column above) — clicking the number
                           dials it. */}
@@ -707,6 +734,21 @@ export default function MyOrdersPage() {
         jobId={scheduleModal.jobId}
         onClose={() => closeJobAction()}
         onAssigned={() => { cacheRef.current.clear(); load(false, true); }}
+      />
+
+      {/*
+        * Live technician location — Pending App Ack / Pending to Close rows.
+        * Polls GET /admin/jobs/:id/location every 15s while open; stops on
+        * close (interval cleanup lives in LiveLocationPopover).
+        */}
+      <LiveLocationPopover
+        open={locationJob != null}
+        onClose={() => setLocationJob(null)}
+        source="job"
+        id={locationJob?.job_id ?? null}
+        title={locationJob
+          ? `Job #${locationJob.job_id}${locationJob.easyfixer_name ? ` · ${formatEasyfixerName(locationJob.easyfixer_name)}` : ''}`
+          : undefined}
       />
 
       {data && (

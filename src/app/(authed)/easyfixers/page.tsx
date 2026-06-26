@@ -1,8 +1,9 @@
 'use client';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Plus, Search } from 'lucide-react';
+import { Plus, Search, MapPin } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
 import { SearchSelect } from '@/components/ui/search-select';
@@ -34,6 +35,7 @@ import { EasyfixerActionMenu } from '@/components/easyfixer/EasyfixerActionMenu'
 import { EasyfixerTransactionsModal } from '@/components/easyfixer/EasyfixerTransactionsModal';
 import { EasyfixerClientMappingModal } from '@/components/easyfixer/EasyfixerClientMappingModal';
 import { EasyfixerDeepSkillModal } from '@/components/easyfixer/EasyfixerDeepSkillModal';
+import { LiveLocationPopover } from '@/components/location/LiveLocationPopover';
 import { cycleSort, SortHeader, type SortDir } from '@/lib/use-sort';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
@@ -487,6 +489,9 @@ export default function EasyfixersPage() {
   const [clientMappingFor, setClientMappingFor] = useState<Ef | null>(null);
   const [transactionsFor, setTransactionsFor] = useState<Ef | null>(null);
   const [deepSkillFor, setDeepSkillFor] = useState<Ef | null>(null);
+  // Live technician-location popover target (null = closed). Polls
+  // GET /admin/easyfixers/:id/location every 15s while open.
+  const [locationFor, setLocationFor] = useState<Ef | null>(null);
   /*
    * Per-row spinner state for the "Send Profile Update Link" action.
    * Tracks efr_ids whose POST is currently in flight so multiple rows
@@ -563,6 +568,13 @@ export default function EasyfixersPage() {
 
   const openDeepSkillModal = useCallback((e: Ef) => {
     setTimeout(() => setDeepSkillFor(e), 0);
+  }, []);
+
+  // Live Location now opens from a plain sibling IconButton (not a
+  // DropdownMenuItem), so there's no dropdown-close pointer-up to race the
+  // just-mounted popover — set state directly, no setTimeout(0) deferral.
+  const openLiveLocation = useCallback((e: Ef) => {
+    setLocationFor(e);
   }, []);
 
   // Stable row-action navigation callbacks for the memoised <EfRow>.
@@ -1321,6 +1333,7 @@ export default function EasyfixersPage() {
                   onClientMapping={openClientMapping}
                   onTransactions={openTransactions}
                   onAssessment={onRowAssessment}
+                  onLiveLocation={openLiveLocation}
                   onSendProfileUpdateLink={openSendDialog}
                   onCopyDevUrl={copyDevUrl}
                   onOpenCsvModal={openCsvModal}
@@ -1407,6 +1420,21 @@ export default function EasyfixersPage() {
         onClose={() => setSendDialogFor(null)}
       />
 
+      {/*
+        * Live technician location — per-easyfixer. Polls
+        * GET /admin/easyfixers/:id/location every 15s while open; the interval
+        * cleanup lives inside LiveLocationPopover.
+        */}
+      <LiveLocationPopover
+        open={locationFor != null}
+        onClose={() => setLocationFor(null)}
+        source="easyfixer"
+        id={locationFor?.efr_id ?? null}
+        title={locationFor
+          ? `${formatEasyfixerName(locationFor.efr_name)}${locationFor.efr_no ? ` · ${locationFor.efr_no}` : ''}`
+          : undefined}
+      />
+
     </div>
   );
 }
@@ -1435,7 +1463,7 @@ type DisplayRow = {
  */
 const EfRow = memo(function EfRow({
   row, canEdit, canSend, isProd, isSending, isCopyingDevUrl,
-  onEdit, onClientMapping, onTransactions, onAssessment,
+  onEdit, onClientMapping, onTransactions, onAssessment, onLiveLocation,
   onSendProfileUpdateLink, onCopyDevUrl, onOpenCsvModal, onOpenDeepSkillModal,
 }: {
   row: DisplayRow;
@@ -1448,6 +1476,7 @@ const EfRow = memo(function EfRow({
   onClientMapping: (e: Ef) => void;
   onTransactions: (e: Ef) => void;
   onAssessment: () => void;
+  onLiveLocation: (e: Ef) => void;
   onSendProfileUpdateLink: (e: Ef) => void;
   onCopyDevUrl: (e: Ef) => void;
   onOpenCsvModal: (title: string, items: CsvCellItem[]) => void;
@@ -1556,20 +1585,36 @@ const EfRow = memo(function EfRow({
           : <span className="text-muted-foreground">—</span>}
       </td>
       <td className="!text-right stick-col stick-right">
-        <EasyfixerActionMenu
-          easyfixer={{ efr_id: e.efr_id, efr_name: e.efr_name }}
-          canEdit={canEdit}
-          canSend={canSend}
-          canCopyDevUrl={!isProd && canSend}
-          onEdit={() => onEdit(e)}
-          onClientMapping={() => onClientMapping(e)}
-          onTransactions={() => onTransactions(e)}
-          onAssessment={onAssessment}
-          onSendProfileUpdateLink={() => onSendProfileUpdateLink(e)}
-          onCopyDevUrl={() => onCopyDevUrl(e)}
-          isSending={isSending}
-          isCopyingDevUrl={isCopyingDevUrl}
-        />
+        {/*
+          * Live Location moved OUT of the 3-dot menu into this sibling
+          * IconButton (2026-06-26). Opening it from a DropdownMenuItem race'd
+          * the menu's close pointer/focus event against the just-mounted
+          * Dialog → instant dismiss. A plain button is race-free (mirrors the
+          * jobs page, which opens the same LiveLocationPopover this way) and
+          * gives ops one-click access without opening the menu.
+          */}
+        <div className="flex items-center justify-end gap-1">
+          <IconButton
+            icon={MapPin}
+            intent="primary"
+            label="Live technician location"
+            onClick={() => onLiveLocation(e)}
+          />
+          <EasyfixerActionMenu
+            easyfixer={{ efr_id: e.efr_id, efr_name: e.efr_name }}
+            canEdit={canEdit}
+            canSend={canSend}
+            canCopyDevUrl={!isProd && canSend}
+            onEdit={() => onEdit(e)}
+            onClientMapping={() => onClientMapping(e)}
+            onTransactions={() => onTransactions(e)}
+            onAssessment={onAssessment}
+            onSendProfileUpdateLink={() => onSendProfileUpdateLink(e)}
+            onCopyDevUrl={() => onCopyDevUrl(e)}
+            isSending={isSending}
+            isCopyingDevUrl={isCopyingDevUrl}
+          />
+        </div>
       </td>
     </tr>
   );
