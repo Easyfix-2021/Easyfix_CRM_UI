@@ -14,17 +14,23 @@
  *       conflict all recompute for the date the operator is about to
  *       commit (not the job's stale requested date).
  *   (b) pick from the TOP 10 ranked technicians for that schedule.
- *   (c) SEARCH any technician by Efr Id / Name / Mobile and assign them
- *       even if they fall outside the top-10 hard filters.
+ *   (c) SEARCH any technician by Efr Id / Name / Mobile and add them to the
+ *       offer even if they fall outside the top-10 hard filters.
  *
- * Assigning fires PATCH /admin/jobs/:id/assign with the (possibly edited)
- * schedule so the date/time update + assignment happen atomically in one
- * BE transaction (preserving the existing assign webhooks + FCM push).
+ * OFFER-POOL MODEL — instead of a single Assign, the operator multi-SELECTS
+ * technicians (row checkboxes) and OFFERS the job to all of them at once via
+ * POST /admin/jobs/:id/offer. The job stays job_status=0 (BOOKED) with no
+ * single owner; each selected technician gets a tbl_job_offer row + an FCM
+ * push, and whoever accepts first on the app is assigned (race-safe BE-side).
+ * The "Offered to" section lists who the job is currently offered to, with a
+ * live "offered N min ago" label.
  *
  * Backend contract (see /my-orders task spec):
  *   GET  /admin/jobs/:id/candidates?limit=10&jobDate=<ISO>&timeSlot=<slot>
  *   GET  /admin/jobs/:id/candidates/search?term=<q>&jobDate=&timeSlot=
- *   PATCH /admin/jobs/:id/assign  { easyfixerId, requestedDateTime?, timeSlot? }
+ *   POST /admin/jobs/:id/offer   { easyfixerIds: number[] }  (carries the
+ *        proposed schedule too so date/time update + offer happen together)
+ *   GET  /admin/jobs/:id/offers  → { items: { efr_id, efr_name, offered_at }[] }
  *
  * Live-location tracking is intentionally DEFERRED — no map / location
  * icon here. A follow-up adds it.
@@ -33,20 +39,20 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle, CheckCircle2, XCircle, Info, Search, X, MapPin,
-  Calendar, Phone, UserCheck, Loader2,
+  Calendar, Phone, Loader2, Clock,
 } from 'lucide-react';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { api, ApiError } from '@/lib/api';
+import { api, ApiError, type JobOffersResponse } from '@/lib/api';
 import { useFetch, invalidateFetch } from '@/lib/hooks';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
-import { formatDate } from '@/lib/utils';
+import { formatDate, relativeTime } from '@/lib/utils';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { InfoTooltip } from '@/components/ui/tooltip';
@@ -222,7 +228,11 @@ export function ScheduleAssignModal({
   const timeSlot = seeded ? deriveTimeSlot(jobDateLocal) : seedSlot;
 
   const [search, setSearch] = useState('');
-  const [assigning, setAssigning] = useState<number | null>(null);
+  // Multi-select offer pool — set of efr_ids the operator has ticked across
+  // the Top-10 + search rows. Reset on close.
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  // True while the offer POST is in flight (drives the sticky footer button).
+  const [offering, setOffering] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // Serviceable-pincodes "view all" modal target (the clicked candidate).
   const [pincodeModalFor, setPincodeModalFor] = useState<ScheduleCandidate | null>(null);
@@ -236,10 +246,20 @@ export function ScheduleAssignModal({
   useEffect(() => {
     if (!open) {
       setSeeded(false); setJobDateLocal(''); setSeedSlot('');
-      setSearch(''); setAssigning(null); setErr(null); setPincodeModalFor(null);
-      setRetainedJob(null);
+      setSearch(''); setOffering(false); setErr(null); setPincodeModalFor(null);
+      setRetainedJob(null); setSelected(new Set());
     }
   }, [open, jobId]);
+
+  // Toggle a technician's membership in the offer-pool selection.
+  function toggleSelected(efrId: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(efrId)) next.delete(efrId);
+      else next.add(efrId);
+      return next;
+    });
+  }
 
   // The proposed-schedule query suffix. Once seeded, ALWAYS send the
   // operator's chosen date/slot so the BE recomputes attendance /
@@ -287,6 +307,23 @@ export function ScheduleAssignModal({
     : null;
   const searchRes = useFetch<SearchResponse>(searchKey, { enabled: !!searchKey });
 
+  // ── Offered-to section ──────────────────────────────────────────────
+  // Who the job is currently offered to (open offers). Keyed on jobId so it
+  // re-fetches on open; invalidated after a successful offer POST so the new
+  // offerees appear immediately. Falls back to an empty list (e.g. when the
+  // BE's tbl_job_offer table is absent → endpoint returns { items: [] }).
+  const offersKey = open && jobId ? `/admin/jobs/${jobId}/offers` : null;
+  const offers = useFetch<JobOffersResponse>(offersKey, { enabled: !!offersKey });
+
+  // Live-time tick — bump a counter every 45s so the "offered N min ago"
+  // labels re-render without re-fetching. Cleared on unmount / close.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!open) return;
+    const id = setInterval(() => setTick((t) => t + 1), 45_000);
+    return () => clearInterval(id);
+  }, [open]);
+
   // Show search results when a term is present, otherwise the top-10.
   const showingSearch = !!term;
   const rows: ScheduleCandidate[] = showingSearch
@@ -295,55 +332,67 @@ export function ScheduleAssignModal({
   const listLoading = showingSearch ? searchRes.loading : top.loading;
   const listError = showingSearch ? searchRes.error : top.error;
 
-  async function assign(c: ScheduleCandidate) {
+  // Offer the job to every selected technician at once (offer-pool model).
+  async function offer() {
     if (!jobId) return;
-    const scheduleNote = proposedWallClock
-      ? `\n\nSchedule: ${formatDate(proposedWallClock)}${timeSlot ? ` · ${timeSlot}` : ''}.`
-      : '';
+    const ids = [...selected];
+    if (ids.length === 0) return;
+    const techCount = ids.length;
+    const techLabel = `${techCount} technician${techCount === 1 ? '' : 's'}`;
     const ok = await confirmAction({
-      title: `Assign Job #${jobId} to ${c.efr_name}?`,
-      description:
-        `Job #${jobId} will be scheduled and assigned to ${c.efr_name} ` +
-        `(${c.mobile ?? '—'}).` + scheduleNote +
-        `\n\nThe technician receives a push notification and the configured ` +
-        `client webhook (TechAssigned) fires.` +
-        (!c.deep_skill_match
-          ? '\n\n⚠ This technician does NOT hold the deep-skill required for this job.'
-          : '') +
-        (c.same_slot_conflict
-          ? '\n\n⚠ This technician already has a job in the same slot on this date.'
-          : ''),
-      confirmLabel: 'Yes, schedule & assign',
+      title: `Offer Job #${jobId} to ${techLabel}?`,
+      icon: <AlertTriangle className="h-5 w-5" />,
+      iconAccent: 'sky',
+      description: (
+        <div className="space-y-3">
+          <p>
+            Job <b>#{jobId}</b> will be offered to <b>{techLabel}</b>.
+          </p>
+          <ul className="space-y-1.5 text-sm">
+            <li>• Offered to <b>{techLabel}</b></li>
+            <li>• Each gets a <b>push notification</b></li>
+            <li>• <b>First to accept</b> is assigned the job</li>
+            {proposedWallClock && (
+              <li>
+                • Schedule: <b>{formatDate(proposedWallClock)}</b>
+                {timeSlot ? <> · {timeSlot}</> : null}
+              </li>
+            )}
+          </ul>
+        </div>
+      ),
+      confirmLabel: `Yes, offer to ${techCount}`,
     });
     if (!ok) return;
-    setAssigning(c.efr_id); setErr(null);
+    setOffering(true); setErr(null);
     try {
-      await api.patch(`/admin/jobs/${jobId}/assign`, {
-        easyfixerId: c.efr_id,
-        // Atomic schedule edit — BE updates date/time in the same txn.
-        ...(proposedWallClock ? { requestedDateTime: proposedWallClock } : {}),
-        ...(timeSlot ? { timeSlot } : {}),
-      });
-      // Bust the candidates cache so reopening reflects the new state.
+      await api.offerJob(jobId, ids);
+      // Bust the candidates + offers caches so reopening (and the Offered-to
+      // section) reflect the new state.
       invalidateFetch((k) => k.startsWith(`/admin/jobs/${jobId}/candidates`));
-      onAssigned?.(c.efr_id, c.efr_name);
+      invalidateFetch((k) => k === `/admin/jobs/${jobId}/offers`);
+      // Reuse the legacy assigned callback to refresh the caller's list — the
+      // first selected technician's identity stands in for the offer (no single
+      // owner yet under the offer-pool model).
+      const first = rows.find((r) => r.efr_id === ids[0]);
+      onAssigned?.(ids[0], first?.efr_name ?? `Efr #${ids[0]}`);
       onClose();
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : 'Assign failed');
+      setErr(e instanceof ApiError ? e.message : 'Offer failed');
     } finally {
-      setAssigning(null);
+      setOffering(false);
     }
   }
 
   // Read-only modal otherwise, but the editable schedule fields make it
   // "dirty" once touched — guard close so an accidental Esc after editing
-  // the date prompts. Skip while an assign is in flight.
+  // the date prompts. Skip while an offer is in flight.
   // Only the Job Date is user-editable; timeSlot is derived so not part of dirty check.
   const guardedOpenChange = useFormDirtyGuard(onClose, {
     isDirty: () =>
       seeded && job != null &&
       jobDateLocal !== isoToLocalInput(job.requested_date_time),
-    when: () => assigning == null,
+    when: () => !offering,
   });
 
   return (
@@ -435,6 +484,37 @@ export function ScheduleAssignModal({
             )}
           </section>
 
+          {/* ───────── Offered to (current open offers) ───────── */}
+          {(offers.data?.items?.length ?? 0) > 0 && (
+            <section>
+              <h3 className="text-sm font-semibold mb-2 flex items-center gap-1.5">
+                Offered To
+                <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700 border border-slate-200">
+                  {offers.data!.items.length}
+                </span>
+              </h3>
+              <p className="mb-2 text-[11px] text-muted-foreground">
+                This job is currently offered to the technicians below. Whoever
+                accepts first on the app is assigned; the rest expire.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {offers.data!.items.map((o) => (
+                  <div
+                    key={o.efr_id}
+                    className="inline-flex items-center gap-2 rounded-full border bg-muted/30 pl-3 pr-3.5 py-1"
+                  >
+                    <span className="text-sm font-medium text-foreground">{o.efr_name}</span>
+                    <span className="text-[10px] text-muted-foreground">#{o.efr_id}</span>
+                    <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+                      <Clock className="h-3 w-3" />
+                      offered {relativeTime(o.offered_at)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
           {err && (
             <div className="text-sm text-red-700 flex items-center gap-1">
               <AlertTriangle className="h-4 w-4" /> {err}
@@ -524,8 +604,8 @@ export function ScheduleAssignModal({
                 error={null}
                 showingSearch={showingSearch}
                 canCommit={canCommit}
-                assigning={assigning}
-                onAssign={assign}
+                selected={selected}
+                onToggleSelected={toggleSelected}
                 onOpenPincodes={setPincodeModalFor}
               />
             )}
@@ -541,23 +621,36 @@ export function ScheduleAssignModal({
               variant="outline"
               className="bg-teal-500 hover:bg-teal-600 text-white border-teal-500 hover:text-white"
               onClick={() => setRemarksOpen(true)}
-              disabled={!jobId}
+              disabled={!jobId || offering}
             >
               Add Remarks
             </Button>
           </div>
-          {/* RIGHT — destructive Cancel (cancels the job) next to Close. */}
+          {/* RIGHT — destructive Cancel, the primary Offer action, then Close.
+              The Offer button replaces the old per-row Assign: it offers the
+              job to every selected technician at once and is disabled until at
+              least one is ticked. */}
           <div className="flex items-center gap-2">
             {canCancel && (
               <Button
                 variant="destructive"
                 onClick={() => setCancelOpen(true)}
-                disabled={!jobId}
+                disabled={!jobId || offering}
               >
                 Cancel
               </Button>
             )}
-            <Button variant="outline" onClick={onClose}>Close</Button>
+            <Button variant="outline" onClick={onClose} disabled={offering}>Close</Button>
+            {canCommit && (
+              <Button
+                onClick={offer}
+                disabled={!jobId || selected.size === 0 || offering}
+              >
+                {offering
+                  ? <Loader2 className="h-4 w-4 animate-spin" />
+                  : (<>Offer to {selected.size} {selected.size === 1 ? 'Technician' : 'Technicians'}</>)}
+              </Button>
+            )}
           </div>
         </DialogFooter>
       </DialogContent>
@@ -617,27 +710,36 @@ function ReadField({ label, value }: { label: string; value: React.ReactNode }) 
 
 /* ───────────────────────── Technician table ─────────────────────────── */
 function CandidateTable({
-  rows, loading, error, showingSearch, canCommit, assigning, onAssign, onOpenPincodes,
+  rows, loading, error, showingSearch, canCommit, selected, onToggleSelected, onOpenPincodes,
 }: {
   rows: ScheduleCandidate[];
   loading: boolean;
   error: string | null;
   showingSearch: boolean;
   canCommit: boolean;
-  assigning: number | null;
-  onAssign: (c: ScheduleCandidate) => void;
+  selected: Set<number>;
+  onToggleSelected: (efrId: number) => void;
   onOpenPincodes: (c: ScheduleCandidate) => void;
 }) {
-  const COLS = 13;
+  // +1 column when the operator can commit: the offer-pool select checkbox.
+  const COLS = canCommit ? 14 : 13;
   return (
     <div className="border rounded max-h-[48vh] overflow-auto thin-scroll">
       <table
         className="data-table text-xs whitespace-nowrap border-separate"
         style={{ borderSpacing: 0 }}
       >
-        <thead className="sticky top-0 bg-background z-20 shadow-sm">
+        <thead className="sticky top-0 bg-background z-40 shadow-sm">
           <tr>
-            <th className="!text-left sticky left-0 bg-white z-40 shadow-[2px_0_0_0_var(--border)] min-w-[190px]">
+            {canCommit && (
+              <th className="!text-center sticky top-0 left-0 bg-white z-50 w-10" aria-label="Select" />
+            )}
+            <th
+              className={
+                '!text-left sticky top-0 bg-white z-50 shadow-[2px_0_0_0_var(--border)] min-w-[190px] ' +
+                (canCommit ? 'left-10' : 'left-0')
+              }
+            >
               Technician
             </th>
             <th className="!text-center">Attendance for Job Date</th>
@@ -676,47 +778,37 @@ function CandidateTable({
             </tr>
           )}
           {!loading && !error && rows.map((c) => {
-            const isAssigningThis = assigning === c.efr_id;
+            const isSelected = selected.has(c.efr_id);
             return (
-            <tr key={c.efr_id} className="group hover:bg-muted/40">
-              {/* Technician (name + efr_id) — sticky left identifier. The
-                  Assign action lives HERE (no separate Action column): an
-                  icon button revealed on row hover, with an "Assign" tooltip,
-                  so it stays reachable no matter how far the wide table is
-                  scrolled horizontally. */}
-              <td className="!text-left sticky left-0 z-20 bg-white group-hover:bg-slate-100 shadow-[2px_0_0_0_var(--border)] min-w-[190px]">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <span className="font-medium truncate" title={c.efr_name}>{c.efr_name}</span>
-                      {c.job_count != null && c.job_count < 5 && (
-                        <StatusChip tone="sky" size="sm" className="shrink-0" title="Completed Less Than 5 Jobs Till Now">Fresher</StatusChip>
-                      )}
-                    </div>
-                    <div className="text-[10px] text-muted-foreground">Efr #{c.efr_id}</div>
+            <tr
+              key={c.efr_id}
+              className={'group hover:bg-muted/40 ' + (isSelected ? 'bg-primary/5' : '')}
+            >
+              {/* Offer-pool select checkbox — sticky left so it stays reachable
+                  no matter how far the wide table is scrolled horizontally.
+                  Toggling membership adds/removes the tech from the offer. */}
+              {canCommit && (
+                <td className={'!text-center sticky left-0 z-20 w-10 ' + (isSelected ? 'bg-primary/5' : 'bg-white group-hover:bg-slate-100')}>
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => onToggleSelected(c.efr_id)}
+                    aria-label={`Select ${c.efr_name} for offer`}
+                    className="h-4 w-4 cursor-pointer accent-primary align-middle"
+                  />
+                </td>
+              )}
+              {/* Technician (name + efr_id) — sticky left identifier, offset
+                  past the checkbox column when present. */}
+              <td className={'!text-left sticky z-20 group-hover:bg-slate-100 shadow-[2px_0_0_0_var(--border)] min-w-[190px] ' + (canCommit ? 'left-10' : 'left-0') + ' ' + (isSelected ? 'bg-primary/5' : 'bg-white')}>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="font-medium truncate" title={c.efr_name}>{c.efr_name}</span>
+                    {c.job_count != null && c.job_count < 5 && (
+                      <StatusChip tone="sky" size="sm" className="shrink-0" title="Completed Less Than 5 Jobs Till Now">Fresher</StatusChip>
+                    )}
                   </div>
-                  {canCommit && (
-                    <button
-                      type="button"
-                      onClick={() => onAssign(c)}
-                      disabled={assigning != null}
-                      title="Assign"
-                      aria-label={`Assign Job to ${c.efr_name}`}
-                      className={
-                        'shrink-0 inline-flex items-center justify-center size-7 rounded-full ' +
-                        'bg-primary text-primary-foreground shadow-sm transition-opacity ' +
-                        'hover:bg-primary/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ' +
-                        'disabled:cursor-not-allowed disabled:opacity-40 ' +
-                        (isAssigningThis
-                          ? 'opacity-100'
-                          : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100')
-                      }
-                    >
-                      {isAssigningThis
-                        ? <Loader2 className="size-3.5 animate-spin" />
-                        : <UserCheck className="size-3.5" />}
-                    </button>
-                  )}
+                  <div className="text-[10px] text-muted-foreground">Efr #{c.efr_id}</div>
                 </div>
               </td>
 

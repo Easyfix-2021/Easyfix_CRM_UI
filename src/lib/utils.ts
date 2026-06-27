@@ -16,6 +16,35 @@ export function formatDate(d: string | Date | null | undefined): string {
 }
 
 /*
+ * relativeTime(iso) → "just now" / "3 min ago" / "2 hr ago" / "5 days ago".
+ *
+ * Small, dependency-free formatter (the repo has no Intl.RelativeTimeFormat
+ * helper). Falls back to the absolute formatDate() for anything older than a
+ * day-ish so very stale timestamps stay legible. Invalid / future dates clamp
+ * to "just now".
+ *
+ * Extracted here (from LiveLocationPopover) so any consumer needing a live
+ * "N min ago" label — e.g. the Offered-to list in ScheduleAssignModal — can
+ * share one implementation next to formatDate.
+ */
+export function relativeTime(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return '—';
+  const diffSec = Math.floor((Date.now() - t) / 1000);
+  if (diffSec < 0) return 'just now';
+  if (diffSec < 45) return 'just now';
+  if (diffSec < 90) return '1 min ago';
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin} min ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr} hr ago`;
+  const diffDay = Math.floor(diffHr / 24);
+  if (diffDay < 7) return `${diffDay} day${diffDay === 1 ? '' : 's'} ago`;
+  return formatDate(iso);
+}
+
+/*
  * toIstClockTime(d) → "HH:MM" (IST 24-hour clock).
  *
  * Produces the value the legacy companion time-text columns store

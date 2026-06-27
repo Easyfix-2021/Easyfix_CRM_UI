@@ -87,6 +87,25 @@ export const api = {
     request<JobLocationResponse>(`/admin/jobs/${jobId}/location`, { method: 'GET' }),
   getEasyfixerLocation: (efrId: number) =>
     request<EasyfixerLocationResponse>(`/admin/easyfixers/${efrId}/location`, { method: 'GET' }),
+
+  /*
+   * Offer-pool model (multi-technician offer).
+   *
+   * offerJob(jobId, [efrId, …]) — POST /admin/jobs/:id/offer with the chosen
+   *   technician ids. The job stays job_status=0 (BOOKED) with no single owner;
+   *   each technician gets a tbl_job_offer row + an FCM push, and whoever
+   *   accepts first on the app wins (race-safe first-wins on the BE).
+   * getJobOffers(jobId) — GET /admin/jobs/:id/offers → the technicians the job
+   *   is currently offered to (open offers), for the "Offered to" section with
+   *   a live "offered <relativeTime>" label.
+   */
+  offerJob: (jobId: number, easyfixerIds: number[]) =>
+    request<JobOfferResult>(`/admin/jobs/${jobId}/offer`, {
+      method: 'POST',
+      body: { easyfixerIds },
+    }),
+  getJobOffers: (jobId: number) =>
+    request<JobOffersResponse>(`/admin/jobs/${jobId}/offers`, { method: 'GET' }),
 };
 
 /*
@@ -113,4 +132,27 @@ export type JobLocationResponse = {
 /* GET /admin/easyfixers/:id/location → latest ping only (no track). */
 export type EasyfixerLocationResponse = {
   latest: LiveLocationPing | null;
+};
+
+/*
+ * One technician this job is currently offered to. `offered_at` is a server
+ * datetime string rendered via relativeTime() as a live "offered N min ago".
+ */
+export type JobOffer = {
+  efr_id: number;
+  efr_name: string;
+  offered_at: string;
+};
+
+/* GET /admin/jobs/:id/offers → technicians the job is currently offered to. */
+export type JobOffersResponse = {
+  items: JobOffer[];
+};
+
+/*
+ * POST /admin/jobs/:id/offer → result of pushing the offer to N technicians.
+ * `offered` is how many tbl_job_offer rows were created (deduped BE-side).
+ */
+export type JobOfferResult = {
+  offered: number;
 };
