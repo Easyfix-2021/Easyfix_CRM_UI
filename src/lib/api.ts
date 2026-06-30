@@ -99,14 +99,33 @@ export const api = {
    *   is currently offered to (open offers), for the "Offered to" section with
    *   a live "offered <relativeTime>" label.
    */
-  offerJob: (jobId: number, easyfixerIds: number[]) =>
+  offerJob: (jobId: number, easyfixerIds: number[], schedule?: CommitSchedule) =>
     request<JobOfferResult>(`/admin/jobs/${jobId}/offer`, {
       method: 'POST',
-      body: { easyfixerIds },
+      body: { easyfixerIds, ...(schedule ?? {}) },
     }),
   getJobOffers: (jobId: number) =>
     request<JobOffersResponse>(`/admin/jobs/${jobId}/offers`, { method: 'GET' }),
+
+  /*
+   * Direct single-assign — used when the offer flow is DISABLED
+   * (offerFlowEnabled=false in the candidates response). PATCH
+   * /admin/jobs/:id/assign with one technician id; the BE immediately bumps the
+   * job BOOKED → SCHEDULED (no tbl_job_offer row, no push). The optional schedule
+   * edit (requestedDateTime + timeSlot) is applied in the same transaction,
+   * exactly as offerJob carries it. The modal chooses offerJob vs assignJob from
+   * the flag — the BE would degrade an offer to a direct-assign anyway, but
+   * calling /assign keeps the UI and the BE action honest.
+   */
+  assignJob: (jobId: number, easyfixerId: number, schedule?: CommitSchedule) =>
+    request<{ job_id: number }>(`/admin/jobs/${jobId}/assign`, {
+      method: 'PATCH',
+      body: { easyfixerId, ...(schedule ?? {}) },
+    }),
 };
+
+/* Optional proposed-schedule edit carried alongside an offer/assign commit. */
+export type CommitSchedule = { requestedDateTime?: string; timeSlot?: string };
 
 /*
  * One GPS ping. `captured_at` is a server datetime string (the popover renders

@@ -17,13 +17,20 @@
  *   (c) SEARCH any technician by Efr Id / Name / Mobile and add them to the
  *       offer even if they fall outside the top-10 hard filters.
  *
- * OFFER-POOL MODEL — instead of a single Assign, the operator multi-SELECTS
- * technicians (row checkboxes) and OFFERS the job to all of them at once via
- * POST /admin/jobs/:id/offer. The job stays job_status=0 (BOOKED) with no
- * single owner; each selected technician gets a tbl_job_offer row + an FCM
- * push, and whoever accepts first on the app is assigned (race-safe BE-side).
- * The "Offered to" section lists who the job is currently offered to, with a
- * live "offered N min ago" label.
+ * COMMIT MODE is driven by the candidates response's `offerFlowEnabled` (the
+ * BE's EFFECTIVE offer-flow gate = property flag AND tbl_job_offer exists). The
+ * candidate LIST is identical in both modes — only how we commit differs:
+ *
+ *   offerFlowEnabled = TRUE  → OFFER-POOL: the operator multi-SELECTS technicians
+ *     (row checkboxes) and OFFERS the job to all of them at once via
+ *     POST /admin/jobs/:id/offer. The job stays job_status=0 (BOOKED) with no
+ *     single owner; each selected tech gets a tbl_job_offer row + an FCM push,
+ *     and whoever accepts first on the app wins (race-safe BE-side). The
+ *     "Offered to" section lists current offerees with a live "offered N min ago".
+ *
+ *   offerFlowEnabled = FALSE → DIRECT-ASSIGN: single-SELECT one technician, the
+ *     button reads "Assign", and PATCH /admin/jobs/:id/assign bumps the job
+ *     BOOKED → SCHEDULED immediately (no offer row, no push, no "Offered to").
  *
  * Backend contract (see /my-orders task spec):
  *   GET  /admin/jobs/:id/candidates?limit=10&jobDate=<ISO>&timeSlot=<slot>
@@ -157,6 +164,8 @@ type CandidatesResponse = {
   job: ScheduleJob;
   candidates: ScheduleCandidate[];
   limit?: number;
+  /** BE's effective offer-flow gate. TRUE → offer-pool; FALSE → direct-assign. */
+  offerFlowEnabled?: boolean;
 };
 
 type SearchResponse = {
@@ -251,9 +260,15 @@ export function ScheduleAssignModal({
     }
   }, [open, jobId]);
 
-  // Toggle a technician's membership in the offer-pool selection.
+  // Toggle a technician's membership in the selection. OFFER mode = multi-select
+  // pool; direct-ASSIGN mode (offer flow off) = single-select (picking one
+  // replaces the prior pick, re-clicking clears it). `offerMode` is derived
+  // below from the candidates response and read here at call time (closure).
   function toggleSelected(efrId: number) {
     setSelected((prev) => {
+      if (!offerMode) {
+        return prev.has(efrId) ? new Set() : new Set([efrId]);
+      }
       const next = new Set(prev);
       if (next.has(efrId)) next.delete(efrId);
       else next.add(efrId);
@@ -298,6 +313,12 @@ export function ScheduleAssignModal({
     if (top.data?.job) setRetainedJob(top.data.job);
   }, [top.data]);
   const job = top.data?.job ?? retainedJob;
+
+  // Effective commit mode from the BE (mirrors its own assign-vs-offer gate).
+  //   ON  → offer pool: multi-select, "Offer to N Technicians" → POST /offer.
+  //   OFF → direct assign: single-select, "Assign" → PATCH /assign (→ SCHEDULED).
+  // Defaults to offer mode if the field is absent (older BE) to preserve prior UI.
+  const offerMode = top.data?.offerFlowEnabled ?? true;
 
   // (c) SEARCH — debounced via the box; keyed so it re-fires on schedule
   // edits too (computed columns must match the proposed schedule).
@@ -366,7 +387,12 @@ export function ScheduleAssignModal({
     if (!ok) return;
     setOffering(true); setErr(null);
     try {
-      await api.offerJob(jobId, ids);
+      // Carry the (possibly edited) proposed schedule so the offer respects the
+      // operator's Job Date edit, just like direct-assign does.
+      await api.offerJob(jobId, ids, {
+        requestedDateTime: proposedWallClock || undefined,
+        timeSlot: timeSlot || undefined,
+      });
       // Bust the candidates + offers caches so reopening (and the Offered-to
       // section) reflect the new state.
       invalidateFetch((k) => k.startsWith(`/admin/jobs/${jobId}/candidates`));
@@ -379,6 +405,55 @@ export function ScheduleAssignModal({
       onClose();
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : 'Offer failed');
+    } finally {
+      setOffering(false);
+    }
+  }
+
+  // Direct-assign the single selected technician (offer flow OFF). The BE bumps
+  // the job BOOKED → SCHEDULED immediately — no offer row, no push.
+  async function assignSingle() {
+    if (!jobId) return;
+    const id = [...selected][0];
+    if (id == null) return;
+    const cand = rows.find((r) => r.efr_id === id);
+    const name = cand?.efr_name ?? `Efr #${id}`;
+    const ok = await confirmAction({
+      title: `Assign Job #${jobId} to ${name}?`,
+      icon: <AlertTriangle className="h-5 w-5" />,
+      iconAccent: 'sky',
+      description: (
+        <div className="space-y-3">
+          <p>
+            Job <b>#{jobId}</b> will be assigned to <b>{name}</b> and scheduled.
+          </p>
+          <ul className="space-y-1.5 text-sm">
+            <li>• Assigned directly to <b>{name}</b> (Efr #{id})</li>
+            <li>• Job moves to <b>Scheduled</b></li>
+            {proposedWallClock && (
+              <li>
+                • Schedule: <b>{formatDate(proposedWallClock)}</b>
+                {timeSlot ? <> · {timeSlot}</> : null}
+              </li>
+            )}
+          </ul>
+        </div>
+      ),
+      confirmLabel: 'Yes, Assign',
+    });
+    if (!ok) return;
+    setOffering(true); setErr(null);
+    try {
+      await api.assignJob(jobId, id, {
+        requestedDateTime: proposedWallClock || undefined,
+        timeSlot: timeSlot || undefined,
+      });
+      invalidateFetch((k) => k.startsWith(`/admin/jobs/${jobId}/candidates`));
+      invalidateFetch((k) => k === `/admin/jobs/${jobId}/offers`);
+      onAssigned?.(id, name);
+      onClose();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'Assign failed');
     } finally {
       setOffering(false);
     }
@@ -484,8 +559,8 @@ export function ScheduleAssignModal({
             )}
           </section>
 
-          {/* ───────── Offered to (current open offers) ───────── */}
-          {(offers.data?.items?.length ?? 0) > 0 && (
+          {/* ───────── Offered to (current open offers) — offer mode only ───────── */}
+          {offerMode && (offers.data?.items?.length ?? 0) > 0 && (
             <section>
               <h3 className="text-sm font-semibold mb-2 flex items-center gap-1.5">
                 Offered To
@@ -604,6 +679,7 @@ export function ScheduleAssignModal({
                 error={null}
                 showingSearch={showingSearch}
                 canCommit={canCommit}
+                multiSelect={offerMode}
                 selected={selected}
                 onToggleSelected={toggleSelected}
                 onOpenPincodes={setPincodeModalFor}
@@ -643,12 +719,14 @@ export function ScheduleAssignModal({
             <Button variant="outline" onClick={onClose} disabled={offering}>Close</Button>
             {canCommit && (
               <Button
-                onClick={offer}
-                disabled={!jobId || selected.size === 0 || offering}
+                onClick={offerMode ? offer : assignSingle}
+                disabled={!jobId || offering || (offerMode ? selected.size === 0 : selected.size !== 1)}
               >
                 {offering
                   ? <Loader2 className="h-4 w-4 animate-spin" />
-                  : (<>Offer to {selected.size} {selected.size === 1 ? 'Technician' : 'Technicians'}</>)}
+                  : offerMode
+                    ? (<>Offer to {selected.size} {selected.size === 1 ? 'Technician' : 'Technicians'}</>)
+                    : 'Assign'}
               </Button>
             )}
           </div>
@@ -710,18 +788,21 @@ function ReadField({ label, value }: { label: string; value: React.ReactNode }) 
 
 /* ───────────────────────── Technician table ─────────────────────────── */
 function CandidateTable({
-  rows, loading, error, showingSearch, canCommit, selected, onToggleSelected, onOpenPincodes,
+  rows, loading, error, showingSearch, canCommit, multiSelect, selected, onToggleSelected, onOpenPincodes,
 }: {
   rows: ScheduleCandidate[];
   loading: boolean;
   error: string | null;
   showingSearch: boolean;
   canCommit: boolean;
+  /** TRUE → offer pool (checkboxes, many); FALSE → direct assign (radio, one). */
+  multiSelect: boolean;
   selected: Set<number>;
   onToggleSelected: (efrId: number) => void;
   onOpenPincodes: (c: ScheduleCandidate) => void;
 }) {
-  // +1 column when the operator can commit: the offer-pool select checkbox.
+  // +1 column when the operator can commit: the select control (checkbox in
+  // offer mode, radio in direct-assign mode).
   const COLS = canCommit ? 14 : 13;
   return (
     <div className="border rounded max-h-[48vh] overflow-auto thin-scroll">
@@ -790,10 +871,11 @@ function CandidateTable({
               {canCommit && (
                 <td className={'!text-center sticky left-0 z-20 w-10 ' + (isSelected ? 'bg-primary/5' : 'bg-white group-hover:bg-slate-100')}>
                   <input
-                    type="checkbox"
+                    type={multiSelect ? 'checkbox' : 'radio'}
+                    name={multiSelect ? undefined : 'assign-select'}
                     checked={isSelected}
                     onChange={() => onToggleSelected(c.efr_id)}
-                    aria-label={`Select ${c.efr_name} for offer`}
+                    aria-label={`Select ${c.efr_name}`}
                     className="h-4 w-4 cursor-pointer accent-primary align-middle"
                   />
                 </td>
