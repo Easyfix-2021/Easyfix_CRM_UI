@@ -165,3 +165,22 @@ export function clearLookupCache() {
     keys.forEach((k) => window.sessionStorage.removeItem(k));
   }
 }
+
+/**
+ * Drop ONE or more lookup caches by key (the same keys passed to fetchOnce —
+ * e.g. 'svcType', 'svcCat'). Clears the in-memory, in-flight, AND sessionStorage
+ * layers so the NEXT useLookup() mount refetches that lookup fresh. Use after a
+ * mutation that changes a lookup's contents — e.g. deactivating a service type
+ * must invalidate 'svcType', otherwise the active-only dropdowns (Manage Deep
+ * Skills, Book New Call) keep serving it from the 30-min sessionStorage cache.
+ * Prefer this over clearLookupCache() so unrelated lookups stay warm.
+ */
+export function invalidateLookup(...keys: string[]) {
+  for (const key of keys) {
+    MEM_CACHE.delete(key);
+    INFLIGHT.delete(key);
+    if (typeof window !== 'undefined') {
+      try { window.sessionStorage.removeItem(SS_PREFIX + key); } catch { /* ignore */ }
+    }
+  }
+}

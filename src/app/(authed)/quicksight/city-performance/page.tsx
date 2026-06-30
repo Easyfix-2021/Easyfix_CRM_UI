@@ -29,7 +29,7 @@
  *     vertical affects the TABLE only, so the widget refetch drops verticalId.
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Building2, ChevronLeft, ChevronRight, Ticket, FolderOpen, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { ReportPageScaffold } from '@/components/quicksight/ReportPageScaffold';
 import { QuickSightFilterBar } from '@/components/quicksight/QuickSightFilterBar';
@@ -367,14 +367,33 @@ export default function CityPerformancePage() {
   const [tatIndex, setTatIndex] = useState(0); // highlights stepper position
 
   // Zonal Managers + State options aren't in useLookup — pull from shared
-  // lookup endpoints (fired once; static for the session).
-  const zonalRes = useFetchOnce<ManagerLite[]>('/shared/lookup/zonal-managers');
+  // lookup endpoints. State is static (fired once). Zonal Managers are SCOPED
+  // to the selected Client/Vertical: keyed on clients+verticals so the picker
+  // refetches and narrows to owners of cities backing those jobs; unfiltered ⇒
+  // the full global list.
+  const zonalManagerKey = useMemo(() => {
+    const qs = new URLSearchParams();
+    clients.forEach((v) => qs.append('clientId', String(v)));
+    verticals.forEach((v) => qs.append('verticalId', String(v)));
+    const s = qs.toString();
+    return s ? `/shared/lookup/zonal-managers?${s}` : '/shared/lookup/zonal-managers';
+  }, [clients, verticals]);
+  const zonalRes = useFetch<ManagerLite[]>(zonalManagerKey);
   const stateRes = useFetchOnce<Array<{ state_id: number; state_name: string }>>('/shared/lookup/states');
 
   const zonalManagerOptions = useMemo<SearchOption[]>(
     () => (zonalRes.data ?? []).map((u) => ({ value: u.user_id, label: u.user_name })),
     [zonalRes.data],
   );
+  // Keep the selected zonal manager valid as the scoped options change.
+  useEffect(() => {
+    if (!zonalRes.data) return;
+    const valid = new Set(zonalManagerOptions.map((o) => Number(o.value)));
+    setZonalManagers((prev) => {
+      const next = prev.filter((v) => valid.has(Number(v)));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [zonalManagerOptions, zonalRes.data]);
   const stateOptions = useMemo<SearchOption[]>(
     () => (stateRes.data ?? []).map((s) => ({ value: s.state_id, label: s.state_name })),
     [stateRes.data],

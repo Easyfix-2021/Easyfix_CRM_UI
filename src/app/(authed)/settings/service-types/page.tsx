@@ -37,7 +37,7 @@ import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/componen
 import { api, ApiError } from '@/lib/api';
 import { useFetch, useDebouncedValue } from '@/lib/hooks';
 import { useConfirm } from '@/components/ui/confirm-dialog';
-import { useLookup } from '@/lib/use-lookup';
+import { useLookup, invalidateLookup } from '@/lib/use-lookup';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
@@ -107,6 +107,14 @@ export default function ManageServiceTypePage() {
   const [error, setError] = useState<string | null>(null);
   useEffect(() => { setError(fetchError); }, [fetchError]);
 
+  // Single refresh chokepoint for every type mutation (deactivate / reactivate /
+  // create / edit). Besides reloading THIS management list, it busts the shared
+  // 'svcType' lookup cache so the active-only dropdowns elsewhere (Manage Deep
+  // Skills, Book New Call) immediately stop showing a just-deactivated type
+  // instead of waiting out the 30-min sessionStorage TTL in use-lookup.ts.
+  // Also passed to the TypeFormModal as its `onSaved` handler.
+  const fetchList = () => { invalidateLookup('svcType'); refetch(); };
+
   // Deactivate an active row → status 0 (Inactive, still listable under
   // "include inactive"). Distinct from Delete (status 3, removed from all lists).
   async function handleDeactivate(t: ServiceType) {
@@ -116,16 +124,14 @@ export default function ManageServiceTypePage() {
       confirmLabel: 'Deactivate', variant: 'destructive',
     });
     if (!ok) return;
-    try { await api.patch(`/admin/service-types/${t.service_type_id}`, { is_active: false }); refetch(); }
+    try { await api.patch(`/admin/service-types/${t.service_type_id}`, { is_active: false }); fetchList(); }
     catch (e) { setError(e instanceof ApiError ? e.message : 'Deactivate failed'); }
   }
   // One-click reactivate for inactive (status 0) rows — flips back to Active.
   async function handleReactivate(t: ServiceType) {
-    try { await api.patch(`/admin/service-types/${t.service_type_id}`, { is_active: true }); refetch(); }
+    try { await api.patch(`/admin/service-types/${t.service_type_id}`, { is_active: true }); fetchList(); }
     catch (e) { setError(e instanceof ApiError ? e.message : 'Reactivate failed'); }
   }
-  // Alias so the existing TypeFormModal `onSaved` prop continues to work.
-  const fetchList = refetch;
 
   return (
     <div className="space-y-4">

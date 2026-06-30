@@ -24,7 +24,7 @@
  * POST endpoints.
  */
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ClipboardList,
   Flame,
@@ -37,8 +37,7 @@ import {
 
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
-import { usePostFetch } from '@/lib/hooks';
-import { useLookup } from '@/lib/use-lookup';
+import { usePostFetch, useFetch } from '@/lib/hooks';
 import type { SearchOption } from '@/components/ui/search-select';
 
 import { ReportPageScaffold } from '@/components/quicksight/ReportPageScaffold';
@@ -152,15 +151,36 @@ export default function OpenOrdersPage() {
   });
   const [applied, setApplied] = useState<FilterBody>(draft);
 
-  /* Zonal-manager options — derived from the shared cities lookup's
-   * state_user is not exposed there, so we source admin users as the
-   * superset of possible city zonal owners (matches the legacy zonal list
-   * being tbl_user rows). Falls back to an empty list while loading. */
-  const lookup = useLookup();
-  const zonalManagerOptions: SearchOption[] = useMemo(
-    () => lookup.toOpts.adminUsers,
-    [lookup.toOpts.adminUsers],
+  /* Zonal-manager options — scoped to the selected Client/Vertical. We pull the
+   * actual zonal owners (tbl_city.state_user) of cities that back jobs for the
+   * chosen client/vertical rather than every admin user, so the picker narrows
+   * live as the draft filters change (before Filter is clicked). With nothing
+   * selected the endpoint returns the full global zonal-manager list. */
+  const zonalManagerKey = useMemo(() => {
+    const qs = new URLSearchParams();
+    draft.clientId.forEach((v) => qs.append('clientId', String(v)));
+    draft.verticalId.forEach((v) => qs.append('verticalId', String(v)));
+    const s = qs.toString();
+    return s ? `/shared/lookup/zonal-managers?${s}` : '/shared/lookup/zonal-managers';
+  }, [draft.clientId, draft.verticalId]);
+  const zonalRes = useFetch<Array<{ user_id: number; user_name: string }>>(
+    canView ? zonalManagerKey : null,
   );
+  const zonalManagerOptions: SearchOption[] = useMemo(
+    () => (zonalRes.data ?? []).map((u) => ({ value: u.user_id, label: u.user_name })),
+    [zonalRes.data],
+  );
+  /* Drop any selected zonal manager that falls outside the freshly scoped
+   * option set when Client/Vertical change, so the draft stays consistent. */
+  useEffect(() => {
+    if (!zonalRes.data) return;
+    const valid = new Set(zonalManagerOptions.map((o) => Number(o.value)));
+    setDraft((d) =>
+      d.zonalManagerId.some((v) => !valid.has(Number(v)))
+        ? { ...d, zonalManagerId: d.zonalManagerId.filter((v) => valid.has(Number(v))) }
+        : d,
+    );
+  }, [zonalManagerOptions, zonalRes.data]);
 
   /* Re-fetch summary only when applied filters change (the shared hook keys
    * off url + serialized body internally). */

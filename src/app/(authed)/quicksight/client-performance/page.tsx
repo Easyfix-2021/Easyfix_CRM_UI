@@ -22,7 +22,7 @@
  *   - Title Case labels; .data-table density; numeric columns right-aligned.
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Gauge, Ticket, IndianRupee, Receipt, Users } from 'lucide-react';
 import { ReportPageScaffold } from '@/components/quicksight/ReportPageScaffold';
 import { QuickSightFilterBar } from '@/components/quicksight/QuickSightFilterBar';
@@ -37,7 +37,7 @@ import {
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { showToast } from '@/components/ui/toast';
-import { useFetch, useFetchOnce } from '@/lib/hooks';
+import { useFetch } from '@/lib/hooks';
 import { downloadXlsx } from '@/lib/download-xlsx';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
@@ -135,11 +135,23 @@ export default function ClientPerformancePage() {
   const [projectManagers, setProjectManagers] = useState<Array<string | number>>([]);
   const [downloading, setDownloading] = useState(false);
 
-  // Zonal + Project Manager options aren't in useLookup — pull from the
-  // shared lookup endpoints (fired once; static for the session). Project
-  // Managers for Client Performance use user_type=1 (Primary SPOC).
-  const zonalRes = useFetchOnce<ManagerLite[]>('/shared/lookup/zonal-managers');
-  const pmRes = useFetchOnce<ManagerLite[]>('/shared/lookup/project-managers?userType=1');
+  // Zonal + Project Manager options aren't in useLookup — pull from the shared
+  // lookup endpoints, SCOPED to the selected Client/Vertical so each picker
+  // narrows to owners relevant to that client/vertical (refetch on change;
+  // unfiltered ⇒ full global lists). Zonal = owners of cities backing the
+  // client/vertical's jobs; PM = user_type=1 (Primary SPOC) on that mapping.
+  const ownerScopeQs = useMemo(() => {
+    const qs = new URLSearchParams();
+    clients.forEach((v) => qs.append('clientId', String(v)));
+    verticals.forEach((v) => qs.append('verticalId', String(v)));
+    return qs.toString();
+  }, [clients, verticals]);
+  const zonalRes = useFetch<ManagerLite[]>(
+    ownerScopeQs ? `/shared/lookup/zonal-managers?${ownerScopeQs}` : '/shared/lookup/zonal-managers',
+  );
+  const pmRes = useFetch<ManagerLite[]>(
+    `/shared/lookup/project-managers?userType=1${ownerScopeQs ? `&${ownerScopeQs}` : ''}`,
+  );
 
   const zonalManagerOptions = useMemo<SearchOption[]>(
     () => (zonalRes.data ?? []).map((u) => ({ value: u.user_id, label: u.user_name })),
@@ -149,6 +161,23 @@ export default function ClientPerformancePage() {
     () => (pmRes.data ?? []).map((u) => ({ value: u.user_id, label: u.user_name })),
     [pmRes.data],
   );
+  // Keep selected owners valid as the scoped option sets change.
+  useEffect(() => {
+    if (!zonalRes.data) return;
+    const valid = new Set(zonalManagerOptions.map((o) => Number(o.value)));
+    setZonalManagers((prev) => {
+      const next = prev.filter((v) => valid.has(Number(v)));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [zonalManagerOptions, zonalRes.data]);
+  useEffect(() => {
+    if (!pmRes.data) return;
+    const valid = new Set(projectManagerOptions.map((o) => Number(o.value)));
+    setProjectManagers((prev) => {
+      const next = prev.filter((v) => valid.has(Number(v)));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [projectManagerOptions, pmRes.data]);
 
   // Fetch key — includes period + every serialized filter so any change
   // refetches. Deferred until the page is viewable (canView gate).
