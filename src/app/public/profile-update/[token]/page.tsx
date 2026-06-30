@@ -92,10 +92,10 @@ import { useDebouncedValue } from '@/lib/hooks';
 /* ───────── OTP Gate ───────── */
 /*
  * Renders an inline "Verify Via WhatsApp OTP" step that sits between the
- * user clicking a section's Save button and the actual PUT /save call.
+ * user clicking the single "Save Profile" button and the actual PUT /save call.
  *
  * Flow:
- *   1. User clicks section Save → parent calls setOtpGateOpen(true).
+ *   1. User clicks Save Profile → parent (ReadyForm) calls setOtpGateOpen(true).
  *   2. OtpGate shows a "Send OTP" button.
  *   3. User taps Send OTP → POST /send-otp fired; Gallabox delivers the
  *      code to the easyfixer's WhatsApp.
@@ -864,8 +864,10 @@ function ReadyForm({
         </SectionShell>
       </div>
 
-      {/* ───── Single combined action area ───── */}
-      <div className="mt-6 space-y-3">
+      {/* ───── Single combined action area — sticky to the viewport bottom on
+          mobile so the Save button stays reachable after a long scroll through
+          Skills + Service Area; reverts to a normal static block on sm+. ───── */}
+      <div className="mt-6 space-y-3 sticky bottom-0 z-20 border-t border-slate-200 bg-slate-50/95 supports-[backdrop-filter]:bg-slate-50/80 backdrop-blur px-1 py-3 sm:static sm:z-auto sm:border-0 sm:bg-transparent sm:px-0 sm:py-0 sm:backdrop-blur-none">
         {!bothFilled ? (
           <p className="text-center text-xs font-medium text-amber-700">
             Both Skills Mapping and Service Area are required to save.
@@ -1337,7 +1339,7 @@ function SkillsMappingPicker({
                                         type="checkbox"
                                         className="h-5 w-5 accent-emerald-600 shrink-0"
                                         checked={isSelected}
-                                        onChange={() => toggleOption(c.category_id, t.service_type_id, s.deep_skill_id, o.option_id)}
+                                        onChange={() => onToggleOption(c.category_id, t.service_type_id, s.deep_skill_id, o.option_id)}
                                       />
                                       <span className={isOriginal ? 'font-semibold text-emerald-700' : 'text-slate-700'}>
                                         {o.option_name}
@@ -1360,46 +1362,6 @@ function SkillsMappingPicker({
         ))}
       </div>
 
-      <AnimatedLoadingBar visible={saving} message="Saving Skills Mapping…" tone="sky" />
-
-      {otpRequired ? (
-        <OtpGate
-          token={token}
-          open={otpGateOpen}
-          sending={saving}
-          onVerified={(otp) => save(otp)}
-          onCancel={() => { setOtpGateOpen(false); setError(null); }}
-          saveError={error}
-        />
-      ) : null}
-
-      {!otpGateOpen ? (
-        <>
-          {error ? (
-            <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>
-          ) : null}
-          {/* Mandate ≥1 skill before saving — a technician can't submit an
-              empty skills set (and can't clear all skills to nothing). */}
-          {selected.size === 0 ? (
-            <p className="mb-2 text-right text-xs font-medium text-amber-700">
-              Map at least one skill to save.
-            </p>
-          ) : null}
-          <div className="flex justify-end">
-            <Button
-              // OTP on → open the gate (which calls save(otp)); OTP off → save directly.
-              onClick={otpRequired
-                ? () => { setError(null); setOtpGateOpen(true); }
-                : () => { setError(null); void save(); }}
-              disabled={!dirty || saving || selected.size === 0}
-              className="h-11 sm:h-9 w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white"
-            >
-              {saved && !dirty ? 'Saved · Tap To Re-Save' : 'Save Skills Mapping'}
-            </Button>
-          </div>
-        </>
-      ) : null}
-
       <MemoizedSkillImageLightboxBridgePublic lightboxUrl={lightboxUrl} setLightboxUrl={setLightboxUrl} />
     </div>
   );
@@ -1409,62 +1371,48 @@ function SkillsMappingPicker({
 
 function ServiceAreaSection({
   token,
-  pincodes,
-  prefill,
-  onSaved,
-  otpRequired,
+  selected,
+  onToggle,
+  onRemove,
+  onEnsureAdd,
 }: {
   token: string;
-  pincodes: PincodeMapping[];
-  prefill: PrefillResponse;
-  onSaved: (next: PrefillResponse) => void;
-  otpRequired: boolean;
+  selected: Map<number, PincodeMapping>;
+  onToggle: (row: CatalogPincode) => void;
+  onRemove: (id: number) => void;
+  onEnsureAdd: (row: CatalogPincode) => void;
 }) {
   // Pincodes are too large (~155k rows) to bundle in the prefill, so the
   // picker is always editable and pulls suggestions from the public search
   // endpoint instead of a bundled catalog.
-  return <PincodePicker token={token} pincodes={pincodes} prefill={prefill} onSaved={onSaved} otpRequired={otpRequired} />;
+  return (
+    <PincodePicker
+      token={token}
+      selected={selected}
+      onToggle={onToggle}
+      onRemove={onRemove}
+      onEnsureAdd={onEnsureAdd}
+    />
+  );
 }
 
 function PincodePicker({
   token,
-  pincodes,
-  prefill,
-  onSaved,
-  otpRequired,
+  selected,
+  onToggle,
+  onRemove,
+  onEnsureAdd,
 }: {
   token: string;
-  pincodes: PincodeMapping[];
-  prefill: PrefillResponse;
-  onSaved: (next: PrefillResponse) => void;
-  otpRequired: boolean;
+  selected: Map<number, PincodeMapping>;
+  onToggle: (row: CatalogPincode) => void;
+  onRemove: (id: number) => void;
+  onEnsureAdd: (row: CatalogPincode) => void;
 }) {
-  const initialMap = React.useMemo(() => {
-    const m = new Map<number, PincodeMapping>();
-    /*
-     * Defensive coercion (2026-06-11). The BE is supposed to send a flat
-     * array, but legacy paths sometimes wrap with `{ items: [...] }` (the
-     * CRM verification page's contract). Handle BOTH shapes here so a
-     * future BE-side drift doesn't crash the public form. Falls back to
-     * empty array for null / undefined too.
-     */
-    const list: PincodeMapping[] = Array.isArray(pincodes)
-      ? pincodes
-      : ((pincodes as unknown as { items?: PincodeMapping[] } | null | undefined)?.items ?? []);
-    for (const p of list) m.set(Number(p.pincode_id), p);
-    return m;
-  }, [pincodes]);
-  const [original, setOriginal] = React.useState<Map<number, PincodeMapping>>(initialMap);
-  const [selected, setSelected] = React.useState<Map<number, PincodeMapping>>(new Map(initialMap));
   const [search, setSearch] = React.useState('');
   const [results, setResults] = React.useState<CatalogPincode[]>([]);
   const [searching, setSearching] = React.useState(false);
   const [searchError, setSearchError] = React.useState<string | null>(null);
-  const [saving, setSaving] = React.useState(false);
-  const [saved, setSaved] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
-  // OTP gate state for the Service Area save flow.
-  const [otpGateOpen, setOtpGateOpen] = React.useState(false);
   // "Ensure pincode" (on-the-fly create) state for the No-Matches branch.
   // `ensuring` blocks a double-tap while the POST is in flight; `ensureHint`
   // is the brief "Added <pincode>" confirmation; `ensureError` is the inline
@@ -1562,22 +1510,11 @@ function PincodePicker({
   }, [debouncedSearch, token]);
 
   function toggle(row: CatalogPincode) {
-    const id = Number(row.pincode_id);
-    const next = new Map(selected);
-    if (next.has(id)) next.delete(id);
-    else next.set(id, {
-      pincode_id: id,
-      pincode: String(row.pincode),
-      city_name: row.city_name ?? null,
-      state_name: row.state_name ?? null,
-    });
-    setSelected(next);
+    onToggle(row);
   }
 
   function removeChip(id: number) {
-    const next = new Map(selected);
-    next.delete(id);
-    setSelected(next);
+    onRemove(id);
   }
 
   /*
@@ -1607,18 +1544,8 @@ function PincodePicker({
           body: JSON.stringify({ pincode: pin }),
         }
       );
-      const id = Number(row.pincode_id);
-      // Merge into the selection (same shape as toggle's add-branch).
-      setSelected((prev) => {
-        const next = new Map(prev);
-        next.set(id, {
-          pincode_id: id,
-          pincode: String(row.pincode),
-          city_name: row.city_name ?? null,
-          state_name: row.state_name ?? null,
-        });
-        return next;
-      });
+      // Merge into the lifted selection (same shape as toggle's add-branch).
+      onEnsureAdd(row);
       // Seed the search cache so re-searching this pincode lists it as a match.
       pincodeSearchCache.set(pin, {
         items: [row],
@@ -1633,49 +1560,6 @@ function PincodePicker({
       setEnsureError(err?.message || 'Could not add this pincode');
     } finally {
       setEnsuring(false);
-    }
-  }
-
-  const dirty = React.useMemo(() => {
-    if (selected.size !== original.size) return true;
-    for (const k of selected.keys()) if (!original.has(k)) return true;
-    return false;
-  }, [selected, original]);
-
-  async function save(otp?: string) {
-    setSaving(true);
-    setError(null);
-    try {
-      const ids = Array.from(selected.keys());
-      // OTP only travels when the BE requires it (otp_required from prefill).
-      const body: { serviceable_pincode_ids: number[]; otp?: number } = { serviceable_pincode_ids: ids };
-      if (otp != null) body.otp = Number(otp);
-      const next = await publicFetch<PrefillResponse>(
-        `/public/easyfixer-profile-update/save?token=${encodeURIComponent(token)}`,
-        {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        }
-      );
-      const merged = next ?? prefill;
-      const fresh = new Map<number, PincodeMapping>();
-      for (const p of merged.serviceable_pincodes) fresh.set(Number(p.pincode_id), p);
-      setOriginal(fresh);
-      setSelected(new Map(fresh));
-      setSaved(true);
-      setOtpGateOpen(false);
-      onSaved(merged);
-      showToast({ variant: 'success', message: 'Service Area Saved' });
-    } catch (e) {
-      const err = e as { status?: number; message?: string };
-      const msg = err?.message || 'Failed to save service area';
-      setError(msg);
-      // Keep gate open on OTP error so the user can retry.
-      if (err?.status !== 400) setOtpGateOpen(false);
-      showToast({ variant: 'error', message: msg });
-    } finally {
-      setSaving(false);
     }
   }
 
@@ -1813,46 +1697,6 @@ function PincodePicker({
           </div>
         ) : null}
       </div>
-
-      <AnimatedLoadingBar visible={saving} message="Saving Service Area…" tone="sky" />
-
-      {otpRequired ? (
-        <OtpGate
-          token={token}
-          open={otpGateOpen}
-          sending={saving}
-          onVerified={(otp) => save(otp)}
-          onCancel={() => { setOtpGateOpen(false); setError(null); }}
-          saveError={error}
-        />
-      ) : null}
-
-      {!otpGateOpen ? (
-        <>
-          {error ? (
-            <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>
-          ) : null}
-          {/* Mandate ≥1 service-area pincode before saving — a technician can't
-              submit an empty service area (and can't clear it to nothing). */}
-          {selected.size === 0 ? (
-            <p className="mb-2 text-right text-xs font-medium text-amber-700">
-              Add at least one service-area pincode to save.
-            </p>
-          ) : null}
-          <div className="flex justify-end">
-            <Button
-              // OTP on → open the gate (which calls save(otp)); OTP off → save directly.
-              onClick={otpRequired
-                ? () => { setError(null); setOtpGateOpen(true); }
-                : () => { setError(null); void save(); }}
-              disabled={!dirty || saving || selected.size === 0}
-              className="h-11 sm:h-9 w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white"
-            >
-              {saved && !dirty ? 'Saved · Tap To Re-Save' : 'Save Service Area'}
-            </Button>
-          </div>
-        </>
-      ) : null}
     </div>
   );
 }
