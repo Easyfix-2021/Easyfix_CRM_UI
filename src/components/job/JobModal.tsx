@@ -16,6 +16,7 @@ import { AddressAutocomplete } from '@/components/ui/address-autocomplete';
 import { AddressPickerWithMap, type AddressValue } from '@/components/ui/address-picker-with-map';
 import { AddressEditDialog, type EditableAddress } from './AddressEditDialog';
 import { JobTransactionView } from './JobTransactionView';
+import { SkillImageLightbox, type SkillImageLightboxValue } from '@/components/easyfixer/SkillImageLightbox';
 import { CustomerSubmissionPanel } from './CustomerSubmissionPanel';
 import { AddRemarksDialog } from './AddRemarksDialog';
 import { CancelWithReasonDialog } from './CancelWithReasonDialog';
@@ -2995,11 +2996,15 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
  * `onError` flips to the "Image not found" empty state when the BE
  * responds 404 (image lost from S3 AND local disk, or imageId stale).
  */
-function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pendingDelete }: {
+function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pendingDelete, onView }: {
   id: string;
   url: string;
   label: string;
   tooltip: string;
+  /* When provided, clicking the thumbnail opens an in-app ENLARGE lightbox
+   * (SkillImageLightbox) instead of opening the raw file in a new browser tab.
+   * Ctrl/middle-click still opens the new tab (the <a> href is preserved). */
+  onView?: (v: { url: string; name: string }) => void;
   /* When provided, renders a top-right X overlay that calls this on
    * click (with stopPropagation so the tile's "open in new tab"
    * behaviour is preserved for clicks elsewhere on the tile). */
@@ -3053,6 +3058,7 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pe
           href={authedUrl}
           target="_blank"
           rel="noopener noreferrer"
+          onClick={(e) => { if (onView) { e.preventDefault(); onView({ url: authedUrl, name: label }); } }}
           className="block w-full h-full"
         >
           {broken ? (
@@ -3131,6 +3137,7 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pe
         href={authedUrl}
         target="_blank"
         rel="noopener noreferrer"
+        onClick={(e) => { if (onView) { e.preventDefault(); onView({ url: authedUrl, name: label }); } }}
         className="block border rounded-md overflow-hidden hover:shadow-sm transition-shadow"
         title={tooltip}
       >
@@ -3256,6 +3263,8 @@ function JobImagesTab({ images, onChanged, compact, onImageDeleted, deferDelete,
    */
   const confirm = useConfirm();
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
+  // Click-to-enlarge lightbox target for an uploaded job-image thumbnail.
+  const [lightbox, setLightbox] = useState<SkillImageLightboxValue>(null);
 
   async function handleDelete(imageId: string, label: string) {
     /*
@@ -3320,6 +3329,7 @@ function JobImagesTab({ images, onChanged, compact, onImageDeleted, deferDelete,
     ? 'flex flex-wrap gap-2'
     : 'grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3';
   return (
+    <>
     <div className={containerClass}>
       {images.map((img) => {
         const id       = String(img.image_id ?? '');
@@ -3349,10 +3359,13 @@ function JobImagesTab({ images, onChanged, compact, onImageDeleted, deferDelete,
             // set. Drives the strikethrough overlay + undo arrow on
             // the corner button.
             pendingDelete={pendingDeleteIds?.has(id) ?? false}
+            onView={setLightbox}
           />
         );
       })}
-    </div>
+      </div>
+      <SkillImageLightbox value={lightbox} onClose={() => setLightbox(null)} />
+    </>
   );
 }
 
@@ -4576,6 +4589,43 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
       setError(`Missing required field(s): ${missing.join(', ')}`);
       setSubmitting(false);
       return;
+    }
+
+    // Create-mode (Book New Call) mandatory-fields gate — the counterpart of the
+    // confirm-mode gate above (2026-06-30). Without it, an INCOMPLETE create form
+    // skipped straight to the "Confirm Booking" popup; after the operator
+    // confirmed, every per-category POST /admin/jobs failed Joi and they saw
+    // "No jobs were created" AFTER the popup. Validate up-front so missing fields
+    // show INLINE and the confirm popup only ever appears for a valid form.
+    // (section1Complete/section2Complete/GPS_RX are declared later in the create
+    // render scope, so we inline the same f.* predicates here.)
+    if (!isConfirm && mode === 'create' && submitVariant === 'book') {
+      const missing: string[] = [];
+      if (!f.fk_client_id) missing.push('Client');
+      if (!f.client_ref_id || !String(f.client_ref_id).trim()) missing.push('Client Reference ID');
+      if (!f.reporting_contact_id) missing.push('Reporting Contact');
+      if (branchProp?.mandatory && !String(f.branch_details || '').trim()) missing.push(branchProp.label || 'Branch Details');
+      if (buildingProp?.mandatory && !String(f.building_name || '').trim()) missing.push(buildingProp.label || 'Property / Building Name');
+      if (productProp?.mandatory && !String(f.product_code || '').trim()) missing.push(productProp.label || 'Product Code');
+      if (!f.customer_name) missing.push('Customer Name');
+      if (!/^[0-9]{10}$/.test(String(f.customer_mob_no || ''))) missing.push('Customer Mobile (10 digits)');
+      if (!f.address) missing.push('Address');
+      if (!String(f.city_id || '').trim()) missing.push('City');
+      if (!/^[0-9]{6}$/.test(String(f.pin_code || ''))) missing.push('PIN (6 digits)');
+      if (!/^-?\d+(\.\d+)?,-?\d+(\.\d+)?$/.test(String(f.gps_location || '').trim())) missing.push('GPS Location (pick on the map)');
+      if (!f.requested_date_time) missing.push('Requested Date & Time');
+      // Section 3 (Select Products) starred fields — these are the ones the
+      // previous gate missed, so an incomplete form (e.g. no Job Type) sailed
+      // past validation into the confirm popup + a failed create.
+      if (!String(f.fk_service_catg_ids || f.fk_service_catg_id || '').trim()) missing.push('Service Categories');
+      if (!(f.fk_service_type_ids && f.fk_service_type_ids.length)) missing.push('Service Type');
+      if (!String(f.job_type || '').trim()) missing.push('Job Type');
+      if (!hasAtLeastOneService) missing.push('At least one Service in Products');
+      if (missing.length) {
+        setError(`Missing required field(s): ${missing.join(', ')}`);
+        setSubmitting(false);
+        return;
+      }
     }
 
     /*
@@ -7362,6 +7412,23 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                   value={f.customer_mob_no}
                   className="font-mono"
                 />
+                {/* Calling (2026-06-30): click-to-call dials by a server-resolvable
+                    customer id, so it works only for an EXISTING customer already
+                    on file. For a brand-new customer there is no record to dial yet
+                    → show a note instead of a dead call control. */}
+                {prefillCustomer?.found && prefillCustomer.customer?.customer_id ? (
+                  <div className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <span>Call:</span>
+                    <CallableMobile
+                      customerId={prefillCustomer.customer.customer_id}
+                      mobile={maskMobile(f.customer_mob_no || null)}
+                    />
+                  </div>
+                ) : (
+                  <p className="mt-1.5 text-xs text-amber-700">
+                    Calling becomes available after the call is booked — this is a new customer not yet on file.
+                  </p>
+                )}
               </Field>
               <Field label="Email"><Input type="email" value={f.customer_email} onChange={(e) => set('customer_email', e.target.value)} /></Field>
               {/*

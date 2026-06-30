@@ -221,7 +221,21 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
    * persist 6 — without normalising, strings would differ harmlessly
    * but the watcher would still re-fire).
    */
-  const lastReverseGeocodedGpsRef = React.useRef<string>('');
+  // SEEDED from the incoming coords (2026-06-30) — mirrors lastGeocodedAddrRef
+  // (seeded from value.address). Without a baseline, the manual-GPS watcher's
+  // dedupe guard (`norm === lastReverseGeocodedGpsRef.current`) missed on every
+  // (re)mount and fired a spurious reverse-geocode for coords already in props.
+  // That blanked city_id whenever Google's city wasn't in the EasyFix master
+  // list — so collapsing/reopening the Customer Details section (which unmounts
+  // + remounts this picker) erased the operator's city pick and disabled Next.
+  // Parsing mirrors the watcher's normalize exactly so the guard now matches.
+  const lastReverseGeocodedGpsRef = React.useRef<string>((() => {
+    const parts = String(value.gps_location || '').trim().split(',').map((s) => Number(s.trim()));
+    if (parts.length !== 2 || parts.some((n) => !Number.isFinite(n))) return '';
+    const [lat, lng] = parts;
+    if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return '';
+    return `${lat.toFixed(6)},${lng.toFixed(6)}`;
+  })());
 
   // Reverse-geocode the marker position and patch dependent fields.
   // Called from the marker's `dragend` handler. Errors are logged but
@@ -277,69 +291,23 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
   }
 
   /*
-   * Typed-address → forward-geocode debounce (2026-05-28).
+   * Typed-address → forward-geocode debounce REMOVED (2026-06-30).
    *
-   * Covers the gap where an operator TYPES a full address but never
-   * picks an autocomplete suggestion — without this, the pin wouldn't
-   * move and the GPS field would stay stale. Fires 1s after the last
-   * keystroke, only when:
-   *   - the typed string differs from what we last reconciled,
-   *   - it's at least 8 chars (avoids burning Google credits on
-   *     half-typed garbage),
-   *   - the editor is editable (skip in read-only view modes).
+   * It geocoded the half-typed address on EVERY keystroke and patched
+   * gps_location + pin_code (+ city) back into the form. That gps_location
+   * write then re-armed the manual-GPS watcher below, whose reverseGeocode()
+   * set next.address = formatted_address and patched it — OVERWRITING the
+   * address text the operator was typing (and rewriting the PIN) under the
+   * cursor on key-up. The address must NEVER auto-change from typing.
    *
-   * Cheap on Google credits because (a) the BE /admin/maps/geocode
-   * endpoint already LRU-caches identical queries for 10 minutes,
-   * and (b) we de-dupe against `lastGeocodedAddrRef` here so an
-   * autocomplete pick that already set both address + gps doesn't
-   * trigger a redundant geocode.
-   *
-   * Stale-response guard: a flag flipped in the cleanup return suppresses
-   * patches from a debounced timer that resolves after the operator
-   * has typed more — prevents the pin from snapping to a previous
-   * partial address.
+   * Address (and PIN) now change ONLY from explicit operator gestures:
+   *   - picking an autocomplete suggestion (onPick), or
+   *   - dragging / clicking the map marker (reverseGeocode).
+   * Plain typing flows purely through AddressAutocomplete onChange →
+   * patch({ address }), which never touches gps_location / pin_code / address.
+   * (`lastGeocodedAddrRef` is now vestigial — still stamped by reverseGeocode/
+   * onPick but no longer read; left in place to avoid touching those paths.)
    */
-  React.useEffect(() => {
-    if (!editable) return;
-    const typed = String(value.address || '').trim();
-    if (typed.length < 8) return;
-    if (typed === lastGeocodedAddrRef.current) return;
-    let cancelled = false;
-    const handle = setTimeout(async () => {
-      try {
-        const r = await api.get<{
-          lat?: number; lng?: number;
-          formatted_address?: string;
-          address_components?: { postal_code?: string; city?: string };
-        }>('/admin/maps/geocode', { address: typed });
-        if (cancelled) return;
-        if (r.lat == null || r.lng == null) return;
-        lastGeocodedAddrRef.current = typed;
-        const next: Partial<AddressValue> = {
-          gps_location: `${r.lat.toFixed(6)},${r.lng.toFixed(6)}`,
-        };
-        const comps = r.address_components || {};
-        if (comps.postal_code) next.pin_code = comps.postal_code;
-        if (comps.city) {
-          const match = cityByName.get(comps.city.toLowerCase());
-          // ALWAYS set city_id — empty string when no master-list match
-          // so the SearchSelect renders blank rather than silently
-          // keeping the stale previous selection. Operators then either
-          // pick a city manually or drag the pin into a serviced region.
-          // (Was previously `if (match) next.city_id = match;` which
-          // misclassified jobs when the pin moved into an unserviced
-          // tier-3 town — the old city_id stuck and got persisted on save.)
-          next.city_id = match || '';
-        }
-        patch(next);
-      } catch {
-        // Silent fail — the operator can keep typing / pick a
-        // suggestion / drag the pin manually.
-      }
-    }, 1000);
-    return () => { cancelled = true; clearTimeout(handle); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value.address, editable]);
 
   /*
    * Manual-GPS → reverse-geocode debounce (2026-06-03).
