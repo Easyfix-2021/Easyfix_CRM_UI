@@ -1182,7 +1182,10 @@ function DeepSkillOptionMapping({ efrId, onReload }: { efrId: number; onReload?:
     next.add(catgId); setOpenCatg(next);
     if (!typesByCatg[catgId]) {
       try {
-        const types = await api.get<ServiceTypeLU[]>(`/shared/lookup/service-types?categoryId=${catgId}`);
+        // display=2 ⇒ only Tx-app / deep-skill service types (BE also filters
+        // active-only by default), so CRM-only types like "Amazon" (display=0)
+        // never appear in the deep-skill option tree.
+        const types = await api.get<ServiceTypeLU[]>(`/shared/lookup/service-types?categoryId=${catgId}&display=2`);
         setTypesByCatg((s) => ({ ...s, [catgId]: Array.isArray(types) ? types : [] }));
       } catch (e) {
         setError(e instanceof ApiError ? e.message : 'Failed to load service types');

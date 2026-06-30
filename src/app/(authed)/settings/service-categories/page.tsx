@@ -36,6 +36,7 @@ import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/componen
 import { Switch } from '@/components/ui/switch';
 import { api, ApiError } from '@/lib/api';
 import { useFetch, useDebouncedValue, invalidateFetch } from '@/lib/hooks';
+import { invalidateLookup } from '@/lib/use-lookup';
 import { cycleSort, SortHeader, type SortDir } from '@/lib/use-sort';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useMe } from '@/lib/auth-context';
@@ -126,8 +127,11 @@ export default function ManageServiceCategoryPage() {
   const total = listData?.total ?? 0;
 
   // Invalidate the 30s module cache for ALL service-category list pages, then
-  // refetch (a mutation changes counts/order across pages).
+  // refetch (a mutation changes counts/order across pages). Also bust the shared
+  // 'svcCat' lookup cache so active-only category dropdowns elsewhere stop showing
+  // a just-deactivated/renamed category instead of waiting out the 30-min TTL.
   function refreshList() {
+    invalidateLookup('svcCat');
     invalidateFetch((k) => k.startsWith('/admin/service-categories'));
     refetch();
   }

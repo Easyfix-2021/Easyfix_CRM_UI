@@ -4946,6 +4946,18 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
               // eslint-disable-next-line no-console
               console.warn('Failed to write outcome comment row', commentErr);
             }
+            // Customer "Unreachable" SMS (legacy parity with
+            // sendSmsToNotReachableCustomer). Only the Unreachable outcome
+            // notifies the customer; Enquiry does not. Fire-and-forget /
+            // non-fatal — a provider hiccup must not block the outcome.
+            if (outcomePayload.mode === 'unreachable') {
+              try {
+                await api.post(`/admin/jobs/${initial.job_id}/notify-unreachable`, {});
+              } catch (smsErr) {
+                // eslint-disable-next-line no-console
+                console.warn('Failed to send unreachable SMS', smsErr);
+              }
+            }
           }
         }
         /*
