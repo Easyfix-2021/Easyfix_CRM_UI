@@ -240,8 +240,9 @@ export function ScheduleAssignModal({
   // Multi-select offer pool — set of efr_ids the operator has ticked across
   // the Top-10 + search rows. Reset on close.
   const [selected, setSelected] = useState<Set<number>>(new Set());
-  // True while the offer POST is in flight (drives the sticky footer button).
-  const [offering, setOffering] = useState(false);
+  // True while the commit (offer POST or assign PATCH) is in flight — drives the
+  // sticky footer button's spinner + disabled state.
+  const [committing, setCommitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // Serviceable-pincodes "view all" modal target (the clicked candidate).
   const [pincodeModalFor, setPincodeModalFor] = useState<ScheduleCandidate | null>(null);
@@ -255,7 +256,7 @@ export function ScheduleAssignModal({
   useEffect(() => {
     if (!open) {
       setSeeded(false); setJobDateLocal(''); setSeedSlot('');
-      setSearch(''); setOffering(false); setErr(null); setPincodeModalFor(null);
+      setSearch(''); setCommitting(false); setErr(null); setPincodeModalFor(null);
       setRetainedJob(null); setSelected(new Set());
     }
   }, [open, jobId]);
@@ -385,7 +386,7 @@ export function ScheduleAssignModal({
       confirmLabel: `Yes, offer to ${techCount}`,
     });
     if (!ok) return;
-    setOffering(true); setErr(null);
+    setCommitting(true); setErr(null);
     try {
       // Carry the (possibly edited) proposed schedule so the offer respects the
       // operator's Job Date edit, just like direct-assign does.
@@ -406,7 +407,7 @@ export function ScheduleAssignModal({
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : 'Offer failed');
     } finally {
-      setOffering(false);
+      setCommitting(false);
     }
   }
 
@@ -442,7 +443,7 @@ export function ScheduleAssignModal({
       confirmLabel: 'Yes, Assign',
     });
     if (!ok) return;
-    setOffering(true); setErr(null);
+    setCommitting(true); setErr(null);
     try {
       await api.assignJob(jobId, id, {
         requestedDateTime: proposedWallClock || undefined,
@@ -455,7 +456,7 @@ export function ScheduleAssignModal({
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : 'Assign failed');
     } finally {
-      setOffering(false);
+      setCommitting(false);
     }
   }
 
@@ -467,7 +468,7 @@ export function ScheduleAssignModal({
     isDirty: () =>
       seeded && job != null &&
       jobDateLocal !== isoToLocalInput(job.requested_date_time),
-    when: () => !offering,
+    when: () => !committing,
   });
 
   return (
@@ -697,7 +698,7 @@ export function ScheduleAssignModal({
               variant="outline"
               className="bg-teal-500 hover:bg-teal-600 text-white border-teal-500 hover:text-white"
               onClick={() => setRemarksOpen(true)}
-              disabled={!jobId || offering}
+              disabled={!jobId || committing}
             >
               Add Remarks
             </Button>
@@ -711,18 +712,18 @@ export function ScheduleAssignModal({
               <Button
                 variant="destructive"
                 onClick={() => setCancelOpen(true)}
-                disabled={!jobId || offering}
+                disabled={!jobId || committing}
               >
                 Cancel
               </Button>
             )}
-            <Button variant="outline" onClick={onClose} disabled={offering}>Close</Button>
+            <Button variant="outline" onClick={onClose} disabled={committing}>Close</Button>
             {canCommit && (
               <Button
                 onClick={offerMode ? offer : assignSingle}
-                disabled={!jobId || offering || (offerMode ? selected.size === 0 : selected.size !== 1)}
+                disabled={!jobId || committing || (offerMode ? selected.size === 0 : selected.size !== 1)}
               >
-                {offering
+                {committing
                   ? <Loader2 className="h-4 w-4 animate-spin" />
                   : offerMode
                     ? (<>Offer to {selected.size} {selected.size === 1 ? 'Technician' : 'Technicians'}</>)

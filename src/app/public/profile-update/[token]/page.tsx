@@ -347,6 +347,9 @@ type PrefillResponse = {
   deep_skill_mappings: DeepSkillMapping[];
   serviceable_pincodes: PincodeMapping[];
   deep_skill_catalog?: CatalogCategory[];
+  /** BE-gated: whether the form must collect a WhatsApp OTP before saving.
+   *  Mirrors property `profile_update.otp.enabled`; absent → treat as true. */
+  otp_required?: boolean;
 };
 
 type DeepSkillItem = {
@@ -475,17 +478,6 @@ export default function ProfileUpdatePage() {
   const token = String(params?.token || '');
   const [state, setState] = React.useState<LoadState>({ kind: 'loading' });
 
-  // Open/closed state for the 2 editable sections. Both start collapsed so
-  // the first viewport on a phone fits the read-only header strip without
-  // scrolling past empty Card chrome.
-  const [openSection, setOpenSection] = React.useState<{ skills: boolean; pincodes: boolean }>({
-    skills: false,
-    pincodes: false,
-  });
-
-  const toggleSection = (key: 'skills' | 'pincodes') =>
-    setOpenSection((s) => ({ ...s, [key]: !s[key] }));
-
   React.useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -558,10 +550,210 @@ export default function ProfileUpdatePage() {
 
   const { data } = state;
 
-  // Callback the children use to push a refreshed prefill back up into the
+  // OTP requirement is BE-gated (property profile_update.otp.enabled), delivered
+  // in the prefill. Absent → assume required (safe default for a stale BE).
+  const otpRequired = data.otp_required ?? true;
+
+  // Callback the form uses to push a refreshed prefill back up into the
   // page after a successful save — keeps the displayed values, the dirty
   // baseline, and any catalog data in sync with the server.
   const onSaved = (next: PrefillResponse) => setState({ kind: 'ready', data: next });
+
+  // The Ready branch lives in a dedicated component so its lifted form
+  // hooks (selSkills / selPincodes / saving / …) are never called
+  // conditionally after the early-return error states above — that would
+  // violate the rules of hooks.
+  return (
+    <ReadyForm token={token} data={data} otpRequired={otpRequired} onSaved={onSaved} />
+  );
+}
+
+/* ───────── Ready form (single combined submit) ───────── */
+/*
+ * Holds the lifted selection state for BOTH editable sections (Skills
+ * Mapping + Service Area). The two pickers are CONTROLLED — they render
+ * the tree / search UI and report toggles back up; they no longer save.
+ * A single page-level "Save Profile" button (with one OTP gate) PUTs both
+ * arrays in one request. Both sections are mandatory, so the button is
+ * disabled until both are non-empty AND something changed.
+ */
+function ReadyForm({
+  token,
+  data,
+  otpRequired,
+  onSaved,
+}: {
+  token: string;
+  data: PrefillResponse;
+  otpRequired: boolean;
+  onSaved: (next: PrefillResponse) => void;
+}) {
+  // Open/closed state for the 2 editable sections. Both start collapsed so
+  // the first viewport on a phone fits the read-only header strip without
+  // scrolling past empty Card chrome.
+  const [openSection, setOpenSection] = React.useState<{ skills: boolean; pincodes: boolean }>({
+    skills: false,
+    pincodes: false,
+  });
+  const toggleSection = (key: 'skills' | 'pincodes') =>
+    setOpenSection((s) => ({ ...s, [key]: !s[key] }));
+
+  // ── Lifted selection state ──
+  // Skills: a set of `c|t|s|o` keys (see skillKey). Pincodes: a Map keyed
+  // by pincode_id → the full mapping row (so chips can render city/state).
+  // Both lazy-init from `data` so the very first render is correct.
+  const [selSkills, setSelSkills] = React.useState<Set<string>>(() => {
+    const s = new Set<string>();
+    for (const m of data.deep_skill_mappings) s.add(skillKey(m.category_id, m.service_type_id, m.deep_skill_id, m.option_id));
+    return s;
+  });
+  const [selPincodes, setSelPincodes] = React.useState<Map<number, PincodeMapping>>(() => {
+    const m = new Map<number, PincodeMapping>();
+    const list: PincodeMapping[] = Array.isArray(data.serviceable_pincodes)
+      ? data.serviceable_pincodes
+      : ((data.serviceable_pincodes as unknown as { items?: PincodeMapping[] } | null | undefined)?.items ?? []);
+    for (const p of list) m.set(Number(p.pincode_id), p);
+    return m;
+  });
+  const [saving, setSaving] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [saved, setSaved] = React.useState(false);
+  const [otpGateOpen, setOtpGateOpen] = React.useState(false);
+
+  // Re-init both selections whenever `data` changes (e.g. after a save
+  // replaces the prefill via onSaved) so the selections snap back to the
+  // saved server state, and clear any transient save / gate flags.
+  React.useEffect(() => {
+    const s = new Set<string>();
+    for (const m of data.deep_skill_mappings) s.add(skillKey(m.category_id, m.service_type_id, m.deep_skill_id, m.option_id));
+    setSelSkills(s);
+    const map = new Map<number, PincodeMapping>();
+    const list: PincodeMapping[] = Array.isArray(data.serviceable_pincodes)
+      ? data.serviceable_pincodes
+      : ((data.serviceable_pincodes as unknown as { items?: PincodeMapping[] } | null | undefined)?.items ?? []);
+    for (const p of list) map.set(Number(p.pincode_id), p);
+    setSelPincodes(map);
+    setSaved(false);
+    setError(null);
+    setOtpGateOpen(false);
+  }, [data]);
+
+  // Baselines derived from the current server prefill.
+  const originalSkills = React.useMemo(() => {
+    const s = new Set<string>();
+    for (const m of data.deep_skill_mappings) s.add(skillKey(m.category_id, m.service_type_id, m.deep_skill_id, m.option_id));
+    return s;
+  }, [data.deep_skill_mappings]);
+  const originalPincodeIds = React.useMemo(() => {
+    const s = new Set<number>();
+    for (const p of data.serviceable_pincodes) s.add(Number(p.pincode_id));
+    return s;
+  }, [data.serviceable_pincodes]);
+
+  const dirty = React.useMemo(() => {
+    if (selSkills.size !== originalSkills.size) return true;
+    for (const k of selSkills) if (!originalSkills.has(k)) return true;
+    if (selPincodes.size !== originalPincodeIds.size) return true;
+    for (const id of selPincodes.keys()) if (!originalPincodeIds.has(id)) return true;
+    return false;
+  }, [selSkills, originalSkills, selPincodes, originalPincodeIds]);
+
+  const bothFilled = selSkills.size > 0 && selPincodes.size > 0;
+  const canSave = dirty && bothFilled;
+
+  // ── Selection handlers (passed down to the controlled pickers) ──
+  const toggleSkill = React.useCallback((c: number, t: number, s: number, o: number) => {
+    const key = skillKey(c, t, s, o);
+    setSelSkills((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const togglePincode = React.useCallback((row: CatalogPincode) => {
+    const id = Number(row.pincode_id);
+    setSelPincodes((prev) => {
+      const next = new Map(prev);
+      if (next.has(id)) next.delete(id);
+      else next.set(id, {
+        pincode_id: id,
+        pincode: String(row.pincode),
+        city_name: row.city_name ?? null,
+        state_name: row.state_name ?? null,
+      });
+      return next;
+    });
+  }, []);
+
+  const removePincode = React.useCallback((id: number) => {
+    setSelPincodes((prev) => {
+      const next = new Map(prev);
+      next.delete(id);
+      return next;
+    });
+  }, []);
+
+  const addEnsuredPincode = React.useCallback((row: CatalogPincode) => {
+    const id = Number(row.pincode_id);
+    setSelPincodes((prev) => {
+      const next = new Map(prev);
+      next.set(id, {
+        pincode_id: id,
+        pincode: String(row.pincode),
+        city_name: row.city_name ?? null,
+        state_name: row.state_name ?? null,
+      });
+      return next;
+    });
+  }, []);
+
+  // ── Single combined save: PUT both arrays in one request ──
+  async function save(otp?: string) {
+    setSaving(true);
+    setError(null);
+    try {
+      const deep_skill_items: DeepSkillItem[] = Array.from(selSkills).map((k) => {
+        const [c, t, s, o] = k.split('|').map(Number);
+        return { category_id: c, service_type_id: t, deep_skill_id: s, option_id: o };
+      });
+      const serviceable_pincode_ids = Array.from(selPincodes.keys());
+      const body: {
+        deep_skill_items: DeepSkillItem[];
+        serviceable_pincode_ids: number[];
+        otp?: number;
+      } = { deep_skill_items, serviceable_pincode_ids };
+      if (otp != null) body.otp = Number(otp);
+      const next = await publicFetch<PrefillResponse>(
+        `/public/easyfixer-profile-update/save?token=${encodeURIComponent(token)}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        }
+      );
+      const merged = next ?? data;
+      onSaved(merged);
+      setSaved(true);
+      setOtpGateOpen(false);
+      showToast({ variant: 'success', message: 'Profile Saved' });
+    } catch (e) {
+      const err = e as { status?: number; message?: string };
+      const msg = err?.message || 'Failed to save profile';
+      setError(msg);
+      // Keep gate open on OTP error so the user can retry.
+      if (err?.status !== 400) setOtpGateOpen(false);
+      showToast({ variant: 'error', message: msg });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Both sections are MANDATORY to complete the profile. Surface a
+  // persistent completion banner until BOTH have at least one entry on
+  // the server.
+  const skillsDone = data.deep_skill_mappings.length > 0;
+  const pincodesDone = data.serviceable_pincodes.length > 0;
 
   return (
     <div className="mx-auto max-w-2xl lg:max-w-3xl py-4 sm:py-6">
@@ -600,6 +792,33 @@ export default function ProfileUpdatePage() {
        *  sections; gracefully hides individual fields the BE left null. */}
       <ProfileHeaderStrip header={data.header} />
 
+      {/* Completion banner — both Skills Mapping AND Service Area are required.
+          Stays until both have at least one entry saved on the server. */}
+      {(!skillsDone || !pincodesDone) ? (
+        <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 flex items-start gap-2">
+          <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-amber-900">
+              Both sections are required to complete your profile.
+            </p>
+            <ul className="mt-1.5 space-y-1 text-xs text-amber-800">
+              <li className="flex items-center gap-1.5">
+                {skillsDone
+                  ? <Check className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                  : <X className="h-3.5 w-3.5 text-amber-600 shrink-0" />}
+                <span>Skills Mapping — {skillsDone ? 'done' : 'still pending'}</span>
+              </li>
+              <li className="flex items-center gap-1.5">
+                {pincodesDone
+                  ? <Check className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                  : <X className="h-3.5 w-3.5 text-amber-600 shrink-0" />}
+                <span>Service Area — {pincodesDone ? 'done' : 'still pending'}</span>
+              </li>
+            </ul>
+          </div>
+        </div>
+      ) : null}
+
       <div className="space-y-3 sm:space-y-4">
         {/*
          * Basic Details section removed (2026-06-11). The form is now
@@ -619,11 +838,11 @@ export default function ProfileUpdatePage() {
           saved={false}
         >
           <SkillsMappingSection
-            token={token}
             mappings={data.deep_skill_mappings}
             catalog={data.deep_skill_catalog}
-            onSaved={onSaved}
-            prefill={data}
+            selected={selSkills}
+            original={originalSkills}
+            onToggleOption={toggleSkill}
           />
         </SectionShell>
 
@@ -637,15 +856,58 @@ export default function ProfileUpdatePage() {
         >
           <ServiceAreaSection
             token={token}
-            pincodes={data.serviceable_pincodes}
-            onSaved={onSaved}
-            prefill={data}
+            selected={selPincodes}
+            onToggle={togglePincode}
+            onRemove={removePincode}
+            onEnsureAdd={addEnsuredPincode}
           />
         </SectionShell>
       </div>
 
+      {/* ───── Single combined action area ───── */}
+      <div className="mt-6 space-y-3">
+        {!bothFilled ? (
+          <p className="text-center text-xs font-medium text-amber-700">
+            Both Skills Mapping and Service Area are required to save.
+          </p>
+        ) : null}
+
+        <AnimatedLoadingBar visible={saving} message="Saving Profile…" tone="sky" />
+
+        {otpRequired ? (
+          <OtpGate
+            token={token}
+            open={otpGateOpen}
+            sending={saving}
+            onVerified={(otp) => save(otp)}
+            onCancel={() => { setOtpGateOpen(false); setError(null); }}
+            saveError={error}
+          />
+        ) : null}
+
+        {!otpGateOpen ? (
+          <>
+            {error ? (
+              <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>
+            ) : null}
+            <div className="flex justify-end">
+              <Button
+                // OTP on → open the gate (which calls save(otp)); OTP off → save directly.
+                onClick={otpRequired
+                  ? () => { setError(null); setOtpGateOpen(true); }
+                  : () => { setError(null); void save(); }}
+                disabled={!canSave || saving}
+                className="h-11 sm:h-9 w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white"
+              >
+                {saved && !dirty ? 'Saved · Tap To Re-Save' : 'Save Profile'}
+              </Button>
+            </div>
+          </>
+        ) : null}
+      </div>
+
       <p className="mt-6 text-center text-xs text-slate-400 px-2">
-        Your changes save instantly after you tap Save. You can re-open this link any time before it expires to make more updates.
+        You can re-open this link any time before it expires to make more updates.
       </p>
     </div>
   );
@@ -837,17 +1099,17 @@ function skillKey(c: number, t: number, s: number, o: number): string {
 }
 
 function SkillsMappingSection({
-  token,
   mappings,
   catalog,
-  prefill,
-  onSaved,
+  selected,
+  original,
+  onToggleOption,
 }: {
-  token: string;
   mappings: DeepSkillMapping[];
   catalog: CatalogCategory[] | undefined;
-  prefill: PrefillResponse;
-  onSaved: (next: PrefillResponse) => void;
+  selected: Set<string>;
+  original: Set<string>;
+  onToggleOption: (c: number, t: number, s: number, o: number) => void;
 }) {
   const hasCatalog = Array.isArray(catalog) && catalog.length > 0;
 
@@ -856,7 +1118,14 @@ function SkillsMappingSection({
     return <ReadOnlyMappings mappings={mappings} />;
   }
 
-  return <SkillsMappingPicker token={token} mappings={mappings} catalog={catalog!} prefill={prefill} onSaved={onSaved} />;
+  return (
+    <SkillsMappingPicker
+      catalog={catalog!}
+      selected={selected}
+      original={original}
+      onToggleOption={onToggleOption}
+    />
+  );
 }
 
 function ReadOnlyMappings({ mappings }: { mappings: DeepSkillMapping[] }) {
@@ -910,34 +1179,19 @@ function ReadOnlyMappings({ mappings }: { mappings: DeepSkillMapping[] }) {
 }
 
 function SkillsMappingPicker({
-  token,
-  mappings,
   catalog,
-  prefill,
-  onSaved,
+  selected,
+  original,
+  onToggleOption,
 }: {
-  token: string;
-  mappings: DeepSkillMapping[];
   catalog: CatalogCategory[];
-  prefill: PrefillResponse;
-  onSaved: (next: PrefillResponse) => void;
+  selected: Set<string>;
+  original: Set<string>;
+  onToggleOption: (c: number, t: number, s: number, o: number) => void;
 }) {
-  const initialSet = React.useMemo(() => {
-    const s = new Set<string>();
-    for (const m of mappings) s.add(skillKey(m.category_id, m.service_type_id, m.deep_skill_id, m.option_id));
-    return s;
-  }, [mappings]);
-
-  const [original, setOriginal] = React.useState<Set<string>>(initialSet);
-  const [selected, setSelected] = React.useState<Set<string>>(new Set(initialSet));
   const [openCatg, setOpenCatg] = React.useState<Set<number>>(new Set());
   const [openType, setOpenType] = React.useState<Set<number>>(new Set());
   const [openSkill, setOpenSkill] = React.useState<Set<number>>(new Set());
-  const [saving, setSaving] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
-  const [saved, setSaved] = React.useState(false);
-  // OTP gate state for the Skills Mapping save flow.
-  const [otpGateOpen, setOtpGateOpen] = React.useState(false);
   // Click-to-enlarge lightbox for the 24×24 deep-skill thumbnails.
   const [lightboxUrl, setLightboxUrl] = React.useState<{ url: string; name: string } | null>(null);
 
@@ -946,19 +1200,6 @@ function SkillsMappingPicker({
     if (next.has(value)) next.delete(value); else next.add(value);
     setter(next);
   };
-
-  const toggleOption = (c: number, t: number, s: number, o: number) => {
-    const key = skillKey(c, t, s, o);
-    const next = new Set(selected);
-    if (next.has(key)) next.delete(key); else next.add(key);
-    setSelected(next);
-  };
-
-  const dirty = React.useMemo(() => {
-    if (selected.size !== original.size) return true;
-    for (const k of selected) if (!original.has(k)) return true;
-    return false;
-  }, [selected, original]);
 
   // Cascading count badges for category / type / skill so the technician
   // sees option counts roll up without having to expand each branch.
@@ -975,43 +1216,6 @@ function SkillsMappingPicker({
     }
     return { countByCategory: byCatg, countByType: byType, countBySkill: bySkill };
   }, [selected]);
-
-  async function save(otp: string) {
-    setSaving(true);
-    setError(null);
-    try {
-      const items: DeepSkillItem[] = Array.from(selected).map((k) => {
-        const [c, t, s, o] = k.split('|').map(Number);
-        return { category_id: c, service_type_id: t, deep_skill_id: s, option_id: o };
-      });
-      const next = await publicFetch<PrefillResponse>(
-        `/public/easyfixer-profile-update/save?token=${encodeURIComponent(token)}`,
-        {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ deep_skill_items: items, otp: Number(otp) }),
-        }
-      );
-      const merged = next ?? prefill;
-      const fresh = new Set<string>();
-      for (const m of merged.deep_skill_mappings) fresh.add(skillKey(m.category_id, m.service_type_id, m.deep_skill_id, m.option_id));
-      setOriginal(fresh);
-      setSelected(new Set(fresh));
-      setSaved(true);
-      setOtpGateOpen(false);
-      onSaved(merged);
-      showToast({ variant: 'success', message: 'Skills Mapping Saved' });
-    } catch (e) {
-      const err = e as { status?: number; message?: string };
-      const msg = err?.message || 'Failed to save skills mapping';
-      setError(msg);
-      // Keep gate open on OTP error so the user can retry.
-      if (err?.status !== 400) setOtpGateOpen(false);
-      showToast({ variant: 'error', message: msg });
-    } finally {
-      setSaving(false);
-    }
-  }
 
   return (
     <div className="space-y-3">
@@ -1158,14 +1362,16 @@ function SkillsMappingPicker({
 
       <AnimatedLoadingBar visible={saving} message="Saving Skills Mapping…" tone="sky" />
 
-      <OtpGate
-        token={token}
-        open={otpGateOpen}
-        sending={saving}
-        onVerified={(otp) => save(otp)}
-        onCancel={() => { setOtpGateOpen(false); setError(null); }}
-        saveError={error}
-      />
+      {otpRequired ? (
+        <OtpGate
+          token={token}
+          open={otpGateOpen}
+          sending={saving}
+          onVerified={(otp) => save(otp)}
+          onCancel={() => { setOtpGateOpen(false); setError(null); }}
+          saveError={error}
+        />
+      ) : null}
 
       {!otpGateOpen ? (
         <>
@@ -1181,7 +1387,10 @@ function SkillsMappingPicker({
           ) : null}
           <div className="flex justify-end">
             <Button
-              onClick={() => { setError(null); setOtpGateOpen(true); }}
+              // OTP on → open the gate (which calls save(otp)); OTP off → save directly.
+              onClick={otpRequired
+                ? () => { setError(null); setOtpGateOpen(true); }
+                : () => { setError(null); void save(); }}
               disabled={!dirty || saving || selected.size === 0}
               className="h-11 sm:h-9 w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white"
             >
@@ -1203,16 +1412,18 @@ function ServiceAreaSection({
   pincodes,
   prefill,
   onSaved,
+  otpRequired,
 }: {
   token: string;
   pincodes: PincodeMapping[];
   prefill: PrefillResponse;
   onSaved: (next: PrefillResponse) => void;
+  otpRequired: boolean;
 }) {
   // Pincodes are too large (~155k rows) to bundle in the prefill, so the
   // picker is always editable and pulls suggestions from the public search
   // endpoint instead of a bundled catalog.
-  return <PincodePicker token={token} pincodes={pincodes} prefill={prefill} onSaved={onSaved} />;
+  return <PincodePicker token={token} pincodes={pincodes} prefill={prefill} onSaved={onSaved} otpRequired={otpRequired} />;
 }
 
 function PincodePicker({
@@ -1220,11 +1431,13 @@ function PincodePicker({
   pincodes,
   prefill,
   onSaved,
+  otpRequired,
 }: {
   token: string;
   pincodes: PincodeMapping[];
   prefill: PrefillResponse;
   onSaved: (next: PrefillResponse) => void;
+  otpRequired: boolean;
 }) {
   const initialMap = React.useMemo(() => {
     const m = new Map<number, PincodeMapping>();
@@ -1429,17 +1642,20 @@ function PincodePicker({
     return false;
   }, [selected, original]);
 
-  async function save(otp: string) {
+  async function save(otp?: string) {
     setSaving(true);
     setError(null);
     try {
       const ids = Array.from(selected.keys());
+      // OTP only travels when the BE requires it (otp_required from prefill).
+      const body: { serviceable_pincode_ids: number[]; otp?: number } = { serviceable_pincode_ids: ids };
+      if (otp != null) body.otp = Number(otp);
       const next = await publicFetch<PrefillResponse>(
         `/public/easyfixer-profile-update/save?token=${encodeURIComponent(token)}`,
         {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ serviceable_pincode_ids: ids, otp: Number(otp) }),
+          body: JSON.stringify(body),
         }
       );
       const merged = next ?? prefill;
@@ -1600,14 +1816,16 @@ function PincodePicker({
 
       <AnimatedLoadingBar visible={saving} message="Saving Service Area…" tone="sky" />
 
-      <OtpGate
-        token={token}
-        open={otpGateOpen}
-        sending={saving}
-        onVerified={(otp) => save(otp)}
-        onCancel={() => { setOtpGateOpen(false); setError(null); }}
-        saveError={error}
-      />
+      {otpRequired ? (
+        <OtpGate
+          token={token}
+          open={otpGateOpen}
+          sending={saving}
+          onVerified={(otp) => save(otp)}
+          onCancel={() => { setOtpGateOpen(false); setError(null); }}
+          saveError={error}
+        />
+      ) : null}
 
       {!otpGateOpen ? (
         <>
@@ -1623,7 +1841,10 @@ function PincodePicker({
           ) : null}
           <div className="flex justify-end">
             <Button
-              onClick={() => { setError(null); setOtpGateOpen(true); }}
+              // OTP on → open the gate (which calls save(otp)); OTP off → save directly.
+              onClick={otpRequired
+                ? () => { setError(null); setOtpGateOpen(true); }
+                : () => { setError(null); void save(); }}
               disabled={!dirty || saving || selected.size === 0}
               className="h-11 sm:h-9 w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white"
             >
