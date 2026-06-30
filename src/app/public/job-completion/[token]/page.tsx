@@ -111,6 +111,12 @@ type CustomProp = { name: string; mandatory: boolean; label: string | null; valu
 // The three canonical keys have dedicated form-state fields + tbl_job columns.
 const CANONICAL_PROP_KEYS = new Set(['branch_details', 'building_name', 'product_code']);
 
+// Feature toggle (2026-06-30): the customer-facing Services picker is HIDDEN on
+// the job-completion form for now. Any services pre-seeded from the booking
+// still submit unchanged (form.services is untouched) — the customer just can't
+// add/remove them here. Flip to `true` to restore the picker.
+const SHOW_SERVICES = false;
+
 // Operator-config rows in tbl_client_custom_properties are NOT customer-facing.
 // The BE already strips these from the prefill, but we filter defensively in
 // case the FE ever talks to an older deploy that doesn't. Compared after the
@@ -956,6 +962,8 @@ export default function JobCompletionMagicLinkPage() {
           </Field>
         </Section>
 
+        {/* Services picker HIDDEN for now (2026-06-30) — gated by SHOW_SERVICES. */}
+        {SHOW_SERVICES && (
         <Section title="Services">
           {/* Customer-facing service picker, rendered as a proper TABLE with
               distinct columns (Action | Service Name | Category | Type | Qty)
@@ -1072,6 +1080,7 @@ export default function JobCompletionMagicLinkPage() {
           )}
           {/* Intentionally NO prices — public flow per spec. */}
         </Section>
+        )}
 
         {/* Product Photos & Videos. The picker accepts BOTH images and short
             videos via the same endpoint (BE branches by MIME). Two separate
@@ -1093,9 +1102,12 @@ export default function JobCompletionMagicLinkPage() {
 
         <Section title="Product Details / Notes">
           <Field label="Product Details / Description / Remarks">
-            <textarea value={form.job_desc} onChange={(e) => patch({ job_desc: e.target.value })}
-              rows={3} className={`${inputClass} resize-y`}
-              placeholder="Anything else our technician should know?" />
+            {/* Job Description is READ-ONLY on the job-completion form (2026-06-30):
+                shown for context but the customer cannot edit it. The value still
+                submits unchanged (controlled from form.job_desc). */}
+            <textarea value={form.job_desc} readOnly aria-readonly="true"
+              rows={3} className={`${inputClass} resize-none bg-slate-50 text-slate-500 cursor-not-allowed`}
+              placeholder="—" />
           </Field>
         </Section>
 
