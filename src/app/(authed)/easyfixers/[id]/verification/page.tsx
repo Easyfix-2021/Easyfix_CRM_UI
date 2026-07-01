@@ -24,7 +24,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, Check, Loader2, Phone, Smile, X, Upload, ChevronDown, ChevronRight, Search } from 'lucide-react';
+import { ArrowLeft, Check, Loader2, Phone, Smile, X, Upload, ChevronDown, ChevronUp, CheckCircle2, Wrench, Search } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
 import { useFetch, useDebouncedValue } from '@/lib/hooks';
 import { Button } from '@/components/ui/button';
@@ -1106,7 +1106,64 @@ function ActivationSection({
  * The "currently mapped" indicator is computed from `original` — the
  * set captured on first fetch. The Save button is disabled until
  * `selected` diverges from `original`.
+ *
+ * RENDER (2026-07 Figma redesign): the tree is presented as a single-page
+ * CATEGORY ACCORDION that mirrors the public profile-update SkillsMappingPicker
+ * — expanding a category reveals an app-like LEFT service-type rail + RIGHT
+ * grid of deep-skill cards, and tapping a card opens an options bottom sheet.
+ * The DATA FLOW is unchanged: every level is still lazy-loaded via the same
+ * /admin lookups, cached per-key in-state; only the fetch TRIGGERS were
+ * re-shaped to the accordion → rail → cards → sheet interactions.
  */
+
+/* ───────── Deep-skill picker theme + icons (Figma redesign) ─────────
+ * Standalone red/blue palette copied from the public profile-update flow so
+ * the CRM picker matches the Figma mockup 1:1. Category / service-type ICONS
+ * ship as static assets in public/deep-skill-icons/{categories,service-types}/
+ * named by the slug of the category / service-type name; until an asset lands,
+ * DsIconTile falls back to a coloured first-letter tile. Deep-skill THUMBNAILS
+ * keep coming from the DB (deep_skill_image_url). */
+const DS_RED = '#DC4B41';
+const DS_RED_TINT = '#FDECEC';
+const DS_BLUE = '#2D9CDB';
+const DS_BLUE_TINT = '#EAF6FD';
+const DS_GREEN = '#16A34A';
+
+function dsSlug(s: string): string {
+  return String(s || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+}
+
+function DsIconTile({
+  name, kind, size = 44, className = '',
+}: { name: string; kind: 'categories' | 'service-types'; size?: number; className?: string }) {
+  const [failed, setFailed] = useState(false);
+  const slug = dsSlug(name);
+  const letter = (String(name || '?').trim().charAt(0) || '?').toUpperCase();
+  if (failed || !slug) {
+    return (
+      <div
+        style={{ width: size, height: size, backgroundColor: DS_RED_TINT, color: DS_RED }}
+        className={`flex items-center justify-center rounded-lg font-bold shrink-0 ${className}`}
+        aria-hidden
+      >
+        {letter}
+      </div>
+    );
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={`/deep-skill-icons/${kind}/${slug}.png`}
+      alt=""
+      width={size}
+      height={size}
+      style={{ width: size, height: size }}
+      className={`rounded-lg object-contain shrink-0 ${className}`}
+      onError={() => setFailed(true)}
+      loading="lazy"
+    />
+  );
+}
 
 type OptionMapping = {
   category_id: number; category_name: string | null;
@@ -1118,7 +1175,7 @@ type OptionMapping = {
 
 type ServiceCategoryLU = { service_catg_id: number; service_catg_name: string };
 type ServiceTypeLU     = { service_type_id: number; service_type_name: string; service_catg_id: number };
-type DeepSkillLU       = { deepskill_id: number; deepskill_name: string; category_id: number; service_type_id: number; deep_skill_image_url: string | null };
+type DeepSkillLU       = { deepskill_id: number; deepskill_name: string; category_id: number; service_type_id: number; deep_skill_image_url: string | null; option_count?: number };
 type DeepSkillOptionLU = { id: number; skill_option: string; status: number };
 type DeepSkillDetail   = { deepskill_id: number; deepskill_name: string; options: DeepSkillOptionLU[] };
 
@@ -1134,14 +1191,20 @@ function DeepSkillOptionMapping({ efrId, onReload }: { efrId: number; onReload?:
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [openCatg, setOpenCatg] = useState<Set<number>>(new Set());
-  const [openType, setOpenType] = useState<Set<number>>(new Set());
-  const [openSkill, setOpenSkill] = useState<Set<number>>(new Set());
-  // Lazy-loaded children — keyed by parent id.
+  // Accordion / rail / sheet UI state (Figma redesign):
+  //   - expandedCatg    : exactly one category card is open at a time.
+  //   - activeTypeByCatg: which service-type rail item is active per category
+  //     (so re-expanding a category restores the last-viewed rail item).
+  //   - sheetSkillId    : which deep-skill's options bottom sheet is open.
+  const [expandedCatg, setExpandedCatg] = useState<number | null>(null);
+  const [activeTypeByCatg, setActiveTypeByCatg] = useState<Record<number, number>>({});
+  const [sheetSkillId, setSheetSkillId] = useState<number | null>(null);
+  // Lazy-loaded children — keyed by parent id (cached so re-expanding /
+  // re-selecting a rail item never re-fetches).
   const [typesByCatg, setTypesByCatg] = useState<Record<number, ServiceTypeLU[]>>({});
   const [skillsByType, setSkillsByType] = useState<Record<number, DeepSkillLU[]>>({});
   const [optionsBySkill, setOptionsBySkill] = useState<Record<number, DeepSkillOptionLU[]>>({});
-  // Click-to-enlarge lightbox for the 24×24 deep-skill thumbnails.
+  // Click-to-enlarge lightbox for the deep-skill thumbnails.
   const [lightboxUrl, setLightboxUrl] = useState<{ url: string; name: string } | null>(null);
 
   // Initial fetch — current mappings + the full categories list.
@@ -1176,51 +1239,77 @@ function DeepSkillOptionMapping({ efrId, onReload }: { efrId: number; onReload?:
     return () => { cancelled = true; };
   }, [efrId]);
 
-  async function toggleCatg(catgId: number) {
-    const next = new Set(openCatg);
-    if (next.has(catgId)) { next.delete(catgId); setOpenCatg(next); return; }
-    next.add(catgId); setOpenCatg(next);
-    if (!typesByCatg[catgId]) {
-      try {
-        // display=2 ⇒ only Tx-app / deep-skill service types (BE also filters
-        // active-only by default), so CRM-only types like "Amazon" (display=0)
-        // never appear in the deep-skill option tree.
-        const types = await api.get<ServiceTypeLU[]>(`/shared/lookup/service-types?categoryId=${catgId}&display=2`);
-        setTypesByCatg((s) => ({ ...s, [catgId]: Array.isArray(types) ? types : [] }));
-      } catch (e) {
-        setError(e instanceof ApiError ? e.message : 'Failed to load service types');
-      }
-    }
-  }
+  // ── Lazy-fetch primitives (cache-guarded; identical endpoints to before,
+  //    only the invocation triggers were re-shaped for the accordion) ──
 
-  async function toggleType(typeId: number, catgId: number) {
-    const next = new Set(openType);
-    if (next.has(typeId)) { next.delete(typeId); setOpenType(next); return; }
-    next.add(typeId); setOpenType(next);
-    if (!skillsByType[typeId]) {
-      try {
-        const skills = await api.get<DeepSkillLU[]>(`/admin/deep-skills?categoryId=${catgId}&serviceTypeId=${typeId}`);
-        setSkillsByType((s) => ({ ...s, [typeId]: Array.isArray(skills) ? skills : [] }));
-      } catch (e) {
-        setError(e instanceof ApiError ? e.message : 'Failed to load deep skills');
-      }
+  // Fetch a category's service-types (rail). display=2 ⇒ only Tx-app /
+  // deep-skill service types (BE also filters active-only by default), so
+  // CRM-only types like "Amazon" (display=0) never appear in the tree.
+  const ensureTypes = useCallback(async (catgId: number): Promise<ServiceTypeLU[]> => {
+    if (typesByCatg[catgId]) return typesByCatg[catgId];
+    try {
+      const types = await api.get<ServiceTypeLU[]>(`/shared/lookup/service-types?categoryId=${catgId}&display=2`);
+      const arr = Array.isArray(types) ? types : [];
+      setTypesByCatg((s) => ({ ...s, [catgId]: arr }));
+      return arr;
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Failed to load service types');
+      return [];
     }
-  }
+  }, [typesByCatg]);
 
-  async function toggleSkill(skillId: number) {
-    const next = new Set(openSkill);
-    if (next.has(skillId)) { next.delete(skillId); setOpenSkill(next); return; }
-    next.add(skillId); setOpenSkill(next);
-    if (!optionsBySkill[skillId]) {
-      try {
-        const detail = await api.get<DeepSkillDetail>(`/admin/deep-skills/${skillId}`);
-        const opts = (detail?.options || []).filter((o) => Number(o.status) === 1);
-        setOptionsBySkill((s) => ({ ...s, [skillId]: opts }));
-      } catch (e) {
-        setError(e instanceof ApiError ? e.message : 'Failed to load skill options');
-      }
+  // Fetch a (category, service-type)'s deep-skill cards.
+  const ensureSkills = useCallback(async (catgId: number, typeId: number): Promise<void> => {
+    if (skillsByType[typeId]) return;
+    try {
+      const skills = await api.get<DeepSkillLU[]>(`/admin/deep-skills?categoryId=${catgId}&serviceTypeId=${typeId}`);
+      setSkillsByType((s) => ({ ...s, [typeId]: Array.isArray(skills) ? skills : [] }));
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Failed to load deep skills');
     }
-  }
+  }, [skillsByType]);
+
+  // Fetch a deep-skill's options (status===1 only) for the bottom sheet.
+  const ensureOptions = useCallback(async (skillId: number): Promise<void> => {
+    if (optionsBySkill[skillId]) return;
+    try {
+      const detail = await api.get<DeepSkillDetail>(`/admin/deep-skills/${skillId}`);
+      const opts = (detail?.options || []).filter((o) => Number(o.status) === 1);
+      setOptionsBySkill((s) => ({ ...s, [skillId]: opts }));
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Failed to load skill options');
+    }
+  }, [optionsBySkill]);
+
+  // Accordion toggle: expanding a category collapses any other, closes the
+  // sheet, then loads its rail (service-types) and the deep-skills for the
+  // active/first rail item.
+  const expandCategory = useCallback(async (catgId: number) => {
+    setSheetSkillId(null);
+    if (expandedCatg === catgId) { setExpandedCatg(null); return; }
+    setExpandedCatg(catgId);
+    const types = await ensureTypes(catgId);
+    if (types.length === 0) return;
+    const activeId = activeTypeByCatg[catgId] ?? types[0].service_type_id;
+    if (activeTypeByCatg[catgId] == null) {
+      setActiveTypeByCatg((s) => ({ ...s, [catgId]: activeId }));
+    }
+    await ensureSkills(catgId, activeId);
+  }, [expandedCatg, activeTypeByCatg, ensureTypes, ensureSkills]);
+
+  // Rail item click: make it the active type for its category and load its
+  // deep-skills.
+  const selectType = useCallback(async (catgId: number, typeId: number) => {
+    setSheetSkillId(null);
+    setActiveTypeByCatg((s) => ({ ...s, [catgId]: typeId }));
+    await ensureSkills(catgId, typeId);
+  }, [ensureSkills]);
+
+  // Card click: open its options bottom sheet and ensure its options loaded.
+  const openSheet = useCallback(async (skillId: number) => {
+    setSheetSkillId(skillId);
+    await ensureOptions(skillId);
+  }, [ensureOptions]);
 
   function toggleOption(catgId: number, typeId: number, skillId: number, optionId: number) {
     const key = mapKey(catgId, typeId, skillId, optionId);
@@ -1287,6 +1376,23 @@ function DeepSkillOptionMapping({ efrId, onReload }: { efrId: number; onReload?:
     }
   }
 
+  // ── Derived render helpers for the open accordion card ──
+  // The active rail service-type for the currently-expanded category (falls
+  // back to the first loaded type), and the deep-skill whose options sheet is
+  // open. `sheetCtx` carries the (catg, type) needed to build option keys.
+  const expandedTypes = expandedCatg != null ? (typesByCatg[expandedCatg] ?? null) : null;
+  const activeTypeId = expandedCatg != null
+    ? (activeTypeByCatg[expandedCatg] ?? expandedTypes?.[0]?.service_type_id ?? null)
+    : null;
+  const activeType = expandedTypes?.find((t) => t.service_type_id === activeTypeId) ?? null;
+  const activeSkills = activeTypeId != null ? (skillsByType[activeTypeId] ?? null) : null;
+  const sheetCtx = useMemo(() => {
+    if (sheetSkillId == null || expandedCatg == null || activeTypeId == null) return null;
+    const skill = (activeSkills ?? []).find((s) => s.deepskill_id === sheetSkillId);
+    if (!skill) return null;
+    return { catgId: expandedCatg, typeId: activeTypeId, skill };
+  }, [sheetSkillId, expandedCatg, activeTypeId, activeSkills]);
+
   return (
     <div className="border-t pt-4 space-y-3">
       <div className="flex items-center justify-between">
@@ -1306,146 +1412,130 @@ function DeepSkillOptionMapping({ efrId, onReload }: { efrId: number; onReload?:
         <>
           {mappings.length === 0 && selected.size === 0 && (
             <div className="rounded border border-dashed border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
-              No Options Mapped Yet. Pick A Service Category To Begin.
+              No Options Mapped Yet. Tap A Service Category To Begin.
             </div>
           )}
 
-          <div className="rounded-md border border-slate-200 divide-y divide-slate-200">
-            {categories.map((c) => (
-              <div key={c.service_catg_id}>
-                <button
-                  type="button"
-                  className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-slate-50"
-                  onClick={() => toggleCatg(c.service_catg_id)}
-                >
-                  {openCatg.has(c.service_catg_id)
-                    ? <ChevronDown className="h-4 w-4 text-slate-500" />
-                    : <ChevronRight className="h-4 w-4 text-slate-500" />}
-                  <span className="font-medium">{c.service_catg_name}</span>
-                  {countByCategory.get(c.service_catg_id) ? (
-                    <span className="ml-2 inline-flex items-center justify-center min-w-[1.5rem] h-5 px-1.5 rounded-full bg-emerald-100 text-emerald-700 text-[11px] font-semibold tabular-nums">
-                      {countByCategory.get(c.service_catg_id)}
+          {/* ── Category accordion (single page): tapping a category expands it
+              in place to reveal its service-type rail + deep-skill cards, and
+              collapses the others. ── */}
+          <div className="space-y-2">
+            {categories.map((c) => {
+              const count = countByCategory.get(c.service_catg_id) || 0;
+              const expanded = expandedCatg === c.service_catg_id;
+              return (
+                <div key={c.service_catg_id} className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => expandCategory(c.service_catg_id)}
+                    className="w-full flex items-center gap-3 px-3 py-3 text-left"
+                  >
+                    <DsIconTile name={c.service_catg_name} kind="categories" size={36} />
+                    <span className="flex-1 min-w-0">
+                      <span className="block font-semibold text-slate-800 truncate">{c.service_catg_name}</span>
+                      <span className="block text-xs text-slate-500">{count} Skill{count === 1 ? '' : 's'} Added</span>
                     </span>
-                  ) : null}
-                </button>
-                {openCatg.has(c.service_catg_id) && (
-                  <div className="bg-slate-50/60">
-                    {!typesByCatg[c.service_catg_id]
-                      ? <div className="pl-9 pr-3 py-2 text-xs text-slate-500">Loading…</div>
-                      : typesByCatg[c.service_catg_id].length === 0
-                      ? <div className="pl-9 pr-3 py-2 text-xs text-slate-500">No Service Types.</div>
-                      : typesByCatg[c.service_catg_id].map((t) => (
-                        <div key={t.service_type_id}>
-                          <button
-                            type="button"
-                            className="w-full flex items-center gap-2 pl-9 pr-3 py-1.5 text-left text-sm hover:bg-slate-100"
-                            onClick={() => toggleType(t.service_type_id, c.service_catg_id)}
-                          >
-                            {openType.has(t.service_type_id)
-                              ? <ChevronDown className="h-4 w-4 text-slate-500" />
-                              : <ChevronRight className="h-4 w-4 text-slate-500" />}
-                            <span>{t.service_type_name}</span>
-                            {countByType.get(`${c.service_catg_id}|${t.service_type_id}`) ? (
-                              <span className="ml-2 inline-flex items-center justify-center min-w-[1.5rem] h-5 px-1.5 rounded-full bg-emerald-100 text-emerald-700 text-[11px] font-semibold tabular-nums">
-                                {countByType.get(`${c.service_catg_id}|${t.service_type_id}`)}
+                    {count > 0 && <CheckCircle2 className="h-5 w-5 shrink-0" style={{ color: DS_GREEN }} />}
+                    {expanded
+                      ? <ChevronUp className="h-5 w-5 text-slate-400 shrink-0" />
+                      : <ChevronDown className="h-5 w-5 text-slate-400 shrink-0" />}
+                  </button>
+
+                  {expanded && (
+                    <div className="border-t border-slate-200 flex max-h-[70vh]">
+                      {/* left service-type rail */}
+                      <div className="w-[84px] shrink-0 overflow-y-auto border-r border-slate-200 bg-white">
+                        {expandedTypes == null ? (
+                          <div className="px-1.5 py-3 text-center text-[11px] text-slate-500">Loading…</div>
+                        ) : expandedTypes.length === 0 ? (
+                          <div className="px-1.5 py-3 text-center text-[11px] text-slate-500">No Service Types.</div>
+                        ) : expandedTypes.map((t) => {
+                          const isActive = activeTypeId === t.service_type_id;
+                          const cnt = countByType.get(`${c.service_catg_id}|${t.service_type_id}`) || 0;
+                          return (
+                            <button
+                              key={t.service_type_id}
+                              type="button"
+                              onClick={() => selectType(c.service_catg_id, t.service_type_id)}
+                              className="w-full flex flex-col items-center gap-1 px-1.5 py-3 text-center border-b border-slate-100"
+                              style={isActive ? { backgroundColor: DS_BLUE_TINT, borderLeft: `3px solid ${DS_BLUE}` } : undefined}
+                            >
+                              <span className="relative">
+                                <DsIconTile name={t.service_type_name} kind="service-types" size={34} />
+                                {cnt > 0 && (
+                                  <span
+                                    style={{ backgroundColor: DS_BLUE }}
+                                    className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full text-[10px] font-bold text-white flex items-center justify-center"
+                                  >
+                                    {cnt}
+                                  </span>
+                                )}
                               </span>
-                            ) : null}
-                          </button>
-                          {openType.has(t.service_type_id) && (
-                            <div>
-                              {!skillsByType[t.service_type_id]
-                                ? <div className="pl-16 pr-3 py-2 text-xs text-slate-500">Loading…</div>
-                                : skillsByType[t.service_type_id].length === 0
-                                ? <div className="pl-16 pr-3 py-2 text-xs text-slate-500">No Deep Skills.</div>
-                                : skillsByType[t.service_type_id].map((s) => (
-                                  <div key={s.deepskill_id}>
-                                    {/*
-                                     * Outer skill-row toggle is a `<div role="button">` (not
-                                     * `<button>`) because it contains the thumbnail's inner
-                                     * `<button>` — nested interactive elements are invalid HTML.
-                                     * `cursor-pointer` + focus ring + onKeyDown keep the
-                                     * keyboard/mouse affordances a real button would give.
-                                     */}
-                                    <div
-                                      role="button"
-                                      tabIndex={0}
-                                      className="w-full flex items-center gap-2 pl-16 pr-3 py-1.5 text-left text-sm hover:bg-slate-100 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 rounded"
-                                      onClick={() => toggleSkill(s.deepskill_id)}
-                                      onKeyDown={(e) => {
-                                        if (e.key === 'Enter' || e.key === ' ') {
-                                          e.preventDefault();
-                                          toggleSkill(s.deepskill_id);
-                                        }
-                                      }}
-                                    >
-                                      {openSkill.has(s.deepskill_id)
-                                        ? <ChevronDown className="h-4 w-4 text-slate-500" />
-                                        : <ChevronRight className="h-4 w-4 text-slate-500" />}
-                                      {s.deep_skill_image_url ? (
-                                        <button
-                                          type="button"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            if (s.deep_skill_image_url) {
-                                              setLightboxUrl({ url: s.deep_skill_image_url, name: s.deepskill_name });
-                                            }
-                                          }}
-                                          className="shrink-0 cursor-zoom-in focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 rounded"
-                                          title="Click To Enlarge"
-                                        >
-                                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                                          <img
-                                            src={s.deep_skill_image_url}
-                                            alt={s.deepskill_name}
-                                            className="h-6 w-6 rounded object-cover border border-slate-200"
-                                            loading="lazy"
-                                          />
-                                        </button>
-                                      ) : null}
-                                      <span>{s.deepskill_name}</span>
-                                      {countBySkill.get(`${c.service_catg_id}|${t.service_type_id}|${s.deepskill_id}`) ? (
-                                        <span className="ml-2 inline-flex items-center justify-center min-w-[1.5rem] h-5 px-1.5 rounded-full bg-emerald-100 text-emerald-700 text-[11px] font-semibold tabular-nums">
-                                          {countBySkill.get(`${c.service_catg_id}|${t.service_type_id}|${s.deepskill_id}`)}
-                                        </span>
-                                      ) : null}
-                                    </div>
-                                    {openSkill.has(s.deepskill_id) && (
-                                      <div className="pl-24 pr-3 py-1 space-y-1">
-                                        {!optionsBySkill[s.deepskill_id]
-                                          ? <div className="text-xs text-slate-500">Loading…</div>
-                                          : optionsBySkill[s.deepskill_id].length === 0
-                                          ? <div className="text-xs text-slate-500">No Options.</div>
-                                          : optionsBySkill[s.deepskill_id].map((o) => {
-                                            const key = mapKey(c.service_catg_id, t.service_type_id, s.deepskill_id, o.id);
-                                            const isSelected = selected.has(key);
-                                            const isOriginal = original.has(key);
-                                            return (
-                                              <label key={o.id} className="flex items-center gap-2 text-sm cursor-pointer">
-                                                <input
-                                                  type="checkbox"
-                                                  className="h-4 w-4 accent-emerald-600"
-                                                  checked={isSelected}
-                                                  onChange={() => toggleOption(c.service_catg_id, t.service_type_id, s.deepskill_id, o.id)}
-                                                />
-                                                <span className={isOriginal ? 'font-semibold text-emerald-700' : 'text-slate-700'}>
-                                                  {o.skill_option}
-                                                </span>
-                                                {isOriginal && <Check className="h-3.5 w-3.5 text-emerald-600" />}
-                                              </label>
-                                            );
-                                          })}
-                                      </div>
+                              <span
+                                className="text-[11px] leading-tight"
+                                style={isActive ? { color: DS_BLUE, fontWeight: 600 } : { color: '#475569' }}
+                              >
+                                {t.service_type_name}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* right skill card grid — small images, 2 columns */}
+                      <div className="flex-1 min-w-0 overflow-y-auto p-3 bg-slate-50">
+                        <div className="text-sm font-semibold text-slate-800 mb-2">{activeType?.service_type_name}</div>
+                        {activeSkills == null ? (
+                          <div className="text-sm text-slate-500">Loading…</div>
+                        ) : activeSkills.length === 0 ? (
+                          <div className="text-sm text-slate-500">No Deep Skills.</div>
+                        ) : (
+                          <div className="grid gap-2.5" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))' }}>
+                            {activeSkills.map((s) => {
+                              const sel = countBySkill.get(`${c.service_catg_id}|${activeTypeId}|${s.deepskill_id}`) || 0;
+                              const optCount = optionsBySkill[s.deepskill_id]?.length ?? s.option_count;
+                              return (
+                                <div key={s.deepskill_id} className="rounded-xl border border-slate-200 bg-white p-2 flex flex-col">
+                                  <button
+                                    type="button"
+                                    onClick={() => { if (s.deep_skill_image_url) setLightboxUrl({ url: s.deep_skill_image_url, name: s.deepskill_name }); }}
+                                    className="relative block w-full aspect-square rounded-lg overflow-hidden bg-slate-100 cursor-zoom-in"
+                                    title="Click To Enlarge"
+                                  >
+                                    {s.deep_skill_image_url ? (
+                                      // eslint-disable-next-line @next/next/no-img-element
+                                      <img src={s.deep_skill_image_url} alt={s.deepskill_name} className="w-full h-full object-cover" loading="lazy" />
+                                    ) : (
+                                      <span className="flex items-center justify-center w-full h-full text-slate-300"><Wrench className="h-7 w-7" /></span>
                                     )}
-                                  </div>
-                                ))}
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                  </div>
-                )}
-              </div>
-            ))}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => openSheet(s.deepskill_id)}
+                                    className="mt-2 w-full rounded-lg py-1.5 text-xs font-semibold border"
+                                    style={sel > 0
+                                      ? { backgroundColor: DS_BLUE, borderColor: DS_BLUE, color: '#fff' }
+                                      : { backgroundColor: '#fff', borderColor: DS_BLUE, color: DS_BLUE }}
+                                  >
+                                    {sel > 0 ? `${sel} Selected` : 'ADD'}
+                                    {optCount != null && (
+                                      <span className="block text-[10px] font-normal opacity-80">
+                                        {optCount} Option{optCount === 1 ? '' : 's'}
+                                      </span>
+                                    )}
+                                  </button>
+                                  <span className="mt-1.5 text-xs font-medium text-slate-700 text-center line-clamp-2">{s.deepskill_name}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
 
           <div className="flex justify-end gap-2 pt-1">
@@ -1453,6 +1543,58 @@ function DeepSkillOptionMapping({ efrId, onReload }: { efrId: number; onReload?:
               {saving ? 'Saving…' : 'Save Option Mappings'}
             </Button>
           </div>
+
+          {/* ── Options bottom sheet ── */}
+          {sheetCtx && (
+            <div className="fixed inset-0 z-[60] flex flex-col justify-end">
+              <button
+                type="button"
+                aria-label="Close"
+                className="absolute inset-0 bg-black/40"
+                onClick={() => setSheetSkillId(null)}
+              />
+              <div className="relative rounded-t-2xl bg-white max-h-[75vh] flex flex-col">
+                <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
+                  <span className="font-semibold text-slate-800">{sheetCtx.skill.deepskill_name}</span>
+                  <button
+                    type="button"
+                    onClick={() => setSheetSkillId(null)}
+                    className="rounded-full p-1 bg-slate-100 text-slate-500"
+                    aria-label="Close"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+                <div className="overflow-y-auto divide-y divide-slate-100">
+                  {optionsBySkill[sheetCtx.skill.deepskill_id] == null ? (
+                    <div className="px-4 py-4 text-sm text-slate-500">Loading…</div>
+                  ) : optionsBySkill[sheetCtx.skill.deepskill_id].length === 0 ? (
+                    <div className="px-4 py-4 text-sm text-slate-500">No Options.</div>
+                  ) : optionsBySkill[sheetCtx.skill.deepskill_id].map((o) => {
+                    const key = mapKey(sheetCtx.catgId, sheetCtx.typeId, sheetCtx.skill.deepskill_id, o.id);
+                    const isSel = selected.has(key);
+                    const isOriginal = original.has(key);
+                    return (
+                      <div key={o.id} className="flex items-center justify-between gap-3 px-4 py-3">
+                        <span className={`text-sm ${isSel ? 'text-slate-400' : 'text-slate-800'}`}>
+                          {o.skill_option}
+                          {isOriginal && <span className="ml-1.5 text-[10px] font-medium" style={{ color: DS_GREEN }}>• Saved</span>}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => toggleOption(sheetCtx.catgId, sheetCtx.typeId, sheetCtx.skill.deepskill_id, o.id)}
+                          className="rounded-lg px-4 py-1.5 text-xs font-bold shrink-0"
+                          style={isSel ? { backgroundColor: '#E5E7EB', color: '#6B7280' } : { backgroundColor: DS_BLUE, color: '#fff' }}
+                        >
+                          {isSel ? 'ADDED' : 'ADD'}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
         </>
       )}
 
