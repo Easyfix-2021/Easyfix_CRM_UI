@@ -47,7 +47,6 @@ import Image from 'next/image';
 import * as React from 'react';
 import {
   ChevronDown,
-  ChevronRight,
   ChevronUp,
   Check,
   CheckCircle2,
@@ -305,6 +304,7 @@ type DeepSkillMapping = {
 type PincodeMapping = {
   pincode_id: number;
   pincode: string;
+  location: string | null;
   city_name: string | null;
   state_name: string | null;
 };
@@ -337,6 +337,7 @@ type CatalogCategory = {
 type CatalogPincode = {
   pincode_id: number;
   pincode: string;
+  location: string | null;
   city_name: string | null;
   state_name: string | null;
 };
@@ -679,6 +680,7 @@ function ReadyForm({
       else next.set(id, {
         pincode_id: id,
         pincode: String(row.pincode),
+        location: row.location ?? null,
         city_name: row.city_name ?? null,
         state_name: row.state_name ?? null,
       });
@@ -701,6 +703,7 @@ function ReadyForm({
       next.set(id, {
         pincode_id: id,
         pincode: String(row.pincode),
+        location: row.location ?? null,
         city_name: row.city_name ?? null,
         state_name: row.state_name ?? null,
       });
@@ -1134,7 +1137,7 @@ function ReadOnlyMappings({ mappings }: { mappings: DeepSkillMapping[] }) {
   if (!mappings.length) {
     return (
       <div className="rounded-md border border-dashed border-slate-200 bg-white p-4 text-center text-sm text-slate-500">
-        No Skills Mapped Yet. Please Contact Your CRM To Set Up Your Skill Profile.
+        No Service Categories Mapped Yet. Please Contact Your CRM To Set Up Your Profile.
       </div>
     );
   }
@@ -1180,6 +1183,60 @@ function ReadOnlyMappings({ mappings }: { mappings: DeepSkillMapping[] }) {
   );
 }
 
+/* ───────── Deep-skill picker theme + icons (Figma redesign) ─────────
+ * Standalone red/blue palette for the public form's Deep Skills flow so it
+ * matches the Figma mockup without pulling in the CRM sky/slate theme. */
+const DS_RED = '#DC4B41';
+const DS_RED_TINT = '#FDECEC';
+const DS_BLUE = '#2D9CDB';
+const DS_BLUE_TINT = '#EAF6FD';
+const DS_GREEN = '#16A34A';
+
+/*
+ * Category + service-type ICONS are not in the DB. They ship as static assets
+ * exported from Figma into  public/deep-skill-icons/{categories,service-types}/
+ * named by the slug of the category / service-type name (e.g. Carpenter →
+ * carpenter.png, "Wooden Furniture Installation" → wooden-furniture-installation.png).
+ * Until an asset is dropped in, a coloured first-letter tile is shown (onError
+ * fallback) — so the flow is fully functional now and the real art appears the
+ * moment the file lands. Deep-skill THUMBNAILS keep coming from the DB.
+ */
+function dsSlug(s: string): string {
+  return String(s || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+}
+
+function DsIconTile({
+  name, kind, size = 44, className = '',
+}: { name: string; kind: 'categories' | 'service-types'; size?: number; className?: string }) {
+  const [failed, setFailed] = React.useState(false);
+  const slug = dsSlug(name);
+  const letter = (String(name || '?').trim().charAt(0) || '?').toUpperCase();
+  if (failed || !slug) {
+    return (
+      <div
+        style={{ width: size, height: size, backgroundColor: DS_RED_TINT, color: DS_RED }}
+        className={`flex items-center justify-center rounded-lg font-bold shrink-0 ${className}`}
+        aria-hidden
+      >
+        {letter}
+      </div>
+    );
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={`/deep-skill-icons/${kind}/${slug}.png`}
+      alt=""
+      width={size}
+      height={size}
+      style={{ width: size, height: size }}
+      className={`rounded-lg object-contain shrink-0 ${className}`}
+      onError={() => setFailed(true)}
+      loading="lazy"
+    />
+  );
+}
+
 function SkillsMappingPicker({
   catalog,
   selected,
@@ -1191,17 +1248,39 @@ function SkillsMappingPicker({
   original: Set<string>;
   onToggleOption: (c: number, t: number, s: number, o: number) => void;
 }) {
-  const [openCatg, setOpenCatg] = React.useState<Set<number>>(new Set());
-  const [openType, setOpenType] = React.useState<Set<number>>(new Set());
-  const [openSkill, setOpenSkill] = React.useState<Set<number>>(new Set());
-  // Click-to-enlarge lightbox for the 24×24 deep-skill thumbnails.
+  // Accordion: exactly one category card can be expanded at a time. Expanding a
+  // card reveals its in-place app-view (service-type rail + skill cards) and
+  // collapses the others. No grid, no navigation — single page.
+  const [expandedCatId, setExpandedCatId] = React.useState<number | null>(null);
+  const [activeTypeId, setActiveTypeId] = React.useState<number | null>(null);
+  const [sheetSkillId, setSheetSkillId] = React.useState<number | null>(null);
+  // Click-to-enlarge lightbox for the deep-skill thumbnails.
   const [lightboxUrl, setLightboxUrl] = React.useState<{ url: string; name: string } | null>(null);
 
-  const toggleSet = <T,>(set: Set<T>, value: T, setter: React.Dispatch<React.SetStateAction<Set<T>>>) => {
-    const next = new Set(set);
-    if (next.has(value)) next.delete(value); else next.add(value);
-    setter(next);
-  };
+  const activeCat = React.useMemo(
+    () => catalog.find((c) => c.category_id === expandedCatId) || null,
+    [catalog, expandedCatId],
+  );
+  const activeType = React.useMemo(() => {
+    if (!activeCat) return null;
+    return activeCat.service_types.find((t) => t.service_type_id === activeTypeId)
+      || activeCat.service_types[0] || null;
+  }, [activeCat, activeTypeId]);
+  const sheetSkill = React.useMemo(() => {
+    if (!activeType || sheetSkillId == null) return null;
+    return activeType.deep_skills.find((s) => s.deep_skill_id === sheetSkillId) || null;
+  }, [activeType, sheetSkillId]);
+
+  function toggleCategory(catId: number) {
+    setSheetSkillId(null);
+    if (expandedCatId === catId) {
+      setExpandedCatId(null); // collapse the open one
+    } else {
+      const cat = catalog.find((c) => c.category_id === catId);
+      setActiveTypeId(cat?.service_types[0]?.service_type_id ?? null);
+      setExpandedCatId(catId); // expand this, collapse others
+    }
+  }
 
   // Cascading count badges for category / type / skill so the technician
   // sees option counts roll up without having to expand each branch.
@@ -1221,146 +1300,168 @@ function SkillsMappingPicker({
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <span className="text-xs text-slate-500">
-          {selected.size} Option{selected.size === 1 ? '' : 's'} Selected
-        </span>
-        {original.size > 0 ? (
-          <span className="text-[11px] text-slate-400">{original.size} Currently Saved</span>
-        ) : null}
-      </div>
-
-      <div className="rounded-md border border-slate-200 bg-white divide-y divide-slate-200 overflow-hidden">
-        {catalog.map((c) => (
-          <div key={c.category_id}>
-            <button
-              type="button"
-              className="w-full flex items-center gap-2 px-3 py-3 sm:py-2.5 text-left text-sm hover:bg-slate-50"
-              onClick={() => toggleSet(openCatg, c.category_id, setOpenCatg)}
-            >
-              {openCatg.has(c.category_id)
-                ? <ChevronDown className="h-5 w-5 text-slate-500 shrink-0" />
-                : <ChevronRight className="h-5 w-5 text-slate-500 shrink-0" />}
-              <span className="font-medium text-slate-800 flex-1 min-w-0 truncate">{c.category_name}</span>
-              {countByCategory.get(c.category_id) ? (
-                <span className="inline-flex items-center justify-center min-w-[1.5rem] h-5 px-1.5 rounded-full bg-emerald-100 text-emerald-700 text-[11px] font-semibold tabular-nums">
-                  {countByCategory.get(c.category_id)}
+      {/* ── Category accordion (single page): all categories listed; expanding
+          one reveals its rail + skill cards IN PLACE and collapses the others.
+          No "Add Skill", no "Choose a Category" grid, no navigation. ── */}
+      <div className="space-y-2">
+        {catalog.map((c) => {
+          const count = countByCategory.get(c.category_id) || 0;
+          const expanded = expandedCatId === c.category_id;
+          return (
+            <div key={c.category_id} className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+              <button
+                type="button"
+                onClick={() => toggleCategory(c.category_id)}
+                className="w-full flex items-center gap-3 px-3 py-3 text-left"
+              >
+                <DsIconTile name={c.category_name} kind="categories" size={36} />
+                <span className="flex-1 min-w-0">
+                  <span className="block font-semibold text-slate-800 truncate">{c.category_name}</span>
+                  <span className="block text-xs text-slate-500">{count} Skill{count === 1 ? '' : 's'} Added</span>
                 </span>
-              ) : null}
-            </button>
-            {openCatg.has(c.category_id) && (
-              <div className="bg-slate-50/60">
-                {c.service_types.length === 0 ? (
-                  <div className="pl-10 pr-3 py-2 text-xs text-slate-500">No Service Types.</div>
-                ) : c.service_types.map((t) => (
-                  <div key={t.service_type_id}>
-                    <button
-                      type="button"
-                      className="w-full flex items-center gap-2 pl-9 pr-3 py-2 text-left text-sm hover:bg-slate-100"
-                      onClick={() => toggleSet(openType, t.service_type_id, setOpenType)}
-                    >
-                      {openType.has(t.service_type_id)
-                        ? <ChevronDown className="h-5 w-5 text-slate-500 shrink-0" />
-                        : <ChevronRight className="h-5 w-5 text-slate-500 shrink-0" />}
-                      <span className="flex-1 min-w-0 truncate">{t.service_type_name}</span>
-                      {countByType.get(`${c.category_id}|${t.service_type_id}`) ? (
-                        <span className="inline-flex items-center justify-center min-w-[1.5rem] h-5 px-1.5 rounded-full bg-emerald-100 text-emerald-700 text-[11px] font-semibold tabular-nums">
-                          {countByType.get(`${c.category_id}|${t.service_type_id}`)}
-                        </span>
-                      ) : null}
-                    </button>
-                    {openType.has(t.service_type_id) && (
-                      <div>
-                        {t.deep_skills.length === 0 ? (
-                          <div className="pl-16 pr-3 py-2 text-xs text-slate-500">No Deep Skills.</div>
-                        ) : t.deep_skills.map((s) => (
-                          <div key={s.deep_skill_id}>
-                            {/*
-                             * Outer skill-row toggle is a `<div role="button">` (not
-                             * `<button>`) because it contains the thumbnail's inner
-                             * `<button>` — nested interactive elements are invalid HTML.
-                             * `cursor-pointer` + focus ring + onKeyDown keep the
-                             * keyboard/mouse affordances a real button would give.
-                             */}
-                            <div
-                              role="button"
-                              tabIndex={0}
-                              className="w-full flex items-center gap-2 pl-16 pr-3 py-2 text-left text-sm hover:bg-slate-100 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 rounded"
-                              onClick={() => toggleSet(openSkill, s.deep_skill_id, setOpenSkill)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter' || e.key === ' ') {
-                                  e.preventDefault();
-                                  toggleSet(openSkill, s.deep_skill_id, setOpenSkill);
-                                }
-                              }}
-                            >
-                              {openSkill.has(s.deep_skill_id)
-                                ? <ChevronDown className="h-5 w-5 text-slate-500 shrink-0" />
-                                : <ChevronRight className="h-5 w-5 text-slate-500 shrink-0" />}
-                              {s.deep_skill_image_url ? (
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (s.deep_skill_image_url) {
-                                      setLightboxUrl({ url: s.deep_skill_image_url, name: s.deep_skill_name });
-                                    }
-                                  }}
-                                  className="shrink-0 cursor-zoom-in focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 rounded"
-                                  title="Click To Enlarge"
-                                >
-                                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                                  <img
-                                    src={s.deep_skill_image_url}
-                                    alt={s.deep_skill_name}
-                                    className="h-6 w-6 rounded object-cover border border-slate-200"
-                                    loading="lazy"
-                                  />
-                                </button>
-                              ) : null}
-                              <span className="flex-1 min-w-0 truncate">{s.deep_skill_name}</span>
-                              {countBySkill.get(`${c.category_id}|${t.service_type_id}|${s.deep_skill_id}`) ? (
-                                <span className="inline-flex items-center justify-center min-w-[1.5rem] h-5 px-1.5 rounded-full bg-emerald-100 text-emerald-700 text-[11px] font-semibold tabular-nums">
-                                  {countBySkill.get(`${c.category_id}|${t.service_type_id}|${s.deep_skill_id}`)}
-                                </span>
-                              ) : null}
-                            </div>
-                            {openSkill.has(s.deep_skill_id) && (
-                              <div className="pl-20 pr-3 py-2 space-y-2 bg-white border-t border-slate-100">
-                                {s.options.length === 0 ? (
-                                  <div className="text-xs text-slate-500">No Options.</div>
-                                ) : s.options.map((o) => {
-                                  const key = skillKey(c.category_id, t.service_type_id, s.deep_skill_id, o.option_id);
-                                  const isSelected = selected.has(key);
-                                  const isOriginal = original.has(key);
-                                  return (
-                                    <label key={o.option_id} className="flex items-center gap-2.5 text-sm cursor-pointer py-1">
-                                      <input
-                                        type="checkbox"
-                                        className="h-5 w-5 accent-emerald-600 shrink-0"
-                                        checked={isSelected}
-                                        onChange={() => onToggleOption(c.category_id, t.service_type_id, s.deep_skill_id, o.option_id)}
-                                      />
-                                      <span className={isOriginal ? 'font-semibold text-emerald-700' : 'text-slate-700'}>
-                                        {o.option_name}
-                                      </span>
-                                      {isOriginal && <Check className="h-4 w-4 text-emerald-600" />}
-                                    </label>
-                                  );
-                                })}
-                              </div>
+                {count > 0 && <CheckCircle2 className="h-5 w-5 shrink-0" style={{ color: DS_GREEN }} />}
+                {expanded
+                  ? <ChevronUp className="h-5 w-5 text-slate-400 shrink-0" />
+                  : <ChevronDown className="h-5 w-5 text-slate-400 shrink-0" />}
+              </button>
+
+              {expanded && (
+                <div className="border-t border-slate-200 flex max-h-[70vh]">
+                  {/* left service-type rail */}
+                  <div className="w-[84px] shrink-0 overflow-y-auto border-r border-slate-200 bg-white">
+                    {c.service_types.map((t) => {
+                      const isActive = activeType?.service_type_id === t.service_type_id;
+                      const cnt = countByType.get(`${c.category_id}|${t.service_type_id}`) || 0;
+                      return (
+                        <button
+                          key={t.service_type_id}
+                          type="button"
+                          onClick={() => { setActiveTypeId(t.service_type_id); setSheetSkillId(null); }}
+                          className="w-full flex flex-col items-center gap-1 px-1.5 py-3 text-center border-b border-slate-100"
+                          style={isActive ? { backgroundColor: DS_BLUE_TINT, borderLeft: `3px solid ${DS_BLUE}` } : undefined}
+                        >
+                          <span className="relative">
+                            <DsIconTile name={t.service_type_name} kind="service-types" size={34} />
+                            {cnt > 0 && (
+                              <span
+                                style={{ backgroundColor: DS_BLUE }}
+                                className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full text-[10px] font-bold text-white flex items-center justify-center"
+                              >
+                                {cnt}
+                              </span>
                             )}
-                          </div>
-                        ))}
+                          </span>
+                          <span
+                            className="text-[11px] leading-tight"
+                            style={isActive ? { color: DS_BLUE, fontWeight: 600 } : { color: '#475569' }}
+                          >
+                            {t.service_type_name}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* right skill card grid — small images, 2 columns */}
+                  <div className="flex-1 min-w-0 overflow-y-auto p-3 bg-slate-50">
+                    <div className="text-sm font-semibold text-slate-800 mb-2">{activeType?.service_type_name}</div>
+                    {(activeType?.deep_skills.length || 0) === 0 ? (
+                      <div className="text-sm text-slate-500">No Deep Skills.</div>
+                    ) : (
+                      <div className="grid gap-2.5" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 148px))' }}>
+                        {activeType?.deep_skills.map((s) => {
+                          const sel = countBySkill.get(`${c.category_id}|${activeType.service_type_id}|${s.deep_skill_id}`) || 0;
+                          return (
+                            <div key={s.deep_skill_id} className="rounded-xl border border-slate-200 bg-white p-2 flex flex-col">
+                              <button
+                                type="button"
+                                onClick={() => { if (s.deep_skill_image_url) setLightboxUrl({ url: s.deep_skill_image_url, name: s.deep_skill_name }); }}
+                                className="relative block w-full aspect-square rounded-lg overflow-hidden bg-slate-100 cursor-zoom-in"
+                                title="Click To Enlarge"
+                              >
+                                {s.deep_skill_image_url ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img src={s.deep_skill_image_url} alt={s.deep_skill_name} className="w-full h-full object-cover" loading="lazy" />
+                                ) : (
+                                  <span className="flex items-center justify-center w-full h-full text-slate-300"><Wrench className="h-7 w-7" /></span>
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setSheetSkillId(s.deep_skill_id)}
+                                className="mt-2 w-full rounded-lg py-1.5 text-xs font-semibold border"
+                                style={sel > 0
+                                  ? { backgroundColor: DS_BLUE, borderColor: DS_BLUE, color: '#fff' }
+                                  : { backgroundColor: '#fff', borderColor: DS_BLUE, color: DS_BLUE }}
+                              >
+                                {sel > 0 ? `${sel} Selected` : 'ADD'}
+                                <span className="block text-[10px] font-normal opacity-80">
+                                  {s.options.length} option{s.options.length === 1 ? '' : 's'}
+                                </span>
+                              </button>
+                              <span className="mt-1.5 text-xs font-medium text-slate-700 text-center line-clamp-2">{s.deep_skill_name}</span>
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
-        ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
+
+      {/* ── Options bottom sheet ── */}
+      {sheetSkill && activeCat && activeType && (
+        <div className="fixed inset-0 z-[60] flex flex-col justify-end">
+          <button
+            type="button"
+            aria-label="Close"
+            className="absolute inset-0 bg-black/40"
+            onClick={() => setSheetSkillId(null)}
+          />
+          <div className="relative rounded-t-2xl bg-white max-h-[75vh] flex flex-col">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
+              <span className="font-semibold text-slate-800">{sheetSkill.deep_skill_name}</span>
+              <button
+                type="button"
+                onClick={() => setSheetSkillId(null)}
+                className="rounded-full p-1 bg-slate-100 text-slate-500"
+                aria-label="Close"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="overflow-y-auto divide-y divide-slate-100">
+              {sheetSkill.options.length === 0 ? (
+                <div className="px-4 py-4 text-sm text-slate-500">No Options.</div>
+              ) : sheetSkill.options.map((o) => {
+                const key = skillKey(activeCat.category_id, activeType.service_type_id, sheetSkill.deep_skill_id, o.option_id);
+                const isSel = selected.has(key);
+                const isOriginal = original.has(key);
+                return (
+                  <div key={o.option_id} className="flex items-center justify-between gap-3 px-4 py-3">
+                    <span className={`text-sm ${isSel ? 'text-slate-400' : 'text-slate-800'}`}>
+                      {o.option_name}
+                      {isOriginal && <span className="ml-1.5 text-[10px] font-medium" style={{ color: DS_GREEN }}>• Saved</span>}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onToggleOption(activeCat.category_id, activeType.service_type_id, sheetSkill.deep_skill_id, o.option_id)}
+                      className="rounded-lg px-4 py-1.5 text-xs font-bold shrink-0"
+                      style={isSel ? { backgroundColor: '#E5E7EB', color: '#6B7280' } : { backgroundColor: DS_BLUE, color: '#fff' }}
+                    >
+                      {isSel ? 'ADDED' : 'ADD'}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       <MemoizedSkillImageLightboxBridgePublic lightboxUrl={lightboxUrl} setLightboxUrl={setLightboxUrl} />
     </div>
@@ -1368,6 +1469,14 @@ function SkillsMappingPicker({
 }
 
 /* ───────── TASK 4 — Service Area (Pincodes) ───────── */
+
+// The location-and-city portion of a pincode label: "<location> - <city>".
+// Only genuinely-empty parts drop out (both values are shown even when equal).
+function pincodeLocCity(p: { location?: string | null; city_name?: string | null }): string {
+  const loc = (p.location ?? '').trim();
+  const city = (p.city_name ?? '').trim();
+  return [loc || null, city || null].filter(Boolean).join(' - ');
+}
 
 function ServiceAreaSection({
   token,
@@ -1576,7 +1685,9 @@ function PincodePicker({
               className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 border border-emerald-200 px-2.5 py-1 text-xs text-emerald-800"
             >
               <span className="font-semibold tabular-nums">{p.pincode}</span>
-              {p.city_name ? <span className="text-emerald-600">- {p.city_name}</span> : null}
+              {pincodeLocCity(p) ? (
+                <span className="text-emerald-600">- {pincodeLocCity(p)}</span>
+              ) : null}
               <button
                 type="button"
                 onClick={() => removeChip(p.pincode_id)}
@@ -1599,7 +1710,7 @@ function PincodePicker({
             id="pf-pincode-search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by pincode or city"
+            placeholder="Search by pincode, location or city"
             inputMode="search"
             className="h-11 sm:h-9"
           />
@@ -1670,8 +1781,8 @@ function PincodePicker({
                 />
                 <span className="flex-1 min-w-0">
                   <span className="font-semibold text-slate-800 tabular-nums">{row.pincode}</span>
-                  {row.city_name ? (
-                    <span className="text-slate-500 ml-2">- {row.city_name}</span>
+                  {pincodeLocCity(row) ? (
+                    <span className="text-slate-500 ml-2">- {pincodeLocCity(row)}</span>
                   ) : null}
                 </span>
               </label>

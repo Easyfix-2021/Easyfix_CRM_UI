@@ -1492,20 +1492,19 @@ function DeepSkillOptionMapping({ efrId, onReload }: { efrId: number; onReload?:
 type PincodeChip = {
   pincode_id: number;
   pincode: string;
+  location: string | null;
   city_name: string | null;
   state_name: string | null;
 };
 
-type PincodeSearchRow = PincodeChip & {
-  location?: string | null;
-};
+type PincodeSearchRow = PincodeChip;
 
 // Canonical label for both the picker OPTIONS and the selected chips (#8):
-// "<pincode> - <city_name>". Falls back to just the pincode when the city is
-// unknown (e.g. a freshly auto-created pincode whose city row is still blank).
-function pincodeLabel(p: { pincode: string; city_name?: string | null }): string {
+// "<pincode> - <location> - <city_name>". Only genuinely-empty parts drop out.
+function pincodeLabel(p: { pincode: string; location?: string | null; city_name?: string | null }): string {
+  const loc  = (p.location ?? '').trim();
   const city = (p.city_name ?? '').trim();
-  return city ? `${p.pincode} - ${city}` : String(p.pincode);
+  return [String(p.pincode), loc || null, city || null].filter(Boolean).join(' - ');
 }
 
 function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: () => Promise<void> }) {
@@ -1548,6 +1547,7 @@ function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: ()
           map.set(Number(p.pincode_id), {
             pincode_id: Number(p.pincode_id),
             pincode: String(p.pincode),
+            location: p.location ?? null,
             city_name: p.city_name ?? null,
             state_name: p.state_name ?? null,
           });
@@ -1605,6 +1605,7 @@ function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: ()
       next.set(id, {
         pincode_id: id,
         pincode: String(row.pincode),
+        location: row.location ?? null,
         city_name: row.city_name ?? null,
         state_name: row.state_name ?? null,
       });
@@ -1644,6 +1645,7 @@ function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: ()
         next.set(id, {
           pincode_id: id,
           pincode: String(it.pincode),
+          location: it.location ?? null,
           city_name: it.city_name ?? null,
           state_name: it.state_name ?? null,
         });
@@ -1689,7 +1691,7 @@ function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: ()
     setError(null);
     try {
       const resp = await api.post<{
-        pincode_id: number; pincode: string;
+        pincode_id: number; pincode: string; location?: string | null;
         city_name: string | null; state_name: string | null; created: boolean;
       }>(`/admin/pincodes/ensure`, { pincode: pin });
       if (!resp?.pincode_id) return;
@@ -1699,6 +1701,7 @@ function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: ()
         next.set(id, {
           pincode_id: id,
           pincode: String(resp.pincode),
+          location: resp.location ?? null,
           city_name: resp.city_name ?? null,
           state_name: resp.state_name ?? null,
         });
@@ -1763,6 +1766,7 @@ function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: ()
         map.set(Number(p.pincode_id), {
           pincode_id: Number(p.pincode_id),
           pincode: String(p.pincode),
+          location: p.location ?? null,
           city_name: p.city_name ?? null,
           state_name: p.state_name ?? null,
         });
@@ -1811,7 +1815,7 @@ function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: ()
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
                 <Input
                   value={search}
-                  placeholder="Search By Pincode Or City, Or Paste A List…"
+                  placeholder="Search By Pincode, Location Or City, Or Paste A List…"
                   onChange={(e) => { setSearch(e.target.value); setOpen(true); }}
                   onFocus={() => setOpen(true)}
                   onKeyDown={onSearchKeyDown}

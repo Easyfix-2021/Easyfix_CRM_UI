@@ -382,9 +382,15 @@ export default function DeepSkillsSettingsPage() {
     // Apply cached counts synchronously — no flicker for re-visits.
     if (cached.length > 0) {
       setMappedCounts((prev) => {
+        let changed = false;
         const next = new Map(prev);
-        for (const c of cached) next.set(c.deepskill_id, c.count);
-        return next;
+        for (const c of cached) {
+          if (next.get(c.deepskill_id) !== c.count) { next.set(c.deepskill_id, c.count); changed = true; }
+        }
+        // Bail when nothing changed — else this re-sorts sortedSkills (which
+        // deps on mappedCounts) → new visibleSkills → re-runs this effect →
+        // infinite loop (React error #185). Returning `prev` stops the cycle.
+        return changed ? next : prev;
       });
     }
     if (missing.length === 0) return;
@@ -409,9 +415,12 @@ export default function DeepSkillsSettingsPage() {
       const merged = [...zeroed, ...resp.items]; // resp.items wins via Map.set
       writeMappedCountsToCache(merged);
       setMappedCounts((prev) => {
+        let changed = false;
         const next = new Map(prev);
-        for (const r of merged) next.set(r.deepskill_id, r.count);
-        return next;
+        for (const r of merged) {
+          if (next.get(r.deepskill_id) !== r.count) { next.set(r.deepskill_id, r.count); changed = true; }
+        }
+        return changed ? next : prev;
       });
     }).catch(() => { /* leave missing entries undefined */ });
 
