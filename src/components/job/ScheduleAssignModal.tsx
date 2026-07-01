@@ -234,6 +234,10 @@ export function ScheduleAssignModal({
   // Falls back to the job's stored slot ONLY during the seed phase (before
   // the operator has set a date). Once seeded the hour-based rule always wins.
   const [seedSlot, setSeedSlot] = useState('');
+  // Seeded baseline date — the job's stored date at seed time. Used to detect
+  // whether the operator has EDITED the schedule (vs. just the one-time seed),
+  // so the expensive Top-10 fetch doesn't re-fire on open.
+  const [seedDate, setSeedDate] = useState('');
   const timeSlot = seeded ? deriveTimeSlot(jobDateLocal) : seedSlot;
 
   const [search, setSearch] = useState('');
@@ -255,7 +259,7 @@ export function ScheduleAssignModal({
   // Reset transient state whenever the modal closes / the job changes.
   useEffect(() => {
     if (!open) {
-      setSeeded(false); setJobDateLocal(''); setSeedSlot('');
+      setSeeded(false); setJobDateLocal(''); setSeedSlot(''); setSeedDate('');
       setSearch(''); setCommitting(false); setErr(null); setPincodeModalFor(null);
       setRetainedJob(null); setSelected(new Set());
     }
@@ -290,11 +294,17 @@ export function ScheduleAssignModal({
     return s ? `&${s}` : '';
   }, [proposedWallClock, timeSlot]);
 
-  // (b) TOP 10 — keyed on jobId + proposed schedule so editing the date
-  // re-fetches. `enabled` waits until the modal is open AND the schedule
-  // has been seeded (so the first fetch reflects the job's real date).
+  // Has the operator EDITED the schedule away from the seeded (job's stored)
+  // date? Only then do we append the schedule query. On open, jobDateLocal is
+  // seeded to seedDate, so this stays false and the key is schedule-free —
+  // preventing the fetch→seed→refetch double round-trip of the expensive
+  // Top-10 endpoint. A genuine date edit flips it true and re-ranks (intended).
+  const scheduleEdited = seeded && jobDateLocal !== seedDate;
+
+  // (b) TOP 10 — keyed on jobId; the proposed schedule joins the key only
+  // after a real edit (scheduleEdited) so the first open is a single fetch.
   const topKey = open && jobId
-    ? `/admin/jobs/${jobId}/candidates?limit=10${seeded ? scheduleQs : ''}`
+    ? `/admin/jobs/${jobId}/candidates?limit=10${scheduleEdited ? scheduleQs : ''}`
     : null;
   const top = useFetch<CandidatesResponse>(topKey, { enabled: !!topKey });
 
@@ -303,7 +313,9 @@ export function ScheduleAssignModal({
   // phase; once seeded, deriveTimeSlot() takes over from the picked date.
   useEffect(() => {
     if (seeded || !top.data?.job) return;
-    setJobDateLocal(isoToLocalInput(top.data.job.requested_date_time));
+    const seededLocal = isoToLocalInput(top.data.job.requested_date_time);
+    setJobDateLocal(seededLocal);
+    setSeedDate(seededLocal);
     setSeedSlot(top.data.job.time_slot ?? 'Anytime');
     setSeeded(true);
   }, [seeded, top.data]);
