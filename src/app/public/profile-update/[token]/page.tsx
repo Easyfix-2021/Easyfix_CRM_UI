@@ -1191,6 +1191,7 @@ const DS_RED_TINT = '#FDECEC';
 const DS_BLUE = '#2D9CDB';
 const DS_BLUE_TINT = '#EAF6FD';
 const DS_GREEN = '#16A34A';
+const DS_GREEN_TINT = '#DCFCE7';
 
 /*
  * Category + service-type ICONS are not in the DB. They ship as static assets
@@ -1450,10 +1451,10 @@ function SkillsMappingPicker({
                     <button
                       type="button"
                       onClick={() => onToggleOption(activeCat.category_id, activeType.service_type_id, sheetSkill.deep_skill_id, o.option_id)}
-                      className="rounded-lg px-4 py-1.5 text-xs font-bold shrink-0"
-                      style={isSel ? { backgroundColor: '#E5E7EB', color: '#6B7280' } : { backgroundColor: DS_BLUE, color: '#fff' }}
+                      className="inline-flex items-center gap-1 rounded-lg px-4 py-1.5 text-xs font-bold shrink-0"
+                      style={isSel ? { backgroundColor: DS_GREEN_TINT, color: DS_GREEN } : { backgroundColor: DS_BLUE, color: '#fff' }}
                     >
-                      {isSel ? 'ADDED' : 'ADD'}
+                      {isSel ? <><Check className="h-3.5 w-3.5" strokeWidth={3} /> Added</> : 'Add'}
                     </button>
                   </div>
                 );

@@ -471,7 +471,7 @@ export default function MyOrdersPage() {
                     <div className="text-xs">{formatDate(j.ticket_created_date_time)}</div>
                     <div className="text-[10px] text-muted-foreground">{jobAgeLabel(j.ticket_created_date_time)}</div>
                   </td>
-                  <td>{j.client_name ?? '—'}</td>
+                  <td className="min-w-[18rem] max-w-[26rem] break-words">{j.client_name ?? '—'}</td>
                   <td>{j.city_name ?? '—'}</td>
                   <td>{j.service_category ?? '—'}</td>
                   <td className="whitespace-nowrap">
@@ -550,7 +550,7 @@ export default function MyOrdersPage() {
               {!loading && sorted.map((j) => (
                 <tr key={j.job_id} className="hover:bg-muted/40">
                   <td className="stick-col stick-left font-medium">#{j.job_id}</td>
-                  <td>{j.client_name ?? '—'}</td>
+                  <td className="min-w-[18rem] max-w-[26rem] break-words">{j.client_name ?? '—'}</td>
                   <td>{j.customer_name ?? '—'}</td>
                   <td className="text-xs text-muted-foreground">
                     {/* Click-to-call lives on the mobile cell itself. */}
