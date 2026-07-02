@@ -223,6 +223,7 @@ type StatusCountsResp = {
 };
 
 type ServiceType = { service_type_id: number; service_type_name: string; service_catg_id: number };
+type ServiceCategory = { service_catg_id: number; service_catg_name: string };
 type ZonalManager = { user_id: number; user_name: string };
 type DeepSkill = { deep_skill_id: number; deep_skill_name: string };
 
@@ -318,6 +319,7 @@ function parseCsvCell(raw: string | null | undefined, lookup: Map<string, string
 let zonalManagersPromise: Promise<ZonalManager[]> | null = null;
 let deepSkillsPromise: Promise<DeepSkill[]> | null = null;
 let serviceTypesAllPromise: Promise<ServiceType[]> | null = null;
+let serviceCategoriesAllPromise: Promise<ServiceCategory[]> | null = null;
 
 /*
  * Module-level in-flight collapse for the LIST call itself.
@@ -403,16 +405,41 @@ function fetchDeepSkillsOnce(): Promise<DeepSkill[]> {
 
 function fetchServiceTypesAllOnce(): Promise<ServiceType[]> {
   if (serviceTypesAllPromise) return serviceTypesAllPromise;
-  const cached = readSession<ServiceType[]>('st');
+  // includeInactive=true: this list is the id→name map for the Service Type
+  // column. A tech's efr_service_type CSV can reference service types that were
+  // later DEACTIVATED (service_type_status=0); the default active-only lookup
+  // omits them, so those ids rendered as "Unknown (<id>)" even though they have
+  // a real name. Fetching inactive types too lets the column name any type that
+  // still exists. (Cache key bumped to 'stAll' so stale active-only caches from
+  // the previous behaviour don't shadow this.)
+  const cached = readSession<ServiceType[]>('stAll');
   if (cached) {
     serviceTypesAllPromise = Promise.resolve(cached);
     return serviceTypesAllPromise;
   }
   serviceTypesAllPromise = api
-    .get<ServiceType[]>('/shared/lookup/service-types')
-    .then((data) => { writeSession('st', data); return data; })
+    .get<ServiceType[]>('/shared/lookup/service-types?includeInactive=true')
+    .then((data) => { writeSession('stAll', data); return data; })
     .catch((e) => { serviceTypesAllPromise = null; throw e; });
   return serviceTypesAllPromise;
+}
+
+function fetchServiceCategoriesAllOnce(): Promise<ServiceCategory[]> {
+  if (serviceCategoriesAllPromise) return serviceCategoriesAllPromise;
+  // includeInactive=true — same rationale as service types: this list is the
+  // id→name map for the Service Category column, and a tech's
+  // efr_service_category CSV can reference DEACTIVATED categories that the
+  // default active-only lookup omits (rendering them as "Unknown (<id>)").
+  const cached = readSession<ServiceCategory[]>('scAll');
+  if (cached) {
+    serviceCategoriesAllPromise = Promise.resolve(cached);
+    return serviceCategoriesAllPromise;
+  }
+  serviceCategoriesAllPromise = api
+    .get<ServiceCategory[]>('/shared/lookup/service-categories?includeInactive=true')
+    .then((data) => { writeSession('scAll', data); return data; })
+    .catch((e) => { serviceCategoriesAllPromise = null; throw e; });
+  return serviceCategoriesAllPromise;
 }
 
 export default function EasyfixersPage() {
@@ -475,6 +502,7 @@ export default function EasyfixersPage() {
   const [zonalManagers, setZonalManagers] = useState<ZonalManager[]>([]);
   const [deepSkills, setDeepSkills] = useState<DeepSkill[]>([]);
   const [serviceTypesAll, setServiceTypesAll] = useState<ServiceType[]>([]);
+  const [serviceCategoriesAll, setServiceCategoriesAll] = useState<ServiceCategory[]>([]);
 
   const [modal, setModal] = useState<{ open: boolean; mode: EasyfixerModalMode; id?: number }>({ open: false, mode: 'create' });
 
@@ -869,6 +897,7 @@ export default function EasyfixersPage() {
     fetchZonalManagersOnce().then((d) => { if (!cancelled) setZonalManagers(d); }).catch(() => {});
     fetchDeepSkillsOnce().then((d) => { if (!cancelled) setDeepSkills(d); }).catch(() => {});
     fetchServiceTypesAllOnce().then((d) => { if (!cancelled) setServiceTypesAll(d); }).catch(() => {});
+    fetchServiceCategoriesAllOnce().then((d) => { if (!cancelled) setServiceCategoriesAll(d); }).catch(() => {});
     return () => { cancelled = true; };
   }, []);
 
@@ -947,10 +976,11 @@ export default function EasyfixersPage() {
    * Memoised lookup maps so we don't rebuild them on every row render.
    */
   const categoryById = useMemo(() => {
+    const list = serviceCategoriesAll.length ? serviceCategoriesAll : lk.serviceCategories;
     const m = new Map<string, string>();
-    lk.serviceCategories.forEach((c) => m.set(String(c.service_catg_id), c.service_catg_name));
+    list.forEach((c) => m.set(String(c.service_catg_id), c.service_catg_name));
     return m;
-  }, [lk.serviceCategories]);
+  }, [serviceCategoriesAll, lk.serviceCategories]);
 
   const serviceTypeById = useMemo(() => {
     const list = serviceTypesAll.length ? serviceTypesAll : lk.serviceTypes;
