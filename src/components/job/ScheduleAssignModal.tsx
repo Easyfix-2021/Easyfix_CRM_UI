@@ -169,12 +169,20 @@ type ScheduleJob = {
   job_desc: string | null;
 };
 
+/** L1-eligible technician the ranker filtered out at L2, with the reason. */
+type RejectedTech = { efr_id: number; efr_name: string | null; reason: string };
+
 type CandidatesResponse = {
   job: ScheduleJob;
   candidates: ScheduleCandidate[];
   limit?: number;
   /** BE's effective offer-flow gate. TRUE → offer-pool; FALSE → direct-assign. */
   offerFlowEnabled?: boolean;
+  /** Diagnostics for the empty state: why the Top-10 came back empty. */
+  note?: string | null;
+  l1Count?: number;
+  l2Count?: number;
+  rejected?: RejectedTech[];
 };
 
 type SearchResponse = {
@@ -662,20 +670,19 @@ export function ScheduleAssignModal({
                       <ul className="list-disc ml-4 space-y-0.5">
                         <li><strong>Active</strong> &amp; <strong>Verified</strong> profile</li>
                         <li>Not already <strong>rejected / rescheduled off</strong> this job</li>
-                        <li><strong>Present</strong> (attendance marked) — applies when the job is <strong>today or tomorrow</strong></li>
-                        <li>Holds an <strong>active Deep Skill</strong> matching the job&apos;s <strong>Service Category &amp; Type</strong></li>
-                        <li><strong>Serviceable</strong> for the job&apos;s area — its <strong>city</strong>, widening to the pincode&apos;s <strong>zone(s)</strong> if fewer than 10 qualify</li>
+                        <li>Holds an <strong>active Deep Skill</strong> matching the job&apos;s <strong>Service Category &amp; Type</strong> — if none match, all in-area technicians are shown instead</li>
+                        <li>In the job&apos;s <strong>area</strong> — same <strong>city</strong>, widening to the pincode&apos;s <strong>zone(s)</strong> (by home zone, current pincode, or serviceable pincodes) when fewer than 10 qualify</li>
                         <li>No other <strong>booking in the same date &amp; time slot</strong></li>
-                        <li>Under the client&apos;s <strong>Max Concurrent Jobs</strong> (Booked / Scheduled / In-Progress)</li>
                         <li><strong>COD</strong> jobs: account balance <strong>₹500+</strong></li>
                       </ul>
                       <div className="font-medium text-slate-900">Ranked in this order</div>
                       <ol className="list-decimal ml-4 space-y-0.5">
-                        <li><strong>Worked in this Vertical</strong> before — existing techs first</li>
+                        <li><strong>Present</strong> for the job date (attendance marked) — present technicians rank first; if fewer than 10 are present, the rest are still listed with a <strong>✗</strong> so the list is never empty</li>
+                        <li>then <strong>Worked in this Vertical</strong> before — existing techs first</li>
                         <li>then <strong>Worked for this Client</strong> before</li>
                         <li>then <strong>Past performance</strong> — Rating, TAT &amp; Same-Day-Attempt (tiebreaker)</li>
                       </ol>
-                      <div className="text-slate-500">New technicians get neutral default performance so they still compete fairly within each group. Account balance is shown but doesn&apos;t affect rank.</div>
+                      <div className="text-slate-500">New technicians get neutral default performance so they still compete fairly within each group. <strong>Concurrent-jobs count</strong> and <strong>account balance</strong> are shown as columns but don&apos;t filter the list.</div>
                     </div>
                   </InfoTooltip>
                 )}
@@ -719,11 +726,61 @@ export function ScheduleAssignModal({
                   : 'Something Went Wrong!! Top Technicians Not Available'}
               </div>
             ) : !listLoading && rows.length === 0 ? (
-              <div className="py-12 text-center text-sm text-muted-foreground">
-                {showingSearch
-                  ? 'No Technicians Match Your Search.'
-                  : 'No Technicians Available For This Job.'}
-              </div>
+              showingSearch ? (
+                <div className="py-12 text-center text-sm text-muted-foreground">
+                  No Technicians Match Your Search.
+                </div>
+              ) : (
+                /* Empty Top-10 — surface WHY, using the ranker's diagnostics.
+                   l1Count>0 with rejects ⇒ techs matched skill+area but every
+                   one failed a hard gate (attendance / same-slot / balance) —
+                   list them so ops can act (e.g. search + offer, or wait for
+                   attendance). l1Count 0 ⇒ genuine supply gap. */
+                <div className="py-8 px-4 text-sm">
+                  <p className="text-center font-medium text-foreground">
+                    No Technicians Available For This Job.
+                  </p>
+                  {(() => {
+                    const rej = top.data?.rejected ?? [];
+                    const l1 = top.data?.l1Count ?? 0;
+                    // note=no_deep_skill_match ⇒ these techs were surfaced by the
+                    // no-skill fallback (matched the AREA, not the exact skill) —
+                    // word it accurately rather than claiming a skill match.
+                    const noSkill = String(top.data?.note ?? '').includes('no_deep_skill_match');
+                    if (l1 > 0 && rej.length > 0) {
+                      return (
+                        <>
+                          <p className="mt-1 text-center text-muted-foreground">
+                            {noSkill
+                              ? <>No technician has the exact deep skill for this job; the {l1} closest in this area {l1 === 1 ? 'is' : 'are'} also unavailable for the selected date &amp; time slot:</>
+                              : <>{l1} technician{l1 === 1 ? '' : 's'} matched the required skill &amp; area, but {l1 === 1 ? 'is' : 'are'} unavailable for the selected date &amp; time slot:</>}
+                          </p>
+                          <ul className="mx-auto mt-3 max-w-md space-y-1">
+                            {rej.map((r) => (
+                              <li
+                                key={r.efr_id}
+                                className="flex items-center justify-between gap-3 rounded border bg-muted/20 px-3 py-1.5 text-xs"
+                              >
+                                <span className="font-medium">{r.efr_name || `Efr #${r.efr_id}`}</span>
+                                <span className="text-right text-muted-foreground">{r.reason}</span>
+                              </li>
+                            ))}
+                          </ul>
+                          <p className="mt-3 text-center text-[11px] text-muted-foreground">
+                            Change the Job Date/time above, or search by name/ID to offer a specific technician.
+                          </p>
+                        </>
+                      );
+                    }
+                    return (
+                      <p className="mt-1 text-center text-muted-foreground">
+                        No active, verified technician with the required skill was found in this city
+                        {String(top.data?.note ?? '').includes('zone') ? ' or its nearby zones' : ''}.
+                      </p>
+                    );
+                  })()}
+                </div>
+              )
             ) : (
               <CandidateTable
                 rows={rows}
