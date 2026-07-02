@@ -15,7 +15,7 @@ import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
-  ShieldCheck, Webhook, FileSpreadsheet, ShieldAlert, Workflow, Database, FileText, Trash2,
+  ShieldCheck, Webhook, FileSpreadsheet, ShieldAlert, Workflow, Database, FileText, Trash2, Activity,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -91,12 +91,13 @@ export default function AdminActionsPage() {
   // by a per-user easyfix_properties allowlist, NOT the user's role/RBAC. The BE
   // enforces the same allowlist on every gated route; these flags only show/hide
   // the cards. GET /admin/access/features → { canSwitchCallMode, canDeleteEntities }.
-  const featureAccess = useFetchOnce<{ canSwitchCallMode: boolean; canDeleteEntities: boolean }>(
+  const featureAccess = useFetchOnce<{ canSwitchCallMode: boolean; canDeleteEntities: boolean; canValidateFlows: boolean }>(
     '/admin/access/features',
   );
   const canSwitchCallMode = featureAccess.data?.canSwitchCallMode === true;
   const canDelete = featureAccess.data?.canDeleteEntities === true;
   const canRestore = canDelete;
+  const canValidateFlows = featureAccess.data?.canValidateFlows === true;
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deletedRecordsOpen, setDeletedRecordsOpen] = useState(false);
   // Legacy sidebar URL_MAP routes generateClientInvoice → /admin-actions?focus=generate-invoice
@@ -160,6 +161,26 @@ export default function AdminActionsPage() {
             </Link>
           );
         })}
+        {/* Validate Flows — property-gated (validate.flows.emails): verify
+            scheduled jobs + test push notifications. */}
+        {canValidateFlows && (
+          <Link href="/admin-actions/validate-flows">
+            <Card className="hover:border-primary hover:shadow-sm transition-colors h-full">
+              <CardContent className="p-4 space-y-2">
+                <div className="flex items-center gap-2">
+                  <div className="h-8 w-8 rounded-md bg-primary/10 text-primary grid place-items-center">
+                    <Activity className="h-4 w-4" />
+                  </div>
+                  <h2 className="font-medium flex-1">Validate Flows</h2>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Verify scheduled jobs and send test push notifications to easyfixers — with full
+                  delivery details for debugging.
+                </p>
+              </CardContent>
+            </Card>
+          </Link>
+        )}
         {/* Generate Client Invoice — closes legacy URL_MAP gap. Opens
             a dialog that POSTs to /admin/finance/invoices/generate
             with { clientId, from, to }. Sidebar deep-link supported
