@@ -141,6 +141,14 @@ export type ScheduleCandidate = {
   avg_rating?: number;
 };
 
+type JobServiceRow = {
+  service_name: string | null;
+  service_catg: string | null;
+  service_type: string | null;
+  quantity: number | null;
+  total_charge: number | null;
+};
+
 type ScheduleJob = {
   job_id: number;
   customer_name: string | null;
@@ -153,6 +161,7 @@ type ScheduleJob = {
   service_category: string | null;
   service_type: string | null;
   deep_skill_label: string | null;
+  services?: JobServiceRow[] | null;
   job_type: string | null;
   payment_mode: string | null;
   requested_date_time: string | null;
@@ -536,6 +545,36 @@ export function ScheduleAssignModal({
                   <ReadField label="Payment Mode" value={job.payment_mode} />
                   <ReadField label="Description" value={job.job_desc} />
                 </div>
+
+                {job.services && job.services.length > 0 && (
+                  <div className="mt-3 pt-3 border-t">
+                    <div className="text-xs font-semibold text-muted-foreground mb-1.5">Services</div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="text-left text-muted-foreground">
+                            <th className="font-medium py-1 pr-3">Service</th>
+                            <th className="font-medium py-1 pr-3">Category</th>
+                            <th className="font-medium py-1 pr-3">Type</th>
+                            <th className="font-medium py-1 pr-3 text-right whitespace-nowrap">Qty</th>
+                            <th className="font-medium py-1 text-right whitespace-nowrap">Amount</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {job.services.map((s, i) => (
+                            <tr key={i} className="border-t border-border/60">
+                              <td className="py-1 pr-3">{s.service_name || '—'}</td>
+                              <td className="py-1 pr-3">{s.service_catg || '—'}</td>
+                              <td className="py-1 pr-3">{s.service_type || '—'}</td>
+                              <td className="py-1 pr-3 text-right whitespace-nowrap">{s.quantity ?? '—'}</td>
+                              <td className="py-1 text-right whitespace-nowrap">{s.total_charge != null ? `₹${s.total_charge}` : '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
 
                 {/* EDITABLE scheduling row — drives the candidate re-fetch. */}
                 <div className="mt-3 pt-3 border-t">

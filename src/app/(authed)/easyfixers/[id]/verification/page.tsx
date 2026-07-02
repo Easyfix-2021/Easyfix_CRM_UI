@@ -1128,6 +1128,7 @@ const DS_RED_TINT = '#FDECEC';
 const DS_BLUE = '#2D9CDB';
 const DS_BLUE_TINT = '#EAF6FD';
 const DS_GREEN = '#16A34A';
+const DS_GREEN_TINT = '#DCFCE7';
 
 function dsSlug(s: string): string {
   return String(s || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
@@ -1583,10 +1584,10 @@ function DeepSkillOptionMapping({ efrId, onReload }: { efrId: number; onReload?:
                         <button
                           type="button"
                           onClick={() => toggleOption(sheetCtx.catgId, sheetCtx.typeId, sheetCtx.skill.deepskill_id, o.id)}
-                          className="rounded-lg px-4 py-1.5 text-xs font-bold shrink-0"
-                          style={isSel ? { backgroundColor: '#E5E7EB', color: '#6B7280' } : { backgroundColor: DS_BLUE, color: '#fff' }}
+                          className="inline-flex items-center gap-1 rounded-lg px-4 py-1.5 text-xs font-bold shrink-0"
+                          style={isSel ? { backgroundColor: DS_GREEN_TINT, color: DS_GREEN } : { backgroundColor: DS_BLUE, color: '#fff' }}
                         >
-                          {isSel ? 'ADDED' : 'ADD'}
+                          {isSel ? <><Check className="h-3.5 w-3.5" strokeWidth={3} /> Added</> : 'Add'}
                         </button>
                       </div>
                     );
