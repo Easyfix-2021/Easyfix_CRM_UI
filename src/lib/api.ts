@@ -165,6 +165,12 @@ export type JobOffer = {
   efr_id: number;
   efr_name: string;
   offered_at: string;
+  /** Human-readable offer_status (OFFERED for open offers). */
+  offer_status_label?: string | null;
+  /** How many times this tech has been (re)offered this job. */
+  offer_count?: number | null;
+  /** Where the offer was made from: Top-10 list, Search, or auto-assign. */
+  offer_source?: 'top10' | 'search' | 'auto' | null;
 };
 
 /* GET /admin/jobs/:id/offers → technicians the job is currently offered to. */

@@ -467,7 +467,12 @@ export default function MyOrdersPage() {
               )}
               {!loading && sorted.map((j) => (
                 <tr key={j.job_id} className="hover:bg-muted/40">
-                  <td className="stick-col stick-left font-medium">#{j.job_id}</td>
+                  <td className="stick-col stick-left font-medium">
+                    <span className="inline-flex items-center gap-1">
+                      #{j.job_id}
+                      <CallHistoryButton jobId={j.job_id} />
+                    </span>
+                  </td>
                   <td className="whitespace-nowrap">
                     <div className="text-xs">{formatDate(j.ticket_created_date_time)}</div>
                     <div className="text-[10px] text-muted-foreground">{jobAgeLabel(j.ticket_created_date_time)}</div>
@@ -482,11 +487,9 @@ export default function MyOrdersPage() {
                   <td>
                     <div>{j.customer_name ?? '—'}</div>
                     <div className="text-xs text-muted-foreground">
-                      {/* Click-to-call + masking handled by CallableMobile. */}
-                      <span className="inline-flex items-center gap-1">
-                        <CallableMobile jobId={j.job_id} mobile={j.customer_mob_no} />
-                        <CallHistoryButton jobId={j.job_id} mobile={j.customer_mob_no} />
-                      </span>
+                      {/* Click-to-call + masking handled by CallableMobile.
+                          Call history moved to the Job # cell (job-scoped). */}
+                      <CallableMobile jobId={j.job_id} mobile={j.customer_mob_no} />
                     </div>
                   </td>
                   <td>
@@ -553,15 +556,18 @@ export default function MyOrdersPage() {
               )}
               {!loading && sorted.map((j) => (
                 <tr key={j.job_id} className="hover:bg-muted/40">
-                  <td className="stick-col stick-left font-medium">#{j.job_id}</td>
+                  <td className="stick-col stick-left font-medium">
+                    <span className="inline-flex items-center gap-1">
+                      #{j.job_id}
+                      <CallHistoryButton jobId={j.job_id} />
+                    </span>
+                  </td>
                   <td className="min-w-[18rem] max-w-[26rem] break-words">{j.client_name ?? '—'}</td>
                   <td>{j.customer_name ?? '—'}</td>
                   <td className="text-xs text-muted-foreground">
-                    {/* Click-to-call lives on the mobile cell itself. */}
-                    <span className="inline-flex items-center gap-1">
-                      <CallableMobile jobId={j.job_id} mobile={j.customer_mob_no} />
-                      <CallHistoryButton jobId={j.job_id} mobile={j.customer_mob_no} />
-                    </span>
+                    {/* Click-to-call lives on the mobile cell itself.
+                        Call history moved to the Job # cell (job-scoped). */}
+                    <CallableMobile jobId={j.job_id} mobile={j.customer_mob_no} />
                   </td>
                   <td>{j.city_name ?? '—'}</td>
                   <td>{j.easyfixer_name ? formatEasyfixerName(j.easyfixer_name) : <span className="text-muted-foreground">unassigned</span>}</td>

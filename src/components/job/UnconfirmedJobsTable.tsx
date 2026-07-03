@@ -163,7 +163,12 @@ export function UnconfirmedJobsTable({
           const ticketTs = j.ticket_created_date_time ?? j.created_date_time;
           return (
             <tr key={j.job_id}>
-              <td className="font-medium whitespace-nowrap stick-col stick-left">#{j.job_id}</td>
+              <td className="font-medium whitespace-nowrap stick-col stick-left">
+                <span className="inline-flex items-center gap-1">
+                  #{j.job_id}
+                  <CallHistoryButton jobId={j.job_id} />
+                </span>
+              </td>
               <td className="text-xs whitespace-nowrap">
                 <div>{ticketTs ? formatDate(ticketTs) : '—'}</div>
                 <div className="text-[10px] text-muted-foreground">{ticketTs ? jobAge(ticketTs) : ''}</div>
@@ -298,10 +303,7 @@ export function UnconfirmedJobsTable({
                     it (falls back to a non-clickable masked string). The
                     customer's unmasked mobile is resolved server-side from
                     jobId — never sent over the wire from this row. */}
-                <span className="inline-flex items-center gap-1">
-                  <CallableMobile jobId={j.job_id} mobile={j.customer_mob_no} />
-                  <CallHistoryButton jobId={j.job_id} mobile={j.customer_mob_no} />
-                </span>
+                <CallableMobile jobId={j.job_id} mobile={j.customer_mob_no} />
               </td>
               <td className="text-xs text-muted-foreground">{j.source_type ?? '—'}</td>
               <td className="stick-col stick-right text-right whitespace-nowrap">

@@ -48,7 +48,7 @@ function safeMobile(v: string | null | undefined): string | undefined {
   return s;
 }
 import { CallableMobile } from '@/components/calls/CallButton';
-import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
+import { CallHistoryTable, type CallRow } from '@/components/calls/CallHistoryButton';
 import { showToast, dismissToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useMe } from '@/lib/auth-context';
@@ -872,7 +872,7 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           <DlCard title="Customer" rows={[
             ['Name', job.customer_name],
-            ['Mobile', <span key="cust-mob" className="inline-flex items-center gap-1"><CallableMobile jobId={Number(job.job_id)} mobile={job.customer_mob_no as string | null} /><CallHistoryButton jobId={Number(job.job_id)} mobile={job.customer_mob_no as string | null} /></span>],
+            ['Mobile', <CallableMobile key="cust-mob" jobId={Number(job.job_id)} mobile={job.customer_mob_no as string | null} />],
             ['Email', job.customer_email],
             ['Alt Name', (job as Record<string, unknown>).additional_name as string],
             // Alt Number rendered via CallableMobile with useAlt=true so
@@ -899,11 +899,14 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
               ? <CallableMobile
                   key="spoc-mob"
                   reportingContactId={Number(job.reporting_contact_id)}
+                  jobContextId={Number(job.job_id)}
                   mobile={job.client_spoc as string | null}
                 />
               : (job.client_spoc as string | null)],
           ]}/>
           <DlCard title="Job Meta" rows={[
+            // No ⓘ popup here — the modal's inline "Calling History" section
+            // (JobCallHistory below) already shows the full party-aware log.
             ['Job ID', job.job_id],
             ['Reference', job.job_reference_id],
             ['Type', job.job_type],
@@ -960,6 +963,7 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
               ? <CallableMobile
                   key="tech-mob"
                   efrId={Number(job.fk_easyfixter_id)}
+                  jobContextId={Number(job.job_id)}
                   mobile={job.easyfixer_mobile as string | null}
                 />
               : (job.easyfixer_mobile as string | null)],
@@ -1404,61 +1408,24 @@ function JobRescheduleHistory({ jobId }: { jobId: number }) {
 }
 
 /*
- * JobCallHistory — Kaleyra call log scoped to this job. Uses the
- * existing /admin/calls/preview endpoint with `jobId=` filter. Empty
- * list when no calls; gracefully falls back if the operator lacks
- * click-to-call permission (the endpoint 403s and we just hide).
+ * JobCallHistory — the job's call log, inline in the detail modal. Uses the
+ * SAME job-scoped /admin/calls endpoint + shared CallHistoryTable as the ⓘ
+ * popup on the Job ID row, so the party-aware "With" column shows here too.
+ *
+ * Was previously pointed at /admin/calls/preview, which returns a single
+ * preview object ({mode, dialFrom, dialTo, provider}) — never an items list —
+ * so this section rendered "No calls recorded" for EVERY job. Fixed 2026-07-03.
  */
 function JobCallHistory({ jobId }: { jobId: number }) {
-  type CallRow = Record<string, unknown> & {
-    id?: number;
-    call_date?: string | null;
-    call_status?: string | null;
-    call_duration?: number | null;
-    call_from?: string | null;
-    call_to?: string | null;
-    initiated_by_name?: string | null;
-  };
-  const { data, error } = useFetch<CallRow[] | { items?: CallRow[] }>(`/admin/calls/preview?jobId=${jobId}&limit=50`);
-  if (error) return null; // operator without isClickToCall permission — hide section
-  const rows: CallRow[] = Array.isArray(data) ? data : (data?.items ?? []);
+  const { data, loading, error } = useFetch<{ items?: CallRow[] }>(`/admin/calls?jobId=${jobId}&limit=50`);
+  if (error) return null; // graceful hide on failure
+  const items = data?.items ?? [];
   return (
     <div className="mt-5">
       <div className="font-medium text-sm mb-1">Calling History</div>
-      {rows.length === 0 ? (
-        <div className="text-xs text-muted-foreground rounded border border-dashed px-3 py-2">
-          No calls recorded for this job.
-        </div>
-      ) : (
-        <div className="rounded-lg border bg-card overflow-hidden">
-          <table className="data-table w-full">
-            <thead>
-              <tr>
-                <th className="!text-left">When</th>
-                <th className="!text-left">By</th>
-                <th className="!text-left">From → To</th>
-                <th className="!text-center">Duration</th>
-                <th className="!text-center">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r, i) => (
-                <tr key={r.id ?? i}>
-                  <td className="text-xs">{formatDate(r.call_date as string)}</td>
-                  <td className="text-xs">{r.initiated_by_name ?? '—'}</td>
-                  <td className="text-xs font-mono">
-                    {String(r.call_from ?? '—')} → {String(r.call_to ?? '—')}
-                  </td>
-                  <td className="text-xs !text-center">
-                    {r.call_duration != null ? `${r.call_duration}s` : '—'}
-                  </td>
-                  <td className="text-xs !text-center">{r.call_status ?? '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      <div className="rounded-lg border bg-card overflow-hidden px-3 py-1">
+        <CallHistoryTable items={items} loading={loading} />
+      </div>
     </div>
   );
 }
@@ -5880,6 +5847,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                     mobile={maskedSpoc}
                     reportingContactId={spocReportingId}
                     jobId={spocJobId}
+                    jobContextId={initial?.job_id ? Number(initial.job_id) : undefined}
                     /*
                      * Input-pill styling — w-full + h-9 + px-3 +
                      * rounded-md + border-input matches the visual

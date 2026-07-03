@@ -200,14 +200,20 @@ type CallTarget = {
   // every other path. NOT a target key in itself; the target is still
   // `jobId`, which is why pickTargetKey filters it out below.
   useAlt?: boolean;
+  // jobContextId (2026-07-03): modifier tagging which JOB an efrId/
+  // reportingContactId call belongs to, so a SPOC/technician call placed
+  // FROM a job records tbl_job_caller_info.job_id and shows in that job's
+  // call history. Like useAlt it is NOT a receiver target — excluded from
+  // pickTargetKey so it never looks like a second identifier.
+  jobContextId?: number;
 };
 
 // The "target keys" are the receiver-id slots the BE selects ON;
-// `useAlt` is a modifier, not a target, so it's intentionally excluded
-// here (otherwise a {jobId, useAlt} target would look ambiguous to
-// pickTargetKey and the call would refuse to fire).
-function pickTargetKey(t: CallTarget): Exclude<keyof CallTarget, 'useAlt'> | null {
-  const keys: Array<Exclude<keyof CallTarget, 'useAlt'>> = [
+// `useAlt` / `jobContextId` are modifiers, not targets, so they're
+// intentionally excluded here (otherwise a {efrId, jobContextId} target
+// would look ambiguous to pickTargetKey and the call would refuse to fire).
+function pickTargetKey(t: CallTarget): Exclude<keyof CallTarget, 'useAlt' | 'jobContextId'> | null {
+  const keys: Array<Exclude<keyof CallTarget, 'useAlt' | 'jobContextId'>> = [
     'jobId', 'customerId', 'efrId', 'reportingContactId',
   ];
   const present = keys.filter((k) => t[k] != null);
@@ -309,6 +315,12 @@ function useClickToCall(target: CallTarget) {
     ? {
         [targetKey]: target[targetKey] as number,
         ...(target.useAlt ? { useAlt: true } : {}),
+        // Tag the call to a job when this SPOC/tech call was launched from
+        // one, so it lands in that job's call history. Skipped when the
+        // target IS jobId (that path already anchors to its own job).
+        ...(target.jobContextId && targetKey !== 'jobId'
+          ? { jobContextId: target.jobContextId }
+          : {}),
       }
     : null;
 
@@ -577,11 +589,11 @@ type ButtonProps = CallTarget & {
 };
 
 export function CallButton({
-  jobId, customerId, efrId, reportingContactId, useAlt,
+  jobId, customerId, efrId, reportingContactId, useAlt, jobContextId,
   size = 'md', label = 'Call Customer', className,
 }: ButtonProps) {
   const { me } = useMe();
-  const target: CallTarget = { jobId, customerId, efrId, reportingContactId, useAlt };
+  const target: CallTarget = { jobId, customerId, efrId, reportingContactId, useAlt, jobContextId };
   const { busy, placeCall, toastNode, customNode } = useClickToCall(target);
   if (!hasAction(me, 'isClickToCall')) return null;
   if (pickTargetKey(target) == null) return null;
@@ -631,11 +643,11 @@ type MobileProps = CallTarget & {
 };
 
 export function CallableMobile({
-  jobId, customerId, efrId, reportingContactId, useAlt,
+  jobId, customerId, efrId, reportingContactId, useAlt, jobContextId,
   mobile, className, hideWhenUnauthorized = false, iconOnly = false,
 }: MobileProps) {
   const { me } = useMe();
-  const target: CallTarget = { jobId, customerId, efrId, reportingContactId, useAlt };
+  const target: CallTarget = { jobId, customerId, efrId, reportingContactId, useAlt, jobContextId };
   const { busy, placeCall, toastNode, customNode } = useClickToCall(target);
 
   const display = mobile && String(mobile).trim() !== '' ? mobile : '—';

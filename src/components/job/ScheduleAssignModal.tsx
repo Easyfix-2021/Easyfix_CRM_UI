@@ -642,6 +642,19 @@ export function ScheduleAssignModal({
                   >
                     <span className="text-sm font-medium text-foreground">{o.efr_name}</span>
                     <span className="text-[10px] text-muted-foreground">#{o.efr_id}</span>
+                    {o.offer_status_label && (
+                      <span className="inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 border border-amber-200">
+                        {o.offer_status_label}
+                      </span>
+                    )}
+                    {o.offer_source && (
+                      <span className="text-[10px] text-slate-500" title="Where this offer was made from">
+                        {o.offer_source === 'top10' ? 'Top-10' : o.offer_source === 'search' ? 'Search' : 'Auto'}
+                      </span>
+                    )}
+                    {(o.offer_count ?? 1) > 1 && (
+                      <span className="text-[10px] text-slate-500" title="Times offered">×{o.offer_count}</span>
+                    )}
                     <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
                       <Clock className="h-3 w-3" />
                       offered {relativeTime(o.offered_at)}
@@ -794,6 +807,7 @@ export function ScheduleAssignModal({
                 selected={selected}
                 onToggleSelected={toggleSelected}
                 onOpenPincodes={setPincodeModalFor}
+                jobId={jobId}
               />
             )}
           </section>
@@ -899,7 +913,7 @@ function ReadField({ label, value }: { label: string; value: React.ReactNode }) 
 
 /* ───────────────────────── Technician table ─────────────────────────── */
 function CandidateTable({
-  rows, loading, error, showingSearch, canCommit, multiSelect, selected, onToggleSelected, onOpenPincodes,
+  rows, loading, error, showingSearch, canCommit, multiSelect, selected, onToggleSelected, onOpenPincodes, jobId,
 }: {
   rows: ScheduleCandidate[];
   loading: boolean;
@@ -911,6 +925,9 @@ function CandidateTable({
   selected: Map<number, 'top10' | 'search'>;
   onToggleSelected: (efrId: number, source: 'top10' | 'search') => void;
   onOpenPincodes: (c: ScheduleCandidate) => void;
+  /** Job the candidates are for — tags click-to-call rows so a call to a
+   *  candidate technician shows in this job's call history. */
+  jobId: number | null;
 }) {
   // +1 column when the operator can commit: the select control (checkbox in
   // offer mode, radio in direct-assign mode).
@@ -1056,7 +1073,7 @@ function CandidateTable({
                 {c.mobile
                   ? (
                     <span className="inline-flex items-center gap-1">
-                      <CallableMobile efrId={c.efr_id} mobile={c.mobile} />
+                      <CallableMobile efrId={c.efr_id} jobContextId={jobId ?? undefined} mobile={c.mobile} />
                     </span>
                   )
                   : <span className="text-muted-foreground inline-flex items-center gap-1"><Phone className="h-3 w-3" />—</span>}
