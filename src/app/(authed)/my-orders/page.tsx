@@ -21,6 +21,7 @@ import { UnconfirmedJobsTable } from '@/components/job/UnconfirmedJobsTable';
 import { AssignTechnicianModal, type AssignMode } from '@/components/job/AssignTechnicianModal';
 import { ScheduleAssignModal } from '@/components/job/ScheduleAssignModal';
 import { CallableMobile } from '@/components/calls/CallButton';
+import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
 import { useSort, SortHeader } from '@/lib/use-sort';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
@@ -482,7 +483,10 @@ export default function MyOrdersPage() {
                     <div>{j.customer_name ?? '—'}</div>
                     <div className="text-xs text-muted-foreground">
                       {/* Click-to-call + masking handled by CallableMobile. */}
-                      <CallableMobile jobId={j.job_id} mobile={j.customer_mob_no} />
+                      <span className="inline-flex items-center gap-1">
+                        <CallableMobile jobId={j.job_id} mobile={j.customer_mob_no} />
+                        <CallHistoryButton jobId={j.job_id} mobile={j.customer_mob_no} />
+                      </span>
                     </div>
                   </td>
                   <td>
@@ -554,7 +558,10 @@ export default function MyOrdersPage() {
                   <td>{j.customer_name ?? '—'}</td>
                   <td className="text-xs text-muted-foreground">
                     {/* Click-to-call lives on the mobile cell itself. */}
-                    <CallableMobile jobId={j.job_id} mobile={j.customer_mob_no} />
+                    <span className="inline-flex items-center gap-1">
+                      <CallableMobile jobId={j.job_id} mobile={j.customer_mob_no} />
+                      <CallHistoryButton jobId={j.job_id} mobile={j.customer_mob_no} />
+                    </span>
                   </td>
                   <td>{j.city_name ?? '—'}</td>
                   <td>{j.easyfixer_name ? formatEasyfixerName(j.easyfixer_name) : <span className="text-muted-foreground">unassigned</span>}</td>
