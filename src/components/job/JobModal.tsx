@@ -48,6 +48,7 @@ function safeMobile(v: string | null | undefined): string | undefined {
   return s;
 }
 import { CallableMobile } from '@/components/calls/CallButton';
+import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
 import { showToast, dismissToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useMe } from '@/lib/auth-context';
@@ -871,7 +872,7 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           <DlCard title="Customer" rows={[
             ['Name', job.customer_name],
-            ['Mobile', <CallableMobile key="cust-mob" jobId={Number(job.job_id)} mobile={job.customer_mob_no as string | null} />],
+            ['Mobile', <span key="cust-mob" className="inline-flex items-center gap-1"><CallableMobile jobId={Number(job.job_id)} mobile={job.customer_mob_no as string | null} /><CallHistoryButton jobId={Number(job.job_id)} mobile={job.customer_mob_no as string | null} /></span>],
             ['Email', job.customer_email],
             ['Alt Name', (job as Record<string, unknown>).additional_name as string],
             // Alt Number rendered via CallableMobile with useAlt=true so

@@ -260,7 +260,7 @@ export function ScheduleAssignModal({
   const [search, setSearch] = useState('');
   // Multi-select offer pool — set of efr_ids the operator has ticked across
   // the Top-10 + search rows. Reset on close.
-  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [selected, setSelected] = useState<Map<number, 'top10' | 'search'>>(new Map());
   // True while the commit (offer POST or assign PATCH) is in flight — drives the
   // sticky footer button's spinner + disabled state.
   const [committing, setCommitting] = useState(false);
@@ -278,7 +278,7 @@ export function ScheduleAssignModal({
     if (!open) {
       setSeeded(false); setJobDateLocal(''); setSeedSlot(''); setSeedDate('');
       setSearch(''); setCommitting(false); setErr(null); setPincodeModalFor(null);
-      setRetainedJob(null); setSelected(new Set());
+      setRetainedJob(null); setSelected(new Map());
     }
   }, [open, jobId]);
 
@@ -286,14 +286,14 @@ export function ScheduleAssignModal({
   // pool; direct-ASSIGN mode (offer flow off) = single-select (picking one
   // replaces the prior pick, re-clicking clears it). `offerMode` is derived
   // below from the candidates response and read here at call time (closure).
-  function toggleSelected(efrId: number) {
+  function toggleSelected(efrId: number, source: 'top10' | 'search') {
     setSelected((prev) => {
       if (!offerMode) {
-        return prev.has(efrId) ? new Set() : new Set([efrId]);
+        return prev.has(efrId) ? new Map<number, 'top10' | 'search'>() : new Map([[efrId, source]]);
       }
-      const next = new Set(prev);
+      const next = new Map(prev);
       if (next.has(efrId)) next.delete(efrId);
-      else next.add(efrId);
+      else next.set(efrId, source);
       return next;
     });
   }
@@ -386,7 +386,7 @@ export function ScheduleAssignModal({
   // Offer the job to every selected technician at once (offer-pool model).
   async function offer() {
     if (!jobId) return;
-    const ids = [...selected];
+    const ids = [...selected.keys()];
     if (ids.length === 0) return;
     const techCount = ids.length;
     const techLabel = `${techCount} technician${techCount === 1 ? '' : 's'}`;
@@ -422,6 +422,8 @@ export function ScheduleAssignModal({
       await api.offerJob(jobId, ids, {
         requestedDateTime: proposedWallClock || undefined,
         timeSlot: timeSlot || undefined,
+        // Per-tech origin (Top-10 list vs Search Result), captured at selection time.
+        sourceByEfr: Object.fromEntries(selected),
       });
       // Bust the candidates + offers caches so reopening (and the Offered-to
       // section) reflect the new state.
@@ -444,7 +446,7 @@ export function ScheduleAssignModal({
   // the job BOOKED → SCHEDULED immediately — no offer row, no push.
   async function assignSingle() {
     if (!jobId) return;
-    const id = [...selected][0];
+    const id = [...selected.keys()][0];
     if (id == null) return;
     const cand = rows.find((r) => r.efr_id === id);
     const name = cand?.efr_name ?? `Efr #${id}`;
@@ -906,8 +908,8 @@ function CandidateTable({
   canCommit: boolean;
   /** TRUE → offer pool (checkboxes, many); FALSE → direct assign (radio, one). */
   multiSelect: boolean;
-  selected: Set<number>;
-  onToggleSelected: (efrId: number) => void;
+  selected: Map<number, 'top10' | 'search'>;
+  onToggleSelected: (efrId: number, source: 'top10' | 'search') => void;
   onOpenPincodes: (c: ScheduleCandidate) => void;
 }) {
   // +1 column when the operator can commit: the select control (checkbox in
@@ -983,7 +985,7 @@ function CandidateTable({
                     type={multiSelect ? 'checkbox' : 'radio'}
                     name={multiSelect ? undefined : 'assign-select'}
                     checked={isSelected}
-                    onChange={() => onToggleSelected(c.efr_id)}
+                    onChange={() => onToggleSelected(c.efr_id, showingSearch ? 'search' : 'top10')}
                     aria-label={`Select ${c.efr_name}`}
                     className="h-4 w-4 cursor-pointer accent-primary align-middle"
                   />

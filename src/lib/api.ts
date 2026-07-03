@@ -99,10 +99,14 @@ export const api = {
    *   is currently offered to (open offers), for the "Offered to" section with
    *   a live "offered <relativeTime>" label.
    */
-  offerJob: (jobId: number, easyfixerIds: number[], schedule?: CommitSchedule) =>
+  offerJob: (
+    jobId: number,
+    easyfixerIds: number[],
+    opts?: CommitSchedule & { sourceByEfr?: Record<string, 'top10' | 'search'> },
+  ) =>
     request<JobOfferResult>(`/admin/jobs/${jobId}/offer`, {
       method: 'POST',
-      body: { easyfixerIds, ...(schedule ?? {}) },
+      body: { easyfixerIds, ...(opts ?? {}) },
     }),
   getJobOffers: (jobId: number) =>
     request<JobOffersResponse>(`/admin/jobs/${jobId}/offers`, { method: 'GET' }),

@@ -3,6 +3,7 @@ import * as React from 'react';
 import { Eye, CalendarCheck, Send } from 'lucide-react';
 import { formatDate, statusLabel, statusTone } from '@/lib/utils';
 import { CallableMobile } from '@/components/calls/CallButton';
+import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
 import { MagicLinkActionPopup } from '@/components/job/MagicLinkActionPopup';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { IconButton } from '@/components/ui/icon-button';
@@ -297,7 +298,10 @@ export function UnconfirmedJobsTable({
                     it (falls back to a non-clickable masked string). The
                     customer's unmasked mobile is resolved server-side from
                     jobId — never sent over the wire from this row. */}
-                <CallableMobile jobId={j.job_id} mobile={j.customer_mob_no} />
+                <span className="inline-flex items-center gap-1">
+                  <CallableMobile jobId={j.job_id} mobile={j.customer_mob_no} />
+                  <CallHistoryButton jobId={j.job_id} mobile={j.customer_mob_no} />
+                </span>
               </td>
               <td className="text-xs text-muted-foreground">{j.source_type ?? '—'}</td>
               <td className="stick-col stick-right text-right whitespace-nowrap">

@@ -108,11 +108,20 @@ export function AddressAutocomplete({
   const [activeIdx, setActiveIdx] = React.useState(0);
   const abortRef = React.useRef<AbortController | null>(null);
   const wrapRef = React.useRef<HTMLDivElement>(null);
+  // TRUE only after the operator actually types in the field. Gates the
+  // suggestion fetch/open so a PRE-FILLED value on (re)mount — e.g. the Customer
+  // Details section expanding, which remounts the address picker — never
+  // auto-opens the list, steals focus, or lets a stray Enter pick a suggestion
+  // that silently rewrites the address.
+  const userTypedRef = React.useRef(false);
 
   // Debounced query effect. 350ms feels natural; <200ms wastes API
   // hits on every keystroke and >500ms makes the suggestion list
   // feel laggy.
   React.useEffect(() => {
+    // Only react to genuine USER edits — ignore mount / remount / prop-sync
+    // value changes so a pre-filled address never auto-fetches or opens.
+    if (!userTypedRef.current) return;
     if (!value || value.length < 3 || disabled || placesDisabled()) {
       // Circuit-broken or below threshold: don't ping the backend.
       // Field stays fully usable as a plain Input.
@@ -179,6 +188,7 @@ export function AddressAutocomplete({
   }, [open]);
 
   async function pick(s: Suggestion) {
+    userTypedRef.current = false; // a picked value must not re-open the list
     onChange(s.description);
     setOpen(false);
     try {
@@ -221,7 +231,7 @@ export function AddressAutocomplete({
     <div ref={wrapRef} className="relative">
       <Input
         value={value}
-        onChange={(e) => { onChange(e.target.value); if (e.target.value.length >= 3) setOpen(true); }}
+        onChange={(e) => { userTypedRef.current = true; onChange(e.target.value); if (e.target.value.length >= 3) setOpen(true); }}
         onFocus={() => { if (items.length > 0) setOpen(true); }}
         onKeyDown={onKey}
         placeholder={placeholder}

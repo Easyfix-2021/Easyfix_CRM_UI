@@ -71,11 +71,11 @@ export function CallHistoryButton({
         title="View call history for this number"
         aria-label="View call history for this number"
         className={cn(
-          'inline-flex items-center align-middle text-muted-foreground hover:text-foreground',
+          'inline-flex items-center align-middle text-sky-600 hover:text-sky-800',
           className,
         )}
       >
-        <Info className="h-3.5 w-3.5" />
+        <Info className="h-4 w-4" />
       </button>
 
       <Dialog open={open} onOpenChange={setOpen}>
