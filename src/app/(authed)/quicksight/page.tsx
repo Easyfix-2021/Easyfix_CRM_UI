@@ -31,7 +31,7 @@ import {
   LayoutDashboard, Lock,
   ClipboardList, Gauge, Layers, Flame, Package,
   Building2, Wrench, MapPinned, Users, BarChart3,
-  ArrowRight, type LucideIcon,
+  ArrowRight, Handshake, type LucideIcon,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { useMe } from '@/lib/auth-context';
@@ -123,6 +123,13 @@ const REPORTS: ReportCardDef[] = [
     actionKey: 'isQuickSightAdminDashboardView',
     description: 'Cross-report operational overview for administrators.',
     Icon: BarChart3,
+  },
+  {
+    urlBase: 'offer-acceptance',
+    label: 'Offer Acceptance',
+    actionKey: 'isQuickSightOfferAcceptanceView',
+    description: 'Job-offer acceptance, rejection & response time by technician and source.',
+    Icon: Handshake,
   },
 ];
 

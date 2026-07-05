@@ -137,7 +137,10 @@ export function JobModal({
   onClose: () => void;
   mode: JobModalMode;
   jobId?: number;
-  onSaved?: () => void;
+  /* Called after any successful save. On a CREATE (Book New Call) the newly
+   * created job is passed so the parent can route straight into Schedule &
+   * Assign; edit/confirm/other saves call it with no argument. */
+  onSaved?: (job?: Job) => void;
   /*
    * Optional initial Tabs value for view-mode (2026-05-28). Threaded
    * from URL `?tab=` by the list page so deep-links like
@@ -481,7 +484,9 @@ export function JobModal({
                   onCancel={onClose}
                   onFormDirty={(dirty) => { hasUnsavedFormRef.current = dirty; }}
                   onSaved={(saved) => {
-                    if (saved?.job_id) { setJob(saved); setMode('view'); onSaved?.(); }
+                    // Pass the created job up so the list page can jump straight
+                    // into Schedule & Assign (parent guards on create mode).
+                    if (saved?.job_id) { setJob(saved); setMode('view'); onSaved?.(saved); }
                   }}
                 />
               )}
@@ -642,6 +647,23 @@ function collectedByCode(label: unknown): number | undefined {
   // Allow numeric strings too (e.g. "2") for forward-compat.
   const n = Number(s);
   return Number.isFinite(n) ? n : undefined;
+}
+
+/*
+ * collectedByLabel — inverse of collectedByCode. tbl_job stores the enum as an
+ * INTEGER (1/2/3), but the Collected By <SearchSelect> options are the string
+ * labels. On reload we must map the stored integer back to its label, else the
+ * dropdown value matches no option and renders blank — the "Collected By not
+ * saved" symptom. Tolerant of already-label values (legacy rows). Returns
+ * undefined for unknown so the caller can apply its default.
+ */
+function collectedByLabel(code: unknown): string | undefined {
+  if (code == null || code === '') return undefined;
+  const s = String(code).trim().toLowerCase();
+  if (s === '1' || s === 'easyfixer') return 'Easyfixer';
+  if (s === '2' || s === 'easyfix')   return 'Easyfix';
+  if (s === '3' || s === 'client')    return 'Client';
+  return undefined;
 }
 
 function ActionBar({ job, jobId, onChanged, onEdit }: {
@@ -4127,6 +4149,46 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
   }, [prefillCustomer?.customer?.customer_id]);
 
   /*
+   * Confirm/Edit mode — the customer's saved addresses (tbl_address), fetched
+   * by the job's fk_customer_id via the existing GET /admin/customers/:id
+   * (returns `{ ...customer, addresses }`). Bulk-uploaded jobs frequently
+   * arrive with a thin/empty address, so we surface every address the customer
+   * has on file and let the operator pick one to auto-fill the form in a click.
+   * Create mode has its own richer prefillCustomer.addresses picker, so this is
+   * gated to edit/confirm only.
+   */
+  type SavedCustomerAddress = {
+    address_id: number;
+    address: string | null;
+    building?: string | null;
+    landmark?: string | null;
+    city_id?: number | null;
+    pin_code?: string | null;
+    gps_location?: string | null;
+  };
+  const [savedAddresses, setSavedAddresses] = useState<SavedCustomerAddress[]>([]);
+  const confirmCustomerId = isEditShape
+    ? ((initial as Record<string, unknown> | null)?.fk_customer_id as number | undefined)
+    : undefined;
+  useEffect(() => {
+    if (!confirmCustomerId) { setSavedAddresses([]); return; }
+    let cancelled = false;
+    api.get<{ addresses?: SavedCustomerAddress[] }>(`/admin/customers/${confirmCustomerId}`)
+      .then((r) => { if (!cancelled) setSavedAddresses(Array.isArray(r?.addresses) ? r.addresses : []); })
+      .catch(() => { if (!cancelled) setSavedAddresses([]); });
+    return () => { cancelled = true; };
+  }, [confirmCustomerId]);
+  // city_id → name for the saved-address picker labels. The reused
+  // /admin/customers/:id endpoint returns tbl_address via SELECT * (no city
+  // join), so we resolve the name from the cities lookup (loads up to 1000
+  // rows — the full master). Keyed on the stable raw `lk.cities` array.
+  const cityNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const c of lk.cities) m.set(String(c.city_id), c.city_name);
+    return m;
+  }, [lk.cities]);
+
+  /*
    * Customer History dialog — surfaces every prior job booked for the
    * same tbl_customer row. Available only when the mobile-gate matched
    * an existing customer (i.e. there's a customer_id to query against);
@@ -4286,11 +4348,16 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
         // Prefill basket from the job's existing services when confirming —
         // ops see what's already there and can add/remove before promoting.
         if (isConfirm && Array.isArray(initial?.services)) {
-          const existing = (initial!.services as Array<Record<string, unknown>>).map((s, i) => ({
-            tempId: Date.now() + i,
-            client_service_id: String(s.service_id ?? ''),
-            quantity: String(s.quantity ?? 1),
-          })).filter((r) => r.client_service_id);
+          const existing = (initial!.services as Array<Record<string, unknown>>)
+            // getById returns soft-deleted (job_service_status===0) rows too so
+            // the view-mode "Show Inactive" toggle can surface them; the editable
+            // draft basket must NOT resurrect them, so keep only active rows.
+            .filter((s) => Number(s.job_service_status) !== 0)
+            .map((s, i) => ({
+              tempId: Date.now() + i,
+              client_service_id: String(s.service_id ?? ''),
+              quantity: String(s.quantity ?? 1),
+            })).filter((r) => r.client_service_id);
           setServiceRows(existing);
         } else {
           setServiceRows([]);
@@ -5023,10 +5090,14 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
          * and the operator can pick up the missed category(ies) from a
          * subsequent Confirm pass.
          *
-         * Gated on submitVariant === 'book' so Save Draft and outcome
-         * paths (Enquiry / Unreachable) don't accidentally fan out.
+         * Fans out for BOTH Confirm & Schedule (book) AND Save Draft
+         * (draft) so a multi-category DRAFT persists every picked category
+         * as a sibling job instead of silently collapsing to the first.
+         * Outcome paths (Enquiry / Unreachable) still don't fan out. Draft
+         * siblings are created Unconfirmed (status 9) to match the drafted
+         * parent; book siblings BOOKED (0). See initial_status below.
          */
-        if (isConfirm && submitVariant === 'book') {
+        if (isConfirm && (submitVariant === 'book' || submitVariant === 'draft')) {
           const allCatIds = (f.fk_service_catg_ids || '')
             .split(',').filter(Boolean).map(Number)
             .filter((n) => Number.isInteger(n) && n > 0);
@@ -5064,7 +5135,14 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
               fk_client_id: Number(f.fk_client_id),
               job_type: f.job_type,
               source_type: f.source_type || 'CRM - New',
-              requested_date_time: new Date(f.requested_date_time).toISOString(),
+              // Draft bypasses validation, so a draft may have no date yet;
+              // guard the ISO conversion so an empty value can't throw and
+              // abort the whole save. (A dateless draft sibling is rejected by
+              // create() — date is required — and caught non-fatally below,
+              // same as any other sibling failure.)
+              requested_date_time: f.requested_date_time
+                ? new Date(f.requested_date_time).toISOString()
+                : undefined,
               time_slot: f.time_slot || undefined,
               client_ref_id: clientRefId,
               // Explicit top-level job_customer_name (2026-06-04).
@@ -5095,7 +5173,9 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 },
                 { expectingReuse: true }, // C&S sibling — log a canary if we fall through
               ),
-              initial_status: 0,  // BOOKED — matches the PATCH'd original
+              // Match the parent's post-save status: Save Draft keeps the job
+              // Unconfirmed (9); Confirm & Schedule promotes to BOOKED (0).
+              initial_status: submitVariant === 'draft' ? 9 : 0,
               branch_details:    f.branch_details || undefined,
               product_code:      f.product_code || undefined,
               building_name:     f.building_name || undefined,
@@ -6071,6 +6151,51 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 suggestion pick. Same component on the create-flow so
                 Confirm & Schedule and Book New Call are byte-identical
                 in behaviour. */}
+            {/* Saved-addresses picker (Confirm & Schedule / Edit). Bulk-
+                uploaded jobs often have a thin address; the same customer
+                usually has fuller addresses on prior jobs. Pick one to
+                auto-fill every field below in a click. Only shows when the
+                customer actually has saved addresses. */}
+            {savedAddresses.length > 0 && (
+              <div className="col-span-1 md:col-span-3 mb-3 rounded-md border bg-muted/30 p-3 text-sm">
+                <div className="font-medium mb-2">Saved Addresses for This Customer</div>
+                <div className="space-y-1.5 max-h-52 overflow-y-auto">
+                  {savedAddresses.map((a) => (
+                    <label key={a.address_id} className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="confirm-saved-address"
+                        checked={selectedAddressId === a.address_id}
+                        onChange={() => {
+                          setSelectedAddressId(a.address_id);
+                          setF((s) => ({
+                            ...s,
+                            address: a.address || '',
+                            building: a.building || '',
+                            landmark: a.landmark || '',
+                            city_id: a.city_id != null ? String(a.city_id) : '',
+                            pin_code: a.pin_code || '',
+                            gps_location: a.gps_location || '',
+                          }));
+                        }}
+                        className="mt-0.5"
+                      />
+                      <span className="flex-1">
+                        {a.address || '(No Address)'}
+                        {a.building ? <span className="text-muted-foreground">, {a.building}</span> : null}
+                        {a.city_id != null && cityNameById.get(String(a.city_id))
+                          ? <span className="text-muted-foreground"> · {cityNameById.get(String(a.city_id))}</span>
+                          : null}
+                        {a.pin_code ? <span className="text-muted-foreground"> · {a.pin_code}</span> : null}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-2">
+                  Pick an address to auto-fill the form below. You can still edit it.
+                </p>
+              </div>
+            )}
             <div className="col-span-1 md:col-span-3">
               <AddressPickerWithMap
                 value={{
@@ -9477,7 +9602,9 @@ function toFormShape(j: Job | null) {
     efr_special_notes: pick('efr_special_notes'),
     helper_req: Boolean(j?.helper_req),
     material_req: Boolean(j?.material_req),
-    collected_by: pick('collected_by') || 'Easyfix',
+    // Stored as an INTEGER enum (1/2/3) on tbl_job — map back to the label the
+    // Collected By dropdown options use, else the saved value shows blank.
+    collected_by: collectedByLabel(pick('collected_by')) || 'Easyfix',
     fk_service_catg_id: pick('fk_service_catg_id'),
     // CSV of category IDs. In CREATE flow, multi-pick fans out into
     // N jobs at submit. In EDIT/CONFIRM flow, seed from the row's
@@ -9499,12 +9626,27 @@ function toFormShape(j: Job | null) {
       return hasAnyService && v ? String(v) : '';
     })(),
     fk_service_type_id: pick('fk_service_type_id'),
-    // Multi-select used in create flow's "Select Products" section.
-    // Picking one or more Service Types auto-fans them out into the
-    // rate-card services table below (qty=1 each). Confirm/Edit
-    // still use the singular `fk_service_type_id` above so existing
-    // rows don't unintentionally get rewritten.
-    fk_service_type_ids: [] as string[],
+    // Multi-select used in the create flow's "Select Products" section AND
+    // re-hydrated on EDIT/CONFIRM reload so a saved draft's Service Type(s)
+    // reappear (previously hardcoded [] → the picker always looked empty,
+    // the "Service Type not saved" symptom). Gated on the job actually
+    // having active service rows — same rule as fk_service_catg_ids above —
+    // so a fresh Unconfirmed order with no services still shows empty pickers.
+    // Prefer the stored tbl_job.service_type_ids CSV; fall back to deriving
+    // from the active service rows. Create mode (j === null) stays [].
+    fk_service_type_ids: (() => {
+      if (!j) return [] as string[];
+      const svcs = (j as { services?: Array<Record<string, unknown>> }).services;
+      const active = Array.isArray(svcs)
+        ? svcs.filter((s) => Number(s.job_service_status) === 1)
+        : [];
+      if (active.length === 0) return [] as string[];
+      const csv = String((j as Record<string, unknown>).service_type_ids ?? '').trim();
+      const ids = csv
+        ? csv.split(',').map((s) => s.trim()).filter(Boolean)
+        : active.map((s) => String(s.service_type_id ?? '').trim()).filter(Boolean);
+      return Array.from(new Set(ids));
+    })(),
   };
 }
 

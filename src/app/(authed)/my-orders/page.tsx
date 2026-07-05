@@ -128,16 +128,19 @@ export default function MyOrdersPage() {
   });
   const [q, setQ] = useState('');
   /*
-   * Unconfirmed-tab global search (2026-06-10). Ops want "find any
-   * unconfirmed job by id regardless of page" — the existing
-   * client-side filter only matches within the currently-loaded page.
-   * On the Unconfirmed tab we forward `q` to the BE's /admin/jobs
-   * search (it already supports searching id / customer / address);
-   * other tabs keep client-side filtering for now. Debounced 300ms
-   * so every keystroke doesn't fire a request.
+   * Global server-side search across ALL tabs (2026-07-03). Ops want to
+   * "find any job by id / ref / customer / client / city / technician /
+   * owner regardless of page". The old client-side `filterJobRows` only
+   * matched within the currently-loaded page, so on any tab with more
+   * than one page (e.g. Pending for Scheduling with its default 10-row
+   * page) search appeared to "only work on the first 10 results". We now
+   * forward `q` to the BE's /admin/jobs search on EVERY tab (the BE
+   * search covers all those columns — see services/job.service.js). The
+   * client-side filter still runs on top for instant same-page feedback
+   * while the debounced (300ms) server refetch is in flight.
    */
   const debouncedQ = useDebouncedValue(q, 300);
-  const serverQ = tab === 'unconfirmed' && debouncedQ.trim() ? debouncedQ.trim() : '';
+  const serverQ = debouncedQ.trim();
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState<TablePageSize>(DEFAULT_PAGE_SIZE);
   const limit = pageSizeToLimit(pageSize, JOBS_MAX_LIMIT);
@@ -738,7 +741,16 @@ export default function MyOrdersPage() {
         mode={modal.mode}
         jobId={modal.id}
         onClose={closeModal}
-        onSaved={() => { cacheRef.current.clear(); load(false, true); }}
+        onSaved={(job) => {
+          cacheRef.current.clear();
+          load(false, true);
+          // Book New Call (create) → jump straight into the NEW Schedule &
+          // Assign modal for the freshly-booked job, replacing the legacy
+          // view-mode step with its Auto-assign / Manual-pick buttons.
+          if (modal.mode === 'create' && job?.job_id) {
+            openSchedule(Number(job.job_id));
+          }
+        }}
         // Same `?viewTab=` deep-link plumbing as /jobs. Powers the
         // clickable "No Services" pill on each row.
         initialTab={searchParams.get('viewTab') || undefined}
