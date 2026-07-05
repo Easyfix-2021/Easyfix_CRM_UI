@@ -61,6 +61,7 @@ import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
 import { formatDate, relativeTime } from '@/lib/utils';
 import { CallableMobile } from '@/components/calls/CallButton';
+import { DateTimeSlotPicker } from '@/components/ui/date-time-slot-picker';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { InfoTooltip } from '@/components/ui/tooltip';
 import { showToast } from '@/components/ui/toast';
@@ -592,13 +593,12 @@ export function ScheduleAssignModal({
                     <label className="text-xs font-medium text-foreground flex items-center gap-1">
                       <Calendar className="h-3.5 w-3.5 text-muted-foreground" /> Job Date *
                     </label>
-                    <Input
-                      type="datetime-local"
+                    <DateTimeSlotPicker
                       min={isoToLocalInput(new Date().toISOString())}
                       value={jobDateLocal}
-                      onChange={(e) => {
+                      onChange={(v) => {
                         const minStr = isoToLocalInput(new Date().toISOString());
-                        setJobDateLocal(e.target.value && e.target.value < minStr ? minStr : e.target.value);
+                        setJobDateLocal(v && v < minStr ? minStr : v);
                       }}
                     />
                   </div>

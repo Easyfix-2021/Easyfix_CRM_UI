@@ -88,6 +88,10 @@ export type PrefillResponse = {
   // click-to-call endpoint, so the customer never sees the full number.
   // The whole SPOC block is hidden when `name` is null.
   spoc?: { name: string | null; mobile_masked: string | null };
+  // The job OWNER — the customer's EasyFix coordinator. UNMASKED so the
+  // customer can call directly once the booking is confirmed. Block hidden
+  // when mobile is null.
+  job_owner?: { name: string | null; mobile: string | null };
   // Reason option lists for the Cancel / Reschedule dialogs. Customer must
   // pick one before submitting the respective request.
   cancel_reasons?: string[];

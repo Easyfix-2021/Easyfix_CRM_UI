@@ -773,6 +773,17 @@ export default function JobCompletionMagicLinkPage() {
           order summary was MOVED to the bottom action row, alongside the
           primary Confirm Order button — see the foot of the form.) */}
 
+      {/* Job owner (EasyFix coordinator) contact — shown unmasked so the
+          customer can call the person handling their order directly. */}
+      {data.job_owner?.mobile && (
+        <div className="bg-sky-50 border border-sky-200 text-sky-800 rounded-md px-4 py-3 text-sm">
+          Need Help With This Order? Call Your EasyFix Coordinator
+          {data.job_owner.name ? <> <span className="font-medium">{data.job_owner.name}</span></> : null}
+          {' '}at{' '}
+          <a href={`tel:${data.job_owner.mobile}`} className="font-semibold underline">{data.job_owner.mobile}</a>.
+        </div>
+      )}
+
       <form id="order-form" onSubmit={handleSubmit} className="space-y-6">
         {/* Short single-line fields: 1-col mobile → 2-col md → 3-col lg so the
             wide desktop container fills cleanly; mobile stays single column. */}

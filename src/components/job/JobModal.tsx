@@ -10,6 +10,7 @@ import { CancelButton } from '@/components/ui/cancel-button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { SearchSelect } from '@/components/ui/search-select';
+import { DateTimeSlotPicker, TimeSelect } from '@/components/ui/date-time-slot-picker';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
 import { Switch } from '@/components/ui/switch';
 import { AddressAutocomplete } from '@/components/ui/address-autocomplete';
@@ -6120,14 +6121,11 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
               </div>
               <div className="space-y-1.5">
                 <Label>Requested Date/Time *</Label>
-                <Input
-                  required type="datetime-local"
+                <DateTimeSlotPicker
+                  required
                   min={nowLocalIso()}
                   value={f.requested_date_time}
-                  onChange={(e) => {
-                    // Hard-block a past time today (native min only flags invalid).
-                    const minStr = nowLocalIso();
-                    const v = e.target.value && e.target.value < minStr ? minStr : e.target.value;
+                  onChange={(v) => {
                     set('requested_date_time', v);
                     const slot = inferSlotFromTime(v);
                     if (slot) set('time_slot', slot);
@@ -6151,6 +6149,25 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 suggestion pick. Same component on the create-flow so
                 Confirm & Schedule and Book New Call are byte-identical
                 in behaviour. */}
+            {/* Address Entered By Client (read-only) — the original address the
+                client booked with, snapshotted before the CRM first edits it,
+                so ops can see what the client actually entered vs the edited
+                Complete Address below. Only shows once a snapshot exists. */}
+            {(() => {
+              const clientAddr = (initial as Record<string, unknown> | null)?.client_entered_address as string | undefined;
+              return clientAddr ? (
+                <div className="col-span-1 md:col-span-3 mb-3">
+                  <Label className="text-xs text-muted-foreground">Address Entered By Client</Label>
+                  <textarea
+                    readOnly
+                    disabled
+                    value={clientAddr}
+                    rows={2}
+                    className="mt-1 w-full rounded-md border border-input bg-slate-100 px-3 py-1.5 text-sm text-slate-700 resize-none"
+                  />
+                </div>
+              ) : null;
+            })()}
             {/* Saved-addresses picker (Confirm & Schedule / Edit). Bulk-
                 uploaded jobs often have a thin address; the same customer
                 usually has fuller addresses on prior jobs. Pick one to
@@ -7116,21 +7133,11 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
   const requestedDate: string = String(f.requested_date || '');
   const requestedTime: string = String(f.requested_time || '');
   const isToday = requestedDate === todayIso;
-  const currentHour = new Date().getHours();
-  const minHourToday = currentHour + 1; // strictly future for today
-  const hourOptions = React.useMemo(() => {
-    const opts: { value: string; label: string }[] = [];
-    for (let h = 0; h < 24; h++) {
-      if (isToday && h < minHourToday) continue;
-      const hh = String(h).padStart(2, '0');
-      const label = h === 0 ? '12:00 AM'
-                  : h < 12  ? `${h}:00 AM`
-                  : h === 12 ? '12:00 PM'
-                  :            `${h - 12}:00 PM`;
-      opts.push({ value: `${hh}:00`, label });
-    }
-    return opts;
-  }, [isToday, minHourToday]);
+  const nowClock = new Date();
+  // Floor for today's 30-min time options — the next slot at/after the current
+  // wall-clock minute; TimeSelect hides earlier slots. (Was a whole-next-hour
+  // gate; 30-min slots make that too coarse.)
+  const minTimeToday = `${String(nowClock.getHours()).padStart(2, '0')}:${String(nowClock.getMinutes()).padStart(2, '0')}`;
   function bookingSlotFor(timeHHMM: string): string {
     const h = Number(timeHHMM.split(':')[0]);
     if (Number.isNaN(h)) return '';
@@ -7477,7 +7484,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
       {isEditShape && (
         <Section title={isEditShape ? 'Schedule & Type' : 'Schedule'}>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <Field label="Requested Date/Time *"><Input required type="datetime-local" min={nowLocalIso()} value={f.requested_date_time} onChange={(e) => set('requested_date_time', e.target.value)} /></Field>
+            <Field label="Requested Date/Time *"><DateTimeSlotPicker required min={nowLocalIso()} value={f.requested_date_time} onChange={(v) => set('requested_date_time', v)} /></Field>
             <Field label="Time Slot"><SearchSelect value={f.time_slot} onChange={(v) => set('time_slot', v)} placeholder="— Select slot —" options={[
               { value: 'Morning 9 to 2', label: 'Morning 9 to 2' },
               { value: 'Afternoon 12 to 5', label: 'Afternoon 12 to 5' },
@@ -7606,23 +7613,20 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                       // previously-picked time (no past-today gate);
                       // if it's today and the existing time is now past,
                       // clear so the operator must re-pick a valid one.
-                      if (e.target.value === todayIso && requestedTime) {
-                        const h = Number(requestedTime.split(':')[0]);
-                        if (Number.isFinite(h) && h < minHourToday) {
-                          set('requested_time', '');
-                        }
+                      if (e.target.value === todayIso && requestedTime && requestedTime < minTimeToday) {
+                        set('requested_time', '');
                       }
                     }}
                   />
                 </Field>
                 <Field label="Requested Time *">
-                  <SearchSelect
+                  <TimeSelect
                     required
                     value={requestedTime}
                     onChange={(v) => set('requested_time', v)}
-                    placeholder={requestedDate ? '— Pick an hour —' : 'Pick a date first'}
+                    placeholder={requestedDate ? '— Pick Time —' : 'Pick A Date First'}
                     disabled={!requestedDate}
-                    options={hourOptions}
+                    minTime={isToday ? minTimeToday : undefined}
                   />
                 </Field>
               </div>

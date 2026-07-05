@@ -14,9 +14,11 @@
  */
 
 import * as React from 'react';
-import { Info, PhoneIncoming, PhoneOutgoing, Loader2 } from 'lucide-react';
+import { Info, PhoneIncoming, PhoneOutgoing, Loader2, Play } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useFetch } from '@/lib/hooks';
+import { api } from '@/lib/api';
+import { showToast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 
 export type CallRow = {
@@ -60,6 +62,55 @@ function partyTone(role: string | null): string {
     case 'alternate':   return 'bg-amber-100 text-amber-700';
     default:            return 'bg-slate-100 text-slate-600';
   }
+}
+
+/*
+ * RecordingCell — lazy call-recording play. On first play we hit
+ * GET /admin/calls/:id/recording, which fetches the audio from Plivo, caches it
+ * to our S3 once, and returns a short-lived URL; every later play is a cheap S3
+ * cache hit. Rendered as a ▶ button until a URL resolves, then an inline
+ * <audio> scrubber. Shows a dash when the row can't have a recording.
+ */
+function RecordingCell({ row }: { row: CallRow }) {
+  const [loading, setLoading] = React.useState(false);
+  const [url, setUrl] = React.useState<string | null>(null);
+
+  // Kaleyra rows carry an https recording URL; Plivo rows only *might* have one
+  // (recorded + connected) — the endpoint 404s cleanly when there's none.
+  const isPlivo = String(row.provider ?? '').toLowerCase() === 'plivo';
+  const canPlay = !!row.recording || (isPlivo && (row.duration ?? 0) > 0);
+  if (!canPlay) return <span className="text-muted-foreground">—</span>;
+
+  if (url) {
+    // eslint-disable-next-line jsx-a11y/media-has-caption
+    return <audio src={url} controls autoPlay className="h-7 w-40" />;
+  }
+
+  async function play() {
+    setLoading(true);
+    try {
+      const r = await api.get<{ url: string }>(`/admin/calls/${row.id}/recording`);
+      if (r?.url) setUrl(r.url);
+      else showToast({ variant: 'error', message: 'No recording available for this call.' });
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof Error ? e.message : 'No recording available for this call.' });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={play}
+      disabled={loading}
+      title="Play call recording"
+      className="inline-flex items-center gap-1 text-emerald-700 hover:underline disabled:opacity-50"
+    >
+      {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+      Play
+    </button>
+  );
 }
 
 /*
@@ -148,20 +199,7 @@ export function CallHistoryTable({
                   side — showing caller_name there would wrongly print the
                   customer (already in "With"). */}
               <td className="py-1.5 pr-3">{(out ? r.caller_name : r.receiver_name) || '—'}</td>
-              <td className="py-1.5">
-                {r.recording ? (
-                  <a
-                    href={r.recording}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-emerald-700 hover:underline"
-                  >
-                    Play
-                  </a>
-                ) : (
-                  '—'
-                )}
-              </td>
+              <td className="py-1.5"><RecordingCell row={r} /></td>
             </tr>
           );
         })}
