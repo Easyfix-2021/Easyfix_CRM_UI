@@ -714,6 +714,13 @@ export function CallableMobile({
 
   return (
     <>
+      {/* Keep the call button + copy icon as ONE inline-flex unit — as bare
+          fragment siblings a parent `justify-between` flex (e.g. the Confirm
+          Job Summary header) pushes them to opposite ends of the row. The
+          caller's `className` styles/sizes THIS WRAPPER (so e.g. a w-full
+          input-pill fills the whole field, not just the button), and defaults
+          to text-xs unless the caller overrides. */}
+      <span className={cn('inline-flex items-center gap-1 text-xs', className)}>
       <button
         type="button"
         onClick={placeCall}
@@ -723,10 +730,9 @@ export function CallableMobile({
         // matches the visible "Alt" pill below.
         title={useAlt ? 'Click to call alternate number' : 'Click to call this customer'}
         className={cn(
-          'inline-flex items-center gap-1 text-xs',
+          'inline-flex items-center gap-1',
           'text-emerald-700 hover:text-emerald-900 hover:underline',
           busy && 'opacity-60 cursor-wait',
-          className,
         )}
       >
         {busy
@@ -750,7 +756,8 @@ export function CallableMobile({
             don't render the value twice. See the prop's docstring. */}
         {!iconOnly && <span className="font-mono">{display}</span>}
       </button>
-      {!iconOnly && <CopyMobileButton value={String(display)} className="ml-0.5" />}
+      {!iconOnly && <CopyMobileButton value={String(display)} />}
+      </span>
       {customNode}
       {toastNode}
     </>

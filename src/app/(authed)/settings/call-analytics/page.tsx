@@ -50,7 +50,19 @@ type Analysis = {
   what_to_avoid?: string[];
   what_to_add?: string[];
 };
-type AnalysisResp = { status: string; analysis?: Analysis; reason?: string };
+type Metrics = {
+  sentiment?: { agent?: number | null; customer?: number | null };
+  talkTime?: { agentSec?: number; customerSec?: number; agentRatioPct?: number | null };
+  interruptions?: number | null;
+  nonTalkSec?: number | null;
+};
+type AnalysisResp = {
+  status: string;
+  analysis?: Analysis;
+  metrics?: Metrics | null;
+  metricsStatus?: string | null;
+  reason?: string;
+};
 
 function fmtDateTime(v: string | null | undefined): string {
   if (!v) return '—';
@@ -208,34 +220,29 @@ export default function CallAnalyticsPage() {
   );
 }
 
-type ModalState =
-  | { kind: 'loading' }
-  | { kind: 'ready'; a: Analysis }
-  | { kind: 'empty'; reason: string };
-
 function AnalysisModal({ call, onClose }: { call: CallRow; onClose: () => void }) {
-  const [state, setState] = React.useState<ModalState>({ kind: 'loading' });
+  const [resp, setResp] = React.useState<AnalysisResp | null>(null);
+  const [err, setErr] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     let cancelled = false;
-    setState({ kind: 'loading' });
+    setResp(null); setErr(null);
     api.get<AnalysisResp>(`/admin/calls/${call.id}/analysis`)
-      .then((r) => {
-        if (cancelled) return;
-        if (r.status === 'ready' && r.analysis) { setState({ kind: 'ready', a: r.analysis }); return; }
-        const msg = r.status === 'no_transcript' ? 'No transcript is available for this call yet.'
-          : r.status === 'llm_disabled' ? 'Call-analysis AI is not configured in this environment.'
-          : r.status === 'unavailable' ? 'Call analytics is not enabled in this environment.'
-          : (r.reason || 'Analysis could not be generated.');
-        setState({ kind: 'empty', reason: msg });
-      })
-      .catch((e) => { if (!cancelled) setState({ kind: 'empty', reason: e instanceof Error ? e.message : 'Failed to load analysis.' }); });
+      .then((r) => { if (!cancelled) setResp(r); })
+      .catch((e) => { if (!cancelled) setErr(e instanceof Error ? e.message : 'Failed to load analysis.'); });
     return () => { cancelled = true; };
   }, [call.id]);
 
   // Read-only modal — never dirty; the guard just satisfies the shared
   // Dialog-close lint rule.
   const guardedOpenChange = useFormDirtyGuard(onClose, { isDirty: false });
+
+  const coachingReason = resp && resp.status !== 'ready'
+    ? (resp.status === 'no_transcript' ? 'No transcript is available for this call yet.'
+      : resp.status === 'llm_disabled' ? 'Coaching AI is not configured in this environment.'
+      : resp.status === 'unavailable' ? 'Call analytics is not enabled in this environment.'
+      : (resp.reason || 'Coaching could not be generated.'))
+    : null;
 
   return (
     <Dialog open onOpenChange={guardedOpenChange}>
@@ -246,20 +253,78 @@ function AnalysisModal({ call, onClose }: { call: CallRow; onClose: () => void }
           </DialogTitle>
         </DialogHeader>
 
-        {state.kind === 'loading' && (
+        {!resp && !err && (
           <div className="py-10 text-center text-muted-foreground">
             <Loader2 className="h-5 w-5 animate-spin inline mr-2" />Analysing the call…
           </div>
         )}
-        {state.kind === 'empty' && (
+        {err && (
           <div className="py-8 text-center text-sm text-muted-foreground flex flex-col items-center gap-2">
-            <AlertTriangle className="h-6 w-6 text-amber-500" />
-            {state.reason}
+            <AlertTriangle className="h-6 w-6 text-amber-500" />{err}
           </div>
         )}
-        {state.kind === 'ready' && <AnalysisBody a={state.a} />}
+        {resp && (
+          <div className="space-y-5">
+            {/* Objective metrics — Amazon Transcribe Call Analytics (cron-precomputed). */}
+            <MetricsBody metrics={resp.metrics} status={resp.metricsStatus} />
+            {/* Coaching narrative — LLM over the transcript. */}
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Coaching</div>
+              {resp.status === 'ready' && resp.analysis
+                ? <AnalysisBody a={resp.analysis} />
+                : <div className="text-sm text-muted-foreground flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />{coachingReason}</div>}
+            </div>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+function sentimentLabel(n?: number | null): { label: string; cls: string } {
+  if (n == null) return { label: '—', cls: 'text-muted-foreground' };
+  // Transcribe OverallSentiment is a signed score (roughly -5..5); sign-based
+  // bucketing is robust to the exact scale.
+  if (n > 0.5) return { label: 'Positive', cls: 'text-emerald-600' };
+  if (n < -0.5) return { label: 'Negative', cls: 'text-rose-600' };
+  return { label: 'Neutral', cls: 'text-slate-600' };
+}
+
+function MetricsBody({ metrics, status }: { metrics?: Metrics | null; status?: string | null }) {
+  if (!metrics) {
+    const s = (status || '').toLowerCase();
+    const msg = s === 'processing' ? 'Call metrics are being generated (Amazon Transcribe) — check back shortly.'
+      : s === 'failed' ? 'Call metrics could not be generated for this call.'
+      : 'Call metrics are not available yet.';
+    return (
+      <div>
+        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Call Metrics</div>
+        <div className="text-sm text-muted-foreground">{msg}</div>
+      </div>
+    );
+  }
+  const t = metrics.talkTime || {};
+  const sa = sentimentLabel(metrics.sentiment?.agent);
+  const sc = sentimentLabel(metrics.sentiment?.customer);
+  return (
+    <div>
+      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Call Metrics</div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <Metric label="Agent Sentiment" value={sa.label} cls={sa.cls} />
+        <Metric label="Customer Sentiment" value={sc.label} cls={sc.cls} />
+        <Metric label="Agent Talk" value={t.agentRatioPct != null ? `${t.agentRatioPct}%` : '—'} />
+        <Metric label="Interruptions" value={metrics.interruptions != null ? String(metrics.interruptions) : '—'} />
+      </div>
+    </div>
+  );
+}
+
+function Metric({ label, value, cls }: { label: string; value: string; cls?: string }) {
+  return (
+    <div className="rounded-md border px-3 py-2">
+      <div className={`text-sm font-semibold ${cls || 'text-slate-800'}`}>{value}</div>
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
+    </div>
   );
 }
 

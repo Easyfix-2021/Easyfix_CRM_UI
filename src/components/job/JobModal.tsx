@@ -5859,6 +5859,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             <div><span className="text-xs text-muted-foreground mr-2">Job Description:</span>{String(initial.job_desc ?? '—')}</div>
             <div><span className="text-xs text-muted-foreground mr-2">Product Quantity:</span>{Array.isArray(initial.services) ? initial.services.length : 0}</div>
             <div><span className="text-xs text-muted-foreground mr-2">Job Type:</span><strong>{String(initial.job_type ?? '—')}</strong></div>
+            <div className="md:col-span-2"><span className="text-xs text-muted-foreground mr-2">Service Address:</span>{formatServiceAddress(initial)}</div>
           </div>
         </div>
 
