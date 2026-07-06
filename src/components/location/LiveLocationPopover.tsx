@@ -12,6 +12,7 @@ import {
 import { api, ApiError, type LiveLocationPing } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
+import { useUiFlags } from '@/lib/hooks';
 
 /*
  * LiveLocationPopover — shared live-technician-location viewer.
@@ -115,6 +116,10 @@ export function LiveLocationPopover({
     return () => clearInterval(t);
   }, [open, id, fetchOnce]);
 
+  // Global map-clickability toggle. When off, the "Open in Google Maps" link
+  // is rendered as a disabled, non-navigable span.
+  const { mapClickable } = useUiFlags();
+
   const mapsHref =
     latest != null
       ? `https://www.google.com/maps?q=${latest.latitude},${latest.longitude}`
@@ -179,7 +184,7 @@ export function LiveLocationPopover({
                 </dd>
               </dl>
 
-              {mapsHref && (
+              {mapsHref && (mapClickable ? (
                 <a
                   href={mapsHref}
                   target="_blank"
@@ -188,7 +193,14 @@ export function LiveLocationPopover({
                 >
                   <ExternalLink className="h-4 w-4" /> Open in Google Maps
                 </a>
-              )}
+              ) : (
+                <span
+                  className="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground cursor-not-allowed"
+                  title="Map links are temporarily disabled"
+                >
+                  <ExternalLink className="h-4 w-4" /> Open in Google Maps
+                </span>
+              ))}
             </>
           )}
 

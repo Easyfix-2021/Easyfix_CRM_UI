@@ -159,6 +159,43 @@ export function useFetchOnce<T>(key: string): FetchState<T> {
 }
 
 /*
+ * useUiFlags — global (non-per-user) runtime UI toggles the backend exposes at
+ * GET /admin/config/ui-flags (backed by easyfix_properties, DB-flipped). One
+ * cached fetch per session via useFetchOnce. Defaults preserve the historical
+ * behaviour until the value lands: customer numbers MASKED, map CLICKABLE.
+ *
+ *   const { customerNumberVisible, mapClickable, loaded } = useUiFlags();
+ */
+export function useUiFlags(): {
+  customerNumberVisible: boolean;
+  mapClickable: boolean;
+  loaded: boolean;
+} {
+  const { data, loading } = useFetchOnce<{ customerNumberVisible: boolean; mapClickable: boolean }>(
+    '/admin/config/ui-flags',
+  );
+  // Defensive: useFetchOnce has no request timeout, so a HUNG endpoint (socket
+  // open, no response) would leave `loading` true forever — and any consumer
+  // that gates rendering on `loaded` (the address-picker map) would never
+  // render. Fall back to "settled with safe defaults" after 5s so a slow/hung
+  // config fetch can never permanently break the UI.
+  const [timedOut, setTimedOut] = useState(false);
+  useEffect(() => {
+    if (!loading) return;
+    const t = setTimeout(() => setTimedOut(true), 5000);
+    return () => clearTimeout(t);
+  }, [loading]);
+  return {
+    customerNumberVisible: data?.customerNumberVisible === true,
+    mapClickable: data?.mapClickable !== false, // default clickable until known
+    // "Settled" = success, error, OR the 5s timeout above. Consumers gating on
+    // this must NOT block forever — on error/timeout `data` is null so the safe
+    // defaults apply (numbers masked, map clickable).
+    loaded: !loading || timedOut,
+  };
+}
+
+/*
  * useDebouncedValue — returns the input value debounced by `delayMs`.
  * Use this for search inputs etc. — emits the trailing value, no
  * leading-edge fire, no setTimeout cleanup boilerplate at call sites.

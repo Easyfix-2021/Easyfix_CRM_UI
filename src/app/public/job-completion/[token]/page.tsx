@@ -835,8 +835,9 @@ export default function JobCompletionMagicLinkPage() {
             + draggable marker), so no separate "Update Location" shortcut is
             needed. Saving location is part of the Confirm/submit flow. */}
         <Section title="Address">
-          {/* "Open In Google Maps" deep link — hidden when no GPS pin set. */}
-          {mapsLink && (
+          {/* "Open In Google Maps" deep link — hidden when no GPS pin set,
+              and also suppressed when the global map-clickable flag is off. */}
+          {mapsLink && data.mapClickable !== false && (
             <a
               href={mapsLink}
               target="_blank"
@@ -847,7 +848,7 @@ export default function JobCompletionMagicLinkPage() {
               Open In Google Maps
             </a>
           )}
-          <AddressMapWidget token={token} cityOptions={data.cityOptions} form={form} patch={patch} />
+          <AddressMapWidget token={token} cityOptions={data.cityOptions} form={form} patch={patch} mapClickable={data.mapClickable !== false} />
         </Section>
 
         {/* Per-client custom-property inputs. Mirrors the CRM Book-New-Call
@@ -1626,12 +1627,13 @@ function FullPageMessage({
  *     page intentionally avoids `@/lib/api` and its hook layer).
  */
 function AddressMapWidget({
-  token, cityOptions, form, patch,
+  token, cityOptions, form, patch, mapClickable,
 }: {
   token: string;
   cityOptions: { value: number; label: string }[];
   form: FormState;
   patch: (p: Partial<FormState>) => void;
+  mapClickable: boolean;
 }) {
   const mapRef = React.useRef<HTMLDivElement | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1661,14 +1663,20 @@ function AddressMapWidget({
         const map = new maps.Map(mapRef.current, {
           center: initial, zoom: form.gps_location ? 16 : 11,
           mapTypeControl: false, streetViewControl: false,
+          // Flag off → static preview: no zoom/UI, gestures + marker drag off.
+          disableDefaultUI: !mapClickable,
+          gestureHandling: mapClickable ? 'auto' : 'none',
+          clickableIcons: mapClickable,
         });
         mapInstance.current = map;
-        const marker = new maps.Marker({ position: initial, map, draggable: true });
-        marker.addListener('dragend', () => {
-          const pos = marker.getPosition();
-          if (!pos) return;
-          void reverseGeocode(pos.lat(), pos.lng());
-        });
+        const marker = new maps.Marker({ position: initial, map, draggable: mapClickable });
+        if (mapClickable) {
+          marker.addListener('dragend', () => {
+            const pos = marker.getPosition();
+            if (!pos) return;
+            void reverseGeocode(pos.lat(), pos.lng());
+          });
+        }
         markerInstance.current = marker;
       } catch (e) {
         if (!cancelled) setMapsError(e instanceof Error ? e.message : 'Map unavailable — fill the address manually.');

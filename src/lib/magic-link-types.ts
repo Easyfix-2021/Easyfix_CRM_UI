@@ -28,6 +28,9 @@ export type PrefillResponse = {
   jobDesc: string;
   additional: { name: string | null; number: string | null };
   client: { id: number; name: string };
+  // Global map-clickability toggle (easyfix_properties ui.map.clickable).
+  // Absent → clickable; false → the customer's map renders read-only.
+  mapClickable?: boolean;
   cityOptions: { value: number; label: string }[];
   timeSlots: string[];
   services: {

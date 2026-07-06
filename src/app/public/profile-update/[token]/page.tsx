@@ -411,6 +411,7 @@ async function publicFetch<T>(url: string, init?: RequestInit): Promise<T> {
 type LoadState =
   | { kind: 'loading' }
   | { kind: 'ready'; data: PrefillResponse }
+  | { kind: 'done' }
   | { kind: 'expired' }
   | { kind: 'not_found' }
   | { kind: 'error'; message: string };
@@ -547,6 +548,10 @@ export default function ProfileUpdatePage() {
     );
   }
 
+  if (state.kind === 'done') {
+    return <FullPageSuccess />;
+  }
+
   /* ───── Ready ───── */
 
   const { data } = state;
@@ -555,17 +560,17 @@ export default function ProfileUpdatePage() {
   // in the prefill. Absent → assume required (safe default for a stale BE).
   const otpRequired = data.otp_required ?? true;
 
-  // Callback the form uses to push a refreshed prefill back up into the
-  // page after a successful save — keeps the displayed values, the dirty
-  // baseline, and any catalog data in sync with the server.
-  const onSaved = (next: PrefillResponse) => setState({ kind: 'ready', data: next });
+  // On a successful save the profile is complete — swap the WHOLE page to a
+  // dedicated Thank-You screen (the form unmounts) instead of leaving the
+  // technician on the form with just a transient toast.
+  const onDone = () => setState({ kind: 'done' });
 
   // The Ready branch lives in a dedicated component so its lifted form
   // hooks (selSkills / selPincodes / saving / …) are never called
   // conditionally after the early-return error states above — that would
   // violate the rules of hooks.
   return (
-    <ReadyForm token={token} data={data} otpRequired={otpRequired} onSaved={onSaved} />
+    <ReadyForm token={token} data={data} otpRequired={otpRequired} onDone={onDone} />
   );
 }
 
@@ -582,12 +587,12 @@ function ReadyForm({
   token,
   data,
   otpRequired,
-  onSaved,
+  onDone,
 }: {
   token: string;
   data: PrefillResponse;
   otpRequired: boolean;
-  onSaved: (next: PrefillResponse) => void;
+  onDone: () => void;
 }) {
   // Open/closed state for the 2 editable sections. Both start collapsed so
   // the first viewport on a phone fits the read-only header strip without
@@ -731,7 +736,7 @@ function ReadyForm({
         otp?: number;
       } = { deep_skill_items, serviceable_pincode_ids };
       if (otp != null) body.otp = Number(otp);
-      const next = await publicFetch<PrefillResponse>(
+      await publicFetch<PrefillResponse>(
         `/public/easyfixer-profile-update/save?token=${encodeURIComponent(token)}`,
         {
           method: 'PUT',
@@ -739,11 +744,11 @@ function ReadyForm({
           body: JSON.stringify(body),
         }
       );
-      const merged = next ?? data;
-      onSaved(merged);
       setSaved(true);
       setOtpGateOpen(false);
-      showToast({ variant: 'success', message: 'Profile Saved' });
+      // Whole-page redirect to the Thank-You screen (replaces the old
+      // "Profile Saved" toast, which read as a dead-end).
+      onDone();
     } catch (e) {
       const err = e as { status?: number; message?: string };
       const msg = err?.message || 'Failed to save profile';
@@ -1075,6 +1080,24 @@ function FullPageError({ title, message, retry }: { title: string; message: stri
           {retry ? (
             <Button onClick={retry} className="mt-2">Try Again</Button>
           ) : null}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+/* ───────── Full-page success (post-submit Thank-You) ───────── */
+function FullPageSuccess() {
+  return (
+    <div className="min-h-[70vh] flex items-center justify-center px-4">
+      <Card className="max-w-md w-full">
+        <CardContent className="pt-8 pb-8 text-center space-y-3">
+          <div className="mx-auto inline-flex items-center justify-center h-14 w-14 rounded-full bg-emerald-100">
+            <CheckCircle2 className="h-7 w-7 text-emerald-600" />
+          </div>
+          <h2 className="text-xl font-semibold text-slate-900">Thank You!</h2>
+          <p className="text-sm text-slate-600">Your Profile is Saved.</p>
+          <p className="text-xs text-slate-500">You can close this page now.</p>
         </CardContent>
       </Card>
     </div>

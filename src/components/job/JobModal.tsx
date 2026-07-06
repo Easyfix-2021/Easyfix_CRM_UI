@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
-import { useFetch } from '@/lib/hooks';
+import { useFetch, useUiFlags } from '@/lib/hooks';
 import { Sparkles, Search, CalendarCheck, History, Eye, Plus, X, Pencil, CalendarPlus, CheckCircle2, BarChart3, Trash2, RotateCcw } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -3833,6 +3833,13 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
   // so ops can add rate-carded products before promoting the job.
   const isEditShape = isEdit || isConfirm;
 
+  // Global customer-number visibility flag. Confirm-mode customer-mobile
+  // displays fetch the RAW number (?unmasked=true) to power the call button
+  // and re-mask it client-side via maskMobile(); when this flag is ON we skip
+  // that re-mask so the operator sees the full number. Technician/SPOC numbers
+  // are unaffected (they stay masked).
+  const { customerNumberVisible } = useUiFlags();
+
   /*
    * When the create-flow gate found an existing customer, seed the form
    * with their name + email + mobile (always editable; operator can
@@ -5843,7 +5850,9 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                * works on the unmasked value server-side; only the
                * visible label is bulleted here.
                */
-              mobile={maskMobile((initial.customer_mob_no as string | null | undefined) ?? null)}
+              mobile={customerNumberVisible
+                ? ((initial.customer_mob_no as string | null | undefined) ?? null)
+                : maskMobile((initial.customer_mob_no as string | null | undefined) ?? null)}
             />
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1">
@@ -6032,7 +6041,9 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
               <div className="h-10 px-2 flex items-center border rounded bg-muted/30">
                 <CallableMobile
                   jobId={Number(initial.job_id)}
-                  mobile={maskMobile(f.customer_mob_no as string | null)}
+                  mobile={customerNumberVisible
+                    ? (f.customer_mob_no as string | null)
+                    : maskMobile(f.customer_mob_no as string | null)}
                 />
               </div>
             </Field>
@@ -7534,7 +7545,9 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                     <span>Call:</span>
                     <CallableMobile
                       customerId={prefillCustomer.customer.customer_id}
-                      mobile={maskMobile(f.customer_mob_no || null)}
+                      mobile={customerNumberVisible
+                        ? (f.customer_mob_no || null)
+                        : maskMobile(f.customer_mob_no || null)}
                     />
                   </div>
                 ) : (

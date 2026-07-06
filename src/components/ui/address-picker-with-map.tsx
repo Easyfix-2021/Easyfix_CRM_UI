@@ -27,6 +27,7 @@
  */
 
 import * as React from 'react';
+import { useUiFlags } from '@/lib/hooks';
 import { Input } from './input';
 import { Label } from './label';
 import { SearchSelect } from './search-select';
@@ -148,6 +149,13 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const markerInstance = React.useRef<any>(null);
   const [mapsError, setMapsError] = React.useState<string | null>(null);
+
+  // Global map-clickability flag. Effective interactivity = caller allows
+  // editing AND the flag is on. When the flag forces the map read-only we
+  // still render it — the marker just can't be dragged and clicks are inert.
+  const { mapClickable, loaded: flagsLoaded } = useUiFlags();
+  const interactive = editable && mapClickable;
+  const mapBuiltRef = React.useRef(false);
 
   /*
    * Inline status for the OPT-IN silent pincode ensure (see `autoCreatePincode`
@@ -426,6 +434,10 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
   // Map bootstrap — loads JS API + instantiates map + marker on first
   // mount. Re-uses the existing marker instance on rerenders.
   React.useEffect(() => {
+    // Wait for the ui.map.clickable flag before building — otherwise a map
+    // meant to be read-only could mount interactive for a frame. Build once.
+    if (mapBuiltRef.current || !flagsLoaded) return;
+    mapBuiltRef.current = true;
     let cancelled = false;
     (async () => {
       try {
@@ -437,7 +449,11 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
         const map = new maps.Map(mapRef.current, {
           center,
           zoom: initialLatLng ? 16 : 11,
-          disableDefaultUI: false,
+          // Flag off → strip zoom/UI + block pan/zoom gestures so the map is a
+          // static preview; flag on → unchanged from before.
+          disableDefaultUI: !mapClickable,
+          gestureHandling: mapClickable ? 'auto' : 'none',
+          clickableIcons: mapClickable,
           mapTypeControl: false,
           streetViewControl: false,
         });
@@ -445,7 +461,7 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
         const marker = new maps.Marker({
           position: center,
           map,
-          draggable: editable,
+          draggable: interactive,
         });
         marker.addListener('dragend', () => {
           const pos = marker.getPosition();
@@ -454,8 +470,9 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
         });
         markerInstance.current = marker;
         // Operators can also click anywhere on the map to drop the pin
-        // — saves a drag if the destination is far from the default.
-        if (editable) {
+        // — saves a drag if the destination is far from the default. Gated on
+        // `interactive` too so a "non-clickable" map really is inert.
+        if (interactive) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (map as any).addListener('click', (e: { latLng?: { lat: () => number; lng: () => number } }) => {
             if (!e.latLng) return;
@@ -469,7 +486,7 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [flagsLoaded]);
 
   // Keep the marker + map view in sync when an autocomplete pick or
   // external change updates gps_location.
