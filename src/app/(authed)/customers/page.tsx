@@ -22,6 +22,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { api, ApiError } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
+import { formatServiceAddress } from '@/lib/format';
 import { CallableMobile } from '@/components/calls/CallButton';
 
 type CustomerRow = {
@@ -208,7 +209,7 @@ export default function CustomersPage() {
                   <ul className="space-y-1 text-xs">
                     {viewing.addresses.map((a) => (
                       <li key={String(a.address_id)} className="rounded border bg-card px-2 py-1">
-                        {[a.address, a.building, a.landmark, a.pin_code].filter(Boolean).join(' · ') || `(address #${a.address_id})`}
+                        {formatServiceAddress(a, { fallback: `(address #${a.address_id})` })}
                       </li>
                     ))}
                   </ul>

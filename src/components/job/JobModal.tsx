@@ -29,7 +29,7 @@ import { api, ApiError } from '@/lib/api';
 import { resolveParentAddressId, buildJobAddressPayload } from '@/lib/job-address';
 import { useLookup } from '@/lib/use-lookup';
 import { formatDate, formatEasyfixerName, statusLabel, statusTone, toIstClockTime } from '@/lib/utils';
-import { maskMobile, INDIAN_MOBILE_REGEX, INDIAN_MOBILE_ERROR, isValidIndianMobile } from '@/lib/format';
+import { maskMobile, formatServiceAddress, INDIAN_MOBILE_REGEX, INDIAN_MOBILE_ERROR, isValidIndianMobile } from '@/lib/format';
 
 /*
  * safeMobile(v) — defends against round-tripping a masked display value
@@ -1126,11 +1126,7 @@ function JobAddressCard({ job, onSaved }: { job: Job; onSaved?: () => void }) {
           )}
         </div>
         <dl className="text-sm divide-y divide-border">
-          <DlRow label="Address" value={job.address} />
-          <DlRow label="Building" value={job.building} />
-          <DlRow label="Landmark" value={job.landmark} />
-          <DlRow label="City" value={job.city_name} />
-          <DlRow label="PIN" value={job.pin_code} />
+          <DlRow label="Service Address" value={formatServiceAddress(job)} />
           <DlRow label="GPS" value={job.gps_location} />
         </dl>
       </div>
@@ -4175,12 +4171,15 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
     gps_location?: string | null;
   };
   const [savedAddresses, setSavedAddresses] = useState<SavedCustomerAddress[]>([]);
+  // Client-side filter for the Confirm & Schedule saved-address picker.
+  const [confirmAddrQuery, setConfirmAddrQuery] = useState('');
   const confirmCustomerId = isEditShape
     ? ((initial as Record<string, unknown> | null)?.fk_customer_id as number | undefined)
     : undefined;
   useEffect(() => {
     if (!confirmCustomerId) { setSavedAddresses([]); return; }
     let cancelled = false;
+    setConfirmAddrQuery('');
     api.get<{ addresses?: SavedCustomerAddress[] }>(`/admin/customers/${confirmCustomerId}`)
       .then((r) => { if (!cancelled) setSavedAddresses(Array.isArray(r?.addresses) ? r.addresses : []); })
       .catch(() => { if (!cancelled) setSavedAddresses([]); });
@@ -6187,37 +6186,61 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             {savedAddresses.length > 0 && (
               <div className="col-span-1 md:col-span-3 mb-3 rounded-md border bg-muted/30 p-3 text-sm">
                 <div className="font-medium mb-2">Saved Addresses for This Customer</div>
+                <Input
+                  value={confirmAddrQuery}
+                  onChange={(e) => setConfirmAddrQuery(e.target.value)}
+                  placeholder="Search saved addresses (text, city or PIN)…"
+                  className="mb-2 h-8"
+                />
                 <div className="space-y-1.5 max-h-52 overflow-y-auto">
-                  {savedAddresses.map((a) => (
-                    <label key={a.address_id} className="flex items-start gap-2 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="confirm-saved-address"
-                        checked={selectedAddressId === a.address_id}
-                        onChange={() => {
-                          setSelectedAddressId(a.address_id);
-                          setF((s) => ({
-                            ...s,
-                            address: a.address || '',
-                            building: a.building || '',
-                            landmark: a.landmark || '',
-                            city_id: a.city_id != null ? String(a.city_id) : '',
-                            pin_code: a.pin_code || '',
-                            gps_location: a.gps_location || '',
-                          }));
-                        }}
-                        className="mt-0.5"
-                      />
-                      <span className="flex-1">
-                        {a.address || '(No Address)'}
-                        {a.building ? <span className="text-muted-foreground">, {a.building}</span> : null}
-                        {a.city_id != null && cityNameById.get(String(a.city_id))
-                          ? <span className="text-muted-foreground"> · {cityNameById.get(String(a.city_id))}</span>
-                          : null}
-                        {a.pin_code ? <span className="text-muted-foreground"> · {a.pin_code}</span> : null}
-                      </span>
-                    </label>
-                  ))}
+                  {(() => {
+                    const q = confirmAddrQuery.trim().toLowerCase();
+                    const filtered = q
+                      ? savedAddresses.filter((a) => {
+                          const city = a.city_id != null ? (cityNameById.get(String(a.city_id)) ?? '') : '';
+                          return [a.address, a.building, a.landmark, city, a.pin_code]
+                            .some((p) => p != null && String(p).toLowerCase().includes(q));
+                        })
+                      : savedAddresses;
+                    if (filtered.length === 0) {
+                      return (
+                        <div className="text-[11px] text-muted-foreground py-1">
+                          No saved addresses match “{confirmAddrQuery}”.
+                        </div>
+                      );
+                    }
+                    return filtered.map((a) => (
+                      <label key={a.address_id} className="flex items-start gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="confirm-saved-address"
+                          checked={selectedAddressId === a.address_id}
+                          onChange={() => {
+                            setSelectedAddressId(a.address_id);
+                            setF((s) => ({
+                              ...s,
+                              address: a.address || '',
+                              building: a.building || '',
+                              landmark: a.landmark || '',
+                              city_id: a.city_id != null ? String(a.city_id) : '',
+                              pin_code: a.pin_code || '',
+                              gps_location: a.gps_location || '',
+                            }));
+                          }}
+                          className="mt-0.5"
+                        />
+                        <span className="flex-1">
+                          {formatServiceAddress({
+                            building: a.building,
+                            address: a.address,
+                            landmark: a.landmark,
+                            city_name: a.city_id != null ? cityNameById.get(String(a.city_id)) : null,
+                            pin_code: a.pin_code,
+                          }, { fallback: '(No Address)' })}
+                        </span>
+                      </label>
+                    ));
+                  })()}
                 </div>
                 <p className="text-[11px] text-muted-foreground mt-2">
                   Pick an address to auto-fill the form below. You can still edit it.
@@ -7751,9 +7774,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                             className="mt-0.5"
                           />
                           <span className="flex-1">
-                            {a.address}
-                            {a.city_name ? <span className="text-muted-foreground"> · {a.city_name}</span> : null}
-                            {a.pin_code ? <span className="text-muted-foreground"> · {a.pin_code}</span> : null}
+                            {formatServiceAddress(a)}
                           </span>
                         </label>
                         {/* Edit pencil — opens the AddressEditDialog
@@ -9598,6 +9619,7 @@ function toFormShape(j: Job | null) {
     requested_time: '',
     address: pick('address'), building: pick('building'), landmark: pick('landmark'),
     city_id: pick('city_id'), pin_code: pick('pin_code'), gps_location: pick('gps_location'),
+    address_instruction: pick('address_instruction'),
     // Client SPOC + Reporting Contact — section 1 dynamic fields.
     // Auto-filled from tbl_client_contacts when the operator picks
     // a Reporting Contact in the create-flow modal (pickReportingContact).

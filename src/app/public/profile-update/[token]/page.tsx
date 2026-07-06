@@ -1563,6 +1563,21 @@ function PincodePicker({
   const [ensureHint, setEnsureHint] = React.useState<string | null>(null);
   const [ensureError, setEnsureError] = React.useState<string | null>(null);
 
+  // The Serviceable Pincodes section only mounts this picker once expanded, so
+  // on mount bring the technician straight to the "Add Pincodes" box — scroll
+  // it into view + focus — so the next action ("add more locations") is obvious
+  // and the cursor is already there, ready to type another pincode/area.
+  const searchInputRef = React.useRef<HTMLInputElement | null>(null);
+  React.useEffect(() => {
+    const el = searchInputRef.current;
+    if (!el) return;
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    // Delay focus a beat so it lands after the scroll settles (mobile Safari
+    // otherwise fights a focus issued mid-scroll / mid-layout).
+    const t = setTimeout(() => el.focus(), 200);
+    return () => clearTimeout(t);
+  }, []);
+
   // Debounce the input so we don't fire one request per keystroke. 300ms is
   // the project-standard debounce (see useDebouncedValue docblock).
   const debouncedSearch = useDebouncedValue(search, 300);
@@ -1653,6 +1668,9 @@ function PincodePicker({
 
   function toggle(row: CatalogPincode) {
     onToggle(row);
+    // Clear the search after each select/unselect so the box is fresh for the
+    // next one — signals the technician they can keep adding/removing pincodes.
+    setSearch('');
   }
 
   function removeChip(id: number) {
@@ -1707,6 +1725,23 @@ function PincodePicker({
 
   const chips = Array.from(selected.values());
 
+  // Result-list ordering. With NO active search (e.g. right after a pick clears
+  // the box), lead the list with the currently-selected pincodes NEWEST-first,
+  // so a just-added pincode sits on TOP and stays visible/uncheckable — then the
+  // default suggestions below, minus anything already selected (no dupes).
+  // During an active search we show the raw results as-is. Keyed on the
+  // immediate `search` (not the debounced value) so the pick jumps to top
+  // instantly. PincodeMapping and CatalogPincode are structurally identical, so
+  // selected rows slot straight into the CatalogPincode list.
+  const listQuery = search.trim();
+  const selectedIds = new Set<number>(Array.from(selected.keys()).map(Number));
+  const displayRows: CatalogPincode[] = listQuery
+    ? results
+    : [
+        ...chips.slice().reverse(),
+        ...results.filter((r) => !selectedIds.has(Number(r.pincode_id))),
+      ];
+
   return (
     <div className="space-y-3">
       {/* Selected chips */}
@@ -1738,8 +1773,9 @@ function PincodePicker({
 
       {/* Search */}
       <div className="space-y-2">
-        <Field label="Add Pincodes" htmlFor="pf-pincode-search">
+        <Field label="Search City" htmlFor="pf-pincode-search">
           <Input
+            ref={searchInputRef}
             id="pf-pincode-search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -1748,6 +1784,13 @@ function PincodePicker({
             className="h-11 sm:h-9"
           />
         </Field>
+
+        {/* Heading for the pincode result list (redesign: "Search City" box →
+            "Select Your Pincodes" list). The minimum-3 rule is still enforced
+            and surfaced by the amber hint above the Save button. */}
+        <div className="text-xs font-semibold text-slate-700 uppercase tracking-wide">
+          Select Your Pincodes
+        </div>
 
         {/* Results list — server-side limited to 50 rows so the phone never
          *  renders the full 155k-row catalog. */}
@@ -1776,7 +1819,7 @@ function PincodePicker({
             */}
           {!searching && searchError ? (
             <div className="p-3 text-xs text-rose-600">{searchError}</div>
-          ) : !searching && results.length === 0 ? (
+          ) : !searching && displayRows.length === 0 ? (
             <div className="p-3 space-y-2">
               <div className="text-xs text-slate-500">No Matches.</div>
               {/*
@@ -1798,7 +1841,7 @@ function PincodePicker({
                 <div className="text-xs text-rose-600">{ensureError}</div>
               ) : null}
             </div>
-          ) : results.map((row) => {
+          ) : displayRows.map((row) => {
             const id = Number(row.pincode_id);
             const isSelected = selected.has(id);
             return (

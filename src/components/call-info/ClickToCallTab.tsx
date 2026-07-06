@@ -40,6 +40,7 @@ type CallRow = {
   provider: string | null;
   inserted_time: string | null;
   is_updated: number | null;
+  transcription_status?: string | null;
 };
 
 type ListResp = { total: number; page: number; limit: number; items: CallRow[] };
@@ -169,7 +170,7 @@ export function ClickToCallTab({ from, to }: { from: string; to: string }) {
               <tr className="text-xs">
                 {[
                   'Call Time', 'Agent', 'Customer', 'Customer Mobile',
-                  'Job #', 'Duration', 'Status', 'Recording',
+                  'Job #', 'Duration', 'Status', 'Recording', 'Transcript',
                 ].map((c) => (
                   <th
                     key={c}
@@ -206,11 +207,24 @@ export function ClickToCallTab({ from, to }: { from: string; to: string }) {
                         </a>
                       : '—'}
                   </td>
+                  <td className="px-3 py-2 text-xs">
+                    {(() => {
+                      const s = (r.transcription_status || '').toLowerCase();
+                      const b = s === 'completed' ? { t: 'Ready', c: 'bg-emerald-100 text-emerald-700' }
+                        : s === 'not_available' ? { t: 'None', c: 'bg-slate-100 text-slate-500' }
+                        : s === 'failed' ? { t: 'Failed', c: 'bg-rose-100 text-rose-700' }
+                        : s ? { t: 'Pending', c: 'bg-amber-100 text-amber-700' }
+                        : { t: '', c: '' };
+                      return b.c
+                        ? <span className={`inline-flex rounded-full px-2 py-0.5 font-medium ${b.c}`}>{b.t}</span>
+                        : <span className="text-muted-foreground">—</span>;
+                    })()}
+                  </td>
                 </tr>
               ))}
               {filteredRows && filteredRows.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-3 py-6 text-center text-sm text-muted-foreground">
+                  <td colSpan={9} className="px-3 py-6 text-center text-sm text-muted-foreground">
                     No rows match &ldquo;{search}&rdquo;.
                   </td>
                 </tr>

@@ -5,7 +5,7 @@ import { Phone, Pencil } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
 import { formatDate, statusLabel, statusTone } from '@/lib/utils';
 import { StatusChip } from '@/components/ui/StatusChip';
-import { maskMobile } from '@/lib/format';
+import { maskMobile, formatServiceAddress } from '@/lib/format';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { Button } from '@/components/ui/button';
 import { useMe } from '@/lib/auth-context';
@@ -321,9 +321,7 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
           <DLRow label="Number:">
             <CallableMobile jobId={Number(j.job_id)} mobile={j.customer_mob_no} />
           </DLRow>
-          <DLRow label="Address:">{fmt(j.address)}</DLRow>
-          <DLRow label="Location:">{fmt(j.city_name)}</DLRow>
-          <DLRow label="PIN:">{fmt(j.pin_code)}</DLRow>
+          <DLRow label="Service Address:">{formatServiceAddress(j)}</DLRow>
           <DLRow label="Rescheduled">{data.rescheduledCount} times</DLRow>
           <DLRow label="City Manager">{fmt((j as Record<string, unknown>).city_manager_name) /* column not always present */}</DLRow>
           <DLRow label="Rating">{data.feedback?.easyfix_rating ?? 0}</DLRow>

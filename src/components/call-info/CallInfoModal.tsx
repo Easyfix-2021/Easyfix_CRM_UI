@@ -30,6 +30,7 @@ import { DownloadButton } from '@/components/ui/download-button';
 import { Label } from '@/components/ui/label';
 import { DateRangePopover } from '@/components/ui/date-range-popover';
 import { JobModal } from '@/components/job/JobModal';
+import { CopyMobileButton } from '@/components/calls/CallButton';
 import { api, ApiError } from '@/lib/api';
 import { downloadXlsx as sharedDownloadXlsx } from '@/lib/download-xlsx';
 import { statusLabel, statusTone } from '@/lib/utils';
@@ -574,7 +575,12 @@ export function CallInfoModal({ open, onClose }: { open: boolean; onClose: () =>
                             ) : '—'}
                           </td>
                           <td className="px-3 py-2">{customerName || '—'}</td>
-                          <td className="px-3 py-2 font-mono text-xs">{r.customer_mob_no || '—'}</td>
+                          <td className="px-3 py-2 font-mono text-xs">
+                            <span className="inline-flex items-center gap-1">
+                              {r.customer_mob_no || '—'}
+                              <CopyMobileButton value={r.customer_mob_no} />
+                            </span>
+                          </td>
                           <td className="px-3 py-2">{r.job_type || '—'}</td>
                           <td className="px-3 py-2">
                             {/* Status renders as a coloured pill — same

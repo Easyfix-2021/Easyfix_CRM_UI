@@ -54,6 +54,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { api, ApiError, type JobOffersResponse } from '@/lib/api';
+import { formatServiceAddress } from '@/lib/format';
 import { useFetch, invalidateFetch } from '@/lib/hooks';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
@@ -536,16 +537,14 @@ export function ScheduleAssignModal({
                   <ReadField label="Client" value={job.client_name} />
                   <ReadField label="Client Ref Id" value={job.client_ref_id} />
                   <ReadField
-                    label="Address"
+                    label="Service Address"
                     value={
                       <span className="inline-flex items-start gap-1">
                         <MapPin className="h-3.5 w-3.5 mt-0.5 shrink-0 text-muted-foreground" />
-                        <span>{job.address || '—'}</span>
+                        <span>{formatServiceAddress(job)}</span>
                       </span>
                     }
                   />
-                  <ReadField label="City" value={job.city_name} />
-                  <ReadField label="Job Pincode" value={job.pin_code} />
                   <ReadField label="Service Category" value={job.service_category} />
                   <ReadField label="Service Type" value={job.service_type} />
                   <ReadField

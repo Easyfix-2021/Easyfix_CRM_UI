@@ -2,13 +2,14 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Phone, Loader2, CheckCircle2, AlertTriangle, X } from 'lucide-react';
+import { Phone, Loader2, CheckCircle2, AlertTriangle, X, Copy } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { formatApiError } from '@/lib/api-errors';
 import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { showToast } from '@/components/ui/toast';
 import { useFetchOnce } from '@/lib/hooks';
 import { CallCustomNumbersDialog } from './CallCustomNumbersDialog';
 import { CallLegsPreview } from '@/components/ui/CallLegsPreview';
@@ -624,6 +625,44 @@ export function CallButton({
   );
 }
 
+// ─── <CopyMobileButton> — copy a VISIBLE mobile number to the clipboard ───
+// Self-hides when the number is masked (contains the bullet '•') or has no
+// digits, so callers can drop it next to ANY mobile display and it only
+// appears when the number is actually shown in full (customer-number-visible
+// flag on). Copies the raw digits, not the punctuation.
+export function CopyMobileButton({ value, className }: { value?: string | null; className?: string }) {
+  const raw = value == null ? '' : String(value);
+  const digits = raw.includes('•') ? '' : raw.replace(/\D/g, '');
+  if (!digits) return null;
+  return (
+    <button
+      type="button"
+      title="Copy Number"
+      aria-label="Copy number"
+      onClick={async (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        try {
+          if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(digits);
+            showToast({ variant: 'success', message: 'Number copied' });
+          } else {
+            showToast({ variant: 'error', message: 'Copy not supported here' });
+          }
+        } catch {
+          showToast({ variant: 'error', message: 'Could not copy' });
+        }
+      }}
+      className={cn(
+        'inline-flex items-center rounded p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors',
+        className,
+      )}
+    >
+      <Copy className="h-3 w-3" />
+    </button>
+  );
+}
+
 // ─── <CallableMobile> — clickable mobile display ──────────────────────
 type MobileProps = CallTarget & {
   mobile: string | null | undefined;
@@ -665,7 +704,12 @@ export function CallableMobile({
     // span fallback so list/table cells still show the digits when the
     // call action isn't available.
     if (iconOnly) return null;
-    return <span className={cn('text-xs', className)}>{display}</span>;
+    return (
+      <span className={cn('inline-flex items-center gap-1 text-xs', className)}>
+        {display}
+        <CopyMobileButton value={String(display)} />
+      </span>
+    );
   }
 
   return (
@@ -706,6 +750,7 @@ export function CallableMobile({
             don't render the value twice. See the prop's docstring. */}
         {!iconOnly && <span className="font-mono">{display}</span>}
       </button>
+      {!iconOnly && <CopyMobileButton value={String(display)} className="ml-0.5" />}
       {customNode}
       {toastNode}
     </>

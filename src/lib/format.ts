@@ -148,3 +148,27 @@ export function titleCaseLabel(input: unknown): string {
     return lower.split('-').map((seg) => seg ? seg[0].toUpperCase() + seg.slice(1) : seg).join('-');
   }).join(' ');
 }
+
+/*
+ * formatServiceAddress — the canonical single-line "Service Address" shown
+ * across the CRM. Combines the parts in a FIXED order —
+ * Building · Complete Address · Landmark · City · Pincode — dropping any
+ * empty/whitespace-only part and joining with ' · '. Returns `fallback`
+ * ('—') when nothing is set. Keep the order stable so every address reads
+ * the same way everywhere it appears.
+ */
+export function formatServiceAddress(
+  // `unknown` so callers can pass a whole job/address object directly,
+  // regardless of how loosely (or strictly, via an index signature) its type
+  // declares these fields. We read the 5 named parts defensively and
+  // coerce/null-check each — avoids TS weak-type errors + per-site casts.
+  parts: unknown,
+  opts?: { separator?: string; fallback?: string },
+): string {
+  const p = (parts && typeof parts === 'object' ? parts : {}) as Record<string, unknown>;
+  const ordered = [p.building, p.address, p.landmark, p.city_name, p.pin_code];
+  const clean = ordered
+    .map((v) => (v == null ? '' : String(v).trim()))
+    .filter((v) => v !== '');
+  return clean.length ? clean.join(opts?.separator ?? ' · ') : (opts?.fallback ?? '—');
+}

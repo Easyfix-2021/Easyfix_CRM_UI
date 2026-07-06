@@ -27,6 +27,7 @@ import { Input } from '@/components/ui/input';
 import { api, ApiError } from '@/lib/api';
 import { useDebounce } from '@/lib/use-debounce';
 import { formatEasyfixerName } from '@/lib/utils';
+import { CopyMobileButton } from '@/components/calls/CallButton';
 
 type EfListRow = {
   efr_id: number;
@@ -330,7 +331,12 @@ export default function SearchPage() {
                     <tr key={c.customer_id} className="hover:bg-slate-50">
                       <td className="!text-center font-mono text-xs">{c.customer_id}</td>
                       <td className="font-medium whitespace-nowrap">{c.customer_name || '—'}</td>
-                      <td className="font-mono text-xs">{c.customer_mob_no ?? '—'}</td>
+                      <td className="font-mono text-xs">
+                        <span className="inline-flex items-center gap-1">
+                          {c.customer_mob_no ?? '—'}
+                          <CopyMobileButton value={c.customer_mob_no} />
+                        </span>
+                      </td>
                       <td className="text-xs">{c.customer_email ?? '—'}</td>
                       <td className="!text-center text-xs">
                         {jc > 0 ? (

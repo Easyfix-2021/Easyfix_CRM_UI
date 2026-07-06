@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import {
   Brain, Building, Hash, Tag, Package, UserCog, FileText, ClipboardList,
-  Sparkles, Wrench, ShieldCheck, Zap, type LucideIcon,
+  Sparkles, Wrench, ShieldCheck, Zap, PhoneCall, type LucideIcon,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { useMe } from '@/lib/auth-context';
@@ -73,6 +73,9 @@ const AREAS: Tile[] = [
   { href: '/settings/questionnaires', icon: ClipboardList, title: 'Manage Questionnaires',
     blurb: 'Per-client questionnaire templates surfaced to technicians at job-completion time.',
     shipped: true, actionKey: 'isClientQuestionaire' },
+  { href: '/settings/call-analytics', icon: PhoneCall, title: 'Call Analytics',
+    blurb: 'Transcripts + AI coaching analysis of Plivo calls — per-call scores for pronunciation, vocabulary and communication, with areas of improvement.',
+    shipped: true, actionKey: 'isCallAnalyticsView' },
   { href: '/admin-actions', icon: ShieldCheck, title: 'Admin Action',
     blurb: 'Privileged operations launchpad (bulk upload, role management, reports, tracking, …).',
     shipped: true },
