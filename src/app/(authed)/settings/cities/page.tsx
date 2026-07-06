@@ -44,6 +44,10 @@ type City = {
   zone_count: number;
   pincode_count: number;
   technician_count: number;
+  created_by: number | null;
+  created_by_type: 'technician' | 'user' | null;
+  created_by_name: string | null;
+  created_date: string | null;
 };
 
 type ListResponse = { items: City[]; total: number };
@@ -70,6 +74,7 @@ export default function ManageCitiesPage() {
   const [search, setSearch] = useState('');
   const [stateFilter, setStateFilter] = useState<number | ''>('');
   const [includeInactive, setIncludeInactive] = useState(false);
+  const [showTechCreated, setShowTechCreated] = useState(false);
   // Server-side pagination state. Page is 0-indexed (offset = page * size).
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState<TablePageSize>(50);
@@ -91,7 +96,7 @@ export default function ManageCitiesPage() {
   // Debounced server-side search to keep payloads small as the catalog grows.
   const debouncedSearch = useDebouncedValue(search, 300);
   // Reset to page 0 whenever a filter changes (debouncedSearch self-delays).
-  useEffect(() => { setPage(0); }, [debouncedSearch, stateFilter, includeInactive]);
+  useEffect(() => { setPage(0); }, [debouncedSearch, stateFilter, includeInactive, showTechCreated]);
 
   // Build the list URL — every input that affects the result set is part of
   // the key, so useFetch re-fires automatically on search/filter/sort/page
@@ -103,6 +108,7 @@ export default function ManageCitiesPage() {
   if (debouncedSearch.trim()) params.set('q', debouncedSearch.trim());
   if (stateFilter)            params.set('stateId', String(stateFilter));
   if (includeInactive)        params.set('includeInactive', 'true');
+  if (showTechCreated)        params.set('createdByTech', 'true');
   params.set('limit',   String(limit));
   params.set('offset',  String(offset));
   const listUrl = `/admin/cities?${params.toString()}`;
@@ -245,6 +251,10 @@ export default function ManageCitiesPage() {
             <input type="checkbox" checked={includeInactive} onChange={(e) => setIncludeInactive(e.target.checked)} />
             Include inactive
           </label>
+          <label className="flex items-center gap-1 text-xs">
+            <input type="checkbox" checked={showTechCreated} onChange={(e) => setShowTechCreated(e.target.checked)} />
+            Technician-Created Only
+          </label>
         </CardContent>
       </Card>
 
@@ -280,6 +290,7 @@ export default function ManageCitiesPage() {
               <col style={{ width: '7%'  }} /> {/* Zones */}
               <col style={{ width: '8%'  }} /> {/* Pincodes */}
               <col style={{ width: '10%' }} /> {/* Technicians */}
+              <col style={{ width: '12%' }} /> {/* Created By */}
               <col style={{ width: '8%'  }} /> {/* Status */}
               <col style={{ width: '11%' }} /> {/* Actions */}
             </colgroup>
@@ -293,16 +304,18 @@ export default function ManageCitiesPage() {
                 <SortHeader col={'zone_count'       as keyof City} align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Zones</SortHeader>
                 <SortHeader col={'pincode_count'    as keyof City} align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Pincodes</SortHeader>
                 <SortHeader col={'technician_count' as keyof City} align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Technicians</SortHeader>
+                {/* Created By — technician (self-service) or CRM operator who added the city. */}
+                <th className="!text-left whitespace-nowrap">Created By</th>
                 <SortHeader col={'city_status'      as keyof City} align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Status</SortHeader>
                 <th className="!text-right whitespace-nowrap">Actions</th>
               </tr>
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={10} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
+                <tr><td colSpan={11} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
               )}
               {!loading && items.length === 0 && (
-                <tr><td colSpan={10} className="!text-center text-muted-foreground py-6">No cities match the current filters.</td></tr>
+                <tr><td colSpan={11} className="!text-center text-muted-foreground py-6">No cities match the current filters.</td></tr>
               )}
               {!loading && sorted.map((c) => (
                 <tr key={c.city_id}>
@@ -318,6 +331,19 @@ export default function ManageCitiesPage() {
                   <td className="!text-center">{c.zone_count}</td>
                   <td className="!text-center">{c.pincode_count}</td>
                   <td className="!text-center">{c.technician_count}</td>
+                  {/* Created By — Tech/CRM badge + name; — for legacy/seed cities. */}
+                  <td className="!text-left whitespace-nowrap truncate">
+                    {c.created_by_type ? (
+                      <span className="inline-flex items-center gap-1" title={c.created_date ? String(c.created_date).replace('T', ' ').slice(0, 16) : undefined}>
+                        <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${c.created_by_type === 'technician' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>
+                          {c.created_by_type === 'technician' ? 'Tech' : 'CRM'}
+                        </span>
+                        {c.created_by_name || <span className="text-muted-foreground">#{c.created_by}</span>}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </td>
                   <td className="!text-center whitespace-nowrap">
                     {c.city_status === 1
                       ? <span className="text-emerald-700 text-xs">Active</span>

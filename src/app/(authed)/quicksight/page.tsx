@@ -31,7 +31,7 @@ import {
   LayoutDashboard, Lock,
   ClipboardList, Gauge, Layers, Flame, Package,
   Building2, Wrench, MapPinned, Users, BarChart3,
-  ArrowRight, Handshake, type LucideIcon,
+  ArrowRight, Handshake, UserPen, type LucideIcon,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { useMe } from '@/lib/auth-context';
@@ -130,6 +130,13 @@ const REPORTS: ReportCardDef[] = [
     actionKey: 'isQuickSightOfferAcceptanceView',
     description: 'Job-offer acceptance, rejection & response time by technician and source.',
     Icon: Handshake,
+  },
+  {
+    urlBase: 'profile-update-requests',
+    label: 'Profile Update Requests',
+    actionKey: 'isQuickSightProfileUpdateRequestsView',
+    description: 'Easyfixer profile-update link funnel — sent vs submitted by technician.',
+    Icon: UserPen,
   },
 ];
 

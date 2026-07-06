@@ -56,6 +56,9 @@ type Pincode = {
   district: string | null;
   state_name: string | null;
   zonal_manager_name: string | null;
+  created_by: number | null;
+  created_by_type: 'technician' | 'user' | null;
+  created_by_name: string | null;
   is_active: boolean;
   status: 'LOCAL' | 'TRAVEL';
   active_efr_count: number;
@@ -113,6 +116,7 @@ export default function ManagePincodesPage() {
   // (pincode_status = 1). Toggle on to ALSO show Non-Serviceable (0) rows so
   // they can be re-marked Serviceable.
   const [showNonServiceable, setShowNonServiceable] = useState(false);
+  const [showTechCreated, setShowTechCreated] = useState(false);
   const [serviceableBusy, setServiceableBusy] = useState<number | null>(null);
   // Bulk recompute ("Refresh Status") busy flag — disables the toolbar button
   // and swaps in a spinner while the POST /refresh-status rewrite runs.
@@ -162,7 +166,7 @@ export default function ManagePincodesPage() {
   // Reset page to 0 whenever filters or the SERVER-side sort change. Client-side
   // sort changes (city/district/state/lat/lng/zone_count) deliberately
   // do NOT reset the page — they reorder only the currently-loaded page.
-  useEffect(() => { setPage(0); }, [debouncedSearch, statusFilter, showNonServiceable, serverSortBy, serverSortDir]);
+  useEffect(() => { setPage(0); }, [debouncedSearch, statusFilter, showNonServiceable, showTechCreated, serverSortBy, serverSortDir]);
 
   // Translate the shared page-size sentinel into the BE limit/offset.
   const limit = pageSizeToLimit(pageSize, PINCODES_LIMIT_CAP);
@@ -170,6 +174,7 @@ export default function ManagePincodesPage() {
   if (debouncedSearch.trim()) urlParams.set('q', debouncedSearch.trim());
   if (statusFilter !== 'ALL') urlParams.set('status', statusFilter);
   if (showNonServiceable) urlParams.set('includeInactive', 'true');
+  if (showTechCreated) urlParams.set('createdByTech', 'true');
   // Push only the whitelisted columns to the BE; everything else stays client-side.
   if (serverSortBy) {
     urlParams.set('sortBy', serverSortBy);
@@ -441,6 +446,14 @@ export default function ManagePincodesPage() {
             />
             Show Non-Serviceable
           </label>
+          <label className="flex items-center gap-1.5 text-xs whitespace-nowrap cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showTechCreated}
+              onChange={(e) => setShowTechCreated(e.target.checked)}
+            />
+            Technician-Created Only
+          </label>
         </CardContent>
       </Card>
 
@@ -469,6 +482,7 @@ export default function ManagePincodesPage() {
               <col style={{ width: '110px' }} />{/* Longitude */}
               <col style={{ width: '90px'  }} />{/* Zones */}
               <col style={{ width: '170px' }} />{/* Zonal Manager */}
+              <col style={{ width: '160px' }} />{/* Created By */}
               <col style={{ width: '130px' }} />{/* Status */}
               <col style={{ width: '180px' }} />{/* Mapping */}
               <col style={{ width: '110px' }} />{/* Action (frozen right) */}
@@ -485,6 +499,8 @@ export default function ManagePincodesPage() {
                 <SortHeader col={'zone_count'    as SortKey} align="center" sortBy={sortBy} sortDir={sortDir} onSort={onSortToggle} className="whitespace-nowrap">Zones</SortHeader>
                 {/* Zonal Manager — city's zonal manager (tbl_city.state_user). Server-side sort. */}
                 <SortHeader col={'zonal_manager' as SortKey} align="left"   sortBy={sortBy} sortDir={sortDir} onSort={onSortToggle} className="whitespace-nowrap">Zonal Manager</SortHeader>
+                {/* Created By — the technician (or CRM operator) who added this pincode. */}
+                <th className="!text-left whitespace-nowrap">Created By</th>
                 {/* Status = Serviceable / Non-Serviceable. Real pincode_status column → server-side sort. */}
                 <SortHeader col={'is_active'     as SortKey} align="center" sortBy={sortBy} sortDir={sortDir} onSort={onSortToggle} className="whitespace-nowrap">Status</SortHeader>
                 {/* Mapping = Local / Travel (virtual, derived post-pagination) — not sortable. */}
@@ -495,10 +511,10 @@ export default function ManagePincodesPage() {
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={12} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
+                <tr><td colSpan={13} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
               )}
               {!loading && items.length === 0 && (
-                <tr><td colSpan={12} className="!text-center text-muted-foreground py-6">No pincodes match the current filters.</td></tr>
+                <tr><td colSpan={13} className="!text-center text-muted-foreground py-6">No pincodes match the current filters.</td></tr>
               )}
               {!loading && items.map((p) => (
                 <tr key={p.pincode_id}>
@@ -534,6 +550,19 @@ export default function ManagePincodesPage() {
                   </td>
                   {/* Zonal Manager — city's zonal manager; blank/— for a new city. */}
                   <td className="!text-left whitespace-nowrap truncate">{p.zonal_manager_name ?? <span className="text-muted-foreground">—</span>}</td>
+                  {/* Created By — technician (self-service) or CRM operator; — for legacy/seed rows. */}
+                  <td className="!text-left whitespace-nowrap truncate">
+                    {p.created_by_type ? (
+                      <span className="inline-flex items-center gap-1">
+                        <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${p.created_by_type === 'technician' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>
+                          {p.created_by_type === 'technician' ? 'Tech' : 'CRM'}
+                        </span>
+                        {p.created_by_name || <span className="text-muted-foreground">#{p.created_by}</span>}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </td>
                   {/* Status — Serviceable / Non-Serviceable (read-only label). */}
                   <td className="!text-center whitespace-nowrap">
                     <span className={`text-xs font-medium ${p.is_active ? 'text-emerald-700' : 'text-amber-700'}`}>

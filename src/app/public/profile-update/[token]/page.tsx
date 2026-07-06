@@ -659,7 +659,11 @@ function ReadyForm({
     return false;
   }, [selSkills, originalSkills, selPincodes, originalPincodeIds]);
 
-  const bothFilled = selSkills.size > 0 && selPincodes.size > 0;
+  // A technician must serve at least MIN_PINCODES areas — the BE enforces the
+  // same floor in acceptSubmission (keep the two in lock-step).
+  const MIN_PINCODES = 3;
+  const enoughPincodes = selPincodes.size >= MIN_PINCODES;
+  const bothFilled = selSkills.size > 0 && enoughPincodes;
   const canSave = dirty && bothFilled;
 
   // ── Selection handlers (passed down to the controlled pickers) ──
@@ -894,6 +898,11 @@ function ReadyForm({
           <>
             {error ? (
               <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>
+            ) : null}
+            {!enoughPincodes ? (
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                Please add at least {MIN_PINCODES} serviceable pincodes to submit — {selPincodes.size} selected.
+              </div>
             ) : null}
             <div className="flex justify-end">
               <Button
