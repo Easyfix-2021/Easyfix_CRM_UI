@@ -30,6 +30,7 @@ import { showToast } from '@/components/ui/toast';
 import { downloadXlsx } from '@/lib/download-xlsx';
 import { useLookup } from '@/lib/use-lookup';
 import { cn, formatDate, formatEasyfixerName } from '@/lib/utils';
+import { maskMobile } from '@/lib/format';
 import { EasyfixerModal, type EasyfixerModalMode } from '@/components/easyfixer/EasyfixerModal';
 import { EasyfixerActionMenu } from '@/components/easyfixer/EasyfixerActionMenu';
 import { EasyfixerTransactionsModal } from '@/components/easyfixer/EasyfixerTransactionsModal';
@@ -1856,15 +1857,6 @@ function SendProfileUpdateLinkDialog({
   // Timestamp of the last open — drives the race-close swallow below.
   const openedAtRef = useRef(0);
   useEffect(() => { if (open) openedAtRef.current = Date.now(); }, [open]);
-
-  function maskMobile(m: string): string {
-    if (!m) return '—';
-    const clean = m.replace(/[^\d]/g, '');
-    if (clean.length < 6) return clean;
-    const head = clean.slice(0, 2);
-    const tail = clean.slice(-3);
-    return `${head}${'X'.repeat(Math.max(0, clean.length - 5))}${tail}`;
-  }
 
   /*
    * Discard-changes guard for Esc / overlay-click / X. This dialog is a

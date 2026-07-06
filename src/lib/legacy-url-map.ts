@@ -100,6 +100,11 @@ export const URL_MAP: Record<string, string> = {
   'vertical':              '/settings/verticals',
   'clientratecard':        '/settings/rate-cards-b2b',
   'retailratecard':        '/settings/rate-cards-b2c',
+  // Call Analytics (Settings): call-history table + Transcribe metrics + LLM
+  // coaching. tbl_menu row seeded with url='callAnalytics' by
+  // 2026-07-06-add-call-analysis.sql; page lives at /settings/call-analytics.
+  // Without this entry the sidebar link fell through to /coming-soon.
+  'callAnalytics':         '/settings/call-analytics',
   // Reports + Tracking + Admin landing pages.
   // Every Report/Tracking sub-menu lands on the same /reports or /tracking
   // page, but each gets a unique `?focus=` so isRouteActive can identify
