@@ -11,9 +11,10 @@
  * `type="time"` input for any-minute entry (per ops: "30-min options only +
  * custom input from the bottom").
  *
- * A native `<select>` is used deliberately — it renders above the Dialog's
- * scroll container without the portal / overflow-clip gymnastics an absolute
- * dropdown needs inside a modal.
+ * The 30-min list renders through the shared searchable <SearchSelect />
+ * (typeahead combobox) so the operator can type "2:30" / "pm" to filter
+ * instead of scrolling 48 rows — and its popover portals above the Dialog's
+ * scroll container, which is exactly why the old native <select> was here.
  *
  * Values are the raw LOCAL strings — 'HH:mm' for TimeSelect, 'YYYY-MM-DDTHH:mm'
  * for DateTimeSlotPicker. Each caller keeps its OWN serialization (Book New
@@ -23,13 +24,8 @@
 
 import * as React from 'react';
 import { Input } from './input';
+import { SearchSelect, type SearchOption } from './search-select';
 import { cn } from '@/lib/utils';
-
-// Mirror the shared Input styling so the native <select> matches other fields.
-const CONTROL_CLASS =
-  'flex h-9 w-full rounded-md border border-input bg-white px-3 py-1 text-sm shadow-sm transition-colors ' +
-  'focus:outline-none focus-visible:outline-none focus-visible:border-foreground/40 ' +
-  'disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-700 disabled:opacity-90';
 
 const CUSTOM = '__custom__';
 
@@ -60,38 +56,36 @@ export function TimeSelect({
     if (value && !isHalfHour(value)) setCustom(true);
   }, [value]);
 
-  const options = React.useMemo(() => {
-    const out: { value: string; label: string }[] = [];
+  const options = React.useMemo<SearchOption[]>(() => {
+    const out: SearchOption[] = [];
     for (let h = 0; h < 24; h++) {
       for (const m of [0, 30]) {
         const hhmm = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
         if (minTime && hhmm < minTime) continue;
-        out.push({ value: hhmm, label: label12h(h, m) });
+        // `keywords: hhmm` lets the operator filter by 24-hour form too —
+        // typing "13" or "13:00" finds "1:00 PM".
+        out.push({ value: hhmm, label: label12h(h, m), keywords: hhmm });
       }
     }
+    // "Custom Time…" pinned last — picking it reveals the free time input.
+    out.push({ value: CUSTOM, label: 'Custom Time…' });
     return out;
   }, [minTime]);
 
   return (
     <div className={className}>
-      <select
-        className={CONTROL_CLASS}
+      <SearchSelect
         value={custom ? CUSTOM : value}
+        options={options}
+        placeholder={placeholder || '— Pick Time —'}
         disabled={disabled}
-        required={required && !custom}
-        onChange={(e) => {
-          const v = e.target.value;
+        required={required}
+        onChange={(v) => {
           if (v === CUSTOM) { setCustom(true); return; } // reveal the free input; keep current value
           setCustom(false);
           onChange(v);
         }}
-      >
-        <option value="" disabled>{placeholder || '— Pick Time —'}</option>
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>{o.label}</option>
-        ))}
-        <option value={CUSTOM}>Custom Time…</option>
-      </select>
+      />
       {custom && (
         <Input
           type="time"

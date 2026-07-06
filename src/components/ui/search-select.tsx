@@ -31,6 +31,13 @@ export type SearchOption = {
    * order the caller provides — caller sorts by group first.
    */
   group?: string;
+  /*
+   * Optional extra searchable text the typeahead matches IN ADDITION to
+   * `label` (case-insensitive substring). Use for alternate spellings /
+   * formats the visible label doesn't carry — e.g. the 24-hour form
+   * "13:00" behind a 12-hour label "1:00 PM". Never rendered.
+   */
+  keywords?: string;
 };
 
 export function SearchSelect({
@@ -97,7 +104,11 @@ export function SearchSelect({
   const filtered = useMemo(() => {
     if (!query) return uniqueOptions;
     const q = query.toLowerCase();
-    return uniqueOptions.filter((o) => o.label.toLowerCase().includes(q));
+    return uniqueOptions.filter(
+      (o) =>
+        o.label.toLowerCase().includes(q) ||
+        (o.keywords ? o.keywords.toLowerCase().includes(q) : false)
+    );
   }, [query, uniqueOptions]);
 
   const selected = uniqueOptions.find((o) => String(o.value) === String(value));
