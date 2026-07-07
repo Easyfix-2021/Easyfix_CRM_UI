@@ -104,6 +104,13 @@ export function SearchMultiSelect({
     return uniqueOptions.filter((o) => o.label.toLowerCase().includes(q));
   }, [query, uniqueOptions]);
 
+  // Cap how many rows we PAINT. Some option sets are huge (e.g. the ~11k city
+  // master), and rendering every <li> janks the popover. "Select filtered/all"
+  // and the count both keep operating on the full `filtered` set below — only
+  // the visible paint is capped, so bulk-select still covers everything.
+  const RENDER_CAP = 300;
+  const visible = filtered.length > RENDER_CAP ? filtered.slice(0, RENDER_CAP) : filtered;
+
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
@@ -293,7 +300,7 @@ export function SearchMultiSelect({
             {(() => {
               const out: ReactNode[] = [];
               let lastGroup: string | undefined;
-              filtered.forEach((opt) => {
+              visible.forEach((opt) => {
                 if (opt.group && opt.group !== lastGroup) {
                   out.push(
                     <li
@@ -353,6 +360,17 @@ export function SearchMultiSelect({
                   </li>
                 );
               });
+              if (filtered.length > visible.length) {
+                out.push(
+                  <li
+                    key="__more"
+                    className="px-3 py-2 text-[11px] text-muted-foreground bg-slate-50 border-t sticky bottom-0"
+                    aria-hidden="true"
+                  >
+                    Showing first {visible.length} of {filtered.length} — type to narrow…
+                  </li>
+                );
+              }
               return out;
             })()}
           </ul>

@@ -5,7 +5,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
-import { SearchSelect } from '@/components/ui/search-select';
+import { CitySelect } from '@/components/ui/city-select';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { api, ApiError } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
@@ -377,12 +377,12 @@ function ProfileAddressCard({ form, set, lk }: { form: FormShape; set: Setter; l
           </EditableRow>
           <EditableRow label="City" mode="edit" display={cityLabel(form.efr_cityId, lk)}>
             <div className="w-full max-w-[60%]">
-              <SearchSelect required value={form.efr_cityId} onChange={(v) => set('efr_cityId', v)} placeholder="— Select City —" options={lk.toOpts.cities.map((o) => ({ value: o.value, label: String(o.label) }))} />
+              <CitySelect required value={form.efr_cityId} onChange={(id) => set('efr_cityId', id)} placeholder="— Select City —" />
             </div>
           </EditableRow>
           <EditableRow label="Zonal City" mode="edit" display={cityLabel(form.efr_zone_city_id, lk)}>
             <div className="w-full max-w-[60%]">
-              <SearchSelect value={form.efr_zone_city_id} onChange={(v) => set('efr_zone_city_id', v)} placeholder="— Select Zone —" options={lk.toOpts.cities.map((o) => ({ value: o.value, label: String(o.label) }))} />
+              <CitySelect value={form.efr_zone_city_id} onChange={(id) => set('efr_zone_city_id', id)} placeholder="— Select Zone —" />
             </div>
           </EditableRow>
           <EditableRow label="Base GPS" mode="edit" display={form.efr_base_gps}>

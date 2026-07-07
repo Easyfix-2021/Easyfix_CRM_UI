@@ -30,6 +30,7 @@ import { IconButton } from '@/components/ui/icon-button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { SearchSelect, type SearchOption } from '@/components/ui/search-select';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
+import { CitySelect } from '@/components/ui/city-select';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
 import { SortHeader, cycleSort } from '@/lib/use-sort';
 import { Switch } from '@/components/ui/switch';
@@ -379,10 +380,9 @@ export default function ManageUsersPage() {
               />
             </div>
             <div className="min-w-[180px]">
-              <SearchSelect
-                value={cityFilter === '' ? '' : cityFilter}
-                onChange={(v) => setCityFilter(v ? Number(v) : '')}
-                options={lookup.cities.map((c) => ({ value: c.city_id, label: c.city_name }))}
+              <CitySelect
+                value={cityFilter}
+                onChange={(id) => setCityFilter(id ? Number(id) : '')}
                 placeholder="All cities"
               />
             </div>

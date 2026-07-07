@@ -7,6 +7,7 @@ import { IconButton } from '@/components/ui/icon-button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
 import { SearchSelect } from '@/components/ui/search-select';
+import { CitySelect } from '@/components/ui/city-select';
 import { DownloadButton } from '@/components/ui/download-button';
 import { StatusChip, type StatusChipTone } from '@/components/ui/StatusChip';
 import { CsvCellModal, type CsvCellItem } from '@/components/ui/CsvCellModal';
@@ -1128,11 +1129,10 @@ export default function EasyfixersPage() {
               />
             </Field>
             <Field label="City">
-              <SearchSelect
+              <CitySelect
                 placeholder="All"
                 value={filters.cityId}
-                onChange={(v) => setFilters({ ...filters, cityId: v })}
-                options={lk.toOpts.cities.map((o) => ({ value: o.value, label: String(o.label) }))}
+                onChange={(id) => setFilters({ ...filters, cityId: id })}
               />
             </Field>
             <Field label="Service Category">

@@ -21,7 +21,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
-import { SearchSelect } from '@/components/ui/search-select';
+import { CitySelect } from '@/components/ui/city-select';
 import { AddressAutocomplete } from '@/components/ui/address-autocomplete';
 import { api, ApiError } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
@@ -150,12 +150,11 @@ export function AddressEditDialog({
             </div>
             <div>
               <label className="text-sm font-medium block mb-1">City *</label>
-              <SearchSelect
+              <CitySelect
                 required
                 value={f.city_id}
-                onChange={(v) => patch('city_id', v)}
+                onChange={(id) => patch('city_id', id)}
                 placeholder="— Select city —"
-                options={lk.toOpts.cities.map((o) => ({ value: o.value, label: String(o.label) }))}
               />
             </div>
             <div>

@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
 import { SearchSelect } from '@/components/ui/search-select';
+import { CitySelect } from '@/components/ui/city-select';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { DownloadButton } from '@/components/ui/download-button';
 import { downloadXlsx } from '@/lib/download-xlsx';
@@ -760,7 +761,7 @@ export default function JobsPage() {
                   </div>
                   <div>
                     <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">City</label>
-                    <SearchSelect placeholder="All" value={filters.cityId} onChange={(v) => setFilters({ ...filters, cityId: v })} options={lk.toOpts.cities.map((o) => ({ value: o.value, label: String(o.label) }))} />
+                    <CitySelect placeholder="All" value={filters.cityId} onChange={(id) => setFilters({ ...filters, cityId: id })} />
                   </div>
                   <div>
                     <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Category</label>

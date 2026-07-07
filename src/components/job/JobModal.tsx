@@ -6001,6 +6001,21 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 />
               </Field>
             )}
+            {/* Customer-submitted custom properties — decoded from
+                tbl_job.custom_property (the flat "Label:Value|…" string the
+                client booking apps write) by the BE getByIdCore decoder and
+                exposed as `custom_properties`. Read-only: these are the exact
+                values the customer submitted at booking, surfaced here in
+                Client Details so ops can see/copy them. Distinct from the
+                editable branch/building/product trio above (those map to
+                `remarks`), so no overlap for arbitrary client properties. */}
+            {Array.isArray((initial as Record<string, unknown>).custom_properties) &&
+              ((initial as Record<string, unknown>).custom_properties as Array<{ name?: string; label?: string; value?: unknown }>)
+                .map((p, i) => (
+                  <Field key={`cp-${i}`} label={String(p.label || p.name || 'Custom Property')}>
+                    <Input value={p.value == null ? '' : String(p.value)} readOnly disabled />
+                  </Field>
+                ))}
           </div>
           <div className="mt-4 flex justify-end">
             <Button

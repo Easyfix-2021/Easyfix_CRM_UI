@@ -34,6 +34,7 @@ import { IconButton } from '@/components/ui/icon-button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { SearchSelect, type SearchOption } from '@/components/ui/search-select';
+import { CitySelect } from '@/components/ui/city-select';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
 import { Switch } from '@/components/ui/switch';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -632,7 +633,6 @@ export default function ManagePincodesPage() {
         open={modalOpen}
         onClose={() => setModalOpen(false)}
         editing={editing}
-        cityOptions={lookup.toOpts.cities}
         stateOptions={lookup.toOpts.states}
         zones={lookup.zones}
         onSaved={() => { setModalOpen(false); refreshList(); }}
@@ -721,12 +721,11 @@ type SuggestZonesResp = { suggestions: ZoneSuggestion[] };
 
 // ─── Add/Edit modal ─────────────────────────────────────────────────
 function PincodeFormModal({
-  open, onClose, editing, cityOptions, stateOptions, zones, onSaved, onSwitchToEdit,
+  open, onClose, editing, stateOptions, zones, onSaved, onSwitchToEdit,
 }: {
   open: boolean;
   onClose: () => void;
   editing: Pincode | null;
-  cityOptions: SearchOption[];
   stateOptions: SearchOption[];
   zones: Array<{ zone_id: number; zone_name: string }>;
   onSaved: () => void;
@@ -1238,10 +1237,9 @@ function PincodeFormModal({
                   <label className="text-sm font-medium block mb-1">City *</label>
                   {isEdit ? (
                     <>
-                      <SearchSelect
+                      <CitySelect
                         value={cityId === '' ? '' : cityId}
-                        onChange={(v) => setCityId(v === '' ? '' : Number(v))}
-                        options={cityOptions}
+                        onChange={(id) => setCityId(id === '' ? '' : Number(id))}
                         placeholder="Search Cities…"
                       />
                       {editing?.state_name && (
@@ -1261,10 +1259,9 @@ function PincodeFormModal({
                         />
                         {cityIsNew && <StatusChip tone="amber" size="sm">New</StatusChip>}
                       </div>
-                      <SearchSelect
+                      <CitySelect
                         value={cityOverride}
-                        onChange={(v) => setCityOverride(v === '' ? '' : Number(v))}
-                        options={cityOptions}
+                        onChange={(id) => setCityOverride(id === '' ? '' : Number(id))}
                         placeholder="Or map to an existing city…"
                       />
                       <p className="text-xs text-muted-foreground mt-1">

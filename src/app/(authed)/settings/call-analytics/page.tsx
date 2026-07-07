@@ -24,6 +24,7 @@ import { api } from '@/lib/api';
 import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
+import { TablePagination, pageSizeToLimit, type TablePageSize } from '@/components/ui/table-pagination';
 
 type CallRow = {
   id: number;
@@ -90,18 +91,21 @@ function scoreColor(n?: number): string {
   return 'text-rose-600';
 }
 
-const PAGE_SIZE = 25;
-
 export default function CallAnalyticsPage() {
   const { me } = useMe();
   const canView = hasAction(me, 'isCallAnalyticsView');
 
-  const [page, setPage] = React.useState(1);
+  // 0-indexed page + the shared TablePagination (matches the rest of the CRM,
+  // and gives the page-size selector the raw table was missing). The backend
+  // list endpoint is 1-indexed, so send `page + 1`.
+  const [page, setPage] = React.useState(0);
+  const [pageSize, setPageSize] = React.useState<TablePageSize>(20);
   const [jobQuery, setJobQuery] = React.useState('');
   const debouncedJob = useDebouncedValue(jobQuery.trim(), 400);
   const [analysisFor, setAnalysisFor] = React.useState<CallRow | null>(null);
 
-  const qs = new URLSearchParams({ page: String(page), limit: String(PAGE_SIZE) });
+  const limit = pageSizeToLimit(pageSize, 200); // backend callListQuery caps limit at 200
+  const qs = new URLSearchParams({ page: String(page + 1), limit: String(limit) });
   if (debouncedJob) qs.set('jobId', debouncedJob);
   const { data, loading, error } = useFetch<ListResp>(canView ? `/admin/calls?${qs.toString()}` : null);
 
@@ -122,7 +126,6 @@ export default function CallAnalyticsPage() {
 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
     <div className="space-y-4">
@@ -138,7 +141,7 @@ export default function CallAnalyticsPage() {
       <div className="max-w-xs">
         <Input
           value={jobQuery}
-          onChange={(e) => { setJobQuery(e.target.value.replace(/\D/g, '')); setPage(1); }}
+          onChange={(e) => { setJobQuery(e.target.value.replace(/\D/g, '')); setPage(0); }}
           placeholder="Filter by Job #"
           inputMode="numeric"
         />
@@ -206,13 +209,14 @@ export default function CallAnalyticsPage() {
         </table>
       </div>
 
-      <div className="flex items-center justify-between text-sm">
-        <span className="text-muted-foreground">{total} call{total === 1 ? '' : 's'}</span>
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Prev</Button>
-          <span className="text-xs text-muted-foreground">Page {page} / {totalPages}</span>
-          <Button size="sm" variant="outline" disabled={page >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>Next</Button>
-        </div>
+      <div className="rounded-md border bg-white px-3 py-2">
+        <TablePagination
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          onPageChange={setPage}
+          onPageSizeChange={(s) => { setPageSize(s); setPage(0); }}
+        />
       </div>
 
       {analysisFor && <AnalysisModal call={analysisFor} onClose={() => setAnalysisFor(null)} />}

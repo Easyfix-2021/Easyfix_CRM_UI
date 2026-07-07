@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { SearchSelect } from '@/components/ui/search-select';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
+import { CitySelect } from '@/components/ui/city-select';
 import { api, ApiError } from '@/lib/api';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
@@ -478,11 +479,10 @@ function ApplyTab({
             </div>
             <div>
               <Label className="!mb-0.5 text-xs">Home City</Label>
-              <SearchSelect
+              <CitySelect
                 value={homeCity}
-                onChange={setHomeCity}
+                onChange={(id) => setHomeCity(id)}
                 placeholder="— No change —"
-                options={lookups.cities.map((c) => ({ value: String(c.id), label: c.name }))}
               />
             </div>
           </>
