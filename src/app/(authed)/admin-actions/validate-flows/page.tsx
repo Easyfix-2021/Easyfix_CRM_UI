@@ -14,8 +14,8 @@
  */
 
 import Link from 'next/link';
-import { useState } from 'react';
-import { Activity, CalendarClock, BellRing, CheckCircle2, XCircle, ArrowRight } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Activity, CalendarClock, BellRing, CheckCircle2, XCircle, ArrowRight, PhoneCall, Loader2, MapPin, Wrench } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -44,6 +44,7 @@ export default function ValidateFlowsPage() {
   const featureAccess = useFetchOnce<{ canValidateFlows: boolean }>('/admin/access/features');
   const canValidateFlows = featureAccess.data?.canValidateFlows === true;
   const [open, setOpen] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
 
   if (featureAccess.loading) return <div className="p-8 text-sm text-muted-foreground">Loading…</div>;
   if (!canValidateFlows) {
@@ -69,7 +70,7 @@ export default function ValidateFlowsPage() {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
         {me?.scheduledJobsAccess ? (
           <Link href="/settings/scheduled-jobs">
             <Card className="hover:border-primary hover:shadow-sm transition-colors h-full">
@@ -120,9 +121,27 @@ export default function ValidateFlowsPage() {
             </CardContent>
           </Card>
         </button>
+
+        <button type="button" onClick={() => setAiOpen(true)} className="w-full text-left">
+          <Card className="hover:border-primary hover:shadow-sm transition-colors h-full">
+            <CardContent className="p-4 space-y-2">
+              <div className="flex items-center gap-2">
+                <div className="h-8 w-8 rounded-md bg-primary/10 text-primary grid place-items-center">
+                  <PhoneCall className="h-4 w-4" />
+                </div>
+                <h2 className="font-medium flex-1">AI Calling</h2>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Place a test AI voice call for a selected flow — it chats in the technician&apos;s
+                language, asks what the flow needs, then maps the reply for you to review.
+              </p>
+            </CardContent>
+          </Card>
+        </button>
       </div>
 
       <VerifyDeliveryModal open={open} onClose={() => setOpen(false)} />
+      <AiCallingModal open={aiOpen} onClose={() => setAiOpen(false)} />
     </div>
   );
 }
@@ -380,6 +399,291 @@ function ResultView({ data, message }: { data: AnyData; message: string | null }
           {(data as MessageData).result.reason
             ? <div className="text-rose-600 break-all">{(data as MessageData).result.reason}</div>
             : null}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── AI Calling → Profile Update (test flow) ─────────────────────────────────
+type AiDeepSkillItem = { category_id: number; service_type_id: number; deep_skill_id: number; option_id: number; label: string | null };
+type AiPincode = { pincode_id: number; pincode: string | null; city_name: string | null };
+type AiResult = {
+  deep_skill_items: AiDeepSkillItem[];
+  serviceable_pincode_ids: number[];
+  serviceable_pincodes: AiPincode[];
+  unmapped: { skills: string[]; areas: string[] };
+  extracted?: { areas: string[] };
+  note?: string;
+};
+type AiSession = {
+  sessionId: string; status: string; error: string | null;
+  mobile: string; efrId: number | null; transcript: string; result: AiResult | null;
+};
+type AiStartData = { sessionId: string; resolvedVia: string; resolvedTech: ResolvedTech; to: string; callId: string | null };
+
+const AI_TERMINAL = new Set(['done', 'failed']);
+const AI_POLL_MS = 3000;
+const AI_MAX_POLL_FAILURES = 5;                 // consecutive transient errors before giving up
+const AI_MAX_POLLS = 140;                        // ~7 min > the 5-min max call duration
+const AI_STATUS_LABEL: Record<string, string> = {
+  calling: 'Calling now — pick up your phone…',
+  streaming: 'On the call — the AI is talking to the technician…',
+  mapping: 'Call ended — mapping the answers to skills & pincodes…',
+  done: 'Done',
+  failed: 'Failed',
+};
+
+function AiCallingModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  // Flow set is served by the engine's registry — the picker is data-driven, so
+  // new flows appear here with no FE change.
+  const flowsFetch = useFetchOnce<{ flows: { id: string; label: string }[] }>('/admin/validate/ai-calling/flows');
+  const flows = flowsFetch.data?.flows?.length ? flowsFetch.data.flows : [{ id: 'profile_update', label: 'Profile Update' }];
+  const [flow, setFlow] = useState('profile_update');
+  const [efrId, setEfrId] = useState('');
+  const [mobile, setMobile] = useState('');
+  const [busy, setBusy] = useState(false);       // placing the call
+  const [error, setError] = useState<string | null>(null);
+  const [startMsg, setStartMsg] = useState<string | null>(null);
+  const [session, setSession] = useState<AiSession | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // `gen` invalidates any in-flight poll whose result would land after a
+  // close/reset/re-start (the modal is always mounted, so its state survives).
+  const genRef = useRef(0);
+  const failRef = useRef(0);   // consecutive transient poll failures
+  const countRef = useRef(0);  // total polls this run (hard cap)
+
+  const polling = Boolean(session && !AI_TERMINAL.has(session.status));
+
+  function stopPolling() {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+  }
+  function reset() {
+    genRef.current += 1;   // discard any in-flight poll resolution
+    stopPolling();
+    failRef.current = 0; countRef.current = 0;
+    setEfrId(''); setMobile(''); setBusy(false);
+    setError(null); setStartMsg(null); setSession(null);
+  }
+  // Clean up the interval on unmount.
+  useEffect(() => () => { genRef.current += 1; stopPolling(); }, []);
+
+  // Force the current session to a terminal state so `polling` clears and the
+  // "Call Me" button re-enables for a retry.
+  function failSession(msg: string) {
+    stopPolling();
+    setSession((prev) => (prev ? { ...prev, status: 'failed', error: msg } : prev));
+  }
+
+  async function pollOnce(sessionId: string, gen: number) {
+    if (gen !== genRef.current) return; // superseded before the request fired
+    try {
+      const env = await api.get<{ data?: AiSession } & Partial<AiSession>>(`/admin/validate/ai-calling/${sessionId}`);
+      if (gen !== genRef.current) return; // closed/reset while awaiting
+      const s = (env?.data ?? env) as AiSession;
+      failRef.current = 0;
+      setSession(s);
+      if (s && AI_TERMINAL.has(s.status)) stopPolling();
+    } catch (e) {
+      if (gen !== genRef.current) return;
+      failRef.current += 1;
+      // Tolerate transient blips — keep the interval alive and retry next tick.
+      // Only give up (and re-enable the button) after several in a row.
+      if (failRef.current >= AI_MAX_POLL_FAILURES) {
+        const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'Lost connection while waiting for the call result.';
+        failSession(`${msg} — please close and retry.`);
+      }
+    }
+  }
+
+  async function startCall() {
+    setError(null); setStartMsg(null); setSession(null); stopPolling();
+    const gen = (genRef.current += 1);
+    failRef.current = 0; countRef.current = 0;
+    const m = mobile.trim();
+    if (m && !/^\d{10}$/.test(m)) { setError('Mobile must be a 10-digit number.'); return; }
+    if (!m && !efrId.trim()) { setError('Provide a Mobile number or an Easyfixer Id to call.'); return; }
+    const body: Record<string, unknown> = { flow };
+    if (efrId.trim()) body.efrId = Number(efrId.trim());
+    if (m) body.mobile = m;
+
+    setBusy(true);
+    try {
+      const env = await api.post<{ data?: AiStartData; message?: string } & Partial<AiStartData>>(
+        '/admin/validate/ai-calling/start', body);
+      if (gen !== genRef.current) return; // modal closed while placing the call
+      const data = (env?.data ?? env) as AiStartData;
+      setStartMsg(env?.message ?? null);
+      // Seed a provisional session and begin polling.
+      setSession({ sessionId: data.sessionId, status: 'calling', error: null, mobile: data.to, efrId: null, transcript: '', result: null });
+      stopPolling();
+      pollRef.current = setInterval(() => {
+        countRef.current += 1;
+        if (countRef.current > AI_MAX_POLLS) { failSession('The call did not complete in time.'); return; }
+        pollOnce(data.sessionId, gen);
+      }, AI_POLL_MS);
+    } catch (e) {
+      if (gen === genRef.current) setError(e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'Could not place the call.');
+    } finally {
+      if (gen === genRef.current) setBusy(false);
+    }
+  }
+
+  function handleOpenChange(next: boolean) {
+    if (!next) { onClose(); reset(); }
+  }
+
+  const result = session?.result ?? null;
+  const isDone = session?.status === 'done';
+  const isFailed = session?.status === 'failed';
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>AI Calling</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 p-4">
+          <p className="text-xs text-muted-foreground">
+            Places a test AI voice call. Enter your own mobile to have the AI call you — it will chat
+            in your language, ask what the flow needs, then map the reply below. This is a
+            display-only test: nothing is written to any real record.
+          </p>
+
+          <div className="space-y-1">
+            <Label>Flow</Label>
+            <select
+              value={flow}
+              onChange={(e) => setFlow(e.target.value)}
+              disabled={busy || polling}
+              className="w-full h-9 rounded-md border bg-background px-2 text-sm disabled:opacity-60"
+            >
+              {flows.map((f) => (
+                <option key={f.id} value={f.id}>{f.label}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label>Mobile</Label>
+              <Input inputMode="numeric" value={mobile} onChange={(e) => setMobile(e.target.value)} placeholder="10-digit mobile to call" />
+            </div>
+            <div className="space-y-1">
+              <Label>Easyfixer Id <span className="text-muted-foreground">(optional)</span></Label>
+              <Input inputMode="numeric" value={efrId} onChange={(e) => setEfrId(e.target.value)} placeholder="for language greeting" />
+            </div>
+          </div>
+
+          {error && (
+            <div className="rounded border bg-rose-50 border-rose-200 p-3 text-sm text-rose-700 flex gap-2">
+              <XCircle className="h-4 w-4 mt-0.5 shrink-0" />
+              <div className="break-words">{error}</div>
+            </div>
+          )}
+
+          {session && (
+            <div className={
+              'rounded border p-3 text-sm space-y-3 '
+              + (isDone ? 'bg-emerald-50 border-emerald-200' : isFailed ? 'bg-rose-50 border-rose-200' : 'bg-sky-50 border-sky-200')
+            }>
+              <div className="flex items-center gap-2 font-medium">
+                {polling && <Loader2 className="h-4 w-4 animate-spin text-sky-600 shrink-0" />}
+                {isDone && <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />}
+                {isFailed && <XCircle className="h-4 w-4 text-rose-600 shrink-0" />}
+                <span>{AI_STATUS_LABEL[session.status] ?? session.status}</span>
+              </div>
+              {startMsg && polling && <div className="text-xs text-sky-800">{startMsg}</div>}
+              {isFailed && session.error && <div className="text-xs text-rose-700 break-words">{session.error}</div>}
+
+              {isDone && result && <AiResultView result={result} />}
+              {isDone && !result && (
+                <div className="text-xs text-amber-700">The call ended but no result was produced.</div>
+              )}
+
+              {session.transcript ? (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-muted-foreground">Show Transcript</summary>
+                  <pre className="mt-2 whitespace-pre-wrap break-words bg-white/70 rounded p-2 max-h-56 overflow-auto">{session.transcript}</pre>
+                </details>
+              ) : null}
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => handleOpenChange(false)}>Close</Button>
+            <Button onClick={startCall} disabled={busy || polling}>
+              {busy ? 'Placing Call…' : polling ? 'Call In Progress…' : 'Call Me'}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function AiResultView({ result }: { result: AiResult }) {
+  const skills = result.deep_skill_items ?? [];
+  const pincodes = result.serviceable_pincodes ?? [];
+  const unmappedSkills = result.unmapped?.skills ?? [];
+  const unmappedAreas = result.unmapped?.areas ?? [];
+  const nothing = skills.length === 0 && pincodes.length === 0 && unmappedSkills.length === 0 && unmappedAreas.length === 0;
+
+  return (
+    <div className="space-y-3">
+      {result.note && !nothing && (
+        <div className="text-xs text-amber-700">{result.note}</div>
+      )}
+      {/* Deep-Skill options */}
+      <div className="space-y-1">
+        <div className="flex items-center gap-1.5 text-xs font-medium text-emerald-800">
+          <Wrench className="h-3.5 w-3.5" /> Mapped Deep-Skill Options ({skills.length})
+        </div>
+        {skills.length ? (
+          <div className="flex flex-wrap gap-1.5">
+            {skills.map((s) => (
+              <span key={`${s.category_id}-${s.service_type_id}-${s.deep_skill_id}-${s.option_id}`}
+                className="inline-flex items-center rounded-full border border-emerald-300 bg-white/70 px-2 py-0.5 text-xs text-emerald-900">
+                {s.label ?? `#${s.deep_skill_id}/${s.option_id}`}
+              </span>
+            ))}
+          </div>
+        ) : <div className="text-xs text-muted-foreground">No skill options matched.</div>}
+      </div>
+
+      {/* Serviceable pincodes */}
+      <div className="space-y-1">
+        <div className="flex items-center gap-1.5 text-xs font-medium text-sky-800">
+          <MapPin className="h-3.5 w-3.5" /> Serviceable Pincodes ({pincodes.length})
+        </div>
+        {pincodes.length ? (
+          <div className="flex flex-wrap gap-1.5 max-h-40 overflow-auto">
+            {pincodes.map((p) => (
+              <span key={p.pincode_id}
+                className="inline-flex items-center rounded-full border border-sky-300 bg-white/70 px-2 py-0.5 text-xs text-sky-900">
+                {p.pincode ?? p.pincode_id}{p.city_name ? ` · ${p.city_name}` : ''}
+              </span>
+            ))}
+          </div>
+        ) : <div className="text-xs text-muted-foreground">No pincodes matched.</div>}
+      </div>
+
+      {/* Unmapped (flagged) */}
+      {(unmappedSkills.length > 0 || unmappedAreas.length > 0) && (
+        <div className="space-y-1">
+          <div className="text-xs font-medium text-amber-800">Mentioned but not matched — review manually</div>
+          {unmappedSkills.length > 0 && (
+            <div className="text-xs text-amber-800">Skills: {unmappedSkills.join(', ')}</div>
+          )}
+          {unmappedAreas.length > 0 && (
+            <div className="text-xs text-amber-800">Areas: {unmappedAreas.join(', ')}</div>
+          )}
+        </div>
+      )}
+
+      {nothing && (
+        <div className="text-xs text-amber-700">
+          {result.note ? `Nothing mapped — ${result.note}.` : 'Nothing could be extracted from the conversation.'}
         </div>
       )}
     </div>

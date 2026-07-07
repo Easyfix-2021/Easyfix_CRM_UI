@@ -60,6 +60,12 @@ const MAX_SEND_COUNT_KEY = 'Max Magic-Link Send Count';
 // Channel for chasing Unconfirmed Orders: 'form' (magic-link web form, default)
 // or 'conversation' (in-chat AI WhatsApp flow). Stored as a custom property.
 const ORDER_MODE_KEY = 'Order Confirmation Mode';
+// Per-client Branch Details policy — Off (no row) / Optional / Mandatory. Stored
+// as the canonical `branch_details` custom-property row; the booking pages
+// (JobModal + /public job-completion) already derive branchProp from it, so this
+// card is the ONLY surface needed to make Branch Details dynamic per client
+// (replaces the legacy hardcoded clientId gate 252/395/10 in EasyFix_CRM).
+const BRANCH_DETAILS_KEY = 'Branch Details';
 
 /*
  * Normalise a property name for case-insensitive + underscore-tolerant
@@ -77,6 +83,8 @@ const HOISTED_NORMALIZED = new Set([
   normalizePropKey(AUTO_PROCESS_KEY),
   normalizePropKey(MAX_SEND_COUNT_KEY),
   normalizePropKey(ORDER_MODE_KEY),
+  normalizePropKey(BRANCH_DETAILS_KEY), // 'branch details'
+  'branch',                             // JobModal canonicalises a legacy 'branch' row → branch_details too
 ]);
 
 /*
@@ -139,6 +147,12 @@ export function CustomPropsTab({ clientId, canEdit, client }: Props) {
   const autoProcessRow = allItems.find((p) => normalizePropKey(p.name) === normalizePropKey(AUTO_PROCESS_KEY)) ?? null;
   const maxSendCountRow = allItems.find((p) => normalizePropKey(p.name) === normalizePropKey(MAX_SEND_COUNT_KEY)) ?? null;
   const orderModeRow = allItems.find((p) => normalizePropKey(p.name) === normalizePropKey(ORDER_MODE_KEY)) ?? null;
+  // Branch Details backing row — match 'branch_details'/'Branch Details' AND a
+  // legacy 'branch' row (JobModal canonicalises all three → branch_details).
+  const branchRow = allItems.find((p) => {
+    const k = normalizePropKey(p.name);
+    return k === normalizePropKey(BRANCH_DETAILS_KEY) || k === 'branch';
+  }) ?? null;
 
   // Invalidating the cross-client keys cache after a save here also
   // invalidates `useFetch`'s memo so a fresh /custom-properties read
@@ -199,6 +213,12 @@ export function CustomPropsTab({ clientId, canEdit, client }: Props) {
         <OrderModeCard
           clientId={clientId}
           existing={orderModeRow}
+          canEdit={canEdit}
+          onSaved={invalidateAndRefetch}
+        />
+        <BranchDetailsCard
+          clientId={clientId}
+          existing={branchRow}
           canEdit={canEdit}
           onSaved={invalidateAndRefetch}
         />
@@ -667,6 +687,93 @@ function OrderModeCard({
         >
           <option value="form">Form (link)</option>
           <option value="conversation">WhatsApp Conversation</option>
+        </select>
+      </div>
+    </div>
+  );
+}
+
+/*
+ * BranchDetailsCard — dedicated per-client Branch Details policy selector:
+ *   - 'off'       → no row (deleted): field hidden on the booking form
+ *   - 'optional'  → row with mandatory=false: field shown, not required
+ *   - 'mandatory' → row with mandatory=true: field shown with * + blocks submit
+ * Backed by the canonical `branch_details` custom-property row, which JobModal
+ * (Book New Call + Confirm & Schedule) and the /public job-completion page
+ * ALREADY consume via `branchProp`, so no booking-page change is needed. This
+ * replaces the legacy hardcoded clientId gate (EasyFix_CRM existCustomer.vm).
+ */
+function BranchDetailsCard({
+  clientId, existing, canEdit, onSaved,
+}: {
+  clientId: number;
+  existing: ClientCustomProperty | null;
+  canEdit: boolean;
+  onSaved: () => void;
+}) {
+  const current: 'off' | 'optional' | 'mandatory' = !existing
+    ? 'off'
+    : (existing.mandatory ? 'mandatory' : 'optional');
+  const [saving, setSaving] = useState(false);
+
+  async function onChange(next: string) {
+    if (saving || next === current) return;
+    setSaving(true);
+    try {
+      if (next === 'off') {
+        // Off = remove the row so the field disappears from booking.
+        if (existing?.id) {
+          await api.delete<{ deleted: boolean }>(`/admin/clients/custom-properties/${existing.id}`);
+        }
+      } else {
+        const mandatory = next === 'mandatory';
+        // Keep an existing row's authored name/label; create a fresh row with the
+        // canonical snake key so it matches everywhere JobModal looks it up.
+        const payload = {
+          name: existing?.name || 'branch_details',
+          label: existing?.label || BRANCH_DETAILS_KEY,
+          value: existing?.value ?? null,
+          mandatory,
+        };
+        if (existing?.id) {
+          await api.put<{ updated: boolean }>(`/admin/clients/custom-properties/${existing.id}`, payload as never);
+        } else {
+          await api.post<{ id: number }>(`/admin/clients/${clientId}/custom-properties`, payload as never);
+        }
+      }
+      onSaved();
+      showToast({
+        variant: 'success',
+        message: next === 'off' ? 'Branch Details turned off.'
+          : next === 'mandatory' ? 'Branch Details set to mandatory.'
+          : 'Branch Details set to optional.',
+      });
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Save failed.' });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="rounded border bg-card px-3 py-2.5 flex items-start justify-between gap-3">
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-medium">{BRANCH_DETAILS_KEY}</div>
+        <div className="text-xs text-muted-foreground mt-0.5">
+          Whether the <b>Branch Details</b> field appears on the booking form for this client, and whether it&rsquo;s required. Saved to the job&rsquo;s <code>branch_details</code>.
+        </div>
+      </div>
+      <div className="shrink-0 pt-0.5">
+        <select
+          value={current}
+          disabled={!canEdit || saving}
+          onChange={(e) => onChange(e.target.value)}
+          className="rounded border border-input bg-background px-2 py-1 text-sm disabled:opacity-60"
+          aria-label={BRANCH_DETAILS_KEY}
+        >
+          <option value="off">Off</option>
+          <option value="optional">Optional</option>
+          <option value="mandatory">Mandatory</option>
         </select>
       </div>
     </div>
