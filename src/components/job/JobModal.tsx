@@ -5859,7 +5859,6 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             <div><span className="text-xs text-muted-foreground mr-2">Job Description:</span>{String(initial.job_desc ?? '—')}</div>
             <div><span className="text-xs text-muted-foreground mr-2">Product Quantity:</span>{Array.isArray(initial.services) ? initial.services.length : 0}</div>
             <div><span className="text-xs text-muted-foreground mr-2">Job Type:</span><strong>{String(initial.job_type ?? '—')}</strong></div>
-            <div className="md:col-span-2"><span className="text-xs text-muted-foreground mr-2">Service Address:</span>{formatServiceAddress(initial)}</div>
           </div>
         </div>
 
@@ -6248,6 +6247,27 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 </p>
               </div>
             )}
+            {/* Service Address (read-only) — the assembled Building · Address ·
+                Landmark · City · Pincode, relocated here from the Job Summary
+                strip and placed just above the editable Complete Address so ops
+                can copy/paste or cross-check it while editing. Mirrors the live
+                form values so it stays in sync as the address is edited. */}
+            <div className="col-span-1 md:col-span-3 mb-3">
+              <Label className="text-xs text-muted-foreground">Service Address</Label>
+              <textarea
+                readOnly
+                disabled
+                value={formatServiceAddress({
+                  building: f.building,
+                  address: f.address,
+                  landmark: f.landmark,
+                  city_name: f.city_id ? cityNameById.get(String(f.city_id)) : null,
+                  pin_code: f.pin_code,
+                }, { fallback: '—' })}
+                rows={2}
+                className="mt-1 w-full rounded-md border border-input bg-slate-100 px-3 py-1.5 text-sm text-slate-700 resize-none"
+              />
+            </div>
             <div className="col-span-1 md:col-span-3">
               <AddressPickerWithMap
                 value={{
@@ -7891,6 +7911,26 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 Schedule below, so both flows behave the same way:
                 autocomplete pick repositions the marker, marker drag
                 reverse-geocodes back to PIN + city + address. */}
+            {/* Service Address (read-only) — live-assembled Building · Address ·
+                Landmark · City · Pincode preview, shown just above the editable
+                Complete Address so the operator can copy/paste or cross-check it
+                as the address fields are filled. Same field as Confirm & Schedule. */}
+            <div className="mb-3">
+              <Label className="text-xs text-muted-foreground">Service Address</Label>
+              <textarea
+                readOnly
+                disabled
+                value={formatServiceAddress({
+                  building: f.building,
+                  address: f.address,
+                  landmark: f.landmark,
+                  city_name: f.city_id ? cityNameById.get(String(f.city_id)) : null,
+                  pin_code: f.pin_code,
+                }, { fallback: '—' })}
+                rows={2}
+                className="mt-1 w-full rounded-md border border-input bg-slate-100 px-3 py-1.5 text-sm text-slate-700 resize-none"
+              />
+            </div>
             <AddressPickerWithMap
               value={{
                 address: f.address || '',

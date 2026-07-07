@@ -45,7 +45,12 @@ type Zone     = { zone_id: number;     zone_name: string };
  */
 const MEM_CACHE = new Map<string, unknown>();
 const INFLIGHT = new Map<string, Promise<unknown>>();
-const SS_PREFIX = 'efx-lookup:';
+// Versioned prefix: bump the suffix whenever a lookup's SHAPE or CONTENT bounds
+// change so already-cached sessionStorage payloads are ignored on next load.
+// v2 (2026-07-07): cities lookup limit raised 1000→20000 (was truncating the
+// dropdown mid-alphabet at ~"Balwada") + payload trimmed to id/name/state_id.
+// Without this bump, a warm tab keeps serving the stale 1000-row list for 30min.
+const SS_PREFIX = 'efx-lookup:v2:';
 const SS_TTL_MS = 30 * 60 * 1000;
 
 function readSession<T>(key: string): T | null {
@@ -99,7 +104,11 @@ export function useLookup() {
     // Fire all lookups in parallel — they're independent, and fetchOnce
     // already de-dupes per key. Each dropdown renders as soon as its own
     // data lands; one failed lookup never blocks the others.
-    fetchOnce('cities', () => api.get<City[]>('/shared/lookup/cities', { limit: 1000 })).then(setCities).catch(() => {});
+    // tbl_city has ~11k active rows; a 1000 cap truncated the dropdown mid-alphabet
+    // (~"Balwada"). Load the full set — SearchSelect caps how many it RENDERS, so the
+    // large option list stays snappy, and AddressPickerWithMap needs every city for
+    // its reverse-geocode name→id match. Bump in lockstep with citiesQuery.max().
+    fetchOnce('cities', () => api.get<City[]>('/shared/lookup/cities', { limit: 20000 })).then(setCities).catch(() => {});
     fetchOnce('verticals', () => api.get<Vertical[]>('/shared/lookup/verticals')).then(setVerticals).catch(() => {});
     fetchOnce('states', () => api.get<State[]>('/shared/lookup/states')).then(setStates).catch(() => {});
     fetchOnce('zones', () => api.get<Zone[]>('/shared/lookup/zones')).then(setZones).catch(() => {});

@@ -30,7 +30,7 @@ import * as React from 'react';
 import { useUiFlags } from '@/lib/hooks';
 import { Input } from './input';
 import { Label } from './label';
-import { SearchSelect } from './search-select';
+import { CitySelect } from './city-select';
 import { AddressAutocomplete } from './address-autocomplete';
 import { api, ApiError } from '@/lib/api';
 import { showToast } from './toast';
@@ -556,10 +556,12 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
         <div className="grid grid-cols-2 gap-3">
           <div>
             <Label className="text-xs">City *</Label>
-            <SearchSelect
-              value={String(value.city_id || '')}
-              onChange={(v) => patch({ city_id: String(v) })}
-              options={cities}
+            {/* Server-side typeahead (CitySelect) — searches the ~11k city
+                master via ?q= instead of preloading it. The `cities` prop is
+                still used below for reverse-geocode name→id matching. */}
+            <CitySelect
+              value={value.city_id}
+              onChange={(id) => patch({ city_id: id })}
               placeholder="— Select city —"
               disabled={!editable}
               required

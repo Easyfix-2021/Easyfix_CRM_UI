@@ -43,7 +43,7 @@ export type SearchOption = {
 export function SearchSelect({
   value, onChange, options, placeholder = 'Select…',
   disabled, required, className, emptyText = 'No matches',
-  groupLabelPrefix,
+  groupLabelPrefix, onQueryChange,
 }: {
   value: string | number | '';
   onChange: (v: string) => void;
@@ -60,6 +60,13 @@ export function SearchSelect({
    * first — the renderer just detects group transitions.
    */
   groupLabelPrefix?: string;
+  /*
+   * Server-side (async) typeahead. When provided, SearchSelect stops
+   * client-filtering `options` and reports the typed query so the caller can
+   * fetch matches and feed them back via `options` (used by CitySelect for the
+   * ~11k-row city master). Omit for the default client-side-filter behaviour.
+   */
+  onQueryChange?: (q: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -102,6 +109,8 @@ export function SearchSelect({
   }, [options]);
 
   const filtered = useMemo(() => {
+    // Async mode: `options` are already server-filtered — don't filter again.
+    if (onQueryChange) return uniqueOptions;
     if (!query) return uniqueOptions;
     const q = query.toLowerCase();
     return uniqueOptions.filter(
@@ -109,7 +118,15 @@ export function SearchSelect({
         o.label.toLowerCase().includes(q) ||
         (o.keywords ? o.keywords.toLowerCase().includes(q) : false)
     );
-  }, [query, uniqueOptions]);
+  }, [query, uniqueOptions, onQueryChange]);
+
+  // Cap how many options we actually render. Most dropdowns are tiny, but a few
+  // preload huge lists for client-side filtering (e.g. cities — ~11k rows);
+  // painting every <li> on open would jank the popover. Render the first
+  // RENDER_CAP and nudge the user to type to narrow. Keyboard nav + Enter are
+  // bounded to this same slice so ↑/↓ never point past what's painted.
+  const RENDER_CAP = 300;
+  const visible = filtered.length > RENDER_CAP ? filtered.slice(0, RENDER_CAP) : filtered;
 
   const selected = uniqueOptions.find((o) => String(o.value) === String(value));
 
@@ -193,9 +210,9 @@ export function SearchSelect({
   }
 
   function onKey(e: React.KeyboardEvent) {
-    if (e.key === 'ArrowDown') { e.preventDefault(); setActiveIdx((i) => Math.min(i + 1, filtered.length - 1)); }
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActiveIdx((i) => Math.min(i + 1, visible.length - 1)); }
     else if (e.key === 'ArrowUp')   { e.preventDefault(); setActiveIdx((i) => Math.max(i - 1, 0)); }
-    else if (e.key === 'Enter')     { e.preventDefault(); if (filtered[activeIdx]) pick(filtered[activeIdx]); }
+    else if (e.key === 'Enter')     { e.preventDefault(); if (visible[activeIdx]) pick(visible[activeIdx]); }
     else if (e.key === 'Escape')    { setOpen(false); }
   }
 
@@ -271,7 +288,7 @@ export function SearchSelect({
             <input
               ref={inputRef}
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => { setQuery(e.target.value); onQueryChange?.(e.target.value); }}
               onKeyDown={onKey}
               placeholder="Type to filter…"
               className="flex-1 bg-transparent outline-none text-sm placeholder:text-muted-foreground"
@@ -295,7 +312,7 @@ export function SearchSelect({
             {(() => {
               const out: ReactNode[] = [];
               let lastGroup: string | undefined;
-              filtered.forEach((opt, i) => {
+              visible.forEach((opt, i) => {
                 if (opt.group && opt.group !== lastGroup) {
                   out.push(
                     <li
@@ -328,6 +345,17 @@ export function SearchSelect({
                   </li>
                 );
               });
+              if (filtered.length > visible.length) {
+                out.push(
+                  <li
+                    key="__more"
+                    className="px-3 py-2 text-[11px] text-muted-foreground bg-slate-50 border-t sticky bottom-0"
+                    aria-hidden="true"
+                  >
+                    Showing first {visible.length} of {filtered.length} — type to narrow…
+                  </li>
+                );
+              }
               return out;
             })()}
           </ul>
