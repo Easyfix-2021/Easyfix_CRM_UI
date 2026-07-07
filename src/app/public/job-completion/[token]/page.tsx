@@ -68,7 +68,7 @@ type PageState =
   | { kind: 'loading' }
   | { kind: 'ready'; data: PrefillResponse }
   | { kind: 'submitting'; data: PrefillResponse }
-  | { kind: 'submitted' }
+  | { kind: 'submitted'; variant?: 'complete' | 'reschedule' | 'cancel' }
   | { kind: 'expired_state' }
   | { kind: 'invalid_token' }
   | { kind: 'error'; message: string };
@@ -460,9 +460,17 @@ export default function JobCompletionMagicLinkPage() {
   if (state.kind === 'error') return (
     <FullPageMessage title="Something Went Wrong" message={state.message} retry />
   );
-  if (state.kind === 'submitted') return (
-    <FullPageMessage title="Thank You" message="Order Confirmed — Our Team Will Finalise The Schedule Shortly. You Can Close This Page." />
-  );
+  if (state.kind === 'submitted') {
+    // Terminal confirmation screen — worded per the action taken. Reschedule
+    // and cancel are REQUESTS ops will action later, so avoid "Order Confirmed".
+    const confirm =
+      state.variant === 'reschedule'
+        ? { title: 'Reschedule Requested', message: 'Our Team Will Review Your Preferred Date & Time And Get Back To You. You Can Close This Page.' }
+        : state.variant === 'cancel'
+          ? { title: 'Cancellation Requested', message: 'Our Team Will Review Your Request And Reach Out To You. You Can Close This Page.' }
+          : { title: 'Thank You', message: 'Order Confirmed — Our Team Will Finalise The Schedule Shortly. You Can Close This Page.' };
+    return <FullPageMessage title={confirm.title} message={confirm.message} />;
+  }
 
   const data = state.data;
   const isSubmitting = state.kind === 'submitting';
@@ -677,7 +685,9 @@ export default function JobCompletionMagicLinkPage() {
         }
       );
       setDialog(null);
-      showToast('Reschedule Requested — Our Team Will Get Back To You.', 'ok');
+      // Show the same persistent confirmation screen as Complete (issue: a
+      // 5s toast was the only feedback, so the page just looked unchanged).
+      setState({ kind: 'submitted', variant: 'reschedule' });
     } catch (err) {
       const e = err as { status?: number; code?: string; message?: string };
       if (e.status === 410 || e.code === 'JOB_NO_LONGER_PENDING') { setDialog(null); setState({ kind: 'expired_state' }); return; }
@@ -702,7 +712,7 @@ export default function JobCompletionMagicLinkPage() {
         }
       );
       setDialog(null);
-      showToast('Cancellation Requested — Our Team Will Reach Out.', 'ok');
+      setState({ kind: 'submitted', variant: 'cancel' });
     } catch (err) {
       const e = err as { status?: number; code?: string; message?: string };
       if (e.status === 410 || e.code === 'JOB_NO_LONGER_PENDING') { setDialog(null); setState({ kind: 'expired_state' }); return; }
