@@ -82,6 +82,25 @@ export function WebCallProvider({ children }: { children: React.ReactNode }) {
   // that follows a pre-answer hangup reads as a normal "ended", not a failure.
   const endedByUserRef = React.useRef(false);
 
+  // The Plivo SDK logs a benign console.error when we hang up a call BEFORE it
+  // connects ("PlivoSDK … Outgoing call failed: Canceled"). We already handle
+  // cancel as a normal end (see onCallFailed + endedByUserRef), but Next.js's
+  // dev overlay surfaces that raw SDK log as a "Console Error", which reads like
+  // a real failure. Filter out ONLY that one line — it must match BOTH the
+  // PlivoSDK prefix AND a cancel reason — so every other error (real Plivo /
+  // login / app failures) still passes through untouched. Restored on unmount.
+  React.useEffect(() => {
+    const orig = console.error;
+    console.error = (...args: any[]) => {
+      try {
+        const msg = args.map((a) => (typeof a === 'string' ? a : '')).join(' ');
+        if (/plivosdk/i.test(msg) && /call failed:\s*cancel/i.test(msg)) return;
+      } catch { /* fall through to the original logger */ }
+      orig(...args);
+    };
+    return () => { console.error = orig; };
+  }, []);
+
   const resetClient = React.useCallback(() => {
     try { clientRef.current?.logout?.(); } catch { /* ignore */ }
     clientRef.current = null;

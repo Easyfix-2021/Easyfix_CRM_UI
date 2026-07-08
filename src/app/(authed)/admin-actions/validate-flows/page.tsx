@@ -22,6 +22,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { SearchSelect } from '@/components/ui/search-select';
+import { showToast, dismissToast } from '@/components/ui/toast';
 import { api, ApiError } from '@/lib/api';
 import { useMe } from '@/lib/auth-context';
 import { useFetchOnce } from '@/lib/hooks';
@@ -460,6 +461,8 @@ function AiCallingModal({ open, onClose }: { open: boolean; onClose: () => void 
   const voices = voicesFetch.data?.engines?.[engine]?.voices?.length
     ? voicesFetch.data.engines[engine].voices
     : (VOICE_FALLBACK[engine] || VOICE_FALLBACK.gemini);
+  // The engine's current global-default voice — tagged "(Default)" in the picker.
+  const engineDefaultVoice = voicesFetch.data?.engines?.[engine]?.default || codeDefaultVoice(engine);
   const [voice, setVoice] = useState('Autonoe');
   // On engine change (or once voices load), reset to that engine's default — a
   // Gemini voice like Autonoe isn't valid for OpenAI and vice-versa.
@@ -468,11 +471,9 @@ function AiCallingModal({ open, onClose }: { open: boolean; onClose: () => void 
   }, [engine, voicesFetch.data]);
   const [voiceSaving, setVoiceSaving] = useState(false);
   const [previewing, setPreviewing] = useState(false);
-  const [voiceMsg, setVoiceMsg] = useState<string | null>(null);
   const [efrId, setEfrId] = useState('');
   const [mobile, setMobile] = useState('');
   const [busy, setBusy] = useState(false);       // placing the call
-  const [error, setError] = useState<string | null>(null);
   const [startMsg, setStartMsg] = useState<string | null>(null);
   const [session, setSession] = useState<AiSession | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -492,7 +493,7 @@ function AiCallingModal({ open, onClose }: { open: boolean; onClose: () => void 
     stopPolling();
     failRef.current = 0; countRef.current = 0;
     setEfrId(''); setMobile(''); setBusy(false);
-    setError(null); setStartMsg(null); setSession(null);
+    setStartMsg(null); setSession(null);
   }
   // Clean up the interval on unmount.
   useEffect(() => () => { genRef.current += 1; stopPolling(); }, []);
@@ -526,17 +527,21 @@ function AiCallingModal({ open, onClose }: { open: boolean; onClose: () => void 
   }
 
   async function startCall() {
-    setError(null); setStartMsg(null); setSession(null); stopPolling();
+    setStartMsg(null); setSession(null); stopPolling();
     const gen = (genRef.current += 1);
     failRef.current = 0; countRef.current = 0;
     const m = mobile.trim();
-    if (m && !/^\d{10}$/.test(m)) { setError('Mobile must be a 10-digit number.'); return; }
-    if (!m && !efrId.trim()) { setError('Provide a Mobile number or an Easyfixer Id to call.'); return; }
+    if (m && !/^\d{10}$/.test(m)) { showToast({ variant: 'error', message: 'Mobile must be a 10-digit number.' }); return; }
+    if (!m && !efrId.trim()) { showToast({ variant: 'error', message: 'Provide a Mobile number or an Easyfixer Id to call.' }); return; }
     const body: Record<string, unknown> = { flow, engine, voice };
     if (efrId.trim()) body.efrId = Number(efrId.trim());
     if (m) body.mobile = m;
 
     setBusy(true);
+    // Loading toast for the placement round-trip. It's dismissed in `finally`
+    // (loading toasts are never auto-evicted); the session panel's "Calling…"
+    // spinner then takes over, so no separate success toast is needed.
+    const placingId = showToast({ variant: 'loading', message: 'Placing the call…' });
     try {
       const env = await api.post<{ data?: AiStartData; message?: string } & Partial<AiStartData>>(
         '/admin/validate/ai-calling/start', body);
@@ -552,8 +557,9 @@ function AiCallingModal({ open, onClose }: { open: boolean; onClose: () => void 
         pollOnce(data.sessionId, gen);
       }, AI_POLL_MS);
     } catch (e) {
-      if (gen === genRef.current) setError(e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'Could not place the call.');
+      if (gen === genRef.current) showToast({ variant: 'error', message: e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'Could not place the call.' });
     } finally {
+      dismissToast(placingId); // always clear the loader — even on the early modal-closed return
       if (gen === genRef.current) setBusy(false);
     }
   }
@@ -564,12 +570,12 @@ function AiCallingModal({ open, onClose }: { open: boolean; onClose: () => void 
 
   // Persist the selected voice as the global default (for this engine) for all calls.
   async function setDefaultVoice() {
-    setVoiceSaving(true); setVoiceMsg(null);
+    setVoiceSaving(true);
     try {
       await api.post('/admin/validate/ai-calling/voice-default', { engine, voice });
-      setVoiceMsg(`Default ${engine} voice set to ${voice} for all automated calls.`);
+      showToast({ variant: 'success', message: `Default ${engine} voice set to ${voice} for all automated calls.` });
     } catch (e) {
-      setVoiceMsg(e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'Could not set default voice.');
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'Could not set default voice.' });
     } finally {
       setVoiceSaving(false);
     }
@@ -577,7 +583,7 @@ function AiCallingModal({ open, onClose }: { open: boolean; onClose: () => void 
 
   // Synthesize + play a short sample of the selected voice (authed fetch → Blob → play).
   async function previewVoice() {
-    setPreviewing(true); setVoiceMsg(null);
+    setPreviewing(true);
     try {
       const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5100/api';
       const token = typeof window !== 'undefined' ? localStorage.getItem('crm_auth_token') : null;
@@ -591,7 +597,7 @@ function AiCallingModal({ open, onClose }: { open: boolean; onClose: () => void 
       audio.onended = () => URL.revokeObjectURL(objUrl);
       await audio.play();
     } catch {
-      setVoiceMsg('Could not play a sample — check the TTS key for this engine.');
+      showToast({ variant: 'error', message: 'Could not play a sample — check the TTS key for this engine.' });
     } finally {
       setPreviewing(false);
     }
@@ -646,7 +652,7 @@ function AiCallingModal({ open, onClose }: { open: boolean; onClose: () => void 
                 <SearchSelect
                   value={voice}
                   onChange={(v) => setVoice(v || codeDefaultVoice(engine))}
-                  options={voices.map((v) => ({ value: v, label: v }))}
+                  options={voices.map((v) => ({ value: v, label: v === engineDefaultVoice ? `(Default) ${v}` : v }))}
                   disabled={busy || polling}
                   required
                   placeholder="Select a voice…"
@@ -659,7 +665,6 @@ function AiCallingModal({ open, onClose }: { open: boolean; onClose: () => void 
                 {voiceSaving ? 'Saving…' : 'Set Default'}
               </Button>
             </div>
-            {voiceMsg && <div className="text-xs text-emerald-700">{voiceMsg}</div>}
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -683,13 +688,6 @@ function AiCallingModal({ open, onClose }: { open: boolean; onClose: () => void 
               />
             </div>
           </div>
-
-          {error && (
-            <div className="rounded border bg-rose-50 border-rose-200 p-3 text-sm text-rose-700 flex gap-2">
-              <XCircle className="h-4 w-4 mt-0.5 shrink-0" />
-              <div className="break-words">{error}</div>
-            </div>
-          )}
 
           {session && (
             <div className={

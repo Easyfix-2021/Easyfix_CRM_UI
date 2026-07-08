@@ -43,6 +43,18 @@ export const TOAST_HOST_SELECTOR = `[${TOAST_HOST_MARKER}]`;
 export const TOAST_HOST_ATTR = { [TOAST_HOST_MARKER]: '' } as const;
 
 /**
+ * Floating call panels (WebCallPanel / LiveCallPanel). Both portal to
+ * document.body as bottom-right status cards and stay mounted WHILE a
+ * modal (e.g. the Confirm & Schedule JobModal) is open — a call is often
+ * placed from inside that modal. Without this marker, clicking a control
+ * on the panel (Hangup, Mute, …) registers as an outside-interaction for
+ * the open Dialog and closes it, discarding the operator's in-flight form.
+ */
+export const CALL_PANEL_MARKER = 'data-call-panel';
+export const CALL_PANEL_SELECTOR = `[${CALL_PANEL_MARKER}]`;
+export const CALL_PANEL_ATTR = { [CALL_PANEL_MARKER]: '' } as const;
+
+/**
  * Full list consumed by Dialog's outside-click guards. Keep in sync
  * when adding a new marker above — Dialog reads from this single
  * source of truth so a new portal kind only needs a single export
@@ -51,4 +63,5 @@ export const TOAST_HOST_ATTR = { [TOAST_HOST_MARKER]: '' } as const;
 export const DIALOG_IGNORED_PORTAL_SELECTORS: ReadonlyArray<string> = [
   PORTAL_POPOVER_SELECTOR,
   TOAST_HOST_SELECTOR,
+  CALL_PANEL_SELECTOR,
 ];

@@ -41,26 +41,13 @@ import { CallLegsPreview } from '@/components/ui/CallLegsPreview';
 // public page). Used for every button on the page so size/font/padding match;
 // colour is differentiated via `variant` + `className`, NOT by `size`.
 import { Button } from '@/components/ui/button';
+// Extracted shared public-page building blocks (also used by the shared-job
+// page). Behaviour-identical to the former inline definitions.
+import { publicFetch } from '@/lib/public-fetch';
+import { InfoCard } from '@/components/public/InfoCard';
+import { OverlayShell } from '@/components/public/OverlayShell';
+import { FullPageMessage } from '@/components/public/FullPageMessage';
 
-/*
- * Bare public-fetch helper. Mirrors the success envelope of `@/lib/api`
- * (`{ success, data }`) but:
- *   - never sends credentials/cookies (`credentials: 'omit'`)
- *   - never attaches Authorization header
- *   - throws a typed object exposing `{status, code, message}` so the page
- *     can dispatch on HTTP status (410/401) without ApiError class checks.
- */
-async function publicFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const apiBase = process.env.NEXT_PUBLIC_API_URL || '/api';
-  const res = await fetch(`${apiBase}${url}`, { ...init, credentials: 'omit' });
-  let body: { success?: boolean; data?: T; error?: string; code?: string } = {};
-  try { body = await res.json(); } catch { /* defensive */ }
-  if (!res.ok) {
-    // eslint-disable-next-line no-throw-literal
-    throw { status: res.status, code: body?.code, message: body?.error || 'Request failed' };
-  }
-  return body.data as T;
-}
 
 type PageState =
   | { kind: 'loading' }
@@ -1241,72 +1228,7 @@ function OrderHeader({ clientName }: { clientName: string }) {
  * free-form (non-grid) body. Used for the Service Requested / Address /
  * Appointment / Coordinator / Your Details cards.
  */
-function InfoCard({
-  icon, title, action, children, bodyClassName,
-}: {
-  icon?: React.ReactNode;
-  title: string;
-  action?: React.ReactNode;
-  children: React.ReactNode;
-  bodyClassName?: string;
-}) {
-  return (
-    <div className="bg-white rounded-lg border p-5 space-y-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 min-w-0">
-          {icon && (
-            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-sky-50 text-sky-600">
-              {icon}
-            </span>
-          )}
-          <h2 className="text-base font-semibold text-slate-700 truncate">{title}</h2>
-        </div>
-        {action && <div className="shrink-0">{action}</div>}
-      </div>
-      <div className={bodyClassName ?? 'space-y-3'}>{children}</div>
-    </div>
-  );
-}
 
-/*
- * Shared overlay shell for the Reschedule / Cancel dialogs. Plain fixed
- * overlay + centered card — deliberately NOT the CRM `Dialog` (which would
- * drag in auth-coupled shared code). Mobile-friendly: full-width card with
- * generous padding, click-outside to dismiss.
- */
-function OverlayShell({
-  title, onClose, busy, children,
-}: {
-  title: string;
-  onClose: () => void;
-  busy: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-0 sm:p-4"
-      onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}
-    >
-      {/* Responsive card: bottom-sheet on mobile (full-width, rounded top,
-          no side gap because the sheet hugs the screen edge), centered
-          max-w-md card on desktop. max-h-[90vh] + overflow-y-auto keeps it
-          scrollable on short viewports; overflow-x-hidden + the w-full body
-          inputs (inputClass = `flex w-full text-base`) guarantee no
-          horizontal overflow at ~360px. */}
-      <div className="bg-white w-full sm:max-w-md rounded-t-2xl sm:rounded-lg shadow-xl max-h-[90vh] overflow-y-auto overflow-x-hidden">
-        {/* Header band matches the sidebar dark-slate convention. */}
-        <div className="bg-slate-900 text-white px-5 py-3 flex items-center justify-between rounded-t-2xl sm:rounded-t-lg">
-          <h2 className="font-semibold text-base">{title}</h2>
-          <button type="button" onClick={onClose} disabled={busy}
-            className="text-slate-300 hover:text-white disabled:opacity-50" aria-label="Close">
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-        <div className="p-5 space-y-4">{children}</div>
-      </div>
-    </div>
-  );
-}
 
 /*
  * Reschedule dialog — reason (required, from reschedule_reasons), an optional
@@ -1466,27 +1388,6 @@ function Field({ label, required, children }: { label: string; required?: boolea
   );
 }
 
-function FullPageMessage({
-  title, message, helpline, retry,
-}: { title: string; message: string; helpline?: boolean; retry?: boolean }) {
-  return (
-    <div className="bg-white rounded-lg border p-8 text-center space-y-4">
-      <h1 className="text-xl font-semibold text-slate-800">{title}</h1>
-      <p className="text-sm text-slate-600 leading-relaxed">{message}</p>
-      {helpline && (
-        <p className="text-sm text-slate-500">
-          Need help? Call <a href="tel:+911800000000" className="text-sky-600 hover:underline">+91-1800-000-000</a>.
-        </p>
-      )}
-      {retry && (
-        <button type="button" onClick={() => window.location.reload()}
-          className="bg-sky-600 hover:bg-sky-700 text-white font-medium px-4 py-2 rounded-md text-sm">
-          Try Again
-        </button>
-      )}
-    </div>
-  );
-}
 
 /*
  * Pared-down version of `<AddressPickerWithMap />` rebuilt against the

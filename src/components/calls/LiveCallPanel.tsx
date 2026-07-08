@@ -23,14 +23,16 @@
 
 import * as React from 'react';
 import { createPortal } from 'react-dom';
-import { Phone, Loader2, X, ArrowRight, PhoneOff } from 'lucide-react';
+import { Phone, Loader2, X, ArrowRight, PhoneOff, GripVertical, Minus, Maximize2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { formatApiError } from '@/lib/api-errors';
 import { useFetch } from '@/lib/hooks';
 import { fmtDuration } from '@/lib/format';
 import { StatusChip, type StatusChipTone } from '@/components/ui/StatusChip';
+import { CALL_PANEL_ATTR } from '@/lib/portal-markers';
 import { useLiveCall, type LiveCall } from './LiveCallContext';
+import { useDraggablePanel } from './useDraggablePanel';
 
 // ─── BE contract: GET /admin/calls/:id/status ─────────────────────────
 type CallStatus =
@@ -125,6 +127,11 @@ function LiveCallCard({
   const [hangupBusy, setHangupBusy] = React.useState(false);
   const [hangupErr, setHangupErr] = React.useState<string | null>(null);
 
+  // ── Drag + collapse UI state (shared hook) ────────────────────────────
+  // Keyed 'live' so it never clobbers WebCallPanel's remembered position.
+  const { containerRef, style, positioned, headerHandlers, collapsed, toggleCollapsed } =
+    useDraggablePanel({ sessionKey: 'live', resetKey: call.id });
+
   // ── Polling driver: bump `tick` every POLL_MS until terminal. The
   //    fetch key embeds the tick to bust the module-level cache so each
   //    cycle is a real round-trip (mirrors ClickToCallTab's setInterval
@@ -199,34 +206,87 @@ function LiveCallCard({
 
   return createPortal(
     <div
+      ref={containerRef}
       role="status"
       aria-live="polite"
+      {...CALL_PANEL_ATTR}
+      style={style}
       className={cn(
-        // Bottom-right, above modal overlays (Radix Dialog defaults to z-50).
-        'fixed bottom-6 right-6 z-[9998]',
-        'w-[320px] max-w-[calc(100vw-3rem)]',
+        // Bottom-right (above modal overlays; Radix Dialog defaults to z-50),
+        // unless dragged — then pinned via `style`.
+        'fixed z-[9998]',
+        !positioned && 'bottom-6 right-6',
+        collapsed ? 'w-auto' : 'w-[320px] max-w-[calc(100vw-3rem)]',
         'rounded-xl border border-slate-200 bg-white shadow-2xl overflow-hidden',
       )}
     >
-      {/* Header band — dark slate, mirrors the modal-header convention. */}
-      <div className="flex items-center gap-2.5 bg-sidebar text-sidebar-foreground px-4 py-3">
-        <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-500/20 ring-1 ring-emerald-400/40 text-emerald-200">
+      {/* Header band — dark slate, doubles as the drag handle. */}
+      <div
+        {...headerHandlers}
+        className="flex items-center gap-2 bg-sidebar text-sidebar-foreground px-3 py-2.5 cursor-grab active:cursor-grabbing select-none"
+      >
+        <GripVertical className="h-4 w-4 shrink-0 text-sidebar-foreground/40" aria-hidden />
+        <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-500/20 ring-1 ring-emerald-400/40 text-emerald-200">
           {connecting && !terminal
             ? <Loader2 className="h-4 w-4 animate-spin" />
             : <Phone className="h-4 w-4" />}
         </span>
-        <span className="flex-1 text-sm font-semibold leading-tight">Live Call</span>
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded p-1 text-sidebar-foreground/70 hover:bg-white/10 hover:text-sidebar-foreground"
-          aria-label="Close"
-        >
-          <X className="h-4 w-4" />
-        </button>
+
+        {collapsed ? (
+          // Collapsed pill: status + live timer inline so the operator keeps
+          // the essentials at a glance while the panel is out of the way.
+          <span className="flex items-center gap-2 min-w-0">
+            <span className="text-sm font-semibold leading-tight truncate">{label}</span>
+            {showTimer && (
+              <span className="font-mono tabular-nums text-xs font-semibold text-sidebar-foreground/80">
+                {fmtDuration(shownSeconds)}
+              </span>
+            )}
+          </span>
+        ) : (
+          <span className="flex-1 text-sm font-semibold leading-tight">Live Call</span>
+        )}
+
+        {/* Hangup stays reachable directly from the collapsed pill. */}
+        {collapsed && !terminal && (
+          <button
+            type="button"
+            onClick={onHangup}
+            disabled={hangupBusy}
+            className={cn(
+              'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded bg-rose-600 text-white hover:bg-rose-700 transition-colors',
+              hangupBusy && 'opacity-60 cursor-wait',
+            )}
+            aria-label="Hang up"
+            title="Hang up"
+          >
+            {hangupBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PhoneOff className="h-3.5 w-3.5" />}
+          </button>
+        )}
+
+        <div className={cn('flex items-center gap-1', !collapsed && 'ml-auto')}>
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            className="rounded p-1 text-sidebar-foreground/70 hover:bg-white/10 hover:text-sidebar-foreground"
+            aria-label={collapsed ? 'Expand call panel' : 'Minimize call panel'}
+            title={collapsed ? 'Expand' : 'Minimize'}
+          >
+            {collapsed ? <Maximize2 className="h-4 w-4" /> : <Minus className="h-4 w-4" />}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded p-1 text-sidebar-foreground/70 hover:bg-white/10 hover:text-sidebar-foreground"
+            aria-label="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
-      {/* Body */}
+      {/* Body — hidden while collapsed; the call keeps polling regardless. */}
+      {!collapsed && (
       <div className="px-4 py-3 space-y-3">
         {/* Optional callee name */}
         {call.name && (
@@ -298,6 +358,7 @@ function LiveCallCard({
           </button>
         )}
       </div>
+      )}
     </div>,
     document.body,
   );

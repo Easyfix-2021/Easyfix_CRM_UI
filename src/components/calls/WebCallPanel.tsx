@@ -13,11 +13,13 @@
 
 import * as React from 'react';
 import { createPortal } from 'react-dom';
-import { Phone, Loader2, X, PhoneOff, Mic, MicOff, Globe } from 'lucide-react';
+import { Phone, Loader2, X, PhoneOff, Mic, MicOff, Globe, GripVertical, Minus, Maximize2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { fmtDuration } from '@/lib/format';
 import { StatusChip, type StatusChipTone } from '@/components/ui/StatusChip';
+import { CALL_PANEL_ATTR } from '@/lib/portal-markers';
 import { useWebCall, type WebCallStatus } from './WebCallContext';
+import { useDraggablePanel } from './useDraggablePanel';
 
 const TONE: Record<WebCallStatus, StatusChipTone> = {
   idle: 'slate', connecting: 'amber', ringing: 'amber', in_progress: 'sky', ended: 'emerald', failed: 'rose',
@@ -50,6 +52,11 @@ export function WebCallPanel() {
   // Live timer from the answered-at epoch; freezes once terminal.
   const elapsed = useElapsed(active?.startedAt ?? null, !terminal);
 
+  // ── Drag + collapse UI state (shared hook) ────────────────────────────
+  // Default expanded whenever a NEW call becomes active — keyed by call id.
+  const { containerRef, style, positioned, headerHandlers, collapsed, toggleCollapsed } =
+    useDraggablePanel({ sessionKey: 'web', resetKey: active?.jobCallerInfoId ?? null });
+
   // Auto-dismiss 10s after the call ends (terminal) OR on a pre-call error (no
   // active call). A live/connecting call is NOT auto-hidden — only the X closes
   // it (handleClose hangs up first if still connected).
@@ -66,32 +73,84 @@ export function WebCallPanel() {
 
   const handleClose = () => { if (nonTerminal) hangup(); else dismiss(); };
 
+  const statusLabel = status === 'failed' ? (active?.endedReason || 'Failed') : LABEL[status];
+
   return createPortal(
     <div
+      ref={containerRef}
       role="status"
       aria-live="polite"
+      {...CALL_PANEL_ATTR}
+      style={style}
       className={cn(
-        'fixed bottom-6 right-6 z-[9998]',
-        'w-[320px] max-w-[calc(100vw-3rem)]',
+        'fixed z-[9998]',
+        !positioned && 'bottom-6 right-6',
+        collapsed ? 'w-auto' : 'w-[320px] max-w-[calc(100vw-3rem)]',
         'rounded-xl border border-slate-200 bg-white shadow-2xl overflow-hidden',
       )}
     >
-      {/* Header band — dark slate, mirrors LiveCallPanel + the modal convention. */}
-      <div className="flex items-center gap-2.5 bg-sidebar text-sidebar-foreground px-4 py-3">
-        <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-500/20 ring-1 ring-emerald-400/40 text-emerald-200">
+      {/* Header band — dark slate, doubles as the drag handle. */}
+      <div
+        {...headerHandlers}
+        className="flex items-center gap-2 bg-sidebar text-sidebar-foreground px-3 py-2.5 cursor-grab active:cursor-grabbing select-none"
+      >
+        <GripVertical className="h-4 w-4 shrink-0 text-sidebar-foreground/40" aria-hidden />
+        <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-500/20 ring-1 ring-emerald-400/40 text-emerald-200">
           {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Globe className="h-4 w-4" />}
         </span>
-        <span className="flex-1 text-sm font-semibold leading-tight">Web Call</span>
-        <button
-          type="button"
-          onClick={handleClose}
-          className="rounded p-1 text-sidebar-foreground/70 hover:bg-white/10 hover:text-sidebar-foreground"
-          aria-label={nonTerminal ? 'Hang up and close' : 'Close'}
-        >
-          <X className="h-4 w-4" />
-        </button>
+
+        {collapsed ? (
+          // Collapsed pill: status + live timer inline so the operator keeps
+          // the essentials at a glance while the panel is out of the way.
+          <span className="flex items-center gap-2 min-w-0">
+            <span className="text-sm font-semibold leading-tight truncate">{statusLabel}</span>
+            {active?.startedAt != null && (
+              <span className="font-mono tabular-nums text-xs font-semibold text-sidebar-foreground/80">
+                {fmtDuration(elapsed)}
+              </span>
+            )}
+          </span>
+        ) : (
+          <span className="flex-1 text-sm font-semibold leading-tight">Web Call</span>
+        )}
+
+        {/* Hangup stays reachable directly from the collapsed pill. */}
+        {collapsed && nonTerminal && (
+          <button
+            type="button"
+            onClick={hangup}
+            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded bg-rose-600 text-white hover:bg-rose-700 transition-colors"
+            aria-label="Hang up"
+            title="Hang up"
+          >
+            <PhoneOff className="h-3.5 w-3.5" />
+          </button>
+        )}
+
+        <div className={cn('flex items-center gap-1', !collapsed && 'ml-auto')}>
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            className="rounded p-1 text-sidebar-foreground/70 hover:bg-white/10 hover:text-sidebar-foreground"
+            aria-label={collapsed ? 'Expand call panel' : 'Minimize call panel'}
+            title={collapsed ? 'Expand' : 'Minimize'}
+          >
+            {collapsed ? <Maximize2 className="h-4 w-4" /> : <Minus className="h-4 w-4" />}
+          </button>
+          <button
+            type="button"
+            onClick={handleClose}
+            className="rounded p-1 text-sidebar-foreground/70 hover:bg-white/10 hover:text-sidebar-foreground"
+            aria-label={nonTerminal ? 'Hang up and close' : 'Close'}
+            title={nonTerminal ? 'Hang up and close' : 'Close'}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
+      {/* Body — hidden while collapsed; the call keeps running regardless. */}
+      {!collapsed && (
       <div className="px-4 py-3 space-y-3">
         {/* Pre-call error (e.g. web-credentials 409 / web-start failure) */}
         {error && !active && (
@@ -119,7 +178,7 @@ export function WebCallPanel() {
                 "Failed" chip + duplicate reason line. */}
             <div className="flex items-center justify-between gap-2">
               <StatusChip tone={TONE[status]}>
-                {status === 'failed' ? (active.endedReason || 'Failed') : LABEL[status]}
+                {statusLabel}
               </StatusChip>
               <div className="flex items-center gap-1.5 text-sm">
                 {connecting && <Loader2 className="h-4 w-4 animate-spin text-slate-400" aria-hidden />}
@@ -160,6 +219,7 @@ export function WebCallPanel() {
           </>
         )}
       </div>
+      )}
     </div>,
     document.body,
   );
