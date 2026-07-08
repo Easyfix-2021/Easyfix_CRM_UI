@@ -420,6 +420,7 @@ type AiResult = {
 type AiSession = {
   sessionId: string; status: string; error: string | null;
   mobile: string; efrId: number | null; transcript: string; result: AiResult | null;
+  recordingAvailable?: boolean; recordingDuration?: number | null;
 };
 type AiStartData = { sessionId: string; resolvedVia: string; resolvedTech: ResolvedTech; to: string; callId: string | null };
 
@@ -441,6 +442,14 @@ function AiCallingModal({ open, onClose }: { open: boolean; onClose: () => void 
   const flowsFetch = useFetchOnce<{ flows: { id: string; label: string }[] }>('/admin/validate/ai-calling/flows');
   const flows = flowsFetch.data?.flows?.length ? flowsFetch.data.flows : [{ id: 'profile_update', label: 'Profile Update' }];
   const [flow, setFlow] = useState('profile_update');
+  // Engine (voice provider) — Gemini default; switchable per call. The default is
+  // driven by the `ai.calling.engine` property, surfaced via the engines endpoint.
+  const enginesFetch = useFetchOnce<{ engines: { id: string; label: string }[]; default: string }>('/admin/validate/ai-calling/engines');
+  const engines = enginesFetch.data?.engines?.length
+    ? enginesFetch.data.engines
+    : [{ id: 'gemini', label: 'Gemini (3.1 Flash Live)' }, { id: 'openai', label: 'OpenAI (Realtime)' }];
+  const [engine, setEngine] = useState('gemini');
+  useEffect(() => { if (enginesFetch.data?.default) setEngine(enginesFetch.data.default); }, [enginesFetch.data?.default]);
   const [efrId, setEfrId] = useState('');
   const [mobile, setMobile] = useState('');
   const [busy, setBusy] = useState(false);       // placing the call
@@ -504,7 +513,7 @@ function AiCallingModal({ open, onClose }: { open: boolean; onClose: () => void 
     const m = mobile.trim();
     if (m && !/^\d{10}$/.test(m)) { setError('Mobile must be a 10-digit number.'); return; }
     if (!m && !efrId.trim()) { setError('Provide a Mobile number or an Easyfixer Id to call.'); return; }
-    const body: Record<string, unknown> = { flow };
+    const body: Record<string, unknown> = { flow, engine };
     if (efrId.trim()) body.efrId = Number(efrId.trim());
     if (m) body.mobile = m;
 
@@ -551,16 +560,29 @@ function AiCallingModal({ open, onClose }: { open: boolean; onClose: () => void 
             display-only test: nothing is written to any real record.
           </p>
 
-          <div className="space-y-1">
-            <Label>Flow</Label>
-            <SearchSelect
-              value={flow}
-              onChange={(v) => setFlow(v || 'profile_update')}
-              options={flows.map((f) => ({ value: f.id, label: f.label }))}
-              disabled={busy || polling}
-              required
-              placeholder="Select a flow…"
-            />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label>Flow</Label>
+              <SearchSelect
+                value={flow}
+                onChange={(v) => setFlow(v || 'profile_update')}
+                options={flows.map((f) => ({ value: f.id, label: f.label }))}
+                disabled={busy || polling}
+                required
+                placeholder="Select a flow…"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label>Engine</Label>
+              <SearchSelect
+                value={engine}
+                onChange={(v) => setEngine(v || 'gemini')}
+                options={engines.map((e) => ({ value: e.id, label: e.label }))}
+                disabled={busy || polling}
+                required
+                placeholder="Select an engine…"
+              />
+            </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -600,6 +622,15 @@ function AiCallingModal({ open, onClose }: { open: boolean; onClose: () => void 
                 <div className="text-xs text-amber-700">The call ended but no result was produced.</div>
               )}
 
+              {isDone && session.recordingAvailable && (
+                <div className="space-y-1">
+                  <div className="text-xs font-medium text-muted-foreground">
+                    Recording{session.recordingDuration ? ` · ${session.recordingDuration}s` : ''}
+                  </div>
+                  <RecordingPlayer sessionId={session.sessionId} />
+                </div>
+              )}
+
               {session.transcript ? (
                 <details className="text-xs">
                   <summary className="cursor-pointer text-muted-foreground">Show Transcript</summary>
@@ -618,6 +649,41 @@ function AiCallingModal({ open, onClose }: { open: boolean; onClose: () => void 
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// Plays the call recording. The proxy route needs JWT auth (a bare <audio src>
+// can't send it), so on click we fetch authenticated → Blob → object URL. Loaded
+// on demand (not on mount) so we don't auto-download audio every time the panel shows.
+function RecordingPlayer({ sessionId }: { sessionId: string }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => () => { if (url) URL.revokeObjectURL(url); }, [url]);
+  async function load() {
+    setLoading(true); setFailed(false);
+    try {
+      const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5100/api';
+      const token = typeof window !== 'undefined' ? localStorage.getItem('crm_auth_token') : null;
+      const res = await fetch(`${base}/admin/validate/ai-calling/${sessionId}/recording`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        credentials: 'include',
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      const blob = await res.blob();
+      setUrl(URL.createObjectURL(blob));
+    } catch {
+      setFailed(true);
+    } finally {
+      setLoading(false);
+    }
+  }
+  // eslint-disable-next-line jsx-a11y/media-has-caption
+  if (url) return <audio controls src={url} className="w-full" />;
+  return (
+    <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+      {loading ? 'Loading…' : failed ? 'Retry' : 'Load Recording'}
+    </Button>
   );
 }
 
