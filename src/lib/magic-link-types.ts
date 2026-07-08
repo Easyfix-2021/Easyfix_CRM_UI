@@ -48,11 +48,13 @@ export type PrefillResponse = {
     // for backward compatibility with older BE deployments.
     billing_label?: 'Free' | 'Paid';
   }[];
-  images: { image_id: number; key: string }[];
+  // `url` is a short-TTL presigned GET the FE renders as a thumbnail /
+  // lightbox source. Optional so older BE deploys (key-only) still type-check.
+  images: { image_id: number; key: string; url?: string | null }[];
   // Customer-uploaded videos via the public Product Photos/Videos picker (or
   // the conversational chat flow). Probe-gated server-side; absent on older
-  // BE deploys → FE defaults to [].
-  videos?: { media_id: number; key: string }[];
+  // BE deploys → FE defaults to []. `url` = presigned playback source.
+  videos?: { media_id: number; key: string; url?: string | null }[];
   // Customer's currently-active service rows on this job. Populated by the BE
   // so that re-opening the magic link (token still valid, status still 9)
   // re-seeds the checkboxes — otherwise the bidirectional reconcile on submit
@@ -111,11 +113,14 @@ export type PrefillResponse = {
 export type SubmitPayload = {
   customer_name: string;
   customer_email?: string;
-  address: string;
+  // address / city_id / pin_code are BOOKED, display-only on the customer
+  // confirmation form (not customer-editable; the map pin captures GPS only).
+  // Optional — omit when empty so the BE keeps the booked value (COALESCE).
+  address?: string;
   building?: string;
   landmark?: string;
-  city_id: number;
-  pin_code: string;
+  city_id?: number;
+  pin_code?: string;
   time_slot: string;
   requested_date_time: string;
   gps_location?: string;

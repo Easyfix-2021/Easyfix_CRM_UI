@@ -30,11 +30,9 @@
 
 import { useParams } from 'next/navigation';
 import Image from 'next/image';
-import { Plus, X, CalendarClock, Ban, CheckCircle2, LifeBuoy, ExternalLink } from 'lucide-react';
+import { X, CalendarClock, CheckCircle2, LifeBuoy, MapPin, Wrench, Phone, User } from 'lucide-react';
 import * as React from 'react';
 import type { PrefillResponse, SubmitPayload } from '@/lib/magic-link-types';
-// Pure presentational chip — no auth dependency, safe on the public page.
-import { StatusChip, type StatusChipTone } from '@/components/ui/StatusChip';
 // Searchable city/long-list select — shared, no auth dependency → safe public.
 import { SearchSelect } from '@/components/ui/search-select';
 // Shared masked from→to preview (also used by the CRM operator click-to-call).
@@ -109,13 +107,15 @@ type FormState = {
 type CustomProp = { name: string; mandatory: boolean; label: string | null; value: string | null };
 
 // The three canonical keys have dedicated form-state fields + tbl_job columns.
-const CANONICAL_PROP_KEYS = new Set(['branch_details', 'building_name', 'product_code']);
+// Feature toggle (2026-07-08): the per-client custom-property section ("Additional
+// Details" — Branch Details / Bill Number / Store Code, etc.) is HIDDEN on the
+// customer-facing job-completion form. These are internal client/ops fields the
+// customer can't meaningfully provide (and were showing the legacy "(NULL)"
+// default value). Flip to `true` to collect them here again — the
+// branchProp/buildingProp/… derivations + validation stay wired behind this flag.
+const COLLECT_CUSTOM_PROPS = false;
 
-// Feature toggle (2026-06-30): the customer-facing Services picker is HIDDEN on
-// the job-completion form for now. Any services pre-seeded from the booking
-// still submit unchanged (form.services is untouched) — the customer just can't
-// add/remove them here. Flip to `true` to restore the picker.
-const SHOW_SERVICES = false;
+const CANONICAL_PROP_KEYS = new Set(['branch_details', 'building_name', 'product_code']);
 
 // Operator-config rows in tbl_client_custom_properties are NOT customer-facing.
 // The BE already strips these from the prefill, but we filter defensively in
@@ -180,11 +180,13 @@ function canonicaliseCustomProps(
   return map;
 }
 
-type ImageRow = { image_id: number; key: string };
+type ImageRow = { image_id: number; key: string; url?: string | null };
 // `poster` is a client-generated thumbnail data URL (first frame), set only for
 // videos the customer just picked this session — prefilled videos (re-opened
 // link) have no local File so they fall back to the play-glyph tile.
-type VideoRow = { media_id: number; key: string; poster?: string | null };
+// `poster` = local frame grabbed from the just-picked File (instant preview);
+// `url` = server presigned playback source (works on reload too).
+type VideoRow = { media_id: number; key: string; poster?: string | null; url?: string | null };
 
 type GMaps = {
   Map: new (el: HTMLElement, opts: Record<string, unknown>) => unknown;
@@ -258,24 +260,6 @@ function deriveTimeSlot(datetimeLocal: string): string {
   return 'After Hours';
 }
 
-/*
- * Map the legacy numeric job-status code (order_status) to a StatusChip
- * tone. We key on the human label first (resilient to code drift between
- * deploys) and fall back to the numeric code, then to slate. Mapping per
- * the spec: Unconfirmed→amber, Booked/Scheduled→sky, Completed→emerald,
- * Cancelled→red, else slate.
- */
-function statusTone(label: string | undefined, code: number | null | undefined): StatusChipTone {
-  const l = (label || '').toLowerCase();
-  if (l.includes('cancel')) return 'red';
-  if (l.includes('complete')) return 'emerald';
-  if (l.includes('book') || l.includes('schedul')) return 'sky';
-  if (l.includes('unconfirm')) return 'amber';
-  // Numeric fallback for deploys that don't send a label: 9=Unconfirmed.
-  if (code === 9) return 'amber';
-  return 'slate';
-}
-
 /* Format the naive datetime-local value (YYYY-MM-DDTHH:mm) the Reschedule
  * picker emits into the "YYYY-MM-DD HH:mm" string the BE expects. Returns
  * undefined for an empty pick (preferred_datetime is optional). */
@@ -298,7 +282,10 @@ export default function JobCompletionMagicLinkPage() {
   // tells us which collection to update.
   const [videos, setVideos] = React.useState<VideoRow[]>([]);
   const [submitError, setSubmitError] = React.useState<string | null>(null);
-  const [missingFields, setMissingFields] = React.useState<string[]>([]);
+  // True after the first failed submit — drives inline red highlights that
+  // clear per-field as the customer fills each one (replaces the old
+  // persistent top-of-form "please fill…" banner).
+  const [submitAttempted, setSubmitAttempted] = React.useState(false);
   const [customProps, setCustomProps] = React.useState<Map<string, CustomProp>>(new Map());
 
   // ── Customer-facing order-page additions ────────────────────────────────
@@ -307,10 +294,10 @@ export default function JobCompletionMagicLinkPage() {
   // public bundle.
   const [toast, setToast] = React.useState<{ text: string; tone: 'ok' | 'err' } | null>(null);
   const toastTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  const showToast = React.useCallback((text: string, tone: 'ok' | 'err' = 'ok') => {
+  const showToast = React.useCallback((text: string, tone: 'ok' | 'err' = 'ok', ms = 5000) => {
     setToast({ text, tone });
     if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(null), 5000);
+    toastTimer.current = setTimeout(() => setToast(null), ms);
   }, []);
   React.useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
 
@@ -321,6 +308,9 @@ export default function JobCompletionMagicLinkPage() {
   // `spoc_confirm` is the "Need Help" → Call EasyFix SPOC confirmation step
   // (reuses OverlayShell; on confirm it runs handleSpocCall).
   const [dialog, setDialog] = React.useState<null | 'reschedule' | 'cancel' | 'spoc_confirm' | 'support_confirm'>(null);
+  // Inline reveal state for the "Pin Exact Location On Map" toggle in the
+  // Service Address card (mounts AddressMapWidget on demand).
+  const [mapOpen, setMapOpen] = React.useState(false);
   // Masked from→to the SPOC bridge would dial — shown in the "Need Help"
   // confirmation for customer visibility (mirrors the CRM operator click-to-
   // call confirm dialog). Fetched lazily when the dialog opens.
@@ -387,8 +377,8 @@ export default function JobCompletionMagicLinkPage() {
           services: seededServices,
         });
         setCustomProps(props);
-        setImages(data.images.map((i) => ({ image_id: i.image_id, key: i.key })));
-        setVideos((data.videos ?? []).map((v) => ({ media_id: v.media_id, key: v.key })));
+        setImages(data.images.map((i) => ({ image_id: i.image_id, key: i.key, url: i.url ?? null })));
+        setVideos((data.videos ?? []).map((v) => ({ media_id: v.media_id, key: v.key, url: v.url ?? null })));
         setState({ kind: 'ready', data });
       } catch (err) {
         if (cancelled) return;
@@ -496,76 +486,67 @@ export default function JobCompletionMagicLinkPage() {
   // case where they manage to submit anyway (e.g. older browser
   // ignoring `required`).
   const mandatoryCustomPropsComplete =
-    (!branchProp   || !branchProp.mandatory   || !!form.branch_details.trim()) &&
-    (!buildingProp || !buildingProp.mandatory || !!form.building_name.trim()) &&
-    (!productProp  || !productProp.mandatory  || !!form.product_code.trim()) &&
-    extraProps.every((p) => !p.mandatory || !!(form.customValues[p.name] || '').trim());
+    !COLLECT_CUSTOM_PROPS || (
+      (!branchProp   || !branchProp.mandatory   || !!form.branch_details.trim()) &&
+      (!buildingProp || !buildingProp.mandatory || !!form.building_name.trim()) &&
+      (!productProp  || !productProp.mandatory  || !!form.product_code.trim()) &&
+      extraProps.every((p) => !p.mandatory || !!(form.customValues[p.name] || '').trim()));
 
   const patch = (p: Partial<FormState>) => setForm((f) => (f ? { ...f, ...p } : f));
 
-  const toggleService = (id: number) => {
-    setForm((f) => {
-      if (!f) return f;
-      const next = new Map(f.services);
-      if (next.has(id)) next.delete(id); else next.set(id, 1);
-      return { ...f, services: next };
-    });
-  };
-  const setServiceQty = (id: number, qty: number) => {
-    setForm((f) => {
-      if (!f) return f;
-      const next = new Map(f.services);
-      if (next.has(id)) next.set(id, Math.max(1, Math.min(99, qty || 1)));
-      return { ...f, services: next };
-    });
-  };
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!form) return;
+    setSubmitAttempted(true);
     const missing: string[] = [];
-    if (!form.customer_name.trim()) missing.push('Customer Name');
-    if (!form.address.trim()) missing.push('Address');
-    if (!form.city_id) missing.push('City');
-    if (!/^\d{6}$/.test(form.pin_code)) missing.push('PIN Code (6 digits)');
+    if (!form.customer_name.trim()) missing.push('Name');
+    // address / city / PIN are booked & display-only here (customer can't edit
+    // them; the pin captures GPS only), so they no longer gate submission — the
+    // BE keeps the booked values. Only the customer's own fields are required.
     if (!form.time_slot) missing.push('Time Slot');
-    if (!form.requested_date_time) missing.push('Requested Date & Time');
+    if (!form.requested_date_time) missing.push('Appointment Time');
     // Mirror JobModal `section1Complete`: only enforce when the client has
     // the prop AND it's marked mandatory. Reuse the BE-provided label when
     // present so the missing-fields banner reads in the client's own
     // wording where they've customised it.
-    if (branchProp?.mandatory && !form.branch_details.trim()) {
-      missing.push(branchProp.label || 'Branch Details');
-    }
-    if (buildingProp?.mandatory && !form.building_name.trim()) {
-      missing.push(buildingProp.label || 'Property / Building Name');
-    }
-    if (productProp?.mandatory && !form.product_code.trim()) {
-      missing.push(productProp.label || 'Product Code');
-    }
-    // Generic (non-canonical) client custom fields — same mandatory rule.
-    for (const p of extraProps) {
-      if (p.mandatory && !(form.customValues[p.name] || '').trim()) {
-        missing.push(p.label || prettyPropName(p.name));
+    if (COLLECT_CUSTOM_PROPS) {
+      if (branchProp?.mandatory && !form.branch_details.trim()) {
+        missing.push(branchProp.label || 'Branch Details');
+      }
+      if (buildingProp?.mandatory && !form.building_name.trim()) {
+        missing.push(buildingProp.label || 'Property / Building Name');
+      }
+      if (productProp?.mandatory && !form.product_code.trim()) {
+        missing.push(productProp.label || 'Product Code');
+      }
+      // Generic (non-canonical) client custom fields — same mandatory rule.
+      for (const p of extraProps) {
+        if (p.mandatory && !(form.customValues[p.name] || '').trim()) {
+          missing.push(p.label || prettyPropName(p.name));
+        }
       }
     }
     if (missing.length) {
-      setMissingFields(missing);
+      // Ephemeral toast (3s) + inline red highlights (driven by submitAttempted)
+      // instead of a persistent top-of-form banner. The highlights clear
+      // reactively as each field is filled.
+      showToast(`Please Fill: ${missing.join(', ')}`, 'err', 3000);
       setSubmitError(null);
-      window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
-    setMissingFields([]);
     setSubmitError(null);
 
     const payload: SubmitPayload = {
       customer_name: form.customer_name.trim(),
       customer_email: form.customer_email.trim() || undefined,
-      address: form.address.trim(),
+      // Booked address fields — send when present, OMIT when empty so the BE's
+      // COALESCE keeps the booked value instead of nulling/blanking it.
+      address: form.address.trim() || undefined,
       building: form.building.trim() || undefined,
       landmark: form.landmark.trim() || undefined,
-      city_id: Number(form.city_id),
-      pin_code: form.pin_code,
+      city_id: form.city_id ? Number(form.city_id) : undefined,
+      pin_code: form.pin_code || undefined,
       time_slot: form.time_slot,
       // datetime-local emits naive `YYYY-MM-DDTHH:mm`. Joi.date().iso() on the
       // BE treats unannotated ISO as UTC, which would shift IST wall-clock by
@@ -586,21 +567,21 @@ export default function JobCompletionMagicLinkPage() {
       // sending `undefined` when absent keeps the BE's COALESCE-preserves
       // semantics intact (existing column value is not overwritten with
       // an empty string).
-      branch_details: branchProp && form.branch_details.trim()
+      branch_details: COLLECT_CUSTOM_PROPS && branchProp && form.branch_details.trim()
         ? form.branch_details.trim() : undefined,
-      building_name: buildingProp && form.building_name.trim()
+      building_name: COLLECT_CUSTOM_PROPS && buildingProp && form.building_name.trim()
         ? form.building_name.trim() : undefined,
-      product_code: productProp && form.product_code.trim()
+      product_code: COLLECT_CUSTOM_PROPS && productProp && form.product_code.trim()
         ? form.product_code.trim() : undefined,
       // Generic custom-property values — only the ones the customer filled.
-      custom_properties: (() => {
+      custom_properties: COLLECT_CUSTOM_PROPS ? (() => {
         const out: Record<string, string> = {};
         for (const p of extraProps) {
           const v = (form.customValues[p.name] || '').trim();
           if (v) out[p.name] = v;
         }
         return Object.keys(out).length ? out : undefined;
-      })(),
+      })() : undefined,
       services: Array.from(form.services.entries()).map(([id, qty]) => ({
         client_service_id: id, quantity: qty,
       })),
@@ -724,142 +705,111 @@ export default function JobCompletionMagicLinkPage() {
   }
 
   // Convenience reads of the expanded contract (all optional → safe reads).
-  const orderStatusLabel = data.order_status_label || 'Order';
-  const tone = statusTone(data.order_status_label, data.order_status);
   const jobId = data.job_id ?? data.jobId;
   const clientName = data.client_name || data.client.name;
   const spoc = data.spoc;
-  const mapsLink = data.maps_link || null;
   const cancelReasons = data.cancel_reasons ?? [];
   const rescheduleReasons = data.reschedule_reasons ?? [];
   const customerMob = data.customer_mob || data.customer.mobile;
 
-  return (
-    <div className="space-y-4">
-      {/* Order header: logo + status chip + Job ID + client name, plus the
-          relocated SPOC contact block on the right. The "Need Help?…" line is
-          the clickable affordance that opens the Call-EasyFix-SPOC
-          confirmation flow; the SPOC name + masked number sit beneath it. The
-          old standalone "Your EasyFix Point Of Contact" section was removed —
-          its identity + Need-Help wiring now live entirely in the header. */}
-      <OrderHeader
-        clientName={clientName}
-        jobId={jobId}
-        statusLabel={orderStatusLabel}
-        tone={tone}
-        spocName={spoc?.name || null}
-        spocMobileMasked={spoc?.mobile_masked || null}
-        onNeedHelp={() => setDialog('spoc_confirm')}
-        needHelpBusy={actionBusy === 'spoc'}
-      />
+  // ── Derived display values for the redesigned card layout ────────────────
+  const customerFirstName = (data.customer.name || '').trim().split(/\s+/)[0] || 'there';
+  // Best-effort single service label for the "Order for" subline + the
+  // "Service Requested" fallback text: the job's first selected service
+  // resolved against the client catalogue, else the first catalogue entry.
+  const primaryService =
+    data.services.find(
+      (s) => s.client_service_id === data.selectedServices?.[0]?.client_service_id,
+    ) || data.services[0];
+  const serviceName =
+    (primaryService?.service_name && primaryService.service_name.trim()) ||
+    (primaryService?.service_type_name && primaryService.service_type_name.trim()) ||
+    (primaryService?.service_catg_name && primaryService.service_catg_name.trim()) ||
+    'Service Visit';
+  // City NAME (not id) for the read-only assembled address line.
+  const cityName =
+    data.cityOptions.find((c) => String(c.value) === form.city_id)?.label || '';
+  // Read-only assembled address: Building/Floor, Complete Address, City,
+  // Landmark, Pincode — skipping empty parts, joined by ", ".
+  const assembledAddress = [form.building, form.address, cityName, form.landmark, form.pin_code]
+    .map((s) => (s || '').trim())
+    .filter(Boolean)
+    .join(', ');
+  // Appointment display (form.requested_date_time is naive "YYYY-MM-DDTHH:mm").
+  const apptDate = form.requested_date_time ? new Date(form.requested_date_time) : null;
+  const apptValid = !!apptDate && !Number.isNaN(apptDate.getTime());
+  const apptDateLabel = apptValid
+    ? apptDate!.toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short' })
+    : 'To Be Scheduled';
+  const apptTimeLabel = apptValid
+    ? apptDate!.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })
+    : '';
+  // Coordinator identity + avatar initials for the "Your Coordinator" card.
+  const coordinatorName = spoc?.name || data.job_owner?.name || 'EasyFix Coordinator';
+  const coordinatorInitials =
+    coordinatorName
+      .trim()
+      .split(/\s+/)
+      .slice(0, 2)
+      .map((w) => w[0]?.toUpperCase() || '')
+      .join('') || 'EF';
 
-      {/* Ephemeral toast for the click-to-call / request actions. */}
+  // Inline validation highlights — only after a failed submit, and each clears
+  // the moment its field becomes valid (reactive on form state).
+  const nameError = submitAttempted && !form.customer_name.trim();
+
+  // Human-friendly "lat, lng" for the captured-location confirmation chip —
+  // 5 decimals (~1 m) is plenty for a navigation hint. Falls back to the raw
+  // stored value if it isn't a parseable pair.
+  const gpsPretty = (() => {
+    if (!form.gps_location) return '';
+    const [la, ln] = form.gps_location.split(',');
+    const f = (v: string) => { const n = Number(v); return Number.isFinite(n) ? n.toFixed(5) : (v || '').trim(); };
+    return la && ln ? `${f(la)}, ${f(ln)}` : form.gps_location.trim();
+  })();
+
+  return (
+    <div className="mx-auto max-w-2xl space-y-4">
+      {/* Blue header band: client name (left) + "Fulfilled by EasyFix" pill
+          (right). The SPOC now lives in the "Your Coordinator" card below. */}
+      <OrderHeader clientName={clientName} />
+
+      {/* Floating toast — fixed above the sticky footer so it stays visible
+          wherever the customer has scrolled (validation + click-to-call). */}
       {toast && (
         <div
           role="status"
-          className={`rounded-md px-4 py-3 text-sm border ${
+          className={`fixed bottom-24 left-1/2 z-50 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 rounded-md border px-4 py-3 text-sm shadow-lg ${
             toast.tone === 'ok'
               ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-              : 'bg-amber-50 border-amber-200 text-amber-800'
+              : 'bg-red-50 border-red-200 text-red-700'
           }`}
         >
           {toast.text}
         </div>
       )}
 
-      {missingFields.length > 0 && (
-        <div className="bg-red-50 border border-red-200 text-red-700 rounded-md px-4 py-3 text-sm">
-          <div className="font-semibold mb-1">Please fill the following before submitting:</div>
-          <ul className="list-disc list-inside">
-            {missingFields.map((m) => <li key={m}>{m}</li>)}
-          </ul>
-        </div>
-      )}
       {submitError && (
         <div className="bg-red-50 border border-red-200 text-red-700 rounded-md px-4 py-3 text-sm">{submitError}</div>
       )}
 
-      {/* (The Reschedule / Cancel cluster that used to sit here near the top
-          order summary was MOVED to the bottom action row, alongside the
-          primary Confirm Order button — see the foot of the form.) */}
-
-      {/* Job owner (EasyFix coordinator) contact — shown unmasked so the
-          customer can call the person handling their order directly. */}
-      {data.job_owner?.mobile && (
-        <div className="bg-sky-50 border border-sky-200 text-sky-800 rounded-md px-4 py-3 text-sm">
-          Need Help With This Order? Call Your EasyFix Coordinator
-          {data.job_owner.name ? <> <span className="font-medium">{data.job_owner.name}</span></> : null}
-          {' '}at{' '}
-          <a href={`tel:${data.job_owner.mobile}`} className="font-semibold underline">{data.job_owner.mobile}</a>.
+      <form id="order-form" onSubmit={handleSubmit} className="space-y-4">
+        {/* Order context — ORDER FOR + client name are now merged into the blue
+            header above; here we keep the service · Job ID line and the
+            personalised greeting chip. */}
+        <div className="space-y-2 px-1">
+          <div className="text-sm text-slate-500">{serviceName} · Job ID #{jobId}</div>
+          <div className="rounded-md bg-sky-100 px-4 py-3 text-sm font-medium text-sky-900 ring-1 ring-inset ring-sky-200">
+            Hi {customerFirstName} — please confirm your service visit below.
+          </div>
         </div>
-      )}
 
-      <form id="order-form" onSubmit={handleSubmit} className="space-y-6">
-        {/* Short single-line fields: 1-col mobile → 2-col md → 3-col lg so the
-            wide desktop container fills cleanly; mobile stays single column. */}
-        <Section title="Customer Details" cols={3}>
-          {/* Mobile-keyboard hints (autoComplete + inputMode) on every
-              field with a clear semantic match — pops the right keyboard
-              and triggers browser autofill where the customer has saved
-              contact info. autoComplete="name" / "email" / "tel"
-              correspond to the WHATWG autofill tokens. */}
-          <Field label="Name" required>
-            <input type="text" required value={form.customer_name}
-              autoComplete="name"
-              onChange={(e) => patch({ customer_name: e.target.value })} className={inputClass} />
-          </Field>
-          <Field label="Customer Phone">
-            {/* Read-only — the customer's OWN number is the identity field on
-                the magic-link JWT and changing it would break the link's
-                binding to the job. Shown UNMASKED (it's their own number).
-                Promoted to text-base (16px) for legibility on small screens;
-                the slate-100 background distinguishes "not editable" from
-                the white-bg editable inputs above/below. */}
-            <div className="px-3 py-2 rounded-md bg-slate-100 text-slate-700 text-base font-mono">
-              {customerMob}
-            </div>
-          </Field>
-          <Field label="Email">
-            <input type="email" value={form.customer_email}
-              autoComplete="email" inputMode="email"
-              onChange={(e) => patch({ customer_email: e.target.value })} className={inputClass} placeholder="you@example.com" />
-          </Field>
-          <Field label="Alternate Contact Name">
-            <input type="text" value={form.additional_name}
-              autoComplete="name"
-              onChange={(e) => patch({ additional_name: e.target.value })} className={inputClass} placeholder="Optional" />
-          </Field>
-          <Field label="Alternate Contact Number">
-            <input type="tel" value={form.additional_number}
-              autoComplete="tel" inputMode="numeric"
-              onChange={(e) => patch({ additional_number: e.target.value.replace(/\D/g, '').slice(0, 10) })}
-              className={inputClass} pattern="[0-9]{10}" placeholder="10 digits" />
-          </Field>
-        </Section>
-
-        {/* The standalone "Your EasyFix Point Of Contact" section was REMOVED —
-            the SPOC identity + Need-Help/Call affordance now live in the page
-            header (see OrderHeader's right-aligned contact block). */}
-
-        {/* Address + map. The address + map are editable inline (autocomplete
-            + draggable marker), so no separate "Update Location" shortcut is
-            needed. Saving location is part of the Confirm/submit flow. */}
-        <Section title="Address">
-          {/* "Open In Google Maps" deep link — hidden when no GPS pin set,
-              and also suppressed when the global map-clickable flag is off. */}
-          {mapsLink && data.mapClickable !== false && (
-            <a
-              href={mapsLink}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 text-sm text-sky-600 hover:text-sky-700 hover:underline mb-1"
-            >
-              <ExternalLink className="h-4 w-4" />
-              Open In Google Maps
-            </a>
-          )}
-          <AddressMapWidget token={token} cityOptions={data.cityOptions} form={form} patch={patch} mapClickable={data.mapClickable !== false} />
-        </Section>
+        {/* CARD: Service requested (read-only — set at booking, not editable). */}
+        <InfoCard icon={<Wrench className="h-4 w-4" />} title="Service Requested">
+          <p className="text-sm leading-relaxed text-slate-600 whitespace-pre-wrap">
+            {(form.job_desc && form.job_desc.trim()) || serviceName}
+          </p>
+        </InfoCard>
 
         {/* Per-client custom-property inputs. Mirrors the CRM Book-New-Call
             flow (JobModal.tsx → Branch Details / Property or Building Name /
@@ -869,7 +819,7 @@ export default function JobCompletionMagicLinkPage() {
             gate above. Placed adjacent to Address since these fields are
             typically address-context (which branch / which property / which
             product line is the service for). */}
-        {(branchProp || buildingProp || productProp || extraProps.length > 0) && (
+        {COLLECT_CUSTOM_PROPS && (branchProp || buildingProp || productProp || extraProps.length > 0) && (
           <Section title="Additional Details" cols={3}>
             {branchProp && (
               <Field
@@ -939,267 +889,178 @@ export default function JobCompletionMagicLinkPage() {
           </Section>
         )}
 
-        {/* 2-col on md+: Requested Date & Time on the left, the auto-derived
-            Time Slot indicator on the right. Both stack to full width on
-            mobile. The customer picks date+time ONCE via the single
-            datetime-local control; the slot is computed from that pick. */}
-        <Section title="Appointment Date & Time" cols={2}>
-          <Field label="Requested Date & Time" required>
-            {/* Single datetime picker — the only control here. Picking a value
-                also AUTO-derives the Time Slot (deriveTimeSlot), so the slot
-                indicator on the right and the submitted time_slot always
-                follow the picked time. The old read-only echo line was
-                removed (the picker itself shows the value). */}
-            <input type="datetime-local" required value={form.requested_date_time}
-              min={toDatetimeLocal(new Date().toISOString())}
-              onChange={(e) => {
-                // Hard-block a past time today: native `min` only flags it invalid,
-                // so clamp anything earlier than now up to now.
-                const minStr = toDatetimeLocal(new Date().toISOString());
-                const v = e.target.value && e.target.value < minStr ? minStr : e.target.value;
-                patch({ requested_date_time: v, time_slot: deriveTimeSlot(v) });
-              }} className={inputClass} />
-          </Field>
-          <Field label="Time Slot" required>
-            {/* DISPLAY-ONLY slot indicators — the derived slot is highlighted;
-                the buttons are disabled (no onClick), so the customer cannot
-                pick a slot directly. The slot is set purely from the picked
-                date+time above. */}
-            <div className="flex flex-wrap gap-2">
-              {data.timeSlots.length === 0 ? (
-                <div className="text-xs text-slate-500">No time slots available. Please contact support.</div>
-              ) : data.timeSlots.map((slot) => (
-                <span key={slot} className={`px-3 py-2 rounded-md border text-sm select-none ${
-                  form.time_slot === slot
-                    ? 'bg-sky-600 text-white border-sky-600'
-                    : 'bg-slate-50 text-slate-400 border-slate-200'
-                }`}>
-                  {slot}
-                </span>
-              ))}
-            </div>
-            <p className="text-[10px] text-slate-500 mt-1">
-              Auto-Selected From The Date &amp; Time You Pick.
-            </p>
-          </Field>
-        </Section>
-
-        {/* Services picker HIDDEN for now (2026-06-30) — gated by SHOW_SERVICES. */}
-        {SHOW_SERVICES && (
-        <Section title="Services">
-          {/* Customer-facing service picker, rendered as a proper TABLE with
-              distinct columns (Action | Service Name | Category | Type | Qty)
-              rather than cards with the qty + Free/Paid tag inline after the
-              name. Form-state wiring is unchanged: `form.services` is a
-              Map<client_service_id, qty>; toggleService adds/removes,
-              setServiceQty updates. The submit-payload mapping is untouched —
-              only the LAYOUT changed.
-
-              Columns:
-                - Action: green "+" to add; once added, a rose "×" to remove.
-                - Service Name: service_name ?? service_type_name ?? "Service #<id>".
-                - Category: service_catg_name.
-                - Type: the Free/Paid value as a small chip (billing_label).
-                - Qty: numeric input ONLY when added (else "—"); min 1, max 100.
-
-              The table is wrapped in an overflow-x-auto container so it stays
-              usable on narrow phones (horizontal scroll fallback) while
-              reading as a clean compact table on wider screens. */}
-          {data.services.length === 0 ? (
-            <div className="text-xs text-slate-500">No Services Available For This Client.</div>
-          ) : (
-            <div className="-mx-1 overflow-x-auto">
-              <table className="w-full min-w-[34rem] text-sm">
-                <thead>
-                  <tr className="text-left text-xs font-medium text-slate-500 border-b border-slate-200">
-                    <th className="px-2 py-2 w-10"><span className="sr-only">Add or remove</span></th>
-                    <th className="px-2 py-2">Service Name</th>
-                    <th className="px-2 py-2">Category</th>
-                    <th className="px-2 py-2">Type</th>
-                    <th className="px-2 py-2 w-24">Qty</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.services.map((s) => {
-                    const selected = form.services.has(s.client_service_id);
-                    const qty = form.services.get(s.client_service_id) ?? 1;
-                    // Name resolution: prefer the rate-card label, fall back to
-                    // the service-type name, then never render blank.
-                    const primaryName =
-                      (s.service_name && s.service_name.trim()) ||
-                      (s.service_type_name && s.service_type_name.trim()) ||
-                      `Service #${s.client_service_id}`;
-                    return (
-                      <tr
-                        key={s.client_service_id}
-                        className={`border-b border-slate-100 transition-colors ${
-                          selected ? 'bg-sky-50/60' : 'hover:bg-slate-50'
-                        }`}
-                      >
-                        {/* Action column: green "+" → rose "×" once added. */}
-                        <td className="px-2 py-2 align-middle">
-                          {selected ? (
-                            <button
-                              type="button"
-                              onClick={() => toggleService(s.client_service_id)}
-                              aria-label={`Remove ${primaryName}`}
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-rose-600 hover:bg-rose-50 hover:text-rose-700 transition-colors"
-                            >
-                              <X className="h-5 w-5" />
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => toggleService(s.client_service_id)}
-                              aria-label={`Add ${primaryName}`}
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-emerald-300 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 transition-colors"
-                            >
-                              <Plus className="h-5 w-5" />
-                            </button>
-                          )}
-                        </td>
-                        {/* Service Name column. */}
-                        <td className="px-2 py-2 align-middle font-medium text-slate-800">
-                          {primaryName}
-                        </td>
-                        {/* Category column. */}
-                        <td className="px-2 py-2 align-middle text-slate-600">
-                          {s.service_catg_name || '—'}
-                        </td>
-                        {/* Type column — Free (emerald) / Paid (amber) chip. */}
-                        <td className="px-2 py-2 align-middle">
-                          {s.billing_label ? (
-                            <StatusChip tone={s.billing_label === 'Free' ? 'emerald' : 'amber'} size="sm">
-                              {s.billing_label}
-                            </StatusChip>
-                          ) : (
-                            <span className="text-slate-400">—</span>
-                          )}
-                        </td>
-                        {/* Qty column — numeric input only when added. */}
-                        <td className="px-2 py-2 align-middle">
-                          {selected ? (
-                            <input
-                              type="number"
-                              min={1}
-                              max={99}
-                              value={qty}
-                              inputMode="numeric"
-                              onChange={(e) => setServiceQty(s.client_service_id, Number(e.target.value))}
-                              className={`w-16 ${inputClass} text-center px-2`}
-                              aria-label={`Quantity for ${primaryName}`}
-                            />
-                          ) : (
-                            <span className="text-slate-400">—</span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+        {/* CARD: Service address — read-only assembled address + map pin + notes. */}
+        <InfoCard icon={<MapPin className="h-4 w-4" />} title="Service Address">
+          {/* Read-only assembled address (display-only; the customer edits the
+              underlying fields via the map reveal below, not here). */}
+          <div className="flex w-full rounded-md border border-slate-300 bg-slate-100 px-3 py-2 text-base text-slate-600">
+            {assembledAddress || '—'}
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setMapOpen((o) => !o)}
+              className="gap-2 border-sky-300 text-sky-700 hover:bg-sky-50 hover:text-sky-800"
+            >
+              <MapPin className="h-4 w-4" />
+              {mapOpen ? 'Hide Map' : 'Pin Exact Location On Map'}
+            </Button>
+            {form.gps_location && !mapOpen && (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200">
+                <MapPin className="h-3.5 w-3.5 shrink-0" />
+                Location Captured
+                {gpsPretty && <span className="font-mono text-emerald-600/90">· {gpsPretty}</span>}
+              </span>
+            )}
+          </div>
+          {/* Reveal the existing AddressMapWidget on demand (Google Places
+              search + draggable pin). It writes gps_location / address / city /
+              pin back into form state via patch() exactly as before. */}
+          {mapOpen && (
+            <div className="rounded-md border border-slate-200 bg-slate-50/60 p-3">
+              <AddressMapWidget
+                token={token}
+                cityOptions={data.cityOptions}
+                form={form}
+                patch={patch}
+                mapClickable={data.mapClickable !== false}
+                mapOnly
+              />
             </div>
           )}
-          {/* Intentionally NO prices — public flow per spec. */}
-        </Section>
-        )}
-
-        {/* Product Photos & Videos. The picker accepts BOTH images and short
-            videos via the same endpoint (BE branches by MIME). Two separate
-            caps — 5 photos + 2 videos — so a flood of one doesn't lock the
-            other; the picker shows both counts. The inline "+ Add" tile is
-            the only entry point. */}
-        <Section
-          title="Product Photos & Videos"
-          subtitle={`Up to 5 photos (${images.length}/5)${videos.length || true ? `, 2 videos (${videos.length}/2)` : ''}`}
-        >
-          <MediaUploader
-            token={token}
-            images={images}
-            setImages={setImages}
-            videos={videos}
-            setVideos={setVideos}
-          />
-        </Section>
-
-        <Section title="Product Details / Notes">
-          <Field label="Product Details / Description / Remarks">
-            {/* Job Description is READ-ONLY on the job-completion form (2026-06-30):
-                shown for context but the customer cannot edit it. The value still
-                submits unchanged (controlled from form.job_desc). */}
-            <textarea value={form.job_desc} readOnly aria-readonly="true"
-              rows={3} className={`${inputClass} resize-none bg-slate-50 text-slate-500 cursor-not-allowed`}
-              placeholder="—" />
+          <Field label="Address Instructions (Optional)">
+            <input
+              type="text"
+              value={form.address_instruction}
+              onChange={(e) => patch({ address_instruction: e.target.value })}
+              className={inputClass}
+              placeholder="Landmark, Gate Code, Floor…"
+            />
           </Field>
-        </Section>
+        </InfoCard>
 
-        {/* Bottom action row — the FOOT-of-form action cluster, restyled into
-            a clear THREE-TIER visual hierarchy (most → least prominent) so the
-            three actions read as distinct weights, no two alike:
-              - Confirm Order   → PRIMARY: solid emerald filled CTA (unchanged).
-              - Reschedule Order → SECONDARY: SOFT-FILLED amber (tinted bg, not
-                a plain white-outline) — a real but lower-weight action.
-              - Cancel Order     → TERTIARY / destructive-exit: a rose GHOST/
-                text button (no solid border) — the rarest, most destructive
-                action, so it invites the least and is visually unlike the
-                amber soft-fill.
-              Desktop (sm+): single right-aligned row, ordered Cancel ·
-                Reschedule · Confirm so the primary emerald button reads last
-                (rightmost / most prominent).
-              Mobile (default): stack full-width with Confirm on TOP (primary
-                first), then Reschedule, then Cancel — achieved via
-                flex-col-reverse over the DOM order (Cancel, Reschedule,
-                Confirm) so desktop keeps Confirm rightmost while mobile puts
-                Confirm topmost. All three keep min ~44px tap height on mobile
-                (py-2.5/py-3) so the ghost Cancel is still obviously tappable. */}
-        {/* All three now use the shared <Button> at size="lg" (same h-10
-            height + text-sm font + padding) so they're dimensionally
-            identical; only COLOUR differs (variant + className), giving a
-            clean three-tier read without size mismatch. DOM order is
-            Cancel · Reschedule · Confirm; flex-col-reverse puts Confirm on
-            TOP on mobile (full-width stack) while desktop keeps it rightmost. */}
-        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end sm:items-center">
-          {/* TERTIARY — rose outline on white (proper border + bg, not bare ghost). */}
-          <Button
-            type="button"
-            size="lg"
-            variant="outline"
-            onClick={() => setDialog('cancel')}
-            className="w-full sm:w-auto gap-2 border-rose-300 text-rose-700 hover:bg-rose-50 hover:text-rose-800"
-          >
-            <Ban className="h-4 w-4" />
-            Cancel Order
-          </Button>
-          {/* SECONDARY — amber outline-tint. */}
-          <Button
-            type="button"
-            size="lg"
-            variant="outline"
-            onClick={() => setDialog('reschedule')}
-            className="w-full sm:w-auto gap-2 border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 hover:text-amber-900"
-          >
-            <CalendarClock className="h-4 w-4" />
-            Reschedule Order
-          </Button>
-          {/* PRIMARY — solid emerald CTA (override the default blue). */}
-          <Button
-            type="submit"
-            size="lg"
-            disabled={isSubmitting || !mandatoryCustomPropsComplete}
-            className="w-full sm:w-auto gap-2 bg-emerald-600 hover:bg-emerald-700 text-white"
-          >
-            <CheckCircle2 className="h-5 w-5" />
-            {isSubmitting ? 'Confirming…' : 'Confirm Order'}
-          </Button>
-        </div>
+        {/* CARD: Appointment — display-only; changes go through Reschedule. */}
+        <InfoCard
+          icon={<CalendarClock className="h-4 w-4" />}
+          title="Appointment"
+        >
+          <div className="flex items-center justify-between gap-3">
+            {/* Mobile: date on top, time below (slot hidden — date + time is
+                enough on a small screen and avoids the 3-line wrap). Desktop
+                (sm+): date + time · slot inline, unchanged. */}
+            <div className="flex flex-col gap-0.5 sm:flex-row sm:flex-wrap sm:items-baseline sm:gap-x-3 sm:gap-y-1">
+              <span className="text-lg font-semibold text-slate-900">{apptDateLabel}</span>
+              <span className="text-sm text-slate-600">
+                {apptTimeLabel && <span className="font-mono">{apptTimeLabel}</span>}
+                <span className="hidden sm:inline">
+                  {apptTimeLabel && form.time_slot ? ' · ' : ''}
+                  {form.time_slot}
+                </span>
+              </span>
+            </div>
+            {/* Reschedule aligned to the right of the date/time row, vertically centered. */}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setDialog('reschedule')}
+              className="shrink-0 gap-1.5 border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 hover:text-amber-900"
+            >
+              <CalendarClock className="h-4 w-4" />
+              Reschedule
+            </Button>
+          </div>
+        </InfoCard>
 
-        {/* Contact Support — secondary, low-weight affordance. Bridges the
-            customer to the EasyFix Support line (distinct from the SPOC "Need
-            Help" in the header). Centred text button so it never competes with
-            the primary action cluster above. Hidden unless a Support line is
-            configured server-side (support_available) — no dead-end dialog. */}
+        {/* CARD: Your coordinator — single point of contact + click-to-call. */}
+        <InfoCard icon={<User className="h-4 w-4" />} title="Your Coordinator">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-sky-100 text-sm font-semibold text-sky-700">
+              {coordinatorInitials}
+            </div>
+            <div className="min-w-0 flex-1">
+              {/* Smaller than the card title (text-base) so the section header
+                  and the person's name read as a clear hierarchy, not twins. */}
+              <div className="truncate text-sm font-semibold text-slate-800">{coordinatorName}</div>
+            </div>
+            {/* Green Call button → existing bridged SPOC call flow (spoc_confirm).
+                Green = "go / place call", mirroring the Call EasyFix SPOC CTA. */}
+            <Button
+              type="button"
+              onClick={() => setDialog('spoc_confirm')}
+              disabled={actionBusy === 'spoc'}
+              className="shrink-0 gap-1.5 bg-emerald-600 text-white hover:bg-emerald-700"
+            >
+              <Phone className="h-4 w-4" />
+              {actionBusy === 'spoc' ? 'Connecting…' : 'Call'}
+            </Button>
+          </div>
+        </InfoCard>
+
+        {/* CARD: Your details — editable contact fields + reference media. */}
+        <InfoCard icon={<User className="h-4 w-4" />} title="Your Details" bodyClassName="space-y-4">
+          <div className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
+            <Field label="Name" required>
+              <input type="text" required value={form.customer_name}
+                autoComplete="name"
+                onChange={(e) => patch({ customer_name: e.target.value })}
+                className={nameError ? `${inputClass} !border-red-400 focus:!border-red-500` : inputClass} />
+            </Field>
+            <Field label="Mobile">
+              {/* Read-only — the customer's OWN number is the identity field on
+                  the magic-link JWT; changing it would break the link binding.
+                  Shown UNMASKED (it's their own number). */}
+              <div className="px-3 py-2 rounded-md bg-slate-100 text-slate-700 text-base font-mono">
+                {customerMob}
+              </div>
+            </Field>
+            <Field label="Alternate Contact Name">
+              <input type="text" value={form.additional_name}
+                autoComplete="name"
+                onChange={(e) => patch({ additional_name: e.target.value })} className={inputClass} placeholder="Optional" />
+            </Field>
+            <Field label="Alternate Mobile">
+              <input type="tel" value={form.additional_number}
+                autoComplete="tel" inputMode="numeric"
+                onChange={(e) => patch({ additional_number: e.target.value.replace(/\D/g, '').slice(0, 10) })}
+                className={inputClass} pattern="[0-9]{10}" placeholder="10 Digits" />
+            </Field>
+            <Field label="Email (For Invoice)">
+              <input type="email" value={form.customer_email}
+                autoComplete="email" inputMode="email"
+                onChange={(e) => patch({ customer_email: e.target.value })} className={inputClass} placeholder="you@example.com" />
+            </Field>
+          </div>
+
+          {/* Reference media — full-width block below the contact grid so the
+              dropzone has room to breathe (a cramped half-column read poorly).
+              Label + counter share one row; the tiles sit in a horizontal strip.
+              Naturally stacks under the fields on mobile. */}
+          <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50/60 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5">
+              <label className="text-xs font-medium text-slate-700">
+                Add Reference Photo Of Appliance / Issue
+              </label>
+              <span className="text-xs text-slate-500">
+                Up To 5 Photos ({images.length}/5) · 2 Videos ({videos.length}/2)
+              </span>
+            </div>
+            <div className="mt-2">
+              <MediaUploader
+                token={token}
+                images={images}
+                setImages={setImages}
+                videos={videos}
+                setVideos={setVideos}
+              />
+            </div>
+          </div>
+        </InfoCard>
+
+        {/* Contact Support — kept, gated by support_available (no dead-end). */}
         {data?.support_available && (
-          <div className="mt-4 flex justify-center">
+          <div className="flex justify-center">
             <button
               type="button"
               onClick={() => setDialog('support_confirm')}
@@ -1211,6 +1072,34 @@ export default function JobCompletionMagicLinkPage() {
             </button>
           </div>
         )}
+
+        {/* Sticky footer action bar. The outer wrapper is a bottom-anchored
+            gradient that fades to the page bg (slate-50), so cards dissolve
+            into it as they scroll underneath instead of colliding with the
+            hard edge of the button bar. The inner bar is solid white with a
+            soft upward shadow. Cancel = red, Confirm = blue. */}
+        <div className="sticky bottom-0 z-30 bg-gradient-to-t from-slate-50 from-60% via-slate-50/95 to-transparent pb-3 pt-8">
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-[0_-2px_16px_rgba(15,23,42,0.10)]">
+            <Button
+              type="button"
+              size="lg"
+              onClick={() => setDialog('cancel')}
+              className="gap-2 bg-rose-600 text-white hover:bg-rose-700"
+            >
+              <X className="h-5 w-5" />
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              size="lg"
+              disabled={isSubmitting || !mandatoryCustomPropsComplete}
+              className="gap-2 bg-sky-600 text-white hover:bg-sky-700"
+            >
+              <CheckCircle2 className="h-5 w-5" />
+              {isSubmitting ? 'Confirming…' : 'Confirm Details'}
+            </Button>
+          </div>
+        </div>
       </form>
 
       {/* ── Lightweight inline overlay dialogs (no CRM Dialog import) ────── */}
@@ -1302,7 +1191,7 @@ export default function JobCompletionMagicLinkPage() {
             {supportPreview !== 'unavailable' && (
               <Button type="button" size="lg" disabled={actionBusy === 'support' || supportPreview === 'loading'}
                 onClick={() => { setDialog(null); void handleSupportCall(); }}
-                className="w-full sm:w-auto bg-sky-600 hover:bg-sky-700 text-white">
+                className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white">
                 {actionBusy === 'support' ? 'Connecting…' : 'Call EasyFix Support'}
               </Button>
             )}
@@ -1326,83 +1215,66 @@ const inputClass =
   'flex w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-base focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500';
 
 /*
- * Order header band — dark-slate brand band carrying the EasyFix logo,
- * order status chip, Job ID and Client Name. The StatusChip tone is computed
- * by the caller from order_status_label / order_status.
- *
- * The logo replaces the old "EASYFIX" wordmark with the same `/logo-full.png`
- * asset the login screen uses (cyan-on-transparent), giving brand consistency.
- * The band is itself dark-slate so the logo doesn't need its own pill — it
- * reads directly on the band (login wraps it in a pill only because that card
- * is white).
- *
- * Right-aligned SPOC contact block: the "Need Help?…" line is the clickable
- * affordance that opens the Call-EasyFix-SPOC confirmation dialog; the SPOC
- * name + masked number sit muted/smaller beneath it. The WHOLE block is
- * hidden when no SPOC is mapped (spocName == null) so we never show a dangling
- * Need-Help line with no contact. On mobile the block stacks below the
- * logo/status (flex-col → sm:flex-row) and the text aligns left; on desktop it
- * right-aligns.
+ * Order header band — a blue brand band with the CLIENT name on the left and a
+ * "Fulfilled by EasyFix" pill on the right. The old logo, status chip and the
+ * in-header SPOC block were removed; the SPOC now lives in the "Your
+ * Coordinator" card in the form body.
  */
-function OrderHeader({
-  clientName, jobId, statusLabel, tone, spocName, spocMobileMasked, onNeedHelp, needHelpBusy,
+function OrderHeader({ clientName }: { clientName: string }) {
+  return (
+    // Same band treatment as every CRM modal header (see DialogHeader):
+    // slate-900 → 700 → 900 gradient + a 3px sky-500 inset underline.
+    <div className="rounded-lg bg-gradient-to-r from-slate-900 via-slate-700 to-slate-900 px-5 py-4 text-white shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]">
+      <div className="text-[11px] font-semibold uppercase tracking-wider text-white/70">Order For</div>
+      {/* Always side-by-side. On mobile the chip stacks its own two parts
+          ("Fulfilled by" over the logo) so it's narrow enough to leave the
+          client name real room (it was clipping to "For Testi…"); on sm+ it's
+          the inline "Fulfilled by [logo]" — web layout unchanged. */}
+      {/* items-end on mobile aligns the client name's baseline with the logo
+          (the chip's bottom element), so name ↔ logo read as one line with
+          "Fulfilled by" as a caption above. sm+ keeps the centered inline row. */}
+      <div className="mt-1 flex items-end justify-between gap-3 sm:items-center">
+        <div className="min-w-0 truncate text-2xl font-bold leading-tight">{clientName}</div>
+        {/* logo-full.png is light-on-transparent, so it reads directly on the
+            dark band (no backing pill needed). */}
+        <span className="flex shrink-0 flex-col items-end gap-0.5 text-xs font-medium text-white/80 sm:flex-row sm:items-center sm:gap-2">
+          <span>Fulfilled by</span>
+          <Image src="/logo-full.png" alt="EasyFix" width={139} height={34} className="h-5 w-auto" priority />
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/*
+ * Generic white card shell for the redesigned form — mirrors <Section>'s
+ * bg-white/rounded/border look but adds a small tinted leading icon and a
+ * free-form (non-grid) body. Used for the Service Requested / Address /
+ * Appointment / Coordinator / Your Details cards.
+ */
+function InfoCard({
+  icon, title, action, children, bodyClassName,
 }: {
-  clientName: string;
-  jobId: number | undefined;
-  statusLabel: string;
-  tone: StatusChipTone;
-  spocName: string | null;
-  spocMobileMasked: string | null;
-  onNeedHelp: () => void;
-  needHelpBusy: boolean;
+  icon?: React.ReactNode;
+  title: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+  bodyClassName?: string;
 }) {
   return (
-    <div className="bg-slate-900 text-white rounded-lg px-4 py-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-      <div className="flex items-center gap-3 min-w-0">
-        {/* Same logo asset as the login screen (next/image, unoptimized). */}
-        <Image
-          src="/logo-full.png" alt="EasyFix"
-          width={139} height={34} priority unoptimized
-          className="h-8 w-auto shrink-0"
-        />
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <StatusChip tone={tone}>{statusLabel}</StatusChip>
-            {jobId != null && (
-              <span className="text-xs text-slate-300">Order #{jobId}</span>
-            )}
-          </div>
-          <div className="font-semibold text-base mt-1 truncate">{clientName}</div>
+    <div className="bg-white rounded-lg border p-5 space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 min-w-0">
+          {icon && (
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-sky-50 text-sky-600">
+              {icon}
+            </span>
+          )}
+          <h2 className="text-base font-semibold text-slate-700 truncate">{title}</h2>
         </div>
+        {action && <div className="shrink-0">{action}</div>}
       </div>
-      {/* Right-aligned SPOC contact block — relocated from the old standalone
-          section. Hidden entirely when no SPOC is mapped. The "Need Help?…"
-          line opens the Call-EasyFix-SPOC confirmation dialog; the identity
-          line below shows name · masked number. */}
-      {/* Responsive guard: on mobile this block sits full-width below the
-          logo/status and aligns LEFT; on sm+ it shrinks and right-aligns.
-          The long "Need Help?" label wraps (items-start + text-left) instead
-          of overflowing the 360px band, and the SPOC identity line breaks
-          words so a long name/number can't push the layout sideways. */}
-      {spocName && (
-        <div className="w-full sm:w-auto shrink-0 text-left sm:text-right">
-          <button
-            type="button"
-            onClick={onNeedHelp}
-            disabled={needHelpBusy}
-            className="inline-flex items-start sm:items-center gap-1.5 text-sm font-medium text-sky-300 hover:text-sky-200 disabled:opacity-50 text-left"
-          >
-            <LifeBuoy className="h-4 w-4 shrink-0 mt-0.5 sm:mt-0" />
-            <span>{needHelpBusy ? 'Connecting…' : 'Need Help? Connect With Your EasyFix Point Of Contact'}</span>
-          </button>
-          <div className="text-xs text-slate-400 mt-0.5 break-words">
-            {spocName}
-            {spocMobileMasked && (
-              <span className="font-mono"> · {spocMobileMasked}</span>
-            )}
-          </div>
-        </div>
-      )}
+      <div className={bodyClassName ?? 'space-y-3'}>{children}</div>
     </div>
   );
 }
@@ -1637,13 +1509,18 @@ function FullPageMessage({
  *     page intentionally avoids `@/lib/api` and its hook layer).
  */
 function AddressMapWidget({
-  token, cityOptions, form, patch, mapClickable,
+  token, cityOptions, form, patch, mapClickable, mapOnly = false,
 }: {
   token: string;
   cityOptions: { value: number; label: string }[];
   form: FormState;
   patch: (p: Partial<FormState>) => void;
   mapClickable: boolean;
+  // When true, render ONLY a location-search box + the map. The building /
+  // landmark / city / PIN / GPS / instructions inputs are suppressed because
+  // the redesigned form already shows those as a disabled Service Address card
+  // (+ a separate Address Instructions field), so repeating them here is noise.
+  mapOnly?: boolean;
 }) {
   const mapRef = React.useRef<HTMLDivElement | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1653,6 +1530,12 @@ function AddressMapWidget({
   const [mapsError, setMapsError] = React.useState<string | null>(null);
   const [suggestions, setSuggestions] = React.useState<Array<{ place_id: string; description: string }>>([]);
   const [showSuggestions, setShowSuggestions] = React.useState(false);
+  // In mapOnly mode the search box drives a LOCAL query and NEVER writes back to
+  // form.address — the booked Service Address must stay exactly as-is; the pin
+  // only captures gps_location (for a future navigation flow). In the full form
+  // the box stays bound to form.address as before.
+  const [searchText, setSearchText] = React.useState('');
+  const searchQuery = mapOnly ? searchText : form.address;
 
   const cityByName = React.useMemo(() => {
     const m = new Map<string, number>();
@@ -1698,7 +1581,7 @@ function AddressMapWidget({
 
   // Debounced autocomplete — 1s after the last keystroke, fire if length ≥ 3.
   React.useEffect(() => {
-    const q = form.address.trim();
+    const q = searchQuery.trim();
     if (q.length < 3) { setSuggestions([]); return; }
     let cancelled = false;
     const handle = setTimeout(async () => {
@@ -1712,9 +1595,12 @@ function AddressMapWidget({
     }, 1000);
     return () => { cancelled = true; clearTimeout(handle); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.address]);
+  }, [searchQuery]);
 
   async function reverseGeocode(lat: number, lng: number) {
+    // mapOnly: capture GPS only — never overwrite the booked address/city/PIN
+    // (and skip the geocode network call, since we don't use its components).
+    if (mapOnly) { patch({ gps_location: `${lat.toFixed(6)},${lng.toFixed(6)}` }); return; }
     try {
       const r = await publicFetch<{
         formatted_address?: string;
@@ -1736,7 +1622,9 @@ function AddressMapWidget({
 
   async function pickSuggestion(place_id: string, description: string) {
     setShowSuggestions(false);
-    patch({ address: description });
+    // Reflect the pick in the search box. mapOnly uses a LOCAL field so the
+    // booked address is never mutated; the full form writes to form.address.
+    if (mapOnly) setSearchText(description); else patch({ address: description });
     try {
       const r = await publicFetch<{
         lat?: number; lng?: number;
@@ -1744,18 +1632,21 @@ function AddressMapWidget({
         address_components?: { postal_code?: string; city?: string };
       }>(`/public/maps/geocode?token=${encodeURIComponent(token)}&place_id=${encodeURIComponent(place_id)}`);
       const next: Partial<FormState> = {};
-      if (r.formatted_address) next.address = r.formatted_address;
       if (r.lat != null && r.lng != null) {
         next.gps_location = `${r.lat.toFixed(6)},${r.lng.toFixed(6)}`;
         if (markerInstance.current) markerInstance.current.setPosition({ lat: r.lat, lng: r.lng });
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         if (mapInstance.current) { (mapInstance.current as any).panTo({ lat: r.lat, lng: r.lng }); (mapInstance.current as any).setZoom(16); }
       }
-      const comps = r.address_components || {};
-      if (comps.postal_code) next.pin_code = comps.postal_code;
-      if (comps.city) {
-        const match = cityByName.get(comps.city.toLowerCase());
-        if (match) next.city_id = String(match);
+      // mapOnly: GPS coordinates only. Full form: also fill address/PIN/city.
+      if (!mapOnly) {
+        if (r.formatted_address) next.address = r.formatted_address;
+        const comps = r.address_components || {};
+        if (comps.postal_code) next.pin_code = comps.postal_code;
+        if (comps.city) {
+          const match = cityByName.get(comps.city.toLowerCase());
+          if (match) next.city_id = String(match);
+        }
       }
       patch(next);
     } catch { /* Silent — text already in field, customer can finish manually. */ }
@@ -1770,16 +1661,16 @@ function AddressMapWidget({
       {/* LEFT column — all the text inputs (address, building, landmark,
           city, PIN, GPS, instructions). */}
       <div className="md:col-span-5 space-y-3">
-      <Field label="Complete Address" required>
+      <Field label={mapOnly ? 'Search Your Location' : 'Complete Address'} required={!mapOnly}>
         <div className="relative">
           <textarea
-            value={form.address}
-            onChange={(e) => { patch({ address: e.target.value }); setShowSuggestions(true); }}
+            value={searchQuery}
+            onChange={(e) => { if (mapOnly) setSearchText(e.target.value); else patch({ address: e.target.value }); setShowSuggestions(true); }}
             onFocus={() => setShowSuggestions(true)}
             onBlur={() => { setTimeout(() => setShowSuggestions(false), 200); }}
-            rows={2} required
+            rows={2} required={!mapOnly}
             className={`${inputClass} resize-y`}
-            placeholder="Start typing — we'll suggest matches"
+            placeholder={mapOnly ? 'Search an address or landmark to drop the pin' : "Start typing — we'll suggest matches"}
           />
           {showSuggestions && suggestions.length > 0 && (
             <div className="absolute left-0 right-0 top-full mt-1 z-10 bg-white border rounded-md shadow-md max-h-64 overflow-y-auto">
@@ -1794,6 +1685,11 @@ function AddressMapWidget({
           )}
         </div>
       </Field>
+      {/* In mapOnly mode these inputs are suppressed — the redesigned form
+          shows Building / Address / City / Landmark / PIN as a disabled
+          Service Address card, and Address Instructions as its own field. */}
+      {!mapOnly && (
+        <>
       {/* grid-cols-1 on mobile (no horizontal cram of two placeholders
           at 320-400px widths), sm:grid-cols-2 at 640px+ where a phone
           in landscape or a tablet portrait has the room. */}
@@ -1839,6 +1735,8 @@ function AddressMapWidget({
           rows={2} className={`${inputClass} resize-y`}
           placeholder="Landing notes for the technician (optional)" />
       </Field>
+        </>
+      )}
       </div>
       {/* RIGHT column — the map canvas. Taller fixed height (h-72 → grows to
           fill on md+) so it renders usefully large beside the inputs. The
@@ -1862,7 +1760,9 @@ function AddressMapWidget({
         </div>
         {!mapsError && (
           <p className="text-[10px] text-slate-500 mt-1">
-            Drag the marker to drop a new pin. Address, PIN and City update automatically.
+            {mapOnly
+              ? 'Drag the marker or search to set your exact location. This saves GPS coordinates only — your address stays as booked.'
+              : 'Drag the marker to drop a new pin. Address, PIN and City update automatically.'}
           </p>
         )}
       </div>
@@ -1871,10 +1771,11 @@ function AddressMapWidget({
 }
 
 /*
- * 5-tile image grid with an "Add" tile when count < 5. We deliberately
- * don't try to thumbnail the S3 keys — the file-download endpoint is
- * auth-gated and would 401 in the customer's browser. The seq stamp +
- * "uploaded" badge is enough confirmation for the customer.
+ * Media grid with an "Add" tile until the per-kind caps are hit. The BE now
+ * hands us a short-TTL presigned GET (`url`) for each item on the public route,
+ * so tiles render the actual photo / a video poster and tap to enlarge/play in
+ * a lightbox. Items without a `url` (older uploads / transient presign miss)
+ * fall back to a text tile — never a broken image.
  */
 // Per-kind caps + size ceilings — keep in sync with the BE in
 // routes/public/job-completion.js (MAX_PHOTOS_PER_JOB / MAX_VIDEOS_PER_JOB /
@@ -1952,6 +1853,16 @@ function MediaUploader({
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   const [uploading, setUploading] = React.useState(false);
   const [uploadError, setUploadError] = React.useState<string | null>(null);
+  // Full-screen preview: tap a photo to enlarge, tap a video to play. src is a
+  // short-TTL presigned URL from the BE (image tiles) or the same for playback.
+  const [lightbox, setLightbox] = React.useState<{ type: 'image' | 'video'; src: string } | null>(null);
+
+  React.useEffect(() => {
+    if (!lightbox) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setLightbox(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [lightbox]);
 
   async function handleFile(file: File) {
     setUploadError(null);
@@ -1988,18 +1899,20 @@ function MediaUploader({
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok || !body?.data) throw new Error(body?.error || 'Upload failed');
-      const d = body.data as { kind?: 'image' | 'video'; image_id?: number; media_id?: number; key?: string; image?: string };
+      const d = body.data as { kind?: 'image' | 'video'; image_id?: number; media_id?: number; key?: string; image?: string; url?: string | null };
       // BE writes `key` for both kinds (and keeps the legacy `image` alias for
-      // older deploys). Newer responses also carry the `kind` discriminator.
+      // older deploys). Newer responses also carry the `kind` discriminator and
+      // a short-TTL presigned `url` we render as the thumbnail / lightbox source.
       const key = d.key || d.image || '';
+      const url = d.url ?? null;
       if (d.kind === 'video' && d.media_id) {
         // Generate the poster from the just-picked File (best-effort). We have
         // the local File here, so no extra network — the customer sees a real
         // frame immediately. Falls back to null → play-glyph tile.
         const poster = isVideo ? await extractVideoPoster(file) : null;
-        setVideos((prev) => [...prev, { media_id: d.media_id!, key, poster }]);
+        setVideos((prev) => [...prev, { media_id: d.media_id!, key, poster, url }]);
       } else if (d.image_id) {
-        setImages((prev) => [...prev, { image_id: d.image_id!, key }]);
+        setImages((prev) => [...prev, { image_id: d.image_id!, key, url }]);
       }
     } catch (e) {
       setUploadError(e instanceof Error ? e.message : 'Upload failed');
@@ -2046,37 +1959,57 @@ function MediaUploader({
   const fullyFull = photoFull && videoFull;
 
   return (
+    <>
     <div className="space-y-2">
       <div className="flex flex-wrap gap-2">
         {images.map((img, idx) => (
           <div key={`img-${img.image_id}`}
-            className="relative w-[72px] h-[72px] rounded-md border bg-slate-100 flex items-center justify-center">
-            <div className="text-center">
-              <div className="text-[10px] text-slate-500">Photo</div>
-              <div className="text-xs font-semibold text-slate-700">#{idx + 1}</div>
-              <div className="text-[9px] text-emerald-600 font-medium">uploaded</div>
-            </div>
+            className="relative w-[72px] h-[72px] rounded-md border bg-slate-100 overflow-hidden">
+            {img.url ? (
+              // Real thumbnail — tap to enlarge in the lightbox.
+              <button type="button" onClick={() => setLightbox({ type: 'image', src: img.url! })}
+                className="absolute inset-0 h-full w-full" aria-label={`View photo ${idx + 1}`}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={img.url} alt={`Photo ${idx + 1}`} className="h-full w-full object-cover" />
+              </button>
+            ) : (
+              // Presign missing (older upload / transient S3 issue) → text tile.
+              <div className="absolute inset-0 flex items-center justify-center text-center">
+                <div>
+                  <div className="text-[10px] text-slate-500">Photo</div>
+                  <div className="text-xs font-semibold text-slate-700">#{idx + 1}</div>
+                  <div className="text-[9px] text-emerald-600 font-medium">uploaded</div>
+                </div>
+              </div>
+            )}
             <button type="button" onClick={() => handleDeleteImage(img.image_id)}
-              className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-red-500 text-white rounded-full text-xs font-bold leading-none flex items-center justify-center hover:bg-red-600"
+              className="absolute z-10 -top-1.5 -right-1.5 w-5 h-5 bg-red-500 text-white rounded-full text-xs font-bold leading-none flex items-center justify-center hover:bg-red-600"
               aria-label="Remove photo">×</button>
           </div>
         ))}
         {videos.map((vid, idx) => (
           <div key={`vid-${vid.media_id}`}
-            className="relative w-[72px] h-[72px] rounded-md border bg-slate-800 text-white overflow-hidden flex items-center justify-center">
-            {/* Poster-frame thumbnail when we have one (just-picked video);
-                otherwise the dark tile + play-glyph. The play-glyph always
-                overlays so the tile reads as "video" even over a poster. */}
-            {vid.poster && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={vid.poster} alt={`Video ${idx + 1} preview`} className="absolute inset-0 w-full h-full object-cover" />
-            )}
-            <span className="relative z-10 inline-flex items-center justify-center w-7 h-7 rounded-full bg-black/45">
-              <svg viewBox="0 0 24 24" className="w-4 h-4 opacity-95" fill="currentColor" aria-hidden>
-                <path d="M8 5v14l11-7z" />
-              </svg>
-            </span>
-            <div className="absolute z-10 bottom-0 inset-x-0 text-[9px] text-center bg-black/60 py-0.5">
+            className="relative w-[72px] h-[72px] rounded-md border bg-slate-800 text-white overflow-hidden">
+            {/* The whole tile is a play button when we have a playback URL:
+                poster-frame thumbnail (just-picked video) + play-glyph overlay.
+                Tap → lightbox <video>. Falls back to a non-clickable dark tile
+                with the glyph when neither poster nor url is available yet. */}
+            <button type="button"
+              onClick={() => { if (vid.url) setLightbox({ type: 'video', src: vid.url }); }}
+              disabled={!vid.url}
+              className="absolute inset-0 flex h-full w-full items-center justify-center disabled:cursor-default"
+              aria-label={`Play video ${idx + 1}`}>
+              {vid.poster && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={vid.poster} alt={`Video ${idx + 1} preview`} className="absolute inset-0 h-full w-full object-cover" />
+              )}
+              <span className="relative z-10 inline-flex h-7 w-7 items-center justify-center rounded-full bg-black/45">
+                <svg viewBox="0 0 24 24" className="h-4 w-4 opacity-95" fill="currentColor" aria-hidden>
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+              </span>
+            </button>
+            <div className="pointer-events-none absolute z-10 bottom-0 inset-x-0 text-[9px] text-center bg-black/60 py-0.5">
               Video #{idx + 1}
             </div>
             <button type="button" onClick={() => handleDeleteVideo(vid.media_id)}
@@ -2101,5 +2034,30 @@ function MediaUploader({
       )}
       {uploadError && <p className="text-xs text-red-600">{uploadError}</p>}
     </div>
+
+    {/* Full-screen preview overlay — tap backdrop / Esc / ✕ to dismiss.
+        Inner wrapper stops propagation so taps on the media don't close it. */}
+    {lightbox && (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+        role="dialog" aria-modal="true"
+        onClick={() => setLightbox(null)}
+      >
+        <button type="button" onClick={() => setLightbox(null)}
+          className="absolute top-4 right-4 text-white/80 hover:text-white" aria-label="Close preview">
+          <X className="h-7 w-7" />
+        </button>
+        <div className="max-h-[85vh] max-w-3xl" onClick={(e) => e.stopPropagation()}>
+          {lightbox.type === 'image' ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={lightbox.src} alt="Preview" className="max-h-[85vh] max-w-full rounded-lg object-contain" />
+          ) : (
+            <video src={lightbox.src} controls autoPlay playsInline
+              className="max-h-[85vh] max-w-full rounded-lg" />
+          )}
+        </div>
+      </div>
+    )}
+    </>
   );
 }
