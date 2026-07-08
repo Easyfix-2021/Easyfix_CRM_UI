@@ -79,7 +79,18 @@ function RecordingCell({ row }: { row: CallRow }) {
   // (recorded + connected) — the endpoint 404s cleanly when there's none.
   const isPlivo = String(row.provider ?? '').toLowerCase() === 'plivo';
   const canPlay = !!row.recording || (isPlivo && (row.duration ?? 0) > 0);
-  if (!canPlay) return <span className="text-muted-foreground">—</span>;
+  if (!canPlay) {
+    // A Plivo call with no duration never connected → there is no recording to
+    // fetch. Label it so operators don't expect a Play button that can't appear.
+    if (isPlivo && (row.duration ?? 0) <= 0) {
+      return (
+        <span className="text-xs italic text-muted-foreground" title="Call wasn't answered — nothing was recorded">
+          Not answered
+        </span>
+      );
+    }
+    return <span className="text-muted-foreground">—</span>;
+  }
 
   if (url) {
     // eslint-disable-next-line jsx-a11y/media-has-caption
