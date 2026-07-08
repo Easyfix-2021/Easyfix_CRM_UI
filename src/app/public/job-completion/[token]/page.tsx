@@ -758,16 +758,6 @@ export default function JobCompletionMagicLinkPage() {
   // the moment its field becomes valid (reactive on form state).
   const nameError = submitAttempted && !form.customer_name.trim();
 
-  // Human-friendly "lat, lng" for the captured-location confirmation chip —
-  // 5 decimals (~1 m) is plenty for a navigation hint. Falls back to the raw
-  // stored value if it isn't a parseable pair.
-  const gpsPretty = (() => {
-    if (!form.gps_location) return '';
-    const [la, ln] = form.gps_location.split(',');
-    const f = (v: string) => { const n = Number(v); return Number.isFinite(n) ? n.toFixed(5) : (v || '').trim(); };
-    return la && ln ? `${f(la)}, ${f(ln)}` : form.gps_location.trim();
-  })();
-
   return (
     <div className="mx-auto max-w-2xl space-y-4">
       {/* Blue header band: client name (left) + "Fulfilled by EasyFix" pill
@@ -910,7 +900,6 @@ export default function JobCompletionMagicLinkPage() {
               <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200">
                 <MapPin className="h-3.5 w-3.5 shrink-0" />
                 Location Captured
-                {gpsPretty && <span className="font-mono text-emerald-600/90">· {gpsPretty}</span>}
               </span>
             )}
           </div>
