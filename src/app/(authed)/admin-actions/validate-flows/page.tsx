@@ -21,6 +21,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { SearchSelect } from '@/components/ui/search-select';
 import { api, ApiError } from '@/lib/api';
 import { useMe } from '@/lib/auth-context';
 import { useFetchOnce } from '@/lib/hooks';
@@ -552,16 +553,14 @@ function AiCallingModal({ open, onClose }: { open: boolean; onClose: () => void 
 
           <div className="space-y-1">
             <Label>Flow</Label>
-            <select
+            <SearchSelect
               value={flow}
-              onChange={(e) => setFlow(e.target.value)}
+              onChange={(v) => setFlow(v || 'profile_update')}
+              options={flows.map((f) => ({ value: f.id, label: f.label }))}
               disabled={busy || polling}
-              className="w-full h-9 rounded-md border bg-background px-2 text-sm disabled:opacity-60"
-            >
-              {flows.map((f) => (
-                <option key={f.id} value={f.id}>{f.label}</option>
-              ))}
-            </select>
+              required
+              placeholder="Select a flow…"
+            />
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
