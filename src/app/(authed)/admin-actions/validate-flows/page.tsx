@@ -450,6 +450,25 @@ function AiCallingModal({ open, onClose }: { open: boolean; onClose: () => void 
     : [{ id: 'gemini', label: 'Gemini (3.1 Flash Live)' }, { id: 'openai', label: 'OpenAI (Realtime)' }];
   const [engine, setEngine] = useState('gemini');
   useEffect(() => { if (enginesFetch.data?.default) setEngine(enginesFetch.data.default); }, [enginesFetch.data?.default]);
+  // Voice — engine-specific list + per-call pick + a settable global default.
+  const voicesFetch = useFetchOnce<{ engines: Record<string, { voices: string[]; default: string }> }>('/admin/validate/ai-calling/voices');
+  const VOICE_FALLBACK: Record<string, string[]> = {
+    gemini: ['Kore', 'Leda', 'Zephyr', 'Orus', 'Autonoe', 'Raselgethi', 'Garcux', 'Achird', 'Sadaltager'],
+    openai: ['alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', 'verse'],
+  };
+  const codeDefaultVoice = (eng: string) => (eng === 'openai' ? 'alloy' : 'Autonoe');
+  const voices = voicesFetch.data?.engines?.[engine]?.voices?.length
+    ? voicesFetch.data.engines[engine].voices
+    : (VOICE_FALLBACK[engine] || VOICE_FALLBACK.gemini);
+  const [voice, setVoice] = useState('Autonoe');
+  // On engine change (or once voices load), reset to that engine's default — a
+  // Gemini voice like Autonoe isn't valid for OpenAI and vice-versa.
+  useEffect(() => {
+    setVoice(voicesFetch.data?.engines?.[engine]?.default || codeDefaultVoice(engine));
+  }, [engine, voicesFetch.data]);
+  const [voiceSaving, setVoiceSaving] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
+  const [voiceMsg, setVoiceMsg] = useState<string | null>(null);
   const [efrId, setEfrId] = useState('');
   const [mobile, setMobile] = useState('');
   const [busy, setBusy] = useState(false);       // placing the call
@@ -513,7 +532,7 @@ function AiCallingModal({ open, onClose }: { open: boolean; onClose: () => void 
     const m = mobile.trim();
     if (m && !/^\d{10}$/.test(m)) { setError('Mobile must be a 10-digit number.'); return; }
     if (!m && !efrId.trim()) { setError('Provide a Mobile number or an Easyfixer Id to call.'); return; }
-    const body: Record<string, unknown> = { flow, engine };
+    const body: Record<string, unknown> = { flow, engine, voice };
     if (efrId.trim()) body.efrId = Number(efrId.trim());
     if (m) body.mobile = m;
 
@@ -541,6 +560,41 @@ function AiCallingModal({ open, onClose }: { open: boolean; onClose: () => void 
 
   function handleOpenChange(next: boolean) {
     if (!next) { onClose(); reset(); }
+  }
+
+  // Persist the selected voice as the global default (for this engine) for all calls.
+  async function setDefaultVoice() {
+    setVoiceSaving(true); setVoiceMsg(null);
+    try {
+      await api.post('/admin/validate/ai-calling/voice-default', { engine, voice });
+      setVoiceMsg(`Default ${engine} voice set to ${voice} for all automated calls.`);
+    } catch (e) {
+      setVoiceMsg(e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'Could not set default voice.');
+    } finally {
+      setVoiceSaving(false);
+    }
+  }
+
+  // Synthesize + play a short sample of the selected voice (authed fetch → Blob → play).
+  async function previewVoice() {
+    setPreviewing(true); setVoiceMsg(null);
+    try {
+      const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5100/api';
+      const token = typeof window !== 'undefined' ? localStorage.getItem('crm_auth_token') : null;
+      const res = await fetch(`${base}/admin/validate/ai-calling/voice-sample?engine=${encodeURIComponent(engine)}&voice=${encodeURIComponent(voice)}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        credentials: 'include',
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      const objUrl = URL.createObjectURL(await res.blob());
+      const audio = new Audio(objUrl);
+      audio.onended = () => URL.revokeObjectURL(objUrl);
+      await audio.play();
+    } catch {
+      setVoiceMsg('Could not play a sample — check the TTS key for this engine.');
+    } finally {
+      setPreviewing(false);
+    }
   }
 
   const result = session?.result ?? null;
@@ -585,14 +639,48 @@ function AiCallingModal({ open, onClose }: { open: boolean; onClose: () => void 
             </div>
           </div>
 
+          <div className="space-y-1">
+            <Label>Voice</Label>
+            <div className="flex items-center gap-2">
+              <div className="flex-1">
+                <SearchSelect
+                  value={voice}
+                  onChange={(v) => setVoice(v || codeDefaultVoice(engine))}
+                  options={voices.map((v) => ({ value: v, label: v }))}
+                  disabled={busy || polling}
+                  required
+                  placeholder="Select a voice…"
+                />
+              </div>
+              <Button variant="outline" size="sm" onClick={previewVoice} disabled={previewing || busy}>
+                {previewing ? 'Playing…' : '▶ Preview'}
+              </Button>
+              <Button variant="outline" size="sm" onClick={setDefaultVoice} disabled={voiceSaving || busy}>
+                {voiceSaving ? 'Saving…' : 'Set Default'}
+              </Button>
+            </div>
+            {voiceMsg && <div className="text-xs text-emerald-700">{voiceMsg}</div>}
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1">
               <Label>Mobile</Label>
-              <Input inputMode="numeric" value={mobile} onChange={(e) => setMobile(e.target.value)} placeholder="10-digit mobile to call" />
+              <Input
+                inputMode="numeric"
+                maxLength={10}
+                value={mobile}
+                onChange={(e) => setMobile(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                placeholder="10-digit mobile to call"
+              />
             </div>
             <div className="space-y-1">
               <Label>Easyfixer Id <span className="text-muted-foreground">(optional)</span></Label>
-              <Input inputMode="numeric" value={efrId} onChange={(e) => setEfrId(e.target.value)} placeholder="for language greeting" />
+              <Input
+                inputMode="numeric"
+                value={efrId}
+                onChange={(e) => setEfrId(e.target.value.replace(/\D/g, ''))}
+                placeholder="for language greeting"
+              />
             </div>
           </div>
 
