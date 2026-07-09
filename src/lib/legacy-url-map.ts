@@ -195,12 +195,17 @@ export const URL_MAP: Record<string, string> = {
   // Lands on the same NDM tab but with the pending-approval filter
   // pre-selected (flag=4 mirrors legacy submitToFinanceList(0)).
   'updateRecharge':         '/finance?tab=ndm-collection&flag=4',
-  // EFR ledger filtered by transaction_type. Legacy convention:
-  //   transaction_type=1 → Credit (incoming, e.g. recharge)
-  //   transaction_type=2 → Debit  (outgoing, e.g. job payout)
-  'easyfixerDebit':         '/finance?tab=efr-ledger&type=2',
-  'easyfixerCredit':        '/finance?tab=efr-ledger&type=1',
+  // EFR ledger filtered by transaction_type. Convention (EasyFix_CRM Finance.java
+  // + legacy API DAO + mobile app, all agree): transaction_type=1 → Debit
+  // (outgoing, e.g. payout/withdrawal), transaction_type=2 → Credit (incoming,
+  // e.g. recharge/earnings). (Fixed 2026-07-09: was inverted here.)
+  'easyfixerDebit':         '/finance?tab=efr-ledger&type=1',
+  'easyfixerCredit':        '/finance?tab=efr-ledger&type=2',
   'easyfixerAdvance':       '/finance/advances',
+  // Payout Requests — finance processor for technician wallet withdrawals.
+  // Seeded as a child of the Finance menu (url='payoutRequests') in
+  // EasyFix_Backend/migrations/2026-07-09-seed-payout-requests-rbac.sql.
+  'payoutRequests':         '/finance/payout-requests',
   // My Orders sub-menus (legacy CRM): each tbl_menu row's `url` is the full
   // `dashboardChecking?enumDesc=<value>` string, so these keys match verbatim.
   // Targets point at the distinct /my-orders route — that page scopes the

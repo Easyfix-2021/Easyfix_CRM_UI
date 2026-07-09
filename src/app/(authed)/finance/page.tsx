@@ -408,7 +408,7 @@ function TransactionsTab({ clientId }: { clientId: string }) {
 /*
  * CreateTransactionDialog — minimal form mapped to POST /admin/finance/transactions.
  * Joi schema requires { clientId, transactionType, amount }; description + jobId
- * optional. transactionType is a legacy code (1=Credit, 2=Debit, etc.); we expose
+ * optional. transactionType is a legacy code (1=Debit, 2=Credit, etc.); we expose
  * the most common 2 codes + leave others passable via the raw number input.
  */
 function CreateTransactionDialog({ open, defaultClientId, onClose, onSaved }: {
@@ -452,8 +452,8 @@ function CreateTransactionDialog({ open, defaultClientId, onClose, onSaved }: {
           <div><Label>Job ID</Label><Input value={jobId} onChange={(e) => setJobId(e.target.value.replace(/\D/g, ''))} className="font-mono" placeholder="optional" /></div>
           <div><Label>Type</Label>
             <select value={transactionType} onChange={(e) => setTransactionType(e.target.value)} className="border rounded h-9 px-2 text-sm bg-background w-full">
-              <option value="1">1 — Credit</option>
-              <option value="2">2 — Debit</option>
+              <option value="1">1 — Debit</option>
+              <option value="2">2 — Credit</option>
               <option value="3">3 — Adjustment</option>
             </select>
           </div>
@@ -968,7 +968,7 @@ function EfrLedgerTab() {
     <div className="space-y-2 mt-2">
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-xs text-muted-foreground">Type:</span>
-        {[['', 'All'], ['1', 'Credit'], ['2', 'Debit']].map(([v, label]) => (
+        {[['', 'All'], ['1', 'Debit'], ['2', 'Credit']].map(([v, label]) => (
           <button key={v}
             onClick={() => setType(v)}
             className={`px-2 py-0.5 rounded text-xs ${type === v ? 'bg-primary text-white' : 'bg-slate-200 text-slate-700'}`}>
@@ -1003,9 +1003,9 @@ function EfrLedgerTab() {
                   <td className="text-xs">{t.efr_name || '—'}<br/><span className="text-muted-foreground font-mono">#{t.easyfixer_id} · {t.efr_no || ''}</span></td>
                   <td className="!text-center text-xs">
                     {t.transaction_type === 1
-                      ? <span className="badge bg-emerald-50 text-emerald-700">Credit</span>
+                      ? <span className="badge bg-rose-50 text-rose-700">Debit</span>
                       : t.transaction_type === 2
-                        ? <span className="badge bg-rose-50 text-rose-700">Debit</span>
+                        ? <span className="badge bg-emerald-50 text-emerald-700">Credit</span>
                         : t.transaction_type}
                   </td>
                   <td className="!text-right font-mono">{t.amount != null ? Number(t.amount).toFixed(2) : '—'}</td>
