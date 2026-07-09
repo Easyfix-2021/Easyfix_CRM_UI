@@ -110,17 +110,44 @@ export function DateTimeSlotPicker({
   required?: boolean;
   className?: string;
 }) {
-  const [date, time] = value ? value.split('T') : ['', ''];
+  // Internal date/time state, DECOUPLED from the parent value. The parent only
+  // ever receives a COMBINED value (or '' when incomplete) so its required-gate
+  // fires — but the inputs must show a picked date BEFORE a time is chosen. If
+  // the date input were bound straight to the (gated) parent value, picking a
+  // date would emit '' and React would snap the controlled input back to empty
+  // (the reschedule "can't pick a date" deadlock). Local state holds the date
+  // so the time picker unlocks.
+  const [date, setDate] = React.useState<string>(value ? value.split('T')[0] : '');
+  const [time, setTime] = React.useState<string>(value ? (value.split('T')[1] || '') : '');
+  // Remember the value WE last emitted so the sync-effect doesn't clobber local
+  // state when the parent echoes back our own push('') (picking a date before a
+  // time makes the parent value '', but we must keep the visible date).
+  const lastPushed = React.useRef<string>(value);
+  React.useEffect(() => {
+    if (value === lastPushed.current) return; // our own echo — keep local state
+    setDate(value ? value.split('T')[0] : '');
+    setTime(value ? (value.split('T')[1] || '') : '');
+    lastPushed.current = value;
+  }, [value]);
+
   const minDate = min ? min.split('T')[0] : undefined;
   // Only gate the time list when the picked date IS the min date (today).
   const minTime = (min && date && date === minDate) ? min.split('T')[1] : undefined;
 
-  // Emit the combined local string only when BOTH parts are present; otherwise
-  // '' so callers' required-gates fire and no half-formed value is submitted.
-  const emit = (d: string, t: string) => onChange(d && t ? `${d}T${t}` : '');
+  // Push to the parent only when BOTH parts are present; otherwise '' so the
+  // caller's required-gate fires and no half-formed value is submitted.
+  const push = (d: string, t: string) => {
+    const v = d && t ? `${d}T${t}` : '';
+    lastPushed.current = v;
+    onChange(v);
+  };
 
   return (
-    <div className={cn('grid grid-cols-2 gap-2', className)}>
+    // Stack full-width on narrow screens (customer mobile magic-link page) and
+    // sit side-by-side from `sm` up (desktop CRM Dialog). A half-width native
+    // date input on mobile is too cramped to tap/read, which is why the
+    // customer couldn't pick a date.
+    <div className={cn('grid grid-cols-1 sm:grid-cols-2 gap-2', className)}>
       <Input
         type="date"
         min={minDate}
@@ -133,7 +160,9 @@ export function DateTimeSlotPicker({
           // operator re-picks a valid slot rather than submitting a past time.
           const newMinTime = (min && d === minDate) ? min!.split('T')[1] : undefined;
           const keptTime = (newMinTime && time && time < newMinTime) ? '' : time;
-          emit(d, keptTime);
+          setDate(d);
+          setTime(keptTime);
+          push(d, keptTime);
         }}
       />
       <TimeSelect
@@ -142,7 +171,7 @@ export function DateTimeSlotPicker({
         disabled={disabled || !date}
         required={required}
         placeholder={date ? '— Pick Time —' : 'Pick A Date First'}
-        onChange={(t) => emit(date, t)}
+        onChange={(t) => { setTime(t); push(date, t); }}
       />
     </div>
   );

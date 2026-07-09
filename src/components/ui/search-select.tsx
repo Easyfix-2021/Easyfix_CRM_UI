@@ -145,13 +145,16 @@ export function SearchSelect({
   }, [open]);
 
   /*
-   * Focus the filter input on open. Plain `.focus()` works now that
-   * our `Dialog` primitive defaults to `modal={false}` — see
-   * dialog.tsx for the trade-off explanation.
+   * Focus the filter input on open — with `preventScroll`. The input is
+   * portaled to the END of <body>, so a plain `.focus()` makes mobile browsers
+   * scroll the whole page to "bring it into view" (reported on the public
+   * magic-link bottom-sheet: opening the time dropdown scrolled the background
+   * page to the bottom). The popover is position:fixed and already visible, so
+   * the scroll is a pure side-effect we suppress.
    */
   useEffect(() => {
     if (!open) return;
-    inputRef.current?.focus();
+    inputRef.current?.focus({ preventScroll: true });
   }, [open]);
   useEffect(() => { if (!open) setQuery(''); }, [open]);
   useEffect(() => { setActiveIdx(0); }, [query, open]);
