@@ -8,9 +8,9 @@
  *     for the list export.
  *   - TablePagination is the canonical footer — server-side paginated
  *     via `?limit=&offset=`.
- *   - SortHeader + cycleSort drive the 3-click sort cycle (refetches
- *     are NOT triggered; sort is applied client-side over the loaded
- *     page since the BE returns up to one page worth).
+ *   - SortHeader + cycleSort drive the 3-click sort cycle; sortBy/sortDir
+ *     are sent to the BE so it ORDER-BYs the COMPLETE list (not just the
+ *     loaded page). A header click resets to page 0 and refetches.
  *
  * Columns (matches legacy `filteredClientList.vm` ordering with light
  * relabeling for clarity):
@@ -73,14 +73,16 @@ export default function ClientsPage() {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState<TablePageSize>(10);
 
-  // Sort state — client-side over the loaded page. Mirrors what
-  // Manage Users uses for the legacy-shape lookup tables.
+  // Sort state — SERVER-SIDE. sortBy/sortDir ride the list query so the BE
+  // orders the COMPLETE list (not just the loaded page); a header click
+  // resets to page 0 and refetches.
   const [sortBy, setSortBy] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   function onSortToggle(col: SortKey) {
     const next = cycleSort<SortKey>(col, { sortBy, sortDir });
     setSortBy(next.sortBy);
     setSortDir(next.sortDir);
+    setPage(0);
   }
 
   // Compose the list key. Reset page on filter changes by tracking the
@@ -95,32 +97,15 @@ export default function ClientsPage() {
     if (includeInactive) p.set('includeInactive', 'true');
     p.set('limit', String(limit));
     p.set('offset', String(page * (pageSize === 'all' ? limit : Number(pageSize))));
+    if (sortBy) { p.set('sortBy', String(sortBy)); p.set('sortDir', sortDir); }
     return `/admin/clients?${p.toString()}`;
-  }, [debouncedSearch, includeInactive, limit, page, pageSize]);
+  }, [debouncedSearch, includeInactive, limit, page, pageSize, sortBy, sortDir]);
 
   const { data: list, loading, error } = useFetch<ClientListResponse>(listKey);
 
-  // Sort the loaded page client-side. For a >500-row dataset, sort
-  // should ultimately move server-side; today the BE returns ORDER BY
-  // client_name and this hook lets the operator re-sort within the
-  // page without a network round-trip.
-  const items = useMemo(() => {
-    const arr = (list?.items ?? []).slice();
-    if (!sortBy) return arr;
-    arr.sort((a, b) => {
-      const av: unknown = (a as Record<string, unknown>)[sortBy as string];
-      const bv: unknown = (b as Record<string, unknown>)[sortBy as string];
-      if (av == null && bv == null) return 0;
-      if (av == null) return 1;
-      if (bv == null) return -1;
-      const na = Number(av), nb = Number(bv);
-      const cmp = (!Number.isNaN(na) && !Number.isNaN(nb) && typeof av !== 'string')
-        ? na - nb
-        : String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' });
-      return sortDir === 'asc' ? cmp : -cmp;
-    });
-    return arr;
-  }, [list?.items, sortBy, sortDir]);
+  // Server-side sorted + paginated — render the page exactly as the BE
+  // returns it (ordering is applied over the complete list, not here).
+  const items = list?.items ?? [];
 
   const total = list?.total ?? 0;
 
@@ -194,7 +179,7 @@ export default function ClientsPage() {
           <div className="relative flex-1 min-w-[240px]">
             <Search className="size-4 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
             <Input
-              placeholder="Search by client name or SPOC name…"
+              placeholder="Search by name, email, city, ref code, ID or SPOC…"
               value={search}
               onChange={(e) => { setSearch(e.target.value); setPage(0); }}
               className="pl-8"

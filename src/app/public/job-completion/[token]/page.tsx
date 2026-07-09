@@ -35,6 +35,9 @@ import * as React from 'react';
 import type { PrefillResponse, SubmitPayload } from '@/lib/magic-link-types';
 // Searchable city/long-list select — shared, no auth dependency → safe public.
 import { SearchSelect } from '@/components/ui/search-select';
+// Shared 30-min searchable time-slot picker (same one the Job Modal uses) —
+// built on SearchSelect + Input, no auth dependency → safe public.
+import { DateTimeSlotPicker } from '@/components/ui/date-time-slot-picker';
 // Shared masked from→to preview (also used by the CRM operator click-to-call).
 import { CallLegsPreview } from '@/components/ui/CallLegsPreview';
 // Shared presentational Button (cva-based, no auth dependency → safe on the
@@ -1257,12 +1260,15 @@ function RescheduleDialog({
         {touched && !reason && <p className="text-xs text-red-600 mt-1">Please Select A Reason.</p>}
       </Field>
       <Field label="Preferred Date & Time">
-        <input type="datetime-local" value={preferred}
+        {/* 30-min searchable time dropdown (with a "Custom Time…" escape) — the
+            same shared component the Job Modal uses, for consistency. Emits the
+            same 'YYYY-MM-DDTHH:mm' string the native input did, so the submit
+            payload (toBackendDateTime → preferred_datetime) is unchanged. */}
+        <DateTimeSlotPicker
+          value={preferred}
+          onChange={setPreferred}
           min={toDatetimeLocal(new Date().toISOString())}
-          onChange={(e) => {
-            const minStr = toDatetimeLocal(new Date().toISOString());
-            setPreferred(e.target.value && e.target.value < minStr ? minStr : e.target.value);
-          }} className={inputClass} />
+        />
       </Field>
       <Field label="Remarks">
         <textarea value={remarks} onChange={(e) => setRemarks(e.target.value)}
