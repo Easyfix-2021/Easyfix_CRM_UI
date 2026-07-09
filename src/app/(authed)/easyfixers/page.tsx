@@ -609,7 +609,9 @@ export default function EasyfixersPage() {
 
   // Stable row-action navigation callbacks for the memoised <EfRow>.
   const onRowEdit = useCallback((e: Ef) => {
-    router.push(`/easyfixers/${e.efr_id}/verification`);
+    // Carry the origin so the verification page's back-link returns HERE
+    // (the Manage Easyfixers roster) rather than defaulting elsewhere.
+    router.push(`/easyfixers/${e.efr_id}/verification?from=${encodeURIComponent('/easyfixers')}`);
   }, [router]);
   const onRowAssessment = useCallback(() => {
     router.push('/coming-soon');

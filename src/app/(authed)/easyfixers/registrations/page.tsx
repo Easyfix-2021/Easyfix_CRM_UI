@@ -413,7 +413,9 @@ export default function RegisteredEasyfixersPage() {
 
   const onVerify = useCallback(
     (efrId: number) => {
-      router.push(`/easyfixers/${efrId}/verification`);
+      // Carry the origin so the verification page's back-link returns HERE
+      // (the registrations queue) instead of the Manage Easyfixers roster.
+      router.push(`/easyfixers/${efrId}/verification?from=${encodeURIComponent('/easyfixers/registrations')}`);
     },
     [router],
   );
@@ -540,9 +542,9 @@ export default function RegisteredEasyfixersPage() {
       <Card>
         <CardContent className="p-0">
           <div className="overflow-x-auto">
-            <table className="data-table" style={{ tableLayout: 'fixed', minWidth: '1150px' }}>
+            <table className="data-table" style={{ tableLayout: 'fixed', minWidth: '1210px' }}>
               <colgroup>
-                <col style={{ width: '90px' }} />{/* Technician Id (sticky) */}
+                <col style={{ width: '140px' }} />{/* Technician Id (sticky) */}
                 <col style={{ width: '210px' }} />{/* Technician Details (sticky) */}
                 <col style={{ width: '240px' }} />{/* Registration Status */}
                 <col style={{ width: '180px' }} />{/* Technician Location */}
@@ -565,8 +567,8 @@ export default function RegisteredEasyfixersPage() {
                     Technician Id
                   </SortHeader>
                   {/* Technician Details (Name + mobile) — sticky-left (col 2,
-                      offset by the 90px Id column). */}
-                  <th className="!text-left stick-col-head stick-left" style={{ left: '90px' }}>
+                      offset by the 140px Id column). */}
+                  <th className="!text-left stick-col-head stick-left" style={{ left: '140px' }}>
                     Technician Details
                   </th>
                   <th className="!text-left">Registration Status</th>
@@ -624,11 +626,11 @@ export default function RegisteredEasyfixersPage() {
                         </td>
                         {/* Technician Details — Name (+ existing-easyfixer
                             marker) over the masked click-to-call mobile.
-                            Sticky-left col 2, offset by the 90px Id column.
+                            Sticky-left col 2, offset by the 140px Id column.
                             CallableMobile dials via efrId only (BE re-resolves
                             the real number); `mobile` is display-only and
                             already bullet-masked by the response middleware. */}
-                        <td className="!text-left stick-col stick-left" style={{ left: '90px' }}>
+                        <td className="!text-left stick-col stick-left" style={{ left: '140px' }}>
                           <div className="flex flex-col gap-0.5 min-w-0">
                             <span className="inline-flex items-center gap-1.5 font-medium">
                               <span className="truncate" title={efName}>

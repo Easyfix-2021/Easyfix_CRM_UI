@@ -22,12 +22,12 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import Link from 'next/link';
-import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, Check, Loader2, Phone, Smile, X, Upload, ChevronDown, ChevronUp, CheckCircle2, Wrench, Search } from 'lucide-react';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
+import { Check, Loader2, Phone, Smile, X, Upload, ChevronDown, ChevronUp, CheckCircle2, Wrench, Search } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
 import { useFetch, useDebouncedValue } from '@/lib/hooks';
 import { Button } from '@/components/ui/button';
+import { BackLink } from '@/components/ui/back-link';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { SearchSelect } from '@/components/ui/search-select';
@@ -183,6 +183,26 @@ export default function EasyfixerVerificationPage() {
   const efrId = Number(params.id);
 
   /*
+   * "Back" destination (2026-07-09) — this page is reachable from BOTH the
+   * Registered Easyfixers queue (/easyfixers/registrations) and the Manage
+   * Easyfixers roster (/easyfixers). Each entry point appends `?from=<its
+   * path>`; the back-link returns there so the operator lands wherever they
+   * came from. Guard against open-redirect: only honour an internal path
+   * (leading "/", not protocol-relative "//"); default to the roster.
+   */
+  const searchParams = useSearchParams();
+  const rawFrom = searchParams.get('from');
+  // Strict internal-path allowlist: a single leading slash, then a NON-slash
+  // path character, then only path characters. The `(?!/)` lookahead is load-
+  // bearing — without it, "//1572395042" / "//localhost" (protocol-relative
+  // to a dotless host or numeric IP) would pass and router.push would leave
+  // the origin (open redirect). Absolute URLs and "/\host" are rejected too
+  // (the char class excludes ':', '.', '\\').
+  const backHref = rawFrom && /^\/(?!\/)[A-Za-z0-9/_-]*$/.test(rawFrom)
+    ? rawFrom
+    : '/easyfixers';
+
+  /*
    * Page data load via the shared `useFetch` hook (2026-06-11). The
    * module-level dedupe in `@/lib/hooks` absorbs React 18 Strict-Mode
    * double-mounts so the network panel shows ONE request on first paint,
@@ -212,17 +232,14 @@ export default function EasyfixerVerificationPage() {
   if (loading) return <div className="p-8 text-sm text-slate-500">Loading…</div>;
   if (error || !data) return (
     <div className="p-8">
-      {/* Canonical Back-link pattern — text-with-hyperlink matching
-          customers/[id], settings/zones/[zoneId], etc. NOT a styled
-          Button. ArrowLeft + "Back to easyfixers" + hover underline. */}
-      <Link href="/easyfixers" className="text-sm text-primary inline-flex items-center gap-1 hover:underline">
-        <ArrowLeft className="size-4" /> Back to easyfixers
-      </Link>
+      {/* Canonical Back-link — returns to the origin (registrations queue or
+          roster) captured in `?from=`; see backHref above. */}
+      <BackLink href={backHref} label="Back to Easyfixers" />
       <div className="mt-4 text-sm text-rose-600">{error || 'Not found'}</div>
     </div>
   );
 
-  return <VerificationView data={data} onReload={reload} />;
+  return <VerificationView data={data} onReload={reload} backHref={backHref} />;
 }
 
 type ActiveSection = 'lead' | 'verification' | 'activation';
@@ -241,7 +258,7 @@ function computeActiveSection(data: VerificationPayload): ActiveSection {
   return 'activation';
 }
 
-function VerificationView({ data, onReload }: { data: VerificationPayload; onReload: () => Promise<void> }) {
+function VerificationView({ data, onReload, backHref }: { data: VerificationPayload; onReload: () => Promise<void>; backHref: string }) {
   const router = useRouter();
   const efrId = data.header.efr_id;
 
@@ -287,13 +304,10 @@ function VerificationView({ data, onReload }: { data: VerificationPayload; onRel
   // ─── Header ───────────────────────────────────────────────────────
   return (
     <div className="space-y-4 p-4 md:p-6">
-      {/* Back-link — canonical text-with-hyperlink pattern matching
-          customers/[id], settings/zones/[zoneId], etc. Lives ABOVE the
-          title row (same vertical placement as the other detail pages)
-          rather than to the right of the title as a styled button. */}
-      <Link href="/easyfixers" className="text-sm text-primary inline-flex items-center gap-1 hover:underline">
-        <ArrowLeft className="size-4" /> Back to easyfixers
-      </Link>
+      {/* Back-link — returns to the origin (registrations queue or roster)
+          captured in `?from=`; see backHref in the parent. Lives ABOVE the
+          title row, matching the other detail pages. */}
+      <BackLink href={backHref} label="Back to Easyfixers" />
       {/* Title row */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Self-Registration Verification And Profile Activation</h1>
