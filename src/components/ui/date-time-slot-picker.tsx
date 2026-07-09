@@ -58,7 +58,11 @@ export function TimeSelect({
 
   const options = React.useMemo<SearchOption[]>(() => {
     const out: SearchOption[] = [];
-    for (let h = 0; h < 24; h++) {
+    // Ordered to START at 08:00 and wrap through midnight to 07:30 — all 48
+    // half-hour slots, business-hours-first (per ops). The same-day `minTime`
+    // gate still hides past slots.
+    for (let i = 0; i < 24; i++) {
+      const h = (8 + i) % 24;
       for (const m of [0, 30]) {
         const hhmm = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
         if (minTime && hhmm < minTime) continue;

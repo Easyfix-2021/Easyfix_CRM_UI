@@ -238,17 +238,15 @@ function toDatetimeLocal(value: string | null | undefined): string {
  *     else        → "After Hours"
  * Returns '' for an empty/invalid pick so the slot clears until a time is set.
  */
-function deriveTimeSlot(datetimeLocal: string): string {
-  if (!datetimeLocal) return '';
-  // datetime-local is "YYYY-MM-DDTHH:mm" — read the hour after the "T".
-  const timePart = datetimeLocal.split('T')[1] || '';
-  const h = Number(timePart.split(':')[0]);
-  if (Number.isNaN(h)) return '';
-  if (h >= 9  && h < 12) return '9 AM – 12 PM';
-  if (h >= 12 && h < 15) return '12 PM – 3 PM';
-  if (h >= 15 && h < 19) return '3 PM – 7 PM';
-  return 'After Hours';
-}
+// The 4 customer-facing appointment slot windows (Appointment-card chips).
+// The customer MUST pick one; `start` is the representative time we stamp into
+// requested_date_time (the window's start hour) on the existing appointment date.
+const APPT_SLOTS: { label: string; start: string }[] = [
+  { label: '9 AM - 12 PM', start: '09:00' },
+  { label: '12 PM - 3 PM', start: '12:00' },
+  { label: '3 PM - 6 PM',  start: '15:00' },
+  { label: '6 PM - 9 PM',  start: '18:00' },
+];
 
 /* Format the naive datetime-local value (YYYY-MM-DDTHH:mm) the Reschedule
  * picker emits into the "YYYY-MM-DD HH:mm" string the BE expects. Returns
@@ -355,7 +353,9 @@ export default function JobCompletionMagicLinkPage() {
           // not picked directly. Seed it from the prefilled datetime so the
           // display indicator matches; fall back to the BE's stored slot when
           // there's no datetime yet.
-          time_slot: deriveTimeSlot(toDatetimeLocal(data.schedule.requested_date_time)) || data.schedule.time_slot || '',
+          // Cleared so the customer must actively pick one of the 4 slot chips
+          // (mandatory) in the Appointment card — see APPT_SLOTS + the submit gate.
+          time_slot: '',
           requested_date_time: toDatetimeLocal(data.schedule.requested_date_time),
           additional_name: data.additional.name || '',
           additional_number: data.additional.number || '',
@@ -731,9 +731,8 @@ export default function JobCompletionMagicLinkPage() {
   const apptDateLabel = apptValid
     ? apptDate!.toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short' })
     : 'To Be Scheduled';
-  const apptTimeLabel = apptValid
-    ? apptDate!.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })
-    : '';
+  // (Appointment time is no longer displayed — the card shows the date + the
+  //  mandatory slot chips; the customer picks the window.)
   // Coordinator identity + avatar initials for the "Your Coordinator" card.
   const coordinatorName = spoc?.name || data.job_owner?.name || 'EasyFix Coordinator';
   const coordinatorInitials =
@@ -924,31 +923,54 @@ export default function JobCompletionMagicLinkPage() {
           icon={<CalendarClock className="h-4 w-4" />}
           title="Appointment"
         >
-          <div className="flex items-center justify-between gap-3">
-            {/* Mobile: date on top, time below (slot hidden — date + time is
-                enough on a small screen and avoids the 3-line wrap). Desktop
-                (sm+): date + time · slot inline, unchanged. */}
-            <div className="flex flex-col gap-0.5 sm:flex-row sm:flex-wrap sm:items-baseline sm:gap-x-3 sm:gap-y-1">
+          <div className="flex flex-col gap-3">
+            {/* Row 1: DATE only (time/slot removed) + Reschedule. */}
+            <div className="flex items-center justify-between gap-3">
               <span className="text-lg font-semibold text-slate-900">{apptDateLabel}</span>
-              <span className="text-sm text-slate-600">
-                {apptTimeLabel && <span className="font-mono">{apptTimeLabel}</span>}
-                <span className="hidden sm:inline">
-                  {apptTimeLabel && form.time_slot ? ' · ' : ''}
-                  {form.time_slot}
-                </span>
-              </span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setDialog('reschedule')}
+                className="shrink-0 gap-1.5 border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 hover:text-amber-900"
+              >
+                <CalendarClock className="h-4 w-4" />
+                Reschedule
+              </Button>
             </div>
-            {/* Reschedule aligned to the right of the date/time row, vertically centered. */}
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setDialog('reschedule')}
-              className="shrink-0 gap-1.5 border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 hover:text-amber-900"
-            >
-              <CalendarClock className="h-4 w-4" />
-              Reschedule
-            </Button>
+            {/* Row 2: MANDATORY time-slot chips. Picking one sets the slot label
+                + a representative requested_date_time (window start hour) on the
+                existing appointment date. The submit gate already requires
+                form.time_slot, so leaving it unpicked blocks confirmation. */}
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-slate-600">
+                Select A Time Slot <span className="text-red-500">*</span>
+              </span>
+              <div className="flex flex-wrap gap-2">
+                {APPT_SLOTS.map((slot) => {
+                  const active = form.time_slot === slot.label;
+                  return (
+                    <button
+                      key={slot.label}
+                      type="button"
+                      onClick={() => {
+                        const datePart = (form.requested_date_time || '').split('T')[0]
+                          || toDatetimeLocal(new Date().toISOString()).split('T')[0];
+                        patch({ time_slot: slot.label, requested_date_time: `${datePart}T${slot.start}` });
+                      }}
+                      className={
+                        'rounded-full border px-3 py-1.5 text-sm transition-colors '
+                        + (active
+                          ? 'border-emerald-600 bg-emerald-600 text-white'
+                          : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50')
+                      }
+                    >
+                      {slot.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         </InfoCard>
 

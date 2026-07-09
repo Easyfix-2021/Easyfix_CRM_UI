@@ -56,6 +56,7 @@ import { Button } from '@/components/ui/button';
 import { api, ApiError, type JobOffersResponse } from '@/lib/api';
 import { formatServiceAddress } from '@/lib/format';
 import { useFetch, invalidateFetch } from '@/lib/hooks';
+import { JobRemarksView } from './JobRemarksView';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useMe } from '@/lib/auth-context';
@@ -810,6 +811,9 @@ export function ScheduleAssignModal({
               />
             )}
           </section>
+
+          {/* Read-only remarks / comments history at the bottom of the modal. */}
+          <JobRemarksView jobId={jobId} />
         </div>
 
         <DialogFooter className="px-6 sm:justify-between">

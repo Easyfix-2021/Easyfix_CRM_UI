@@ -23,6 +23,7 @@ import { AddRemarksDialog } from './AddRemarksDialog';
 import { CancelWithReasonDialog } from './CancelWithReasonDialog';
 import { fetchReasonsCached } from './jobActionReasons';
 import type { JobComment } from './jobTypes';
+import { JobRemarksView } from './JobRemarksView';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { api, ApiError } from '@/lib/api';
@@ -701,6 +702,10 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
   ]);
   const isReassign = !!job.fk_easyfixter_id;
   const canPickTech = isReassign ? can.isJobReassign : can.isJobAssign;
+  // Legacy Auto-assign / Manual-pick buttons retired (2026-07-09) — assignment
+  // now flows exclusively through the Schedule & Assign modal (?action=schedule).
+  // Gated off (not deleted) so the dialogs below stay wired for a quick revert.
+  const LEGACY_ASSIGN_BUTTONS = false;
 
   async function doStatus(key: BusyKey, status: number, reasonId?: number, comment?: string) {
     setBusy(key);
@@ -735,13 +740,13 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
           engine action visually distinct from the generic Edit / Change Owner
           buttons next to it. Manual searchable picker stays available beside as
           a fallback for the "I need this specific person" cases. */}
-      {canAssign(s) && canPickTech && (
+      {LEGACY_ASSIGN_BUTTONS && canAssign(s) && canPickTech && (
         <Button size="sm" onClick={() => setAutoAssignOpen(true)}>
           <Sparkles className="h-3.5 w-3.5 mr-1" />
           {isReassign ? 'Auto-reassign' : 'Auto-assign'}
         </Button>
       )}
-      {canAssign(s) && canPickTech && (
+      {LEGACY_ASSIGN_BUTTONS && canAssign(s) && canPickTech && (
         <Button size="sm" variant="outline" onClick={() => setAssignOpen(true)}>
           <Search className="h-3.5 w-3.5 mr-1" />
           Manual pick
@@ -6956,6 +6961,9 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             <Button type="button" variant="outline" onClick={() => setConfirmOpenSection(2)}>← Back</Button>
           </div>
         </Section>
+
+        {/* Read-only remarks / comments history at the bottom of the confirm form. */}
+        <JobRemarksView jobId={initial?.job_id ?? null} />
 
         {error && <div className="text-sm text-destructive">{error}</div>}
         {/* Confirm-mode footer — three-button layout matching the legacy
