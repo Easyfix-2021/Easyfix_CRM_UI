@@ -25,7 +25,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Check, Loader2, Phone, Smile, X, Upload, ChevronDown, ChevronUp, CheckCircle2, Wrench, Search } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
-import { useFetch, useDebouncedValue } from '@/lib/hooks';
+import { useFetch, useFetchOnce, useDebouncedValue } from '@/lib/hooks';
 import { Button } from '@/components/ui/button';
 import { BackLink } from '@/components/ui/back-link';
 import { Input } from '@/components/ui/input';
@@ -35,6 +35,7 @@ import { VerificationSection } from '@/components/easyfixer/VerificationSection'
 import { CommentsPanel, type CommentEntry } from '@/components/easyfixer/CommentsPanel';
 import { SkillImageLightbox } from '@/components/easyfixer/SkillImageLightbox';
 import { AnimatedLoadingBar } from '@/components/ui/animated-loading-bar';
+import { TeleprompterPanel } from '@/components/teleprompter/TeleprompterPanel';
 import { showToast } from '@/components/ui/toast';
 import { formatDate } from '@/lib/utils';
 
@@ -527,6 +528,10 @@ function LeadActions({ efrId, onReload }: { efrId: number; onReload: () => Promi
   const [checked, setChecked] = useState(false);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
+  // AI Teleprompter (property-gated: teleprompter.emails). Absent ⇒ button hidden.
+  const features = useFetchOnce<{ canRunTeleprompter?: boolean }>('/admin/access/features');
+  const canRunTeleprompter = features.data?.canRunTeleprompter === true;
+  const [teleprompterOpen, setTeleprompterOpen] = useState(false);
 
   async function call(personal_details_filled: 0 | 1 | 2) {
     if (personal_details_filled !== 1 && reason.trim().length === 0) {
@@ -574,11 +579,21 @@ function LeadActions({ efrId, onReload }: { efrId: number; onReload: () => Promi
         className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500/40"
       />
       <AnimatedLoadingBar visible={busy} message="Saving Lead Action…" tone="emerald" />
+      {canRunTeleprompter && (
+        <div className="flex justify-center">
+          <Button onClick={() => setTeleprompterOpen(true)} disabled={busy} className="bg-sky-600 hover:bg-sky-700 text-white">
+            <Phone className="h-4 w-4" /> Start Guided Call
+          </Button>
+        </div>
+      )}
       <div className="flex flex-wrap gap-2 justify-center">
         <Button onClick={() => call(1)} disabled={!checked || busy} className="bg-emerald-600 hover:bg-emerald-700 text-white">Accept</Button>
         <Button onClick={() => call(2)} disabled={busy} className="bg-rose-600 hover:bg-rose-700 text-white">Deny</Button>
         <Button onClick={() => call(0)} disabled={busy} className="bg-rose-600 hover:bg-rose-700 text-white">Send Back To Technician</Button>
       </div>
+      {canRunTeleprompter && (
+        <TeleprompterPanel open={teleprompterOpen} efrId={efrId} onClose={() => setTeleprompterOpen(false)} onApplied={onReload} />
+      )}
     </div>
   );
 }

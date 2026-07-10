@@ -13,11 +13,14 @@
 import * as React from 'react';
 import Link from 'next/link';
 import {
-  PhoneCall, Loader2, Sparkles, TrendingUp, AlertTriangle, ThumbsUp, Ban, PlusCircle,
+  PhoneCall, Loader2, Sparkles, TrendingUp, AlertTriangle, ThumbsUp, Ban, PlusCircle, Users,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
+import { SearchSelect, type SearchOption } from '@/components/ui/search-select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useFetch, useDebouncedValue } from '@/lib/hooks';
 import { api } from '@/lib/api';
@@ -38,8 +41,46 @@ type CallRow = {
   duration: number | null;
   provider: string | null;
   transcription_status?: string | null;
+  // Extended by the list endpoint (2026-07): the flow that originated the
+  // call, the cached coaching overall_score, and the analysis job status.
+  call_flow?: string | null;
+  score?: string | null;
+  call_analysis_status?: string | null;
 };
 type ListResp = { total: number; page: number; limit: number; items: CallRow[] };
+
+// Per-caller coaching rollup — GET /admin/calls/scorecard ("who is improving").
+type ScorecardRow = {
+  callerUserId: number;
+  callerName: string;
+  callsCount: number;
+  avgOverall: number | null;
+  avgCoverage: number | null;
+  dimensions: { [name: string]: number };
+  trend: { score: number | null; when: string | null }[];
+  lastCallOn: string | null;
+};
+type ScorecardResp = { items: ScorecardRow[] };
+
+// Known call flows (the backend `flow` filter accepts the raw key). Kept as a
+// small hardcoded set — the label is what the operator sees, the value is what
+// the list query param takes.
+const FLOW_OPTIONS: { value: string; label: string }[] = [
+  { value: 'guided_verification', label: 'Guided Verification' },
+  { value: 'technician', label: 'Technician' },
+  { value: 'job', label: 'Job' },
+  { value: 'customer', label: 'Customer' },
+  { value: 'spoc', label: 'SPOC' },
+];
+// SearchSelect option lists for the filter row (defined at module scope so the
+// arrays keep a stable identity across renders — SearchSelect memoises on them).
+const FLOW_SELECT_OPTIONS: SearchOption[] = [{ value: '', label: 'All Flows' }, ...FLOW_OPTIONS];
+const MIN_SCORE_OPTIONS: SearchOption[] = [
+  { value: '', label: 'Any' },
+  { value: '5', label: '5+' },
+  { value: '7', label: '7+' },
+  { value: '8', label: '8+' },
+];
 
 type Dimension = { name: string; score: number; notes?: string };
 type Analysis = {
@@ -90,6 +131,25 @@ function scoreColor(n?: number): string {
   if (v >= 5) return 'text-amber-600';
   return 'text-rose-600';
 }
+// Prettify a raw flow key for display. Known keys use the curated label;
+// anything else falls back to Title-Cased words.
+function prettyFlow(flow?: string | null): string {
+  if (!flow) return '—';
+  const known = FLOW_OPTIONS.find((f) => f.value === flow);
+  if (known) return known.label;
+  return flow.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+// A score string ("8", "8.5", null) → a finite number or null.
+function toScore(v: string | number | null | undefined): number | null {
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+// avgCoverage is a 0–100 percentage; render rounded with a % suffix.
+function fmtCoverage(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return '—';
+  return `${Math.round(v)}%`;
+}
 
 export default function CallAnalyticsPage() {
   const { me } = useMe();
@@ -98,16 +158,30 @@ export default function CallAnalyticsPage() {
   // 0-indexed page + the shared TablePagination (matches the rest of the CRM,
   // and gives the page-size selector the raw table was missing). The backend
   // list endpoint is 1-indexed, so send `page + 1`.
+  const [tab, setTab] = React.useState<'calls' | 'scorecard'>('calls');
   const [page, setPage] = React.useState(0);
   const [pageSize, setPageSize] = React.useState<TablePageSize>(20);
   const [jobQuery, setJobQuery] = React.useState('');
   const debouncedJob = useDebouncedValue(jobQuery.trim(), 400);
+  // List filters wired to the extended list endpoint (flow / minScore / hasAnalysis).
+  const [flow, setFlow] = React.useState('');
+  const [minScore, setMinScore] = React.useState('');
+  const [hasAnalysisOnly, setHasAnalysisOnly] = React.useState(false);
   const [analysisFor, setAnalysisFor] = React.useState<CallRow | null>(null);
 
   const limit = pageSizeToLimit(pageSize, 200); // backend callListQuery caps limit at 200
   const qs = new URLSearchParams({ page: String(page + 1), limit: String(limit) });
   if (debouncedJob) qs.set('jobId', debouncedJob);
-  const { data, loading, error } = useFetch<ListResp>(canView ? `/admin/calls?${qs.toString()}` : null);
+  if (flow) qs.set('flow', flow);
+  if (minScore) qs.set('minScore', minScore);
+  if (hasAnalysisOnly) qs.set('hasAnalysis', 'true');
+  const { data, loading, error } = useFetch<ListResp>(
+    canView && tab === 'calls' ? `/admin/calls?${qs.toString()}` : null,
+  );
+  // Per-caller scorecard — only fetched while the Scorecard tab is active.
+  const { data: scorecard, loading: scLoading, error: scError } = useFetch<ScorecardResp>(
+    canView && tab === 'scorecard' ? '/admin/calls/scorecard?limit=100&offset=0' : null,
+  );
 
   if (!canView) {
     return (
@@ -138,88 +212,249 @@ export default function CallAnalyticsPage() {
         see per-call scores + areas of improvement (needs a stored transcript).
       </p>
 
-      <div className="max-w-xs">
-        <Input
-          value={jobQuery}
-          onChange={(e) => { setJobQuery(e.target.value.replace(/\D/g, '')); setPage(0); }}
-          placeholder="Filter by Job #"
-          inputMode="numeric"
-        />
+      {/* Tab switcher — Calls table vs the per-caller coaching rollup. */}
+      <div className="inline-flex gap-1 rounded-md border bg-white p-1">
+        <Button size="sm" variant={tab === 'calls' ? 'default' : 'ghost'} onClick={() => setTab('calls')}>
+          <PhoneCall className="h-4 w-4 mr-1.5" /> Calls
+        </Button>
+        <Button size="sm" variant={tab === 'scorecard' ? 'default' : 'ghost'} onClick={() => setTab('scorecard')}>
+          <Users className="h-4 w-4 mr-1.5" /> Caller Scorecard
+        </Button>
       </div>
 
-      <div className="rounded-md border bg-white overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50 text-left text-xs text-slate-500">
-            <tr>
-              <th className="px-3 py-2">Date / Time</th>
-              <th className="px-3 py-2">Direction</th>
-              <th className="px-3 py-2">Caller</th>
-              <th className="px-3 py-2">Receiver</th>
-              <th className="px-3 py-2">Job</th>
-              <th className="px-3 py-2">Duration</th>
-              <th className="px-3 py-2">Transcript</th>
-              <th className="px-3 py-2 text-right">Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading && (
-              <tr><td colSpan={8} className="px-3 py-8 text-center text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin inline mr-2" />Loading…
-              </td></tr>
-            )}
-            {!loading && error && (
-              <tr><td colSpan={8} className="px-3 py-6 text-center text-rose-600">{error}</td></tr>
-            )}
-            {!loading && !error && items.length === 0 && (
-              <tr><td colSpan={8} className="px-3 py-6 text-center text-muted-foreground">No calls found.</td></tr>
-            )}
-            {!loading && items.map((r) => {
-              const b = txBadge(r.transcription_status);
-              const outgoing = String(r.call_type || '').toUpperCase() === 'OUT';
-              return (
-                <tr key={r.id} className="border-t hover:bg-slate-50">
-                  <td className="px-3 py-2 whitespace-nowrap">{fmtDateTime(r.start_time)}</td>
-                  <td className="px-3 py-2">{outgoing ? 'Outgoing' : 'Incoming'}</td>
-                  <td className="px-3 py-2">
-                    <div>{r.caller_name || '—'}</div>
-                    <div className="font-mono text-xs text-muted-foreground">{r.caller || ''}</div>
-                  </td>
-                  <td className="px-3 py-2">
-                    <div>{r.receiver_name || '—'}</div>
-                    <div className="font-mono text-xs text-muted-foreground">{r.receiver || ''}</div>
-                  </td>
-                  <td className="px-3 py-2">
-                    {r.job_id
-                      ? <Link href={`/jobs?jobId=${r.job_id}`} className="text-sky-600 hover:underline font-mono">#{r.job_id}</Link>
-                      : '—'}
-                  </td>
-                  <td className="px-3 py-2 font-mono">{fmtDuration(r.duration)}</td>
-                  <td className="px-3 py-2">
-                    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${b.cls}`}>{b.label}</span>
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    <Button size="sm" variant="outline" className="!h-7 !px-2 text-xs" onClick={() => setAnalysisFor(r)}>
-                      <Sparkles className="h-3.5 w-3.5 mr-1" /> View Analysis
-                    </Button>
-                  </td>
+      {tab === 'calls' && (
+        <>
+          {/* Filters — wired to the extended list query params. */}
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="w-40">
+              <label className="block text-xs font-medium text-slate-500 mb-1">Job #</label>
+              <Input
+                value={jobQuery}
+                onChange={(e) => { setJobQuery(e.target.value.replace(/\D/g, '')); setPage(0); }}
+                placeholder="Filter by Job #"
+                inputMode="numeric"
+              />
+            </div>
+            <div className="w-52">
+              <label className="block text-xs font-medium text-slate-500 mb-1">Flow</label>
+              <SearchSelect
+                value={flow}
+                onChange={(v) => { setFlow(v); setPage(0); }}
+                options={FLOW_SELECT_OPTIONS}
+                placeholder="All Flows"
+              />
+            </div>
+            <div className="w-40">
+              <label className="block text-xs font-medium text-slate-500 mb-1">Min Score</label>
+              <SearchSelect
+                value={minScore}
+                onChange={(v) => { setMinScore(v); setPage(0); }}
+                options={MIN_SCORE_OPTIONS}
+                placeholder="Any"
+              />
+            </div>
+            <label className="flex h-9 items-center gap-2 text-sm text-slate-700">
+              <Switch
+                checked={hasAnalysisOnly}
+                onCheckedChange={(v) => { setHasAnalysisOnly(v); setPage(0); }}
+                ariaLabel="Has Analysis Only"
+              />
+              Has Analysis Only
+            </label>
+          </div>
+
+          <div className="rounded-md border bg-white overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-left text-xs text-slate-500">
+                <tr>
+                  <th className="px-3 py-2">Date / Time</th>
+                  <th className="px-3 py-2">Direction</th>
+                  <th className="px-3 py-2">Flow</th>
+                  <th className="px-3 py-2">Caller</th>
+                  <th className="px-3 py-2">Receiver</th>
+                  <th className="px-3 py-2">Job</th>
+                  <th className="px-3 py-2">Duration</th>
+                  <th className="px-3 py-2">Transcript</th>
+                  <th className="px-3 py-2">Score</th>
+                  <th className="px-3 py-2 text-right">Action</th>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+              </thead>
+              <tbody>
+                {loading && (
+                  <tr><td colSpan={10} className="px-3 py-8 text-center text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin inline mr-2" />Loading…
+                  </td></tr>
+                )}
+                {!loading && error && (
+                  <tr><td colSpan={10} className="px-3 py-6 text-center text-rose-600">{error}</td></tr>
+                )}
+                {!loading && !error && items.length === 0 && (
+                  <tr><td colSpan={10} className="px-3 py-6 text-center text-muted-foreground">No calls found.</td></tr>
+                )}
+                {!loading && items.map((r) => {
+                  const b = txBadge(r.transcription_status);
+                  const outgoing = String(r.call_type || '').toUpperCase() === 'OUT';
+                  const s = toScore(r.score);
+                  return (
+                    <tr key={r.id} className="border-t hover:bg-slate-50">
+                      <td className="px-3 py-2 whitespace-nowrap">{fmtDateTime(r.start_time)}</td>
+                      <td className="px-3 py-2">{outgoing ? 'Outgoing' : 'Incoming'}</td>
+                      <td className="px-3 py-2">
+                        {r.call_flow
+                          ? <Badge className="bg-slate-100 text-slate-700">{prettyFlow(r.call_flow)}</Badge>
+                          : <span className="text-muted-foreground">—</span>}
+                      </td>
+                      <td className="px-3 py-2">
+                        <div>{r.caller_name || '—'}</div>
+                        <div className="font-mono text-xs text-muted-foreground">{r.caller || ''}</div>
+                      </td>
+                      <td className="px-3 py-2">
+                        <div>{r.receiver_name || '—'}</div>
+                        <div className="font-mono text-xs text-muted-foreground">{r.receiver || ''}</div>
+                      </td>
+                      <td className="px-3 py-2">
+                        {r.job_id
+                          ? <Link href={`/jobs?jobId=${r.job_id}`} className="text-sky-600 hover:underline font-mono">#{r.job_id}</Link>
+                          : '—'}
+                      </td>
+                      <td className="px-3 py-2 font-mono">{fmtDuration(r.duration)}</td>
+                      <td className="px-3 py-2">
+                        <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${b.cls}`}>{b.label}</span>
+                      </td>
+                      <td className="px-3 py-2">
+                        {s != null
+                          ? <span className={`font-semibold ${scoreColor(s)}`}>{s}/10</span>
+                          : <span className="text-muted-foreground">—</span>}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <Button size="sm" variant="outline" className="!h-7 !px-2 text-xs" onClick={() => setAnalysisFor(r)}>
+                          <Sparkles className="h-3.5 w-3.5 mr-1" /> View Analysis
+                        </Button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
 
-      <div className="rounded-md border bg-white px-3 py-2">
-        <TablePagination
-          page={page}
-          pageSize={pageSize}
-          total={total}
-          onPageChange={setPage}
-          onPageSizeChange={(s) => { setPageSize(s); setPage(0); }}
-        />
-      </div>
+          <div className="rounded-md border bg-white px-3 py-2">
+            <TablePagination
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onPageChange={setPage}
+              onPageSizeChange={(s) => { setPageSize(s); setPage(0); }}
+            />
+          </div>
+        </>
+      )}
+
+      {tab === 'scorecard' && (
+        <CallerScorecard rows={scorecard?.items ?? []} loading={scLoading} error={scError} />
+      )}
 
       {analysisFor && <AnalysisModal call={analysisFor} onClose={() => setAnalysisFor(null)} />}
+    </div>
+  );
+}
+
+// Per-caller coaching rollup — the "who is improving" view.
+function CallerScorecard({ rows, loading, error }: { rows: ScorecardRow[]; loading: boolean; error: string | null }) {
+  return (
+    <div className="rounded-md border bg-white overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead className="bg-slate-50 text-left text-xs text-slate-500">
+          <tr>
+            <th className="px-3 py-2">Caller</th>
+            <th className="px-3 py-2">Calls</th>
+            <th className="px-3 py-2">Avg Score</th>
+            <th className="px-3 py-2">Avg Coverage</th>
+            <th className="px-3 py-2">Dimensions</th>
+            <th className="px-3 py-2">Trend</th>
+            <th className="px-3 py-2">Last Call</th>
+          </tr>
+        </thead>
+        <tbody>
+          {loading && (
+            <tr><td colSpan={7} className="px-3 py-8 text-center text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin inline mr-2" />Loading…
+            </td></tr>
+          )}
+          {!loading && error && (
+            <tr><td colSpan={7} className="px-3 py-6 text-center text-rose-600">{error}</td></tr>
+          )}
+          {!loading && !error && rows.length === 0 && (
+            <tr><td colSpan={7} className="px-3 py-6 text-center text-muted-foreground">No Caller Scores Yet</td></tr>
+          )}
+          {!loading && rows.map((r) => {
+            const avg = r.avgOverall;
+            const dims = Object.entries(r.dimensions || {});
+            return (
+              <tr key={r.callerUserId} className="border-t hover:bg-slate-50 align-top">
+                <td className="px-3 py-2 font-medium text-slate-800">{r.callerName || '—'}</td>
+                <td className="px-3 py-2 font-mono">{r.callsCount}</td>
+                <td className="px-3 py-2">
+                  {avg != null && Number.isFinite(avg)
+                    ? <span className={`font-semibold ${scoreColor(avg)}`}>{avg.toFixed(1)}/10</span>
+                    : <span className="text-muted-foreground">—</span>}
+                </td>
+                <td className="px-3 py-2">{fmtCoverage(r.avgCoverage)}</td>
+                <td className="px-3 py-2">
+                  {dims.length === 0
+                    ? <span className="text-muted-foreground">—</span>
+                    : (
+                      <div className="flex flex-wrap gap-1">
+                        {dims.map(([name, val]) => (
+                          <span key={name} className="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px]">
+                            <span className="text-muted-foreground">{name}</span>
+                            <span className={`font-semibold ${scoreColor(val)}`}>{Number(val).toFixed(1)}</span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                </td>
+                <td className="px-3 py-2"><Sparkline trend={r.trend} /></td>
+                <td className="px-3 py-2 whitespace-nowrap">{fmtDateTime(r.lastCallOn)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// Tiny inline-SVG sparkline for a caller's score trend (oldest → newest).
+// Falls back to a single number for one point, or "—" when there's no data.
+function Sparkline({ trend }: { trend: { score: number | null; when: string | null }[] }) {
+  const pts = (trend || []).map((t) => toScore(t.score)).filter((s): s is number => s != null);
+  if (pts.length === 0) return <span className="text-muted-foreground">—</span>;
+  if (pts.length === 1) return <span className={`text-xs font-medium ${scoreColor(pts[0])}`}>{pts[0]}</span>;
+  const w = 72, h = 22, pad = 3;
+  const min = Math.min(...pts);
+  const max = Math.max(...pts);
+  const range = max - min || 1;
+  const step = (w - pad * 2) / (pts.length - 1);
+  const coords = pts.map((s, i) => {
+    const x = pad + i * step;
+    const y = h - pad - ((s - min) / range) * (h - pad * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const last = pts[pts.length - 1];
+  return (
+    <div className="flex items-center gap-2">
+      <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="text-sky-500 shrink-0" aria-hidden="true">
+        <polyline
+          points={coords.join(' ')}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+      <span className={`text-xs font-medium ${scoreColor(last)}`}>{last}</span>
     </div>
   );
 }
