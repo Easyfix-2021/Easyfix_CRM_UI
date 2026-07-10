@@ -15,7 +15,7 @@ import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
-  ShieldCheck, Webhook, FileSpreadsheet, ShieldAlert, Workflow, Database, FileText, Trash2, Activity, Sparkles,
+  ShieldCheck, Webhook, FileSpreadsheet, ShieldAlert, Workflow, Database, FileText, Trash2, Activity, Sparkles, AudioLines,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -99,8 +99,12 @@ export default function AdminActionsPage() {
   const canRestore = canDelete;
   const canValidateFlows = featureAccess.data?.canValidateFlows === true;
   const canBuildSkillMatrix = featureAccess.data?.canBuildSkillMatrix === true;
+  // Call-recording backfill — gated on the same isClickToCall action the BE
+  // endpoint requires (requireClickToCallAction on /admin/calls/recordings/backfill).
+  const canBackfillRecordings = hasAction(me, 'isClickToCall');
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deletedRecordsOpen, setDeletedRecordsOpen] = useState(false);
+  const [recBackfillOpen, setRecBackfillOpen] = useState(false);
   // Legacy sidebar URL_MAP routes generateClientInvoice → /admin-actions?focus=generate-invoice
   // — auto-open the dialog when that param is present.
   const sp = useSearchParams();
@@ -281,10 +285,36 @@ export default function AdminActionsPage() {
             </Card>
           </button>
         )}
+        {/* Backfill Call Recordings — recovers tbl_plivo_call_log.recording_url for
+            calls whose Plivo push callback never landed, by pulling each from the
+            Plivo Recording API. Gated on isClickToCall (same as the BE endpoint). */}
+        {canBackfillRecordings && (
+          <button
+            type="button"
+            onClick={() => setRecBackfillOpen(true)}
+            className="w-full text-left"
+          >
+            <Card className="hover:border-primary hover:shadow-sm transition-colors h-full">
+              <CardContent className="p-4 space-y-2">
+                <div className="flex items-center gap-2">
+                  <div className="h-8 w-8 rounded-md bg-primary/10 text-primary grid place-items-center">
+                    <AudioLines className="h-4 w-4" />
+                  </div>
+                  <h2 className="font-medium flex-1">Backfill Call Recordings</h2>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Recover missing call recordings — pulls each recorded call&apos;s audio URL from
+                  Plivo for rows the provider&apos;s callback never delivered.
+                </p>
+              </CardContent>
+            </Card>
+          </button>
+        )}
       </div>
       {canFinance && <GenerateInvoiceDialog open={invoiceOpen} onClose={() => setInvoiceOpen(false)} />}
       {canDelete && <DeleteEntityDialog open={deleteOpen} onClose={() => setDeleteOpen(false)} />}
       {canRestore && <DeletedRecordsDialog open={deletedRecordsOpen} onClose={() => setDeletedRecordsOpen(false)} />}
+      {canBackfillRecordings && <RecordingBackfillDialog open={recBackfillOpen} onClose={() => setRecBackfillOpen(false)} />}
     </div>
   );
 }
@@ -370,6 +400,66 @@ function GenerateInvoiceDialog({ open, onClose }: { open: boolean; onClose: () =
             <Button onClick={submit} disabled={busy || !clientId || !from || !to}>
               {busy ? 'Generating…' : 'Generate Invoice'}
             </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/*
+ * RecordingBackfillDialog — one-click sweep that recovers missing call-recording
+ * URLs. POSTs /admin/calls/recordings/backfill (pulls each requested-but-missing
+ * recording from Plivo by call_uuid) and shows { scanned, recovered, stillMissing }.
+ * The Plivo PUSH callback has proven unreliable, so this pull-based sweep is how
+ * ops clears the "Missing Call Recordings" report on demand.
+ */
+function RecordingBackfillDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ scanned: number; recovered: number; stillMissing: number; errors: number } | null>(null);
+
+  async function run() {
+    setBusy(true); setResult(null);
+    try {
+      const r = await api.post<{ data?: { scanned: number; recovered: number; stillMissing: number; errors: number } }>(
+        '/admin/calls/recordings/backfill?limit=100',
+        {},
+      );
+      const d = r as unknown as { data?: typeof result; scanned?: number; recovered?: number; stillMissing?: number; errors?: number };
+      const payload = d?.data ?? (d as { scanned: number; recovered: number; stillMissing: number; errors: number });
+      setResult(payload);
+      showToast({ variant: 'success', message: `Recovered ${payload?.recovered ?? 0} recording(s)` });
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Backfill failed' });
+    } finally { setBusy(false); }
+  }
+
+  const guardedOpenChange = useFormDirtyGuard(
+    () => { onClose(); setResult(null); },
+    { when: () => !busy },
+  );
+
+  return (
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Backfill Call Recordings</DialogTitle></DialogHeader>
+        <div className="space-y-3 p-4">
+          <p className="text-sm text-muted-foreground">
+            Sweeps recorded calls that are missing their recording URL and pulls each one from Plivo
+            (up to 100 per run). Safe to run repeatedly — run again if more than 100 are missing.
+          </p>
+          {result && (
+            <div className="rounded border bg-emerald-50 border-emerald-200 p-3 text-sm space-y-1">
+              <div><strong>{result.recovered}</strong> recovered of <strong>{result.scanned}</strong> scanned.</div>
+              <div className="text-xs">
+                {result.stillMissing} still missing{result.errors ? ` · ${result.errors} error(s)` : ''}.
+                {result.stillMissing > 0 && ' Still-missing calls have no recording on Plivo for their call id (e.g. web calls filed under another leg).'}
+              </div>
+            </div>
+          )}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => { onClose(); setResult(null); }} disabled={busy}>Close</Button>
+            <Button onClick={run} disabled={busy}>{busy ? 'Running…' : 'Run Backfill'}</Button>
           </div>
         </div>
       </DialogContent>
