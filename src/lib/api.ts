@@ -126,6 +126,23 @@ export const api = {
       method: 'PATCH',
       body: { easyfixerId, ...(schedule ?? {}) },
     }),
+
+  /*
+   * Schedule & Assign → Reschedule. The modal's Date/Time fields are read-only;
+   * this is the ONLY path that moves the appointment. All fields are mandatory:
+   * the BE persists the new requested_date_time + derived slot columns, logs
+   * reason + remarks to scheduling_history and a job comment, and expires any
+   * open offers made for the old slot. `rescheduleReason` is the chosen reason's
+   * label (mirrored into the audit trail alongside `reasonId`).
+   */
+  rescheduleJob: (
+    jobId: number,
+    body: { requestedDateTime: string; reasonId: number; rescheduleReason?: string; remarks: string },
+  ) =>
+    request<{ job_id: number }>(`/admin/jobs/${jobId}/reschedule`, {
+      method: 'PATCH',
+      body,
+    }),
 };
 
 /* Optional proposed-schedule edit carried alongside an offer/assign commit. */
@@ -165,15 +182,25 @@ export type JobOffer = {
   efr_id: number;
   efr_name: string;
   offered_at: string;
-  /** Human-readable offer_status (OFFERED for open offers). */
+  /** Server datetime the tech responded (rejected/accepted) or the offer expired. */
+  responded_at?: string | null;
+  /** Raw offer_status code: 0 OFFERED · 1 ACCEPTED · 2 REJECTED · 3 EXPIRED. */
+  offer_status?: number | null;
+  /** Human-readable offer_status (OFFERED / REJECTED / EXPIRED). */
   offer_status_label?: string | null;
+  /** Reason the technician gave when rejecting (offer_status 2 only). */
+  reject_reason?: string | null;
   /** How many times this tech has been (re)offered this job. */
   offer_count?: number | null;
   /** Where the offer was made from: Top-10 list, Search, or auto-assign. */
   offer_source?: 'top10' | 'search' | 'auto' | null;
 };
 
-/* GET /admin/jobs/:id/offers → technicians the job is currently offered to. */
+/*
+ * GET /admin/jobs/:id/offers → the job's offer history: live offers PLUS the
+ * technicians who declined (REJECTED) or timed out (EXPIRED). One row per tech
+ * (latest offer), ordered live → rejected → expired.
+ */
 export type JobOffersResponse = {
   items: JobOffer[];
 };

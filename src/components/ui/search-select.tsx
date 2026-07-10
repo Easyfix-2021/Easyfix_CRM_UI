@@ -145,6 +145,26 @@ export function SearchSelect({
   }, [open]);
 
   /*
+   * Close on scroll of any ANCESTOR scroll container (the modal body, the page,
+   * …) so the body-portaled `position: fixed` popover never detaches and floats
+   * over unrelated modal content when the user scrolls (reported: the Requested
+   * Time dropdown drifting over the Confirm & Schedule modal header). Scrolls
+   * that originate INSIDE the popover (its own options list) are ignored so the
+   * list stays scrollable. `capture: true` because scroll events don't bubble —
+   * that's the only way to observe an arbitrary scrollable ancestor.
+   */
+  useEffect(() => {
+    if (!open) return;
+    const onScroll = (e: Event) => {
+      const t = e.target as Node;
+      if (popoverRef.current && popoverRef.current.contains(t)) return; // list scroll — keep open
+      setOpen(false);
+    };
+    document.addEventListener('scroll', onScroll, true);
+    return () => document.removeEventListener('scroll', onScroll, true);
+  }, [open]);
+
+  /*
    * Focus the filter input on open — with `preventScroll`. The input is
    * portaled to the END of <body>, so a plain `.focus()` makes mobile browsers
    * scroll the whole page to "bring it into view" (reported on the public
@@ -339,8 +359,16 @@ export function SearchSelect({
                     onClick={() => pick(opt)}
                     className={cn(
                       'flex items-center justify-between px-3 py-1.5 cursor-pointer',
-                      isActive ? 'bg-muted' : '',
-                      isSel ? 'text-foreground font-medium' : 'text-foreground/90'
+                      // Selected row gets a solid darker-grey fill (not just the
+                      // check tick, which was too easy to miss) so the current
+                      // value is unmistakable in the list; the keyboard/hover
+                      // "active" row gets the lighter muted fill. Selected wins
+                      // over active so it stays highlighted even while hovered.
+                      isSel
+                        ? 'bg-slate-200 text-foreground font-semibold'
+                        : isActive
+                          ? 'bg-muted text-foreground/90'
+                          : 'text-foreground/90'
                     )}
                   >
                     <span className="truncate">{opt.label}</span>

@@ -4423,6 +4423,28 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
   }
 
   /*
+   * Auto-select the Booking Time Slot chip from the Requested Time on LOAD (and
+   * any later programmatic time change) — edit/confirm mode only. `toFormShape`
+   * seeds `time_slot` from the job row, which is frequently empty or a LEGACY
+   * value ('Morning 9 to 2') that matches NO SLOTS chip, so a loaded job showed
+   * no chip highlighted. Derive the chip from the time (out-of-window → 'After
+   * Hours') whenever the current value isn't already a valid SLOTS chip — this
+   * both fixes the highlight AND keeps the submitted time_slot coherent. Guards:
+   *   - isEditShape only: create mode uses the legacy 'Morning 9 to 2' vocabulary
+   *     (a different Booking Time Slot control) and must NOT be re-mapped.
+   *   - skip when time_slot is already a valid SLOTS value → respects a manual
+   *     chip pick (e.g. clicking 'After Hours' while the time is in-window).
+   *   - setF (not set) so this load-time heal never flips the dirty flag.
+   */
+  React.useEffect(() => {
+    if (!isEditShape) return;
+    if (!f.requested_date_time) return;
+    if (SLOTS.some((s) => s.value === f.time_slot)) return;
+    const derived = inferSlotFromTime(f.requested_date_time);
+    if (derived) setF((s) => ({ ...s, time_slot: derived }));
+  }, [isEditShape, f.requested_date_time, f.time_slot]);
+
+  /*
    * Client's "Collected By" preference. Read from the client profile
    * (tbl_client_custom_properties) via the BE endpoint added 2026-05-15.
    *   - null      → "Any" — operator picks freely from both options

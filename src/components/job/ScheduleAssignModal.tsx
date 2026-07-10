@@ -46,7 +46,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle, CheckCircle2, XCircle, Info, Search, X, MapPin,
-  Calendar, Phone, Loader2, Clock,
+  Calendar, CalendarClock, Phone, Loader2, Clock,
 } from 'lucide-react';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -63,12 +63,12 @@ import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
 import { formatDate, relativeTime } from '@/lib/utils';
 import { CallableMobile } from '@/components/calls/CallButton';
-import { DateTimeSlotPicker } from '@/components/ui/date-time-slot-picker';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { InfoTooltip } from '@/components/ui/tooltip';
 import { showToast } from '@/components/ui/toast';
 import { AddRemarksDialog } from './AddRemarksDialog';
 import { CancelWithReasonDialog } from './CancelWithReasonDialog';
+import { RescheduleDialog } from './RescheduleDialog';
 import { ST } from './JobModal';
 
 /* ── Time-slot options — mirror the values used in JobModal's Confirm
@@ -169,6 +169,8 @@ type ScheduleJob = {
   payment_mode: string | null;
   requested_date_time: string | null;
   time_slot: string | null;
+  /** Legacy "H AM - H PM" cut-off window — shown as the read-only Time Slot. */
+  booking_cut_off_time_slot: string | null;
   job_desc: string | null;
 };
 
@@ -242,6 +244,8 @@ export function ScheduleAssignModal({
   // Footer action dialogs — reuse the SAME extracted dialogs JobModal uses.
   const [remarksOpen, setRemarksOpen] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
+  // Reschedule dialog — the ONLY way to change the (now read-only) Job Date/Time.
+  const [rescheduleOpen, setRescheduleOpen] = useState(false);
 
   // Proposed schedule — seeded from the job's current values once it
   // loads, then operator-editable. `seeded` guards the one-time seed so
@@ -406,10 +410,10 @@ export function ScheduleAssignModal({
             <li>• Offered to <b>{techLabel}</b></li>
             <li>• Each gets a <b>push notification</b></li>
             <li>• <b>First to accept</b> is assigned the job</li>
-            {proposedWallClock && (
+            {job?.requested_date_time && (
               <li>
-                • Schedule: <b>{formatDate(proposedWallClock)}</b>
-                {timeSlot ? <> · {timeSlot}</> : null}
+                • Schedule: <b>{formatDate(job.requested_date_time)}</b>
+                {job.booking_cut_off_time_slot ? <> · {job.booking_cut_off_time_slot}</> : null}
               </li>
             )}
           </ul>
@@ -420,11 +424,9 @@ export function ScheduleAssignModal({
     if (!ok) return;
     setCommitting(true); setErr(null);
     try {
-      // Carry the (possibly edited) proposed schedule so the offer respects the
-      // operator's Job Date edit, just like direct-assign does.
+      // Schedule is owned by the persisted job + the Reschedule flow now — the
+      // offer only fans the job out to the pool; it never overwrites date/slot.
       await api.offerJob(jobId, ids, {
-        requestedDateTime: proposedWallClock || undefined,
-        timeSlot: timeSlot || undefined,
         // Per-tech origin (Top-10 list vs Search Result), captured at selection time.
         sourceByEfr: Object.fromEntries(selected),
       });
@@ -465,10 +467,10 @@ export function ScheduleAssignModal({
           <ul className="space-y-1.5 text-sm">
             <li>• Assigned directly to <b>{name}</b> (Efr #{id})</li>
             <li>• Job moves to <b>Scheduled</b></li>
-            {proposedWallClock && (
+            {job?.requested_date_time && (
               <li>
-                • Schedule: <b>{formatDate(proposedWallClock)}</b>
-                {timeSlot ? <> · {timeSlot}</> : null}
+                • Schedule: <b>{formatDate(job.requested_date_time)}</b>
+                {job.booking_cut_off_time_slot ? <> · {job.booking_cut_off_time_slot}</> : null}
               </li>
             )}
           </ul>
@@ -479,10 +481,9 @@ export function ScheduleAssignModal({
     if (!ok) return;
     setCommitting(true); setErr(null);
     try {
-      await api.assignJob(jobId, id, {
-        requestedDateTime: proposedWallClock || undefined,
-        timeSlot: timeSlot || undefined,
-      });
+      // Schedule stays as persisted on the job (change it via Reschedule); assign
+      // only sets the technician and moves the job to Scheduled.
+      await api.assignJob(jobId, id);
       invalidateFetch((k) => k.startsWith(`/admin/jobs/${jobId}/candidates`));
       invalidateFetch((k) => k === `/admin/jobs/${jobId}/offers`);
       onAssigned?.(id, name);
@@ -494,14 +495,12 @@ export function ScheduleAssignModal({
     }
   }
 
-  // Read-only modal otherwise, but the editable schedule fields make it
-  // "dirty" once touched — guard close so an accidental Esc after editing
-  // the date prompts. Skip while an offer is in flight.
-  // Only the Job Date is user-editable; timeSlot is derived so not part of dirty check.
+  // The modal has no inline-editable fields anymore — Job Date/Time move ONLY
+  // through the Reschedule dialog (which persists immediately), so there is
+  // nothing to guard on close. Kept wired (not removed) so the Dialog's
+  // onOpenChange plumbing is unchanged.
   const guardedOpenChange = useFormDirtyGuard(onClose, {
-    isDirty: () =>
-      seeded && job != null &&
-      jobDateLocal !== isoToLocalInput(job.requested_date_time),
+    isDirty: () => false,
     when: () => !committing,
   });
 
@@ -587,41 +586,50 @@ export function ScheduleAssignModal({
                   </div>
                 )}
 
-                {/* EDITABLE scheduling row — drives the candidate re-fetch. */}
+                {/* READ-ONLY schedule row — Date/Time are locked; change only via
+                    the Reschedule dialog. Time Slot shows the stored
+                    booking_cut_off_time_slot (the customer's booked window). */}
                 <div className="mt-3 pt-3 border-t">
-                  <div className="space-y-1.5 max-w-xs">
-                    <label className="text-xs font-medium text-foreground flex items-center gap-1">
-                      <Calendar className="h-3.5 w-3.5 text-muted-foreground" /> Job Date *
-                    </label>
-                    <DateTimeSlotPicker
-                      min={isoToLocalInput(new Date().toISOString())}
-                      value={jobDateLocal}
-                      onChange={(v) => {
-                        const minStr = isoToLocalInput(new Date().toISOString());
-                        setJobDateLocal(v && v < minStr ? minStr : v);
-                      }}
-                    />
-                  </div>
-                  {/* Auto-derived Time Slot chip — read-only; derived from the Job Date's hour. */}
-                  {timeSlot && (
-                    <div className="mt-2 flex items-center gap-1.5">
-                      <span className="text-[11px] text-muted-foreground">Time Slot:</span>
-                      <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-medium text-slate-700 border border-slate-200">
-                        {timeSlot}
-                      </span>
+                  <div className="flex flex-wrap items-end justify-between gap-3">
+                    <div className="flex flex-wrap gap-x-8 gap-y-2">
+                      <div className="space-y-0.5">
+                        <div className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                          <Calendar className="h-3.5 w-3.5" /> Job Date &amp; Time
+                        </div>
+                        <div className="text-sm font-medium text-foreground">
+                          {job.requested_date_time ? formatDate(job.requested_date_time) : '—'}
+                        </div>
+                      </div>
+                      <div className="space-y-0.5">
+                        <div className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                          <Clock className="h-3.5 w-3.5" /> Time Slot
+                        </div>
+                        <div className="text-sm font-medium text-foreground">
+                          {job.booking_cut_off_time_slot || '—'}
+                        </div>
+                      </div>
                     </div>
-                  )}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setRescheduleOpen(true)}
+                      className="gap-1.5"
+                    >
+                      <CalendarClock className="h-4 w-4" /> Reschedule
+                    </Button>
+                  </div>
+                  <p className="mt-2 text-[11px] text-muted-foreground">
+                    Job Date &amp; Time are locked. Use <b>Reschedule</b> to change the
+                    appointment — a reason and remarks are mandatory, and technicians
+                    are re-ranked against the new schedule.
+                  </p>
                 </div>
-                <p className="mt-2 text-[11px] text-muted-foreground">
-                  Editing the Job Date re-ranks technicians and recomputes
-                  attendance, concurrent jobs and same-slot conflicts against the proposed schedule.
-                  The Time Slot is automatically derived from the selected time.
-                </p>
               </div>
             )}
           </section>
 
-          {/* ───────── Offered to (current open offers) — offer mode only ───────── */}
+          {/* ───────── Offer history — live + rejected + expired — offer mode only ───────── */}
           {offerMode && (offers.data?.items?.length ?? 0) > 0 && (
             <section>
               <h3 className="text-sm font-semibold mb-2 flex items-center gap-1.5">
@@ -631,36 +639,52 @@ export function ScheduleAssignModal({
                 </span>
               </h3>
               <p className="mb-2 text-[11px] text-muted-foreground">
-                This job is currently offered to the technicians below. Whoever
-                accepts first on the app is assigned; the rest expire.
+                Technicians this job has been offered to — including those who
+                declined or whose offer expired. Whoever accepts first on the app
+                is assigned; open offers expire after 30 minutes.
               </p>
               <div className="flex flex-wrap gap-2">
-                {offers.data!.items.map((o) => (
-                  <div
-                    key={o.efr_id}
-                    className="inline-flex items-center gap-2 rounded-full border bg-muted/30 pl-3 pr-3.5 py-1"
-                  >
-                    <span className="text-sm font-medium text-foreground">{o.efr_name}</span>
-                    <span className="text-[10px] text-muted-foreground">#{o.efr_id}</span>
-                    {o.offer_status_label && (
-                      <span className="inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 border border-amber-200">
-                        {o.offer_status_label}
+                {offers.data!.items.map((o) => {
+                  // Colour the status chip by offer_status: REJECTED=rose, EXPIRED=slate,
+                  // OFFERED (live) / anything else = amber.
+                  const chip =
+                    o.offer_status === 2
+                      ? 'bg-rose-100 text-rose-700 border-rose-200'
+                      : o.offer_status === 3
+                        ? 'bg-slate-100 text-slate-600 border-slate-200'
+                        : 'bg-amber-100 text-amber-700 border-amber-200';
+                  return (
+                    <div
+                      key={o.efr_id}
+                      className="inline-flex items-center gap-2 rounded-full border bg-muted/30 pl-3 pr-3.5 py-1"
+                    >
+                      <span className="text-sm font-medium text-foreground">{o.efr_name}</span>
+                      <span className="text-[10px] text-muted-foreground">#{o.efr_id}</span>
+                      {o.offer_status_label && (
+                        <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium border ${chip}`}>
+                          {o.offer_status_label}
+                        </span>
+                      )}
+                      {o.offer_status === 2 && o.reject_reason && (
+                        <span className="text-[10px] text-rose-600" title="Reason given by technician">
+                          &ldquo;{o.reject_reason}&rdquo;
+                        </span>
+                      )}
+                      {o.offer_source && (
+                        <span className="text-[10px] text-slate-500" title="Where this offer was made from">
+                          {o.offer_source === 'top10' ? 'Top-10' : o.offer_source === 'search' ? 'Search' : 'Auto'}
+                        </span>
+                      )}
+                      {(o.offer_count ?? 1) > 1 && (
+                        <span className="text-[10px] text-slate-500" title="Times offered">×{o.offer_count}</span>
+                      )}
+                      <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+                        <Clock className="h-3 w-3" />
+                        offered {relativeTime(o.offered_at)}
                       </span>
-                    )}
-                    {o.offer_source && (
-                      <span className="text-[10px] text-slate-500" title="Where this offer was made from">
-                        {o.offer_source === 'top10' ? 'Top-10' : o.offer_source === 'search' ? 'Search' : 'Auto'}
-                      </span>
-                    )}
-                    {(o.offer_count ?? 1) > 1 && (
-                      <span className="text-[10px] text-slate-500" title="Times offered">×{o.offer_count}</span>
-                    )}
-                    <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-                      <Clock className="h-3 w-3" />
-                      offered {relativeTime(o.offered_at)}
-                    </span>
-                  </div>
-                ))}
+                    </div>
+                  );
+                })}
               </div>
             </section>
           )}
@@ -894,6 +918,21 @@ export function ScheduleAssignModal({
             showToast({ variant: 'success', message: 'Job Cancelled' });
             setCancelOpen(false);
             onClose();
+          }}
+        />
+      )}
+
+      {/* Reschedule — the ONLY way to change the (read-only) Job Date/Time. The
+          BE persists + audits, then onDone re-ranks candidates and refreshes the
+          offer list (open offers get EXPIRED on reschedule) against the new date. */}
+      {jobId && (
+        <RescheduleDialog
+          open={rescheduleOpen}
+          jobId={jobId}
+          onClose={() => setRescheduleOpen(false)}
+          onDone={() => {
+            invalidateFetch((k) => k.startsWith(`/admin/jobs/${jobId}/candidates`));
+            invalidateFetch((k) => k === `/admin/jobs/${jobId}/offers`);
           }}
         />
       )}

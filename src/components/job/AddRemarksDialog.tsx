@@ -26,15 +26,19 @@ import type { JobComment } from './jobTypes';
  *
  * Submit POSTs to /admin/jobs/:id/comments with:
  *   {
- *     comments:        "[Open Due To: Client · Reason: <label>] <ops remark>",
- *     comment_on:      1,    // legacy "created" stage code
- *     enum_reason_id:  <id>  // picked from the reason dropdown
+ *     comments:        "<ops remark>",  // ONLY the typed remark — the legacy
+ *                                       // "[Open Due To: X · Reason: Y]" prefix
+ *                                       // was dropped 2026-06-04; the reason lives
+ *                                       // in enum_reason_id, joined back for display
+ *     comment_on:      1,               // legacy "created" stage code
+ *     enum_reason_id:  <id>             // picked from the reason dropdown
  *   }
  *
- * Reason list comes from GET /admin/jobs/comment-reasons which
- * returns `tbl_enum_reason` rows for the legacy "Others" pool
- * (enum_type=4 default). Operators see the same dropdown legacy
- * surfaces; new and old apps remain readable from each other.
+ * Reason list comes from GET /admin/jobs/comment-reasons, which reads
+ * `action_taken_reason` WHERE action_type = 5 ("Job CheckOut Remarks" bucket,
+ * ACTION_TYPE.ADD_REMARKS) AND user_type = the "Open Due To" radio
+ * (Customer 1 / Client 2 / EasyFix 3 / Technician 4; default Client), status
+ * active — refetched whenever the radio changes.
  */
 const REMARK_DUE_TO_OPTIONS: Array<'Customer' | 'Client' | 'EasyFix' | 'Technician'> = [
   'Customer', 'Client', 'EasyFix', 'Technician',
@@ -69,12 +73,12 @@ export function AddRemarksDialog({ open, jobId, onClose, onSaved, currentUserNam
     if (open) { setDueTo('Customer'); setReasonId(''); setText(''); setErr(null); }
   }, [open]);
 
-  // Fetch the reason list filtered by Open-Due-To. Legacy CRM's
-  // dropdown narrows dynamically as the operator switches the radio
-  // (verified against the screenshot's exact labels — those rows
-  // live under user_type=2 / "Client" in action_taken_reason). The
-  // refetch resets the picked reason since a stale id from a
-  // different bucket would render as an opaque number.
+  // Fetch the reason list filtered by Open-Due-To. Legacy CRM's dropdown
+  // narrows dynamically as the operator switches the radio — each value maps to
+  // action_taken_reason.user_type (Customer 1 / Client 2 / EasyFix 3 /
+  // Technician 4) within the action_type = 5 "Job CheckOut Remarks" bucket. The
+  // refetch resets the picked reason since a stale id from a different bucket
+  // would render as an opaque number.
   useEffect(() => {
     if (!open) return;
     let cancelled = false;

@@ -239,13 +239,20 @@ function toDatetimeLocal(value: string | null | undefined): string {
  * Returns '' for an empty/invalid pick so the slot clears until a time is set.
  */
 // The 4 customer-facing appointment slot windows (Appointment-card chips).
-// The customer MUST pick one; `start` is the representative time we stamp into
-// requested_date_time (the window's start hour) on the existing appointment date.
+// Labels + stored values MATCH the CRM Confirm & Schedule "Booking Time Slot"
+// chips EXACTLY (JobModal `SLOTS`, value === label). The dash is an EN-DASH
+// '–' (U+2013 / bytes e2 80 93) — verified byte-for-byte against SLOTS (comments
+// elsewhere in JobModal use a plain hyphen, but the SLOTS array does not) — so
+// the slot the customer picks here is the identical string the CRM modal renders
+// and pre-selects (it matches on f.time_slot === slot value).
+// The customer MUST pick one; `start` is the time we stamp into
+// requested_date_time = the window's START hour, so the Confirm & Schedule
+// modal's Requested Time reflects it (9 AM–12 PM → 9 AM … After Hours → 7 PM).
 const APPT_SLOTS: { label: string; start: string }[] = [
-  { label: '9 AM - 12 PM', start: '09:00' },
-  { label: '12 PM - 3 PM', start: '12:00' },
-  { label: '3 PM - 6 PM',  start: '15:00' },
-  { label: '6 PM - 9 PM',  start: '18:00' },
+  { label: '9 AM – 12 PM', start: '09:00' },
+  { label: '12 PM – 3 PM', start: '12:00' },
+  { label: '3 PM – 7 PM',  start: '15:00' },
+  { label: 'After Hours',  start: '19:00' },
 ];
 
 /* Format the naive datetime-local value (YYYY-MM-DDTHH:mm) the Reschedule
@@ -774,10 +781,11 @@ export default function JobCompletionMagicLinkPage() {
 
       <form id="order-form" onSubmit={handleSubmit} className="space-y-4">
         {/* Order context — ORDER FOR + client name are now merged into the blue
-            header above; here we keep the service · Job ID line and the
-            personalised greeting chip. */}
+            header above; here we keep the Job ID line and the personalised
+            greeting chip. (serviceName is still used below as the Service
+            Requested fallback when the job has no description.) */}
         <div className="space-y-2 px-1">
-          <div className="text-sm text-slate-500">{serviceName} · Job ID #{jobId}</div>
+          <div className="text-sm text-slate-500">Job ID #{jobId}</div>
           <div className="rounded-md bg-sky-100 px-4 py-3 text-sm font-medium text-sky-900 ring-1 ring-inset ring-sky-200">
             Hi {customerFirstName} — please confirm your service visit below.
           </div>
