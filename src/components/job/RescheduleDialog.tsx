@@ -40,11 +40,18 @@ function istNowLocalInput(): string {
  * The reason list comes from GET /admin/jobs/reschedule-reasons — query-agnostic
  * here; whatever rows that endpoint returns are what the dropdown shows.
  */
-export function RescheduleDialog({ open, jobId, onClose, onDone }: {
+export function RescheduleDialog({ open, jobId, onClose, onDone, initialDateTime, initialRemarks }: {
   open: boolean;
   jobId: number | null;
   onClose: () => void;
   onDone: () => void;
+  // Optional pre-fill: when launched from the "Apply Requested Date &
+  // Reschedule" action on a customer reschedule request, seed the date &
+  // remarks from the request so Ops only needs to confirm the reason. The
+  // reason stays empty on purpose (a proper action_type=8 CRM reason must be
+  // chosen so the audit trail is correct).
+  initialDateTime?: string;
+  initialRemarks?: string;
 }) {
   const reasons = useFetch<RescheduleReason[]>(
     open ? '/admin/jobs/reschedule-reasons' : null,
@@ -56,10 +63,16 @@ export function RescheduleDialog({ open, jobId, onClose, onDone }: {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // Reset every field on each open so a prior attempt never leaks in.
+  // Reset every field on each open so a prior attempt never leaks in. When
+  // pre-fill props are supplied (apply-from-request flow), seed date + remarks.
   useEffect(() => {
-    if (open) { setDateTime(''); setReasonId(''); setRemarks(''); setErr(null); }
-  }, [open]);
+    if (open) {
+      setDateTime(initialDateTime ?? '');
+      setReasonId('');
+      setRemarks(initialRemarks ?? '');
+      setErr(null);
+    }
+  }, [open, initialDateTime, initialRemarks]);
 
   const minLocal = useMemo(() => istNowLocalInput(), [open]);
   const reasonOptions = (reasons.data ?? []).map((r) => ({ value: r.id, label: r.label }));

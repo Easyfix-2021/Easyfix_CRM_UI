@@ -1,7 +1,7 @@
 'use client';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Plus, Search, MapPin } from 'lucide-react';
+import { Search, MapPin } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
 import { Input } from '@/components/ui/input';
@@ -34,6 +34,7 @@ import { cn, formatDate, formatEasyfixerName } from '@/lib/utils';
 import { maskMobile } from '@/lib/format';
 import { EasyfixerModal, type EasyfixerModalMode } from '@/components/easyfixer/EasyfixerModal';
 import { EasyfixerActionMenu } from '@/components/easyfixer/EasyfixerActionMenu';
+import { EasyfixerStatusDialog } from '@/components/easyfixer/EasyfixerStatusDialog';
 import { EasyfixerTransactionsModal } from '@/components/easyfixer/EasyfixerTransactionsModal';
 import { EasyfixerClientMappingModal } from '@/components/easyfixer/EasyfixerClientMappingModal';
 import { EasyfixerDeepSkillModal } from '@/components/easyfixer/EasyfixerDeepSkillModal';
@@ -228,6 +229,9 @@ type ServiceType = { service_type_id: number; service_type_name: string; service
 type ServiceCategory = { service_catg_id: number; service_catg_name: string };
 type ZonalManager = { user_id: number; user_name: string };
 type DeepSkill = { deep_skill_id: number; deep_skill_name: string };
+// Raw shape returned by GET /admin/deep-skills (deepskill_id/deepskill_name);
+// remapped to DeepSkill in fetchDeepSkillsOnce so the dropdown + filter work.
+type RawDeepSkill = { deepskill_id: number; deepskill_name: string };
 
 const DEFAULT_FILTERS = {
   easyfixerId: '',
@@ -266,6 +270,11 @@ function buildQuery(f: Filters, extras: Record<string, string | number | undefin
   if (f.zonalManagerId) q.zonalManagerId = f.zonalManagerId;
   if (f.attendance) q.attendance = f.attendance;
   if (f.deepSkillMapped) q.deepSkillMapped = f.deepSkillMapped;
+  // Manage Easyfixers shows ONLY verified technicians (2026-07-13). Forced here
+  // so both the list load and the XLSX export (both build their query through
+  // this fn) are constrained; Joi coerces the 'true' string → boolean and
+  // list() appends `is_technician_verified = 1`.
+  q.isVerified = 'true';
   return q;
 }
 
@@ -389,16 +398,20 @@ function fetchZonalManagersOnce(): Promise<ZonalManager[]> {
 
 function fetchDeepSkillsOnce(): Promise<DeepSkill[]> {
   if (deepSkillsPromise) return deepSkillsPromise;
-  const cached = readSession<DeepSkill[]>('ds');
+  const cached = readSession<DeepSkill[]>('ds_v2');
   if (cached) {
     deepSkillsPromise = Promise.resolve(cached);
     return deepSkillsPromise;
   }
   deepSkillsPromise = api
-    .get<{ items: DeepSkill[] } | DeepSkill[]>('/admin/deep-skills', { limit: 500, status: 1 })
+    // /admin/deep-skills returns deepskill_id/deepskill_name — remap to the FE
+    // shape (deep_skill_id/deep_skill_name) the dropdown + filter read. The old
+    // code cached the raw shape under 'ds' with undefined ids → the v2 key.
+    .get<{ items: RawDeepSkill[] } | RawDeepSkill[]>('/admin/deep-skills', { limit: 500, status: 1 })
     .then((r) => {
-      const list = Array.isArray(r) ? r : (r.items ?? []);
-      writeSession('ds', list);
+      const raw = Array.isArray(r) ? r : (r.items ?? []);
+      const list: DeepSkill[] = raw.map((d) => ({ deep_skill_id: d.deepskill_id, deep_skill_name: d.deepskill_name }));
+      writeSession('ds_v2', list);
       return list;
     })
     .catch((e) => { deepSkillsPromise = null; throw e; });
@@ -470,7 +483,7 @@ export default function EasyfixersPage() {
    * Future easyfixer-specific actions should also use bare names here
    * to stay consistent with the Legacy CRM seed.
    */
-  const can = actionFlags(me, ['isAddNew', 'isEdit', 'isProfileUpdateLinkSend']);
+  const can = actionFlags(me, ['isEdit', 'isProfileUpdateLinkSend', 'isEasyfixerTempInactive']);
   const searchParams = useSearchParams();
   // Total comes from the base list response; rows are stored separately
   // so we can mutate them in place when aggregates/attendance land.
@@ -519,6 +532,12 @@ export default function EasyfixersPage() {
   const [clientMappingFor, setClientMappingFor] = useState<Ef | null>(null);
   const [transactionsFor, setTransactionsFor] = useState<Ef | null>(null);
   const [deepSkillFor, setDeepSkillFor] = useState<Ef | null>(null);
+  // The row whose Deactivate/Reactivate dialog is open (null = closed).
+  const [statusFor, setStatusFor] = useState<Ef | null>(null);
+  // setTimeout(0): same Radix DropdownMenu → Dialog race as openSendDialog — open
+  // synchronously and the menu's teardown dismisses the just-mounted dialog
+  // (it flashes open then auto-closes). Defer so the dropdown closes first.
+  const openStatusDialog = useCallback((e: Ef) => { setTimeout(() => setStatusFor(e), 0); }, []);
   // Live technician-location popover target (null = closed). Polls
   // GET /admin/easyfixers/:id/location every 15s while open.
   const [locationFor, setLocationFor] = useState<Ef | null>(null);
@@ -700,21 +719,16 @@ export default function EasyfixersPage() {
   }
 
   useEffect(() => {
-    if (searchParams.get('new') === '1') {
-      setModal({ open: true, mode: 'create' });
-    } else {
-      const v = searchParams.get('view');
-      // Deep-link compat: ?view=<id> still opens the modal, but in `edit`
-      // mode (the page no longer has a view-only flow — issue 4).
-      if (v && /^\d+$/.test(v)) setModal({ open: true, mode: 'edit', id: Number(v) });
-    }
+    // Create flow retired (2026-07-13 — "Add New Easyfixer" removed); only the
+    // ?view=<id> deep link remains, opening the modal in edit mode.
+    const v = searchParams.get('view');
+    if (v && /^\d+$/.test(v)) setModal({ open: true, mode: 'edit', id: Number(v) });
   }, [searchParams]);
 
   function closeModal() {
     setModal((m) => ({ ...m, open: false }));
     if (searchParams.get('new') || searchParams.get('view')) router.replace('/easyfixers');
   }
-  function openCreate() { setModal({ open: true, mode: 'create' }); }
 
   /*
    * Two-phase fetch (issue 4):
@@ -909,11 +923,9 @@ export default function EasyfixersPage() {
   const serviceTypeOpts = (() => {
     const list = serviceTypesAll.length ? serviceTypesAll : lk.serviceTypes;
     if (!filters.serviceCategory) return list;
-    // Match by category name → id (filters.serviceCategory holds the category NAME,
-    // matching the existing BE contract for `serviceCategory`).
-    const cat = lk.serviceCategories.find((c) => c.service_catg_name === filters.serviceCategory);
-    if (!cat) return list;
-    return list.filter((t) => t.service_catg_id === cat.service_catg_id);
+    // filters.serviceCategory holds the category ID (string) — narrow Service
+    // Types to that category by id.
+    return list.filter((t) => String(t.service_catg_id) === filters.serviceCategory);
   })();
 
   function onSearch() { setPage(0); load(true); }
@@ -1045,9 +1057,6 @@ export default function EasyfixersPage() {
           )}
         </div>
         <div className="flex items-center gap-2">
-          {can.isAddNew && (
-            <Button onClick={openCreate}><Plus className="h-4 w-4 mr-1" /> Add New Easyfixer</Button>
-          )}
           <DownloadButton onClick={onDownload} downloading={downloading} />
         </div>
       </div>
@@ -1107,14 +1116,14 @@ export default function EasyfixersPage() {
                 placeholder="All"
                 value={filters.status}
                 onChange={(v) => setFilters({ ...filters, status: v })}
+                /* Only Active / Inactive / All — the other legacy buckets
+                   (Idle, Not Eligible, Not Suitable, Registration In Progress)
+                   are all intrinsically UNVERIFIED, so under the verified-only
+                   view (buildQuery forces isVerified) they'd always be empty. */
                 options={[
                   { value: '0', label: 'All' },
                   { value: '1', label: 'Active' },
                   { value: '2', label: 'Inactive' },
-                  { value: '3', label: 'Idle' },
-                  { value: '4', label: 'Not Eligible' },
-                  { value: '5', label: 'Not Suitable' },
-                  { value: '6', label: 'Registration In Progress' },
                 ]}
               />
             </Field>
@@ -1142,7 +1151,7 @@ export default function EasyfixersPage() {
                 placeholder="All"
                 value={filters.serviceCategory}
                 onChange={(v) => setFilters({ ...filters, serviceCategory: v, serviceType: '' })}
-                options={lk.serviceCategories.map((c) => ({ value: c.service_catg_name, label: c.service_catg_name }))}
+                options={lk.serviceCategories.map((c) => ({ value: String(c.service_catg_id), label: c.service_catg_name }))}
               />
             </Field>
             <Field label="Service Type">
@@ -1150,7 +1159,7 @@ export default function EasyfixersPage() {
                 placeholder="All"
                 value={filters.serviceType}
                 onChange={(v) => setFilters({ ...filters, serviceType: v })}
-                options={serviceTypeOpts.map((t) => ({ value: t.service_type_name, label: t.service_type_name }))}
+                options={serviceTypeOpts.map((t) => ({ value: String(t.service_type_id), label: t.service_type_name }))}
               />
             </Field>
             <Field label="Deep Skill">
@@ -1158,7 +1167,7 @@ export default function EasyfixersPage() {
                 placeholder="All"
                 value={filters.deepSkillId}
                 onChange={(v) => setFilters({ ...filters, deepSkillId: v })}
-                options={deepSkills.map((d) => ({ value: d.deep_skill_id, label: d.deep_skill_name }))}
+                options={deepSkills.map((d) => ({ value: String(d.deep_skill_id), label: d.deep_skill_name }))}
               />
             </Field>
           </div>
@@ -1359,10 +1368,12 @@ export default function EasyfixersPage() {
                   row={row}
                   canEdit={!!can.isEdit}
                   canSend={!!can.isProfileUpdateLinkSend}
+                  canToggleStatus={!!can.isEdit}
                   isProd={isProd}
                   isSending={sendingFor.has(row.e.efr_id)}
                   isCopyingDevUrl={copyingDevUrlFor.has(row.e.efr_id)}
                   onEdit={onRowEdit}
+                  onToggleStatus={openStatusDialog}
                   onClientMapping={openClientMapping}
                   onTransactions={openTransactions}
                   onAssessment={onRowAssessment}
@@ -1433,6 +1444,13 @@ export default function EasyfixersPage() {
             r.efr_id === efrId ? { ...r, options_mapped_count: count } : r));
         }}
       />
+      <EasyfixerStatusDialog
+        open={statusFor != null}
+        easyfixer={statusFor}
+        canScheduleReactivation={!!can.isEasyfixerTempInactive}
+        onClose={() => setStatusFor(null)}
+        onDone={() => { setStatusFor(null); load(); }}
+      />
 
       <EasyfixerTransactionsModal
         open={transactionsFor != null}
@@ -1495,13 +1513,14 @@ type DisplayRow = {
  * merges replace row objects immutably, so affected rows still re-render.
  */
 const EfRow = memo(function EfRow({
-  row, canEdit, canSend, isProd, isSending, isCopyingDevUrl,
+  row, canEdit, canSend, canToggleStatus, isProd, isSending, isCopyingDevUrl,
   onEdit, onClientMapping, onTransactions, onAssessment, onLiveLocation,
-  onSendProfileUpdateLink, onCopyDevUrl, onOpenCsvModal, onOpenDeepSkillModal,
+  onSendProfileUpdateLink, onCopyDevUrl, onToggleStatus, onOpenCsvModal, onOpenDeepSkillModal,
 }: {
   row: DisplayRow;
   canEdit: boolean;
   canSend: boolean;
+  canToggleStatus: boolean;
   isProd: boolean;
   isSending: boolean;
   isCopyingDevUrl: boolean;
@@ -1512,6 +1531,7 @@ const EfRow = memo(function EfRow({
   onLiveLocation: (e: Ef) => void;
   onSendProfileUpdateLink: (e: Ef) => void;
   onCopyDevUrl: (e: Ef) => void;
+  onToggleStatus: (e: Ef) => void;
   onOpenCsvModal: (title: string, items: CsvCellItem[]) => void;
   onOpenDeepSkillModal: (e: Ef) => void;
 }) {
@@ -1644,6 +1664,9 @@ const EfRow = memo(function EfRow({
             onAssessment={onAssessment}
             onSendProfileUpdateLink={() => onSendProfileUpdateLink(e)}
             onCopyDevUrl={() => onCopyDevUrl(e)}
+            canToggleStatus={canToggleStatus}
+            isInactive={!Number(e.efr_status)}
+            onToggleStatus={() => onToggleStatus(e)}
             isSending={isSending}
             isCopyingDevUrl={isCopyingDevUrl}
           />

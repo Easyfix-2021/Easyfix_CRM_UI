@@ -1,6 +1,6 @@
 'use client';
 
-import { Pencil, Link as LinkIcon, Receipt, ClipboardList, Send, Loader2, ClipboardCopy, MoreVertical } from 'lucide-react';
+import { Pencil, Link as LinkIcon, Receipt, ClipboardList, Send, Loader2, ClipboardCopy, MoreVertical, UserX, UserCheck } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
   DropdownMenu,
@@ -63,9 +63,12 @@ export function EasyfixerActionMenu({
   onAssessment,
   onSendProfileUpdateLink,
   onCopyDevUrl,
+  onToggleStatus,
   canEdit = true,
   canSend = false,
   canCopyDevUrl = false,
+  canToggleStatus = false,
+  isInactive = false,
   isSending = false,
   isCopyingDevUrl = false,
 }: {
@@ -74,6 +77,12 @@ export function EasyfixerActionMenu({
   onClientMapping: () => void;
   onTransactions: () => void;
   onAssessment: () => void;
+  /* Opens the Deactivate/Reactivate dialog; only shown when canToggleStatus. */
+  onToggleStatus?: () => void;
+  /* Whether the row is currently inactive — flips the item to "Reactivate". */
+  isInactive?: boolean;
+  /* Gate for the Deactivate/Reactivate item (parent passes isEdit). */
+  canToggleStatus?: boolean;
   /* Click handler for the Send Profile Update Link action; only invoked
    * when `canSend` is true and `isSending` is false. */
   onSendProfileUpdateLink?: () => void;
@@ -95,7 +104,7 @@ export function EasyfixerActionMenu({
    * item so rapid double-clicks don't double-mint. */
   isCopyingDevUrl?: boolean;
 }) {
-  const hasWriteGroup = (canSend && onSendProfileUpdateLink) || (canCopyDevUrl && onCopyDevUrl);
+  const hasWriteGroup = (canSend && onSendProfileUpdateLink) || (canCopyDevUrl && onCopyDevUrl) || (canToggleStatus && onToggleStatus);
   return (
     // modal={false}: Radix's default modal dropdown locks document.body
     // pointer-events while open/closing; that lock races a Dialog opened from
@@ -164,6 +173,14 @@ export function EasyfixerActionMenu({
               : <ClipboardCopy className="mr-2 h-4 w-4" />}
             {isCopyingDevUrl ? 'Copying…' : 'Copy Dev URL'}
             <span className="ml-auto text-xs text-muted-foreground">(dev)</span>
+          </DropdownMenuItem>
+        )}
+        {canToggleStatus && onToggleStatus && (
+          <DropdownMenuItem onClick={onToggleStatus}>
+            {isInactive
+              ? <UserCheck className="mr-2 h-4 w-4 text-emerald-600" />
+              : <UserX className="mr-2 h-4 w-4 text-red-600" />}
+            {isInactive ? 'Reactivate' : 'Deactivate'}
           </DropdownMenuItem>
         )}
       </DropdownMenuContent>

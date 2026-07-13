@@ -35,6 +35,7 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
+import { useFetch } from '@/lib/hooks';
 
 type Candidate = {
   efr_id: number;
@@ -115,9 +116,17 @@ export function AssignTechnicianModal({
   // who can open this modal but not actually commit will see a read-only
   // view with the Assign buttons hidden.
   const { me } = useMe();
-  const canCommit = mode === 'reassign'
+  // Deep-link hardening: this modal opens from a shareable ?action=assign|reassign
+  // URL for ANY jobId. Assign is valid only for a BOOKED (0) job, Reassign only
+  // for a SCHEDULED (1) job — a tampered link to any other status (e.g. a
+  // completed job) must NOT let the operator (re)assign. Probe the real status;
+  // while it loads (status unknown) we don't block — the modal shows its loader.
+  const statusGate = useFetch<{ job_status?: number }>(open && jobId ? `/admin/jobs/${jobId}` : null);
+  const allowedStatus = mode === 'reassign' ? 1 : 0;
+  const statusIneligible = statusGate.data?.job_status != null && Number(statusGate.data.job_status) !== allowedStatus;
+  const canCommit = (mode === 'reassign'
     ? hasAction(me, 'isJobReassign')
-    : hasAction(me, 'isJobAssign');
+    : hasAction(me, 'isJobAssign')) && !statusIneligible;
   const confirmAction = useConfirm();
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -267,6 +276,12 @@ export function AssignTechnicianModal({
             {jobId && <span className="text-sm font-normal text-muted-foreground">· Job #{jobId}</span>}
           </DialogTitle>
         </DialogHeader>
+
+        {statusIneligible && (
+          <div className="mb-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+            This order isn’t in the required status for {mode === 'reassign' ? 'reassignment' : 'assignment'} — opened read-only.
+          </div>
+        )}
 
         {/* Job context */}
         {data && (

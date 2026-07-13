@@ -234,7 +234,13 @@ export function ScheduleAssignModal({
   // Schedule & Assign maps to the same legacy assign permission as the
   // entry icon on /my-orders. View-only users see the table but no
   // Assign buttons.
-  const canCommit = hasAction(me, 'isJobAssign');
+  // Deep-link hardening: this modal opens from a shareable ?action=schedule URL
+  // for ANY jobId. Scheduling/offering is only valid for a BOOKED (0) job; a
+  // tampered link to any other status (e.g. a completed job) must NOT let the
+  // operator schedule/offer. Probe the real status; while it loads we don't block.
+  const statusGate = useFetch<{ job_status?: number }>(open && jobId ? `/admin/jobs/${jobId}` : null);
+  const statusIneligible = statusGate.data?.job_status != null && Number(statusGate.data.job_status) !== 0;
+  const canCommit = hasAction(me, 'isJobAssign') && !statusIneligible;
   // Cancel Job mirrors JobModal's ActionBar gate (the destructive
   // `isJobCancel` key). Add Remarks is NOT permission-gated in JobModal
   // (status-gated only), so we render it unconditionally here too.
@@ -518,6 +524,11 @@ export function ScheduleAssignModal({
         </DialogHeader>
 
         <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-4 space-y-5">
+          {statusIneligible && (
+            <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+              This order isn’t in the “Pending for Scheduling” status — opened read-only. Schedule &amp; Assign is only available for booked, unassigned orders.
+            </div>
+          )}
           {/* ───────── (a) COMPLETE JOB DETAILS + editable schedule ───────── */}
           <section>
             <h3 className="text-sm font-semibold mb-2">Job Details</h3>

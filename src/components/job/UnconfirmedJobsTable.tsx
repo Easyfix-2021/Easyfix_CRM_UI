@@ -82,6 +82,13 @@ export type UnconfirmedJobRow = {
   // responses during staging rollouts don't break the type narrow.
   pending_request_type?: 'cancel' | 'reschedule' | null;
   pending_request_reason?: string | null;
+  // The date/time the customer asked to move the appointment TO (from
+  // tbl_job_customer_request.preferred_datetime). Distinct from
+  // requested_date_time (the current/live appointment) — a reschedule
+  // REQUEST does not move the live slot until Ops actions it, so we render
+  // this alongside the "Reschedule Requested" chip. NULL when the customer
+  // did not pick a specific date.
+  pending_request_preferred_datetime?: string | null;
 };
 
 /*
@@ -268,6 +275,19 @@ export function UnconfirmedJobsTable({
                     {j.pending_request_reason && (
                       <div className="text-[10px] text-muted-foreground max-w-[160px] truncate" title={j.pending_request_reason}>
                         {j.pending_request_reason}
+                      </div>
+                    )}
+                    {/* The date the customer asked to move TO. Shown here
+                        (not in the Appointment column) because the live
+                        appointment stays put until Ops actions the request —
+                        so this is the "requested new date", kept visually
+                        distinct from the current appointment beside it. */}
+                    {j.pending_request_preferred_datetime && (
+                      <div
+                        className="text-[10px] font-medium text-amber-700 dark:text-amber-500 whitespace-nowrap"
+                        title="Requested new date/time (pending Ops action)"
+                      >
+                        New: {formatDate(j.pending_request_preferred_datetime)}
                       </div>
                     )}
                   </div>

@@ -21,6 +21,10 @@ import { SkillImageLightbox, type SkillImageLightboxValue } from '@/components/e
 import { CustomerSubmissionPanel } from './CustomerSubmissionPanel';
 import { AddRemarksDialog } from './AddRemarksDialog';
 import { CancelWithReasonDialog } from './CancelWithReasonDialog';
+// Audited reschedule dialog (PATCH /admin/jobs/:id/reschedule → job.reschedule:
+// offer-expiry + scheduling_history). Kept aliased for a descriptive name;
+// both ActionBar and the customer-request "apply" flow use it.
+import { RescheduleDialog as ApptRescheduleDialog } from './RescheduleDialog';
 import { fetchReasonsCached } from './jobActionReasons';
 import type { JobComment } from './jobTypes';
 import { JobRemarksView } from './JobRemarksView';
@@ -357,11 +361,18 @@ export function JobModal({
   // lands and the real `Job #N` title can render.
   // Create-mode title is now "Book New Call" to match the legacy CRM
   // header button label exactly. Edit/Confirm/View titles unchanged.
-  const title = mode === 'create'  ? 'Book New Call'
-             : mode === 'edit'    ? `Edit Job #${jobId}`
-             : mode === 'confirm' ? `Confirm & Schedule · Job #${jobId}`
-             : job                ? `Job #${job.job_id}`
-             :                       'Job';
+  // Deep-link hardening: `?action=confirm&jobId=N` opens confirm mode for ANY
+  // jobId. Once `job` is loaded, downgrade confirm→view when it isn't actually
+  // Unconfirmed (job_status=9), so a pasted link to a non-unconfirmed job can't
+  // open the full Confirm & Schedule flow with all its actions. While the job is
+  // still loading (job null) confirm stays so the loader shows; a genuine
+  // unconfirmed job is unaffected. create/edit/view are never downgraded.
+  const effectiveMode = (mode === 'confirm' && job && Number(job.job_status) !== 9) ? 'view' : mode;
+  const title = effectiveMode === 'create'  ? 'Book New Call'
+             : effectiveMode === 'edit'    ? `Edit Job #${jobId}`
+             : effectiveMode === 'confirm' ? `Confirm & Schedule · Job #${jobId}`
+             : job                          ? `Job #${job.job_id}`
+             :                                'Job';
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) guardedClose(); }}>
@@ -400,9 +411,9 @@ export function JobModal({
                   "schedule a new call" for create; Pencil for edit;
                   Eye for view. */}
               <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-sky-500/20 ring-1 ring-sky-400/40">
-                {mode === 'create'  ? <CalendarPlus className="h-4 w-4 text-sky-300" />
-                 : mode === 'edit'  ? <Pencil className="h-4 w-4 text-sky-300" />
-                 : mode === 'confirm' ? <CheckCircle2 className="h-4 w-4 text-sky-300" />
+                {effectiveMode === 'create'  ? <CalendarPlus className="h-4 w-4 text-sky-300" />
+                 : effectiveMode === 'edit'  ? <Pencil className="h-4 w-4 text-sky-300" />
+                 : effectiveMode === 'confirm' ? <CheckCircle2 className="h-4 w-4 text-sky-300" />
                  : <Eye className="h-4 w-4 text-sky-300" />}
               </span>
               <div className="min-w-0">
@@ -442,22 +453,32 @@ export function JobModal({
             </div>
           )}
           {error && !job && <div className="text-sm text-destructive">{error}</div>}
-          {!loading && mode === 'view' && job && (
+          {!loading && effectiveMode === 'view' && job && (
             // Unconfirmed (status=9) gets the legacy "Job Transaction"
             // single-page read-only layout — no tabs, no edits. Every
             // other status keeps the tabbed Summary/Services/Schedule/
             // Images/etc. view that ops uses for active jobs.
-            Number(job.job_status) === 9
-              ? <JobTransactionView jobId={Number(job.job_id)} />
-              : <ViewBody
-                  job={job}
-                  onRefresh={refresh}
-                  initialTab={initialTab}
-                  onDirtyChange={(dirty) => { hasUnsavedQtyRef.current = dirty; }}
-                  commentsRefreshKey={commentsRefreshKey}
-                  pendingComments={pendingComments}
-                  onCommentsLoaded={() => setPendingComments([])}
-                />
+            <>
+              {/* A `?action=confirm` deep-link to a non-Unconfirmed job was
+                  downgraded to read-only — tell the operator why so it isn't
+                  mistaken for a broken Confirm & Schedule. */}
+              {mode === 'confirm' && (
+                <div className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+                  This order isn’t Unconfirmed, so Confirm &amp; Schedule isn’t available — opened in read-only view.
+                </div>
+              )}
+              {Number(job.job_status) === 9
+                ? <JobTransactionView jobId={Number(job.job_id)} />
+                : <ViewBody
+                    job={job}
+                    onRefresh={refresh}
+                    initialTab={initialTab}
+                    onDirtyChange={(dirty) => { hasUnsavedQtyRef.current = dirty; }}
+                    commentsRefreshKey={commentsRefreshKey}
+                    pendingComments={pendingComments}
+                    onCommentsLoaded={() => setPendingComments([])}
+                  />}
+            </>
           )}
           {/* Mobile-first gate for the CREATE flow. Mirrors legacy
               `addEditJob.vm` which opened with a single mobile-number
@@ -494,9 +515,9 @@ export function JobModal({
               )}
             />
           )}
-          {!loading && (mode === 'edit' || mode === 'confirm') && (
+          {!loading && (effectiveMode === 'edit' || effectiveMode === 'confirm') && (
             <JobForm
-              mode={mode}
+              mode={effectiveMode}
               initial={job}
               /*
                * Cancel returns the operator to the View modal (where
@@ -541,7 +562,7 @@ export function JobModal({
           )}
         </div>
 
-        {mode === 'view' && (
+        {effectiveMode === 'view' && (
           <div className="px-6 py-3 border-t bg-muted/30 flex items-center justify-between gap-2 flex-wrap">
             {/* LEFT cluster — only Add Remarks lives here per ops 2026-05-21.
                 Mirrors the legacy "Job Transaction → Add Remarks" affordance
@@ -795,44 +816,16 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
           setOwnerOpen(false); onChanged();
         }}
       />
-      <RescheduleDialog
-        open={rescheduleOpen} onClose={() => setRescheduleOpen(false)}
-        initialDate={String(job.requested_date_time ?? '')}
-        initialSlot={String(job.time_slot ?? '')}
-        onSubmit={async (date, slot) => {
-          // Two writes per reschedule:
-          //   1. PATCH the job's scheduled date + slot.
-          //   2. POST a tbl_job_comment row with appointment_on=new
-          //      date and comment_on=2 (the "Reschedule" code; same
-          //      shape the legacy CRM used). The Summary tab's
-          //      JobRescheduleHistory component filters tbl_job_comment
-          //      rows where appointment_on IS NOT NULL — without this
-          //      POST the rescheduling trail stays empty even though
-          //      the requested_date_time updates.
-          await api.patch(`/admin/jobs/${jobId}`, {
-            requested_date_time: date,
-            time_slot: slot || null,
-          });
-          try {
-            await api.post(`/admin/jobs/${jobId}/comments`, {
-              comments: `Rescheduled to ${date}${slot ? ` (${slot})` : ''}`,
-              comment_on: 2,                 // legacy "reschedule" comment code
-              appointment_on: date,          // anchors the trail row
-            });
-            showToast({ variant: 'success', message: `Job Rescheduled to ${date}${slot ? ` (${slot})` : ''}` });
-          } catch (e) {
-            // Non-fatal — the PATCH already succeeded. Surface a soft
-            // warning so the operator knows the history won't show
-            // this entry, but don't roll back the reschedule itself.
-            showToast({
-              variant: 'error',
-              message: e instanceof Error
-                ? `Rescheduled, but history entry failed: ${e.message}`
-                : 'Rescheduled, but history entry failed',
-            });
-          }
-          setRescheduleOpen(false); onChanged();
-        }}
+      {/* Audited reschedule: goes through PATCH /admin/jobs/:id/reschedule →
+          job.reschedule (derives the slot columns, logs reason+remarks to
+          scheduling_history + a tbl_job_comment with appointment_on so the
+          JobRescheduleHistory trail still populates, and expires open offers).
+          Replaces the old generic PATCH /:id path which skipped all of that. */}
+      <ApptRescheduleDialog
+        open={rescheduleOpen}
+        jobId={jobId}
+        onClose={() => setRescheduleOpen(false)}
+        onDone={() => { setRescheduleOpen(false); onChanged(); }}
       />
       <ChangeDescriptionDialog
         open={descOpen} onClose={() => setDescOpen(false)}
@@ -891,7 +884,7 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
         {/* Customer Cancel/Reschedule requests — attention banner pinned
             to the top of the Summary tab so ops action pending asks
             before anything else. Renders nothing when there are none. */}
-        <JobCustomerRequests jobId={Number(job.job_id)} jobStatus={Number(job.job_status)} />
+        <JobCustomerRequests jobId={Number(job.job_id)} jobStatus={Number(job.job_status)} onJobChanged={onRefresh} />
         {/* 3-column layout (2026-05-26 per ops): packs the four short
             DlCards (Customer / Client / Job meta / Audit & History) into
             a denser grid so the page doesn't read as half-empty. Address
@@ -999,6 +992,12 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
             ['Time slot',    job.time_slot],
           ]}/>
         </div>
+        {/* Reached-location selfie (proof of arrival). Renders nothing when the
+            job has no selfie — see TechnicianSelfieTile. */}
+        <TechnicianSelfieTile
+          jobId={Number(job.job_id)}
+          selfieId={(job as Record<string, unknown>).tx_selfie_id}
+        />
       </TabsContent>
 
       {/*
@@ -1276,7 +1275,7 @@ type CustomerRequest = {
   created_at?: string | null;
 };
 
-function JobCustomerRequests({ jobId, jobStatus }: { jobId: number; jobStatus: number }) {
+function JobCustomerRequests({ jobId, jobStatus, onJobChanged }: { jobId: number; jobStatus: number; onJobChanged?: () => void }) {
   const { data, error, refetch } = useFetch<CustomerRequest[] | { items?: CustomerRequest[] }>(
     `/admin/jobs/${jobId}/customer-requests`,
   );
@@ -1286,6 +1285,9 @@ function JobCustomerRequests({ jobId, jobStatus }: { jobId: number; jobStatus: n
   // the job is not in a terminal-completion state.
   const canAct = can.isJobEdit && !isJobClosed(jobStatus);
   const [busyId, setBusyId] = useState<number | null>(null);
+  // The reschedule request the operator chose to APPLY — opens the audited
+  // reschedule dialog pre-filled from the request. null = dialog closed.
+  const [applyReq, setApplyReq] = useState<CustomerRequest | null>(null);
 
   const rows: CustomerRequest[] = useMemo(
     () => (Array.isArray(data) ? data : (data?.items ?? [])),
@@ -1344,22 +1346,34 @@ function JobCustomerRequests({ jobId, jobStatus }: { jobId: number; jobStatus: n
                 </div>
               </div>
               {canAct && (
-                <div className="flex shrink-0 gap-2">
-                  <LoadBtn
-                    size="sm"
-                    loading={busyId === r.request_id}
-                    onClick={() => act(r.request_id, 'actioned')}
-                  >
-                    Mark Actioned
-                  </LoadBtn>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled={busyId === r.request_id}
-                    onClick={() => act(r.request_id, 'dismissed')}
-                  >
-                    Dismiss
-                  </Button>
+                <div className="flex shrink-0 flex-col items-end gap-2">
+                  {/* One-click apply: reschedule the job to the customer's
+                      requested date via the AUDITED /reschedule endpoint
+                      (offer-expiry + scheduling_history), pre-filled so Ops
+                      only confirms the reason. Only for reschedule requests
+                      that carry a preferred date. */}
+                  {!isCancel && r.preferred_datetime && (
+                    <Button size="sm" onClick={() => setApplyReq(r)}>
+                      Apply Requested Date &amp; Reschedule
+                    </Button>
+                  )}
+                  <div className="flex gap-2">
+                    <LoadBtn
+                      size="sm"
+                      loading={busyId === r.request_id}
+                      onClick={() => act(r.request_id, 'actioned')}
+                    >
+                      Mark Actioned
+                    </LoadBtn>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={busyId === r.request_id}
+                      onClick={() => act(r.request_id, 'dismissed')}
+                    >
+                      Dismiss
+                    </Button>
+                  </div>
                 </div>
               )}
             </div>
@@ -1379,6 +1393,38 @@ function JobCustomerRequests({ jobId, jobStatus }: { jobId: number; jobStatus: n
           ))}
         </div>
       )}
+      {/* Audited reschedule dialog, pre-filled from the request the operator
+          chose to apply. On success it marks that request actioned and
+          refreshes both this banner and the parent job view (new appointment). */}
+      <ApptRescheduleDialog
+        open={!!applyReq}
+        jobId={applyReq ? jobId : null}
+        initialDateTime={
+          applyReq?.preferred_datetime
+            ? String(applyReq.preferred_datetime).slice(0, 16).replace(' ', 'T')
+            : ''
+        }
+        initialRemarks={
+          applyReq
+            ? `Customer requested reschedule${applyReq.reason ? `: ${applyReq.reason}` : ''}${applyReq.remarks ? ` — ${applyReq.remarks}` : ''}`
+            : ''
+        }
+        onClose={() => setApplyReq(null)}
+        onDone={async () => {
+          const req = applyReq;
+          if (req) {
+            try {
+              await api.patch(`/admin/customer-requests/${req.request_id}`, { request_status: 'actioned' });
+            } catch {
+              // Non-fatal: the reschedule already applied via the audited
+              // endpoint. The request stays pending so Ops can Mark Actioned
+              // manually.
+            }
+          }
+          await refetch();
+          onJobChanged?.();
+        }}
+      />
     </div>
   );
 }
@@ -3865,8 +3911,16 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
       const first = prefillCustomer.addresses?.[0];
       if (first) {
         base.address = first.address || '';
+        // Copy the FULL address, not just line/city/pin — building, landmark and
+        // gps_location must ride along too, else the preselected address renders
+        // with empty Building/Floor + Landmark fields and the map falls back to
+        // its Delhi default (empty gps → no marker). Mirrors the Confirm-mode
+        // saved-address handler which already copies all six.
+        base.building = first.building || '';
+        base.landmark = first.landmark || '';
         base.city_id = first.city_id != null ? String(first.city_id) : '';
         base.pin_code = first.pin_code || '';
+        base.gps_location = first.gps_location || '';
       }
     }
     return base;
@@ -5705,6 +5759,43 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
    * Rules of Hooks are satisfied regardless of which branch renders.
    */
   const [confirmOpenSection, setConfirmOpenSection] = React.useState<1 | 2 | 3>(1);
+  // Confirm & Schedule: same "scroll the just-expanded section header to the top
+  // of the modal body (no focus)" behaviour as the create flow. These refs + the
+  // effect MUST live above the `if (isConfirm && initial) return (…)` early-
+  // return so React's Rules of Hooks hold. Double rAF for the collapse-above shift.
+  const confirmSection2Ref = React.useRef<HTMLElement | null>(null);
+  const confirmSection3Ref = React.useRef<HTMLElement | null>(null);
+  React.useEffect(() => {
+    const el = confirmOpenSection === 3 ? confirmSection3Ref.current
+      : confirmOpenSection === 2 ? confirmSection2Ref.current
+      : null;
+    if (!el) return undefined;
+    const raf = requestAnimationFrame(() => requestAnimationFrame(() => scrollSectionToTop(el)));
+    return () => cancelAnimationFrame(raf);
+  }, [confirmOpenSection]);
+
+  // Confirm & Schedule reschedule pre-fill: when the job has a PENDING customer
+  // reschedule request, seed Requested Date/Time with the customer's requested
+  // NEW time (the same preferred_datetime the "New:" list badge shows) and keep
+  // the ORIGINAL appointment (initial.requested_date_time) to show under the
+  // field. Fetches only in confirm mode; applied once via the ref guard so it
+  // never clobbers an operator edit. Lives above the early-return (Rules of Hooks).
+  const rescheduleReqJobId = isConfirm && initial ? Number(initial.job_id) : null;
+  const { data: custReqData } = useFetch<CustomerRequest[] | { items?: CustomerRequest[] }>(
+    rescheduleReqJobId ? `/admin/jobs/${rescheduleReqJobId}/customer-requests` : null,
+  );
+  const pendingReschedule = React.useMemo(() => {
+    const rows = Array.isArray(custReqData) ? custReqData : (custReqData?.items ?? []);
+    return rows.find((r) => r.request_status === 'pending' && r.request_type === 'reschedule' && r.preferred_datetime) ?? null;
+  }, [custReqData]);
+  const reschedulePrefillRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!pendingReschedule || reschedulePrefillRef.current) return;
+    reschedulePrefillRef.current = true;
+    // preferred_datetime is 'YYYY-MM-DD HH:mm:ss' → datetime-local 'YYYY-MM-DDTHH:mm'.
+    const pref = String(pendingReschedule.preferred_datetime).slice(0, 16).replace(' ', 'T');
+    setF((s) => ({ ...s, requested_date_time: pref, time_slot: inferSlotFromTime(pref) ?? s.time_slot }));
+  }, [pendingReschedule]);
 
   /*
    * Client custom-properties (loaded when a client is picked).
@@ -6059,6 +6150,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
         {/* ── 2 · Customer Details ───────────────────────────────────────── */}
         <Section
           title="2 · Customer Details"
+          sectionRef={confirmSection2Ref}
           expanded={confirmOpenSection === 2}
           onToggle={() => { if (confirmSection1Complete) setConfirmOpenSection(2); }}
           disabled={!confirmSection1Complete}
@@ -6192,6 +6284,14 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                     From upload: <strong>{f.upload_date_hint}</strong> — pick a time slot to proceed.
                   </p>
                 )}
+                {/* When a pending customer reschedule pre-filled the field above
+                    with the requested NEW time, show the ORIGINAL appointment
+                    (from the job) underneath for context. */}
+                {pendingReschedule && initial?.requested_date_time ? (
+                  <p className="text-[11px] text-muted-foreground">
+                    Original Date/Time: {formatDate(initial.requested_date_time as string)}
+                  </p>
+                ) : null}
               </div>
             </div>
             {/* Address section — uses the shared AddressPickerWithMap
@@ -6364,6 +6464,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
           */}
         <Section
           title="3 · Select Products"
+          sectionRef={confirmSection3Ref}
           expanded={confirmOpenSection === 3}
           onToggle={() => { if (confirmSection2Complete) setConfirmOpenSection(3); }}
           disabled={!confirmSection2Complete}
@@ -7182,6 +7283,25 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
    */
   const [openSection, setOpenSection] = React.useState<1 | 2 | 3>(1);
   /*
+   * Book New Call: when the operator advances a section, scroll that section's
+   * HEADER to the TOP of the modal's scroll body (no field focus) so the
+   * viewport doesn't stay parked at the bottom. Covers BOTH the 1→2 and 2→3
+   * Next transitions. Double rAF so the just-collapsed prior section has settled
+   * its layout before we measure + scroll (scrollSectionToTop uses an absolute
+   * target, immune to that shift). Scoped to create mode (this accordion only
+   * renders when !isEditShape).
+   */
+  const section2Ref = React.useRef<HTMLElement | null>(null);
+  const selectProductsRef = React.useRef<HTMLElement | null>(null);
+  React.useEffect(() => {
+    const el = openSection === 3 ? selectProductsRef.current
+      : openSection === 2 ? section2Ref.current
+      : null;
+    if (!el) return undefined;
+    const raf = requestAnimationFrame(() => requestAnimationFrame(() => scrollSectionToTop(el)));
+    return () => cancelAnimationFrame(raf);
+  }, [openSection]);
+  /*
    * Clients for which Branch Details is MANDATORY (not optional).
    * Sourced from product config:
    *   252 → Lenskart
@@ -7605,6 +7725,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
         <>
           <Section
             title="2. Customer Details"
+            sectionRef={section2Ref}
             expanded={openSection === 2}
             onToggle={() => { if (section1Complete) setOpenSection(2); }}
             disabled={!section1Complete}
@@ -7830,11 +7951,18 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                             checked={isSelected}
                             onChange={() => {
                               setSelectedAddressId(a.address_id);
+                              // Copy all six address fields (not just line/city/pin)
+                              // so switching saved addresses also fills Building/
+                              // Floor + Landmark and re-centres the map from
+                              // gps_location — same as the preselect initializer.
                               setF((s) => ({
                                 ...s,
                                 address: a.address || '',
+                                building: a.building || '',
+                                landmark: a.landmark || '',
                                 city_id: a.city_id != null ? String(a.city_id) : '',
                                 pin_code: a.pin_code || '',
+                                gps_location: a.gps_location || '',
                               }));
                             }}
                             className="mt-0.5"
@@ -8017,6 +8145,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
 
           <Section
             title="3. Select Products"
+            sectionRef={selectProductsRef}
             expanded={openSection === 3}
             onToggle={() => { if (section2Complete) setOpenSection(3); }}
             disabled={!section2Complete}
@@ -9839,6 +9968,27 @@ export function slotBoundsForPicker(currentIso: string): { min: string; max: str
  *     `onToggle` is supplied — preserves the existing Confirm/Edit
  *     mode layout that wasn't accordion-shaped.
  */
+/*
+ * Scroll the given section element so its HEADER pins to the TOP of the modal's
+ * scroll container. Walks up to the nearest scrollable ancestor and sets an
+ * ABSOLUTE scrollTop (delta from current) — idempotent and immune to the layout
+ * shift from the previously-open section collapsing above it. A plain
+ * scrollIntoView({block:'start'}) fights browser scroll-anchoring and clamps a
+ * trailing section to max scrollTop, landing it low. Moves no focus.
+ */
+function scrollSectionToTop(sectionEl: HTMLElement | null) {
+  if (!sectionEl) return;
+  let sc: HTMLElement | null = sectionEl.parentElement;
+  while (sc) {
+    const oy = getComputedStyle(sc).overflowY;
+    if ((oy === 'auto' || oy === 'scroll') && sc.scrollHeight > sc.clientHeight) break;
+    sc = sc.parentElement;
+  }
+  if (!sc) return;
+  const delta = sectionEl.getBoundingClientRect().top - sc.getBoundingClientRect().top;
+  sc.scrollTo({ top: sc.scrollTop + delta, behavior: 'smooth' });
+}
+
 function Section({
   title,
   children,
@@ -9846,6 +9996,7 @@ function Section({
   onToggle,
   disabled,
   badge,
+  sectionRef,
 }: {
   title: string;
   children: React.ReactNode;
@@ -9853,11 +10004,15 @@ function Section({
   onToggle?: () => void;
   disabled?: boolean;
   badge?: React.ReactNode;
+  // Optional scroll target — lets a caller scroll this section's <section>
+  // element into view (Book New Call scrolls to "3. Select Products" when the
+  // operator advances). Unused by every other Section usage.
+  sectionRef?: React.Ref<HTMLElement>;
 }) {
   const collapsible = onToggle !== undefined;
   const isOpen = !collapsible || expanded;
   return (
-    <section className="rounded-lg border bg-card">
+    <section ref={sectionRef} className="rounded-lg border bg-card">
       <button
         type="button"
         onClick={() => { if (collapsible && !disabled) onToggle?.(); }}
@@ -10105,61 +10260,10 @@ function Field({ label, children, full }: { label: string; children: React.React
 }
 
 // ─── Reschedule dialog ──────────────────────────────────────────────
-// Mirrors legacy `jobReshedule.vm` — change requested_date_time +
-// time_slot. Doesn't re-stamp scheduled_date_time (that's the assign
-// flow's job). Backend support: PATCH /admin/jobs/:id with both fields
-// in MUTABLE_COLUMNS.
-function RescheduleDialog({ open, onClose, initialDate, initialSlot, onSubmit }: {
-  open: boolean; onClose: () => void;
-  initialDate: string; initialSlot: string;
-  onSubmit: (date: string, slot: string) => Promise<void>;
-}) {
-  const [date, setDate] = useState('');
-  const [slot, setSlot] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  useEffect(() => {
-    if (open) {
-      // Convert MySQL DATETIME to <input type="datetime-local"> value.
-      // Slice to YYYY-MM-DDTHH:mm; the input ignores seconds + TZ.
-      setDate(initialDate ? initialDate.replace(' ', 'T').slice(0, 16) : '');
-      setSlot(initialSlot || '');
-      setErr(null);
-    }
-  }, [open, initialDate, initialSlot]);
-  async function go() {
-    if (!date) { setErr('Date is required'); return; }
-    setLoading(true); setErr(null);
-    try {
-      // Convert back to MySQL DATETIME shape for the backend.
-      await onSubmit(date.replace('T', ' ') + ':00', slot);
-    } catch (e) {
-      setErr(e instanceof ApiError ? e.message : 'Save failed');
-    } finally { setLoading(false); }
-  }
-  return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
-        <DialogHeader><DialogTitle>Reschedule Job</DialogTitle></DialogHeader>
-        <div className="space-y-3">
-          <div>
-            <Label className="text-sm font-medium block mb-1">Requested Date / Time *</Label>
-            <Input type="datetime-local" value={date} onChange={(e) => setDate(e.target.value)} />
-          </div>
-          <div>
-            <Label className="text-sm font-medium block mb-1">Time Slot</Label>
-            <Input value={slot} onChange={(e) => setSlot(e.target.value)} placeholder='e.g. "10am-12pm"' />
-          </div>
-          {err && <div className="text-sm text-red-600">{err}</div>}
-          <div className="flex justify-end gap-2 pt-2">
-            <CancelButton onCancel={onClose} disabled={loading} />
-            <Button onClick={go} disabled={loading}>{loading ? 'Saving…' : 'Reschedule'}</Button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
+// The local inline RescheduleDialog (generic PATCH /:id, no offer-expiry /
+// scheduling_history) was removed 2026-07-13. ActionBar now reschedules
+// through the AUDITED RescheduleDialog.tsx (imported as ApptRescheduleDialog
+// near the top of this file) → PATCH /admin/jobs/:id/reschedule.
 
 // ─── Change Description dialog ──────────────────────────────────────
 // Legacy `changeJobDesc.vm`. PATCH /admin/jobs/:id { job_desc }.
@@ -10352,6 +10456,48 @@ function Spinner() {
       <circle cx="12" cy="12" r="10" stroke="currentColor" strokeOpacity="0.25" strokeWidth="4" />
       <path d="M22 12a10 10 0 0 1-10 10" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />
     </svg>
+  );
+}
+
+/*
+ * Reached-location technician selfie — "proof of arrival". tbl_job.tx_selfie_id
+ * is an int FK to document.id; GET /admin/jobs/:id/selfie-url resolves it to a
+ * short-TTL presigned S3 URL (public — a plain <img src> loads it, same as the
+ * deep-skill image-url pattern; no auth header / blob needed). Gated on the
+ * tx_selfie_id the job detail already carries, so the resolver is hit ONLY when a
+ * selfie exists; renders nothing otherwise (older jobs, no reached step).
+ */
+function TechnicianSelfieTile({ jobId, selfieId }: { jobId: number; selfieId: unknown }) {
+  const has = selfieId != null && selfieId !== '' && Number(selfieId) > 0;
+  const { data, loading, error } = useFetch<{ url: string | null }>(
+    has ? `/admin/jobs/${jobId}/selfie-url` : null,
+  );
+  if (!has) return null;
+  // Resolved but no image (unresolvable doc row, or S3 disabled in local/QA where
+  // the resolver returns url=null) → hide entirely, per the endpoint's documented
+  // "render the tile unconditionally and hide it on null" contract. Otherwise every
+  // reached job in a non-S3 environment would show an empty selfie card. Loading and
+  // genuine-error states still render (an error means a selfie exists but failed).
+  const url = data?.url ?? null;
+  if (!loading && !error && !url) return null;
+  return (
+    <div className="rounded-lg border bg-card mt-5 max-w-md">
+      <div className="px-5 py-3 border-b bg-muted/30"><h3 className="text-sm font-semibold">Technician Selfie</h3></div>
+      <div className="p-5">
+        <p className="text-xs text-muted-foreground mb-3">Reached-location proof of arrival</p>
+        {loading ? (
+          <div className="text-xs text-muted-foreground">Loading…</div>
+        ) : error ? (
+          <div className="text-xs text-destructive">Could not load selfie</div>
+        ) : url ? (
+          <img
+            src={url}
+            alt="Technician arrival selfie"
+            className="rounded-md border max-h-64 object-contain"
+          />
+        ) : null}
+      </div>
+    </div>
   );
 }
 
