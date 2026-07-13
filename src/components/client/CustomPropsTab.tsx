@@ -23,6 +23,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
+import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { SearchSelect, type SearchOption } from '@/components/ui/search-select';
 import { showToast } from '@/components/ui/toast';
@@ -258,6 +259,13 @@ export function CustomPropsTab({ clientId, canEdit, client }: Props) {
                 </span>
                 {p.label && <span className="text-sm font-medium">{p.label}</span>}
                 {p.mandatory && <span className="text-[10px] uppercase tracking-wide text-amber-700 bg-amber-50 border border-amber-200 px-1 rounded">Required</span>}
+                {/*
+                  Control/config property — hidden from booking forms + bulk
+                  templates (is_config discriminator). Data-entry rows have no chip.
+                */}
+                {p.is_config && (
+                  <Badge className="text-[10px] uppercase tracking-wide text-sky-700 bg-sky-50 border border-sky-200 px-1.5 py-0">Setting</Badge>
+                )}
               </div>
               <div className="text-xs text-muted-foreground mt-0.5">
                 {p.value ? <span>Value: <span className="font-mono">{p.value}</span></span> : <span className="italic">No default value</span>}
@@ -312,6 +320,7 @@ function CustomPropFormDialog({
     label: initial?.label ?? '',
     value: initial?.value ?? '',
     mandatory: initial?.mandatory ?? false,
+    is_config: initial?.is_config ?? false,
   }));
   /*
    * DB-discovered property keys, loaded via the module-level TTL cache
@@ -422,6 +431,7 @@ function CustomPropFormDialog({
         label: form.label?.trim() || null,
         value: form.value?.trim() || null,
         mandatory: !!form.mandatory,
+        is_config: !!form.is_config,
       };
       if (isEdit && initial?.id) {
         await api.put<{ updated: boolean }>(`/admin/clients/custom-properties/${initial.id}`, payload as never);
@@ -539,6 +549,23 @@ function CustomPropFormDialog({
               onChange={(e) => update('mandatory', e.target.checked)}
             />
             Required at Booking Time
+          </label>
+          {/*
+            Client Setting discriminator (is_config). When checked, this is a
+            client-level control/config property — the BE hides it from booking
+            forms + bulk templates. Unchecked = a per-booking data-entry field.
+          */}
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={!!form.is_config}
+              onChange={(e) => update('is_config', e.target.checked)}
+            />
+            <span>
+              Client Setting
+              <span className="block text-[11px] text-muted-foreground">Hide From Booking Forms &amp; Bulk Template</span>
+            </span>
           </label>
           <DialogFooter className="pt-2">
             <Button type="button" variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
