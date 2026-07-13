@@ -102,6 +102,10 @@ export type ClientCustomProperty = {
   label: string | null;
   value: string | null;
   mandatory: boolean;
+  // Discriminator: true = client-level CONFIG/CONTROL setting (hidden from
+  // booking forms + bulk templates); false/absent = per-booking data-entry
+  // field. BE returns 0/1 per row on LIST/GET.
+  is_config?: boolean;
   raw?: Record<string, unknown>;
 };
 
@@ -147,6 +151,8 @@ export type CustomPropertyFormPayload = {
   label?: string | null;
   value?: string | null;
   mandatory?: boolean;
+  // true → stored 1 (client-level control setting); default false → 0.
+  is_config?: boolean;
 };
 
 // Static enum for the collected_by code → label mapping (mirrors the
