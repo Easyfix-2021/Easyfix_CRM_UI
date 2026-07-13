@@ -47,7 +47,7 @@ type WebCallValue = {
   muted: boolean;
   error: string | null;
   busy: boolean;              // between click and the SDK call being placed
-  placeWebCall: (target: WebCallTarget, opts?: { callTo?: string }) => Promise<void>;
+  placeWebCall: (target: WebCallTarget, opts?: { callTo?: string; teleprompterSessionId?: string; flow?: string }) => Promise<void>;
   hangup: () => void;
   toggleMute: () => void;
   dismiss: () => void;
@@ -161,7 +161,7 @@ export function WebCallProvider({ children }: { children: React.ReactNode }) {
     return client;
   }, []);
 
-  const placeWebCall = React.useCallback(async (target: WebCallTarget, opts?: { callTo?: string }) => {
+  const placeWebCall = React.useCallback(async (target: WebCallTarget, opts?: { callTo?: string; teleprompterSessionId?: string; flow?: string }) => {
     if (busy) return;
     if (active) { setError('A call is already in progress — hang up the current call before starting another.'); return; }
     setBusy(true); setError(null); setMuted(false);
@@ -181,6 +181,10 @@ export function WebCallProvider({ children }: { children: React.ReactNode }) {
       const body: Record<string, number | boolean | string> = {};
       for (const [k, v] of Object.entries(target)) if (v != null) body[k] = v as number | boolean;
       if (opts?.callTo) body.callTo = opts.callTo;
+      // AI Teleprompter (additive): tag the flow + pass the session so web-answer
+      // forks the call audio to STT. Absent ⇒ an ordinary web call, unchanged.
+      if (opts?.teleprompterSessionId) body.teleprompterSessionId = opts.teleprompterSessionId;
+      if (opts?.flow) body.flow = opts.flow;
       const resp = await api.post<{
         jobCallerInfoId: number; dialId: string; toMasked: string | null; receiverName: string | null;
       }>('/admin/calls/web-start', body);
