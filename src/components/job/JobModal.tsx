@@ -4336,6 +4336,33 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
   }, [initial, mode]);
 
   /*
+   * Confirm-flow saved-address conveniences, applied once per job (ref guard, so
+   * a later operator edit is never stomped) as soon as the saved addresses land.
+   * Declared AFTER the reseed effect above so its building override isn't clobbered.
+   *   (a) Auto-check the preselected saved-address radio — for ALL confirm jobs
+   *       (any source), mirroring the create-flow addresses[0] preselect rule.
+   *   (b) BULK-UPLOAD ONLY: mirror the current Complete Address into the
+   *       Building/Floor field — bulk rows arrive as one address blob with no
+   *       structured building. Gated on source: the Source column shows/stores
+   *       "Bulk Upload" (an older EasyFix path wrote the literal 'excel', per
+   *       isBulkSentinel) — accept either, case-insensitively.
+   */
+  const confirmAddrAppliedRef = React.useRef<number | null>(null);
+  React.useEffect(() => {
+    if (!isConfirm || !initial) return;
+    const jobKey = Number(initial.job_id);
+    if (confirmAddrAppliedRef.current === jobKey || savedAddresses.length === 0) return;
+    confirmAddrAppliedRef.current = jobKey;
+    // (a) preselect the saved-address radio — every source.
+    setSelectedAddressId(savedAddresses[0].address_id);
+    // (b) Complete Address → Building/Floor — Bulk Upload only.
+    const src = String(initial.source_type ?? '').trim().toLowerCase();
+    if (src === 'bulk upload' || src === 'excel') {
+      setF((s) => ({ ...s, building: s.address }));
+    }
+  }, [isConfirm, initial, savedAddresses]);
+
+  /*
    * Fire when the picked client changes. Loads the client's contact
    * list for the Reporting Contact dropdown and resets
    * reporting_contact_id if the old pick is no longer in the new list.
