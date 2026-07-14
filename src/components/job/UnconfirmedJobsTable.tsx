@@ -297,69 +297,69 @@ export function UnconfirmedJobsTable({
                 </div>
               </td>
               {/*
-                Customer Request cell — shows the latest PENDING cancel /
-                reschedule request raised by the customer via the magic-link
-                page. Cancel = rose chip, Reschedule = amber chip, with the
-                reason as muted sub-text + a title tooltip. None → em-dash.
-                The presence of a request also hides the Send action below.
+                Customer Request cell — the customer's magic-link activity.
+                These are INDEPENDENT (stacked), NOT mutually exclusive: a job
+                can carry a pending cancel/reschedule request AND be
+                auto-rescheduled — both chips then show. Cancel = rose,
+                Reschedule Requested = amber, Auto Rescheduled = sky (system
+                action, kept visually distinct from the amber customer request).
+                None → em-dash. A pending cancel/reschedule also hides the Send.
               */}
               <td className="text-xs whitespace-nowrap">
-                {j.pending_request_type === 'cancel' ? (
-                  <div className="flex flex-col items-start gap-0.5">
-                    <StatusChip tone="rose" size="sm" title={j.pending_request_reason ?? undefined}>
-                      Cancel Requested
-                    </StatusChip>
-                    {j.pending_request_reason && (
-                      <div className="text-[10px] text-muted-foreground max-w-[160px] truncate" title={j.pending_request_reason}>
-                        {j.pending_request_reason}
+                {(j.pending_request_type === 'cancel' || j.pending_request_type === 'reschedule' || autoRescheduled) ? (
+                  <div className="flex flex-col items-start gap-1.5">
+                    {j.pending_request_type === 'cancel' && (
+                      <div className="flex flex-col items-start gap-0.5">
+                        <StatusChip tone="rose" size="sm" title={j.pending_request_reason ?? undefined}>
+                          Cancel Requested
+                        </StatusChip>
+                        {j.pending_request_reason && (
+                          <div className="text-[10px] text-muted-foreground max-w-[160px] truncate" title={j.pending_request_reason}>
+                            {j.pending_request_reason}
+                          </div>
+                        )}
                       </div>
                     )}
-                  </div>
-                ) : j.pending_request_type === 'reschedule' ? (
-                  <div className="flex flex-col items-start gap-0.5">
-                    <StatusChip tone="amber" size="sm" title={j.pending_request_reason ?? undefined}>
-                      Reschedule Requested
-                    </StatusChip>
-                    {j.pending_request_reason && (
-                      <div className="text-[10px] text-muted-foreground max-w-[160px] truncate" title={j.pending_request_reason}>
-                        {j.pending_request_reason}
+                    {j.pending_request_type === 'reschedule' && (
+                      <div className="flex flex-col items-start gap-0.5">
+                        <StatusChip tone="amber" size="sm" title={j.pending_request_reason ?? undefined}>
+                          Reschedule Requested
+                        </StatusChip>
+                        {j.pending_request_reason && (
+                          <div className="text-[10px] text-muted-foreground max-w-[160px] truncate" title={j.pending_request_reason}>
+                            {j.pending_request_reason}
+                          </div>
+                        )}
+                        {/* The date the customer asked to move TO (pending Ops). */}
+                        {j.pending_request_preferred_datetime && (
+                          <div
+                            className="text-[10px] font-medium text-amber-700 dark:text-amber-500 whitespace-nowrap"
+                            title="Requested new date/time (pending Ops action)"
+                          >
+                            New: {formatDate(j.pending_request_preferred_datetime)}
+                          </div>
+                        )}
                       </div>
                     )}
-                    {/* The date the customer asked to move TO. Shown here
-                        (not in the Appointment column) because the live
-                        appointment stays put until Ops actions the request —
-                        so this is the "requested new date", kept visually
-                        distinct from the current appointment beside it. */}
-                    {j.pending_request_preferred_datetime && (
-                      <div
-                        className="text-[10px] font-medium text-amber-700 dark:text-amber-500 whitespace-nowrap"
-                        title="Requested new date/time (pending Ops action)"
-                      >
-                        New: {formatDate(j.pending_request_preferred_datetime)}
-                      </div>
-                    )}
-                  </div>
-                ) : autoRescheduled ? (
-                  /* No pending customer request, but the appointment was
-                     auto-shifted +1 day by the after-3pm magic-link-open rule.
-                     Shown here (a reschedule-type event) rather than the Status
-                     column, with the original (pre-shift) date beneath. */
-                  <div className="flex flex-col items-start gap-0.5">
-                    <StatusChip
-                      tone="amber"
-                      size="sm"
-                      title={j.original_appointment_date_time
-                        ? `Auto-rescheduled +1 day (link opened after 3pm). Original appointment: ${formatDate(j.original_appointment_date_time)}`
-                        : 'Auto-rescheduled +1 day (link opened after 3pm)'}
-                    >
-                      Auto Rescheduled
-                    </StatusChip>
-                    {j.original_appointment_date_time && (
-                      <div
-                        className="text-[10px] font-medium text-amber-700 dark:text-amber-500 whitespace-nowrap"
-                        title="Original appointment (before the after-3pm auto-reschedule)"
-                      >
-                        Original: {formatDate(j.original_appointment_date_time)}
+                    {autoRescheduled && (
+                      <div className="flex flex-col items-start gap-0.5">
+                        <StatusChip
+                          tone="sky"
+                          size="sm"
+                          title={j.original_appointment_date_time
+                            ? `Auto-rescheduled +1 day (link opened after 3pm). Original appointment: ${formatDate(j.original_appointment_date_time)}`
+                            : 'Auto-rescheduled +1 day (link opened after 3pm)'}
+                        >
+                          Auto Rescheduled
+                        </StatusChip>
+                        {j.original_appointment_date_time && (
+                          <div
+                            className="text-[10px] font-medium text-sky-700 dark:text-sky-400 whitespace-nowrap"
+                            title="Original appointment (before the after-3pm auto-reschedule)"
+                          >
+                            Original: {formatDate(j.original_appointment_date_time)}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
