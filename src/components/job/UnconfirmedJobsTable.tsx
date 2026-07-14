@@ -97,6 +97,13 @@ export type UnconfirmedJobRow = {
   // this alongside the "Reschedule Requested" chip. NULL when the customer
   // did not pick a specific date.
   pending_request_preferred_datetime?: string | null;
+  // Auto-reschedule (after-3pm magic-link-open rule): whether this job's
+  // appointment was auto-shifted +1 day, and the original (pre-shift) date.
+  // Drives the amber "Auto Rescheduled" chip + the "Original: <date>" line.
+  // `auto_rescheduled` is a reliable marker (scheduling_history), not the
+  // overwrite-prone remarks text. Optional so older API responses don't break.
+  auto_rescheduled?: boolean | 0 | 1;
+  original_appointment_date_time?: string | null;
 };
 
 /*
@@ -191,6 +198,9 @@ export function UnconfirmedJobsTable({
           // a failed send must NOT read as sent.
           const deliveryFailed = j.magic_link_delivery_status === 'failed'
             || j.magic_link_delivery_status === 'undelivered';
+          // Coerce the mysql2 EXISTS 0/1 to a real boolean — `{0 && <Chip/>}`
+          // renders the literal "0" in JSX, which is the stray "0" bug.
+          const autoRescheduled = !!j.auto_rescheduled;
           return (
             <tr key={j.job_id}>
               <td className="font-medium whitespace-nowrap stick-col stick-left">
@@ -295,7 +305,7 @@ export function UnconfirmedJobsTable({
               */}
               <td className="text-xs whitespace-nowrap">
                 {j.pending_request_type === 'cancel' ? (
-                  <div className="flex flex-col gap-0.5">
+                  <div className="flex flex-col items-start gap-0.5">
                     <StatusChip tone="rose" size="sm" title={j.pending_request_reason ?? undefined}>
                       Cancel Requested
                     </StatusChip>
@@ -306,7 +316,7 @@ export function UnconfirmedJobsTable({
                     )}
                   </div>
                 ) : j.pending_request_type === 'reschedule' ? (
-                  <div className="flex flex-col gap-0.5">
+                  <div className="flex flex-col items-start gap-0.5">
                     <StatusChip tone="amber" size="sm" title={j.pending_request_reason ?? undefined}>
                       Reschedule Requested
                     </StatusChip>
@@ -326,6 +336,30 @@ export function UnconfirmedJobsTable({
                         title="Requested new date/time (pending Ops action)"
                       >
                         New: {formatDate(j.pending_request_preferred_datetime)}
+                      </div>
+                    )}
+                  </div>
+                ) : autoRescheduled ? (
+                  /* No pending customer request, but the appointment was
+                     auto-shifted +1 day by the after-3pm magic-link-open rule.
+                     Shown here (a reschedule-type event) rather than the Status
+                     column, with the original (pre-shift) date beneath. */
+                  <div className="flex flex-col items-start gap-0.5">
+                    <StatusChip
+                      tone="amber"
+                      size="sm"
+                      title={j.original_appointment_date_time
+                        ? `Auto-rescheduled +1 day (link opened after 3pm). Original appointment: ${formatDate(j.original_appointment_date_time)}`
+                        : 'Auto-rescheduled +1 day (link opened after 3pm)'}
+                    >
+                      Auto Rescheduled
+                    </StatusChip>
+                    {j.original_appointment_date_time && (
+                      <div
+                        className="text-[10px] font-medium text-amber-700 dark:text-amber-500 whitespace-nowrap"
+                        title="Original appointment (before the after-3pm auto-reschedule)"
+                      >
+                        Original: {formatDate(j.original_appointment_date_time)}
                       </div>
                     )}
                   </div>
