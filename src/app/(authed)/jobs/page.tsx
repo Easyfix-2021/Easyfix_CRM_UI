@@ -25,7 +25,7 @@ import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { TransferJobOwnershipDialog } from '@/components/job/TransferJobOwnershipDialog';
 import { UnconfirmedJobsTable } from '@/components/job/UnconfirmedJobsTable';
 import { CallableMobile } from '@/components/calls/CallButton';
-import { useSort, SortHeader } from '@/lib/use-sort';
+import { cycleSort, SortHeader, type SortDir } from '@/lib/use-sort';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -227,7 +227,7 @@ export default function JobsPage() {
     const off = reset ? 0 : offset;
     // Cache key includes pageSize so changing rows-per-page doesn't
     // serve a stale fixed-50 payload.
-    const key = `${tab}|${off}|${limit}|${filterKey()}`;
+    const key = `${tab}|${off}|${limit}|${sortKey || ''}|${sortDir}|${filterKey()}`;
 
     if (!force) {
       const hit = cacheRef.current.get(key);
@@ -319,6 +319,10 @@ export default function JobsPage() {
         isEscalated,
         noServices,
         limit, offset: off,
+        // Server-side sort (whitelisted BE-side). Only sent when a column is
+        // active; absent → BE default job_id DESC.
+        sortBy: sortKey || undefined,
+        sortDir: sortKey ? sortDir : undefined,
         clientId: filters.clientId || undefined,
         cityId: filters.cityId || undefined,
         stateId: filters.stateId || undefined,
@@ -586,14 +590,34 @@ export default function JobsPage() {
     afterReload: refreshCounts,
   });
 
-  // Apply UI-only search filter before sorting (shared filterJobRows in
-  // lib/job-tabs.ts — see there for the column/label/date matching rationale).
-  // Memoized on [data, q] so unrelated renders (rowBusy/transferAlert/
-  // showFilters) keep a stable filteredItems identity and don't trigger
-  // useSort's internal re-sort.
+  // Instant client-side search filter over the current (server-sorted,
+  // server-paginated) page — shared filterJobRows in lib/job-tabs.ts. Sorting
+  // itself is now server-side (see below), so this only narrows what's already
+  // ordered; it preserves the server's row order.
   const filteredItems = useMemo(() => filterJobRows(data?.items ?? [], q), [data, q]);
-  // Sort hook must live at the component root to satisfy Rules of Hooks.
-  const { sorted, sortKey, sortDir, toggle } = useSort<JobRow>(filteredItems);
+  // Server-side sort — the whole result set is ordered in SQL before LIMIT/OFFSET
+  // so sorting reaches OFF-page rows (a client-side reorder only touched the
+  // current page). State drives the fetch; a header click cycles it + refetches.
+  const [sortKey, setSortKey] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
+  const toggle = (col: string) => {
+    const next = cycleSort(col, { sortBy: sortKey, sortDir });
+    setSortKey(next.sortBy);
+    setSortDir(next.sortDir);
+  };
+  // Server already returns the page in sort order; keep the name `sorted` for the
+  // render. filteredItems = the instant client q-filter over the current page.
+  const sorted = filteredItems;
+  // Refetch when the sort changes (skip the initial mount — the tab effect
+  // already loads). Resets to page 1 so the operator sees the top of the new
+  // ordering.
+  const sortMountRef = useRef(true);
+  useEffect(() => {
+    if (sortMountRef.current) { sortMountRef.current = false; return; }
+    setPage(0);
+    load(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortKey, sortDir]);
 
   return (
     <div className="space-y-5">
@@ -968,6 +992,11 @@ export default function JobsPage() {
               userIsAdmin={me?.role?.role_name?.toLowerCase() === 'admin'}
               openView={openView}
               openConfirm={openConfirm}
+              // Server-side sort: forward the page's sort state + toggle so the
+              // Unconfirmed column headers sort the WHOLE list (not just page).
+              sortBy={sortKey}
+              sortDir={sortDir}
+              onSort={toggle}
               // Force-refetch (skip TAB_CACHE) so the "Link Sent" pill
               // appears immediately after the popup closes successfully.
               onMagicLinkSent={() => load(false, true)}

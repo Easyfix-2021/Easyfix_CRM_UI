@@ -723,6 +723,19 @@ export default function JobCompletionMagicLinkPage() {
     (primaryService?.service_type_name && primaryService.service_type_name.trim()) ||
     (primaryService?.service_catg_name && primaryService.service_catg_name.trim()) ||
     'Service Visit';
+  // Free/Paid chip for the Service Requested card. Sourced from the prefill's
+  // per-service billing_label (BE: tbl_client_service.total_amount null/0 → 'Free',
+  // else 'Paid'). Order-level rule: 'Paid' if ANY selected service is billed,
+  // else the primary service's label. (This is the billing Free/Paid — distinct
+  // from the CRM `collected_by` "who collects" enum, which is not exposed here.)
+  const billingLabel: 'Free' | 'Paid' =
+    (data.selectedServices ?? []).some(
+      (sel) =>
+        data.services.find((s) => s.client_service_id === sel.client_service_id)?.billing_label ===
+        'Paid',
+    )
+      ? 'Paid'
+      : primaryService?.billing_label ?? 'Free';
   // City NAME (not id) for the read-only assembled address line.
   const cityName =
     data.cityOptions.find((c) => String(c.value) === form.city_id)?.label || '';
@@ -791,8 +804,25 @@ export default function JobCompletionMagicLinkPage() {
           </div>
         </div>
 
-        {/* CARD: Service requested (read-only — set at booking, not editable). */}
-        <InfoCard icon={<Wrench className="h-4 w-4" />} title="Service Requested">
+        {/* CARD: Service requested (read-only — set at booking, not editable).
+            Right-aligned Free/Paid chip in the title row via InfoCard's `action`
+            slot. */}
+        <InfoCard
+          icon={<Wrench className="h-4 w-4" />}
+          title="Service Requested"
+          action={
+            <span
+              className={
+                'inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset ' +
+                (billingLabel === 'Paid'
+                  ? 'bg-amber-50 text-amber-800 ring-amber-200'
+                  : 'bg-emerald-50 text-emerald-700 ring-emerald-200')
+              }
+            >
+              {billingLabel}
+            </span>
+          }
+        >
           <p className="text-sm leading-relaxed text-slate-600 whitespace-pre-wrap">
             {(form.job_desc && form.job_desc.trim()) || serviceName}
           </p>

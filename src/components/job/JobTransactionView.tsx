@@ -242,6 +242,15 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
           <DLRow label="Tools Required:">{fmt((j as Record<string, unknown>).tools_required) /* legacy free-text; column may not exist */}</DLRow>
           <DLRow label="Helper Required:">{j.helper_req ? 'YES' : 'NO'}</DLRow>
           <DLRow label="Filter Type:">{fmt((j as Record<string, unknown>).filter_type) /* legacy text column; absent in some DBs */}</DLRow>
+          {/* Original Appointment — the date snapshotted at create. Distinct
+              from the row below (the live/possibly auto-rescheduled date) so
+              ops can see when a late-open auto-reschedule (after-3pm rule)
+              moved the appointment. */}
+          <DLRow label="Original Appointment:">
+            {(j as Record<string, unknown>).original_appointment_date_time
+              ? formatDate((j as Record<string, unknown>).original_appointment_date_time as string)
+              : '—'}
+          </DLRow>
           <DLRow label="Appointment status with date time:">
             {j.requested_date_time ? formatDate(j.requested_date_time) : '—'}
             {j.time_slot ? <span className="ml-2 text-xs text-muted-foreground">({j.time_slot})</span> : null}

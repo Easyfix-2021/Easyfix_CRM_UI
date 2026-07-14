@@ -7,6 +7,7 @@ import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
 import { MagicLinkActionPopup } from '@/components/job/MagicLinkActionPopup';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { IconButton } from '@/components/ui/icon-button';
+import { SortHeader, type SortDir } from '@/lib/use-sort';
 
 /*
  * UnconfirmedJobsTable — the focused column set ops requested for the
@@ -69,6 +70,13 @@ export type UnconfirmedJobRow = {
   // the popup's disable-reason text + the Force Send (Override) branch.
   magic_link_max_send_count?: number | null;
   magic_link_last_action?: 'first' | 'reminder' | 'resend' | null;
+  // Real WhatsApp delivery state (BE reconciles it from Gallabox message-status
+  // callbacks — routes/webhook/whatsapp.js). 'sent' at dispatch; failed /
+  // undelivered → a red "Delivery Failed" chip with the reason on hover, so ops
+  // don't read a queued-but-undelivered send as "Link Sent". Optional so
+  // pre-migration API responses don't break the type narrow.
+  magic_link_delivery_status?: 'sent' | 'delivered' | 'read' | 'failed' | 'undelivered' | null;
+  magic_link_delivery_reason?: string | null;
   // Derived server-side from tbl_client_custom_properties
   // (auto_process_unconfirmed_order='true'). When false the client has
   // not opted into the magic-link flow and the action is hidden even
@@ -116,6 +124,13 @@ export function UnconfirmedJobsTable({
   openView,
   openConfirm,
   onMagicLinkSent,
+  // Client-side sort wiring (from the parent's useSort<JobRow>). Optional so a
+  // caller that doesn't sort still renders — headers just stay inert. The keyed
+  // columns (Job #, Ticket Created, Client, City, Status, Appointment, Customer,
+  // Source) render as clickable <SortHeader>; derived columns stay plain <th>.
+  sortBy = null,
+  sortDir = 'asc',
+  onSort = () => {},
 }: {
   rows: UnconfirmedJobRow[];
   loading: boolean;
@@ -136,6 +151,9 @@ export function UnconfirmedJobsTable({
   // should refetch the Unconfirmed list (via its useFetch / invalidate
   // mechanism) so the new sent_at / send_count flow back into the row.
   onMagicLinkSent?: () => void;
+  sortBy?: string | null;
+  sortDir?: SortDir;
+  onSort?: (col: string) => void;
 }) {
   // Track which row's Magic-Link popup is open. Single state because the
   // dialog is modal and at most one row's popup is mounted at a time.
@@ -145,18 +163,18 @@ export function UnconfirmedJobsTable({
     <table className="data-table">
       <thead>
         <tr>
-          <th className="stick-col-head stick-left">Job #</th>
-          <th>Ticket Created · Age</th>
-          <th>Client / Unique Code</th>
-          <th>City</th>
-          <th>Status</th>
+          <SortHeader<string> col="job_id" sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="stick-col-head stick-left">Job #</SortHeader>
+          <SortHeader<string> col="created_date_time" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Ticket Created · Age</SortHeader>
+          <SortHeader<string> col="client_name" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Client Ref Id</SortHeader>
+          <SortHeader<string> col="city_name" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>City</SortHeader>
+          <SortHeader<string> col="requested_date_time" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Appointment · Slot</SortHeader>
+          <SortHeader<string> col="job_status" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Status</SortHeader>
           <th>Customer Request</th>
           <th>Action Taken Reason</th>
           <th>Remarks</th>
           <th>Client SPOC</th>
-          <th>Appointment · Slot</th>
-          <th>Customer</th>
-          <th>Source</th>
+          <SortHeader<string> col="customer_name" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Customer</SortHeader>
+          <SortHeader<string> col="source_type" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Source</SortHeader>
           <th className="stick-col-head stick-right text-right">Action</th>
         </tr>
       </thead>
@@ -168,6 +186,11 @@ export function UnconfirmedJobsTable({
         {!loading && rows.map((j) => {
           const { reason, freeText } = splitRemarks(j.remarks ?? '');
           const ticketTs = j.ticket_created_date_time ?? j.created_date_time;
+          // A WhatsApp send Gallabox accepted but never delivered (e.g. number
+          // not on WhatsApp). Takes precedence over the sky "Link Sent" chip —
+          // a failed send must NOT read as sent.
+          const deliveryFailed = j.magic_link_delivery_status === 'failed'
+            || j.magic_link_delivery_status === 'undelivered';
           return (
             <tr key={j.job_id}>
               <td className="font-medium whitespace-nowrap stick-col stick-left">
@@ -185,6 +208,13 @@ export function UnconfirmedJobsTable({
                 {j.client_ref_id && <div className="text-[10px] text-muted-foreground">{j.client_ref_id}</div>}
               </td>
               <td className="text-xs">{j.city_name ?? '—'}</td>
+              {/* Appointment · Slot — moved here (between City and Status) so the
+                  appointment date is visible up-front for triage. Same value
+                  (requested_date_time + time_slot) as before. */}
+              <td className="text-xs whitespace-nowrap">
+                <div>{formatDate(j.requested_date_time)}</div>
+                {j.time_slot && <div className="text-[10px] text-muted-foreground">{j.time_slot}</div>}
+              </td>
               {/*
                 Status cell — two-row layout (2026-05-30 redesign):
                   Row 1: primary job_status chip (Unconfirmed / Booked / …)
@@ -216,7 +246,7 @@ export function UnconfirmedJobsTable({
                       {statusLabel(j.job_status, { assigned: j.fk_easyfixter_id != null })}
                     </StatusChip>
                   </div>
-                  {(hasDraftEdit(j) || j.customer_submitted_at || j.magic_link_sent_at) && (
+                  {(hasDraftEdit(j) || j.customer_submitted_at || j.magic_link_sent_at || deliveryFailed) && (
                     <div className="flex flex-wrap gap-1">
                       {hasDraftEdit(j) && (
                         <StatusChip
@@ -234,6 +264,14 @@ export function UnconfirmedJobsTable({
                           title={`Customer submitted on ${formatDate(j.customer_submitted_at)}`}
                         >
                           Customer Submitted
+                        </StatusChip>
+                      ) : deliveryFailed ? (
+                        <StatusChip
+                          tone="red"
+                          size="sm"
+                          title={j.magic_link_delivery_reason || 'WhatsApp could not deliver this message (e.g. the number is not on WhatsApp).'}
+                        >
+                          Delivery Failed
                         </StatusChip>
                       ) : j.magic_link_sent_at ? (
                         <StatusChip
@@ -310,10 +348,6 @@ export function UnconfirmedJobsTable({
                     </>
                   )
                   : <span className="text-muted-foreground">—</span>}
-              </td>
-              <td className="text-xs whitespace-nowrap">
-                <div>{formatDate(j.requested_date_time)}</div>
-                {j.time_slot && <div className="text-[10px] text-muted-foreground">{j.time_slot}</div>}
               </td>
               <td className="text-xs whitespace-nowrap">
                 <div>{j.customer_name ?? '—'}</div>

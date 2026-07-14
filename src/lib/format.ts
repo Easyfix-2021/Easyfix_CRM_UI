@@ -150,25 +150,32 @@ export function titleCaseLabel(input: unknown): string {
 }
 
 /*
- * formatServiceAddress — the canonical single-line "Service Address" shown
- * across the CRM. Combines the parts in a FIXED order —
- * Building · Complete Address · Landmark · City · Pincode — dropping any
- * empty/whitespace-only part and joining with ' · '. Returns `fallback`
- * ('—') when nothing is set. Keep the order stable so every address reads
- * the same way everywhere it appears.
+ * formatServiceAddress — the canonical "Service Address" shown across the CRM.
+ *
+ * tbl_address column roles (per ops 2026-07-14):
+ *   - `address`  = the ACTUAL service address, populated by the booking flows
+ *                  (Book New Call, bulk upload, client API, magic-link). This —
+ *                  and ONLY this — IS the Service Address. Treated as
+ *                  non-editable in the Confirm & Schedule view.
+ *   - `building` = REPURPOSED to hold the Google-Map search text, used ONLY to
+ *                  derive GPS coordinates; NOT part of the Service Address.
+ *   - landmark / city / pincode stay their own fields.
+ *
+ * So the summary is simply the `address` value (trimmed), falling back to
+ * `fallback` ('—') when absent. (Earlier revisions composed
+ * building · [address] · landmark · city · pincode — retired: ops want the
+ * single authoritative address string, nothing else. `opts.separator` is now
+ * unused; kept for call-site signature compatibility.)
  */
 export function formatServiceAddress(
   // `unknown` so callers can pass a whole job/address object directly,
   // regardless of how loosely (or strictly, via an index signature) its type
-  // declares these fields. We read the 5 named parts defensively and
-  // coerce/null-check each — avoids TS weak-type errors + per-site casts.
+  // declares these fields. We read `address` defensively and coerce/null-check
+  // it — avoids TS weak-type errors + per-site casts.
   parts: unknown,
   opts?: { separator?: string; fallback?: string },
 ): string {
   const p = (parts && typeof parts === 'object' ? parts : {}) as Record<string, unknown>;
-  const ordered = [p.building, p.address, p.landmark, p.city_name, p.pin_code];
-  const clean = ordered
-    .map((v) => (v == null ? '' : String(v).trim()))
-    .filter((v) => v !== '');
-  return clean.length ? clean.join(opts?.separator ?? ' · ') : (opts?.fallback ?? '—');
+  const addr = p.address == null ? '' : String(p.address).trim();
+  return addr !== '' ? addr : (opts?.fallback ?? '—');
 }

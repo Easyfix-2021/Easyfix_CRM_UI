@@ -44,6 +44,7 @@ import { formatDate } from '@/lib/utils';
 import { cycleSort, SortHeader, type SortDir } from '@/lib/use-sort';
 import { downloadXlsx } from '@/lib/download-xlsx';
 import { showToast } from '@/components/ui/toast';
+import { StatusChip } from '@/components/ui/StatusChip';
 import type { ClientRow, ClientDetail, ClientListResponse } from '@/lib/client-types';
 import { ClientFormDialog } from '@/components/client/ClientFormDialog';
 import { ContactsTab } from '@/components/client/ContactsTab';
@@ -214,13 +215,14 @@ export default function ClientsPage() {
                 <th className="!text-left">Primary SPOC</th>
                 <th className="!text-left">Secondary SPOC</th>
                 <SortHeader col={'client_status'  as SortKey} align="center" sortBy={sortBy} sortDir={sortDir} onSort={onSortToggle}>Status</SortHeader>
+                <th className="!text-center">Magic Link</th>
                 <th className="!text-right">Action</th>
               </tr>
             </thead>
             <tbody>
-              {loading && <tr><td colSpan={8} className="!text-center text-muted-foreground py-6">Loading…</td></tr>}
+              {loading && <tr><td colSpan={9} className="!text-center text-muted-foreground py-6">Loading…</td></tr>}
               {!loading && items.length === 0 && (
-                <tr><td colSpan={8} className="!text-center text-muted-foreground py-6">No clients match the filter.</td></tr>
+                <tr><td colSpan={9} className="!text-center text-muted-foreground py-6">No clients match the filter.</td></tr>
               )}
               {!loading && items.map((c) => (
                 <tr key={c.client_id} className="cursor-pointer hover:bg-muted/30" onClick={() => openClient(c.client_id)}>
@@ -248,6 +250,11 @@ export default function ClientsPage() {
                     {c.client_status === 1
                       ? <span className="text-emerald-700 text-xs">Active</span>
                       : <span className="text-muted-foreground text-xs">Inactive</span>}
+                  </td>
+                  <td className="!text-center">
+                    {c.magic_link_enabled
+                      ? <StatusChip tone="emerald" size="sm">Enabled</StatusChip>
+                      : <span className="text-muted-foreground">—</span>}
                   </td>
                   <td className="!text-right whitespace-nowrap">
                     {/* Row actions — pencil (Edit) for the most-common

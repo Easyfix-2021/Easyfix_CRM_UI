@@ -6416,11 +6416,10 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 </p>
               </div>
             )}
-            {/* Service Address (read-only) — the assembled Building · Address ·
-                Landmark · City · Pincode, relocated here from the Job Summary
-                strip and placed just above the editable Complete Address so ops
-                can copy/paste or cross-check it while editing. Mirrors the live
-                form values so it stays in sync as the address is edited. */}
+            {/* Service Address (read-only) — the actual booking address
+                (tbl_address.address). Non-editable here: the operator sets GPS
+                via the "Search Location On Map" (building) field in the picker
+                below, which never changes this address. */}
             <div className="col-span-1 md:col-span-3 mb-3">
               <Label className="text-xs text-muted-foreground">Service Address</Label>
               <textarea
@@ -6459,6 +6458,10 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 }}
                 cities={lk.toOpts.cities.map((o) => ({ value: String(o.value), label: String(o.label) }))}
                 autoCreatePincode
+                /* Confirm & Schedule: `address` is the non-editable Service
+                   Address (shown read-only above); the Google search moves to
+                   the `building` field and only sets GPS. */
+                serviceAddressReadOnly
               />
             </div>
           </div>

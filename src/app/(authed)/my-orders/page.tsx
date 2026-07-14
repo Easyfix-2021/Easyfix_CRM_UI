@@ -22,7 +22,7 @@ import { AssignTechnicianModal, type AssignMode } from '@/components/job/AssignT
 import { ScheduleAssignModal } from '@/components/job/ScheduleAssignModal';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
-import { useSort, SortHeader } from '@/lib/use-sort';
+import { cycleSort, SortHeader, type SortDir } from '@/lib/use-sort';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
 import { useDebouncedValue } from '@/lib/hooks';
@@ -178,7 +178,7 @@ export default function MyOrdersPage() {
     // serve a stale 50-row payload. Also includes serverQ so the
     // Unconfirmed-tab search results don't collide with the
     // unfiltered cache entry for the same offset.
-    const key = `${tab}|${off}|${limit}|${scopedOwnerId ?? 'admin-all'}|q=${serverQ}`;
+    const key = `${tab}|${off}|${limit}|${scopedOwnerId ?? 'admin-all'}|q=${serverQ}|s=${sortKey || ''}:${sortDir}`;
 
     if (!force) {
       const hit = cacheRef.current.get(key);
@@ -207,6 +207,9 @@ export default function MyOrdersPage() {
         statuses:  tabDef?.statuses ? tabDef.statuses.join(',') : undefined,
         assigned:  tabDef?.assigned === undefined ? undefined : String(tabDef.assigned),
         limit, offset: off,
+        // Server-side sort (whitelisted BE-side); absent → BE default job_id DESC.
+        sortBy: sortKey || undefined,
+        sortDir: sortKey ? sortDir : undefined,
         ownerId: scopedOwnerId,
         // Global search (Unconfirmed tab only). BE's /admin/jobs accepts
         // `q` and searches across id / customer / address. Empty string
@@ -337,7 +340,25 @@ export default function MyOrdersPage() {
   // matches INSTANTLY; the debounced server-q refetch in parallel
   // expands the result to off-page matches when it lands.
   const filteredItems = filterJobRows(data?.items ?? [], q);
-  const { sorted, sortKey, sortDir, toggle } = useSort<JobRow>(filteredItems);
+  // Server-side sort — order the WHOLE result set in SQL before LIMIT/OFFSET so
+  // sorting reaches off-page rows (a client reorder only touched the current
+  // page). A header click cycles the state and refetches.
+  const [sortKey, setSortKey] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
+  const toggle = (col: string) => {
+    const next = cycleSort(col, { sortBy: sortKey, sortDir });
+    setSortKey(next.sortBy);
+    setSortDir(next.sortDir);
+  };
+  // Server returns the page already ordered; keep the name `sorted` for render.
+  const sorted = filteredItems;
+  const sortMountRef = useRef(true);
+  useEffect(() => {
+    if (sortMountRef.current) { sortMountRef.current = false; return; }
+    setPage(0);
+    load(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortKey, sortDir]);
 
   // Resolve the current tab's human label for the page header — each sidebar
   // sub-menu is a standalone status page, so the tab name IS the page title.
@@ -428,6 +449,11 @@ export default function MyOrdersPage() {
               userIsAdmin={me?.role?.role_name?.toLowerCase() === 'admin'}
               openView={openView}
               openConfirm={openConfirm}
+              // Server-side sort: forward the page's sort state + toggle so the
+              // Unconfirmed column headers sort the WHOLE list (not just page).
+              sortBy={sortKey}
+              sortDir={sortDir}
+              onSort={toggle}
               // Force-refetch (skip TAB_CACHE) so the "Link Sent" pill
               // appears immediately after the popup closes successfully.
               onMagicLinkSent={() => load(false, true)}
@@ -443,14 +469,14 @@ export default function MyOrdersPage() {
           <table className="data-table">
             <thead>
               <tr>
-                <th className="stick-col-head stick-left">Job ID</th>
-                <th>Ticket Created Date / Job Age</th>
-                <th>Client</th>
-                <th>City</th>
+                <SortHeader<string> col="job_id" sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="stick-col-head stick-left">Job ID</SortHeader>
+                <SortHeader<string> col="created_date_time" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Ticket Created Date / Job Age</SortHeader>
+                <SortHeader<string> col="client_name" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Client</SortHeader>
+                <SortHeader<string> col="city_name" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>City</SortHeader>
                 <th>Service Category</th>
-                <th>Appointment Date &amp; Time</th>
-                <th>Customer</th>
-                <th>Current Status</th>
+                <SortHeader<string> col="requested_date_time" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Appointment Date &amp; Time</SortHeader>
+                <SortHeader<string> col="customer_name" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Customer</SortHeader>
+                <SortHeader<string> col="job_status" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Current Status</SortHeader>
                 <th>Open Reason / Remarks</th>
                 <th className="stick-col-head stick-right text-right">Action</th>
               </tr>
