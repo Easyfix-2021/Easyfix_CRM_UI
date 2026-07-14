@@ -80,6 +80,12 @@ export function TeleprompterPanel({ open, efrId, onClose, onApplied }: {
   const [starting, setStarting] = React.useState(false);
   const [applying, setApplying] = React.useState(false);
   const [micOn, setMicOn] = React.useState(false);
+  // Whether the media stream has EVER attached — the relay writes status='streaming'
+  // on connect. Latches true; drives the no-stream warning + the fail-fast on hangup
+  // (a call that never streamed has nothing to "wrap up", so we don't wait out the
+  // backend connect-reaper for minutes).
+  const [streamConnected, setStreamConnected] = React.useState(false);
+  const [noStreamWarn, setNoStreamWarn] = React.useState(false);
 
   const askedRef = React.useRef<{ id: string; ts: number }[]>([]);
   const pollRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
@@ -167,6 +173,9 @@ export function TeleprompterPanel({ open, efrId, onClose, onApplied }: {
       const s = await api.get<Session>(`/admin/teleprompter/${sid}`);
       if (gen !== genRef.current) return;
       setSession(s);
+      // Latch once the media stream has attached (or moved past it). 'calling' means
+      // it never connected — that's what the no-stream warning + fail-fast key on.
+      if (s.status === 'streaming' || s.status === 'processing' || s.status === 'done') setStreamConnected(true);
       if (s.status === 'done' || s.status === 'failed') { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } }
     } catch { /* transient; keep polling */ }
   }
@@ -188,6 +197,7 @@ export function TeleprompterPanel({ open, efrId, onClose, onApplied }: {
       setSessionId(null); setSession(null); setQuestions([]); setCurrentId(null); setCallTo('');
       setPickedSkills(new Set()); setPickedPins(new Set());
       setStartError(null); setRetryPending(false); setCfgTimedOut(false);
+      setStreamConnected(false); setNoStreamWarn(false);
       lastPromotedNextRef.current = null; lastPromoteAtRef.current = 0;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -199,6 +209,16 @@ export function TeleprompterPanel({ open, efrId, onClose, onApplied }: {
     setPickedSkills(new Set((session.result.deep_skill_items || []).map((_, i) => i)));
     setPickedPins(new Set(session.result.serviceable_pincode_ids || []));
   }, [isDone, session?.result]);
+
+  // No-stream watchdog: once the call is answered, STT should attach within a few
+  // seconds. If the session hasn't reached 'streaming' within 15s, warn Ops during
+  // the call so they don't burn a full call with nothing captured (usually a
+  // wss/nginx/PLIVO_CALLBACK_BASE_URL connectivity issue, not STT itself).
+  React.useEffect(() => {
+    if (webCall.status !== 'in_progress' || streamConnected) { setNoStreamWarn(false); return; }
+    const t = setTimeout(() => setNoStreamWarn(true), 15000);
+    return () => clearTimeout(t);
+  }, [webCall.status, streamConnected]);
 
   // ── Ops mic VAD (best-effort) while the call is live ──
   React.useEffect(() => {
@@ -404,6 +424,12 @@ export function TeleprompterPanel({ open, efrId, onClose, onApplied }: {
                   {webCall.error || webCall.active?.endedReason || 'The call could not be connected. You can retry.'}
                 </div>
               )}
+              {callLive && !streamConnected && noStreamWarn && (
+                <div className="rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                  STT hasn&apos;t connected — this call won&apos;t be transcribed or analyzed. It&apos;s usually a
+                  connectivity issue (the media stream can&apos;t reach the server), not a bad call. You can end and retry.
+                </div>
+              )}
               <p className="text-xs text-muted-foreground">
                 Read the highlighted question. As the technician answers, the next question lights up automatically.
               </p>
@@ -456,12 +482,28 @@ export function TeleprompterPanel({ open, efrId, onClose, onApplied }: {
                     <Phone className="h-4 w-4" /> Retry Call
                   </Button>
                 </div>
-              ) : (
+              ) : streamConnected ? (
                 <div className="flex items-center justify-between gap-2">
                   <span className="inline-flex items-center gap-1 text-xs text-slate-500">
                     <Loader2 className="h-3 w-3 animate-spin" /> Wrapping Up The Call…
                   </span>
                   <Button variant="outline" size="sm" onClick={onClose}>Close</Button>
+                </div>
+              ) : (
+                // Call ended but STT never attached → nothing was captured, so don't sit
+                // on the backend connect-reaper for minutes. Fail fast with a retry.
+                <div className="space-y-2">
+                  <div className="rounded border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+                    The call ended but STT never connected, so nothing was captured. This is a
+                    connectivity issue (the media stream couldn&apos;t reach the server) — check the
+                    teleprompter stream config, then retry.
+                  </div>
+                  <div className="flex items-center justify-end gap-2">
+                    <Button variant="outline" size="sm" onClick={onClose}>Close</Button>
+                    <Button size="sm" onClick={retryCall} className="bg-sky-600 hover:bg-sky-700 text-white">
+                      <Phone className="h-4 w-4" /> Retry Call
+                    </Button>
+                  </div>
                 </div>
               )}
             </>
