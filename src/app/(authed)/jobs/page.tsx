@@ -30,6 +30,7 @@ import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
+import { RefreshBar } from '@/components/ui/refresh-bar';
 import { LiveLocationPopover } from '@/components/location/LiveLocationPopover';
 
 // `/admin/jobs` Joi caps limit at 500 — pass to pageSizeToLimit so
@@ -171,6 +172,15 @@ export default function JobsPage() {
   const offset = page * limit;
   const [data, setData] = useState<Resp | null>(null);
   const [loading, setLoading] = useState(false);
+  // `refreshing` = a silent/poll reload while data is already on screen. Never
+  // gates the table (that's `loading`, first-paint only) — keeps refreshes
+  // flicker-free. Optionally surfaced as a subtle indicator.
+  const [refreshing, setRefreshing] = useState(false);
+  // Server-side sort state (whitelisted BE-side) — declared here with the other
+  // query state so load() and the poll effect can depend on it. `toggle` + the
+  // sort refetch effect live near the render below.
+  const [sortKey, setSortKey] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [showFilters, setShowFilters] = useState(false);
 
   /*
@@ -221,7 +231,7 @@ export default function JobsPage() {
     ].join('|');
   }
 
-  async function load(reset = false, force = false) {
+  async function load(reset = false, force = false, silent = false) {
     const seq = ++loadSeqRef.current;
     const tabDef = TABS.find((t) => t.value === tab);
     const off = reset ? 0 : offset;
@@ -255,7 +265,10 @@ export default function JobsPage() {
       return;
     }
 
-    setLoading(true);
+    // First paint (no data yet) raises the skeleton; every later reload —
+    // pagination, sort, post-mutation, poll — is silent so the table body
+    // never flashes "Loading…".
+    if (data == null && !silent) setLoading(true); else setRefreshing(true);
     try {
       /*
        * Pass the tab's filter payload to the backend:
@@ -365,7 +378,7 @@ export default function JobsPage() {
       setErrorMsg(`Failed to load jobs: ${e instanceof Error ? e.message : 'Unknown error'}`);
     } finally {
       inflightRef.current.delete(key);
-      if (seq === loadSeqRef.current) setLoading(false);
+      if (seq === loadSeqRef.current) { setLoading(false); setRefreshing(false); }
     }
   }
 
@@ -374,6 +387,10 @@ export default function JobsPage() {
   // via the onPageSizeChange handler below, so an explicit reset isn't
   // needed here.
   useEffect(() => { load(false); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [page, pageSize]);
+  // NOTE: no interval polling — data refreshes on ACTION (post-mutation
+  // load(false, true) after saves/row-actions), which is now SILENT + flicker-
+  // free thanks to the data-null loading guard above. Event-driven is cheaper
+  // than a 15s poll and never surprises an operator mid-task.
   // Reload when ?focus=… changes — drives the Escalated Jobs deep-link
   // from the navbar.
   const focusParam = useSearchParams().get('focus');
@@ -595,11 +612,8 @@ export default function JobsPage() {
   // itself is now server-side (see below), so this only narrows what's already
   // ordered; it preserves the server's row order.
   const filteredItems = useMemo(() => filterJobRows(data?.items ?? [], q), [data, q]);
-  // Server-side sort — the whole result set is ordered in SQL before LIMIT/OFFSET
-  // so sorting reaches OFF-page rows (a client-side reorder only touched the
-  // current page). State drives the fetch; a header click cycles it + refetches.
-  const [sortKey, setSortKey] = useState<string | null>(null);
-  const [sortDir, setSortDir] = useState<SortDir>('desc');
+  // Server-side sort — sortKey/sortDir state is declared up in the state block
+  // (load()/the poll effect depend on it); here we wire the header-click cycle.
   const toggle = (col: string) => {
     const next = cycleSort(col, { sortBy: sortKey, sortDir });
     setSortKey(next.sortBy);
@@ -977,6 +991,7 @@ export default function JobsPage() {
       </Card>
 
       <Card>
+        <RefreshBar active={refreshing} />
         <CardContent className="p-0 overflow-x-auto">
           {tab === 'unconfirmed' ? (
             <UnconfirmedJobsTable

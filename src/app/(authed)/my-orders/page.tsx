@@ -23,6 +23,7 @@ import { ScheduleAssignModal } from '@/components/job/ScheduleAssignModal';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
 import { cycleSort, SortHeader, type SortDir } from '@/lib/use-sort';
+import { RefreshBar } from '@/components/ui/refresh-bar';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
 import { useDebouncedValue } from '@/lib/hooks';
@@ -147,6 +148,16 @@ export default function MyOrdersPage() {
   const offset = page * limit;
   const [data, setData] = useState<Resp | null>(null);
   const [loading, setLoading] = useState(false);
+  // `refreshing` = a silent/poll reload while data is already shown (never gates
+  // the table). `loadSeqRef` = stale-response guard this page lacked: a slow
+  // poll must not clobber a newer user-initiated load — only the latest seq wins.
+  const [refreshing, setRefreshing] = useState(false);
+  const loadSeqRef = useRef(0);
+  // Server-side sort state (whitelisted BE-side) — declared here with the other
+  // query state so load() and the poll effect can depend on it. `toggle` + the
+  // sort refetch effect live near the render below.
+  const [sortKey, setSortKey] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
 
   /*
    * Role-aware owner filter: admin-group users see all jobs here (matches
@@ -171,7 +182,8 @@ export default function MyOrdersPage() {
   const inflightRef = useRef<Map<string, Promise<Resp>>>(new Map());
   const TAB_CACHE_TTL = 30_000;
 
-  async function load(reset = false, force = false) {
+  async function load(reset = false, force = false, silent = false) {
+    const seq = ++loadSeqRef.current;
     const tabDef = TABS.find((t) => t.value === tab);
     const off = reset ? 0 : offset;
     // Cache key includes pageSize so changing rows-per-page doesn't
@@ -183,8 +195,7 @@ export default function MyOrdersPage() {
     if (!force) {
       const hit = cacheRef.current.get(key);
       if (hit && Date.now() - hit.at < TAB_CACHE_TTL) {
-        setData(hit.data);
-        if (reset) setPage(0);
+        if (seq === loadSeqRef.current) { setData(hit.data); if (reset) setPage(0); }
         return;
       }
     }
@@ -194,13 +205,14 @@ export default function MyOrdersPage() {
     if (inflight) {
       try {
         const r = await inflight;
-        setData(r);
-        if (reset) setPage(0);
+        if (seq === loadSeqRef.current) { setData(r); if (reset) setPage(0); }
       } catch { /* originator surfaces the error */ }
       return;
     }
 
-    setLoading(true);
+    // First paint (no data) shows the skeleton; every later reload — tab/page/
+    // sort/search/post-mutation/poll — is silent so the table never flashes.
+    if (data == null && !silent) setLoading(true); else setRefreshing(true);
     try {
       const reqPromise = api.get<Resp>('/admin/jobs', {
         status:    tabDef?.statuses ? undefined : tabDef?.status,
@@ -219,12 +231,14 @@ export default function MyOrdersPage() {
       });
       inflightRef.current.set(key, reqPromise);
       const r = await reqPromise;
-      setData(r);
       cacheRef.current.set(key, { at: Date.now(), data: r });
-      if (reset) setPage(0);
+      if (seq === loadSeqRef.current) {
+        setData(r);
+        if (reset) setPage(0);
+      }
     } finally {
       inflightRef.current.delete(key);
-      setLoading(false);
+      if (seq === loadSeqRef.current) { setLoading(false); setRefreshing(false); }
     }
   }
 
@@ -236,6 +250,9 @@ export default function MyOrdersPage() {
   // unfiltered paginated list.
   useEffect(() => { setPage(0); load(true, true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [tab, scopedOwnerId, serverQ]);
   useEffect(() => { load(false); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [page, pageSize]);
+  // NOTE: no interval polling — data refreshes on ACTION (post-mutation
+  // load(false, true) after saves/row-actions), now SILENT + flicker-free via
+  // the data-null loading guard. Event-driven, no mid-task surprises.
 
   // (refreshCounts removed with the pill bar — each sub-menu is its own page
   // so we don't need cross-tab counts; `data.total` in the subtitle covers
@@ -340,11 +357,8 @@ export default function MyOrdersPage() {
   // matches INSTANTLY; the debounced server-q refetch in parallel
   // expands the result to off-page matches when it lands.
   const filteredItems = filterJobRows(data?.items ?? [], q);
-  // Server-side sort — order the WHOLE result set in SQL before LIMIT/OFFSET so
-  // sorting reaches off-page rows (a client reorder only touched the current
-  // page). A header click cycles the state and refetches.
-  const [sortKey, setSortKey] = useState<string | null>(null);
-  const [sortDir, setSortDir] = useState<SortDir>('desc');
+  // Server-side sort — sortKey/sortDir state is declared up in the state block
+  // (load()/the poll effect depend on it); here we wire the header-click cycle.
   const toggle = (col: string) => {
     const next = cycleSort(col, { sortBy: sortKey, sortDir });
     setSortKey(next.sortBy);
@@ -434,6 +448,7 @@ export default function MyOrdersPage() {
       </Card>
 
       <Card>
+        <RefreshBar active={refreshing} />
         <CardContent className="p-0 overflow-x-auto">
           {tab === 'unconfirmed' ? (
             <UnconfirmedJobsTable

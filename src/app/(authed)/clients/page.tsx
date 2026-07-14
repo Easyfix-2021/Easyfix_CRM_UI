@@ -45,6 +45,7 @@ import { cycleSort, SortHeader, type SortDir } from '@/lib/use-sort';
 import { downloadXlsx } from '@/lib/download-xlsx';
 import { showToast } from '@/components/ui/toast';
 import { StatusChip } from '@/components/ui/StatusChip';
+import { RefreshBar } from '@/components/ui/refresh-bar';
 import type { ClientRow, ClientDetail, ClientListResponse } from '@/lib/client-types';
 import { ClientFormDialog } from '@/components/client/ClientFormDialog';
 import { ContactsTab } from '@/components/client/ContactsTab';
@@ -102,7 +103,9 @@ export default function ClientsPage() {
     return `/admin/clients?${p.toString()}`;
   }, [debouncedSearch, includeInactive, limit, page, pageSize, sortBy, sortDir]);
 
-  const { data: list, loading, error } = useFetch<ClientListResponse>(listKey);
+  // Refreshes on action (the save flow calls refetch()); now SILENT + flicker-
+  // free since `loading` only gates first paint. `refreshing` drives the top bar.
+  const { data: list, loading, refreshing, error } = useFetch<ClientListResponse>(listKey);
 
   // Server-side sorted + paginated — render the page exactly as the BE
   // returns it (ordering is applied over the complete list, not here).
@@ -204,6 +207,7 @@ export default function ClientsPage() {
       )}
 
       <Card>
+        <RefreshBar active={refreshing} />
         <CardContent className="p-0">
           <table className="data-table w-full">
             <thead>
@@ -254,7 +258,7 @@ export default function ClientsPage() {
                   <td className="!text-center">
                     {c.magic_link_enabled
                       ? <StatusChip tone="emerald" size="sm">Enabled</StatusChip>
-                      : <span className="text-muted-foreground">—</span>}
+                      : <StatusChip tone="red" size="sm">Disabled</StatusChip>}
                   </td>
                   <td className="!text-right whitespace-nowrap">
                     {/* Row actions — pencil (Edit) for the most-common

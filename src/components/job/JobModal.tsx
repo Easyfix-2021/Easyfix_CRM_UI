@@ -349,6 +349,11 @@ export function JobModal({
     catch { /* swallow — outer error state is set by action handlers */ }
   }
 
+  // NOTE: no interval polling on the modal — the job re-pulls on ACTION via the
+  // silent refresh() already wired to ActionBar.onChanged (assign / reschedule /
+  // remarks etc.). Event-driven avoids refreshing the panel under an operator
+  // who is reading or editing it.
+
   // While loading a fresh job we render a neutral title so the operator
   // doesn't see last-modal's job id flash. The non-view modes embed the
   // jobId from props (always current — no stale risk) so they render
