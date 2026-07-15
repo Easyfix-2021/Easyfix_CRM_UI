@@ -420,7 +420,34 @@ export default function CallAnalyticsPage() {
         <CallerScorecard rows={scorecard?.items ?? []} loading={scLoading} error={scError} />
       )}
 
-      {analysisFor && <AnalysisModal call={analysisFor} onClose={() => setAnalysisFor(null)} />}
+      {analysisFor && (
+        <AnalysisModal
+          call={analysisFor}
+          onClose={() => setAnalysisFor(null)}
+          onAnalysed={() => {
+            /*
+             * Opening the modal GENERATES the analysis server-side on first view,
+             * so this row's score + call_analysis_status just changed and the
+             * table would otherwise stay stale until a manual reload.
+             *
+             * Refetch ONLY when the row had no analysis before we opened it. A
+             * cache hit changed nothing, and re-requesting the list on every
+             * modal open is pure waste — `hasAnalysis` on the row we captured at
+             * open time is exactly that "was it already scored?" question.
+             *
+             * A silent refetch, not an in-place patch: `useFetch` keeps the
+             * current data and raises `refreshing` (never `loading`), so the
+             * table updates with no skeleton and no flicker. Patching locally
+             * would save one small paginated request but force this component to
+             * re-derive `score` and `call_analysis_status` the way the BE does —
+             * two fields free to drift from the server.
+             */
+            if (hasAnalysis(analysisFor)) return;
+            invalidateFetch((k) => k.startsWith('/admin/calls/scorecard'));
+            refetch();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -525,15 +552,37 @@ function Sparkline({ trend }: { trend: { score: number | null; when: string | nu
   );
 }
 
-function AnalysisModal({ call, onClose }: { call: CallRow; onClose: () => void }) {
+/*
+ * `onAnalysed` fires when the GET came back 'ready'. That endpoint GENERATES and
+ * stores the analysis on first view, so opening this modal can change the row's
+ * score server-side — without this callback the table showed a stale score until
+ * the operator reloaded the page.
+ *
+ * It fires on cache hits too (the endpoint reports 'ready' either way, and the
+ * modal can't tell them apart). Deciding whether anything actually CHANGED is the
+ * caller's job — it knows what the row looked like before it opened.
+ */
+function AnalysisModal({ call, onClose, onAnalysed }: {
+  call: CallRow;
+  onClose: () => void;
+  onAnalysed?: () => void;
+}) {
   const [resp, setResp] = React.useState<AnalysisResp | null>(null);
   const [err, setErr] = React.useState<string | null>(null);
+  // Kept in a ref so a caller passing an inline arrow can't re-trigger the fetch
+  // effect on every render.
+  const onAnalysedRef = React.useRef(onAnalysed);
+  onAnalysedRef.current = onAnalysed;
 
   React.useEffect(() => {
     let cancelled = false;
     setResp(null); setErr(null);
     api.get<AnalysisResp>(`/admin/calls/${call.id}/analysis`)
-      .then((r) => { if (!cancelled) setResp(r); })
+      .then((r) => {
+        if (cancelled) return;
+        setResp(r);
+        if (r.status === 'ready') onAnalysedRef.current?.();
+      })
       .catch((e) => { if (!cancelled) setErr(e instanceof Error ? e.message : 'Failed to load analysis.'); });
     return () => { cancelled = true; };
   }, [call.id]);
