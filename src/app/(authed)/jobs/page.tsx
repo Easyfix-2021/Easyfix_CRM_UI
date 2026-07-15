@@ -239,37 +239,48 @@ export default function JobsPage() {
     // serve a stale fixed-50 payload.
     const key = `${tab}|${off}|${limit}|${sortKey || ''}|${sortDir}|${filterKey()}`;
 
-    if (!force) {
-      const hit = cacheRef.current.get(key);
-      if (hit && Date.now() - hit.at < TAB_CACHE_TTL) {
-        setData(hit.data);
-        if (reset) setPage(0);
-        return;
-      }
-    }
-
-    // In-flight dedupe: if a request for this exact key is already
-    // mid-air (Strict Mode double-fire, or two effects landing in
-    // the same tick), attach to it instead of starting a fresh one.
-    // The Promise hasn't settled yet, so the cache isn't populated —
-    // but the response is on the way; we just await it.
-    const inflight = inflightRef.current.get(key);
-    if (inflight) {
-      try {
-        const r = await inflight;
-        if (seq === loadSeqRef.current) {
-          setData(r);
-          if (reset) setPage(0);
-        }
-      } catch { /* ignore — the originating call will surface the error */ }
-      return;
-    }
-
     // First paint (no data yet) raises the skeleton; every later reload —
-    // pagination, sort, post-mutation, poll — is silent so the table body
-    // never flashes "Loading…".
+    // pagination, sort, post-mutation — is silent so the table body never
+    // flashes "Loading…".
+    //
+    // Raised BEFORE the cache/in-flight short-circuits, and cleared in the single
+    // `finally` that every exit path below funnels through. When those
+    // short-circuits had their own `return`s they skipped the cleanup entirely:
+    // on mount BOTH effects call load(), the second bumps `seq` (staling the
+    // first) and then short-circuits onto the first's in-flight promise — so the
+    // first was stale-guarded out of its own `finally` and the second never
+    // reached one. Nobody cleared `loading` and the table showed the skeleton
+    // until a tab change fired an un-raced load.
     if (data == null && !silent) setLoading(true); else setRefreshing(true);
     try {
+      if (!force) {
+        const hit = cacheRef.current.get(key);
+        if (hit && Date.now() - hit.at < TAB_CACHE_TTL) {
+          if (seq === loadSeqRef.current) {
+            setData(hit.data);
+            if (reset) setPage(0);
+          }
+          return;
+        }
+      }
+
+      // In-flight dedupe: if a request for this exact key is already
+      // mid-air (Strict Mode double-fire, or two effects landing in
+      // the same tick), attach to it instead of starting a fresh one.
+      // The Promise hasn't settled yet, so the cache isn't populated —
+      // but the response is on the way; we just await it.
+      const inflight = inflightRef.current.get(key);
+      if (inflight) {
+        try {
+          const r = await inflight;
+          if (seq === loadSeqRef.current) {
+            setData(r);
+            if (reset) setPage(0);
+          }
+        } catch { /* ignore — the originating call will surface the error */ }
+        return;
+      }
+
       /*
        * Pass the tab's filter payload to the backend:
        *   - `statuses` (CSV) wins when set (multi-status tabs: Pending to Close,
@@ -366,18 +377,23 @@ export default function JobsPage() {
         requestedBefore: tabDef?.requestedBefore,
       });
       inflightRef.current.set(key, reqPromise);
-      const r = await reqPromise;
-      // Cache unconditionally — the payload is correct for its own key
-      // regardless of whether this invocation is still the latest.
-      cacheRef.current.set(key, { at: Date.now(), data: r });
-      if (seq === loadSeqRef.current) {
-        setData(r);
-        if (reset) setPage(0);
+      try {
+        const r = await reqPromise;
+        // Cache unconditionally — the payload is correct for its own key
+        // regardless of whether this invocation is still the latest.
+        cacheRef.current.set(key, { at: Date.now(), data: r });
+        if (seq === loadSeqRef.current) {
+          setData(r);
+          if (reset) setPage(0);
+        }
+      } finally {
+        // Only THIS call owns the entry it registered — the cache/dedupe
+        // short-circuits above must not evict a promise another call awaits.
+        inflightRef.current.delete(key);
       }
     } catch (e) {
       setErrorMsg(`Failed to load jobs: ${e instanceof Error ? e.message : 'Unknown error'}`);
     } finally {
-      inflightRef.current.delete(key);
       if (seq === loadSeqRef.current) { setLoading(false); setRefreshing(false); }
     }
   }

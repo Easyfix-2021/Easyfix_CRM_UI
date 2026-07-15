@@ -192,52 +192,67 @@ export default function MyOrdersPage() {
     // unfiltered cache entry for the same offset.
     const key = `${tab}|${off}|${limit}|${scopedOwnerId ?? 'admin-all'}|q=${serverQ}|s=${sortKey || ''}:${sortDir}`;
 
-    if (!force) {
-      const hit = cacheRef.current.get(key);
-      if (hit && Date.now() - hit.at < TAB_CACHE_TTL) {
-        if (seq === loadSeqRef.current) { setData(hit.data); if (reset) setPage(0); }
-        return;
-      }
-    }
-
-    // In-flight dedupe — see comment on inflightRef.
-    const inflight = inflightRef.current.get(key);
-    if (inflight) {
-      try {
-        const r = await inflight;
-        if (seq === loadSeqRef.current) { setData(r); if (reset) setPage(0); }
-      } catch { /* originator surfaces the error */ }
-      return;
-    }
-
     // First paint (no data) shows the skeleton; every later reload — tab/page/
-    // sort/search/post-mutation/poll — is silent so the table never flashes.
+    // sort/search/post-mutation — is silent so the table never flashes.
+    //
+    // Raised BEFORE the cache/in-flight short-circuits, and cleared in the single
+    // `finally` that every exit path below funnels through. When those
+    // short-circuits had their own `return`s they skipped the cleanup entirely:
+    // on mount BOTH effects call load(), the second bumps `seq` (staling the
+    // first) and then short-circuits onto the first's in-flight promise — so the
+    // first was stale-guarded out of its own `finally` and the second never
+    // reached one. Nobody cleared `loading` and the table showed the skeleton
+    // until a tab change fired an un-raced load.
     if (data == null && !silent) setLoading(true); else setRefreshing(true);
     try {
-      const reqPromise = api.get<Resp>('/admin/jobs', {
-        status:    tabDef?.statuses ? undefined : tabDef?.status,
-        statuses:  tabDef?.statuses ? tabDef.statuses.join(',') : undefined,
-        assigned:  tabDef?.assigned === undefined ? undefined : String(tabDef.assigned),
-        limit, offset: off,
-        // Server-side sort (whitelisted BE-side); absent → BE default job_id DESC.
-        sortBy: sortKey || undefined,
-        sortDir: sortKey ? sortDir : undefined,
-        ownerId: scopedOwnerId,
-        // Global search (Unconfirmed tab only). BE's /admin/jobs accepts
-        // `q` and searches across id / customer / address. Empty string
-        // ⇒ undefined so we don't send a no-op param on other tabs or
-        // when the box is cleared.
-        q: serverQ || undefined,
-      });
-      inflightRef.current.set(key, reqPromise);
-      const r = await reqPromise;
-      cacheRef.current.set(key, { at: Date.now(), data: r });
-      if (seq === loadSeqRef.current) {
-        setData(r);
-        if (reset) setPage(0);
+      if (!force) {
+        const hit = cacheRef.current.get(key);
+        if (hit && Date.now() - hit.at < TAB_CACHE_TTL) {
+          if (seq === loadSeqRef.current) { setData(hit.data); if (reset) setPage(0); }
+          return;
+        }
+      }
+
+      // In-flight dedupe — see comment on inflightRef.
+      const inflight = inflightRef.current.get(key);
+      if (inflight) {
+        try {
+          const r = await inflight;
+          if (seq === loadSeqRef.current) { setData(r); if (reset) setPage(0); }
+        } catch { /* originator surfaces the error */ }
+        return;
+      }
+
+      // Only THIS call owns the in-flight entry it registers, so the delete is
+      // scoped to an inner `finally` — the cache/dedupe short-circuits above
+      // must not evict a promise another call is still awaiting.
+      try {
+        const reqPromise = api.get<Resp>('/admin/jobs', {
+          status:    tabDef?.statuses ? undefined : tabDef?.status,
+          statuses:  tabDef?.statuses ? tabDef.statuses.join(',') : undefined,
+          assigned:  tabDef?.assigned === undefined ? undefined : String(tabDef.assigned),
+          limit, offset: off,
+          // Server-side sort (whitelisted BE-side); absent → BE default job_id DESC.
+          sortBy: sortKey || undefined,
+          sortDir: sortKey ? sortDir : undefined,
+          ownerId: scopedOwnerId,
+          // Global search (Unconfirmed tab only). BE's /admin/jobs accepts
+          // `q` and searches across id / customer / address. Empty string
+          // ⇒ undefined so we don't send a no-op param on other tabs or
+          // when the box is cleared.
+          q: serverQ || undefined,
+        });
+        inflightRef.current.set(key, reqPromise);
+        const r = await reqPromise;
+        cacheRef.current.set(key, { at: Date.now(), data: r });
+        if (seq === loadSeqRef.current) {
+          setData(r);
+          if (reset) setPage(0);
+        }
+      } finally {
+        inflightRef.current.delete(key);
       }
     } finally {
-      inflightRef.current.delete(key);
       if (seq === loadSeqRef.current) { setLoading(false); setRefreshing(false); }
     }
   }
