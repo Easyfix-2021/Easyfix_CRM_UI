@@ -1,5 +1,7 @@
 'use client';
 
+import { useState } from 'react';
+import { ChevronDown } from 'lucide-react';
 import { useFetch } from '@/lib/hooks';
 import { formatDate } from '@/lib/utils';
 import type { JobComment } from './jobTypes';
@@ -30,8 +32,22 @@ type CustomerRequest = {
  * into the bottom of the Confirm & Schedule and Schedule & Assign modals so
  * ops can see the existing remarks history — and the customer's pending ask —
  * without leaving the modal.
+ *
+ * `collapsible` is OPT-IN (2026-07-15) so the two hosts can differ without one
+ * dictating to the other: Schedule & Assign moved this panel up between Job
+ * Details and the technician list, where a long thread would push the Top 10
+ * off-screen, so it collapses and starts CLOSED there. Confirm & Schedule keeps
+ * the panel always-open at the bottom — passing nothing preserves exactly that.
  */
-export function JobRemarksView({ jobId }: { jobId: number | null }) {
+export function JobRemarksView({
+  jobId,
+  collapsible = false,
+  defaultOpen = true,
+}: {
+  jobId: number | null;
+  collapsible?: boolean;
+  defaultOpen?: boolean;
+}) {
   const { data, loading } = useFetch<JobComment[]>(
     jobId ? `/admin/jobs/${jobId}/comments` : null,
     { enabled: !!jobId },
@@ -40,17 +56,42 @@ export function JobRemarksView({ jobId }: { jobId: number | null }) {
     jobId ? `/admin/jobs/${jobId}/customer-requests` : null,
     { enabled: !!jobId },
   );
+  const [bodyOpen, setBodyOpen] = useState(defaultOpen);
   const rows = data ?? [];
   const pendingRequests = (reqData ?? []).filter((r) => r.request_status === 'pending');
   // Only claim "No remarks yet" when BOTH stores are empty.
   const isEmpty = !loading && rows.length === 0 && pendingRequests.length === 0;
 
+  // Non-collapsible hosts are always open; `open` only gates the body.
+  const open = !collapsible || bodyOpen;
+  // Surface the thread size on the collapsed header so ops know whether it's
+  // worth expanding — a bare "Comments" chevron gives them no reason to click.
+  const count = rows.length + pendingRequests.length;
+
   return (
     <div className="rounded-md border bg-muted/30">
-      <div className="px-3 py-2 border-b text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        Remarks / Comments
-      </div>
-      <div className="max-h-48 overflow-y-auto">
+      {collapsible ? (
+        <button
+          type="button"
+          onClick={() => setBodyOpen((o) => !o)}
+          aria-expanded={open}
+          className="flex w-full items-center gap-1.5 px-3 py-2 border-b text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-sky-700"
+        >
+          <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform ${open ? '' : '-rotate-90'}`} />
+          Remarks / Comments
+          {count > 0 && <span className="font-normal normal-case">({count})</span>}
+          {pendingRequests.length > 0 && (
+            <span className="font-normal normal-case text-amber-700">
+              · {pendingRequests.length} pending customer request{pendingRequests.length > 1 ? 's' : ''}
+            </span>
+          )}
+        </button>
+      ) : (
+        <div className="px-3 py-2 border-b text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Remarks / Comments
+        </div>
+      )}
+      <div className={`max-h-48 overflow-y-auto ${open ? '' : 'hidden'}`}>
         {pendingRequests.map((r) => (
           <div
             key={`req-${r.request_id}`}

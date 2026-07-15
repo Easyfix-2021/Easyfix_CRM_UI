@@ -46,7 +46,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle, CheckCircle2, XCircle, Info, Search, X, MapPin,
-  Calendar, CalendarClock, Phone, Loader2, Clock,
+  Calendar, CalendarClock, Phone, Loader2, Clock, ChevronDown,
 } from 'lucide-react';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -55,6 +55,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { api, ApiError, type JobOffersResponse } from '@/lib/api';
 import { formatServiceAddress } from '@/lib/format';
+import { COLLECTED_BY_OPTIONS } from '@/lib/client-types';
 import { useFetch, invalidateFetch } from '@/lib/hooks';
 import { JobRemarksView } from './JobRemarksView';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -150,6 +151,13 @@ type JobServiceRow = {
   service_type: string | null;
   quantity: number | null;
   total_charge: number | null;
+  /**
+   * Free/Paid for THIS service line. Derived BE-side in job.service.js getById
+   * from `effective_charge` (null/0 → Free, else Paid) using the same rule as
+   * the customer job-completion form, so both surfaces always agree.
+   * NOT the same thing as the job-level `collected_by` (who collects).
+   */
+  billing_label?: 'Free' | 'Paid' | null;
 };
 
 type ScheduleJob = {
@@ -161,10 +169,22 @@ type ScheduleJob = {
   address: string | null;
   city_name: string | null;
   pin_code: string | null;
+  // service_category / service_type / deep_skill_label are still projected by the
+  // BE and kept on the type (other consumers read them) — but the Job Details
+  // grid no longer renders them; `services[]` below is the authoritative
+  // per-service breakdown. Don't re-add them to the grid.
   service_category: string | null;
   service_type: string | null;
   deep_skill_label: string | null;
   services?: JobServiceRow[] | null;
+  /** Who collects payment — per JOB, not per service. 1=Easyfixer 2=Easyfix 3=Client. */
+  collected_by?: number | string | null;
+  /** Technician-facing note ("Anything Handyman should keep in mind?") — shown as Additional Comments. */
+  efr_special_notes?: string | null;
+  client_spoc?: string | null;
+  client_spoc_name?: string | null;
+  created_by_name?: string | null;
+  created_date_time?: string | null;
   job_type: string | null;
   payment_mode: string | null;
   requested_date_time: string | null;
@@ -357,6 +377,36 @@ export function ScheduleAssignModal({
   }, [top.data]);
   const job = top.data?.job ?? retainedJob;
 
+  // Job Details is collapsible but starts EXPANDED — ops read it on nearly every
+  // open; collapsing is for reclaiming height once they've moved on to picking a
+  // technician.
+  const [jobDetailsOpen, setJobDetailsOpen] = useState(true);
+
+  /*
+   * Who collects payment, resolved to a label for the Services table. Reuses the
+   * shared COLLECTED_BY_OPTIONS map rather than re-deriving 1/2/3 (there is also
+   * a private collectedByLabel() inside JobModal — the shared list is the one to
+   * build on).
+   *
+   * Code 0 ("Any (Operator Picks)") intentionally yields no text: it carries no
+   * instruction for ops, so rendering "· Any (Operator Picks)" next to every Paid
+   * line would be noise.
+   */
+  const collectedByText = useMemo(() => {
+    const raw = job?.collected_by;
+    if (raw == null || raw === '') return null;
+    const code = Number(raw);
+    if (!Number.isFinite(code) || code === 0) return null;
+    // Customer-facing wording, matching the Book-New-Call / Confirm dropdown:
+    // 1 = the technician takes payment on site → Paid By Customer;
+    // 2 = Easyfix invoices the client         → Free For Customer.
+    // Anything else (3 = Client — set on the client profile, not per job) falls
+    // back to the raw enum label rather than inventing customer-facing wording.
+    if (code === 1) return 'Paid By Customer';
+    if (code === 2) return 'Free For Customer';
+    return COLLECTED_BY_OPTIONS.find((o) => o.value === code)?.label ?? null;
+  }, [job?.collected_by]);
+
   // Effective commit mode from the BE (mirrors its own assign-vs-offer gate).
   //   ON  → offer pool: multi-select, "Offer to N Technicians" → POST /offer.
   //   OFF → direct assign: single-select, "Assign" → PATCH /assign (→ SCHEDULED).
@@ -530,13 +580,27 @@ export function ScheduleAssignModal({
             </div>
           )}
           {/* ───────── (a) COMPLETE JOB DETAILS + editable schedule ───────── */}
-          <section>
-            <h3 className="text-sm font-semibold mb-2">Job Details</h3>
-            {top.loading && !job && (
-              <div className="text-sm text-muted-foreground py-4">Loading job details…</div>
+          {/* Bordered card with an uppercase header button — same shell as
+              JobRemarksView so the two collapsibles in this modal read as one
+              family. Collapsible, expanded by default. A <button> (not a bare
+              div) so it's keyboard-reachable; aria-expanded carries state to AT. */}
+          <section className="rounded-md border bg-muted/30">
+            <button
+              type="button"
+              onClick={() => setJobDetailsOpen((o) => !o)}
+              aria-expanded={jobDetailsOpen}
+              className="flex w-full items-center gap-1.5 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-sky-700"
+            >
+              <ChevronDown
+                className={`h-3.5 w-3.5 shrink-0 transition-transform ${jobDetailsOpen ? '' : '-rotate-90'}`}
+              />
+              Job Details
+            </button>
+            {jobDetailsOpen && top.loading && !job && (
+              <div className="border-t px-3 text-sm text-muted-foreground py-4">Loading job details…</div>
             )}
-            {job && (
-              <div className="rounded-lg border bg-muted/20 p-3">
+            {jobDetailsOpen && job && (
+              <div className="border-t p-3">
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-2 text-sm">
                   <ReadField label="Customer" value={job.customer_name} />
                   <ReadField
@@ -547,25 +611,44 @@ export function ScheduleAssignModal({
                   />
                   <ReadField label="Client" value={job.client_name} />
                   <ReadField label="Client Ref Id" value={job.client_ref_id} />
+                  <ReadField label="Client SPOC" value={job.client_spoc_name || job.client_spoc} />
                   <ReadField
                     label="Service Address"
                     value={
                       <span className="inline-flex items-start gap-1">
                         <MapPin className="h-3.5 w-3.5 mt-0.5 shrink-0 text-muted-foreground" />
+                        {/* formatServiceAddress resolves to tbl_address.address ALONE
+                            (see lib/format.ts), so City is a separate field — it is
+                            not folded into the address string. */}
                         <span>{formatServiceAddress(job)}</span>
                       </span>
                     }
                   />
-                  <ReadField label="Service Category" value={job.service_category} />
-                  <ReadField label="Service Type" value={job.service_type} />
-                  <ReadField
-                    label="Deep Skill"
-                    value={job.deep_skill_label || job.service_category}
-                  />
+                  <ReadField label="City" value={job.city_name} />
+                  {/* Service Category / Service Type / Deep Skill deliberately NOT
+                      here (removed 2026-07-15) — the Services table below is the
+                      authoritative, per-service breakdown of exactly that, and the
+                      job-level copies were both redundant and wrong for
+                      multi-service jobs. */}
                   <ReadField label="Job Type" value={job.job_type} />
                   <ReadField label="Payment Mode" value={job.payment_mode} />
-                  <ReadField label="Description" value={job.job_desc} />
+                  <ReadField label="Booked By" value={job.created_by_name} />
+                  {/* formatDate renders date + IST time — no separate datetime helper. */}
+                  <ReadField label="Booked On" value={formatDate(job.created_date_time)} />
                 </div>
+
+                {/* Job Description + Additional Comments — full-width under the
+                    grid because they're free text and wrap badly in a 3-col cell.
+                    `job_desc` is the ACTUAL tbl_job.job_desc; `efr_special_notes`
+                    is the technician-facing note ("Anything Handyman should keep
+                    in mind?" in the Book-New-Call form) surfaced here as
+                    "Additional Comments". */}
+                {(job.job_desc || job.efr_special_notes) && (
+                  <div className="mt-3 pt-3 border-t grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 text-sm">
+                    <ReadField label="Job Description" value={job.job_desc} />
+                    <ReadField label="Additional Comments" value={job.efr_special_notes} />
+                  </div>
+                )}
 
                 {job.services && job.services.length > 0 && (
                   <div className="mt-3 pt-3 border-t">
@@ -578,7 +661,9 @@ export function ScheduleAssignModal({
                             <th className="font-medium py-1 pr-3">Category</th>
                             <th className="font-medium py-1 pr-3">Type</th>
                             <th className="font-medium py-1 pr-3 text-right whitespace-nowrap">Qty</th>
-                            <th className="font-medium py-1 text-right whitespace-nowrap">Amount</th>
+                            <th className="font-medium py-1 pr-3 text-right whitespace-nowrap">Amount</th>
+                            {/* Billing = Free/Paid + (Paid only) who collects. */}
+                            <th className="font-medium py-1 whitespace-nowrap">Billing</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -588,7 +673,32 @@ export function ScheduleAssignModal({
                               <td className="py-1 pr-3">{s.service_catg || '—'}</td>
                               <td className="py-1 pr-3">{s.service_type || '—'}</td>
                               <td className="py-1 pr-3 text-right whitespace-nowrap">{s.quantity ?? '—'}</td>
-                              <td className="py-1 text-right whitespace-nowrap">{s.total_charge != null ? `₹${s.total_charge}` : '—'}</td>
+                              <td className="py-1 pr-3 text-right whitespace-nowrap">{s.total_charge != null ? `₹${s.total_charge}` : '—'}</td>
+                              {/*
+                               * Free/Paid is `billing_label`, derived PER SERVICE by the
+                               * BE from effective_charge (same rule as the customer
+                               * job-completion form, so the two surfaces always agree).
+                               * Collected By is shown ONLY when Paid — there is nobody
+                               * to collect from on a free service.
+                               *
+                               * ⚠ Collected By is per-JOB (tbl_job.collected_by), not
+                               * per-service: no collected-by column exists on
+                               * tbl_job_services or tbl_client_service. So every Paid
+                               * row necessarily shows the SAME value. It sits here
+                               * because it only means anything next to Free/Paid.
+                               */}
+                              <td className="py-1 whitespace-nowrap">
+                                <span className="inline-flex items-center gap-1.5">
+                                  <StatusChip tone={s.billing_label === 'Paid' ? 'amber' : 'emerald'}>
+                                    {s.billing_label || '—'}
+                                  </StatusChip>
+                                  {s.billing_label === 'Paid' && collectedByText && (
+                                    <span className="text-muted-foreground" title="Who collects the payment for this job">
+                                      · {collectedByText}
+                                    </span>
+                                  )}
+                                </span>
+                              </td>
                             </tr>
                           ))}
                         </tbody>
@@ -639,6 +749,14 @@ export function ScheduleAssignModal({
               </div>
             )}
           </section>
+
+          {/* Job comments to date. Sits BETWEEN Job Details and the technician
+              list (moved up from the modal footer 2026-07-15) — it's context for
+              choosing a technician, so it belongs before the choice, not after
+              it. Collapsed by default so a long thread can't push the Top 10
+              off-screen; the header carries the count so ops can tell at a glance
+              whether it's worth opening. */}
+          <JobRemarksView jobId={jobId} collapsible defaultOpen={false} />
 
           {/* ───────── Offer history — live + rejected + expired — offer mode only ───────── */}
           {offerMode && (offers.data?.items?.length ?? 0) > 0 && (
@@ -711,6 +829,22 @@ export function ScheduleAssignModal({
             <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
               <h3 className="text-sm font-semibold flex items-center gap-1.5">
                 {showingSearch ? 'Search Results' : 'Top 10 Technicians'}
+                {showingSearch && (
+                  <InfoTooltip label="What you can search by">
+                    <div className="space-y-2">
+                      <div className="font-semibold text-slate-900">What you can search by</div>
+                      <div>One box — the term is matched against every field below.</div>
+                      <ul className="list-disc ml-4 space-y-0.5">
+                        <li><strong>Name</strong> — partial match</li>
+                        <li><strong>Mobile Number</strong> — partial match</li>
+                        <li><strong>City</strong> — partial match on the technician&apos;s registered city</li>
+                        <li><strong>Pincode</strong> — the technician&apos;s current pincode, matched on a full 6 digits</li>
+                        <li><strong>Technician Id</strong> — exact match</li>
+                      </ul>
+                      <div className="text-slate-500">Search ignores the Top 10 ranking filters, so it finds any <strong>Active</strong> &amp; <strong>Verified</strong> technician — including ones outside the job&apos;s area.</div>
+                    </div>
+                  </InfoTooltip>
+                )}
                 {!showingSearch && (
                   <InfoTooltip label="How the Top 10 is ranked">
                     <div className="space-y-2">
@@ -740,7 +874,7 @@ export function ScheduleAssignModal({
               <div className="relative w-80 max-w-full">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
-                  placeholder="Search Any Technician by Name or Id"
+                  placeholder="Search Any Technician by Name, Id, City or Pincode"
                   className="pl-9 pr-9"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
@@ -847,8 +981,6 @@ export function ScheduleAssignModal({
             )}
           </section>
 
-          {/* Read-only remarks / comments history at the bottom of the modal. */}
-          <JobRemarksView jobId={jobId} />
         </div>
 
         <DialogFooter className="px-6 sm:justify-between">

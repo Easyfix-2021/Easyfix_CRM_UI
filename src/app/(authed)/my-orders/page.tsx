@@ -92,8 +92,40 @@ type JobRow = {
   // offered_efr_name is that technician's name (may be null).
   is_offered?: number | boolean;
   offered_efr_name?: string | null;
+  // Offer aggregates driving the Pending-for-Scheduling tri-state chip.
+  // offered_count = offers still OPEN; total = offers in any state;
+  // expired = offers in EXPIRED state. See offerColumns() in job.service.js.
+  offered_count?: number | null;
+  total_offer_count?: number | null;
+  expired_offer_count?: number | null;
 };
 type Resp = { items: JobRow[]; total: number; limit: number; offset: number };
+
+/*
+ * Pending-for-Scheduling tri-state — Offered / Expired / Pending For Scheduling.
+ * Ops' rule, taken literally: "Expired only when ALL the offers are expired.
+ * Offered if even a single offer is active from multiple offers."
+ *
+ * Order matters: one live offer outranks any number of expired siblings, so the
+ * open-offer check comes first.
+ *
+ * The Expired test is `expired === total`, NOT `offered_count === 0`. Those look
+ * interchangeable and aren't: a job whose only offer was REJECTED has no open
+ * offer, but its offers are not all expired — it must read as Pending For
+ * Scheduling (it's back in the pool), not Expired. Don't "simplify" this.
+ *
+ * 'none' covers both never-offered and rejected/accepted-only, which the caller
+ * renders with the plain job_status label.
+ */
+function offerState(j: JobRow): 'offered' | 'expired' | 'none' {
+  // is_offered is the EXISTS flag; offered_count the COUNT. Either proves a live
+  // offer — checking both keeps this correct against older BE deploys that
+  // project is_offered but not the counts (NULL → 0).
+  if (j.is_offered === 1 || j.is_offered === true || (j.offered_count ?? 0) > 0) return 'offered';
+  const total = j.total_offer_count ?? 0;
+  const expired = j.expired_offer_count ?? 0;
+  return total > 0 && expired === total ? 'expired' : 'none';
+}
 
 // Operator-controlled via the TablePagination footer. "All" maps to
 // JOBS_MAX_LIMIT (the BE Joi cap on /admin/jobs).
@@ -502,6 +534,11 @@ export default function MyOrdersPage() {
                 <SortHeader<string> col="job_id" sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="stick-col-head stick-left">Job ID</SortHeader>
                 <SortHeader<string> col="created_date_time" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Ticket Created Date / Job Age</SortHeader>
                 <SortHeader<string> col="client_name" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Client</SortHeader>
+                {/* client_spoc_name is already on the LIST projection (LIST_COLUMNS
+                    carries it for the Unconfirmed tab) — no BE change needed. Not
+                    sortable: `client_spoc_name` isn't in the BE's SORT_COLUMN
+                    whitelist, and a click on an unwhitelisted key 400s. */}
+                <th>Client SPOC</th>
                 <SortHeader<string> col="city_name" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>City</SortHeader>
                 <th>Service Category</th>
                 <SortHeader<string> col="requested_date_time" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Appointment Date &amp; Time</SortHeader>
@@ -514,13 +551,13 @@ export default function MyOrdersPage() {
             <tbody>
               {loading && Array.from({ length: 5 }).map((_, i) => (
                 <tr key={`sk-${i}`}>
-                  {Array.from({ length: 10 }).map((_, c) => (
+                  {Array.from({ length: 11 }).map((_, c) => (
                     <td key={c}><div className="h-3 w-24 rounded bg-muted animate-pulse" /></td>
                   ))}
                 </tr>
               ))}
               {!loading && sorted.length === 0 && (
-                <tr><td colSpan={10} className="text-center text-muted-foreground py-8">
+                <tr><td colSpan={11} className="text-center text-muted-foreground py-8">
                   No orders in this bucket{!isAdmin ? ' owned by you' : ''}.
                 </td></tr>
               )}
@@ -537,6 +574,9 @@ export default function MyOrdersPage() {
                     <div className="text-[10px] text-muted-foreground">{jobAgeLabel(j.ticket_created_date_time)}</div>
                   </td>
                   <td className="min-w-[18rem] max-w-[26rem] break-words">{j.client_name ?? '—'}</td>
+                  {/* Prefer the resolved name; fall back to the raw client_spoc
+                      id/handle, which is what older rows carry. */}
+                  <td className="whitespace-nowrap">{j.client_spoc_name || j.client_spoc || '—'}</td>
                   <td>{j.city_name ?? '—'}</td>
                   <td>{j.service_category ?? '—'}</td>
                   <td className="whitespace-nowrap">
@@ -552,12 +592,25 @@ export default function MyOrdersPage() {
                     </div>
                   </td>
                   <td>
-                    {j.job_status === 0 && (j.is_offered === 1 || j.is_offered === true) ? (
+                    {/* Offer tri-state only overrides the chip on BOOKED (0)
+                        rows — on any other status the job_status label wins. */}
+                    {j.job_status === 0 && offerState(j) === 'offered' ? (
                       <StatusChip
                         tone="orange"
-                        title={j.offered_efr_name ? `Offered to ${j.offered_efr_name}` : 'Offered to technician'}
+                        title={
+                          (j.offered_count ?? 0) > 1
+                            ? `Offered to ${j.offered_count} technicians — awaiting the first to accept`
+                            : j.offered_efr_name ? `Offered to ${j.offered_efr_name}` : 'Offered to technician'
+                        }
                       >
-                        Offered to Tx
+                        {(j.offered_count ?? 0) > 1 ? `Offered to ${j.offered_count} Tx` : 'Offered to Tx'}
+                      </StatusChip>
+                    ) : j.job_status === 0 && offerState(j) === 'expired' ? (
+                      <StatusChip
+                        tone="rose"
+                        title={`Every offer on this order expired without a response (${j.expired_offer_count} of ${j.total_offer_count}) — it needs re-offering or a manual assign`}
+                      >
+                        Expired
                       </StatusChip>
                     ) : (
                       <StatusChip tone={statusTone(j.job_status)}>

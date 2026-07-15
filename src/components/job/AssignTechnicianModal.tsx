@@ -379,7 +379,7 @@ export function AssignTechnicianModal({
                 <SortHeaderTH col="sda_rate"         sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="!text-center" title="Same-day attempt rate over the lookback window">SDA Rate</SortHeaderTH>
                 <SortHeaderTH col="worked_for_client"  sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="!text-center" title="Worked for this client before?">Worked for Client</SortHeaderTH>
                 <SortHeaderTH col="worked_for_vertical" sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="!text-center" title="Worked in this service category before?">Worked in Vertical</SortHeaderTH>
-                <SortHeaderTH col="attendance_marked" sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="!text-center" title="Attendance marked today?">Attendance Today</SortHeaderTH>
+                <SortHeaderTH col="attendance_marked" sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="!text-center" title="Present unless explicitly marked absent (on leave) for the job date — an unmarked technician counts as present.">Attendance Today</SortHeaderTH>
                 <SortHeaderTH col="score"            sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="!text-right">Score</SortHeaderTH>
                 <SortHeaderTH col="grade"            sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="!text-center">Grade</SortHeaderTH>
                 <th className="!text-right whitespace-nowrap">Action</th>
