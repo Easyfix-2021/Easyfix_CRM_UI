@@ -16,7 +16,7 @@ export function FullPageMessage({
       <p className="text-sm text-slate-600 leading-relaxed">{message}</p>
       {helpline && (
         <p className="text-sm text-slate-500">
-          Need help? Call <a href="tel:+911800000000" className="text-sky-600 hover:underline">+91-1800-000-000</a>.
+          Need help? Call <a href="tel:+918068931789" className="text-sky-600 hover:underline">+91-8068931789</a>.
         </p>
       )}
       {retry && (

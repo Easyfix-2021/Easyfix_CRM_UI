@@ -13,7 +13,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import {
-  PhoneCall, Loader2, Sparkles, TrendingUp, AlertTriangle, ThumbsUp, Ban, PlusCircle, Users,
+  PhoneCall, Loader2, Sparkles, TrendingUp, AlertTriangle, ThumbsUp, Ban, PlusCircle, Users, RefreshCw,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -22,8 +22,10 @@ import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { SearchSelect, type SearchOption } from '@/components/ui/search-select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { useFetch, useDebouncedValue } from '@/lib/hooks';
-import { api } from '@/lib/api';
+import { useConfirm } from '@/components/ui/confirm-dialog';
+import { showToast } from '@/components/ui/toast';
+import { useFetch, useDebouncedValue, invalidateFetch } from '@/lib/hooks';
+import { api, ApiError } from '@/lib/api';
 import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
@@ -150,6 +152,13 @@ function fmtCoverage(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return '—';
   return `${Math.round(v)}%`;
 }
+// Does this call already carry a coaching analysis? Re-analyse only makes sense
+// for those — for everything else "View Analysis" already generates the first one.
+// `score` is extracted from the cached analysis JSON, so it's the primary signal;
+// call_analysis_status covers an analysis stored without an overall_score.
+function hasAnalysis(r: CallRow): boolean {
+  return toScore(r.score) != null || r.call_analysis_status === 'ready';
+}
 
 export default function CallAnalyticsPage() {
   const { me } = useMe();
@@ -169,19 +178,58 @@ export default function CallAnalyticsPage() {
   const [hasAnalysisOnly, setHasAnalysisOnly] = React.useState(false);
   const [analysisFor, setAnalysisFor] = React.useState<CallRow | null>(null);
 
+  // Row id currently being re-analysed — doubles as the double-submit guard
+  // (the request is slow: a provider transcript fetch plus an LLM round-trip).
+  const [reanalysing, setReanalysing] = React.useState<number | null>(null);
+  const confirm = useConfirm();
+
   const limit = pageSizeToLimit(pageSize, 200); // backend callListQuery caps limit at 200
   const qs = new URLSearchParams({ page: String(page + 1), limit: String(limit) });
   if (debouncedJob) qs.set('jobId', debouncedJob);
   if (flow) qs.set('flow', flow);
   if (minScore) qs.set('minScore', minScore);
   if (hasAnalysisOnly) qs.set('hasAnalysis', 'true');
-  const { data, loading, error } = useFetch<ListResp>(
+  const { data, loading, error, refetch } = useFetch<ListResp>(
     canView && tab === 'calls' ? `/admin/calls?${qs.toString()}` : null,
   );
   // Per-caller scorecard — only fetched while the Scorecard tab is active.
   const { data: scorecard, loading: scLoading, error: scError } = useFetch<ScorecardResp>(
     canView && tab === 'scorecard' ? '/admin/calls/scorecard?limit=100&offset=0' : null,
   );
+
+  // Force a fresh transcript + fresh coaching for a call that already has one —
+  // the analysis is cached server-side, so a better transcript would otherwise
+  // never reach the score.
+  async function onReanalyse(r: CallRow) {
+    if (reanalysing != null) return;
+    const ok = await confirm({
+      title: 'Re-analyse This Call?',
+      description: 'Fetches a fresh transcript from the provider, regenerates the coaching analysis and '
+        + "updates the caller's scorecard. The existing analysis is kept if a new one can't be generated.",
+      confirmLabel: 'Re-analyse',
+      icon: <RefreshCw className="h-5 w-5" />,
+    });
+    if (!ok) return;
+    setReanalysing(r.id);
+    try {
+      const resp = await api.post<AnalysisResp>(`/admin/calls/${r.id}/reanalyse`);
+      if (resp.status === 'ready') {
+        showToast({ variant: 'success', message: 'Analysis regenerated.' });
+        // The Scorecard tab reads a cached key it only fetches on tab switch, and
+        // the rollup just changed — drop it so switching tabs shows the new score.
+        invalidateFetch((k) => k.startsWith('/admin/calls/scorecard'));
+        refetch();
+      } else {
+        // Not ready isn't a crash (transcript still processing, AI off) — surface
+        // the backend's reason so the operator knows whether to retry.
+        showToast({ variant: 'error', message: resp.reason || 'Re-analysis could not be completed.' });
+      }
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Re-analysis failed.' });
+    } finally {
+      setReanalysing(null);
+    }
+  }
 
   if (!canView) {
     return (
@@ -209,7 +257,8 @@ export default function CallAnalyticsPage() {
       </div>
       <p className="text-sm text-muted-foreground -mt-2">
         Call history with AI coaching analysis. Click <span className="font-medium">View Analysis</span> to
-        see per-call scores + areas of improvement (needs a stored transcript).
+        see per-call scores + areas of improvement (needs a stored transcript), or{' '}
+        <span className="font-medium">Re-analyse</span> to pull a fresh transcript and regenerate the score.
       </p>
 
       {/* Tab switcher — Calls table vs the per-caller coaching rollup. */}
@@ -327,9 +376,26 @@ export default function CallAnalyticsPage() {
                           : <span className="text-muted-foreground">—</span>}
                       </td>
                       <td className="px-3 py-2 text-right">
-                        <Button size="sm" variant="outline" className="!h-7 !px-2 text-xs" onClick={() => setAnalysisFor(r)}>
-                          <Sparkles className="h-3.5 w-3.5 mr-1" /> View Analysis
-                        </Button>
+                        <div className="flex items-center justify-end gap-1.5">
+                          <Button size="sm" variant="outline" className="!h-7 !px-2 text-xs" onClick={() => setAnalysisFor(r)}>
+                            <Sparkles className="h-3.5 w-3.5 mr-1" /> View Analysis
+                          </Button>
+                          {/* Only for calls that already have an analysis — for the rest,
+                              View Analysis generates the first one anyway. */}
+                          {hasAnalysis(r) && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="!h-7 !px-2 text-xs"
+                              disabled={reanalysing != null}
+                              onClick={() => void onReanalyse(r)}
+                            >
+                              {reanalysing === r.id
+                                ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                                : <RefreshCw className="h-3.5 w-3.5 mr-1" />} Re-analyse
+                            </Button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
