@@ -574,9 +574,19 @@ export default function MyOrdersPage() {
                     <div className="text-[10px] text-muted-foreground">{jobAgeLabel(j.ticket_created_date_time)}</div>
                   </td>
                   <td className="min-w-[18rem] max-w-[26rem] break-words">{j.client_name ?? '—'}</td>
-                  {/* Prefer the resolved name; fall back to the raw client_spoc
-                      id/handle, which is what older rows carry. */}
-                  <td className="whitespace-nowrap">{j.client_spoc_name || j.client_spoc || '—'}</td>
+                  {/* client_spoc IS the SPOC's mobile (a raw string on tbl_job —
+                      there is no SPOC id), masked in transit by mask-mobile.
+                      Dialling goes through the spocJobId target, which re-reads
+                      the clear number BE-side; the FE never holds it. Same
+                      name-over-number shape as the Customer cell below. */}
+                  <td className="whitespace-nowrap">
+                    <div>{j.client_spoc_name || '—'}</div>
+                    {j.client_spoc && (
+                      <div className="text-xs text-muted-foreground">
+                        <CallableMobile spocJobId={j.job_id} mobile={j.client_spoc} />
+                      </div>
+                    )}
+                  </td>
                   <td>{j.city_name ?? '—'}</td>
                   <td>{j.service_category ?? '—'}</td>
                   <td className="whitespace-nowrap">

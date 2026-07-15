@@ -194,7 +194,14 @@ type CallTarget = {
   jobId?: number;
   customerId?: number;
   efrId?: number;             // call a technician
-  reportingContactId?: number; // call a client SPOC
+  reportingContactId?: number; // call a client SPOC (tbl_client_contacts row)
+  // spocJobId (2026-07-15): call the SPOC recorded ON THE JOB
+  // (tbl_job.client_spoc) — the per-job snapshot, which is often the only SPOC
+  // a job has and is distinct from the client's master contact record above.
+  // The id you pass is a JOB id: the SPOC number is a plain string column with
+  // no id of its own, so the BE resolves it from the job. Self-anchoring like
+  // `jobId` — the call lands in that job's history without a jobContextId.
+  spocJobId?: number;
   // useAlt (2026-06-03): modifier flag for the `jobId` path — when true
   // the BE dials tbl_job.additional_number (the customer's per-job
   // alternate) instead of the customer's master mobile. Ignored on
@@ -215,7 +222,7 @@ type CallTarget = {
 // would look ambiguous to pickTargetKey and the call would refuse to fire).
 function pickTargetKey(t: CallTarget): Exclude<keyof CallTarget, 'useAlt' | 'jobContextId'> | null {
   const keys: Array<Exclude<keyof CallTarget, 'useAlt' | 'jobContextId'>> = [
-    'jobId', 'customerId', 'efrId', 'reportingContactId',
+    'jobId', 'customerId', 'efrId', 'reportingContactId', 'spocJobId',
   ];
   const present = keys.filter((k) => t[k] != null);
   return present.length === 1 ? present[0] : null;
@@ -318,8 +325,10 @@ function useClickToCall(target: CallTarget) {
         ...(target.useAlt ? { useAlt: true } : {}),
         // Tag the call to a job when this SPOC/tech call was launched from
         // one, so it lands in that job's call history. Skipped when the
-        // target IS jobId (that path already anchors to its own job).
-        ...(target.jobContextId && targetKey !== 'jobId'
+        // target already anchors to its own job (jobId dials that job's
+        // customer; spocJobId dials that job's SPOC) — the BE stamps the job
+        // from the target id itself on both paths.
+        ...(target.jobContextId && targetKey !== 'jobId' && targetKey !== 'spocJobId'
           ? { jobContextId: target.jobContextId }
           : {}),
       }
@@ -590,11 +599,11 @@ type ButtonProps = CallTarget & {
 };
 
 export function CallButton({
-  jobId, customerId, efrId, reportingContactId, useAlt, jobContextId,
+  jobId, customerId, efrId, reportingContactId, spocJobId, useAlt, jobContextId,
   size = 'md', label = 'Call Customer', className,
 }: ButtonProps) {
   const { me } = useMe();
-  const target: CallTarget = { jobId, customerId, efrId, reportingContactId, useAlt, jobContextId };
+  const target: CallTarget = { jobId, customerId, efrId, reportingContactId, spocJobId, useAlt, jobContextId };
   const { busy, placeCall, toastNode, customNode } = useClickToCall(target);
   if (!hasAction(me, 'isClickToCall')) return null;
   if (pickTargetKey(target) == null) return null;
@@ -682,11 +691,11 @@ type MobileProps = CallTarget & {
 };
 
 export function CallableMobile({
-  jobId, customerId, efrId, reportingContactId, useAlt, jobContextId,
+  jobId, customerId, efrId, reportingContactId, spocJobId, useAlt, jobContextId,
   mobile, className, hideWhenUnauthorized = false, iconOnly = false,
 }: MobileProps) {
   const { me } = useMe();
-  const target: CallTarget = { jobId, customerId, efrId, reportingContactId, useAlt, jobContextId };
+  const target: CallTarget = { jobId, customerId, efrId, reportingContactId, spocJobId, useAlt, jobContextId };
   const { busy, placeCall, toastNode, customNode } = useClickToCall(target);
 
   const display = mobile && String(mobile).trim() !== '' ? mobile : '—';
@@ -727,8 +736,13 @@ export function CallableMobile({
         disabled={busy}
         // Tooltip names the leg so hover confirms before click —
         // "Click to call alternate number" when useAlt is in effect,
-        // matches the visible "Alt" pill below.
-        title={useAlt ? 'Click to call alternate number' : 'Click to call this customer'}
+        // matches the visible "Alt" pill below. A spocJobId target dials a
+        // CLIENT-side contact, so it must not read "customer".
+        title={
+          spocJobId ? 'Click to call the client SPOC'
+            : useAlt ? 'Click to call alternate number'
+              : 'Click to call this customer'
+        }
         className={cn(
           'inline-flex items-center gap-1',
           'text-emerald-700 hover:text-emerald-900 hover:underline',

@@ -376,8 +376,17 @@ export function UnconfirmedJobsTable({
                   ? (
                     <>
                       <div>{j.client_spoc_name ?? '—'}</div>
+                      {/* client_spoc IS the SPOC's mobile (a raw string on
+                          tbl_job — there is no SPOC id), and it arrives masked.
+                          The spocJobId target re-resolves the real number
+                          BE-side, so the number is dialable without the FE ever
+                          holding it. The !== name guard stays: legacy rows exist
+                          where both columns carry the same text, and we must not
+                          render a "call" affordance on a name. */}
                       {j.client_spoc && j.client_spoc !== j.client_spoc_name && (
-                        <div className="text-[10px] text-muted-foreground">{j.client_spoc}</div>
+                        <div className="text-[10px] text-muted-foreground">
+                          <CallableMobile spocJobId={j.job_id} mobile={j.client_spoc} />
+                        </div>
                       )}
                     </>
                   )

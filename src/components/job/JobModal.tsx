@@ -4587,8 +4587,26 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
 
   // When the client locks the preference, auto-populate the form field
   // so the operator can't save with a value that contradicts the lock.
+  //
+  // …and UNDO that fill when the client no longer pins one. Switching from a
+  // pinned client to an "Any" client (collected_by = 0) unlocks the dropdown but
+  // used to leave the previous client's value sitting there preselected — ops
+  // could save it without ever choosing, which is the whole point of the field.
+  //
+  // `lastAppliedPrefRef` makes the clear SURGICAL: we only ever wipe a value we
+  // auto-filled ourselves. A value seeded from the saved job (Confirm/Edit mode
+  // re-hydrates collected_by) or picked by the operator is never touched — a
+  // blind `else set('')` would silently blank the saved value of every job whose
+  // client is "Any".
+  const lastAppliedPrefRef = useRef<string | null>(null);
   useEffect(() => {
-    if (collectedByPref) set('collected_by', collectedByPref);
+    if (collectedByPref) {
+      set('collected_by', collectedByPref);
+      lastAppliedPrefRef.current = collectedByPref;
+    } else if (lastAppliedPrefRef.current) {
+      set('collected_by', '');
+      lastAppliedPrefRef.current = null;
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collectedByPref]);
 
