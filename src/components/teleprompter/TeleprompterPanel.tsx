@@ -384,7 +384,7 @@ export function TeleprompterPanel({ open, efrId, onClose, onApplied }: {
                       onClick={() => { startedRef.current = true; void start(); }}
                       className="bg-sky-600 hover:bg-sky-700 text-white"
                     >
-                      <Phone className="h-4 w-4" /> Start Guided Call
+                      <Phone className="mr-2 h-4 w-4" /> Start Guided Call
                     </Button>
                   </div>
                 </div>
@@ -395,7 +395,7 @@ export function TeleprompterPanel({ open, efrId, onClose, onApplied }: {
                 <div className="flex items-center justify-end gap-2">
                   <Button variant="outline" size="sm" onClick={onClose}>Close</Button>
                   <Button size="sm" onClick={retryStart} className="bg-sky-600 hover:bg-sky-700 text-white">
-                    <Phone className="h-4 w-4" /> Retry
+                    <Phone className="mr-2 h-4 w-4" /> Retry
                   </Button>
                 </div>
               )}
@@ -469,17 +469,17 @@ export function TeleprompterPanel({ open, efrId, onClose, onApplied }: {
               {callLive ? (
                 <div className="flex items-center justify-between gap-2">
                   <Button variant="outline" size="sm" onClick={() => doPromote(nextId)} disabled={!nextId}>
-                    Next <ChevronRight className="h-4 w-4" />
+                    Next <ChevronRight className="ml-2 h-4 w-4" />
                   </Button>
                   <Button variant="outline" size="sm" onClick={handleClose} className="text-rose-600">
-                    <PhoneOff className="h-4 w-4" /> End Call
+                    <PhoneOff className="mr-2 h-4 w-4" /> End Call
                   </Button>
                 </div>
               ) : callProblem ? (
                 <div className="flex items-center justify-end gap-2">
                   <Button variant="outline" size="sm" onClick={onClose}>Close</Button>
                   <Button size="sm" onClick={retryCall} className="bg-sky-600 hover:bg-sky-700 text-white">
-                    <Phone className="h-4 w-4" /> Retry Call
+                    <Phone className="mr-2 h-4 w-4" /> Retry Call
                   </Button>
                 </div>
               ) : streamConnected ? (
@@ -501,7 +501,7 @@ export function TeleprompterPanel({ open, efrId, onClose, onApplied }: {
                   <div className="flex items-center justify-end gap-2">
                     <Button variant="outline" size="sm" onClick={onClose}>Close</Button>
                     <Button size="sm" onClick={retryCall} className="bg-sky-600 hover:bg-sky-700 text-white">
-                      <Phone className="h-4 w-4" /> Retry Call
+                      <Phone className="mr-2 h-4 w-4" /> Retry Call
                     </Button>
                   </div>
                 </div>
