@@ -108,7 +108,9 @@ export function statusLabel(code: number, opts?: { assigned?: boolean | null }):
   // caller tells us whether the job has a tech — otherwise we fall through
   // to the base "Booked" label.
   if (code === 0 && opts && opts.assigned !== undefined && opts.assigned !== null) {
-    return opts.assigned ? 'Pending App Ack' : 'Pending Scheduling';
+    // 'Pending for Scheduling' matches the tab name in lib/job-tabs.ts and the
+    // name ops actually use — the chip and the tab must read the same.
+    return opts.assigned ? 'Pending App Ack' : 'Pending for Scheduling';
   }
   const map: Record<number, string> = {
     0:  'Booked',

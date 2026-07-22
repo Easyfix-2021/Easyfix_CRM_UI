@@ -723,12 +723,32 @@ export default function JobCompletionMagicLinkPage() {
     (primaryService?.service_type_name && primaryService.service_type_name.trim()) ||
     (primaryService?.service_catg_name && primaryService.service_catg_name.trim()) ||
     'Service Visit';
+  // Free/Paid chip for the Service Requested card. Sourced from the prefill's
+  // per-service billing_label (BE: tbl_client_service.total_amount null/0 → 'Free',
+  // else 'Paid'). Order-level rule: 'Paid' if ANY selected service is billed,
+  // else the primary service's label. (This is the billing Free/Paid — distinct
+  // from the CRM `collected_by` "who collects" enum, which is not exposed here.)
+  const billingLabel: 'Free' | 'Paid' =
+    (data.selectedServices ?? []).some(
+      (sel) =>
+        data.services.find((s) => s.client_service_id === sel.client_service_id)?.billing_label ===
+        'Paid',
+    )
+      ? 'Paid'
+      : primaryService?.billing_label ?? 'Free';
   // City NAME (not id) for the read-only assembled address line.
   const cityName =
     data.cityOptions.find((c) => String(c.value) === form.city_id)?.label || '';
-  // Read-only assembled address: Building/Floor, Complete Address, City,
-  // Landmark, Pincode — skipping empty parts, joined by ", ".
-  const assembledAddress = [form.building, form.address, cityName, form.landmark, form.pin_code]
+  // Read-only Service Address: Complete Address, City, Landmark, Pincode —
+  // skipping empty parts, joined by ", ".
+  //
+  // `building` is deliberately NOT in this list (2026-07-15). Under the
+  // tbl_address column-role remap it no longer means "Building / Floor" on this
+  // surface — it holds the Google-Map SEARCH text backing the pin (see
+  // AddressMapWidget's mapOnly mode). Concatenating it here would render the
+  // map-resolved address next to the booked one, reading as a duplicated /
+  // contradictory address to the customer.
+  const assembledAddress = [form.address, cityName, form.landmark, form.pin_code]
     .map((s) => (s || '').trim())
     .filter(Boolean)
     .join(', ');
@@ -791,8 +811,25 @@ export default function JobCompletionMagicLinkPage() {
           </div>
         </div>
 
-        {/* CARD: Service requested (read-only — set at booking, not editable). */}
-        <InfoCard icon={<Wrench className="h-4 w-4" />} title="Service Requested">
+        {/* CARD: Service requested (read-only — set at booking, not editable).
+            Right-aligned Free/Paid chip in the title row via InfoCard's `action`
+            slot. */}
+        <InfoCard
+          icon={<Wrench className="h-4 w-4" />}
+          title="Service Requested"
+          action={
+            <span
+              className={
+                'inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset ' +
+                (billingLabel === 'Paid'
+                  ? 'bg-amber-50 text-amber-800 ring-amber-200'
+                  : 'bg-emerald-50 text-emerald-700 ring-emerald-200')
+              }
+            >
+              {billingLabel}
+            </span>
+          }
+        >
           <p className="text-sm leading-relaxed text-slate-600 whitespace-pre-wrap">
             {(form.job_desc && form.job_desc.trim()) || serviceName}
           </p>
@@ -1456,12 +1493,18 @@ function AddressMapWidget({
   const [mapsError, setMapsError] = React.useState<string | null>(null);
   const [suggestions, setSuggestions] = React.useState<Array<{ place_id: string; description: string }>>([]);
   const [showSuggestions, setShowSuggestions] = React.useState(false);
-  // In mapOnly mode the search box drives a LOCAL query and NEVER writes back to
-  // form.address — the booked Service Address must stay exactly as-is; the pin
-  // only captures gps_location (for a future navigation flow). In the full form
-  // the box stays bound to form.address as before.
-  const [searchText, setSearchText] = React.useState('');
-  const searchQuery = mapOnly ? searchText : form.address;
+  // In mapOnly mode the search box NEVER writes back to form.address — the
+  // booked Service Address must stay exactly as-is. It binds to `form.building`
+  // instead, mirroring the tbl_address column-role remap the CRM's
+  // AddressPickerWithMap already applies under `serviceAddressReadOnly`:
+  // `address` = the untouchable booked address, `building` = the Google-Map
+  // search text backing the pin. Persisting it (2026-07-15) is what lets ops
+  // reopen Confirm & Schedule and see the customer's own map selection in the
+  // "Search Location On Map" field with the pin already dropped — previously
+  // this was LOCAL-only state, so the search text died with the page and only
+  // the bare coordinates survived. In the full form the box stays bound to
+  // form.address as before.
+  const searchQuery = mapOnly ? form.building : form.address;
 
   const cityByName = React.useMemo(() => {
     const m = new Map<string, number>();
@@ -1524,9 +1567,25 @@ function AddressMapWidget({
   }, [searchQuery]);
 
   async function reverseGeocode(lat: number, lng: number) {
-    // mapOnly: capture GPS only — never overwrite the booked address/city/PIN
-    // (and skip the geocode network call, since we don't use its components).
-    if (mapOnly) { patch({ gps_location: `${lat.toFixed(6)},${lng.toFixed(6)}` }); return; }
+    // mapOnly: capture the pin's coordinates AND the address Google resolves
+    // them to, the latter into `building` (the map-search column) so ops see
+    // WHERE the customer pinned, not just a bare lat,lng. Still never touches
+    // the booked address/city/PIN: those inputs are suppressed in this mode, so
+    // a silent overwrite the customer can't see or correct could re-zone the
+    // job. The reverse-geocode is best-effort — on failure we keep the
+    // coordinates, which are the load-bearing half.
+    if (mapOnly) {
+      const gps = `${lat.toFixed(6)},${lng.toFixed(6)}`;
+      try {
+        const r = await publicFetch<{ formatted_address?: string }>(
+          `/public/maps/geocode?token=${encodeURIComponent(token)}&latlng=${lat},${lng}`,
+        );
+        patch(r.formatted_address ? { gps_location: gps, building: r.formatted_address } : { gps_location: gps });
+      } catch {
+        patch({ gps_location: gps });
+      }
+      return;
+    }
     try {
       const r = await publicFetch<{
         formatted_address?: string;
@@ -1548,9 +1607,10 @@ function AddressMapWidget({
 
   async function pickSuggestion(place_id: string, description: string) {
     setShowSuggestions(false);
-    // Reflect the pick in the search box. mapOnly uses a LOCAL field so the
-    // booked address is never mutated; the full form writes to form.address.
-    if (mapOnly) setSearchText(description); else patch({ address: description });
+    // Reflect the pick in the search box. mapOnly writes to `building` (the
+    // map-search column) so the booked address is never mutated; the full form
+    // writes to form.address.
+    patch(mapOnly ? { building: description } : { address: description });
     try {
       const r = await publicFetch<{
         lat?: number; lng?: number;
@@ -1564,7 +1624,8 @@ function AddressMapWidget({
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         if (mapInstance.current) { (mapInstance.current as any).panTo({ lat: r.lat, lng: r.lng }); (mapInstance.current as any).setZoom(16); }
       }
-      // mapOnly: GPS coordinates only. Full form: also fill address/PIN/city.
+      // mapOnly: coordinates only here — `building` already holds the picked
+      // description (set above). Full form: also fill address/PIN/city.
       if (!mapOnly) {
         if (r.formatted_address) next.address = r.formatted_address;
         const comps = r.address_components || {};
@@ -1591,7 +1652,7 @@ function AddressMapWidget({
         <div className="relative">
           <textarea
             value={searchQuery}
-            onChange={(e) => { if (mapOnly) setSearchText(e.target.value); else patch({ address: e.target.value }); setShowSuggestions(true); }}
+            onChange={(e) => { patch(mapOnly ? { building: e.target.value } : { address: e.target.value }); setShowSuggestions(true); }}
             onFocus={() => setShowSuggestions(true)}
             onBlur={() => { setTimeout(() => setShowSuggestions(false), 200); }}
             rows={2} required={!mapOnly}

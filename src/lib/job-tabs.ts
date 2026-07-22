@@ -103,6 +103,11 @@ export type SearchableJobRow = {
   city_name: string | null;
   easyfixer_name: string | null;
   owner_name: string | null;
+  // Client SPOC snapshot (on tbl_job) — shown in the Unconfirmed / Pending-to-
+  // Scheduling SPOC column; included in the haystack so the instant client-side
+  // filter matches SPOC name too (mirrors the BE list() search predicate).
+  client_spoc?: string | null;
+  client_spoc_name?: string | null;
   fk_easyfixter_id: number | null;
   created_date_time: string;
   requested_date_time: string;
@@ -130,6 +135,7 @@ export function filterJobRows<T extends SearchableJobRow>(items: T[], q: string)
       j.client_name, j.customer_name, j.customer_mob_no,
       j.city_name, j.easyfixer_name, j.owner_name, j.job_type,
       j.source_type,
+      j.client_spoc_name, j.client_spoc,
       j.job_status,
       statusLabel(Number(j.job_status), { assigned: j.fk_easyfixter_id != null }),
       j.created_date_time && formatDate(j.created_date_time),

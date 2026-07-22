@@ -25,11 +25,12 @@ import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { TransferJobOwnershipDialog } from '@/components/job/TransferJobOwnershipDialog';
 import { UnconfirmedJobsTable } from '@/components/job/UnconfirmedJobsTable';
 import { CallableMobile } from '@/components/calls/CallButton';
-import { useSort, SortHeader } from '@/lib/use-sort';
+import { cycleSort, SortHeader, type SortDir } from '@/lib/use-sort';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
+import { RefreshBar } from '@/components/ui/refresh-bar';
 import { LiveLocationPopover } from '@/components/location/LiveLocationPopover';
 
 // `/admin/jobs` Joi caps limit at 500 — pass to pageSizeToLimit so
@@ -171,6 +172,15 @@ export default function JobsPage() {
   const offset = page * limit;
   const [data, setData] = useState<Resp | null>(null);
   const [loading, setLoading] = useState(false);
+  // `refreshing` = a silent/poll reload while data is already on screen. Never
+  // gates the table (that's `loading`, first-paint only) — keeps refreshes
+  // flicker-free. Optionally surfaced as a subtle indicator.
+  const [refreshing, setRefreshing] = useState(false);
+  // Server-side sort state (whitelisted BE-side) — declared here with the other
+  // query state so load() and the poll effect can depend on it. `toggle` + the
+  // sort refetch effect live near the render below.
+  const [sortKey, setSortKey] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [showFilters, setShowFilters] = useState(false);
 
   /*
@@ -221,42 +231,56 @@ export default function JobsPage() {
     ].join('|');
   }
 
-  async function load(reset = false, force = false) {
+  async function load(reset = false, force = false, silent = false) {
     const seq = ++loadSeqRef.current;
     const tabDef = TABS.find((t) => t.value === tab);
     const off = reset ? 0 : offset;
     // Cache key includes pageSize so changing rows-per-page doesn't
     // serve a stale fixed-50 payload.
-    const key = `${tab}|${off}|${limit}|${filterKey()}`;
+    const key = `${tab}|${off}|${limit}|${sortKey || ''}|${sortDir}|${filterKey()}`;
 
-    if (!force) {
-      const hit = cacheRef.current.get(key);
-      if (hit && Date.now() - hit.at < TAB_CACHE_TTL) {
-        setData(hit.data);
-        if (reset) setPage(0);
+    // First paint (no data yet) raises the skeleton; every later reload —
+    // pagination, sort, post-mutation — is silent so the table body never
+    // flashes "Loading…".
+    //
+    // Raised BEFORE the cache/in-flight short-circuits, and cleared in the single
+    // `finally` that every exit path below funnels through. When those
+    // short-circuits had their own `return`s they skipped the cleanup entirely:
+    // on mount BOTH effects call load(), the second bumps `seq` (staling the
+    // first) and then short-circuits onto the first's in-flight promise — so the
+    // first was stale-guarded out of its own `finally` and the second never
+    // reached one. Nobody cleared `loading` and the table showed the skeleton
+    // until a tab change fired an un-raced load.
+    if (data == null && !silent) setLoading(true); else setRefreshing(true);
+    try {
+      if (!force) {
+        const hit = cacheRef.current.get(key);
+        if (hit && Date.now() - hit.at < TAB_CACHE_TTL) {
+          if (seq === loadSeqRef.current) {
+            setData(hit.data);
+            if (reset) setPage(0);
+          }
+          return;
+        }
+      }
+
+      // In-flight dedupe: if a request for this exact key is already
+      // mid-air (Strict Mode double-fire, or two effects landing in
+      // the same tick), attach to it instead of starting a fresh one.
+      // The Promise hasn't settled yet, so the cache isn't populated —
+      // but the response is on the way; we just await it.
+      const inflight = inflightRef.current.get(key);
+      if (inflight) {
+        try {
+          const r = await inflight;
+          if (seq === loadSeqRef.current) {
+            setData(r);
+            if (reset) setPage(0);
+          }
+        } catch { /* ignore — the originating call will surface the error */ }
         return;
       }
-    }
 
-    // In-flight dedupe: if a request for this exact key is already
-    // mid-air (Strict Mode double-fire, or two effects landing in
-    // the same tick), attach to it instead of starting a fresh one.
-    // The Promise hasn't settled yet, so the cache isn't populated —
-    // but the response is on the way; we just await it.
-    const inflight = inflightRef.current.get(key);
-    if (inflight) {
-      try {
-        const r = await inflight;
-        if (seq === loadSeqRef.current) {
-          setData(r);
-          if (reset) setPage(0);
-        }
-      } catch { /* ignore — the originating call will surface the error */ }
-      return;
-    }
-
-    setLoading(true);
-    try {
       /*
        * Pass the tab's filter payload to the backend:
        *   - `statuses` (CSV) wins when set (multi-status tabs: Pending to Close,
@@ -319,6 +343,10 @@ export default function JobsPage() {
         isEscalated,
         noServices,
         limit, offset: off,
+        // Server-side sort (whitelisted BE-side). Only sent when a column is
+        // active; absent → BE default job_id DESC.
+        sortBy: sortKey || undefined,
+        sortDir: sortKey ? sortDir : undefined,
         clientId: filters.clientId || undefined,
         cityId: filters.cityId || undefined,
         stateId: filters.stateId || undefined,
@@ -349,19 +377,24 @@ export default function JobsPage() {
         requestedBefore: tabDef?.requestedBefore,
       });
       inflightRef.current.set(key, reqPromise);
-      const r = await reqPromise;
-      // Cache unconditionally — the payload is correct for its own key
-      // regardless of whether this invocation is still the latest.
-      cacheRef.current.set(key, { at: Date.now(), data: r });
-      if (seq === loadSeqRef.current) {
-        setData(r);
-        if (reset) setPage(0);
+      try {
+        const r = await reqPromise;
+        // Cache unconditionally — the payload is correct for its own key
+        // regardless of whether this invocation is still the latest.
+        cacheRef.current.set(key, { at: Date.now(), data: r });
+        if (seq === loadSeqRef.current) {
+          setData(r);
+          if (reset) setPage(0);
+        }
+      } finally {
+        // Only THIS call owns the entry it registered — the cache/dedupe
+        // short-circuits above must not evict a promise another call awaits.
+        inflightRef.current.delete(key);
       }
     } catch (e) {
       setErrorMsg(`Failed to load jobs: ${e instanceof Error ? e.message : 'Unknown error'}`);
     } finally {
-      inflightRef.current.delete(key);
-      if (seq === loadSeqRef.current) setLoading(false);
+      if (seq === loadSeqRef.current) { setLoading(false); setRefreshing(false); }
     }
   }
 
@@ -370,6 +403,10 @@ export default function JobsPage() {
   // via the onPageSizeChange handler below, so an explicit reset isn't
   // needed here.
   useEffect(() => { load(false); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [page, pageSize]);
+  // NOTE: no interval polling — data refreshes on ACTION (post-mutation
+  // load(false, true) after saves/row-actions), which is now SILENT + flicker-
+  // free thanks to the data-null loading guard above. Event-driven is cheaper
+  // than a 15s poll and never surprises an operator mid-task.
   // Reload when ?focus=… changes — drives the Escalated Jobs deep-link
   // from the navbar.
   const focusParam = useSearchParams().get('focus');
@@ -586,14 +623,31 @@ export default function JobsPage() {
     afterReload: refreshCounts,
   });
 
-  // Apply UI-only search filter before sorting (shared filterJobRows in
-  // lib/job-tabs.ts — see there for the column/label/date matching rationale).
-  // Memoized on [data, q] so unrelated renders (rowBusy/transferAlert/
-  // showFilters) keep a stable filteredItems identity and don't trigger
-  // useSort's internal re-sort.
+  // Instant client-side search filter over the current (server-sorted,
+  // server-paginated) page — shared filterJobRows in lib/job-tabs.ts. Sorting
+  // itself is now server-side (see below), so this only narrows what's already
+  // ordered; it preserves the server's row order.
   const filteredItems = useMemo(() => filterJobRows(data?.items ?? [], q), [data, q]);
-  // Sort hook must live at the component root to satisfy Rules of Hooks.
-  const { sorted, sortKey, sortDir, toggle } = useSort<JobRow>(filteredItems);
+  // Server-side sort — sortKey/sortDir state is declared up in the state block
+  // (load()/the poll effect depend on it); here we wire the header-click cycle.
+  const toggle = (col: string) => {
+    const next = cycleSort(col, { sortBy: sortKey, sortDir });
+    setSortKey(next.sortBy);
+    setSortDir(next.sortDir);
+  };
+  // Server already returns the page in sort order; keep the name `sorted` for the
+  // render. filteredItems = the instant client q-filter over the current page.
+  const sorted = filteredItems;
+  // Refetch when the sort changes (skip the initial mount — the tab effect
+  // already loads). Resets to page 1 so the operator sees the top of the new
+  // ordering.
+  const sortMountRef = useRef(true);
+  useEffect(() => {
+    if (sortMountRef.current) { sortMountRef.current = false; return; }
+    setPage(0);
+    load(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortKey, sortDir]);
 
   return (
     <div className="space-y-5">
@@ -953,6 +1007,7 @@ export default function JobsPage() {
       </Card>
 
       <Card>
+        <RefreshBar active={refreshing} />
         <CardContent className="p-0 overflow-x-auto">
           {tab === 'unconfirmed' ? (
             <UnconfirmedJobsTable
@@ -968,6 +1023,11 @@ export default function JobsPage() {
               userIsAdmin={me?.role?.role_name?.toLowerCase() === 'admin'}
               openView={openView}
               openConfirm={openConfirm}
+              // Server-side sort: forward the page's sort state + toggle so the
+              // Unconfirmed column headers sort the WHOLE list (not just page).
+              sortBy={sortKey}
+              sortDir={sortDir}
+              onSort={toggle}
               // Force-refetch (skip TAB_CACHE) so the "Link Sent" pill
               // appears immediately after the popup closes successfully.
               onMagicLinkSent={() => load(false, true)}

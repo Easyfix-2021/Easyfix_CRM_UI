@@ -30,6 +30,11 @@ export type WebCallTarget = {
   customerId?: number;
   efrId?: number;
   reportingContactId?: number;
+  // The job whose tbl_job.client_spoc should be dialled. /web-start shares the
+  // clickToCallBody validator + resolveReceiver with /click-to-call, so the
+  // target works identically in web mode; it's listed here because placeWebCall
+  // forwards the target's keys verbatim and an absent key would be dropped.
+  spocJobId?: number;
   useAlt?: boolean;
 };
 

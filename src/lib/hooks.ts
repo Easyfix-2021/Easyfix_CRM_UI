@@ -90,38 +90,64 @@ type FetchState<T> = { data: T | null; loading: boolean; error: string | null };
  */
 export function useFetch<T>(
   key: string | null,
-  options: { enabled?: boolean } = {},
-): FetchState<T> & { refetch: () => void } {
+  options: { enabled?: boolean; refetchInterval?: number } = {},
+): FetchState<T> & { refreshing: boolean; refetch: () => void } {
   const enabled = options.enabled !== false && key != null;
-  const [state, setState] = useState<FetchState<T>>({
-    data: null, loading: enabled, error: null,
+  const [state, setState] = useState<FetchState<T> & { refreshing: boolean }>({
+    data: null, loading: enabled, refreshing: false, error: null,
   });
-  // Bump this counter to force a refetch — used by the returned
-  // `refetch` callback. The counter is included in the effect's
-  // dependencies so the next fire bypasses the module cache check
-  // (it doesn't, actually — see the note on cache-busting).
+  // Bump this counter to force a refetch — used by the returned `refetch`
+  // callback and the optional poll below.
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
     if (!enabled || !key) return;
     let cancelled = false;
-    setState((s) => ({ ...s, loading: true, error: null }));
+    // FLICKER FIX: raise the skeleton gate (`loading`) ONLY when there's
+    // nothing to show yet (first paint). If data is already present, a key
+    // change / poll / refetch() keeps the previous rows mounted and flags
+    // `refreshing` instead — the table/modal body never unmounts, so there's
+    // no flash of "Loading…" / skeleton on a background refresh.
+    setState((s) => s.data == null
+      ? { ...s, loading: true, refreshing: false, error: null }
+      : { ...s, loading: false, refreshing: true, error: null });
     dedupedGet<T>(key, () => api.get<T>(key))
-      .then((data) => { if (!cancelled) setState({ data, loading: false, error: null }); })
+      .then((data) => { if (!cancelled) setState({ data, loading: false, refreshing: false, error: null }); })
       .catch((e) => {
-        if (!cancelled) setState({
-          data: null, loading: false,
+        // Keep the previous data on error so a transient poll/refetch failure
+        // never blanks a populated table (SWR). First-load errors still show
+        // (data was null anyway).
+        if (!cancelled) setState((s) => ({
+          data: s.data, loading: false, refreshing: false,
           error: e instanceof ApiError ? e.message : 'Failed to load',
-        });
+        }));
       });
     return () => { cancelled = true; };
   }, [key, enabled, tick]);
 
+  // Optional SILENT background poll — realtime opt-in via `refetchInterval`.
+  // Never flips `loading`; busts the module cache so each tick is a real
+  // round-trip, then re-runs the effect above (which sets `refreshing`, not
+  // `loading`, because data is present).
+  useEffect(() => {
+    const ms = options.refetchInterval;
+    if (!enabled || !key || !ms) return;
+    const id = setInterval(() => {
+      cache.delete(key);
+      inflight.delete(key);
+      setTick((t) => t + 1);
+    }, ms);
+    return () => clearInterval(id);
+  }, [key, enabled, options.refetchInterval]);
+
   return {
-    ...state,
+    data: state.data,
+    loading: state.loading,
+    refreshing: state.refreshing,
+    error: state.error,
     refetch: () => {
-      // Drop cached entry for this key, then bump the tick. The next
-      // effect run will see no cache hit and fire a real request.
+      // Drop cached entry for this key, then bump the tick — the next effect
+      // run fires a real request (and swaps silently, since data is present).
       if (key) { cache.delete(key); inflight.delete(key); }
       setTick((t) => t + 1);
     },
@@ -284,19 +310,23 @@ export function usePostFetch<T>(
   useEffect(() => {
     if (!enabled || url == null || key == null) return;
     let cancelled = false;
-    setState((s) => ({ ...s, loading: true, error: null, status: null }));
+    // Same flicker fix as useFetch: raise the skeleton gate only on first paint;
+    // a body change / refetch keeps the previous rows visible while reloading.
+    setState((s) => s.data == null
+      ? { ...s, loading: true, error: null, status: null }
+      : { ...s, loading: false, error: null, status: null });
     dedupedPost<T>(key, () => api.post<T>(url, body))
       .then((data) => {
         if (!cancelled) setState({ data, loading: false, error: null, status: 200 });
       })
       .catch((e) => {
         if (cancelled) return;
-        setState({
-          data: null,
+        setState((s) => ({
+          data: s.data,   // keep previous rows on a background error
           loading: false,
           error: e instanceof ApiError ? e.message : 'Failed to load',
           status: e instanceof ApiError ? e.status : 0,
-        });
+        }));
       });
     return () => { cancelled = true; };
     // `body` is captured through `key` (serialized); re-running on `key`/`tick`

@@ -47,6 +47,10 @@ export type ClientRow = {
      (user_type=1=Primary, 2=Secondary). Resolved server-side. */
   primary_spoc?: ClientSpoc | null;
   secondary_spoc?: ClientSpoc | null;
+  /* Derived server-side via EXISTS on tbl_client_custom_properties
+     (auto_process_unconfirmed_order='true', status=1). 1 = magic-link
+     job-completion flow enabled for this client. */
+  magic_link_enabled?: number | null;
 };
 
 /* List response envelope — server returns { items, total } now that

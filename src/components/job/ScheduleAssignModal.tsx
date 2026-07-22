@@ -46,7 +46,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle, CheckCircle2, XCircle, Info, Search, X, MapPin,
-  Calendar, CalendarClock, Phone, Loader2, Clock,
+  Calendar, CalendarClock, Phone, Loader2, Clock, ChevronDown,
 } from 'lucide-react';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -65,6 +65,7 @@ import { formatDate, relativeTime } from '@/lib/utils';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { InfoTooltip } from '@/components/ui/tooltip';
+import { TablePagination, type TablePageSize } from '@/components/ui/table-pagination';
 import { showToast } from '@/components/ui/toast';
 import { AddRemarksDialog } from './AddRemarksDialog';
 import { CancelWithReasonDialog } from './CancelWithReasonDialog';
@@ -150,6 +151,13 @@ type JobServiceRow = {
   service_type: string | null;
   quantity: number | null;
   total_charge: number | null;
+  /**
+   * Free/Paid for THIS service line. Derived BE-side in job.service.js getById
+   * from `effective_charge` (null/0 → Free, else Paid) using the same rule as
+   * the customer job-completion form, so both surfaces always agree.
+   * NOT the same thing as the job-level `collected_by` (who collects).
+   */
+  billing_label?: 'Free' | 'Paid' | null;
 };
 
 type ScheduleJob = {
@@ -161,10 +169,24 @@ type ScheduleJob = {
   address: string | null;
   city_name: string | null;
   pin_code: string | null;
+  // service_category / service_type / deep_skill_label are still projected by the
+  // BE and kept on the type (other consumers read them) — but the Job Details
+  // grid no longer renders them; `services[]` below is the authoritative
+  // per-service breakdown. Don't re-add them to the grid.
   service_category: string | null;
   service_type: string | null;
   deep_skill_label: string | null;
   services?: JobServiceRow[] | null;
+  /** Who collects payment — per JOB, not per service. 1=Easyfixer 2=Easyfix 3=Client. */
+  collected_by?: number | string | null;
+  /** Who pays — per JOB. 2 = the customer pays; anything else = not the customer. */
+  paid_by?: number | string | null;
+  /** Technician-facing note ("Anything Handyman should keep in mind?") — shown as Additional Comments. */
+  efr_special_notes?: string | null;
+  client_spoc?: string | null;
+  client_spoc_name?: string | null;
+  created_by_name?: string | null;
+  created_date_time?: string | null;
   job_type: string | null;
   payment_mode: string | null;
   requested_date_time: string | null;
@@ -271,6 +293,14 @@ export function ScheduleAssignModal({
   const timeSlot = seeded ? deriveTimeSlot(jobDateLocal) : seedSlot;
 
   const [search, setSearch] = useState('');
+  // Search-results paging. CLIENT-side only: the search endpoint hands back the
+  // whole match set in one shot (BE caps it at 50), so paging is a pure view
+  // slice over an already-fetched array — never a new round-trip. State lives
+  // here (not in CandidateTable) because only this component knows when the
+  // term changed and the page must go back to 1. The Top-10 is a fixed top-N
+  // and is deliberately NOT paged.
+  const [searchPage, setSearchPage] = useState(0);
+  const [searchPageSize, setSearchPageSize] = useState<TablePageSize>(10);
   // Multi-select offer pool — set of efr_ids the operator has ticked across
   // the Top-10 + search rows. Reset on close.
   const [selected, setSelected] = useState<Map<number, 'top10' | 'search'>>(new Map());
@@ -288,11 +318,19 @@ export function ScheduleAssignModal({
 
   // Reset transient state whenever the modal closes / the job changes.
   useEffect(() => {
-    if (!open) {
-      setSeeded(false); setJobDateLocal(''); setSeedSlot(''); setSeedDate('');
-      setSearch(''); setCommitting(false); setErr(null); setPincodeModalFor(null);
-      setRetainedJob(null); setSelected(new Map());
-    }
+    // Runs on close AND on a job change — every value below is scoped to ONE
+    // job, so none of it may survive either. The `jobId` dep was always here for
+    // that, but an `if (!open)` guard used to swallow the job-change half:
+    // switching straight from job A to job B (the deep-link swaps jobId while
+    // `open` stays true) left `retainedJob` holding A, and since
+    // `job = top.data?.job ?? retainedJob`, B rendered A's Job Details until the
+    // new fetch landed. Worse, `selected` survived too — ops could carry a
+    // technician ticked on job A into an offer on job B. retainedJob is a
+    // fallback for a failed refetch of the SAME job; it must never outlive one.
+    setSeeded(false); setJobDateLocal(''); setSeedSlot(''); setSeedDate('');
+    setSearch(''); setCommitting(false); setErr(null); setPincodeModalFor(null);
+    setRetainedJob(null); setSelected(new Map());
+    setSearchPage(0); setSearchPageSize(10);
   }, [open, jobId]);
 
   // Toggle a technician's membership in the selection. OFFER mode = multi-select
@@ -338,30 +376,58 @@ export function ScheduleAssignModal({
     : null;
   const top = useFetch<CandidatesResponse>(topKey, { enabled: !!topKey });
 
+  /*
+   * ⚠ NEVER read `top.data` directly — read `topData`.
+   *
+   * useFetch deliberately KEEPS the previous payload while a new key loads
+   * (lib/hooks.ts: `s.data == null ? loading : refreshing`), which is what makes
+   * param-change refreshes flicker-free. But the hook can't tell "same resource,
+   * new params" from "a DIFFERENT ENTITY" — and this key carries the jobId. So
+   * on switching job A → B, `top.data` still holds A's job AND A's ranked
+   * technicians until B lands, and the modal renders another job's data under
+   * B's title. (Ops reported exactly this: "shows the details of the 1st job for
+   * a few seconds".) Clearing state on jobId change is NOT enough on its own —
+   * the stale payload is re-served by the hook on the very next render.
+   *
+   * The hook can't fix this without reintroducing the skeleton flash app-wide;
+   * the modal, unlike the hook, knows which job it asked for. So: trust the
+   * payload only when it IS this job. Everything downstream (Job Details, the
+   * Top-10 rows, offerFlowEnabled, the seed) flows from `topData`, so one guard
+   * covers them all.
+   */
+  const topData = top.data && Number(top.data.job?.job_id) === Number(jobId) ? top.data : null;
+
   // Seed the proposed schedule from the loaded job exactly once.
   // seedSlot captures the job's stored time_slot for display during the seed
   // phase; once seeded, deriveTimeSlot() takes over from the picked date.
   useEffect(() => {
-    if (seeded || !top.data?.job) return;
-    const seededLocal = isoToLocalInput(top.data.job.requested_date_time);
+    if (seeded || !topData?.job) return;
+    const seededLocal = isoToLocalInput(topData.job.requested_date_time);
     setJobDateLocal(seededLocal);
     setSeedDate(seededLocal);
-    setSeedSlot(top.data.job.time_slot ?? 'Anytime');
+    setSeedSlot(topData.job.time_slot ?? 'Anytime');
     setSeeded(true);
-  }, [seeded, top.data]);
+  }, [seeded, topData]);
 
   // Retain the last good job so Job Details survive a failed candidate
   // re-fetch (resilience — the flow must not break on a Top-10 error).
+  // Scoped to THIS job by the topData guard, and cleared on jobId change.
   useEffect(() => {
-    if (top.data?.job) setRetainedJob(top.data.job);
-  }, [top.data]);
-  const job = top.data?.job ?? retainedJob;
+    if (topData?.job) setRetainedJob(topData.job);
+  }, [topData]);
+  const job = topData?.job ?? retainedJob;
+
+  // Job Details is collapsible but starts EXPANDED — ops read it on nearly every
+  // open; collapsing is for reclaiming height once they've moved on to picking a
+  // technician.
+  const [jobDetailsOpen, setJobDetailsOpen] = useState(true);
+
 
   // Effective commit mode from the BE (mirrors its own assign-vs-offer gate).
   //   ON  → offer pool: multi-select, "Offer to N Technicians" → POST /offer.
   //   OFF → direct assign: single-select, "Assign" → PATCH /assign (→ SCHEDULED).
   // Defaults to offer mode if the field is absent (older BE) to preserve prior UI.
-  const offerMode = top.data?.offerFlowEnabled ?? true;
+  const offerMode = topData?.offerFlowEnabled ?? true;
 
   // (c) SEARCH — debounced via the box; keyed so it re-fires on schedule
   // edits too (computed columns must match the proposed schedule).
@@ -392,9 +458,27 @@ export function ScheduleAssignModal({
   const showingSearch = !!term;
   const rows: ScheduleCandidate[] = showingSearch
     ? (searchRes.data?.candidates ?? [])
-    : (top.data?.candidates ?? []);
-  const listLoading = showingSearch ? searchRes.loading : top.loading;
+    : (topData?.candidates ?? []);
+  // `top.loading` is FALSE while a stale payload is on screen (the hook reports
+  // `refreshing` instead). Treat "no payload for THIS job yet" as loading, or the
+  // list would render another job's technicians as if settled.
+  const listLoading = showingSearch ? searchRes.loading : (top.loading || !topData);
   const listError = showingSearch ? searchRes.error : top.error;
+
+  // A new term is a new result set — send the operator back to page 1 rather
+  // than stranding them on a page that no longer exists.
+  useEffect(() => { setSearchPage(0); }, [term]);
+
+  // The slice actually rendered. `rows` stays whole: the capped-results hint,
+  // offer() and assignSingle() all resolve efr_ids against the FULL match set,
+  // so a technician ticked on page 1 is still resolvable while page 3 is shown.
+  // Selection itself is immune to paging by construction — `selected` is keyed
+  // by efr_id and owned here, so it never derives from what the table renders.
+  const pageRows = useMemo(() => {
+    if (!showingSearch || searchPageSize === 'all') return rows;
+    const start = searchPage * searchPageSize;
+    return rows.slice(start, start + searchPageSize);
+  }, [rows, showingSearch, searchPage, searchPageSize]);
 
   // Offer the job to every selected technician at once (offer-pool model).
   async function offer() {
@@ -530,13 +614,27 @@ export function ScheduleAssignModal({
             </div>
           )}
           {/* ───────── (a) COMPLETE JOB DETAILS + editable schedule ───────── */}
-          <section>
-            <h3 className="text-sm font-semibold mb-2">Job Details</h3>
-            {top.loading && !job && (
-              <div className="text-sm text-muted-foreground py-4">Loading job details…</div>
+          {/* Bordered card with an uppercase header button — same shell as
+              JobRemarksView so the two collapsibles in this modal read as one
+              family. Collapsible, expanded by default. A <button> (not a bare
+              div) so it's keyboard-reachable; aria-expanded carries state to AT. */}
+          <section className="rounded-md border bg-muted/30">
+            <button
+              type="button"
+              onClick={() => setJobDetailsOpen((o) => !o)}
+              aria-expanded={jobDetailsOpen}
+              className="flex w-full items-center gap-1.5 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-sky-700"
+            >
+              <ChevronDown
+                className={`h-3.5 w-3.5 shrink-0 transition-transform ${jobDetailsOpen ? '' : '-rotate-90'}`}
+              />
+              Job Details
+            </button>
+            {jobDetailsOpen && !job && (
+              <div className="border-t px-3 text-sm text-muted-foreground py-4">Loading job details…</div>
             )}
-            {job && (
-              <div className="rounded-lg border bg-muted/20 p-3">
+            {jobDetailsOpen && job && (
+              <div className="border-t p-3">
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-2 text-sm">
                   <ReadField label="Customer" value={job.customer_name} />
                   <ReadField
@@ -547,25 +645,59 @@ export function ScheduleAssignModal({
                   />
                   <ReadField label="Client" value={job.client_name} />
                   <ReadField label="Client Ref Id" value={job.client_ref_id} />
+                  {/* client_spoc IS the mobile (raw string on tbl_job, no SPOC id);
+                      it arrives masked. Dialling routes through the spocJobId
+                      target, which re-resolves the real number BE-side. */}
+                  <ReadField
+                    label="Client SPOC"
+                    value={
+                      job.client_spoc_name || job.client_spoc ? (
+                        <span className="inline-flex flex-col items-start">
+                          <span>{job.client_spoc_name || '—'}</span>
+                          {job.client_spoc && (
+                            <CallableMobile spocJobId={job.job_id} mobile={job.client_spoc} />
+                          )}
+                        </span>
+                      ) : null
+                    }
+                  />
                   <ReadField
                     label="Service Address"
                     value={
                       <span className="inline-flex items-start gap-1">
                         <MapPin className="h-3.5 w-3.5 mt-0.5 shrink-0 text-muted-foreground" />
+                        {/* formatServiceAddress resolves to tbl_address.address ALONE
+                            (see lib/format.ts), so City is a separate field — it is
+                            not folded into the address string. */}
                         <span>{formatServiceAddress(job)}</span>
                       </span>
                     }
                   />
-                  <ReadField label="Service Category" value={job.service_category} />
-                  <ReadField label="Service Type" value={job.service_type} />
-                  <ReadField
-                    label="Deep Skill"
-                    value={job.deep_skill_label || job.service_category}
-                  />
+                  <ReadField label="City" value={job.city_name} />
+                  {/* Service Category / Service Type / Deep Skill deliberately NOT
+                      here (removed 2026-07-15) — the Services table below is the
+                      authoritative, per-service breakdown of exactly that, and the
+                      job-level copies were both redundant and wrong for
+                      multi-service jobs. */}
                   <ReadField label="Job Type" value={job.job_type} />
                   <ReadField label="Payment Mode" value={job.payment_mode} />
-                  <ReadField label="Description" value={job.job_desc} />
+                  <ReadField label="Booked By" value={job.created_by_name} />
+                  {/* formatDate renders date + IST time — no separate datetime helper. */}
+                  <ReadField label="Booked On" value={formatDate(job.created_date_time)} />
                 </div>
+
+                {/* Job Description + Additional Comments — full-width under the
+                    grid because they're free text and wrap badly in a 3-col cell.
+                    `job_desc` is the ACTUAL tbl_job.job_desc; `efr_special_notes`
+                    is the technician-facing note ("Anything Handyman should keep
+                    in mind?" in the Book-New-Call form) surfaced here as
+                    "Additional Comments". */}
+                {(job.job_desc || job.efr_special_notes) && (
+                  <div className="mt-3 pt-3 border-t grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 text-sm">
+                    <ReadField label="Job Description" value={job.job_desc} />
+                    <ReadField label="Additional Comments" value={job.efr_special_notes} />
+                  </div>
+                )}
 
                 {job.services && job.services.length > 0 && (
                   <div className="mt-3 pt-3 border-t">
@@ -574,21 +706,53 @@ export function ScheduleAssignModal({
                       <table className="w-full text-xs">
                         <thead>
                           <tr className="text-left text-muted-foreground">
-                            <th className="font-medium py-1 pr-3">Service</th>
-                            <th className="font-medium py-1 pr-3">Category</th>
-                            <th className="font-medium py-1 pr-3">Type</th>
-                            <th className="font-medium py-1 pr-3 text-right whitespace-nowrap">Qty</th>
-                            <th className="font-medium py-1 text-right whitespace-nowrap">Amount</th>
+                            {/* Widths keep each service on ONE line: the three text
+                                columns truncate under pressure, while Qty / Amount /
+                                Billing are content-sized and never wrap. */}
+                            <th className="font-medium py-1 pr-3 w-[30%]">Service</th>
+                            <th className="font-medium py-1 pr-3 w-[24%]">Category</th>
+                            <th className="font-medium py-1 pr-3 w-[24%]">Type</th>
+                            <th className="font-medium py-1 pr-3 text-right whitespace-nowrap w-12">Qty</th>
+                            <th className="font-medium py-1 pr-3 text-right whitespace-nowrap w-20">Amount</th>
+                            {/* Does the customer pay? Driven by tbl_job.paid_by. */}
+                            <th className="font-medium py-1 whitespace-nowrap">Payment</th>
                           </tr>
                         </thead>
                         <tbody>
                           {job.services.map((s, i) => (
                             <tr key={i} className="border-t border-border/60">
-                              <td className="py-1 pr-3">{s.service_name || '—'}</td>
-                              <td className="py-1 pr-3">{s.service_catg || '—'}</td>
-                              <td className="py-1 pr-3">{s.service_type || '—'}</td>
+                              {/* truncate + title: long rate-card names stay on one
+                                  line and reveal in full on hover. */}
+                              <td className="py-1 pr-3 max-w-0 truncate" title={s.service_name || undefined}>{s.service_name || '—'}</td>
+                              <td className="py-1 pr-3 max-w-0 truncate" title={s.service_catg || undefined}>{s.service_catg || '—'}</td>
+                              <td className="py-1 pr-3 max-w-0 truncate" title={s.service_type || undefined}>{s.service_type || '—'}</td>
                               <td className="py-1 pr-3 text-right whitespace-nowrap">{s.quantity ?? '—'}</td>
-                              <td className="py-1 text-right whitespace-nowrap">{s.total_charge != null ? `₹${s.total_charge}` : '—'}</td>
+                              <td className="py-1 pr-3 text-right whitespace-nowrap">{s.total_charge != null ? `₹${s.total_charge}` : '—'}</td>
+                              {/*
+                               * PAYMENT — does the customer pay for this job?
+                               * Driven solely by tbl_job.paid_by (2 = the customer
+                               * pays; anything else = they don't), per ops.
+                               *
+                               * ⚠ paid_by is per-JOB, so every service line shows the
+                               * SAME chip — it sits per-row because that's where ops
+                               * read it, not because the data varies. Deliberately NOT
+                               * keyed on the per-service `billing_label` (which only
+                               * says whether a CHARGE exists) nor on `collected_by`
+                               * (who physically collects): a line can carry ₹1000 and
+                               * still be free to the customer when the client is billed.
+                               * paid_by is the only column that answers who pays.
+                               */}
+                              <td className="py-1 whitespace-nowrap">
+                                {Number(job.paid_by) === 2 ? (
+                                  <StatusChip tone="amber" title="The customer pays for this job — collect on site.">
+                                    Paid by Customer
+                                  </StatusChip>
+                                ) : (
+                                  <StatusChip tone="emerald" title="Nothing to collect from the customer — the client is billed.">
+                                    Free for Customer
+                                  </StatusChip>
+                                )}
+                              </td>
                             </tr>
                           ))}
                         </tbody>
@@ -639,6 +803,14 @@ export function ScheduleAssignModal({
               </div>
             )}
           </section>
+
+          {/* Job comments to date. Sits BETWEEN Job Details and the technician
+              list (moved up from the modal footer 2026-07-15) — it's context for
+              choosing a technician, so it belongs before the choice, not after
+              it. Collapsed by default so a long thread can't push the Top 10
+              off-screen; the header carries the count so ops can tell at a glance
+              whether it's worth opening. */}
+          <JobRemarksView jobId={jobId} collapsible defaultOpen={false} />
 
           {/* ───────── Offer history — live + rejected + expired — offer mode only ───────── */}
           {offerMode && (offers.data?.items?.length ?? 0) > 0 && (
@@ -711,6 +883,22 @@ export function ScheduleAssignModal({
             <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
               <h3 className="text-sm font-semibold flex items-center gap-1.5">
                 {showingSearch ? 'Search Results' : 'Top 10 Technicians'}
+                {showingSearch && (
+                  <InfoTooltip label="What you can search by">
+                    <div className="space-y-2">
+                      <div className="font-semibold text-slate-900">What you can search by</div>
+                      <div>One box — the term is matched against every field below.</div>
+                      <ul className="list-disc ml-4 space-y-0.5">
+                        <li><strong>Name</strong> — partial match</li>
+                        <li><strong>Mobile Number</strong> — partial match</li>
+                        <li><strong>City</strong> — partial match on the technician&apos;s registered city</li>
+                        <li><strong>Pincode</strong> — the technician&apos;s current pincode, matched on a full 6 digits</li>
+                        <li><strong>Technician Id</strong> — exact match</li>
+                      </ul>
+                      <div className="text-slate-500">Search ignores the Top 10 ranking filters, so it finds any <strong>Active</strong> &amp; <strong>Verified</strong> technician — including ones outside the job&apos;s area.</div>
+                    </div>
+                  </InfoTooltip>
+                )}
                 {!showingSearch && (
                   <InfoTooltip label="How the Top 10 is ranked">
                     <div className="space-y-2">
@@ -740,7 +928,7 @@ export function ScheduleAssignModal({
               <div className="relative w-80 max-w-full">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
-                  placeholder="Search Any Technician by Name or Id"
+                  placeholder="Search Any Technician by Name, Id, City or Pincode"
                   className="pl-9 pr-9"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
@@ -757,9 +945,12 @@ export function ScheduleAssignModal({
                 )}
               </div>
             </div>
+            {/* Only when the BE genuinely truncated (raw matches > the 250 cap).
+                Below that the footer pages through every match, so there is
+                nothing to warn about — "Refine your search" would be a lie. */}
             {showingSearch && searchRes.data?.capped && (
               <p className="mb-2 text-[11px] text-amber-700">
-                Showing the first {rows.length} matches. Refine your search to narrow the list.
+                More than {rows.length} technicians match — showing the first {rows.length}. Refine your search to see the rest.
               </p>
             )}
 
@@ -791,12 +982,12 @@ export function ScheduleAssignModal({
                     No Technicians Available For This Job.
                   </p>
                   {(() => {
-                    const rej = top.data?.rejected ?? [];
-                    const l1 = top.data?.l1Count ?? 0;
+                    const rej = topData?.rejected ?? [];
+                    const l1 = topData?.l1Count ?? 0;
                     // note=no_deep_skill_match ⇒ these techs were surfaced by the
                     // no-skill fallback (matched the AREA, not the exact skill) —
                     // word it accurately rather than claiming a skill match.
-                    const noSkill = String(top.data?.note ?? '').includes('no_deep_skill_match');
+                    const noSkill = String(topData?.note ?? '').includes('no_deep_skill_match');
                     if (l1 > 0 && rej.length > 0) {
                       return (
                         <>
@@ -825,30 +1016,43 @@ export function ScheduleAssignModal({
                     return (
                       <p className="mt-1 text-center text-muted-foreground">
                         No active, verified technician with the required skill was found in this city
-                        {String(top.data?.note ?? '').includes('zone') ? ' or its nearby zones' : ''}.
+                        {String(topData?.note ?? '').includes('zone') ? ' or its nearby zones' : ''}.
                       </p>
                     );
                   })()}
                 </div>
               )
             ) : (
-              <CandidateTable
-                rows={rows}
-                loading={listLoading}
-                error={null}
-                showingSearch={showingSearch}
-                canCommit={canCommit}
-                multiSelect={offerMode}
-                selected={selected}
-                onToggleSelected={toggleSelected}
-                onOpenPincodes={setPincodeModalFor}
-                jobId={jobId}
-              />
+              <>
+                <CandidateTable
+                  rows={pageRows}
+                  loading={listLoading}
+                  error={null}
+                  showingSearch={showingSearch}
+                  canCommit={canCommit}
+                  multiSelect={offerMode}
+                  selected={selected}
+                  onToggleSelected={toggleSelected}
+                  onOpenPincodes={setPincodeModalFor}
+                  jobId={jobId}
+                />
+                {/* Search Results only — the Top 10 is a fixed top-N with
+                    nothing to page through. `total` is the full match set, not
+                    the slice. */}
+                {showingSearch && rows.length > 0 && (
+                  <TablePagination
+                    className="mt-3"
+                    page={searchPage}
+                    pageSize={searchPageSize}
+                    total={rows.length}
+                    onPageChange={setSearchPage}
+                    onPageSizeChange={(s) => { setSearchPageSize(s); setSearchPage(0); }}
+                  />
+                )}
+              </>
             )}
           </section>
 
-          {/* Read-only remarks / comments history at the bottom of the modal. */}
-          <JobRemarksView jobId={jobId} />
         </div>
 
         <DialogFooter className="px-6 sm:justify-between">
@@ -986,19 +1190,32 @@ function CandidateTable({
   // offer mode, radio in direct-assign mode).
   const COLS = canCommit ? 14 : 13;
   return (
-    <div className="border rounded max-h-[48vh] overflow-auto thin-scroll">
+    // Horizontal scroll ONLY (the 13-14 columns can't fit any laptop). There is
+    // deliberately no max-height: a capped inner scroller showed ~5 rows and
+    // forced ops to scroll a nested area inside an already-scrolling modal. The
+    // list is bounded instead — Top-10 by the BE's top-N, Search Results by the
+    // page size — so it's the modal body that scrolls, once.
+    <div className="border rounded overflow-x-auto thin-scroll">
       <table
         className="data-table text-xs whitespace-nowrap border-separate"
         style={{ borderSpacing: 0 }}
       >
         <thead className="sticky top-0 bg-background z-40 shadow-sm">
           <tr>
+            {/* These two are FROZEN, so they need an opaque background or
+                horizontally-scrolled cells bleed through. It must be `bg-muted`
+                — the shade `.data-table th` already paints every other header
+                cell (globals.css). They previously hard-coded `bg-white`, which
+                made them read as two pale boxes cut out of the grey header row;
+                the empty w-10 select cell in particular looked like a stray
+                artifact next to "Technician", most visibly while loading, when
+                the colSpan'd "Loading technicians…" row leaves nothing under it. */}
             {canCommit && (
-              <th className="!text-center sticky top-0 left-0 bg-white z-50 w-10" aria-label="Select" />
+              <th className="!text-center sticky top-0 left-0 bg-muted z-50 w-10" aria-label="Select" />
             )}
             <th
               className={
-                '!text-left sticky top-0 bg-white z-50 shadow-[2px_0_0_0_var(--border)] min-w-[190px] ' +
+                '!text-left sticky top-0 bg-muted z-50 shadow-[2px_0_0_0_var(--border)] min-w-[190px] ' +
                 (canCommit ? 'left-10' : 'left-0')
               }
             >

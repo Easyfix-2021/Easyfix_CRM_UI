@@ -349,6 +349,11 @@ export function JobModal({
     catch { /* swallow — outer error state is set by action handlers */ }
   }
 
+  // NOTE: no interval polling on the modal — the job re-pulls on ACTION via the
+  // silent refresh() already wired to ActionBar.onChanged (assign / reschedule /
+  // remarks etc.). Event-driven avoids refreshing the panel under an operator
+  // who is reading or editing it.
+
   // While loading a fresh job we render a neutral title so the operator
   // doesn't see last-modal's job id flash. The non-view modes embed the
   // jobId from props (always current — no stale risk) so they render
@@ -688,6 +693,40 @@ function collectedByLabel(code: unknown): string | undefined {
   if (s === '3' || s === 'client')    return 'Client';
   return undefined;
 }
+
+/*
+ * Customer-facing wording for Collected By. The stored enum and the wire
+ * vocabulary are UNCHANGED — 'Easyfixer'/'Easyfix' remain the option values and
+ * the BE's /collected-by-preference still answers with them (routes/admin/
+ * clients.js COLLECTED_BY_MAP). Only the words ops read change, from "who
+ * physically collects" to "who bears the cost", which is the same fact:
+ *   1 Easyfixer → the technician takes payment on site → Paid By Customer
+ *   2 Easyfix   → Easyfix invoices the client          → Free For Customer
+ * Keeping value≠label is deliberate: relabelling the VALUES would silently
+ * reinterpret 82k jobs already storing 1 and break collectedByCode()'s mapping.
+ *
+ * 3 (Client) is intentionally NOT offered per job — ops set it on the client
+ * profile, and production has 13 such jobs. Any unmapped value falls through
+ * verbatim so a legacy 'Client' row still renders its own name rather than blank.
+ */
+const COLLECTED_BY_CUSTOMER_LABEL: Record<string, string> = {
+  Easyfixer: 'Paid By Customer',
+  Easyfix:   'Free For Customer',
+};
+function collectedByDisplay(v: unknown): string {
+  const s = String(v ?? '').trim();
+  return COLLECTED_BY_CUSTOMER_LABEL[s] ?? s;
+}
+
+/*
+ * The two options the booking flow offers when the client profile says "Any"
+ * (tbl_client.collected_by = 0). Ops MUST pick one — leaving it unset is what
+ * wrote 0 to tbl_job and blocked those jobs from checking out.
+ */
+const COLLECTED_BY_JOB_OPTIONS = [
+  { value: 'Easyfix',   label: 'Free For Customer' },
+  { value: 'Easyfixer', label: 'Paid By Customer' },
+];
 
 function ActionBar({ job, jobId, onChanged, onEdit }: {
   job: Job; jobId: number; onChanged: () => void; onEdit: () => void;
@@ -4548,8 +4587,26 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
 
   // When the client locks the preference, auto-populate the form field
   // so the operator can't save with a value that contradicts the lock.
+  //
+  // …and UNDO that fill when the client no longer pins one. Switching from a
+  // pinned client to an "Any" client (collected_by = 0) unlocks the dropdown but
+  // used to leave the previous client's value sitting there preselected — ops
+  // could save it without ever choosing, which is the whole point of the field.
+  //
+  // `lastAppliedPrefRef` makes the clear SURGICAL: we only ever wipe a value we
+  // auto-filled ourselves. A value seeded from the saved job (Confirm/Edit mode
+  // re-hydrates collected_by) or picked by the operator is never touched — a
+  // blind `else set('')` would silently blank the saved value of every job whose
+  // client is "Any".
+  const lastAppliedPrefRef = useRef<string | null>(null);
   useEffect(() => {
-    if (collectedByPref) set('collected_by', collectedByPref);
+    if (collectedByPref) {
+      set('collected_by', collectedByPref);
+      lastAppliedPrefRef.current = collectedByPref;
+    } else if (lastAppliedPrefRef.current) {
+      set('collected_by', '');
+      lastAppliedPrefRef.current = null;
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collectedByPref]);
 
@@ -4732,6 +4789,12 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
       if (!/^[0-9]{6}$/.test(String(f.pin_code || ''))) missing.push('PIN (6 digits)');
       if (!f.requested_date_time) missing.push('Requested Date & Time');
       if (!f.time_slot) missing.push('Time Slot');
+      // Collected By is mandatory. Left unset it reached tbl_job as 0 ("Any"),
+      // which the checkout flow refuses — the job then couldn't be closed. When
+      // the client profile pins a preference the effect above pre-fills this
+      // field, so the check passes for free; it only bites when the client is
+      // "Any" and ops genuinely has to choose.
+      if (!f.collected_by) missing.push('Collected By');
       // Services check — added 2026-05-28 after Job #482453 was booked
       // with zero services. The BE Joi schema now also rejects this so
       // a future FE bug can't repeat the silent-empty-create.
@@ -4770,6 +4833,9 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
       if (!String(f.fk_service_catg_ids || f.fk_service_catg_id || '').trim()) missing.push('Service Categories');
       if (!(f.fk_service_type_ids && f.fk_service_type_ids.length)) missing.push('Service Type');
       if (!String(f.job_type || '').trim()) missing.push('Job Type');
+      // Mandatory here for the same reason as the confirm gate above: unset →
+      // tbl_job.collected_by = 0 → the job can never check out.
+      if (!f.collected_by) missing.push('Collected By');
       if (!hasAtLeastOneService) missing.push('At least one Service in Products');
       if (missing.length) {
         setError(`Missing required field(s): ${missing.join(', ')}`);
@@ -6416,11 +6482,10 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 </p>
               </div>
             )}
-            {/* Service Address (read-only) — the assembled Building · Address ·
-                Landmark · City · Pincode, relocated here from the Job Summary
-                strip and placed just above the editable Complete Address so ops
-                can copy/paste or cross-check it while editing. Mirrors the live
-                form values so it stays in sync as the address is edited. */}
+            {/* Service Address (read-only) — the actual booking address
+                (tbl_address.address). Non-editable here: the operator sets GPS
+                via the "Search Location On Map" (building) field in the picker
+                below, which never changes this address. */}
             <div className="col-span-1 md:col-span-3 mb-3">
               <Label className="text-xs text-muted-foreground">Service Address</Label>
               <textarea
@@ -6459,6 +6524,10 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 }}
                 cities={lk.toOpts.cities.map((o) => ({ value: String(o.value), label: String(o.label) }))}
                 autoCreatePincode
+                /* Confirm & Schedule: `address` is the non-editable Service
+                   Address (shown read-only above); the Google search moves to
+                   the `building` field and only sets GPS. */
+                serviceAddressReadOnly
               />
             </div>
           </div>
@@ -7090,19 +7159,16 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 value={collectedByPref ?? (getJobField('collected_by') ?? '')}
                 onChange={(v) => { if (!collectedByPref) setJobField('collected_by', v); }}
                 disabled={!!collectedByPref}
+                placeholder="Select"
                 options={
                   collectedByPref
-                    ? [{ value: collectedByPref, label: collectedByPref }]
-                    : [
-                        { value: 'Easyfix',   label: 'Easyfix' },
-                        { value: 'Easyfixer', label: 'Easyfixer' },
-                        { value: 'Client',    label: 'Client' },
-                      ]
+                    ? [{ value: collectedByPref, label: collectedByDisplay(collectedByPref) }]
+                    : COLLECTED_BY_JOB_OPTIONS
                 }
               />
               {collectedByPref && (
                 <p className="text-[11px] text-muted-foreground mt-1">
-                  Locked by client profile (Collected By = {collectedByPref}).
+                  Locked by client profile (Collected By = {collectedByDisplay(collectedByPref)}).
                 </p>
               )}
             </Field>
@@ -8543,22 +8609,22 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                     */}
                   <SearchSelect
                     required
-                    value={collectedByPref ?? (getJobField('collected_by') || 'Easyfix')}
+                    // No 'Easyfix' fallback: an invisible default is what let ops
+                    // submit without choosing. Empty → the "Select" placeholder,
+                    // and the submit gate blocks until they pick.
+                    value={collectedByPref ?? (getJobField('collected_by') || '')}
                     onChange={(v) => { if (!collectedByPref) setJobField('collected_by', v); }}
                     disabled={!!collectedByPref}
+                    placeholder="Select"
                     options={
                       collectedByPref
-                        ? [{ value: collectedByPref, label: collectedByPref }]
-                        : [
-                            { value: 'Easyfix',   label: 'Easyfix' },
-                            { value: 'Easyfixer', label: 'Easyfixer' },
-                            { value: 'Client',    label: 'Client' },
-                          ]
+                        ? [{ value: collectedByPref, label: collectedByDisplay(collectedByPref) }]
+                        : COLLECTED_BY_JOB_OPTIONS
                     }
                   />
                   {collectedByPref && (
                     <p className="text-[11px] text-muted-foreground mt-1">
-                      Locked by client profile (Collected By = {collectedByPref}).
+                      Locked by client profile (Collected By = {collectedByDisplay(collectedByPref)}).
                     </p>
                   )}
                 </Field>

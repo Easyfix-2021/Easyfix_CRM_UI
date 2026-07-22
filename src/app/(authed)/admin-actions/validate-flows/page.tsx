@@ -19,6 +19,7 @@ import { Activity, CalendarClock, BellRing, CheckCircle2, XCircle, ArrowRight, P
 import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { CallRecordingAudio } from '@/components/ui/call-recording-audio';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { SearchSelect } from '@/components/ui/search-select';
@@ -764,8 +765,10 @@ function RecordingPlayer({ sessionId }: { sessionId: string }) {
       setLoading(false);
     }
   }
-  // eslint-disable-next-line jsx-a11y/media-has-caption
-  if (url) return <audio controls src={url} className="w-full" />;
+  // Downmix the 2-channel (agent | customer) recording to mono — the customer
+  // sits on the RIGHT channel alone otherwise. `url` here is a same-origin
+  // blob:, so the Web Audio graph is never CORS-tainted on this surface.
+  if (url) return <CallRecordingAudio src={url} className="w-full" />;
   return (
     <Button variant="outline" size="sm" onClick={load} disabled={loading}>
       {loading ? 'Loading…' : failed ? 'Retry' : 'Load Recording'}

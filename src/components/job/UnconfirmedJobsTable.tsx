@@ -7,6 +7,7 @@ import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
 import { MagicLinkActionPopup } from '@/components/job/MagicLinkActionPopup';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { IconButton } from '@/components/ui/icon-button';
+import { SortHeader, type SortDir } from '@/lib/use-sort';
 
 /*
  * UnconfirmedJobsTable — the focused column set ops requested for the
@@ -69,6 +70,13 @@ export type UnconfirmedJobRow = {
   // the popup's disable-reason text + the Force Send (Override) branch.
   magic_link_max_send_count?: number | null;
   magic_link_last_action?: 'first' | 'reminder' | 'resend' | null;
+  // Real WhatsApp delivery state (BE reconciles it from Gallabox message-status
+  // callbacks — routes/webhook/whatsapp.js). 'sent' at dispatch; failed /
+  // undelivered → a red "Delivery Failed" chip with the reason on hover, so ops
+  // don't read a queued-but-undelivered send as "Link Sent". Optional so
+  // pre-migration API responses don't break the type narrow.
+  magic_link_delivery_status?: 'sent' | 'delivered' | 'read' | 'failed' | 'undelivered' | null;
+  magic_link_delivery_reason?: string | null;
   // Derived server-side from tbl_client_custom_properties
   // (auto_process_unconfirmed_order='true'). When false the client has
   // not opted into the magic-link flow and the action is hidden even
@@ -89,6 +97,13 @@ export type UnconfirmedJobRow = {
   // this alongside the "Reschedule Requested" chip. NULL when the customer
   // did not pick a specific date.
   pending_request_preferred_datetime?: string | null;
+  // Auto-reschedule (after-3pm magic-link-open rule): whether this job's
+  // appointment was auto-shifted +1 day, and the original (pre-shift) date.
+  // Drives the amber "Auto Rescheduled" chip + the "Original: <date>" line.
+  // `auto_rescheduled` is a reliable marker (scheduling_history), not the
+  // overwrite-prone remarks text. Optional so older API responses don't break.
+  auto_rescheduled?: boolean | 0 | 1;
+  original_appointment_date_time?: string | null;
 };
 
 /*
@@ -116,6 +131,13 @@ export function UnconfirmedJobsTable({
   openView,
   openConfirm,
   onMagicLinkSent,
+  // Client-side sort wiring (from the parent's useSort<JobRow>). Optional so a
+  // caller that doesn't sort still renders — headers just stay inert. The keyed
+  // columns (Job #, Ticket Created, Client, City, Status, Appointment, Customer,
+  // Source) render as clickable <SortHeader>; derived columns stay plain <th>.
+  sortBy = null,
+  sortDir = 'asc',
+  onSort = () => {},
 }: {
   rows: UnconfirmedJobRow[];
   loading: boolean;
@@ -136,6 +158,9 @@ export function UnconfirmedJobsTable({
   // should refetch the Unconfirmed list (via its useFetch / invalidate
   // mechanism) so the new sent_at / send_count flow back into the row.
   onMagicLinkSent?: () => void;
+  sortBy?: string | null;
+  sortDir?: SortDir;
+  onSort?: (col: string) => void;
 }) {
   // Track which row's Magic-Link popup is open. Single state because the
   // dialog is modal and at most one row's popup is mounted at a time.
@@ -145,18 +170,18 @@ export function UnconfirmedJobsTable({
     <table className="data-table">
       <thead>
         <tr>
-          <th className="stick-col-head stick-left">Job #</th>
-          <th>Ticket Created · Age</th>
-          <th>Client / Unique Code</th>
-          <th>City</th>
-          <th>Status</th>
+          <SortHeader<string> col="job_id" sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="stick-col-head stick-left">Job #</SortHeader>
+          <SortHeader<string> col="created_date_time" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Ticket Created · Age</SortHeader>
+          <SortHeader<string> col="client_name" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Client Ref Id</SortHeader>
+          <SortHeader<string> col="city_name" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>City</SortHeader>
+          <SortHeader<string> col="requested_date_time" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Appointment · Slot</SortHeader>
+          <SortHeader<string> col="job_status" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Status</SortHeader>
           <th>Customer Request</th>
           <th>Action Taken Reason</th>
           <th>Remarks</th>
           <th>Client SPOC</th>
-          <th>Appointment · Slot</th>
-          <th>Customer</th>
-          <th>Source</th>
+          <SortHeader<string> col="customer_name" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Customer</SortHeader>
+          <SortHeader<string> col="source_type" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Source</SortHeader>
           <th className="stick-col-head stick-right text-right">Action</th>
         </tr>
       </thead>
@@ -168,6 +193,14 @@ export function UnconfirmedJobsTable({
         {!loading && rows.map((j) => {
           const { reason, freeText } = splitRemarks(j.remarks ?? '');
           const ticketTs = j.ticket_created_date_time ?? j.created_date_time;
+          // A WhatsApp send Gallabox accepted but never delivered (e.g. number
+          // not on WhatsApp). Takes precedence over the sky "Link Sent" chip —
+          // a failed send must NOT read as sent.
+          const deliveryFailed = j.magic_link_delivery_status === 'failed'
+            || j.magic_link_delivery_status === 'undelivered';
+          // Coerce the mysql2 EXISTS 0/1 to a real boolean — `{0 && <Chip/>}`
+          // renders the literal "0" in JSX, which is the stray "0" bug.
+          const autoRescheduled = !!j.auto_rescheduled;
           return (
             <tr key={j.job_id}>
               <td className="font-medium whitespace-nowrap stick-col stick-left">
@@ -185,6 +218,13 @@ export function UnconfirmedJobsTable({
                 {j.client_ref_id && <div className="text-[10px] text-muted-foreground">{j.client_ref_id}</div>}
               </td>
               <td className="text-xs">{j.city_name ?? '—'}</td>
+              {/* Appointment · Slot — moved here (between City and Status) so the
+                  appointment date is visible up-front for triage. Same value
+                  (requested_date_time + time_slot) as before. */}
+              <td className="text-xs whitespace-nowrap">
+                <div>{formatDate(j.requested_date_time)}</div>
+                {j.time_slot && <div className="text-[10px] text-muted-foreground">{j.time_slot}</div>}
+              </td>
               {/*
                 Status cell — two-row layout (2026-05-30 redesign):
                   Row 1: primary job_status chip (Unconfirmed / Booked / …)
@@ -216,7 +256,7 @@ export function UnconfirmedJobsTable({
                       {statusLabel(j.job_status, { assigned: j.fk_easyfixter_id != null })}
                     </StatusChip>
                   </div>
-                  {(hasDraftEdit(j) || j.customer_submitted_at || j.magic_link_sent_at) && (
+                  {(hasDraftEdit(j) || j.customer_submitted_at || j.magic_link_sent_at || deliveryFailed) && (
                     <div className="flex flex-wrap gap-1">
                       {hasDraftEdit(j) && (
                         <StatusChip
@@ -235,6 +275,14 @@ export function UnconfirmedJobsTable({
                         >
                           Customer Submitted
                         </StatusChip>
+                      ) : deliveryFailed ? (
+                        <StatusChip
+                          tone="red"
+                          size="sm"
+                          title={j.magic_link_delivery_reason || 'WhatsApp could not deliver this message (e.g. the number is not on WhatsApp).'}
+                        >
+                          Delivery Failed
+                        </StatusChip>
                       ) : j.magic_link_sent_at ? (
                         <StatusChip
                           tone="sky"
@@ -249,45 +297,69 @@ export function UnconfirmedJobsTable({
                 </div>
               </td>
               {/*
-                Customer Request cell — shows the latest PENDING cancel /
-                reschedule request raised by the customer via the magic-link
-                page. Cancel = rose chip, Reschedule = amber chip, with the
-                reason as muted sub-text + a title tooltip. None → em-dash.
-                The presence of a request also hides the Send action below.
+                Customer Request cell — the customer's magic-link activity.
+                These are INDEPENDENT (stacked), NOT mutually exclusive: a job
+                can carry a pending cancel/reschedule request AND be
+                auto-rescheduled — both chips then show. Cancel = rose,
+                Reschedule Requested = amber, Auto Rescheduled = sky (system
+                action, kept visually distinct from the amber customer request).
+                None → em-dash. A pending cancel/reschedule also hides the Send.
               */}
               <td className="text-xs whitespace-nowrap">
-                {j.pending_request_type === 'cancel' ? (
-                  <div className="flex flex-col gap-0.5">
-                    <StatusChip tone="rose" size="sm" title={j.pending_request_reason ?? undefined}>
-                      Cancel Requested
-                    </StatusChip>
-                    {j.pending_request_reason && (
-                      <div className="text-[10px] text-muted-foreground max-w-[160px] truncate" title={j.pending_request_reason}>
-                        {j.pending_request_reason}
+                {(j.pending_request_type === 'cancel' || j.pending_request_type === 'reschedule' || autoRescheduled) ? (
+                  <div className="flex flex-col items-start gap-1.5">
+                    {j.pending_request_type === 'cancel' && (
+                      <div className="flex flex-col items-start gap-0.5">
+                        <StatusChip tone="rose" size="sm" title={j.pending_request_reason ?? undefined}>
+                          Cancel Requested
+                        </StatusChip>
+                        {j.pending_request_reason && (
+                          <div className="text-[10px] text-muted-foreground max-w-[160px] truncate" title={j.pending_request_reason}>
+                            {j.pending_request_reason}
+                          </div>
+                        )}
                       </div>
                     )}
-                  </div>
-                ) : j.pending_request_type === 'reschedule' ? (
-                  <div className="flex flex-col gap-0.5">
-                    <StatusChip tone="amber" size="sm" title={j.pending_request_reason ?? undefined}>
-                      Reschedule Requested
-                    </StatusChip>
-                    {j.pending_request_reason && (
-                      <div className="text-[10px] text-muted-foreground max-w-[160px] truncate" title={j.pending_request_reason}>
-                        {j.pending_request_reason}
+                    {j.pending_request_type === 'reschedule' && (
+                      <div className="flex flex-col items-start gap-0.5">
+                        <StatusChip tone="amber" size="sm" title={j.pending_request_reason ?? undefined}>
+                          Reschedule Requested
+                        </StatusChip>
+                        {j.pending_request_reason && (
+                          <div className="text-[10px] text-muted-foreground max-w-[160px] truncate" title={j.pending_request_reason}>
+                            {j.pending_request_reason}
+                          </div>
+                        )}
+                        {/* The date the customer asked to move TO (pending Ops). */}
+                        {j.pending_request_preferred_datetime && (
+                          <div
+                            className="text-[10px] font-medium text-amber-700 dark:text-amber-500 whitespace-nowrap"
+                            title="Requested new date/time (pending Ops action)"
+                          >
+                            New: {formatDate(j.pending_request_preferred_datetime)}
+                          </div>
+                        )}
                       </div>
                     )}
-                    {/* The date the customer asked to move TO. Shown here
-                        (not in the Appointment column) because the live
-                        appointment stays put until Ops actions the request —
-                        so this is the "requested new date", kept visually
-                        distinct from the current appointment beside it. */}
-                    {j.pending_request_preferred_datetime && (
-                      <div
-                        className="text-[10px] font-medium text-amber-700 dark:text-amber-500 whitespace-nowrap"
-                        title="Requested new date/time (pending Ops action)"
-                      >
-                        New: {formatDate(j.pending_request_preferred_datetime)}
+                    {autoRescheduled && (
+                      <div className="flex flex-col items-start gap-0.5">
+                        <StatusChip
+                          tone="sky"
+                          size="sm"
+                          title={j.original_appointment_date_time
+                            ? `Auto-rescheduled +1 day (link opened after 3pm). Original appointment: ${formatDate(j.original_appointment_date_time)}`
+                            : 'Auto-rescheduled +1 day (link opened after 3pm)'}
+                        >
+                          Auto Rescheduled
+                        </StatusChip>
+                        {j.original_appointment_date_time && (
+                          <div
+                            className="text-[10px] font-medium text-sky-700 dark:text-sky-400 whitespace-nowrap"
+                            title="Original appointment (before the after-3pm auto-reschedule)"
+                          >
+                            Original: {formatDate(j.original_appointment_date_time)}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -304,16 +376,21 @@ export function UnconfirmedJobsTable({
                   ? (
                     <>
                       <div>{j.client_spoc_name ?? '—'}</div>
+                      {/* client_spoc IS the SPOC's mobile (a raw string on
+                          tbl_job — there is no SPOC id), and it arrives masked.
+                          The spocJobId target re-resolves the real number
+                          BE-side, so the number is dialable without the FE ever
+                          holding it. The !== name guard stays: legacy rows exist
+                          where both columns carry the same text, and we must not
+                          render a "call" affordance on a name. */}
                       {j.client_spoc && j.client_spoc !== j.client_spoc_name && (
-                        <div className="text-[10px] text-muted-foreground">{j.client_spoc}</div>
+                        <div className="text-[10px] text-muted-foreground">
+                          <CallableMobile spocJobId={j.job_id} mobile={j.client_spoc} />
+                        </div>
                       )}
                     </>
                   )
                   : <span className="text-muted-foreground">—</span>}
-              </td>
-              <td className="text-xs whitespace-nowrap">
-                <div>{formatDate(j.requested_date_time)}</div>
-                {j.time_slot && <div className="text-[10px] text-muted-foreground">{j.time_slot}</div>}
               </td>
               <td className="text-xs whitespace-nowrap">
                 <div>{j.customer_name ?? '—'}</div>

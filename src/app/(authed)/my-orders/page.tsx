@@ -22,7 +22,8 @@ import { AssignTechnicianModal, type AssignMode } from '@/components/job/AssignT
 import { ScheduleAssignModal } from '@/components/job/ScheduleAssignModal';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
-import { useSort, SortHeader } from '@/lib/use-sort';
+import { cycleSort, SortHeader, type SortDir } from '@/lib/use-sort';
+import { RefreshBar } from '@/components/ui/refresh-bar';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
 import { useDebouncedValue } from '@/lib/hooks';
@@ -91,8 +92,40 @@ type JobRow = {
   // offered_efr_name is that technician's name (may be null).
   is_offered?: number | boolean;
   offered_efr_name?: string | null;
+  // Offer aggregates driving the Pending-for-Scheduling tri-state chip.
+  // offered_count = offers still OPEN; total = offers in any state;
+  // expired = offers in EXPIRED state. See offerColumns() in job.service.js.
+  offered_count?: number | null;
+  total_offer_count?: number | null;
+  expired_offer_count?: number | null;
 };
 type Resp = { items: JobRow[]; total: number; limit: number; offset: number };
+
+/*
+ * Pending-for-Scheduling tri-state — Offered / Expired / Pending For Scheduling.
+ * Ops' rule, taken literally: "Expired only when ALL the offers are expired.
+ * Offered if even a single offer is active from multiple offers."
+ *
+ * Order matters: one live offer outranks any number of expired siblings, so the
+ * open-offer check comes first.
+ *
+ * The Expired test is `expired === total`, NOT `offered_count === 0`. Those look
+ * interchangeable and aren't: a job whose only offer was REJECTED has no open
+ * offer, but its offers are not all expired — it must read as Pending For
+ * Scheduling (it's back in the pool), not Expired. Don't "simplify" this.
+ *
+ * 'none' covers both never-offered and rejected/accepted-only, which the caller
+ * renders with the plain job_status label.
+ */
+function offerState(j: JobRow): 'offered' | 'expired' | 'none' {
+  // is_offered is the EXISTS flag; offered_count the COUNT. Either proves a live
+  // offer — checking both keeps this correct against older BE deploys that
+  // project is_offered but not the counts (NULL → 0).
+  if (j.is_offered === 1 || j.is_offered === true || (j.offered_count ?? 0) > 0) return 'offered';
+  const total = j.total_offer_count ?? 0;
+  const expired = j.expired_offer_count ?? 0;
+  return total > 0 && expired === total ? 'expired' : 'none';
+}
 
 // Operator-controlled via the TablePagination footer. "All" maps to
 // JOBS_MAX_LIMIT (the BE Joi cap on /admin/jobs).
@@ -147,6 +180,16 @@ export default function MyOrdersPage() {
   const offset = page * limit;
   const [data, setData] = useState<Resp | null>(null);
   const [loading, setLoading] = useState(false);
+  // `refreshing` = a silent/poll reload while data is already shown (never gates
+  // the table). `loadSeqRef` = stale-response guard this page lacked: a slow
+  // poll must not clobber a newer user-initiated load — only the latest seq wins.
+  const [refreshing, setRefreshing] = useState(false);
+  const loadSeqRef = useRef(0);
+  // Server-side sort state (whitelisted BE-side) — declared here with the other
+  // query state so load() and the poll effect can depend on it. `toggle` + the
+  // sort refetch effect live near the render below.
+  const [sortKey, setSortKey] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
 
   /*
    * Role-aware owner filter: admin-group users see all jobs here (matches
@@ -171,57 +214,78 @@ export default function MyOrdersPage() {
   const inflightRef = useRef<Map<string, Promise<Resp>>>(new Map());
   const TAB_CACHE_TTL = 30_000;
 
-  async function load(reset = false, force = false) {
+  async function load(reset = false, force = false, silent = false) {
+    const seq = ++loadSeqRef.current;
     const tabDef = TABS.find((t) => t.value === tab);
     const off = reset ? 0 : offset;
     // Cache key includes pageSize so changing rows-per-page doesn't
     // serve a stale 50-row payload. Also includes serverQ so the
     // Unconfirmed-tab search results don't collide with the
     // unfiltered cache entry for the same offset.
-    const key = `${tab}|${off}|${limit}|${scopedOwnerId ?? 'admin-all'}|q=${serverQ}`;
+    const key = `${tab}|${off}|${limit}|${scopedOwnerId ?? 'admin-all'}|q=${serverQ}|s=${sortKey || ''}:${sortDir}`;
 
-    if (!force) {
-      const hit = cacheRef.current.get(key);
-      if (hit && Date.now() - hit.at < TAB_CACHE_TTL) {
-        setData(hit.data);
-        if (reset) setPage(0);
+    // First paint (no data) shows the skeleton; every later reload — tab/page/
+    // sort/search/post-mutation — is silent so the table never flashes.
+    //
+    // Raised BEFORE the cache/in-flight short-circuits, and cleared in the single
+    // `finally` that every exit path below funnels through. When those
+    // short-circuits had their own `return`s they skipped the cleanup entirely:
+    // on mount BOTH effects call load(), the second bumps `seq` (staling the
+    // first) and then short-circuits onto the first's in-flight promise — so the
+    // first was stale-guarded out of its own `finally` and the second never
+    // reached one. Nobody cleared `loading` and the table showed the skeleton
+    // until a tab change fired an un-raced load.
+    if (data == null && !silent) setLoading(true); else setRefreshing(true);
+    try {
+      if (!force) {
+        const hit = cacheRef.current.get(key);
+        if (hit && Date.now() - hit.at < TAB_CACHE_TTL) {
+          if (seq === loadSeqRef.current) { setData(hit.data); if (reset) setPage(0); }
+          return;
+        }
+      }
+
+      // In-flight dedupe — see comment on inflightRef.
+      const inflight = inflightRef.current.get(key);
+      if (inflight) {
+        try {
+          const r = await inflight;
+          if (seq === loadSeqRef.current) { setData(r); if (reset) setPage(0); }
+        } catch { /* originator surfaces the error */ }
         return;
       }
-    }
 
-    // In-flight dedupe — see comment on inflightRef.
-    const inflight = inflightRef.current.get(key);
-    if (inflight) {
+      // Only THIS call owns the in-flight entry it registers, so the delete is
+      // scoped to an inner `finally` — the cache/dedupe short-circuits above
+      // must not evict a promise another call is still awaiting.
       try {
-        const r = await inflight;
-        setData(r);
-        if (reset) setPage(0);
-      } catch { /* originator surfaces the error */ }
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const reqPromise = api.get<Resp>('/admin/jobs', {
-        status:    tabDef?.statuses ? undefined : tabDef?.status,
-        statuses:  tabDef?.statuses ? tabDef.statuses.join(',') : undefined,
-        assigned:  tabDef?.assigned === undefined ? undefined : String(tabDef.assigned),
-        limit, offset: off,
-        ownerId: scopedOwnerId,
-        // Global search (Unconfirmed tab only). BE's /admin/jobs accepts
-        // `q` and searches across id / customer / address. Empty string
-        // ⇒ undefined so we don't send a no-op param on other tabs or
-        // when the box is cleared.
-        q: serverQ || undefined,
-      });
-      inflightRef.current.set(key, reqPromise);
-      const r = await reqPromise;
-      setData(r);
-      cacheRef.current.set(key, { at: Date.now(), data: r });
-      if (reset) setPage(0);
+        const reqPromise = api.get<Resp>('/admin/jobs', {
+          status:    tabDef?.statuses ? undefined : tabDef?.status,
+          statuses:  tabDef?.statuses ? tabDef.statuses.join(',') : undefined,
+          assigned:  tabDef?.assigned === undefined ? undefined : String(tabDef.assigned),
+          limit, offset: off,
+          // Server-side sort (whitelisted BE-side); absent → BE default job_id DESC.
+          sortBy: sortKey || undefined,
+          sortDir: sortKey ? sortDir : undefined,
+          ownerId: scopedOwnerId,
+          // Global search (Unconfirmed tab only). BE's /admin/jobs accepts
+          // `q` and searches across id / customer / address. Empty string
+          // ⇒ undefined so we don't send a no-op param on other tabs or
+          // when the box is cleared.
+          q: serverQ || undefined,
+        });
+        inflightRef.current.set(key, reqPromise);
+        const r = await reqPromise;
+        cacheRef.current.set(key, { at: Date.now(), data: r });
+        if (seq === loadSeqRef.current) {
+          setData(r);
+          if (reset) setPage(0);
+        }
+      } finally {
+        inflightRef.current.delete(key);
+      }
     } finally {
-      inflightRef.current.delete(key);
-      setLoading(false);
+      if (seq === loadSeqRef.current) { setLoading(false); setRefreshing(false); }
     }
   }
 
@@ -233,6 +297,9 @@ export default function MyOrdersPage() {
   // unfiltered paginated list.
   useEffect(() => { setPage(0); load(true, true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [tab, scopedOwnerId, serverQ]);
   useEffect(() => { load(false); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [page, pageSize]);
+  // NOTE: no interval polling — data refreshes on ACTION (post-mutation
+  // load(false, true) after saves/row-actions), now SILENT + flicker-free via
+  // the data-null loading guard. Event-driven, no mid-task surprises.
 
   // (refreshCounts removed with the pill bar — each sub-menu is its own page
   // so we don't need cross-tab counts; `data.total` in the subtitle covers
@@ -337,7 +404,22 @@ export default function MyOrdersPage() {
   // matches INSTANTLY; the debounced server-q refetch in parallel
   // expands the result to off-page matches when it lands.
   const filteredItems = filterJobRows(data?.items ?? [], q);
-  const { sorted, sortKey, sortDir, toggle } = useSort<JobRow>(filteredItems);
+  // Server-side sort — sortKey/sortDir state is declared up in the state block
+  // (load()/the poll effect depend on it); here we wire the header-click cycle.
+  const toggle = (col: string) => {
+    const next = cycleSort(col, { sortBy: sortKey, sortDir });
+    setSortKey(next.sortBy);
+    setSortDir(next.sortDir);
+  };
+  // Server returns the page already ordered; keep the name `sorted` for render.
+  const sorted = filteredItems;
+  const sortMountRef = useRef(true);
+  useEffect(() => {
+    if (sortMountRef.current) { sortMountRef.current = false; return; }
+    setPage(0);
+    load(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortKey, sortDir]);
 
   // Resolve the current tab's human label for the page header — each sidebar
   // sub-menu is a standalone status page, so the tab name IS the page title.
@@ -413,6 +495,7 @@ export default function MyOrdersPage() {
       </Card>
 
       <Card>
+        <RefreshBar active={refreshing} />
         <CardContent className="p-0 overflow-x-auto">
           {tab === 'unconfirmed' ? (
             <UnconfirmedJobsTable
@@ -428,6 +511,11 @@ export default function MyOrdersPage() {
               userIsAdmin={me?.role?.role_name?.toLowerCase() === 'admin'}
               openView={openView}
               openConfirm={openConfirm}
+              // Server-side sort: forward the page's sort state + toggle so the
+              // Unconfirmed column headers sort the WHOLE list (not just page).
+              sortBy={sortKey}
+              sortDir={sortDir}
+              onSort={toggle}
               // Force-refetch (skip TAB_CACHE) so the "Link Sent" pill
               // appears immediately after the popup closes successfully.
               onMagicLinkSent={() => load(false, true)}
@@ -443,14 +531,19 @@ export default function MyOrdersPage() {
           <table className="data-table">
             <thead>
               <tr>
-                <th className="stick-col-head stick-left">Job ID</th>
-                <th>Ticket Created Date / Job Age</th>
-                <th>Client</th>
-                <th>City</th>
+                <SortHeader<string> col="job_id" sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="stick-col-head stick-left">Job ID</SortHeader>
+                <SortHeader<string> col="created_date_time" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Ticket Created Date / Job Age</SortHeader>
+                <SortHeader<string> col="client_name" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Client</SortHeader>
+                {/* client_spoc_name is already on the LIST projection (LIST_COLUMNS
+                    carries it for the Unconfirmed tab) — no BE change needed. Not
+                    sortable: `client_spoc_name` isn't in the BE's SORT_COLUMN
+                    whitelist, and a click on an unwhitelisted key 400s. */}
+                <th>Client SPOC</th>
+                <SortHeader<string> col="city_name" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>City</SortHeader>
                 <th>Service Category</th>
-                <th>Appointment Date &amp; Time</th>
-                <th>Customer</th>
-                <th>Current Status</th>
+                <SortHeader<string> col="requested_date_time" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Appointment Date &amp; Time</SortHeader>
+                <SortHeader<string> col="customer_name" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Customer</SortHeader>
+                <SortHeader<string> col="job_status" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Current Status</SortHeader>
                 <th>Open Reason / Remarks</th>
                 <th className="stick-col-head stick-right text-right">Action</th>
               </tr>
@@ -458,13 +551,13 @@ export default function MyOrdersPage() {
             <tbody>
               {loading && Array.from({ length: 5 }).map((_, i) => (
                 <tr key={`sk-${i}`}>
-                  {Array.from({ length: 10 }).map((_, c) => (
+                  {Array.from({ length: 11 }).map((_, c) => (
                     <td key={c}><div className="h-3 w-24 rounded bg-muted animate-pulse" /></td>
                   ))}
                 </tr>
               ))}
               {!loading && sorted.length === 0 && (
-                <tr><td colSpan={10} className="text-center text-muted-foreground py-8">
+                <tr><td colSpan={11} className="text-center text-muted-foreground py-8">
                   No orders in this bucket{!isAdmin ? ' owned by you' : ''}.
                 </td></tr>
               )}
@@ -481,6 +574,19 @@ export default function MyOrdersPage() {
                     <div className="text-[10px] text-muted-foreground">{jobAgeLabel(j.ticket_created_date_time)}</div>
                   </td>
                   <td className="min-w-[18rem] max-w-[26rem] break-words">{j.client_name ?? '—'}</td>
+                  {/* client_spoc IS the SPOC's mobile (a raw string on tbl_job —
+                      there is no SPOC id), masked in transit by mask-mobile.
+                      Dialling goes through the spocJobId target, which re-reads
+                      the clear number BE-side; the FE never holds it. Same
+                      name-over-number shape as the Customer cell below. */}
+                  <td className="whitespace-nowrap">
+                    <div>{j.client_spoc_name || '—'}</div>
+                    {j.client_spoc && (
+                      <div className="text-xs text-muted-foreground">
+                        <CallableMobile spocJobId={j.job_id} mobile={j.client_spoc} />
+                      </div>
+                    )}
+                  </td>
                   <td>{j.city_name ?? '—'}</td>
                   <td>{j.service_category ?? '—'}</td>
                   <td className="whitespace-nowrap">
@@ -496,12 +602,25 @@ export default function MyOrdersPage() {
                     </div>
                   </td>
                   <td>
-                    {j.job_status === 0 && (j.is_offered === 1 || j.is_offered === true) ? (
+                    {/* Offer tri-state only overrides the chip on BOOKED (0)
+                        rows — on any other status the job_status label wins. */}
+                    {j.job_status === 0 && offerState(j) === 'offered' ? (
                       <StatusChip
                         tone="orange"
-                        title={j.offered_efr_name ? `Offered to ${j.offered_efr_name}` : 'Offered to technician'}
+                        title={
+                          (j.offered_count ?? 0) > 1
+                            ? `Offered to ${j.offered_count} technicians — awaiting the first to accept`
+                            : j.offered_efr_name ? `Offered to ${j.offered_efr_name}` : 'Offered to technician'
+                        }
                       >
-                        Offered to Tx
+                        {(j.offered_count ?? 0) > 1 ? `Offered to ${j.offered_count} Tx` : 'Offered to Tx'}
+                      </StatusChip>
+                    ) : j.job_status === 0 && offerState(j) === 'expired' ? (
+                      <StatusChip
+                        tone="rose"
+                        title={`Every offer on this order expired without a response (${j.expired_offer_count} of ${j.total_offer_count}) — it needs re-offering or a manual assign`}
+                      >
+                        Expired
                       </StatusChip>
                     ) : (
                       <StatusChip tone={statusTone(j.job_status)}>

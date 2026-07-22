@@ -67,6 +67,20 @@ type Props = {
    * the address-edit dialog, or any Client/public surface.
    */
   autoCreatePincode?: boolean;
+  /*
+   * tbl_address column-role remap (2026-07-14, Confirm & Schedule). When true:
+   *   - `address` (the ACTUAL service address, populated by the booking flows)
+   *     is NON-EDITABLE here — the operator never overwrites it. It's shown as
+   *     the read-only "Service Address" (rendered by the modal just above this
+   *     picker), so this component hides its own Complete-Address field.
+   *   - `building` is REPURPOSED as the Google-Map SEARCH box, used ONLY to
+   *     derive GPS coordinates: picking a suggestion (or dragging the pin)
+   *     writes gps_location (+ pin/city) and stores the searched text in
+   *     `building`, but NEVER touches `address`.
+   * When false (Book New Call / edit dialog) the picker is unchanged: `address`
+   * is the editable Complete-Address autocomplete, `building` is Building/Floor.
+   */
+  serviceAddressReadOnly?: boolean;
 };
 
 /*
@@ -140,7 +154,7 @@ function loadGoogleMaps(): Promise<GMaps> {
   return mapsLoader;
 }
 
-export function AddressPickerWithMap({ value, onChange, cities, editable = true, autoCreatePincode = false }: Props) {
+export function AddressPickerWithMap({ value, onChange, cities, editable = true, autoCreatePincode = false, serviceAddressReadOnly = false }: Props) {
   const mapRef = React.useRef<HTMLDivElement | null>(null);
   // The map + marker types are minimal at the call site — we only
   // need .panTo / .setZoom on the map and .setPosition on the marker.
@@ -263,11 +277,17 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
         gps_location: `${lat.toFixed(6)},${lng.toFixed(6)}`,
       };
       if (r.formatted_address) {
-        next.address = r.formatted_address;
-        // Reverse-geocoded address is now the canonical "synced" one;
-        // record so the typed-address debounce doesn't immediately
-        // re-fire a forward-geocode for the same string.
-        lastGeocodedAddrRef.current = r.formatted_address;
+        if (serviceAddressReadOnly) {
+          // `building` is the map-search field; reflect the pinned location
+          // there. NEVER overwrite the read-only Service Address (`address`).
+          next.building = r.formatted_address;
+        } else {
+          next.address = r.formatted_address;
+          // Reverse-geocoded address is now the canonical "synced" one;
+          // record so the typed-address debounce doesn't immediately
+          // re-fire a forward-geocode for the same string.
+          lastGeocodedAddrRef.current = r.formatted_address;
+        }
       }
       const comps = r.address_components || {};
       if (comps.postal_code) next.pin_code = comps.postal_code;
@@ -501,6 +521,11 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
       {/* Left pane — form fields. */}
       <div className="space-y-3">
+        {/* Complete-Address autocomplete — hidden in serviceAddressReadOnly mode
+            (Confirm & Schedule), where `address` is the non-editable Service
+            Address shown by the modal above and the Google search moves to the
+            `building` field below. Shown in Book New Call / edit dialog. */}
+        {!serviceAddressReadOnly && (
         <div>
           <Label className="text-xs">Complete Address *</Label>
           <AddressAutocomplete
@@ -533,26 +558,70 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
             disabled={!editable}
           />
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <Label className="text-xs">Building / Floor Number</Label>
-            <Input
-              value={value.building || ''}
-              onChange={(e) => patch({ building: e.target.value })}
-              placeholder="House / flat / floor"
-              disabled={!editable}
-            />
+        )}
+        {serviceAddressReadOnly ? (
+          <>
+            {/* Google-Map SEARCH — the repurposed `building` field. Used ONLY to
+                set the GPS pin: picking a suggestion writes gps_location (+ pin/
+                city) and stores the searched text in `building`; it never touches
+                the read-only Service Address (`address`). */}
+            <div>
+              <Label className="text-xs">Search Location On Map</Label>
+              <AddressAutocomplete
+                value={value.building || ''}
+                onChange={(v) => patch({ building: v })}
+                onPick={(p) => {
+                  const picked = p.formatted_address || p.description;
+                  const next: Partial<AddressValue> = { building: picked };
+                  if (p.lat != null && p.lng != null) {
+                    next.gps_location = `${p.lat.toFixed(6)},${p.lng.toFixed(6)}`;
+                  }
+                  if (p.components.postal_code) next.pin_code = p.components.postal_code;
+                  if (p.components.city) {
+                    const match = cityByName.get(p.components.city.toLowerCase());
+                    next.city_id = match || '';
+                  }
+                  patch(next);
+                }}
+                placeholder="Search a place to drop the map pin & capture GPS"
+                disabled={!editable}
+              />
+              <p className="text-[10px] text-muted-foreground mt-1">
+                Used only to set the GPS pin — it does not change the Service Address.
+              </p>
+            </div>
+            <div>
+              <Label className="text-xs">Landmark</Label>
+              <Input
+                value={value.landmark || ''}
+                onChange={(e) => patch({ landmark: e.target.value })}
+                placeholder="Optional"
+                disabled={!editable}
+              />
+            </div>
+          </>
+        ) : (
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-xs">Building / Floor Number</Label>
+              <Input
+                value={value.building || ''}
+                onChange={(e) => patch({ building: e.target.value })}
+                placeholder="House / flat / floor"
+                disabled={!editable}
+              />
+            </div>
+            <div>
+              <Label className="text-xs">Landmark</Label>
+              <Input
+                value={value.landmark || ''}
+                onChange={(e) => patch({ landmark: e.target.value })}
+                placeholder="Optional"
+                disabled={!editable}
+              />
+            </div>
           </div>
-          <div>
-            <Label className="text-xs">Landmark</Label>
-            <Input
-              value={value.landmark || ''}
-              onChange={(e) => patch({ landmark: e.target.value })}
-              placeholder="Optional"
-              disabled={!editable}
-            />
-          </div>
-        </div>
+        )}
         <div className="grid grid-cols-2 gap-3">
           <div>
             <Label className="text-xs">City *</Label>

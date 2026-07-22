@@ -16,6 +16,7 @@
 import * as React from 'react';
 import { Info, PhoneIncoming, PhoneOutgoing, Loader2, Play } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { CallRecordingAudio } from '@/components/ui/call-recording-audio';
 import { useFetch } from '@/lib/hooks';
 import { api } from '@/lib/api';
 import { showToast } from '@/components/ui/toast';
@@ -93,8 +94,10 @@ function RecordingCell({ row }: { row: CallRow }) {
   }
 
   if (url) {
-    // eslint-disable-next-line jsx-a11y/media-has-caption
-    return <audio src={url} controls autoPlay className="h-7 w-40" />;
+    // Downmixes the 2-channel (agent | customer) Plivo recording to mono —
+    // otherwise the customer is audible only on the RIGHT channel. See
+    // components/ui/call-recording-audio.tsx.
+    return <CallRecordingAudio src={url} autoPlay className="h-7 w-40" />;
   }
 
   async function play() {
