@@ -114,8 +114,15 @@ function deriveTimeSlot(datetimeLocal: string): string {
 /* ── BE row shape (exact contract). ──────────────────────────────────── */
 type DistanceTier =
   | 'same_pincode' | 'current_pincode' | 'in_zone' | 'out_of_zone' | 'unknown';
+/*
+ * 'not_applicable' is its own state on purpose: the job names no Service
+ * Category/Type, so there is no skill requirement to match against. It used to
+ * collapse into 'both_available', making one green label mean both "matches"
+ * and "nothing to match".
+ */
 type DeepSkillStatus =
-  | 'both_available' | 'job_skill_not_available' | 'easyfixer_skills_not_available';
+  | 'both_available' | 'job_skill_not_available' | 'easyfixer_skills_not_available'
+  | 'not_applicable';
 
 export type ScheduleCandidate = {
   efr_id: number;
@@ -158,6 +165,26 @@ type JobServiceRow = {
    * NOT the same thing as the job-level `collected_by` (who collects).
    */
   billing_label?: 'Free' | 'Paid' | null;
+  /**
+   * Deep skill(s) the Job Skill Matrix (tbl_service_skill_mapping, built from
+   * the Admin Action) says THIS service requires. A service legitimately maps
+   * to SEVERAL skills — the matrix stores one row per (service, skill) pair —
+   * so this is an array and every entry is rendered. An EMPTY array (or an
+   * absent field on an older BE) means the matrix holds no mapping for this
+   * service, which is what the "—" in the Job Skill column means.
+   *
+   * Display-only: candidate matching does NOT use this yet.
+   */
+  job_skills?: { deep_skill_id: number; deepskill_name: string | null; confidence: string | number | null }[];
+  /**
+   * Highest `confidence` among `job_skills`. Typed to allow string because the
+   * column is DECIMAL(3,2) and mysql2 returns decimals verbatim as strings
+   * ('0.90' / '0.00') — passed through unformatted so this reads identically to
+   * the Confidence column on the Skill Matrix page. `null` ⇒ no mapping (or the
+   * matrix recorded no confidence); a real 0 arrives as '0.00', never null, so
+   * the two can't be confused.
+   */
+  job_skill_score?: string | number | null;
 };
 
 type ScheduleJob = {
@@ -242,6 +269,15 @@ function localInputToWallClock(local: string): string {
   if (!local) return '';
   const withSecs = local.length === 16 ? `${local}:00` : local;
   return withSecs.replace('T', ' ');
+}
+
+/*
+ * Job Skill Matrix cell text. A service can require SEVERAL deep skills, so all
+ * mapped names are joined; unnamed rows (deleted deep skill) are dropped. Empty
+ * string ⇒ the matrix has no mapping for this service and the cell shows "—".
+ */
+function jobSkillNames(s: JobServiceRow): string {
+  return (s.job_skills ?? []).map((k) => k.deepskill_name).filter(Boolean).join(', ');
 }
 
 export function ScheduleAssignModal({
@@ -731,12 +767,20 @@ export function ScheduleAssignModal({
                       <table className="w-full text-xs">
                         <thead>
                           <tr className="text-left text-muted-foreground">
-                            {/* Widths keep each service on ONE line: the three text
+                            {/* Widths keep each service on ONE line: the four text
                                 columns truncate under pressure, while Qty / Amount /
-                                Billing are content-sized and never wrap. */}
-                            <th className="font-medium py-1 pr-3 w-[30%]">Service</th>
-                            <th className="font-medium py-1 pr-3 w-[24%]">Category</th>
-                            <th className="font-medium py-1 pr-3 w-[24%]">Type</th>
+                                Score / Billing are content-sized and never wrap.
+                                The percentages were rebalanced (was 30/24/24) to fit
+                                Job Skill WITHOUT widening the modal. */}
+                            <th className="font-medium py-1 pr-3 w-[22%]">Service</th>
+                            <th className="font-medium py-1 pr-3 w-[17%]">Category</th>
+                            <th className="font-medium py-1 pr-3 w-[17%]">Type</th>
+                            {/* Job Skill / Job Matrix Score — what the Job Skill Matrix
+                                (Admin Actions → Job Skill Matrix) says this service
+                                needs, and how sure it is. Display-only: candidate
+                                matching still runs on category/deep-skill. */}
+                            <th className="font-medium py-1 pr-3 w-[22%]">Job Skill</th>
+                            <th className="font-medium py-1 pr-3 text-right whitespace-nowrap w-16">Job Matrix Score</th>
                             <th className="font-medium py-1 pr-3 text-right whitespace-nowrap w-12">Qty</th>
                             <th className="font-medium py-1 pr-3 text-right whitespace-nowrap w-20">Amount</th>
                             {/* Does the customer pay? Driven by tbl_job.paid_by. */}
@@ -751,6 +795,39 @@ export function ScheduleAssignModal({
                               <td className="py-1 pr-3 max-w-0 truncate" title={s.service_name || undefined}>{s.service_name || '—'}</td>
                               <td className="py-1 pr-3 max-w-0 truncate" title={s.service_catg || undefined}>{s.service_catg || '—'}</td>
                               <td className="py-1 pr-3 max-w-0 truncate" title={s.service_type || undefined}>{s.service_type || '—'}</td>
+                              {/*
+                               * JOB SKILL — every deep skill the matrix maps this
+                               * service to, comma-joined. "—" means the matrix has
+                               * NO mapping for this service (not "zero skills
+                               * needed"); the tooltip says so out loud.
+                               */}
+                              <td
+                                className="py-1 pr-3 max-w-0 truncate"
+                                title={jobSkillNames(s) || 'No mapping in the Job Skill Matrix'}
+                              >
+                                {jobSkillNames(s) || '—'}
+                              </td>
+                              {/*
+                               * JOB MATRIX SCORE — the HIGHEST confidence among the
+                               * mapped skills, printed verbatim to match the
+                               * Confidence column on the Skill Matrix page.
+                               * ⚠ Strict `!= null`, never a truthiness check: a real
+                               * score of 0 arrives as '0.00' and must render as
+                               * "0.00", visibly different from the "—" that means
+                               * the matrix has no mapping at all.
+                               */}
+                              <td
+                                className="py-1 pr-3 text-right whitespace-nowrap"
+                                title={
+                                  s.job_skill_score != null
+                                    ? 'Job Skill Matrix confidence (highest of the mapped skills)'
+                                    : jobSkillNames(s)
+                                      ? 'Mapped, but the matrix recorded no confidence'
+                                      : 'No mapping in the Job Skill Matrix'
+                                }
+                              >
+                                {s.job_skill_score != null ? s.job_skill_score : '—'}
+                              </td>
                               <td className="py-1 pr-3 text-right whitespace-nowrap">{s.quantity ?? '—'}</td>
                               <td className="py-1 pr-3 text-right whitespace-nowrap">{s.total_charge != null ? `₹${s.total_charge}` : '—'}</td>
                               {/*
@@ -1557,6 +1634,17 @@ function deepSkillStatusLabel(status: DeepSkillStatus): React.ReactNode {
       return <span className="text-amber-700">Job Skill Not Available</span>;
     case 'easyfixer_skills_not_available':
       return <span className="text-red-700">Easyfixer Skills Not Available</span>;
+    /*
+     * Neutral, never green. The job carries no Service Category/Type, so no
+     * technician can be said to match or miss it — showing this as a positive
+     * would claim a fit that was never assessed.
+     */
+    case 'not_applicable':
+      return (
+        <span className="text-muted-foreground" title="This job has no Service Category or Type, so there is no skill requirement to match against.">
+          Not Applicable
+        </span>
+      );
     default:
       return <span className="text-muted-foreground">—</span>;
   }

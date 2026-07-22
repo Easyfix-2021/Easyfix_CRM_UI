@@ -5,9 +5,22 @@
  *
  * A call-history table (linked to the job where available) with a "View
  * Analysis" action per row that opens an AI coaching report generated from the
- * call's stored transcript (GET /admin/calls/:id/analysis). Transcript comes
- * from Plivo; the communication analysis is LLM-generated + cached server-side.
+ * call (GET /admin/calls/:id/analysis). Transcript comes from Plivo; the
+ * communication analysis is LLM-generated + cached server-side.
  * RBAC-gated by isCallAnalyticsView.
+ *
+ * ANALYSIS MODE (2026-07): the coaching AI can read either the call's TEXT
+ * TRANSCRIPT or the RECORDING AUDIO directly — a poor transcript caps the score,
+ * so ops needs the audio route. It is chosen in exactly two places:
+ *
+ *   1. the global default in the filter row (GET/POST /admin/calls/analysis-mode);
+ *   2. a per-call override in the confirm dialog, reachable from BOTH row
+ *      actions — "Analyse Call" for a call's FIRST analysis and "Re-analyse
+ *      Call" for every one after it. One picker component, one mental model,
+ *      no extra row icon (see `askAnalysisMode`).
+ *
+ * Everywhere else the mode is READ-ONLY provenance (the "Audio"/"Transcript"
+ * chip) — deliberately, so the icon-only row actions stay uncluttered.
  */
 
 import * as React from 'react';
@@ -21,6 +34,8 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { SearchSelect, type SearchOption } from '@/components/ui/search-select';
+import { Select } from '@/components/ui/select';
+import { InfoTooltip } from '@/components/ui/tooltip';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { showToast } from '@/components/ui/toast';
@@ -91,6 +106,30 @@ const MIN_SCORE_OPTIONS: SearchOption[] = [
   { value: '8', label: '8+' },
 ];
 
+/*
+ * Which SOURCE the coaching AI reads. 'transcript' = the stored text (cheap, but
+ * a bad transcript caps the score); 'recording' = the recording audio handed to
+ * Gemini directly. `modeAvailable.recording` is false when that key isn't
+ * configured — a mode we must never OFFER, because asking for it would just fall
+ * back to the transcript and quietly mislabel the result.
+ */
+type AnalysisMode = 'transcript' | 'recording';
+type ModeAvailability = { transcript: boolean; recording: boolean };
+type AnalysisModeResp = { mode: AnalysisMode; modeAvailable: ModeAvailability };
+
+const MODE_CFG_KEY = '/admin/calls/analysis-mode';
+const MODE_LABEL: Record<AnalysisMode, string> = { transcript: 'Transcript', recording: 'Call Recording' };
+// Lower-case noun for mid-sentence use in toasts ("regenerated from the …").
+const MODE_NOUN: Record<AnalysisMode, string> = { transcript: 'transcript', recording: 'call recording' };
+const MODE_HINT: Record<AnalysisMode, string> = {
+  transcript: 'Reads the stored text transcript. A poor transcript caps the score.',
+  recording: 'Listens to the recording itself, so tone and unclear speech survive.',
+};
+const MODE_OFF_HINT: Record<AnalysisMode, string> = {
+  recording: 'Unavailable — the Gemini API key is not configured in this environment.',
+  transcript: 'Unavailable — no transcript source is configured in this environment.',
+};
+
 type Dimension = { name: string; score: number; notes?: string };
 type Analysis = {
   overall_score?: number;
@@ -113,6 +152,10 @@ type AnalysisResp = {
   metrics?: Metrics | null;
   metricsStatus?: string | null;
   reason?: string;
+  // Which mode ACTUALLY produced this analysis — may differ from the one asked
+  // for when the backend fell back. Always read this, never assume the request.
+  mode?: AnalysisMode;
+  modeAvailable?: ModeAvailability;
 };
 
 function fmtDateTime(v: string | null | undefined): string {
@@ -127,11 +170,25 @@ function fmtDuration(sec: number | null | undefined): string {
   const s = sec == null || !Number.isFinite(sec) ? 0 : Math.floor(sec);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
-function txBadge(status?: string | null): { label: string; cls: string } {
+/*
+ * Transcript status pill, or null for "not applicable".
+ *
+ * Takes the DURATION as well, because a call that never connected can never be
+ * transcribed: the transcription backfill selects on `duration > 0`, so those
+ * rows are never picked up and `transcription_status` stays NULL forever —
+ * "Pending" was a promise that could never resolve. They render as the muted "—"
+ * the rest of this table uses for "nothing here" (and that ClickToCallTab
+ * already uses for exactly this case).
+ *
+ * The real statuses are checked FIRST so a 0-duration row that somehow DOES
+ * carry a transcript — or an explicit failure — keeps its actual state.
+ */
+function txBadge(status?: string | null, durationSec?: number | null): { label: string; cls: string } | null {
   const s = (status || '').toLowerCase();
   if (s === 'completed') return { label: 'Ready', cls: 'bg-emerald-100 text-emerald-700' };
   if (s === 'not_available') return { label: 'None', cls: 'bg-slate-100 text-slate-500' };
   if (s === 'failed') return { label: 'Failed', cls: 'bg-rose-100 text-rose-700' };
+  if (durationSec == null || !Number.isFinite(durationSec) || durationSec <= 0) return null;
   return { label: 'Pending', cls: 'bg-amber-100 text-amber-700' };
 }
 function scoreColor(n?: number): string {
@@ -147,6 +204,12 @@ function prettyFlow(flow?: string | null): string {
   const known = FLOW_OPTIONS.find((f) => f.value === flow);
   if (known) return known.label;
   return flow.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+// Narrow an untrusted `mode` off the wire to the union, or null. Anything the
+// backend adds later (a third mode, a typo) reads as "unknown" and simply shows
+// no provenance rather than mislabelling a score.
+function normaliseMode(v: unknown): AnalysisMode | null {
+  return v === 'transcript' || v === 'recording' ? v : null;
 }
 // A score string ("8", "8.5", null) → a finite number or null.
 function toScore(v: string | number | null | undefined): number | null {
@@ -218,12 +281,115 @@ export default function CallAnalyticsPage() {
   const [flow, setFlow] = React.useState('');
   const [minScore, setMinScore] = React.useState('');
   const [hasAnalysisOnly, setHasAnalysisOnly] = React.useState(false);
-  const [analysisFor, setAnalysisFor] = React.useState<CallRow | null>(null);
+  /*
+   * The open analysis modal: the row, plus the mode the operator explicitly
+   * picked for it (null = "no override, use the server's resolved default").
+   * They travel together in ONE state object rather than two parallel pieces
+   * of state so the modal can never open against a stale/foreign override.
+   */
+  const [analysisFor, setAnalysisFor] =
+    React.useState<{ row: CallRow; mode: AnalysisMode | null } | null>(null);
 
   // Row id currently being re-analysed — doubles as the double-submit guard
   // (the request is slow: a provider transcript fetch plus an LLM round-trip).
   const [reanalysing, setReanalysing] = React.useState<number | null>(null);
   const confirm = useConfirm();
+
+  /*
+   * Global default analysis mode. Fetched HERE rather than inside the control
+   * because three things need it: the select, the per-call override's starting
+   * value, and the fallback check after a re-analysis.
+   */
+  const { data: modeCfg, loading: modeCfgLoading, refetch: refetchModeCfg } =
+    useFetch<AnalysisModeResp>(canView ? MODE_CFG_KEY : null);
+  // Optimistic display value for the select, and a separate in-flight flag. Kept
+  // apart on purpose: `savingMode` clears in `finally` so the control can never
+  // stick disabled, while `pendingMode` survives until the re-read agrees.
+  const [pendingMode, setPendingMode] = React.useState<AnalysisMode | null>(null);
+  const [savingMode, setSavingMode] = React.useState(false);
+
+  /*
+   * Everything below fails CLOSED. The backend ships this endpoint in a separate
+   * deploy, so until a response lands there is no mode UI at all (`modeSupported`)
+   * and recording is treated as unconfigured — offering a mode that would only
+   * fall back is worse than not offering it.
+   */
+  const modeSupported = modeCfg != null;
+  const recordingAvailable = modeCfg?.modeAvailable?.recording === true;
+  // Transcript is assumed available unless the server explicitly denies it — and
+  // a denial is only honoured when recording can take over, so no combination of
+  // server flags can leave the operator with nothing selectable.
+  const modeAvailable: ModeAvailability = {
+    recording: recordingAvailable,
+    transcript: modeCfg?.modeAvailable?.transcript !== false || !recordingAvailable,
+  };
+  const globalMode: AnalysisMode = normaliseMode(modeCfg?.mode) ?? 'transcript';
+  const shownMode = pendingMode ?? globalMode;
+
+  /*
+   * Should clicking "Analyse Call" stop to ask which source to read?
+   *
+   * Only when the click would ACTUALLY generate something AND there is a real
+   * choice to make. Both halves matter:
+   *
+   *  - `!hasAnalysis(r)` — this is the first-analysis gate. A row that already
+   *    has an analysis opens the modal to READ it, and that read is a cache hit;
+   *    sending an explicit ?mode= there would make the backend bypass a cache
+   *    produced the other way and silently REGENERATE (an LLM round-trip) just
+   *    to look at an existing report. Those rows already show the Re-analyse
+   *    icon, which is the correct — and explicitly destructive — place to change
+   *    a mode. The two actions stay complementary: exactly one of them prompts.
+   *
+   *  - both modes available — with only one runnable mode the "choice" is a
+   *    dialog with a single selectable radio, i.e. pure friction. Today
+   *    GEMINI_API_KEY is unset, so `modeAvailable.recording` is false and this
+   *    is ALWAYS false: no dialog ever appears and the action behaves exactly as
+   *    it did before. It lights up on its own once the key is provisioned.
+   *
+   * (`modeAvailable.recording` can only be true when the mode endpoint answered,
+   * so this also implies `modeSupported`.)
+   */
+  function canPickModeFor(r: CallRow): boolean {
+    return !hasAnalysis(r) && modeAvailable.transcript && modeAvailable.recording;
+  }
+
+  // Drop the optimistic value once the re-read agrees. Clearing it in the POST's
+  // `finally` instead would flash the PREVIOUS mode for as long as the GET takes.
+  React.useEffect(() => {
+    setPendingMode((m) => (m != null && normaliseMode(modeCfg?.mode) === m ? null : m));
+  }, [modeCfg]);
+
+  /*
+   * Which mode PRODUCED each row's score, learned from the per-call analysis /
+   * reanalyse responses. GET /admin/calls does NOT project it, so this only
+   * covers rows the operator has touched this session — the modal always shows
+   * provenance, the row chip fills in as calls are analysed.
+   */
+  const [modeByCall, setModeByCall] = React.useState<Record<number, AnalysisMode>>({});
+  function rememberMode(callId: number, mode: AnalysisMode | null) {
+    if (!mode) return;
+    setModeByCall((prev) => (prev[callId] === mode ? prev : { ...prev, [callId]: mode }));
+  }
+
+  // Change the GLOBAL default (every future analysis, every operator).
+  async function onChangeGlobalMode(next: AnalysisMode) {
+    if (savingMode || next === shownMode) return;
+    setPendingMode(next);
+    setSavingMode(true);
+    try {
+      await api.post(MODE_CFG_KEY, { mode: next });
+      showToast({ variant: 'success', message: `Analysis mode set to ${MODE_LABEL[next]}.` });
+      // invalidateFetch only DROPS the cache — this hook is mounted, so it needs
+      // the explicit refetch to re-read the server's own view of the value.
+      invalidateFetch((k) => k.startsWith(MODE_CFG_KEY));
+      refetchModeCfg();
+    } catch (e) {
+      setPendingMode(null); // snap back to whatever the server still says
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Could not change the analysis mode.' });
+    } finally {
+      setSavingMode(false);
+    }
+  }
 
   const limit = pageSizeToLimit(pageSize, 200); // backend callListQuery caps limit at 200
   const qs = new URLSearchParams({ page: String(page + 1), limit: String(limit) });
@@ -239,24 +405,110 @@ export default function CallAnalyticsPage() {
     canView && tab === 'scorecard' ? '/admin/calls/scorecard?limit=100&offset=0' : null,
   );
 
+  /*
+   * The ONE mode-choosing dialog, shared by both row actions. Resolves to the
+   * picked mode, or null if the operator backed out.
+   *
+   * `kind` only swaps the COPY — a first analysis and a re-analysis are the same
+   * decision ("which source should the AI read?") wearing different verbs, so
+   * they share the dialog and the picker rather than forking them. Anything that
+   * changes about the picker changes for both entry points at once.
+   */
+  async function askAnalysisMode(kind: 'analyse' | 'reanalyse'): Promise<AnalysisMode | null> {
+    const first = kind === 'analyse';
+    /*
+     * The picked mode has to travel back out of `confirm()`, which resolves to a
+     * bare boolean — so the picker writes into this box and we read it once the
+     * promise settles. A plain object, not a React ref: it lives for exactly one
+     * invocation. Seeded from the global default so pressing straight through
+     * reproduces exactly what would have happened without the dialog — but never
+     * from a mode the environment can't run.
+     */
+    const picked: { mode: AnalysisMode } = {
+      mode: modeAvailable[globalMode] ? globalMode : (globalMode === 'recording' ? 'transcript' : 'recording'),
+    };
+    const ok = await confirm({
+      title: first ? 'Analyse This Call?' : 'Re-analyse This Call?',
+      description: (
+        <div className="space-y-3">
+          <p>
+            {first
+              ? <>Generates the coaching analysis for this call and adds the score to the caller&apos;s scorecard.</>
+              : <>Fetches a fresh transcript from the provider, regenerates the coaching analysis and updates the
+                 caller&apos;s scorecard. The existing analysis is kept if a new one can&apos;t be generated.</>}
+          </p>
+          {/* Hidden entirely on a backend without mode support — the dialog then
+              reads exactly as it did before this feature. */}
+          {modeSupported && (
+            <AnalysisModePicker
+              initial={picked.mode}
+              available={modeAvailable}
+              onChange={(m) => { picked.mode = m; }}
+            />
+          )}
+        </div>
+      ),
+      confirmLabel: first ? 'Analyse' : 'Re-analyse',
+      icon: first ? <Sparkles className="h-5 w-5" /> : <RefreshCw className="h-5 w-5" />,
+    });
+    return ok ? picked.mode : null;
+  }
+
+  /*
+   * "Analyse Call" — opens the report, which GENERATES the analysis server-side
+   * on first view. Before this, that first generation always ran at the global
+   * default and could never be overridden: the per-call picker lived only in the
+   * Re-analyse dialog, which only appears once an analysis already exists.
+   *
+   * So the picker is offered here too, but ONLY when the click is genuinely a
+   * choice — see `canPickModeFor`. Otherwise the modal opens immediately with no
+   * override, byte-identical to the previous behaviour.
+   */
+  async function onAnalyse(r: CallRow) {
+    if (!canPickModeFor(r)) { setAnalysisFor({ row: r, mode: null }); return; }
+    const mode = await askAnalysisMode('analyse');
+    if (!mode) return;
+    setAnalysisFor({ row: r, mode });
+  }
+
   // Force a fresh transcript + fresh coaching for a call that already has one —
   // the analysis is cached server-side, so a better transcript would otherwise
   // never reach the score.
   async function onReanalyse(r: CallRow) {
     if (reanalysing != null) return;
-    const ok = await confirm({
-      title: 'Re-analyse This Call?',
-      description: 'Fetches a fresh transcript from the provider, regenerates the coaching analysis and '
-        + "updates the caller's scorecard. The existing analysis is kept if a new one can't be generated.",
-      confirmLabel: 'Re-analyse',
-      icon: <RefreshCw className="h-5 w-5" />,
-    });
-    if (!ok) return;
+    const picked = await askAnalysisMode('reanalyse');
+    if (!picked) return;
     setReanalysing(r.id);
     try {
-      const resp = await api.post<AnalysisResp>(`/admin/calls/${r.id}/reanalyse`);
+      /*
+       * `mode` is sent EXPLICITLY rather than omitted-for-the-global-default: the
+       * picker showed the operator a concrete value, so the request should say
+       * exactly that, and it makes the fallback comparison below unambiguous.
+       * Omitted only when the backend doesn't know the parameter at all.
+       */
+      const requested = picked;
+      const resp = await api.post<AnalysisResp>(
+        `/admin/calls/${r.id}/reanalyse`,
+        modeSupported ? { mode: requested } : undefined,
+      );
+      const produced = normaliseMode(resp.mode);
+      rememberMode(r.id, produced);
       if (resp.status === 'ready') {
-        showToast({ variant: 'success', message: 'Analysis regenerated.' });
+        if (produced && produced !== requested) {
+          // The backend fell back. Say so — an audio-derived and a
+          // transcript-derived score aren't comparable, and silently reporting
+          // "regenerated" would let the operator assume the audio ran.
+          //
+          // `warning`, NOT `error`: the re-analysis SUCCEEDED, it just took the
+          // other source. Rose here told the operator their action had failed
+          // when a fresh analysis was sitting in the row behind the toast.
+          showToast({
+            variant: 'warning',
+            message: `Analysis regenerated from the ${MODE_NOUN[produced]} — the ${MODE_NOUN[requested]} could not be used for this call.`,
+          });
+        } else {
+          showToast({ variant: 'success', message: 'Analysis regenerated.' });
+        }
         // The Scorecard tab reads a cached key it only fetches on tab switch, and
         // the rollup just changed — drop it so switching tabs shows the new score.
         invalidateFetch((k) => k.startsWith('/admin/calls/scorecard'));
@@ -298,9 +550,9 @@ export default function CallAnalyticsPage() {
         <h1 className="text-lg font-semibold text-slate-900">Call Analytics</h1>
       </div>
       <p className="text-sm text-muted-foreground -mt-2">
-        Call history with AI coaching analysis. Click <span className="font-medium">View Analysis</span> to
-        see per-call scores + areas of improvement (needs a stored transcript), or{' '}
-        <span className="font-medium">Re-analyse</span> to pull a fresh transcript and regenerate the score.
+        Call history with AI coaching analysis. Click <span className="font-medium">Analyse Call</span> to
+        see per-call scores + areas of improvement, or <span className="font-medium">Re-analyse Call</span> to
+        regenerate the score — either dialog can force one analysis mode for a single call.
       </p>
 
       {/* Tab switcher — Calls table vs the per-caller coaching rollup. */}
@@ -352,6 +604,61 @@ export default function CallAnalyticsPage() {
               />
               Has Analysis Only
             </label>
+
+            {/*
+             * NOT a filter — it changes which source every FUTURE analysis is
+             * generated from, for everyone. `ml-auto` pushes it to the far end of
+             * the row so it doesn't read as one of the filters beside it.
+             * Rendered while the config is still loading (so it doesn't pop in),
+             * then dropped entirely if the endpoint never answers.
+             */}
+            {(modeCfgLoading || modeSupported) && (
+              <div className="w-56 sm:ml-auto">
+                <div className="flex items-center gap-1 text-xs font-medium text-slate-500 mb-1">
+                  <span>Analysis Mode</span>
+                  <InfoTooltip label="About Analysis Mode" align="end">
+                    <div className="space-y-2">
+                      <div className="font-semibold text-slate-900">Analysis Mode</div>
+                      <div>
+                        The source the AI coach reads when it scores a call. Existing analyses keep the
+                        mode they were generated with — this applies to new ones only.
+                      </div>
+                      <ul className="list-disc ml-4 space-y-0.5">
+                        <li><strong>Transcript</strong> — {MODE_HINT.transcript}</li>
+                        <li><strong>Call Recording</strong> — {MODE_HINT.recording}</li>
+                      </ul>
+                      {modeSupported && !recordingAvailable && (
+                        <div className="text-rose-700">
+                          Call Recording is switched off here because the Gemini API key is not
+                          configured in this environment.
+                        </div>
+                      )}
+                    </div>
+                  </InfoTooltip>
+                </div>
+                <Select
+                  value={shownMode}
+                  onChange={(e) => void onChangeGlobalMode(e.target.value as AnalysisMode)}
+                  disabled={modeCfgLoading || savingMode}
+                  aria-label="Analysis Mode"
+                >
+                  {/* Unavailable modes are DISABLED, not hidden: ops should see
+                      the audio route exists and why it's off. `title` surfaces
+                      the reason natively where the browser supports it on an
+                      <option>; the (i) tooltip always does. */}
+                  {(['transcript', 'recording'] as AnalysisMode[]).map((m) => (
+                    <option
+                      key={m}
+                      value={m}
+                      disabled={!modeAvailable[m]}
+                      title={modeAvailable[m] ? undefined : MODE_OFF_HINT[m]}
+                    >
+                      {modeAvailable[m] ? MODE_LABEL[m] : `${MODE_LABEL[m]} (Unavailable)`}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            )}
           </div>
 
           <div className="rounded-md border bg-white overflow-x-auto">
@@ -383,7 +690,7 @@ export default function CallAnalyticsPage() {
                   <tr><td colSpan={10} className="px-3 py-6 text-center text-muted-foreground">No calls found.</td></tr>
                 )}
                 {!loading && items.map((r) => {
-                  const b = txBadge(r.transcription_status);
+                  const b = txBadge(r.transcription_status, r.duration);
                   const outgoing = String(r.call_type || '').toUpperCase() === 'OUT';
                   const s = toScore(r.score);
                   return (
@@ -413,12 +720,18 @@ export default function CallAnalyticsPage() {
                       </td>
                       <td className="px-3 py-2 font-mono">{fmtDuration(r.duration)}</td>
                       <td className="px-3 py-2">
-                        <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${b.cls}`}>{b.label}</span>
+                        {b
+                          ? <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${b.cls}`}>{b.label}</span>
+                          : <span className="text-muted-foreground">—</span>}
                       </td>
                       <td className="px-3 py-2">
                         {s != null
                           ? <span className={`font-semibold ${scoreColor(s)}`}>{s}/10</span>
                           : <span className="text-muted-foreground">—</span>}
+                        {/* Provenance, when we know it — see `modeByCall`. */}
+                        {modeByCall[r.id] && (
+                          <div className="mt-0.5"><ModeChip mode={modeByCall[r.id]} /></div>
+                        )}
                       </td>
                       <td className="px-3 py-2 text-right">
                         {/* Icon-only row actions; each label is the hover tooltip
@@ -429,11 +742,14 @@ export default function CallAnalyticsPage() {
                               an unanswered call has no recording) and the operator
                               can fetch it. */}
                           {canListen && (r.duration ?? 0) > 0 && <ListenButton callId={r.id} />}
+                          {/* Opens the report — and, on a call with no analysis
+                              yet, first asks which source to read it from (only
+                              when both are runnable; see `canPickModeFor`). */}
                           <IconButton
                             icon={Sparkles}
                             label="Analyse Call"
                             intent="primary"
-                            onClick={() => setAnalysisFor(r)}
+                            onClick={() => void onAnalyse(r)}
                           />
                           {/* Only for calls that already have an analysis — for the rest,
                               Analyse Call generates the first one anyway. */}
@@ -473,9 +789,12 @@ export default function CallAnalyticsPage() {
 
       {analysisFor && (
         <AnalysisModal
-          call={analysisFor}
+          call={analysisFor.row}
+          mode={analysisFor.mode}
           onClose={() => setAnalysisFor(null)}
-          onAnalysed={() => {
+          onAnalysed={(produced) => {
+            // Provenance for the row's Score chip — true on a cache hit too.
+            rememberMode(analysisFor.row.id, produced);
             /*
              * Opening the modal GENERATES the analysis server-side on first view,
              * so this row's score + call_analysis_status just changed and the
@@ -493,12 +812,105 @@ export default function CallAnalyticsPage() {
              * re-derive `score` and `call_analysis_status` the way the BE does —
              * two fields free to drift from the server.
              */
-            if (hasAnalysis(analysisFor)) return;
+            if (hasAnalysis(analysisFor.row)) return;
+            /*
+             * This row had NO analysis, so the GET just generated one — which
+             * makes a mode other than the one we ASKED FOR a real fallback worth
+             * reporting. The check is gated on that: a CACHE HIT legitimately
+             * carries whatever mode it was generated with (possibly months ago,
+             * under a different default) and toasting on those would cry wolf
+             * every time an old analysis is opened.
+             *
+             * Compared against the operator's explicit pick when there was one
+             * (the confirm dialog), falling back to the global default when the
+             * modal opened without asking — i.e. always against what this
+             * particular click actually requested.
+             */
+            const requested = analysisFor.mode ?? globalMode;
+            if (modeSupported && produced && produced !== requested) {
+              // `warning`, not `error`: the analysis WAS generated and is on
+              // screen behind this toast — only the source differs from the one
+              // requested. See toast.tsx's variant notes.
+              showToast({
+                variant: 'warning',
+                message: `Analysed from the ${MODE_NOUN[produced]} — the ${MODE_NOUN[requested]} could not be used for this call.`,
+              });
+            }
             invalidateFetch((k) => k.startsWith('/admin/calls/scorecard'));
             refetch();
           }}
         />
       )}
+    </div>
+  );
+}
+
+/*
+ * Read-only provenance: which source a score came from. "Audio" rather than
+ * "Call Recording" — it has to fit beside a score in a dense table cell, and the
+ * hover title carries the full sentence.
+ */
+function ModeChip({ mode }: { mode: AnalysisMode }) {
+  const audio = mode === 'recording';
+  return (
+    <span
+      className={`inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+        audio ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600'
+      }`}
+      title={audio
+        ? 'Generated from the call recording (audio).'
+        : 'Generated from the call transcript — a poor transcript caps the score.'}
+    >
+      {audio ? 'Audio' : 'Transcript'}
+    </span>
+  );
+}
+
+/*
+ * Per-call mode override, embedded in the confirm dialog — the SAME component
+ * for a first analysis and a re-analysis (see `askAnalysisMode`). Its own copy
+ * is verb-free ("Analyse From", "this call only"), so only the surrounding
+ * dialog needs different wording; nothing here forks per entry point.
+ *
+ * It owns its own state and reports upward through `onChange` because
+ * `useConfirm()` resolves to a bare boolean — the caller reads the last reported
+ * value once the dialog settles. Radios rather than a select: two options, and
+ * the "why is audio off" reason has to be readable without opening anything.
+ */
+function AnalysisModePicker({ initial, available, onChange }: {
+  initial: AnalysisMode;
+  available: ModeAvailability;
+  onChange: (mode: AnalysisMode) => void;
+}) {
+  const [mode, setMode] = React.useState<AnalysisMode>(initial);
+  return (
+    <div className="rounded-md border bg-muted/30 px-3 py-2 space-y-1.5">
+      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Analyse From</div>
+      {(['transcript', 'recording'] as AnalysisMode[]).map((m) => {
+        const off = !available[m];
+        return (
+          <label
+            key={m}
+            className={`flex items-start gap-2 ${off ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}`}
+          >
+            <input
+              type="radio"
+              name="analysis-mode"
+              className="mt-1 shrink-0"
+              checked={mode === m}
+              disabled={off}
+              onChange={() => { setMode(m); onChange(m); }}
+            />
+            <span>
+              <span className="block text-sm font-medium">{MODE_LABEL[m]}</span>
+              <span className="block text-xs text-muted-foreground">{off ? MODE_OFF_HINT[m] : MODE_HINT[m]}</span>
+            </span>
+          </label>
+        );
+      })}
+      <div className="text-[11px] text-muted-foreground">
+        Applies to this call only — the default for everything else stays as it is.
+      </div>
     </div>
   );
 }
@@ -513,9 +925,26 @@ function CallerScorecard({ rows, loading, error }: { rows: ScorecardRow[]; loadi
             <th className="px-3 py-2">Caller</th>
             <th className="px-3 py-2">Calls</th>
             <th className="px-3 py-2">Avg Score</th>
-            <th className="px-3 py-2">Avg Coverage</th>
+            {/* Coverage is NOT from the AI call analysis — it's the AI Teleprompter's
+                script coverage (% of REQUIRED questions the caller actually asked on a
+                guided call). Blank for anyone who hasn't used the teleprompter. */}
+            <th className="px-3 py-2">
+              <span
+                className="inline-flex items-center gap-1 border-b border-dotted border-muted-foreground/50"
+                title="AI Teleprompter script coverage — the average % of REQUIRED questions the caller actually asked on guided calls. Blank if they haven't used the Teleprompter."
+              >
+                Avg Coverage
+              </span>
+            </th>
             <th className="px-3 py-2">Dimensions</th>
-            <th className="px-3 py-2">Trend</th>
+            <th className="px-3 py-2">
+              <span
+                className="inline-flex items-center gap-1 border-b border-dotted border-muted-foreground/50"
+                title="Score direction across this caller's recent scored calls (oldest → newest). Needs at least two."
+              >
+                Trend
+              </span>
+            </th>
             <th className="px-3 py-2">Last Call</th>
           </tr>
         </thead>
@@ -569,12 +998,17 @@ function CallerScorecard({ rows, loading, error }: { rows: ScorecardRow[]; loadi
   );
 }
 
-// Tiny inline-SVG sparkline for a caller's score trend (oldest → newest).
-// Falls back to a single number for one point, or "—" when there's no data.
+/*
+ * Tiny inline-SVG sparkline for a caller's score trend (oldest → newest).
+ *
+ * Renders the LINE ONLY — no trailing number. A bare digit next to the Calls and
+ * Avg Score columns read as another count and confused ops; the trend's job is
+ * direction, and both numbers it could show are already their own columns.
+ * A single data point is not a trend, so it shows "—" rather than a lone number.
+ */
 function Sparkline({ trend }: { trend: { score: number | null; when: string | null }[] }) {
   const pts = (trend || []).map((t) => toScore(t.score)).filter((s): s is number => s != null);
-  if (pts.length === 0) return <span className="text-muted-foreground">—</span>;
-  if (pts.length === 1) return <span className={`text-xs font-medium ${scoreColor(pts[0])}`}>{pts[0]}</span>;
+  if (pts.length < 2) return <span className="text-muted-foreground" title="Needs at least two scored calls to show a trend">—</span>;
   const w = 72, h = 22, pad = 3;
   const min = Math.min(...pts);
   const max = Math.max(...pts);
@@ -585,7 +1019,6 @@ function Sparkline({ trend }: { trend: { score: number | null; when: string | nu
     const y = h - pad - ((s - min) / range) * (h - pad * 2);
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   });
-  const last = pts[pts.length - 1];
   return (
     <div className="flex items-center gap-2">
       <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="text-sky-500 shrink-0" aria-hidden="true">
@@ -598,7 +1031,6 @@ function Sparkline({ trend }: { trend: { score: number | null; when: string | nu
           strokeLinejoin="round"
         />
       </svg>
-      <span className={`text-xs font-medium ${scoreColor(last)}`}>{last}</span>
     </div>
   );
 }
@@ -612,11 +1044,24 @@ function Sparkline({ trend }: { trend: { score: number | null; when: string | nu
  * It fires on cache hits too (the endpoint reports 'ready' either way, and the
  * modal can't tell them apart). Deciding whether anything actually CHANGED is the
  * caller's job — it knows what the row looked like before it opened.
+ *
+ * It carries the mode that PRODUCED the analysis so the caller can record
+ * provenance and spot a fallback.
+ *
+ * `mode` is the operator's explicit per-call override, forwarded as `?mode=` —
+ * the ONLY way a call's FIRST analysis can run at anything but the global
+ * default. The caller passes null unless it actually asked (see
+ * `canPickModeFor`), and that matters: an explicit ?mode= makes the backend
+ * bypass a cache produced the other way and regenerate, so sending one on a
+ * plain "view the existing report" click would burn an LLM round-trip per open.
+ * This modal renders no picker of its own — mode is chosen before it opens, so a
+ * read-only report stays a read-only report.
  */
-function AnalysisModal({ call, onClose, onAnalysed }: {
+function AnalysisModal({ call, mode, onClose, onAnalysed }: {
   call: CallRow;
+  mode?: AnalysisMode | null;
   onClose: () => void;
-  onAnalysed?: () => void;
+  onAnalysed?: (producedMode: AnalysisMode | null) => void;
 }) {
   const [resp, setResp] = React.useState<AnalysisResp | null>(null);
   const [err, setErr] = React.useState<string | null>(null);
@@ -628,15 +1073,18 @@ function AnalysisModal({ call, onClose, onAnalysed }: {
   React.useEffect(() => {
     let cancelled = false;
     setResp(null); setErr(null);
-    api.get<AnalysisResp>(`/admin/calls/${call.id}/analysis`)
+    // Only append ?mode= when an override was actually chosen — omitting it lets
+    // the backend resolve the global default AND serve the cache as-is.
+    const q = mode ? `?mode=${encodeURIComponent(mode)}` : '';
+    api.get<AnalysisResp>(`/admin/calls/${call.id}/analysis${q}`)
       .then((r) => {
         if (cancelled) return;
         setResp(r);
-        if (r.status === 'ready') onAnalysedRef.current?.();
+        if (r.status === 'ready') onAnalysedRef.current?.(normaliseMode(r.mode));
       })
       .catch((e) => { if (!cancelled) setErr(e instanceof Error ? e.message : 'Failed to load analysis.'); });
     return () => { cancelled = true; };
-  }, [call.id]);
+  }, [call.id, mode]);
 
   // Read-only modal — never dirty; the guard just satisfies the shared
   // Dialog-close lint rule.
@@ -672,9 +1120,13 @@ function AnalysisModal({ call, onClose, onAnalysed }: {
           <div className="space-y-5">
             {/* Objective metrics — Amazon Transcribe Call Analytics (cron-precomputed). */}
             <MetricsBody metrics={resp.metrics} status={resp.metricsStatus} />
-            {/* Coaching narrative — LLM over the transcript. */}
+            {/* Coaching narrative — LLM over the transcript OR the recording;
+                the chip says which, since the two aren't comparable. */}
             <div>
-              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Coaching</div>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Coaching</span>
+                {normaliseMode(resp.mode) && <ModeChip mode={normaliseMode(resp.mode)!} />}
+              </div>
               {resp.status === 'ready' && resp.analysis
                 ? <AnalysisBody a={resp.analysis} />
                 : <div className="text-sm text-muted-foreground flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />{coachingReason}</div>}

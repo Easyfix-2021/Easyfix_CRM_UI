@@ -23,7 +23,7 @@ import { TOAST_HOST_ATTR } from '@/lib/portal-markers';
  *    convention so the operator's eye learns ONE location for
  *    "thing happened, here's how it went."
  *
- * 3. Three variants:
+ * 3. Four variants:
  *    - `loading`  — persists until explicitly dismissed or replaced.
  *                   Use for in-flight operations (>500ms).
  *    - `success`  — auto-dismisses after 4s.
@@ -33,6 +33,18 @@ import { TOAST_HOST_ATTR } from '@/lib/portal-markers';
  *                   button. Was sticky until 2026-05-25 — ops feedback
  *                   was that 403s/transient API errors piled up and
  *                   covered the action buttons.
+ *    - `warning`  — auto-dismisses after 6s, same as `error`. For an
+ *                   operation that SUCCEEDED but not the way the operator
+ *                   asked (a degraded path, a server-side fallback, a
+ *                   throttle). Amber sits deliberately between the green
+ *                   "it worked" and the rose "it failed": rose on a
+ *                   successful action reads as a failure and trains the
+ *                   operator to distrust the colour. Same 6s as `error`
+ *                   because the message carries a caveat the operator has
+ *                   to actually read, not just acknowledge.
+ *                   Announced with `role="status"` (polite), NOT
+ *                   `role="alert"` — nothing failed, so it must not
+ *                   interrupt a screen-reader user mid-sentence.
  *
  * 4. `showToast()` returns the toast id so the caller can dismiss
  *    or replace it explicitly. Common pattern for loading → success
@@ -48,7 +60,7 @@ import { TOAST_HOST_ATTR } from '@/lib/portal-markers';
  *    a time.
  */
 
-export type ToastVariant = 'success' | 'error' | 'loading';
+export type ToastVariant = 'success' | 'error' | 'warning' | 'loading';
 
 type Toast = {
   id: number;
@@ -73,6 +85,11 @@ const DISMISS_EVENT = 'easyfix:toast:dismiss';
  * in-flight work and disappearing one mid-request would leave the
  * operator unsure whether the work is still happening. Eviction
  * scans for the oldest NON-loading entry first.
+ *
+ * The rule is deliberately "loading vs everything else", not a
+ * per-variant priority list, so adding a variant (e.g. `warning`,
+ * 2026-07-22) needs no change here: every self-dismissing variant is
+ * equally evictable, and oldest-first stays the tie-break.
  */
 const MAX_TOAST_STACK = 3;
 
@@ -158,7 +175,12 @@ export function ToastHost() {
         window.setTimeout(() => {
           setToasts((prev) => prev.filter((p) => p.id !== t.id));
         }, 4000);
-      } else if (t.variant === 'error') {
+      } else if (t.variant === 'error' || t.variant === 'warning') {
+        // `warning` rides the ERROR timing, not the success timing: both
+        // carry a caveat the operator has to read and act on ("it ran, but
+        // from the other source"), and 4s is not enough for a full
+        // sentence. `loading` is intentionally absent — it has no timer
+        // and is dismissed by the caller when the work finishes.
         window.setTimeout(() => {
           setToasts((prev) => prev.filter((p) => p.id !== t.id));
         }, 6000);
@@ -291,17 +313,29 @@ export function ToastHost() {
 function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }) {
   return (
     <div
+      /*
+       * `alert` is assertive — it interrupts a screen reader mid-sentence —
+       * so it stays reserved for `error`. `warning` reports a SUCCESSFUL
+       * operation that took a different route, which is information, not an
+       * interruption; it falls through to the polite `status` alongside
+       * success/loading.
+       */
       role={toast.variant === 'error' ? 'alert' : 'status'}
       className={cn(
         'pointer-events-auto max-w-md min-w-[280px] shadow-xl rounded-lg px-4 py-3',
         'flex items-start gap-2 text-sm border',
         toast.variant === 'success' && 'bg-emerald-600 border-emerald-700 text-white',
         toast.variant === 'error'   && 'bg-rose-50 border-rose-300 text-rose-800',
+        // Tinted surface (like `error`) rather than a solid fill (like
+        // `success`): a solid amber block reads as an alarm, and amber-on-white
+        // keeps the message legible at the contrast the tinted style gives.
+        toast.variant === 'warning' && 'bg-amber-50 border-amber-300 text-amber-800',
         toast.variant === 'loading' && 'bg-slate-900 border-slate-700 text-white',
       )}
     >
       {toast.variant === 'success' && <CheckCircle2 className="h-5 w-5 mt-0.5 shrink-0 text-white" />}
       {toast.variant === 'error'   && <AlertTriangle className="h-5 w-5 mt-0.5 shrink-0 text-rose-600" />}
+      {toast.variant === 'warning' && <AlertTriangle className="h-5 w-5 mt-0.5 shrink-0 text-amber-600" />}
       {toast.variant === 'loading' && <Loader2 className="h-5 w-5 mt-0.5 shrink-0 text-white animate-spin" />}
       <span className="flex-1 break-words font-medium">{toast.message}</span>
       {/* Loading variant intentionally has no dismiss button — caller
@@ -312,7 +346,13 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
           onClick={onDismiss}
           className={cn(
             'rounded p-0.5 shrink-0',
-            toast.variant === 'success' ? 'hover:bg-emerald-700/40 text-white' : 'hover:bg-rose-100 text-rose-700',
+            // One explicit branch per dismissible variant, replacing the old
+            // success-or-else-rose ternary — under that shape a new variant
+            // silently inherited the rose hover. `loading` never reaches here
+            // (it renders no dismiss button).
+            toast.variant === 'success' && 'hover:bg-emerald-700/40 text-white',
+            toast.variant === 'warning' && 'hover:bg-amber-100 text-amber-700',
+            toast.variant === 'error'   && 'hover:bg-rose-100 text-rose-700',
           )}
           aria-label="Dismiss"
         >

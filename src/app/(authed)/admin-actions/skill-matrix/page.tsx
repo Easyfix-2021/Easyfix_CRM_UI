@@ -8,16 +8,16 @@
  */
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Sparkles, ArrowLeft, Loader2, AlertTriangle, CheckCircle2, Search } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { api, ApiError } from '@/lib/api';
-import { useFetch, useFetchOnce, useDebouncedValue } from '@/lib/hooks';
-import { SortHeader, useSort } from '@/lib/use-sort';
-import { TablePagination, type TablePageSize } from '@/components/ui/table-pagination';
+import { useFetch, useFetchOnce, useDebouncedValue, invalidateFetch } from '@/lib/hooks';
+import { SortHeader, cycleSort, type SortDir } from '@/lib/use-sort';
+import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
 
 type Stats = { total: number; categories: number; skills: number; manual: number; llmConfigured: boolean };
 type BuildSummary = {
@@ -29,6 +29,18 @@ type MatrixRow = {
   id: number; service_catg_name: string | null; service_name: string;
   deepskill_name: string | null; confidence: number | null; source: string;
 };
+type ListResponse = { items: MatrixRow[]; total: number };
+
+// Must mirror SORTABLE_COLUMNS in services/service-skill-matrix.service.js —
+// the BE rejects (400) anything not on that whitelist.
+type SortKey = 'service_catg_name' | 'service_name' | 'deepskill_name' | 'confidence' | 'source';
+
+/*
+ * The endpoint's real Joi ceiling (listQuery in routes/admin/skill-matrix.js).
+ * TablePagination's 'All' otherwise resolves to pageSizeToLimit's 1000 default,
+ * which this endpoint would reject with a 400.
+ */
+const MATRIX_LIMIT_CAP = 500;
 
 export default function SkillMatrixPage() {
   const [categoryId, setCategoryId] = useState('');
@@ -39,40 +51,49 @@ export default function SkillMatrixPage() {
 
   const catgQ = useFetchOnce<Catg[]>('/shared/lookup/service-categories');
   const statsQ = useFetch<Stats>('/admin/skill-matrix/stats');
-  // limit=500 = the endpoint's Joi cap, and the whole matrix is well under it
-  // (the Mappings stat card shows the true total). So the full set loads in one
-  // request and search / sort / pagination all run CLIENT-side — instant, and no
-  // BE round-trip per keystroke or page. `matrixCapped` warns if the matrix ever
-  // outgrows the cap, at which point this would need server-side paging.
-  const MATRIX_LIMIT = 500;
-  const listKey = `/admin/skill-matrix?limit=${MATRIX_LIMIT}${categoryId ? `&categoryId=${Number(categoryId)}` : ''}`;
-  const listQ = useFetch<{ items: MatrixRow[] }>(listKey);
-  const rows = useMemo(() => listQ.data?.items ?? [], [listQ.data]);
-  const stats = statsQ.data;
-  const llmOff = stats && !stats.llmConfigured;
-  const matrixCapped = rows.length >= MATRIX_LIMIT;
 
-  // Client-side search across the three name columns (Category / Service / Deep
-  // Skill), debounced so typing doesn't thrash the filter on every keystroke.
+  /*
+   * Search / sort / pagination are ALL server-side. A full build spans
+   * thousands of (category, service) pairs — far past any single-request cap —
+   * so a client-side sort could only ever reorder the arbitrary window that
+   * happened to load, never surface a row from outside it.
+   */
   const [search, setSearch] = useState('');
-  const q = useDebouncedValue(search, 200).trim().toLowerCase();
-  const filtered = useMemo(() => {
-    if (!q) return rows;
-    return rows.filter((r) =>
-      (r.service_catg_name || '').toLowerCase().includes(q)
-      || (r.service_name || '').toLowerCase().includes(q)
-      || (r.deepskill_name || '').toLowerCase().includes(q));
-  }, [rows, q]);
-
-  // Sort (client-side, any column) then paginate the sorted+filtered set.
-  const { sorted, sortKey, sortDir, toggle } = useSort<MatrixRow>(filtered);
+  const q = useDebouncedValue(search, 300).trim();
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState<TablePageSize>(20);
-  const perPage = pageSize === 'all' ? sorted.length || 1 : pageSize;
-  const pageRows = sorted.slice(page * perPage, page * perPage + perPage);
+  // Nullable sortBy: the 3rd click clears sort entirely (canonical cycleSort
+  // cycle) and we then omit both params so the BE applies its default order.
+  const [sortBy, setSortBy] = useState<SortKey | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>('asc');
 
-  // Any change to the result set (search or category filter) can leave `page`
-  // pointing past the end — snap back to the first page.
+  function onSort(col: SortKey) {
+    const next = cycleSort<SortKey>(col, { sortBy, sortDir });
+    setSortBy(next.sortBy);
+    setSortDir(next.sortDir);
+    setPage(0);
+  }
+
+  // Every input that affects the result set is part of the key, so useFetch
+  // re-fires automatically on search / filter / sort / page changes.
+  const limit = pageSizeToLimit(pageSize, MATRIX_LIMIT_CAP);
+  const offset = page * (pageSize === 'all' ? limit : Number(pageSize));
+  const params = new URLSearchParams();
+  if (categoryId) params.set('categoryId', String(Number(categoryId)));
+  if (q) params.set('q', q);
+  if (sortBy) { params.set('sortBy', sortBy); params.set('sortDir', sortDir); }
+  params.set('limit', String(limit));
+  params.set('offset', String(offset));
+  const listKey = `/admin/skill-matrix?${params.toString()}`;
+
+  const listQ = useFetch<ListResponse>(listKey);
+  const rows = listQ.data?.items ?? [];
+  const total = listQ.data?.total ?? 0;
+  const stats = statsQ.data;
+  const llmOff = stats && !stats.llmConfigured;
+
+  // A filter change can leave `page` pointing past the end of the new result
+  // set — snap back to the first page. (`q` self-delays via the debounce.)
   useEffect(() => { setPage(0); }, [q, categoryId]);
 
   async function build() {
@@ -82,7 +103,13 @@ export default function SkillMatrixPage() {
       if (categoryId) body.categoryId = Number(categoryId);
       const summary = await api.post<BuildSummary>('/admin/skill-matrix/build', body);
       setResult(summary);
-      if (!dryRun) { statsQ.refetch(); listQ.refetch(); }
+      if (!dryRun) {
+        // A build rewrites rows across every page/sort window, so drop the
+        // whole cached key-space for this endpoint, not just the current key.
+        invalidateFetch((k) => k.startsWith('/admin/skill-matrix'));
+        statsQ.refetch();
+        listQ.refetch();
+      }
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : 'Build failed');
     } finally {
@@ -191,8 +218,10 @@ export default function SkillMatrixPage() {
       <Card>
         <CardContent className="p-4">
           <div className="mb-3 flex flex-wrap items-center gap-2">
+            {/* Count is the SERVER total for the current filters, not the
+                loaded page — the page is one window onto a much larger set. */}
             <div className="text-sm font-semibold">
-              Job Matrix{rows.length ? ` (${filtered.length === rows.length ? rows.length : `${filtered.length} of ${rows.length}`})` : ''}
+              Job Matrix{total ? ` (${total.toLocaleString('en-IN')})` : ''}
             </div>
             <div className="relative ml-auto w-full sm:w-72">
               <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -205,9 +234,9 @@ export default function SkillMatrixPage() {
             </div>
           </div>
 
-          {matrixCapped && (
-            <div className="mb-2 text-[11px] text-amber-700">
-              Showing the first {MATRIX_LIMIT} mappings — the matrix has outgrown the single-page cap.
+          {listQ.error && (
+            <div className="mb-2 flex items-center gap-1 text-xs text-red-700">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" /> {listQ.error}
             </div>
           )}
 
@@ -216,12 +245,12 @@ export default function SkillMatrixPage() {
               <Loader2 className="mx-auto mb-1 h-4 w-4 animate-spin" /> Loading…
             </div>
           ) : rows.length === 0 ? (
+            // With server-side filtering an empty page means either "nothing
+            // built yet" or "nothing matches" — the active filters tell us which.
             <div className="py-10 text-center text-sm text-muted-foreground">
-              No mappings yet. Run a build to populate the matrix.
-            </div>
-          ) : filtered.length === 0 ? (
-            <div className="py-10 text-center text-sm text-muted-foreground">
-              No mappings match &ldquo;{search}&rdquo;.
+              {q || categoryId
+                ? <>No mappings match the current filters.</>
+                : <>No mappings yet. Run a build to populate the matrix.</>}
             </div>
           ) : (
             <>
@@ -229,15 +258,15 @@ export default function SkillMatrixPage() {
                 <table className="data-table text-xs">
                   <thead>
                     <tr>
-                      <SortHeader col={'service_catg_name' as keyof MatrixRow} sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Category</SortHeader>
-                      <SortHeader col={'service_name'      as keyof MatrixRow} sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Service</SortHeader>
-                      <SortHeader col={'deepskill_name'    as keyof MatrixRow} sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Deep Skill</SortHeader>
-                      <SortHeader col={'confidence'        as keyof MatrixRow} align="right" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Confidence</SortHeader>
-                      <SortHeader col={'source'            as keyof MatrixRow} sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Source</SortHeader>
+                      <SortHeader<SortKey> col="service_catg_name" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Category</SortHeader>
+                      <SortHeader<SortKey> col="service_name"      sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Service</SortHeader>
+                      <SortHeader<SortKey> col="deepskill_name"    sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Deep Skill</SortHeader>
+                      <SortHeader<SortKey> col="confidence" align="right" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Confidence</SortHeader>
+                      <SortHeader<SortKey> col="source"           sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Source</SortHeader>
                     </tr>
                   </thead>
                   <tbody>
-                    {pageRows.map((r) => (
+                    {rows.map((r) => (
                       <tr key={r.id} className="hover:bg-muted/40">
                         <td>{r.service_catg_name || '—'}</td>
                         <td>{r.service_name}</td>
@@ -255,7 +284,9 @@ export default function SkillMatrixPage() {
                 className="mt-3 border-t pt-3"
                 page={page}
                 pageSize={pageSize}
-                total={filtered.length}
+                // Server total for the current filters — drives the real page
+                // count, not just what happens to be loaded.
+                total={total}
                 onPageChange={setPage}
                 onPageSizeChange={(s) => { setPageSize(s); setPage(0); }}
               />
