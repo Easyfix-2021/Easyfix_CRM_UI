@@ -1,20 +1,23 @@
 'use client';
 
 /*
- * Build Skill Matrix — property-gated Admin Action (skill.matrix.emails).
+ * Job Skill Matrix — property-gated Admin Action (skill.matrix.emails).
  * Triggers the AI build that maps services → deep skills (keyed by service
  * category) and shows the resulting matrix table for review. NOT (yet) used by
  * candidate-ranking — this is a review-only surface. BE enforces the gate.
  */
 
 import Link from 'next/link';
-import { useState } from 'react';
-import { Sparkles, ArrowLeft, Loader2, AlertTriangle, CheckCircle2, RefreshCw } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Sparkles, ArrowLeft, Loader2, AlertTriangle, CheckCircle2, Search } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { api, ApiError } from '@/lib/api';
-import { useFetch, useFetchOnce } from '@/lib/hooks';
+import { useFetch, useFetchOnce, useDebouncedValue } from '@/lib/hooks';
+import { SortHeader, useSort } from '@/lib/use-sort';
+import { TablePagination, type TablePageSize } from '@/components/ui/table-pagination';
 
 type Stats = { total: number; categories: number; skills: number; manual: number; llmConfigured: boolean };
 type BuildSummary = {
@@ -36,11 +39,41 @@ export default function SkillMatrixPage() {
 
   const catgQ = useFetchOnce<Catg[]>('/shared/lookup/service-categories');
   const statsQ = useFetch<Stats>('/admin/skill-matrix/stats');
-  const listKey = `/admin/skill-matrix?limit=200${categoryId ? `&categoryId=${Number(categoryId)}` : ''}`;
+  // limit=500 = the endpoint's Joi cap, and the whole matrix is well under it
+  // (the Mappings stat card shows the true total). So the full set loads in one
+  // request and search / sort / pagination all run CLIENT-side — instant, and no
+  // BE round-trip per keystroke or page. `matrixCapped` warns if the matrix ever
+  // outgrows the cap, at which point this would need server-side paging.
+  const MATRIX_LIMIT = 500;
+  const listKey = `/admin/skill-matrix?limit=${MATRIX_LIMIT}${categoryId ? `&categoryId=${Number(categoryId)}` : ''}`;
   const listQ = useFetch<{ items: MatrixRow[] }>(listKey);
-  const rows = listQ.data?.items ?? [];
+  const rows = useMemo(() => listQ.data?.items ?? [], [listQ.data]);
   const stats = statsQ.data;
   const llmOff = stats && !stats.llmConfigured;
+  const matrixCapped = rows.length >= MATRIX_LIMIT;
+
+  // Client-side search across the three name columns (Category / Service / Deep
+  // Skill), debounced so typing doesn't thrash the filter on every keystroke.
+  const [search, setSearch] = useState('');
+  const q = useDebouncedValue(search, 200).trim().toLowerCase();
+  const filtered = useMemo(() => {
+    if (!q) return rows;
+    return rows.filter((r) =>
+      (r.service_catg_name || '').toLowerCase().includes(q)
+      || (r.service_name || '').toLowerCase().includes(q)
+      || (r.deepskill_name || '').toLowerCase().includes(q));
+  }, [rows, q]);
+
+  // Sort (client-side, any column) then paginate the sorted+filtered set.
+  const { sorted, sortKey, sortDir, toggle } = useSort<MatrixRow>(filtered);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState<TablePageSize>(20);
+  const perPage = pageSize === 'all' ? sorted.length || 1 : pageSize;
+  const pageRows = sorted.slice(page * perPage, page * perPage + perPage);
+
+  // Any change to the result set (search or category filter) can leave `page`
+  // pointing past the end — snap back to the first page.
+  useEffect(() => { setPage(0); }, [q, categoryId]);
 
   async function build() {
     setBusy(true); setErr(null); setResult(null);
@@ -58,7 +91,7 @@ export default function SkillMatrixPage() {
   }
 
   return (
-    <div className="max-w-4xl space-y-5">
+    <div className="space-y-5">
       <div>
         <Link
           href="/admin-actions"
@@ -67,7 +100,7 @@ export default function SkillMatrixPage() {
           <ArrowLeft className="h-4 w-4" /> Admin Actions
         </Link>
         <h1 className="mt-1 flex items-center gap-2 text-2xl font-semibold">
-          <Sparkles className="h-5 w-5 text-primary" /> Build Skill Matrix
+          <Sparkles className="h-5 w-5 text-primary" /> Job Skill Matrix
         </h1>
         <p className="text-sm text-muted-foreground">
           AI-map each service to the deep skill(s) it requires (keyed by service category). Review
@@ -151,22 +184,32 @@ export default function SkillMatrixPage() {
         </CardContent>
       </Card>
 
-      {/* Current matrix — always shown for review. */}
+      {/* Job Matrix — always shown for review. No manual refresh button: a
+          non-dry-run build already refetches this list (see build()), and it's
+          a review surface that isn't edited elsewhere, so there is nothing to
+          poll for. */}
       <Card>
         <CardContent className="p-4">
-          <div className="mb-2 flex items-center gap-2">
-            <div className="text-sm font-semibold flex-1">
-              Current Matrix{rows.length ? ` (${rows.length}${rows.length >= 200 ? '+' : ''})` : ''}
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <div className="text-sm font-semibold">
+              Job Matrix{rows.length ? ` (${filtered.length === rows.length ? rows.length : `${filtered.length} of ${rows.length}`})` : ''}
             </div>
-            <button
-              type="button"
-              onClick={() => listQ.refetch()}
-              title="Refresh"
-              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-            >
-              <RefreshCw className="h-3.5 w-3.5" /> Refresh
-            </button>
+            <div className="relative ml-auto w-full sm:w-72">
+              <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search Category, Service or Deep Skill"
+                className="h-8 pl-8 text-xs"
+              />
+            </div>
           </div>
+
+          {matrixCapped && (
+            <div className="mb-2 text-[11px] text-amber-700">
+              Showing the first {MATRIX_LIMIT} mappings — the matrix has outgrown the single-page cap.
+            </div>
+          )}
 
           {listQ.loading ? (
             <div className="py-10 text-center text-sm text-muted-foreground">
@@ -176,31 +219,44 @@ export default function SkillMatrixPage() {
             <div className="py-10 text-center text-sm text-muted-foreground">
               No mappings yet. Run a build to populate the matrix.
             </div>
-          ) : (
-            <div className="max-h-[55vh] overflow-auto">
-              <table className="w-full text-xs">
-                <thead className="sticky top-0 bg-background">
-                  <tr className="border-b text-left text-muted-foreground">
-                    <th className="py-1.5 pr-3 font-medium">Category</th>
-                    <th className="py-1.5 pr-3 font-medium">Service</th>
-                    <th className="py-1.5 pr-3 font-medium">Deep Skill</th>
-                    <th className="py-1.5 pr-3 font-medium">Conf.</th>
-                    <th className="py-1.5 font-medium">Source</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((r) => (
-                    <tr key={r.id} className="border-b border-border/60">
-                      <td className="py-1.5 pr-3">{r.service_catg_name || '—'}</td>
-                      <td className="py-1.5 pr-3">{r.service_name}</td>
-                      <td className="py-1.5 pr-3">{r.deepskill_name || '—'}</td>
-                      <td className="py-1.5 pr-3">{r.confidence != null ? r.confidence : '—'}</td>
-                      <td className="py-1.5">{r.source}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          ) : filtered.length === 0 ? (
+            <div className="py-10 text-center text-sm text-muted-foreground">
+              No mappings match &ldquo;{search}&rdquo;.
             </div>
+          ) : (
+            <>
+              <div className="overflow-x-auto">
+                <table className="data-table text-xs">
+                  <thead>
+                    <tr>
+                      <SortHeader col={'service_catg_name' as keyof MatrixRow} sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Category</SortHeader>
+                      <SortHeader col={'service_name'      as keyof MatrixRow} sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Service</SortHeader>
+                      <SortHeader col={'deepskill_name'    as keyof MatrixRow} sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Deep Skill</SortHeader>
+                      <SortHeader col={'confidence'        as keyof MatrixRow} align="right" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Conf.</SortHeader>
+                      <SortHeader col={'source'            as keyof MatrixRow} sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Source</SortHeader>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pageRows.map((r) => (
+                      <tr key={r.id} className="hover:bg-muted/40">
+                        <td>{r.service_catg_name || '—'}</td>
+                        <td>{r.service_name}</td>
+                        <td>{r.deepskill_name || '—'}</td>
+                        <td className="text-right">{r.confidence != null ? r.confidence : '—'}</td>
+                        <td>{r.source}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <TablePagination
+                page={page}
+                pageSize={pageSize}
+                total={filtered.length}
+                onPageChange={setPage}
+                onPageSizeChange={(s) => { setPageSize(s); setPage(0); }}
+              />
+            </>
           )}
         </CardContent>
       </Card>

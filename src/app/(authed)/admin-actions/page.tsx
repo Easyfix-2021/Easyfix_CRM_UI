@@ -196,7 +196,7 @@ export default function AdminActionsPage() {
                   <div className="h-8 w-8 rounded-md bg-primary/10 text-primary grid place-items-center">
                     <Sparkles className="h-4 w-4" />
                   </div>
-                  <h2 className="font-medium flex-1">Build Skill Matrix</h2>
+                  <h2 className="font-medium flex-1">Job Skill Matrix</h2>
                 </div>
                 <p className="text-xs text-muted-foreground">
                   Use AI to map each service to the deep skill(s) it needs, so candidate ranking
