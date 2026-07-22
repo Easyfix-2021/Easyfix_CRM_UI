@@ -16,6 +16,48 @@ export function formatDate(d: string | Date | null | undefined): string {
 }
 
 /*
+ * IST 'now' as a fixed-width wall-clock string 'YYYY-MM-DDTHH:mm'. Built from
+ * Intl parts (not `new Date().toISOString()`) so it's the IST clock regardless
+ * of the browser's local timezone, and fixed-width so it compares
+ * LEXICOGRAPHICALLY against another same-format string.
+ */
+export function istNowWallClock(): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(new Date());
+  const g = (t: string) => parts.find((p) => p.type === t)?.value ?? '00';
+  return `${g('year')}-${g('month')}-${g('day')}T${g('hour')}:${g('minute')}`;
+}
+
+/*
+ * Reschedule gate for "Send Magic Link" on Unconfirmed orders, keyed on the
+ * job's appointment (`requested_date_time`, an IST wall-clock string from the BE):
+ *   'mandatory' — appointment is in the PAST (datetime < IST now). Includes a
+ *                 slot that already passed earlier today. Ops must reschedule
+ *                 before the link goes out.
+ *   'optional'  — appointment is LATER TODAY (>= now, same IST calendar day).
+ *                 Offer a reschedule but let ops send as-is.
+ *   'none'      — appointment is a future day. Send directly.
+ *
+ * Compares IST WALL-CLOCK strings, never `new Date(a) < new Date(b)` — that
+ * compares instants and misfires across the +05:30 boundary near midnight.
+ */
+export function magicLinkRescheduleGate(
+  requestedDateTime: string | null | undefined,
+): 'mandatory' | 'optional' | 'none' {
+  if (!requestedDateTime) return 'none';
+  // BE format is 'YYYY-MM-DD HH:mm:ss' (IST); normalise to 'YYYY-MM-DDTHH:mm'.
+  const appt = String(requestedDateTime).replace(' ', 'T').slice(0, 16);
+  if (appt.length < 16) return 'none';
+  const now = istNowWallClock();
+  if (appt < now) return 'mandatory';
+  if (appt.slice(0, 10) === now.slice(0, 10)) return 'optional';
+  return 'none';
+}
+
+/*
  * relativeTime(iso) → "just now" / "3 min ago" / "2 hr ago" / "5 days ago".
  *
  * Small, dependency-free formatter (the repo has no Intl.RelativeTimeFormat

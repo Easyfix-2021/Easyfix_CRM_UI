@@ -274,6 +274,9 @@ export function ScheduleAssignModal({
   const [cancelOpen, setCancelOpen] = useState(false);
   // Reschedule dialog — the ONLY way to change the (now read-only) Job Date/Time.
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
+  // Bumped after a reschedule to REMOUNT JobRemarksView (its comment thread lives
+  // in its own useFetch, which invalidateFetch alone can't re-run — see onDone).
+  const [remarksReloadKey, setRemarksReloadKey] = useState(0);
 
   // Proposed schedule — seeded from the job's current values once it
   // loads, then operator-editable. `seeded` guards the one-time seed so
@@ -810,7 +813,7 @@ export function ScheduleAssignModal({
               it. Collapsed by default so a long thread can't push the Top 10
               off-screen; the header carries the count so ops can tell at a glance
               whether it's worth opening. */}
-          <JobRemarksView jobId={jobId} collapsible defaultOpen={false} />
+          <JobRemarksView key={remarksReloadKey} jobId={jobId} collapsible defaultOpen={false} />
 
           {/* ───────── Offer history — live + rejected + expired — offer mode only ───────── */}
           {offerMode && (offers.data?.items?.length ?? 0) > 0 && (
@@ -1146,8 +1149,18 @@ export function ScheduleAssignModal({
           jobId={jobId}
           onClose={() => setRescheduleOpen(false)}
           onDone={() => {
-            invalidateFetch((k) => k.startsWith(`/admin/jobs/${jobId}/candidates`));
-            invalidateFetch((k) => k === `/admin/jobs/${jobId}/offers`);
+            // invalidateFetch only DROPS the cache — it does not re-run a hook
+            // that's still mounted, which is why the reschedule used to need a
+            // manual page reload. Actually refetch the two mounted queries so the
+            // new Job Date + re-ranked candidates + expired offers show at once,
+            // and remount JobRemarksView (key bump) so the reschedule comment and
+            // any pending-request change appear too.
+            top.refetch();
+            offers.refetch();
+            invalidateFetch((k) =>
+              k.startsWith(`/admin/jobs/${jobId}/comments`)
+              || k.startsWith(`/admin/jobs/${jobId}/customer-requests`));
+            setRemarksReloadKey((n) => n + 1);
           }}
         />
       )}

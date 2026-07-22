@@ -1,10 +1,12 @@
 'use client';
 import * as React from 'react';
 import { Eye, CalendarCheck, Send } from 'lucide-react';
-import { formatDate, statusLabel, statusTone } from '@/lib/utils';
+import { formatDate, statusLabel, statusTone, magicLinkRescheduleGate } from '@/lib/utils';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
 import { MagicLinkActionPopup } from '@/components/job/MagicLinkActionPopup';
+import { RescheduleDialog } from '@/components/job/RescheduleDialog';
+import { showToast } from '@/components/ui/toast';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { IconButton } from '@/components/ui/icon-button';
 import { SortHeader, type SortDir } from '@/lib/use-sort';
@@ -165,6 +167,29 @@ export function UnconfirmedJobsTable({
   // Track which row's Magic-Link popup is open. Single state because the
   // dialog is modal and at most one row's popup is mounted at a time.
   const [magicLinkRow, setMagicLinkRow] = React.useState<UnconfirmedJobRow | null>(null);
+  // Reschedule-before-send gate. When the appointment is past (mandatory) or
+  // later-today (optional) we open the reschedule dialog FIRST; `rescheduleRow`
+  // holds the row awaiting reschedule and `rescheduleMandatory` decides whether
+  // dismissing the dialog still proceeds to send.
+  const [rescheduleRow, setRescheduleRow] = React.useState<UnconfirmedJobRow | null>(null);
+  const [rescheduleMandatory, setRescheduleMandatory] = React.useState(false);
+
+  /*
+   * Send-magic-link entry point. The gate keys on the job's appointment vs IST
+   * now (see magicLinkRescheduleGate):
+   *   - future day  → open the send popup directly.
+   *   - later today → open Reschedule (optional): rescheduling OR dismissing both
+   *                   proceed to send (per ops — a same-day slot is still valid).
+   *   - past slot   → open Reschedule (mandatory): only a completed reschedule
+   *                   proceeds; dismissing aborts (a past appointment must move
+   *                   before the customer gets a link).
+   */
+  function startMagicLinkSend(j: UnconfirmedJobRow) {
+    const gate = magicLinkRescheduleGate(j.requested_date_time);
+    if (gate === 'none') { setMagicLinkRow(j); return; }
+    setRescheduleMandatory(gate === 'mandatory');
+    setRescheduleRow(j);
+  }
   return (
     <>
     <table className="data-table">
@@ -448,7 +473,7 @@ export function UnconfirmedJobsTable({
                       icon={Send}
                       intent="default"
                       label={j.magic_link_sent_at ? 'Re-send Magic Link' : 'Send Magic Link'}
-                      onClick={() => setMagicLinkRow(j)}
+                      onClick={() => startMagicLinkSend(j)}
                     />
                   )}
                 </div>
@@ -480,6 +505,37 @@ export function UnconfirmedJobsTable({
         userIsAdmin={userIsAdmin}
         onSent={() => {
           onMagicLinkSent?.();
+        }}
+      />
+    )}
+
+    {/* Reschedule-before-send gate (see startMagicLinkSend). The reschedule
+        keeps the job Unconfirmed and doesn't touch magic-link telemetry, so on
+        success we hand the SAME row straight to the send popup (its magic_link_*
+        props stay valid) and fire a background refetch so the list shows the new
+        date. onDone → always send. onClose → send only when the reschedule was
+        OPTIONAL; a mandatory (past-appointment) dismissal aborts with a nudge. */}
+    {rescheduleRow && (
+      <RescheduleDialog
+        open={true}
+        jobId={rescheduleRow.job_id}
+        // No initialDateTime prefill: the picker's `min` is now, so a past/today
+        // appointment can't seed a valid value — ops picks the new slot fresh.
+        onClose={() => {
+          const row = rescheduleRow;
+          const wasMandatory = rescheduleMandatory;
+          setRescheduleRow(null);
+          if (wasMandatory) {
+            showToast({ variant: 'error', message: 'Reschedule the past appointment before sending the link.' });
+          } else if (row) {
+            setMagicLinkRow(row); // optional path: send with the current slot
+          }
+        }}
+        onDone={() => {
+          const row = rescheduleRow;
+          setRescheduleRow(null);
+          onMagicLinkSent?.(); // background refetch → list shows the new date
+          if (row) setMagicLinkRow(row);
         }}
       />
     )}
