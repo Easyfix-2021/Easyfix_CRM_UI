@@ -43,7 +43,7 @@
  * icon here. A follow-up adds it.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle, CheckCircle2, XCircle, Info, Search, X, MapPin,
   Calendar, CalendarClock, Phone, Loader2, Clock, ChevronDown,
@@ -277,6 +277,15 @@ export function ScheduleAssignModal({
   // Bumped after a reschedule to REMOUNT JobRemarksView (its comment thread lives
   // in its own useFetch, which invalidateFetch alone can't re-run — see onDone).
   const [remarksReloadKey, setRemarksReloadKey] = useState(0);
+  // True from the moment a reschedule is submitted until the refetch settles.
+  // Drives a LOADING state over the schedule row + technician list so ops never
+  // sees the stale (pre-reschedule) date/candidates for even a frame — the
+  // useFetch hook keeps the old data on screen during a background refetch, which
+  // is right for a silent poll but wrong right after ops changed the appointment.
+  const [rescheduling, setRescheduling] = useState(false);
+  // Guards the clear: only fire once the refetch has actually STARTED (top went
+  // refreshing) and then SETTLED — not on the render before refetch kicks in.
+  const rescheduleRefetchStarted = useRef(false);
 
   // Proposed schedule — seeded from the job's current values once it
   // loads, then operator-editable. `seeded` guards the one-time seed so
@@ -400,6 +409,17 @@ export function ScheduleAssignModal({
    */
   const topData = top.data && Number(top.data.job?.job_id) === Number(jobId) ? top.data : null;
 
+  // Clear the post-reschedule loading state once the candidate refetch has both
+  // STARTED (top.refreshing went true) and SETTLED (back to false) — so the new
+  // date + re-ranked list are in before we drop the loading veil. Keyed on the
+  // refetch lifecycle (not on the date changing) so it can't get stuck if ops
+  // reschedules to a coincidentally-identical time.
+  useEffect(() => {
+    if (!rescheduling) return;
+    if (top.loading || top.refreshing) { rescheduleRefetchStarted.current = true; return; }
+    if (rescheduleRefetchStarted.current) setRescheduling(false);
+  }, [rescheduling, top.loading, top.refreshing]);
+
   // Seed the proposed schedule from the loaded job exactly once.
   // seedSlot captures the job's stored time_slot for display during the seed
   // phase; once seeded, deriveTimeSlot() takes over from the picked date.
@@ -465,7 +485,9 @@ export function ScheduleAssignModal({
   // `top.loading` is FALSE while a stale payload is on screen (the hook reports
   // `refreshing` instead). Treat "no payload for THIS job yet" as loading, or the
   // list would render another job's technicians as if settled.
-  const listLoading = showingSearch ? searchRes.loading : (top.loading || !topData);
+  // `rescheduling` forces the loading state during the post-reschedule refetch
+  // so the Top-10 doesn't show the OLD ranking (ranked against the old date).
+  const listLoading = showingSearch ? searchRes.loading : (top.loading || !topData || rescheduling);
   const listError = showingSearch ? searchRes.error : top.error;
 
   // A new term is a new result set — send the operator back to page 1 rather
@@ -775,7 +797,11 @@ export function ScheduleAssignModal({
                           <Calendar className="h-3.5 w-3.5" /> Job Date &amp; Time
                         </div>
                         <div className="text-sm font-medium text-foreground">
-                          {job.requested_date_time ? formatDate(job.requested_date_time) : '—'}
+                          {/* While the post-reschedule refetch is in flight, show a
+                              spinner rather than the stale pre-reschedule date. */}
+                          {rescheduling
+                            ? <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> Updating…</span>
+                            : (job.requested_date_time ? formatDate(job.requested_date_time) : '—')}
                         </div>
                       </div>
                       <div className="space-y-0.5">
@@ -783,7 +809,9 @@ export function ScheduleAssignModal({
                           <Clock className="h-3.5 w-3.5" /> Time Slot
                         </div>
                         <div className="text-sm font-medium text-foreground">
-                          {job.booking_cut_off_time_slot || '—'}
+                          {rescheduling
+                            ? <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> Updating…</span>
+                            : (job.booking_cut_off_time_slot || '—')}
                         </div>
                       </div>
                     </div>
@@ -1155,6 +1183,8 @@ export function ScheduleAssignModal({
             // new Job Date + re-ranked candidates + expired offers show at once,
             // and remount JobRemarksView (key bump) so the reschedule comment and
             // any pending-request change appear too.
+            rescheduleRefetchStarted.current = false;
+            setRescheduling(true); // veil the stale date/list until the refetch settles
             top.refetch();
             offers.refetch();
             invalidateFetch((k) =>

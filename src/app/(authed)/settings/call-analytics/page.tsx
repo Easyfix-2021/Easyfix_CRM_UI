@@ -13,7 +13,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import {
-  PhoneCall, Loader2, Sparkles, TrendingUp, AlertTriangle, ThumbsUp, Ban, PlusCircle, Users, RefreshCw,
+  PhoneCall, Loader2, Sparkles, TrendingUp, AlertTriangle, ThumbsUp, Ban, PlusCircle, Users, RefreshCw, Play,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -30,6 +30,8 @@ import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { TablePagination, pageSizeToLimit, type TablePageSize } from '@/components/ui/table-pagination';
+import { CallRecordingAudio } from '@/components/ui/call-recording-audio';
+import { IconButton } from '@/components/ui/icon-button';
 
 type CallRow = {
   id: number;
@@ -39,7 +41,12 @@ type CallRow = {
   receiver: string | null;
   receiver_name: string | null;
   call_type: string | null;
+  // start_time = when the call was ANSWERED — NULL on ~13% of rows (and on most
+  // recent ones), so it can't be the display source on its own. inserted_time =
+  // when the call was logged/initiated, never NULL (it's the list's ORDER BY
+  // key). Both are already projected by GET /admin/calls. See the Date/Time cell.
   start_time: string | null;
+  inserted_time: string | null;
   duration: number | null;
   provider: string | null;
   transcription_status?: string | null;
@@ -160,9 +167,44 @@ function hasAnalysis(r: CallRow): boolean {
   return toScore(r.score) != null || r.call_analysis_status === 'ready';
 }
 
+/*
+ * Listen to a call recording, lazily. Same shape as the CallHistoryButton
+ * player: a ▶ button until the operator clicks, then GET /admin/calls/:id/recording
+ * (which pulls from the provider, caches to S3 once, and returns a short-lived
+ * URL) → an inline <CallRecordingAudio> that downmixes the 2-channel Plivo
+ * recording to mono (otherwise the customer is audible only on the right
+ * channel — see components/ui/call-recording-audio.tsx). Only rendered when the
+ * call actually connected (duration > 0); an unanswered call has no recording.
+ */
+function ListenButton({ callId }: { callId: number }) {
+  const [loading, setLoading] = React.useState(false);
+  const [url, setUrl] = React.useState<string | null>(null);
+
+  if (url) return <CallRecordingAudio src={url} autoPlay className="h-7 w-44" />;
+
+  async function play() {
+    setLoading(true);
+    try {
+      const r = await api.get<{ url: string }>(`/admin/calls/${callId}/recording`);
+      if (r?.url) setUrl(r.url);
+      else showToast({ variant: 'error', message: 'No recording available for this call.' });
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Could not load the recording.' });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return <IconButton icon={Play} label="Listen Recording" busy={loading} onClick={() => void play()} />;
+}
+
 export default function CallAnalyticsPage() {
   const { me } = useMe();
   const canView = hasAction(me, 'isCallAnalyticsView');
+  // Recording playback hits GET /admin/calls/:id/recording, which is gated on
+  // isClickToCall — so only show Listen to operators who can actually fetch it,
+  // rather than a button that 403s. (The list itself needs only isCallAnalyticsView.)
+  const canListen = hasAction(me, 'isClickToCall');
 
   // 0-indexed page + the shared TablePagination (matches the rest of the CRM,
   // and gives the page-size selector the raw table was missing). The backend
@@ -346,7 +388,10 @@ export default function CallAnalyticsPage() {
                   const s = toScore(r.score);
                   return (
                     <tr key={r.id} className="border-t hover:bg-slate-50">
-                      <td className="px-3 py-2 whitespace-nowrap">{fmtDateTime(r.start_time)}</td>
+                      {/* Prefer the answered time; fall back to the initiated
+                          (inserted) time, which is always present — otherwise
+                          recent calls (start_time NULL) showed a bare "—". */}
+                      <td className="px-3 py-2 whitespace-nowrap">{fmtDateTime(r.start_time || r.inserted_time)}</td>
                       <td className="px-3 py-2">{outgoing ? 'Outgoing' : 'Incoming'}</td>
                       <td className="px-3 py-2">
                         {r.call_flow
@@ -376,24 +421,30 @@ export default function CallAnalyticsPage() {
                           : <span className="text-muted-foreground">—</span>}
                       </td>
                       <td className="px-3 py-2 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
-                          <Button size="sm" variant="outline" className="!h-7 !px-2 text-xs" onClick={() => setAnalysisFor(r)}>
-                            <Sparkles className="h-3.5 w-3.5 mr-1" /> View Analysis
-                          </Button>
+                        {/* Icon-only row actions; each label is the hover tooltip
+                            (title) + accessible name. gap-2 keeps the naked icons
+                            from crowding. */}
+                        <div className="flex items-center justify-end gap-2">
+                          {/* Listen — only when the call connected (duration > 0;
+                              an unanswered call has no recording) and the operator
+                              can fetch it. */}
+                          {canListen && (r.duration ?? 0) > 0 && <ListenButton callId={r.id} />}
+                          <IconButton
+                            icon={Sparkles}
+                            label="Analyse Call"
+                            intent="primary"
+                            onClick={() => setAnalysisFor(r)}
+                          />
                           {/* Only for calls that already have an analysis — for the rest,
-                              View Analysis generates the first one anyway. */}
+                              Analyse Call generates the first one anyway. */}
                           {hasAnalysis(r) && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="!h-7 !px-2 text-xs"
+                            <IconButton
+                              icon={RefreshCw}
+                              label="Reanalyse Call"
+                              busy={reanalysing === r.id}
                               disabled={reanalysing != null}
                               onClick={() => void onReanalyse(r)}
-                            >
-                              {reanalysing === r.id
-                                ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
-                                : <RefreshCw className="h-3.5 w-3.5 mr-1" />} Re-analyse
-                            </Button>
+                            />
                           )}
                         </div>
                       </td>

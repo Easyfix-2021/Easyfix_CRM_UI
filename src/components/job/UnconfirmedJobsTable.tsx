@@ -173,6 +173,9 @@ export function UnconfirmedJobsTable({
   // dismissing the dialog still proceeds to send.
   const [rescheduleRow, setRescheduleRow] = React.useState<UnconfirmedJobRow | null>(null);
   const [rescheduleMandatory, setRescheduleMandatory] = React.useState(false);
+  // True between onDone and the onClose that RescheduleDialog fires right after —
+  // lets onClose tell "closed after a successful save" from a genuine dismiss.
+  const rescheduleDoneRef = React.useRef(false);
 
   /*
    * Send-magic-link entry point. The gate keys on the job's appointment vs IST
@@ -522,6 +525,12 @@ export function UnconfirmedJobsTable({
         // No initialDateTime prefill: the picker's `min` is now, so a past/today
         // appointment can't seed a valid value — ops picks the new slot fresh.
         onClose={() => {
+          // RescheduleDialog fires onDone() AND onClose() on a successful save
+          // (RescheduleDialog.tsx:99-100), so onClose runs even after a real
+          // reschedule. Without this guard the mandatory branch below would show
+          // the "reschedule the past appointment" nudge right after ops DID
+          // reschedule. onDone sets this flag; a genuine Back/escape leaves it false.
+          if (rescheduleDoneRef.current) { rescheduleDoneRef.current = false; return; }
           const row = rescheduleRow;
           const wasMandatory = rescheduleMandatory;
           setRescheduleRow(null);
@@ -532,6 +541,7 @@ export function UnconfirmedJobsTable({
           }
         }}
         onDone={() => {
+          rescheduleDoneRef.current = true; // suppress the onClose that follows
           const row = rescheduleRow;
           setRescheduleRow(null);
           onMagicLinkSent?.(); // background refetch → list shows the new date

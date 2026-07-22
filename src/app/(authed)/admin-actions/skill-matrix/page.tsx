@@ -160,9 +160,9 @@ export default function SkillMatrixPage() {
               <span className="inline-flex items-center gap-1">
                 <Loader2 className="h-4 w-4 animate-spin" /> Building…
               </span>
-            ) : dryRun ? (
-              'Run Dry Run'
             ) : (
+              // One label in both modes — the Dry Run checkbox already tells the
+              // operator which of the two this run will be.
               'Build Matrix'
             )}
           </Button>
@@ -232,7 +232,7 @@ export default function SkillMatrixPage() {
                       <SortHeader col={'service_catg_name' as keyof MatrixRow} sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Category</SortHeader>
                       <SortHeader col={'service_name'      as keyof MatrixRow} sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Service</SortHeader>
                       <SortHeader col={'deepskill_name'    as keyof MatrixRow} sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Deep Skill</SortHeader>
-                      <SortHeader col={'confidence'        as keyof MatrixRow} align="right" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Conf.</SortHeader>
+                      <SortHeader col={'confidence'        as keyof MatrixRow} align="right" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Confidence</SortHeader>
                       <SortHeader col={'source'            as keyof MatrixRow} sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Source</SortHeader>
                     </tr>
                   </thead>
@@ -250,6 +250,9 @@ export default function SkillMatrixPage() {
                 </table>
               </div>
               <TablePagination
+                // Divider above the footer — the table and pagination share one
+                // card here, so without it the footer reads as another table row.
+                className="mt-3 border-t pt-3"
                 page={page}
                 pageSize={pageSize}
                 total={filtered.length}
