@@ -5725,7 +5725,16 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             efr_special_notes: (override.efr_special_notes ?? f.efr_special_notes) || undefined,
             helper_req:        override.helper_req ?? Boolean(f.helper_req),
             material_req:      override.material_req ?? Boolean(f.material_req),
-            collected_by:      override.collected_by ?? f.collected_by,
+            // MUST re-code to the numeric enum. `basePayload` already sends
+            // collectedByCode(f.collected_by), but this per-tab override clobbers
+            // it — and both `override.collected_by` and `f.collected_by` hold the
+            // LABEL ('Easyfix'/'Easyfixer'), not the code. Sending the raw label
+            // made the BE's Number('Easyfix')=NaN fall through and MySQL coerce
+            // the string into the INT column as 0 — so a client pinned to
+            // Collected By = Easyfix (2) had its jobs saved as 0 (Any), which
+            // then blocks checkout. collectedByCode is a no-op on a number, so
+            // wrapping is safe whichever shape the field holds.
+            collected_by:      collectedByCode(override.collected_by ?? f.collected_by),
             services: filteredServices.length > 0 ? filteredServices : undefined,
             ...(catId > 0 ? { fk_service_catg_id: catId } : {}),
           };

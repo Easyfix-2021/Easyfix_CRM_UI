@@ -1668,9 +1668,10 @@ function PincodePicker({
 
   function toggle(row: CatalogPincode) {
     onToggle(row);
-    // Clear the search after each select/unselect so the box is fresh for the
-    // next one — signals the technician they can keep adding/removing pincodes.
-    setSearch('');
+    // Deliberately does NOT clear the search: a technician searching "560" often
+    // wants to add several of the matches in one go. Keeping the results (and the
+    // query) up lets them tick multiple pincodes without re-typing; the toggled
+    // row reflects its selected state in place via the `selected` map.
   }
 
   function removeChip(id: number) {
