@@ -16,7 +16,7 @@
  * authorised" card if the request 403s.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
   ChevronDown, ChevronRight, Play, RotateCcw, AlertTriangle, Clock, Send,
@@ -31,7 +31,6 @@ import { StatusChip } from '@/components/ui/StatusChip';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { showToast } from '@/components/ui/toast';
 import { api } from '@/lib/api';
-import { useFetch } from '@/lib/hooks';
 import { formatApiError } from '@/lib/api-errors';
 import { cn } from '@/lib/utils';
 import { useMe } from '@/lib/auth-context';
@@ -50,6 +49,15 @@ type ScheduledJob = {
   lastResult: unknown;
   lastError: string | null;
   lastTriggerKind: 'cron' | 'manual' | 'test' | null;
+  // Live-run surface (2026-07-23) — published by the scheduler on the LIST
+  // payload, so watching a run costs no extra request. `cancellable` is true
+  // only where Stop genuinely interrupts; see the BE's requestCancel().
+  running?: boolean;
+  runningSince?: string | null;
+  runningMs?: number | null;
+  progressText?: string | null;
+  cancelRequested?: boolean;
+  cancellable?: boolean;
   // Test-send surface (2026-06-06). When `testable` is true, a "Test"
   // button renders alongside "Trigger Now" and the modal uses the
   // testSourceLabel / testSourceHelp strings for its optional source-id
@@ -65,26 +73,6 @@ type ScheduledJob = {
 };
 
 type JobsResponse = { jobs: ScheduledJob[] };
-
-/*
- * Live progress for the QA database refresh, served by
- * GET /admin/scheduled-jobs/qa-db-refresh/progress. Server-owned state, so it
- * is unaffected by this page unmounting — see the polling effect below.
- */
-type QaProgress = {
-  running: boolean;
-  phase: string;
-  label: string;        // human sentence, e.g. "Downloading data from the production replica"
-  dryRun?: boolean;
-  startedAt?: string;
-  elapsedMs?: number;
-  bytes?: number | null; // dump size so far, straight off the file on disk
-  cancelled?: boolean;
-  file?: string;
-};
-
-/* The two jobs the progress card applies to. */
-const QA_REFRESH_IDS = ['qa-db-refresh', 'qa-db-refresh-dry-run'];
 
 function formatDateTime(iso: string | null): string {
   if (!iso) return '—';
@@ -124,39 +112,21 @@ export default function ScheduledJobsPage() {
   const [testTarget, setTestTarget] = useState<ScheduledJob | null>(null);
 
   /*
-   * LIVE PROGRESS for the QA database refresh — the only jobs here that run for
-   * MINUTES (a multi-GB dump), where "Last Run" telemetry alone leaves the
-   * operator watching a spinner with no idea if anything is happening.
+   * LIVE PROGRESS for EVERY scheduled job, at the lowest possible cost.
    *
-   * The state lives on the SERVER (qa-db-refresh.service), so this is a pure
-   * read. That is what makes progress survive switching tabs, navigating away,
-   * or closing the browser entirely — nothing is held in React, so there is
-   * nothing to lose. Re-opening this page picks a run back up mid-flight.
+   * The live fields ride on GET /admin/scheduled-jobs — the request this page
+   * already makes — so there is NO dedicated progress endpoint and no second
+   * round-trip. That matters because this backend is shared with the client
+   * portal and the mobile app.
    *
-   * Poll cadence: brisk while a run is in flight, lazy when idle so an open page
-   * isn't a permanent heartbeat. Driven through the shared `useFetch` hook
-   * (module-level dedupe + cleanup) rather than a hand-rolled useEffect loop —
-   * the repo forbids raw api.* calls inside effects for exactly the
-   * double-fire reasons the lint rule cites.
-   */
-  /*
-   * POLLING BUDGET — this backend is shared by the CRM, the client portal and
-   * the mobile app, so an ops page left open must not become a permanent
-   * heartbeat against it. The cost is therefore bounded three ways:
-   *
-   *   1. NO POLLING WHEN IDLE. `refetchInterval` is 0 unless a run is actually
-   *      in flight, so an open page costs exactly ONE request on mount and then
-   *      nothing at all.
-   *   2. PAUSED IN A BACKGROUND TAB. `enabled` follows document visibility —
-   *      ops leave tabs open for hours, and a hidden tab has nobody to show
-   *      progress to. Because `enabled` is a dependency of the fetch, flipping
-   *      back to visible also re-probes once, which is how a run started
-   *      elsewhere (or by the cron) gets picked up.
-   *   3. 3s ONLY WHILE RUNNING, and the endpoint it hits is in-memory state
-   *      plus one stat() — no database, no query.
-   *
-   * Triggering a QA job calls refetch() directly, so the live strip appears at
-   * once rather than waiting for a tick.
+   * Cost is bounded three ways:
+   *   1. NO POLLING WHEN IDLE — the interval only exists while some job is
+   *      actually running, so an open page is one request and then silence.
+   *   2. PAUSED IN A BACKGROUND TAB — ops leave tabs open for hours, and a
+   *      hidden tab has nobody to show progress to. Coming back re-probes once,
+   *      which is also how a cron-started run gets picked up.
+   *   3. The endpoint is a pure in-memory projection — no query, no pool
+   *      connection taken from the other UIs.
    */
   const [tabVisible, setTabVisible] = useState(true);
   useEffect(() => {
@@ -166,40 +136,43 @@ export default function ScheduledJobsPage() {
     return () => document.removeEventListener('visibilitychange', onVis);
   }, []);
 
-  const [qaRunning, setQaRunning] = useState(false);
-  const qaProg = useFetch<QaProgress>(
-    '/admin/scheduled-jobs/qa-db-refresh/progress',
-    { enabled: tabVisible, refetchInterval: qaRunning ? 3_000 : 0 },
-  );
-  const qaProgress = qaProg.data;
-  const [stopping, setStopping] = useState(false);
-  useEffect(() => { setQaRunning(!!qaProgress?.running); }, [qaProgress?.running]);
+  const anyRunning = !!jobs?.some((j) => j.running);
+  const [stopping, setStopping] = useState<Set<string>>(new Set());
 
-  // Refresh the job list as soon as a run ends, so "Last Run" reflects it
-  // without the operator hitting reload.
-  const wasRunning = useRef(false);
+  // Re-read the list while something is in flight (and once on becoming visible).
   useEffect(() => {
-    if (wasRunning.current && qaProgress && !qaProgress.running) load();
-    wasRunning.current = !!qaProgress?.running;
+    if (!tabVisible) return;
+    load();
+    if (!anyRunning) return;
+    const id = setInterval(() => { load({ silent: true }); }, 3_000);
+    return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [qaProgress?.running]);
+  }, [tabVisible, anyRunning]);
 
-  async function stopQaRun() {
-    setStopping(true);
+  async function stopJob(job: ScheduledJob) {
+    setStopping((p) => new Set(p).add(job.id));
     try {
-      await api.post('/admin/scheduled-jobs/qa-db-refresh/cancel', {});
-      showToast({ variant: 'warning', message: 'Stopping the run — it will report as stopped shortly.' });
-      qaProg.refetch();   // reflect the cancelled flag without waiting for the tick
+      const r = await api.post<{ immediate?: boolean }>(
+        `/admin/scheduled-jobs/${encodeURIComponent(job.id)}/cancel`, {},
+      );
+      showToast({
+        variant: 'warning',
+        message: r?.immediate
+          ? `Stopping "${job.name}" now…`
+          : `Stop requested — "${job.name}" will end at its next checkpoint.`,
+      });
+      load({ silent: true });
     } catch (e) {
-      showToast({ variant: 'error', message: formatApiError(e, { fallback: 'Could not stop the run.' }) });
+      showToast({ variant: 'error', message: formatApiError(e, { fallback: 'Could not stop the task.' }) });
     } finally {
-      setStopping(false);
+      setStopping((p) => { const n = new Set(p); n.delete(job.id); return n; });
     }
   }
 
-  async function load() {
-    setLoading(true);
-    setError(null);
+  async function load({ silent = false }: { silent?: boolean } = {}) {
+    // `silent` = a background poll: keep the rendered list mounted so the page
+    // doesn't flash a skeleton every 3 seconds while a job runs.
+    if (!silent) { setLoading(true); setError(null); }
     try {
       const res = await api.get<JobsResponse>('/admin/scheduled-jobs');
       setJobs(res.jobs);
@@ -216,11 +189,10 @@ export default function ScheduledJobsPage() {
         setError(msg);
       }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }
 
-  useEffect(() => { void load(); }, []);
 
   function toggle(id: string) {
     setExpanded((prev) => {
@@ -254,15 +226,9 @@ export default function ScheduledJobsPage() {
     try {
       await api.post(`/admin/scheduled-jobs/${encodeURIComponent(job.id)}/trigger`, {});
       showToast({ variant: 'success', message: `"${job.name}" triggered successfully.` });
-      /*
-       * QA-refresh jobs run for minutes, so start the live strip immediately
-       * instead of waiting for a poll tick — and because polling is OFF while
-       * idle, without this nudge nothing would begin watching at all until the
-       * operator switched tabs.
-       */
-      if (QA_REFRESH_IDS.includes(job.id)) { setQaRunning(true); qaProg.refetch(); }
-      // Re-fetch so the lastRunAt / lastResult panel reflects the new run.
-      await load();
+      // Re-read immediately: this both refreshes Last Run AND flips `running`
+      // on, which is what starts the 3s poll (idle pages don't poll at all).
+      await load({ silent: true });
     } catch (e) {
       showToast({
         variant: 'error',
@@ -427,16 +393,14 @@ export default function ScheduledJobsPage() {
                   </Button>
                 </div>
                 {/*
-                  * LIVE PROGRESS strip — QA refresh jobs only, and only while a
-                  * run is actually in flight. Rendered OUTSIDE the `isOpen`
-                  * block on purpose: a long-running job must be visible without
-                  * the operator remembering which card to expand.
-                  *
-                  * It reads from the server poll, so it repaints correctly after
-                  * a tab switch or a full page reload — the run keeps going
-                  * regardless of whether anyone is watching.
+                  * LIVE PROGRESS strip — any job, while it is running.
+                  * Rendered OUTSIDE the `isOpen` block on purpose: a long run
+                  * must be visible without remembering which card to expand.
+                  * Values come from the list payload, so this repaints correctly
+                  * after a reload or a tab switch — the run continues whether or
+                  * not anyone is watching.
                   */}
-                {QA_REFRESH_IDS.includes(job.id) && qaProgress?.running && (
+                {job.running && (
                   <div className="border-t bg-sky-50 px-4 py-2.5 flex items-center gap-3 flex-wrap">
                     <span className="relative flex h-2.5 w-2.5 shrink-0">
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sky-400 opacity-75" />
@@ -444,28 +408,28 @@ export default function ScheduledJobsPage() {
                     </span>
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-medium text-sky-900">
-                        {qaProgress.label}
-                        {qaProgress.dryRun && <span className="ml-1.5 text-xs font-normal text-sky-700">(dry run — QA untouched)</span>}
+                        {job.progressText || 'Running…'}
                       </div>
                       <div className="text-xs text-sky-800/80 tabular-nums">
-                        Running {formatDuration(qaProgress.elapsedMs ?? null)}
-                        {qaProgress.bytes != null && qaProgress.bytes > 0
-                          && ` · ${(qaProgress.bytes / 1024 / 1024).toFixed(1)} MB downloaded`}
+                        Started {formatDateTime(job.runningSince ?? null)}
+                        {job.runningMs != null && ` · ${formatDuration(job.runningMs)} elapsed`}
+                        {job.cancelRequested && ' · stop requested'}
                       </div>
                     </div>
-                    {/* Stop is destructive-ish but always safe: the run unwinds
-                        through its normal failure path, so the maintenance gate
-                        is lowered and the partial dump deleted. */}
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      disabled={stopping || qaProgress.cancelled}
-                      onClick={() => void stopQaRun()}
-                      className="shrink-0 border-rose-300 text-rose-700 hover:bg-rose-50"
-                    >
-                      {qaProgress.cancelled ? 'Stopping…' : stopping ? 'Stopping…' : 'Stop'}
-                    </Button>
+                    {/* Stop appears ONLY where it genuinely interrupts. A button
+                        that silently does nothing is worse than no button. */}
+                    {job.cancellable && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={stopping.has(job.id) || job.cancelRequested}
+                        onClick={() => void stopJob(job)}
+                        className="shrink-0 border-rose-300 text-rose-700 hover:bg-rose-50"
+                      >
+                        {job.cancelRequested || stopping.has(job.id) ? 'Stopping…' : 'Stop'}
+                      </Button>
+                    )}
                   </div>
                 )}
                 {isOpen && (

@@ -429,6 +429,39 @@ export default function JobCompletionMagicLinkPage() {
     return () => { cancelled = true; };
   }, [dialog, token]);
 
+  /*
+   * Earliest date/time the CUSTOMER may reschedule to.
+   *
+   * ⚠ MUST STAY ABOVE THE EARLY RETURNS BELOW. This component returns early for
+   * the loading / expired / invalid / error / submitted / no-form states, so a
+   * hook placed after them runs on some renders and not others — React counts
+   * hooks positionally and throws #310 ("rendered more hooks than during the
+   * previous render"). That is exactly what happened when this was first written
+   * further down the file. `form` is therefore optional-chained: it is legitimately
+   * null on the first render, before the fetch resolves.
+   *
+   * Two floors, whichever is later:
+   *   - the START OF THE CURRENT APPOINTMENT'S DAY — a customer may push an
+   *     appointment out, never pull it earlier. Day start, not the appointment
+   *     instant, so an earlier SLOT on the same day is still allowed.
+   *   - NOW — so an appointment already today/past can't be "moved" to a moment
+   *     that has already gone.
+   *
+   * Ops are deliberately NOT subject to this: they reschedule from the CRM, a
+   * different surface, where back-dating is a legitimate correction.
+   *
+   * Both values are naive IST "YYYY-MM-DDTHH:mm" strings, which sort
+   * lexicographically in chronological order — so the comparison needs no date
+   * math and no timezone conversion.
+   */
+  const rescheduleMin = React.useMemo(() => {
+    const nowLocal = toDatetimeLocal(new Date().toISOString());
+    const day = (form?.requested_date_time || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return nowLocal; // unscheduled → today
+    const apptDayStart = `${day}T00:00`;
+    return apptDayStart > nowLocal ? apptDayStart : nowLocal;
+  }, [form?.requested_date_time]);
+
   if (state.kind === 'loading') return <div className="text-center text-slate-500 py-12">Loading…</div>;
   if (state.kind === 'expired_state') return (
     <FullPageMessage
@@ -761,33 +794,6 @@ export default function JobCompletionMagicLinkPage() {
   // (Appointment time is no longer displayed — the card shows the date + the
   //  mandatory slot chips; the customer picks the window.)
 
-  /*
-   * Earliest date/time the CUSTOMER may reschedule to.
-   *
-   * Two floors, whichever is later:
-   *   - the START OF THE CURRENT APPOINTMENT'S DAY — a customer may push an
-   *     appointment out, never pull it earlier. Day start, not the appointment
-   *     instant, so an earlier SLOT on the same day is still allowed.
-   *   - NOW — so an appointment that is already today/past can't be "moved" to a
-   *     moment that has already gone.
-   *
-   * Ops are deliberately NOT subject to this: they reschedule from the CRM,
-   * which is a different surface entirely, and back-dating is a legitimate ops
-   * correction (recording what actually happened). This floor exists only on the
-   * customer-facing magic-link form.
-   *
-   * Both values are naive IST "YYYY-MM-DDTHH:mm" strings, which sort
-   * lexicographically in chronological order — so the comparison needs no date
-   * math and no timezone conversion, the two places this codebase most often
-   * goes wrong on dates.
-   */
-  const rescheduleMin = React.useMemo(() => {
-    const nowLocal = toDatetimeLocal(new Date().toISOString());
-    const day = (form.requested_date_time || '').slice(0, 10);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return nowLocal; // unscheduled → today
-    const apptDayStart = `${day}T00:00`;
-    return apptDayStart > nowLocal ? apptDayStart : nowLocal;
-  }, [form.requested_date_time]);
   // Coordinator identity + avatar initials for the "Your Coordinator" card.
   const coordinatorName = spoc?.name || data.job_owner?.name || 'EasyFix Coordinator';
   const coordinatorInitials =
