@@ -760,6 +760,34 @@ export default function JobCompletionMagicLinkPage() {
     : 'To Be Scheduled';
   // (Appointment time is no longer displayed — the card shows the date + the
   //  mandatory slot chips; the customer picks the window.)
+
+  /*
+   * Earliest date/time the CUSTOMER may reschedule to.
+   *
+   * Two floors, whichever is later:
+   *   - the START OF THE CURRENT APPOINTMENT'S DAY — a customer may push an
+   *     appointment out, never pull it earlier. Day start, not the appointment
+   *     instant, so an earlier SLOT on the same day is still allowed.
+   *   - NOW — so an appointment that is already today/past can't be "moved" to a
+   *     moment that has already gone.
+   *
+   * Ops are deliberately NOT subject to this: they reschedule from the CRM,
+   * which is a different surface entirely, and back-dating is a legitimate ops
+   * correction (recording what actually happened). This floor exists only on the
+   * customer-facing magic-link form.
+   *
+   * Both values are naive IST "YYYY-MM-DDTHH:mm" strings, which sort
+   * lexicographically in chronological order — so the comparison needs no date
+   * math and no timezone conversion, the two places this codebase most often
+   * goes wrong on dates.
+   */
+  const rescheduleMin = React.useMemo(() => {
+    const nowLocal = toDatetimeLocal(new Date().toISOString());
+    const day = (form.requested_date_time || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return nowLocal; // unscheduled → today
+    const apptDayStart = `${day}T00:00`;
+    return apptDayStart > nowLocal ? apptDayStart : nowLocal;
+  }, [form.requested_date_time]);
   // Coordinator identity + avatar initials for the "Your Coordinator" card.
   const coordinatorName = spoc?.name || data.job_owner?.name || 'EasyFix Coordinator';
   const coordinatorInitials =
@@ -1153,6 +1181,7 @@ export default function JobCompletionMagicLinkPage() {
         <RescheduleDialog
           reasons={rescheduleReasons}
           busy={actionBusy === 'reschedule'}
+          minDateTime={rescheduleMin}
           onClose={() => { if (actionBusy !== 'reschedule') setDialog(null); }}
           onSubmit={handleRescheduleSubmit}
         />
@@ -1306,10 +1335,12 @@ function OrderHeader({ clientName }: { clientName: string }) {
  * optional Remarks textarea.
  */
 function RescheduleDialog({
-  reasons, busy, onClose, onSubmit,
+  reasons, busy, minDateTime, onClose, onSubmit,
 }: {
   reasons: string[];
   busy: boolean;
+  /* Earliest selectable slot — see `rescheduleMin` at the call site. */
+  minDateTime: string;
   onClose: () => void;
   onSubmit: (reason: string, preferred: string, remarks: string) => void;
 }) {
@@ -1331,10 +1362,15 @@ function RescheduleDialog({
             same shared component the Job Modal uses, for consistency. Emits the
             same 'YYYY-MM-DDTHH:mm' string the native input did, so the submit
             payload (toBackendDateTime → preferred_datetime) is unchanged. */}
+        {/* min was `now`, which let a customer pull an appointment EARLIER than
+            the one they already have. It is now the later of the current
+            appointment's day-start and now, so the calendar blocks every date
+            before the existing appointment. Ops keep full freedom (including
+            back-dating) from the CRM — a different surface. */}
         <DateTimeSlotPicker
           value={preferred}
           onChange={setPreferred}
-          min={toDatetimeLocal(new Date().toISOString())}
+          min={minDateTime}
         />
       </Field>
       <Field label="Remarks">
