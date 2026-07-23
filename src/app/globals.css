@@ -232,6 +232,37 @@
     opacity: 0;
     cursor: pointer;
   }
+
+  /*
+   * Native <select> popup surface — reported on the Analysis Mode dropdown,
+   * whose option list rendered semi-transparent so the page bled through and
+   * the text became hard to read.
+   *
+   * Nothing in OUR css caused it: --popover is a fully opaque `0 0% 100%`, the
+   * trigger already carries bg-background, and there were no select/option
+   * rules at all. It is the BROWSER's own popup, which inherits macOS system
+   * vibrancy (a translucent, blurred surface).
+   *
+   * The popup chrome itself isn't styleable, but the <option> rows ARE in
+   * Chrome/Edge/Firefox — painting them an opaque colour covers the vibrancy so
+   * the list reads solid. Safari draws the whole popup natively and ignores
+   * this; that's an accepted limitation of keeping a real <select> (see
+   * components/ui/select.tsx, which stays native on purpose for accessibility
+   * and zero-JS behaviour). Swapping in a custom popover is the only fix that
+   * would cover Safari too, at the cost of that.
+   *
+   * Scoped to the element, so every native select in the CRM gets a consistent
+   * readable dropdown rather than only the one that was reported.
+   */
+  select option {
+    background-color: hsl(var(--popover));
+    color: hsl(var(--popover-foreground));
+  }
+  /* Unavailable choices (e.g. Call Recording without a Gemini key) must still
+     read as deliberately inert rather than as washed-out body text. */
+  select option:disabled {
+    color: hsl(var(--muted-foreground));
+  }
 }
 
 /*

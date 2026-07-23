@@ -31,6 +31,7 @@ import { showToast } from '@/components/ui/toast';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useFetchOnce } from '@/lib/hooks';
 import { CallingModeToggle } from './CallingModeToggle';
+import { OtpChannelToggle } from './OtpChannelToggle';
 import { DeleteEntityDialog } from './DeleteEntityDialog';
 import { DeletedRecordsDialog } from './DeletedRecordsDialog';
 
@@ -91,7 +92,7 @@ export default function AdminActionsPage() {
   // by a per-user easyfix_properties allowlist, NOT the user's role/RBAC. The BE
   // enforces the same allowlist on every gated route; these flags only show/hide
   // the cards. GET /admin/access/features → { canSwitchCallMode, canDeleteEntities }.
-  const featureAccess = useFetchOnce<{ canSwitchCallMode: boolean; canDeleteEntities: boolean; canValidateFlows: boolean; canBuildSkillMatrix: boolean }>(
+  const featureAccess = useFetchOnce<{ canSwitchCallMode: boolean; canDeleteEntities: boolean; canValidateFlows: boolean; canBuildSkillMatrix: boolean; canSwitchOtpChannel: boolean }>(
     '/admin/access/features',
   );
   const canSwitchCallMode = featureAccess.data?.canSwitchCallMode === true;
@@ -99,6 +100,7 @@ export default function AdminActionsPage() {
   const canRestore = canDelete;
   const canValidateFlows = featureAccess.data?.canValidateFlows === true;
   const canBuildSkillMatrix = featureAccess.data?.canBuildSkillMatrix === true;
+  const canSwitchOtpChannel = featureAccess.data?.canSwitchOtpChannel === true;
   // Call-recording backfill — gated on the same isClickToCall action the BE
   // endpoint requires (requireClickToCallAction on /admin/calls/recordings/backfill).
   const canBackfillRecordings = hasAction(me, 'isClickToCall');
@@ -138,6 +140,7 @@ export default function AdminActionsPage() {
 
       {/* Click-to-call mode switch (Web ⇄ Mobile) — Admin only; self-hides otherwise. */}
       {canSwitchCallMode && <CallingModeToggle />}
+      {canSwitchOtpChannel && <OtpChannelToggle />}
 
       {visible.length === 0 && (
         <Card>
