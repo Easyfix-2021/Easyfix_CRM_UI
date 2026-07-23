@@ -26,6 +26,7 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Check, Loader2, Phone, Smile, X, Upload, ChevronDown, ChevronUp, CheckCircle2, Wrench, Search } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
 import { useFetch, useFetchOnce, useDebouncedValue } from '@/lib/hooks';
+import { CallableMobile } from '@/components/calls/CallButton';
 import { Button } from '@/components/ui/button';
 import { BackLink } from '@/components/ui/back-link';
 import { Input } from '@/components/ui/input';
@@ -328,11 +329,28 @@ function VerificationView({ data, onReload, backHref }: { data: VerificationPayl
             </span>
           )}
           <Smile className="h-5 w-5 text-amber-400" />
-          {data.header.mobile && (
-            <a href={`tel:${data.header.mobile}`} title="Call technician" className="text-sky-600 hover:text-sky-700">
-              <Phone className="h-5 w-5" />
-            </a>
-          )}
+          {/*
+            * Click-to-call, NOT a `tel:` link. A raw tel: href hands the number
+            * to the operating system — which on a Mac opens FaceTime and on
+            * Windows opens nothing useful — so the call never goes through the
+            * platform at all: no Plivo/Kaleyra bridge, no respect for the
+            * configured web/mobile call mode, no tbl_job_caller_info audit row,
+            * and the technician's raw number exposed in the DOM.
+            *
+            * CallableMobile routes through useClickToCall, which resolves the
+            * provider + mode server-side and places the bridge. `efrId` is the
+            * technician target (the same component serves customers via
+            * customerId and SPOCs via spocJobId). `iconOnly` keeps this a bare
+            * icon in the header — and makes the affordance disappear entirely
+            * for operators without the isClickToCall action, rather than
+            * falling back to printing the number.
+            */}
+          <CallableMobile
+            efrId={data.header.efr_id}
+            mobile={data.header.mobile}
+            iconOnly
+            className="text-sky-600 hover:text-sky-700"
+          />
         </div>
       </div>
 
