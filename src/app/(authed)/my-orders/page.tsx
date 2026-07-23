@@ -15,7 +15,10 @@ import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { formatDate, formatEasyfixerName, statusLabel, statusTone } from '@/lib/utils';
 import { StatusChip } from '@/components/ui/StatusChip';
-import { TABS, filterJobRows, makeQuickStatusChange } from '@/lib/job-tabs';
+import {
+  TABS, filterJobRows, makeQuickStatusChange,
+  JOB_SEARCH_PLACEHOLDER, JOB_SEARCH_HINT,
+} from '@/lib/job-tabs';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { UnconfirmedJobsTable } from '@/components/job/UnconfirmedJobsTable';
 import { AssignTechnicianModal, type AssignMode } from '@/components/job/AssignTechnicianModal';
@@ -484,8 +487,14 @@ export default function MyOrdersPage() {
         <CardContent className="p-3">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            {/* Placeholder + hint are DERIVED from JOB_SEARCH_FIELDS in
+                lib/job-tabs.ts — the same array filterJobRows matches on — so
+                the box can never again advertise a different set of fields than
+                it actually searches (it previously named 4 of 14, hiding the
+                Client SPOC / city / technician search entirely). */}
             <Input
-              placeholder="Search job ref / client ref / customer name or mobile…"
+              placeholder={JOB_SEARCH_PLACEHOLDER}
+              title={JOB_SEARCH_HINT}
               value={q}
               onChange={(e) => setQ(e.target.value)}
               className="pl-9"

@@ -20,7 +20,10 @@ import { downloadXlsx } from '@/lib/download-xlsx';
 import { api } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
 import { formatDate, formatEasyfixerName, statusLabel, statusTone } from '@/lib/utils';
-import { TABS, type CountsResp, countFor, filterJobRows, makeQuickStatusChange } from '@/lib/job-tabs';
+import {
+  TABS, type CountsResp, countFor, filterJobRows, makeQuickStatusChange,
+  JOB_SEARCH_PLACEHOLDER, JOB_SEARCH_HINT,
+} from '@/lib/job-tabs';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { TransferJobOwnershipDialog } from '@/components/job/TransferJobOwnershipDialog';
 import { UnconfirmedJobsTable } from '@/components/job/UnconfirmedJobsTable';
@@ -700,8 +703,21 @@ export default function JobsPage() {
                 eliminate the dual-input confusion. */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">
               <div>
-                <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Job ID / RefID</label>
-                <Input placeholder="-- All --" value={q} onChange={(e) => setQ(e.target.value)} />
+                {/* Relabelled from "Job ID / RefID" (2026-07-23): `q` feeds
+                    filterJobRows, which matches 19 fields — the old label named
+                    2 of them, so operators had no idea this box also narrows by
+                    technician, client SPOC, city, status or date. Placeholder +
+                    hint derive from JOB_SEARCH_FIELDS so the copy can't drift
+                    from the filter again. Distinct from the "Customer Name / No."
+                    box beside it: that one is a SERVER-side filter, this only
+                    narrows rows already loaded for the current tab. */}
+                <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Quick Search (This Page)</label>
+                <Input
+                  placeholder={JOB_SEARCH_PLACEHOLDER}
+                  title={JOB_SEARCH_HINT}
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                />
               </div>
               <div>
                 <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Customer Name / No.</label>

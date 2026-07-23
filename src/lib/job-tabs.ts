@@ -117,35 +117,75 @@ export type SearchableJobRow = {
 };
 
 /*
+ * THE ONE LIST of what a job search matches.
+ *
+ * Both the filter and the search box's copy derive from this array, because
+ * they had already drifted apart once: the placeholder advertised 4 fields
+ * while the filter matched 14, so operators never discovered they could search
+ * by Client SPOC, city or technician. A capability nobody knows about is
+ * indistinguishable from one that doesn't exist.
+ *
+ * Adding a field here now updates the filter AND the UI copy together — there
+ * is no second list to forget. `primary` marks the ones worth naming in the
+ * (necessarily short) placeholder; every label appears in the full hover hint.
+ */
+const JOB_SEARCH_FIELDS: Array<{
+  label: string;
+  primary?: boolean;
+  get: (j: SearchableJobRow) => unknown;
+}> = [
+  { label: 'job ID', primary: true, get: (j) => j.job_id },
+  { label: 'ref', primary: true, get: (j) => j.job_reference_id },
+  { label: 'client ref', get: (j) => j.client_ref_id },
+  { label: 'client', primary: true, get: (j) => j.client_name },
+  { label: 'customer', primary: true, get: (j) => j.customer_name },
+  { label: 'mobile', primary: true, get: (j) => j.customer_mob_no },
+  { label: 'city', get: (j) => j.city_name },
+  { label: 'technician', primary: true, get: (j) => j.easyfixer_name },
+  { label: 'owner', get: (j) => j.owner_name },
+  { label: 'job type', get: (j) => j.job_type },
+  { label: 'source', get: (j) => j.source_type },
+  // Client SPOC snapshot on tbl_job — the BE's list() search covers the same two
+  // columns, so server-side and client-side agree. Named in the placeholder
+  // because it is the one operators most often don't realise is searchable.
+  { label: 'client SPOC', primary: true, get: (j) => j.client_spoc_name },
+  { label: 'SPOC mobile', get: (j) => j.client_spoc },
+  { label: 'status', get: (j) => j.job_status },
+  // The human-readable label too, so typing "scheduled" matches status=1 rows.
+  {
+    label: 'status label',
+    get: (j) => statusLabel(Number(j.job_status), { assigned: j.fk_easyfixter_id != null }),
+  },
+  // Formatted dates, so partial typing like "12 May" hits what is on screen.
+  { label: 'booked date', get: (j) => j.created_date_time && formatDate(j.created_date_time) },
+  { label: 'requested date', get: (j) => j.requested_date_time && formatDate(j.requested_date_time) },
+  { label: 'scheduled date', get: (j) => j.scheduled_date_time && formatDate(j.scheduled_date_time) },
+  { label: 'check-in date', get: (j) => j.checkin_date_time && formatDate(j.checkin_date_time) },
+  { label: 'check-out date', get: (j) => j.checkout_date_time && formatDate(j.checkout_date_time) },
+];
+
+/* Search-box copy, derived — never hand-written alongside the list above. */
+export const JOB_SEARCH_PLACEHOLDER =
+  `Search ${JOB_SEARCH_FIELDS.filter((f) => f.primary).map((f) => f.label).join(' / ')}…`;
+
+/* Full list for a hover title, so nothing searchable stays hidden. */
+export const JOB_SEARCH_HINT =
+  `Searches: ${JOB_SEARCH_FIELDS.map((f) => f.label).join(', ')}.`;
+
+/*
  * Client-side search over the currently-loaded page, shared by /jobs and
- * /my-orders (previously copy-pasted and drifting). Matches every visible
- * column INCLUDING the human-readable status label (so typing "scheduled"
- * matches status=1 rows) and the formatted date strings (so partial date
- * typing like "12 May" hits what the operator visually sees). The needle is
- * lowercased once; each candidate is compared as its lowercase string form.
- * Kept as a per-row haystack array (not a joined string) so a needle can
- * never false-positive across field boundaries.
+ * /my-orders (previously copy-pasted and drifting). The needle is lowercased
+ * once; each candidate is compared as its lowercase string form. Kept as a
+ * per-row haystack ARRAY (not a joined string) so a needle can never
+ * false-positive across field boundaries.
  */
 export function filterJobRows<T extends SearchableJobRow>(items: T[], q: string): T[] {
   if (!q) return items;
   const needle = q.toLowerCase();
-  return items.filter((j) => {
-    const haystacks: Array<unknown> = [
-      j.job_id, j.job_reference_id, j.client_ref_id,
-      j.client_name, j.customer_name, j.customer_mob_no,
-      j.city_name, j.easyfixer_name, j.owner_name, j.job_type,
-      j.source_type,
-      j.client_spoc_name, j.client_spoc,
-      j.job_status,
-      statusLabel(Number(j.job_status), { assigned: j.fk_easyfixter_id != null }),
-      j.created_date_time && formatDate(j.created_date_time),
-      j.requested_date_time && formatDate(j.requested_date_time),
-      j.scheduled_date_time && formatDate(j.scheduled_date_time),
-      j.checkin_date_time && formatDate(j.checkin_date_time),
-      j.checkout_date_time && formatDate(j.checkout_date_time),
-    ];
-    return haystacks.some((h) => h != null && String(h).toLowerCase().includes(needle));
-  });
+  return items.filter((j) => JOB_SEARCH_FIELDS.some((f) => {
+    const v = f.get(j);
+    return v != null && String(v).toLowerCase().includes(needle);
+  }));
 }
 
 /*
