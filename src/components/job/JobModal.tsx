@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import { useSlotRecommendations, SlotBadge, SlotAdvisory } from '@/components/job/SlotRecommendations';
 import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import { useFetch, useUiFlags } from '@/lib/hooks';
 import { Sparkles, Search, CalendarCheck, History, Eye, Plus, X, Pencil, CalendarPlus, CheckCircle2, BarChart3, Trash2, RotateCcw } from 'lucide-react';
@@ -3964,6 +3965,21 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
     }
     return base;
   });
+
+  /*
+   * BEST-SLOT ADVICE (Confirm & Schedule only, per the staged rollout).
+   * Asks the backend which of the four windows can actually be STAFFED on the
+   * chosen date — it runs the real candidate-ranking engine, so these counts
+   * agree with the Schedule & Assign list rather than being a second opinion.
+   *
+   * Gated to confirm mode by passing a null jobId elsewhere: the hook is still
+   * called unconditionally (rules of hooks) and simply doesn't fetch. Create
+   * mode has no job to rank against yet.
+   */
+  const slotRec = useSlotRecommendations(
+    isConfirm ? Number(initial?.job_id) || null : null,
+    f.requested_date_time,
+  );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -6361,9 +6377,20 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                       }`}
                     >
                       {s.label}
+                      {/* Free-technician count. ADVISORY — the chip stays fully
+                          selectable even at 0, because ops hold context the
+                          engine can't see. Renders nothing until data lands. */}
+                      <SlotBadge rec={slotRec.bySlot.get(s.value)} />
                     </button>
                   ))}
                 </div>
+                <SlotAdvisory
+                  best={slotRec.best}
+                  attendanceKnown={slotRec.attendanceKnown}
+                  candidatePool={slotRec.candidatePool}
+                  loading={slotRec.loading}
+                  failed={slotRec.failed}
+                />
               </div>
               <div className="space-y-1.5">
                 <Label>Requested Date/Time *</Label>
