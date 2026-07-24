@@ -30,6 +30,7 @@ import { showToast } from '@/components/ui/toast';
 
 import { ReportPageScaffold } from '@/components/quicksight/ReportPageScaffold';
 import { QuickSightFilterBar } from '@/components/quicksight/QuickSightFilterBar';
+import { SortHeader, useSort } from '@/lib/use-sort';
 import { QsKpiTile } from '@/components/quicksight/charts';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -147,6 +148,15 @@ export default function PrematureConfirmationsPage() {
   const summary = usePostFetch<Data>(canView ? `${API_BASE}/summary` : null, applied, { enabled: canView });
   const data = summary.data;
   const rows = useMemo(() => data?.rows ?? [], [data]);
+  /*
+   * Client-side sort over the fully-loaded page (the endpoint returns the whole
+   * flagged set, capped at `limit`). `useSort` gives the 3-click cycle for free —
+   * asc → desc → unsorted, restoring the server's newest-first order on the
+   * third click. `flags` and `short_call_ids` are arrays with no natural order,
+   * so those two columns stay unsortable rather than sorting by something
+   * meaningless like array length.
+   */
+  const { sorted, sortKey, sortDir, toggle } = useSort<Row>(rows);
   const totals = data?.totals;
   const accessDenied = canView === false || summary.status === 403;
   const isEmpty = !summary.loading && !summary.error && rows.length === 0;
@@ -252,19 +262,20 @@ export default function PrematureConfirmationsPage() {
         <table className="data-table w-full text-sm">
           <thead>
             <tr>
-              <th className="!text-left">Job</th>
-              <th className="!text-left">Client / City</th>
-              <th className="!text-left">Customer</th>
-              <th className="!text-left">Moved By</th>
-              <th className="!text-left">Moved On</th>
-              <th className="!text-center">Calls</th>
-              <th className="!text-center">Longest</th>
+              <SortHeader col={'job_id' as keyof Row} sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Job</SortHeader>
+              <SortHeader col={'client_name' as keyof Row} sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Client / City</SortHeader>
+              <SortHeader col={'customer_name' as keyof Row} sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Customer</SortHeader>
+              <SortHeader col={'moved_by' as keyof Row} sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Moved By</SortHeader>
+              <SortHeader col={'moved_at' as keyof Row} sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Moved On</SortHeader>
+              <SortHeader col={'call_count' as keyof Row} align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Calls</SortHeader>
+              <SortHeader col={'max_duration' as keyof Row} align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Longest</SortHeader>
+              {/* Non-scalar columns: no natural sort order. */}
               <th className="!text-left">Why Flagged</th>
               <th className="!text-left">Recording</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
+            {sorted.map((r) => (
               <tr key={r.job_id}>
                 <td className="!text-left font-mono">
                   #{r.job_id}
