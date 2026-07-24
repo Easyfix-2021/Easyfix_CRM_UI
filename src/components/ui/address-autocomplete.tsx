@@ -25,6 +25,17 @@
  * suggestion still works — the input is fully editable; `onChange`
  * always fires on every keystroke so the parent form's address
  * field stays in sync.
+ *
+ * Places session token (added 2026-07-24, billing optimisation): a
+ * Places Autocomplete session only bills as one unit if the SAME
+ * token rides every keystroke request AND the closing resolve call —
+ * so we mint one `crypto.randomUUID()` per typing session (first
+ * autocomplete fetch after empty/after a pick), thread it through
+ * every `/admin/maps/autocomplete` call, send the SAME token on the
+ * `/admin/maps/geocode?place_id=…` pick, then retire it. The backend
+ * routes a tokened place_id resolve to Places Details (session-billed)
+ * instead of Geocoding (which ignores sessiontoken and would silently
+ * forfeit the discount) — see services/maps.service.js.
  */
 
 import * as React from 'react';
@@ -108,6 +119,13 @@ export function AddressAutocomplete({
   const [activeIdx, setActiveIdx] = React.useState(0);
   const abortRef = React.useRef<AbortController | null>(null);
   const wrapRef = React.useRef<HTMLDivElement>(null);
+  // Places session token — lives for exactly one "type → see predictions →
+  // pick" cycle. Minted lazily on the first autocomplete fetch of a session,
+  // sent on every subsequent autocomplete call in that same session, sent
+  // once more on the closing geocode(place_id) resolve, then cleared so the
+  // NEXT search mints a fresh one. Never reused across sessions — reuse
+  // would void the Autocomplete-session billing discount.
+  const sessionTokenRef = React.useRef<string | null>(null);
   // TRUE only after the operator actually types in the field. Gates the
   // suggestion fetch/open so a PRE-FILLED value on (re)mount — e.g. the Customer
   // Details section expanding, which remounts the address picker — never
@@ -127,6 +145,10 @@ export function AddressAutocomplete({
       // Field stays fully usable as a plain Input.
       setItems([]);
       setLoading(false);
+      // Box emptied out (or dropped below threshold) with no pick made —
+      // this search is over. Retire the token so the next 3+ char search
+      // mints a fresh one instead of resuming a stale session.
+      sessionTokenRef.current = null;
       return;
     }
     const cached = RESULT_CACHE.get(value.toLowerCase());
@@ -147,7 +169,15 @@ export function AddressAutocomplete({
       abortRef.current = ctrl;
       setLoading(true);
       try {
-        const r = await api.get<{ items: Suggestion[] }>('/admin/maps/autocomplete', { q: value });
+        // Mint the session token on the FIRST autocomplete fetch of a new
+        // search; reuse the same one for every subsequent keystroke in this
+        // session so the closing geocode(place_id) call below can bill it
+        // as a single Places session.
+        if (!sessionTokenRef.current) sessionTokenRef.current = crypto.randomUUID();
+        const r = await api.get<{ items: Suggestion[] }>('/admin/maps/autocomplete', {
+          q: value,
+          sessionToken: sessionTokenRef.current,
+        });
         if (ctrl.signal.aborted) return;
         const rows = r.items || [];
         RESULT_CACHE.set(value.toLowerCase(), { items: rows, expires: Date.now() + RESULT_TTL_MS });
@@ -191,6 +221,14 @@ export function AddressAutocomplete({
     userTypedRef.current = false; // a picked value must not re-open the list
     onChange(s.description);
     setOpen(false);
+    // Closing call of this session — send the SAME token one last time
+    // (so the backend routes to session-billed Place Details instead of
+    // Geocoding), then retire it. A picked value ends the session even if
+    // the token was never minted (e.g. suggestions came from RESULT_CACHE
+    // without a fresh autocomplete fetch) — `sessionToken` is simply
+    // omitted in that case.
+    const sessionToken = sessionTokenRef.current;
+    sessionTokenRef.current = null;
     try {
       // Fire geocode for lat/lng + components. If it fails, we still
       // populate the description so the operator can save the job —
@@ -200,7 +238,7 @@ export function AddressAutocomplete({
         lng: number | null;
         formatted_address: string;
         address_components: AddressPickPayload['components'];
-      }>('/admin/maps/geocode', { place_id: s.place_id });
+      }>('/admin/maps/geocode', { place_id: s.place_id, sessionToken: sessionToken || undefined });
       onPick({
         description: s.description,
         lat: r.lat,

@@ -21,6 +21,12 @@
  *     `/admin/maps/geocode?latlng=...` and updates Address, PIN, City
  *     from the response if those components are present.
  *   - Picking an autocomplete suggestion also re-positions the marker.
+ *   - The Map INSTANCE (not just the JS script) is reused across mounts —
+ *     see the `sharedMapCore` docblock below. This component is mounted and
+ *     unmounted a lot (JobModal's Dialog unmounts on close; its collapsible
+ *     Section unmounts on collapse), and Google bills per `new
+ *     google.maps.Map()` call, so we build it once per page and re-parent
+ *     its container div into whichever mount is currently showing.
  *
  * Both panes are bound to the same `value` object via `onChange` so
  * the caller doesn't have to wire each field individually.
@@ -139,7 +145,8 @@ function loadGoogleMaps(): Promise<GMaps> {
     resolveApiKey().then((key) => {
       if (!key) { reject(new Error('Google Maps API key not configured (set NEXT_PUBLIC_GOOGLE_MAPS_API_KEY at build, or GOOGLE_MAPS_API_KEY on the backend for the /admin/maps/config fallback)')); return; }
       const script = document.createElement('script');
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${key}&libraries=places&v=weekly`;
+      // No &libraries=places — autocomplete is backend-proxied (see AddressAutocomplete), so the client never needs the Places JS library.
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${key}&v=weekly`;
       script.async = true;
       script.defer = true;
       script.onerror = () => reject(new Error('Failed to load Google Maps JS API'));
@@ -153,6 +160,40 @@ function loadGoogleMaps(): Promise<GMaps> {
   });
   return mapsLoader;
 }
+
+/*
+ * Module-level singleton for the MAP INSTANCE itself — a sibling to
+ * `mapsLoader` above, which only singleton-izes the *script*. Google bills
+ * Dynamic Maps per `new google.maps.Map()` call, and every mount of this
+ * component used to pay that cost again. That's expensive here specifically
+ * because AddressPickerWithMap mounts inside JobModal's Radix <Dialog>
+ * (unmounts its content on close) and inside a collapsible <Section>
+ * (unmounts its children on collapse) — so opening Book New Call / Confirm &
+ * Schedule, or just toggling the address Section open/closed, was minting a
+ * brand-new Map every time.
+ *
+ * Fix: build the Map + Marker pair ONCE per page load, in a standalone
+ * `containerEl` div that outlives any single mount. On mount we RE-PARENT
+ * that div into `mapRef.current` (the standard "move the live DOM node"
+ * trick — the map keeps its tile/WebGL state, only its parent changes) and
+ * recenter/re-mark for whichever job is showing now, instead of rebuilding.
+ * `ownerId` marks which live mount currently holds the div; it's set back to
+ * null (not destroyed) on unmount so the NEXT mount can reclaim the exact
+ * same instance. If a second AddressPickerWithMap needs a map while the
+ * first is still mounted (both visible at once — not how today's three call
+ * sites behave, but not structurally impossible), it falls back to building
+ * its own private, one-off map rather than stealing the div out from under a
+ * currently-visible instance.
+ */
+type SharedMapCore = {
+  containerEl: HTMLDivElement;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  map: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  marker: any;
+  ownerId: symbol | null;
+};
+let sharedMapCore: SharedMapCore | null = null;
 
 export function AddressPickerWithMap({ value, onChange, cities, editable = true, autoCreatePincode = false, serviceAddressReadOnly = false }: Props) {
   const mapRef = React.useRef<HTMLDivElement | null>(null);
@@ -170,6 +211,11 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
   const { mapClickable, loaded: flagsLoaded } = useUiFlags();
   const interactive = editable && mapClickable;
   const mapBuiltRef = React.useRef(false);
+  // Identifies THIS mount as the current owner of `sharedMapCore` (or not).
+  // A fresh Symbol per mount — remounts (dialog reopen, Section re-expand)
+  // get a new id, so a stale unmounted instance can never mistakenly think
+  // it still owns the shared map.
+  const instanceIdRef = React.useRef<symbol>(Symbol('address-picker-map'));
 
   /*
    * Inline status for the OPT-IN silent pincode ensure (see `autoCreatePincode`
@@ -451,8 +497,33 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value.pin_code, autoCreatePincode, editable]);
 
-  // Map bootstrap — loads JS API + instantiates map + marker on first
-  // mount. Re-uses the existing marker instance on rerenders.
+  // Binds the dragend/click handlers for THIS mount's `reverseGeocode` +
+  // `interactive` closure onto a (possibly reused) map/marker pair. Split out
+  // of the bootstrap effect below so both the "build fresh" and "reuse
+  // shared instance" branches can share it verbatim.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function bindMapListeners(map: any, marker: any) {
+    marker.addListener('dragend', () => {
+      const pos = marker.getPosition();
+      if (!pos) return;
+      void reverseGeocode(pos.lat(), pos.lng());
+    });
+    // Operators can also click anywhere on the map to drop the pin
+    // — saves a drag if the destination is far from the default. Gated on
+    // `interactive` too so a "non-clickable" map really is inert.
+    if (interactive) {
+      map.addListener('click', (e: { latLng?: { lat: () => number; lng: () => number } }) => {
+        if (!e.latLng) return;
+        marker.setPosition(e.latLng as unknown);
+        void reverseGeocode(e.latLng.lat(), e.latLng.lng());
+      });
+    }
+  }
+
+  // Map bootstrap — on first mount that finds `sharedMapCore` free, RE-PARENTS
+  // its container div here and recenters/re-marks for this job instead of
+  // calling `new maps.Map` again (see the `sharedMapCore` docblock above).
+  // Only builds a fresh Map/Marker pair when no reusable instance exists yet.
   React.useEffect(() => {
     // Wait for the ui.map.clickable flag before building — otherwise a map
     // meant to be read-only could mount interactive for a frame. Build once.
@@ -466,9 +537,50 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
         // Default to Delhi if no GPS — operators almost always pan
         // anyway, but it stops the map staring at the Pacific Ocean.
         const center = initialLatLng || { lat: 28.6139, lng: 77.2090 };
-        const map = new maps.Map(mapRef.current, {
+        const zoom = initialLatLng ? 16 : 11;
+
+        if (sharedMapCore && sharedMapCore.ownerId === null) {
+          // REUSE — claim the existing instance instead of paying for a new
+          // `new maps.Map()`. Re-parent its container div, refresh center /
+          // zoom / interactivity options for THIS job, and rebind the
+          // dragend/click listeners onto THIS mount's closures (clearing the
+          // previous owner's listeners first — otherwise they'd keep firing
+          // against an unmounted instance's stale `reverseGeocode`/`patch`).
+          const { map, marker } = sharedMapCore;
+          sharedMapCore.ownerId = instanceIdRef.current;
+          mapRef.current.appendChild(sharedMapCore.containerEl);
+          mapInstance.current = map;
+          markerInstance.current = marker;
+          map.setCenter(center);
+          map.setZoom(zoom);
+          map.setOptions({
+            disableDefaultUI: !mapClickable,
+            gestureHandling: mapClickable ? 'auto' : 'none',
+            clickableIcons: mapClickable,
+          });
+          marker.setPosition(center);
+          marker.setDraggable(interactive);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (maps as any).event.clearInstanceListeners(marker);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (maps as any).event.clearInstanceListeners(map);
+          bindMapListeners(map, marker);
+          return;
+        }
+
+        // No reusable instance available yet — either the very first mount on
+        // this page, or `sharedMapCore` is still claimed by another live mount
+        // (not expected from today's call sites, but handled defensively: we
+        // never rip the div out from under a currently-visible instance).
+        // Build inside a standalone container div so it CAN be detached (not
+        // destroyed) and reclaimed by a later mount.
+        const containerEl = document.createElement('div');
+        containerEl.style.width = '100%';
+        containerEl.style.height = '100%';
+        mapRef.current.appendChild(containerEl);
+        const map = new maps.Map(containerEl, {
           center,
-          zoom: initialLatLng ? 16 : 11,
+          zoom,
           // Flag off → strip zoom/UI + block pan/zoom gestures so the map is a
           // static preview; flag on → unchanged from before.
           disableDefaultUI: !mapClickable,
@@ -483,28 +595,28 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
           map,
           draggable: interactive,
         });
-        marker.addListener('dragend', () => {
-          const pos = marker.getPosition();
-          if (!pos) return;
-          void reverseGeocode(pos.lat(), pos.lng());
-        });
         markerInstance.current = marker;
-        // Operators can also click anywhere on the map to drop the pin
-        // — saves a drag if the destination is far from the default. Gated on
-        // `interactive` too so a "non-clickable" map really is inert.
-        if (interactive) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (map as any).addListener('click', (e: { latLng?: { lat: () => number; lng: () => number } }) => {
-            if (!e.latLng) return;
-            marker.setPosition(e.latLng as unknown);
-            void reverseGeocode(e.latLng.lat(), e.latLng.lng());
-          });
+        bindMapListeners(map, marker);
+        // Only the first-ever build becomes the page's reusable instance. If
+        // we're here because a prior instance was still claimed, this one-off
+        // map is intentionally NOT stored back — it stays private to this
+        // mount and is discarded (GC'd) on unmount, same as before this change.
+        if (!sharedMapCore) {
+          sharedMapCore = { containerEl, map, marker, ownerId: instanceIdRef.current };
         }
       } catch (e) {
         if (!cancelled) setMapsError(e instanceof Error ? e.message : 'Map load failed');
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      // Release ownership (don't destroy) so the next mount — dialog reopen,
+      // Section re-expand, whatever triggered this unmount — can reclaim this
+      // exact instance instead of paying for another `new maps.Map()`.
+      if (sharedMapCore && sharedMapCore.ownerId === instanceIdRef.current) {
+        sharedMapCore.ownerId = null;
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flagsLoaded]);
 

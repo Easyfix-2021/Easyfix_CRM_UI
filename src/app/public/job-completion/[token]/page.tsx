@@ -25,7 +25,9 @@
  * `/api/admin/maps/*` (auth-gated) — extending it to be token-aware would
  * mean touching shared CRM code which is out of scope here. The public
  * maps endpoints (`/api/public/maps/*`) take a `?token=<jwt>` query arg
- * instead of a bearer header.
+ * instead of a bearer header. The Map INSTANCE (not just the JS script) is
+ * reused across "Pin Exact Location On Map" toggles via the module-level
+ * `sharedMapCore` singleton below `loadGoogleMaps` — see its docblock.
  */
 
 import { useParams } from 'next/navigation';
@@ -195,7 +197,8 @@ function loadGoogleMaps(apiKey: string): Promise<GMaps> {
     const w = window as unknown as GMapsWindow;
     if (w.google?.maps) { resolve(w.google.maps); return; }
     const script = document.createElement('script');
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places&v=weekly`;
+    // No &libraries=places — autocomplete is backend-proxied, so the client never needs the Places JS library.
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&v=weekly`;
     script.async = true; script.defer = true;
     script.onerror = () => reject(new Error('Failed to load Google Maps'));
     script.onload = () => {
@@ -207,6 +210,31 @@ function loadGoogleMaps(apiKey: string): Promise<GMaps> {
   });
   return mapsLoader;
 }
+
+/*
+ * Module-level singleton for the MAP INSTANCE — a sibling to `mapsLoader`
+ * above (which only singleton-izes the *script*). `AddressMapWidget` mounts
+ * only when the customer clicks "Pin Exact Location On Map" and unmounts on
+ * "Hide Map" (see `mapOpen` below), so every toggle used to pay for a fresh
+ * `new google.maps.Map()`. We now build the Map + Marker pair once per page
+ * load, in a standalone `containerEl` div that outlives any single mount,
+ * and RE-PARENT that div into `mapRef.current` on remount instead of
+ * rebuilding — the map keeps its tile state, only its parent changes.
+ * `ownerId` marks which live mount currently holds the div; cleared (not
+ * destroyed) on unmount so the next "Pin Exact Location" click can reclaim
+ * the exact same instance. Mirrors the identical pattern in the CRM's
+ * `AddressPickerWithMap` — kept as a separate, independent singleton here
+ * since this is a distinct page/module (and a distinct token-scoped loader).
+ */
+type SharedMapCore = {
+  containerEl: HTMLDivElement;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  map: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  marker: any;
+  ownerId: symbol | null;
+};
+let sharedMapCore: SharedMapCore | null = null;
 
 function parseLatLng(csv: string | null | undefined): { lat: number; lng: number } | null {
   if (!csv) return null;
@@ -1532,9 +1560,22 @@ function AddressMapWidget({
   const mapInstance = React.useRef<any>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const markerInstance = React.useRef<any>(null);
+  // Identifies THIS mount as the current owner of `sharedMapCore` (or not) —
+  // see that module-level singleton's docblock above. Fresh Symbol per mount
+  // so a stale unmounted instance never mistakes itself for the current owner.
+  const instanceIdRef = React.useRef<symbol>(Symbol('address-map-widget'));
   const [mapsError, setMapsError] = React.useState<string | null>(null);
   const [suggestions, setSuggestions] = React.useState<Array<{ place_id: string; description: string }>>([]);
   const [showSuggestions, setShowSuggestions] = React.useState(false);
+  // Places session token (added 2026-07-24, billing optimisation) — lives
+  // for exactly one "type → see predictions → pick" cycle. Minted lazily on
+  // the first autocomplete fetch of a session, resent unchanged on every
+  // later keystroke in that same session AND on the closing
+  // geocode(place_id) resolve in `pickSuggestion`, then cleared. This is the
+  // high-volume public box, so getting this right is where the saving
+  // actually shows up. See the AddressAutocomplete admin component for the
+  // same pattern with more detail in comments.
+  const sessionTokenRef = React.useRef<string | null>(null);
   // In mapOnly mode the search box NEVER writes back to form.address — the
   // booked Service Address must stay exactly as-is. It binds to `form.building`
   // instead, mirroring the tbl_address column-role remap the CRM's
@@ -1564,8 +1605,53 @@ function AddressMapWidget({
         const maps = await loadGoogleMaps(cfg.apiKey);
         if (cancelled || !mapRef.current) return;
         const initial = parseLatLng(form.gps_location) || { lat: 28.6139, lng: 77.2090 };
-        const map = new maps.Map(mapRef.current, {
-          center: initial, zoom: form.gps_location ? 16 : 11,
+        const zoom = form.gps_location ? 16 : 11;
+
+        if (sharedMapCore && sharedMapCore.ownerId === null) {
+          // REUSE — claim the existing instance instead of paying for a new
+          // `new maps.Map()` on every "Pin Exact Location On Map" click. See
+          // the module-level `sharedMapCore` docblock above. Re-parent its
+          // container div, refresh center/zoom/interactivity, and rebind the
+          // dragend listener onto THIS mount's `reverseGeocode` closure
+          // (clearing the previous mount's listener first).
+          const { map, marker } = sharedMapCore;
+          sharedMapCore.ownerId = instanceIdRef.current;
+          mapRef.current.appendChild(sharedMapCore.containerEl);
+          mapInstance.current = map;
+          markerInstance.current = marker;
+          map.setCenter(initial);
+          map.setZoom(zoom);
+          map.setOptions({
+            disableDefaultUI: !mapClickable,
+            gestureHandling: mapClickable ? 'auto' : 'none',
+            clickableIcons: mapClickable,
+          });
+          marker.setPosition(initial);
+          marker.setDraggable(mapClickable);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (maps as any).event.clearInstanceListeners(marker);
+          if (mapClickable) {
+            marker.addListener('dragend', () => {
+              const pos = marker.getPosition();
+              if (!pos) return;
+              void reverseGeocode(pos.lat(), pos.lng());
+            });
+          }
+          return;
+        }
+
+        // No reusable instance yet — either the first-ever "Pin Exact
+        // Location" click on this page, or `sharedMapCore` is still claimed
+        // by another live mount (not expected — this widget only ever has
+        // one call site — but handled defensively). Build inside a
+        // standalone container div so it CAN be detached (not destroyed) and
+        // reclaimed on the next "Pin Exact Location" click.
+        const containerEl = document.createElement('div');
+        containerEl.style.width = '100%';
+        containerEl.style.height = '100%';
+        mapRef.current.appendChild(containerEl);
+        const map = new maps.Map(containerEl, {
+          center: initial, zoom,
           mapTypeControl: false, streetViewControl: false,
           // Flag off → static preview: no zoom/UI, gestures + marker drag off.
           disableDefaultUI: !mapClickable,
@@ -1582,23 +1668,48 @@ function AddressMapWidget({
           });
         }
         markerInstance.current = marker;
+        // Only the first-ever build becomes the page's reusable instance —
+        // see the analogous comment in the CRM AddressPickerWithMap.
+        if (!sharedMapCore) {
+          sharedMapCore = { containerEl, map, marker, ownerId: instanceIdRef.current };
+        }
       } catch (e) {
         if (!cancelled) setMapsError(e instanceof Error ? e.message : 'Map unavailable — fill the address manually.');
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      // Release ownership (don't destroy) so the next "Pin Exact Location On
+      // Map" click can reclaim this exact instance instead of paying for
+      // another `new maps.Map()`.
+      if (sharedMapCore && sharedMapCore.ownerId === instanceIdRef.current) {
+        sharedMapCore.ownerId = null;
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Debounced autocomplete — 1s after the last keystroke, fire if length ≥ 3.
   React.useEffect(() => {
     const q = searchQuery.trim();
-    if (q.length < 3) { setSuggestions([]); return; }
+    if (q.length < 3) {
+      setSuggestions([]);
+      // Box emptied out (or dropped below threshold) with no pick made —
+      // this search is over. Retire the token so the next 3+ char search
+      // mints a fresh one instead of resuming a stale session.
+      sessionTokenRef.current = null;
+      return;
+    }
     let cancelled = false;
     const handle = setTimeout(async () => {
       try {
+        // Mint the session token on the FIRST autocomplete fetch of a new
+        // search; reuse the same one for every subsequent keystroke so the
+        // closing geocode(place_id) resolve in `pickSuggestion` can bill it
+        // as a single Places session.
+        if (!sessionTokenRef.current) sessionTokenRef.current = crypto.randomUUID();
         const r = await publicFetch<{ items: Array<{ place_id: string; description: string; primary: string; secondary: string }> }>(
-          `/public/maps/autocomplete?token=${encodeURIComponent(token)}&q=${encodeURIComponent(q)}`
+          `/public/maps/autocomplete?token=${encodeURIComponent(token)}&q=${encodeURIComponent(q)}&sessionToken=${encodeURIComponent(sessionTokenRef.current)}`
         );
         if (cancelled) return;
         setSuggestions(r.items || []);
@@ -1653,12 +1764,18 @@ function AddressMapWidget({
     // map-search column) so the booked address is never mutated; the full form
     // writes to form.address.
     patch(mapOnly ? { building: description } : { address: description });
+    // Closing call of this session — send the SAME token one last time (so
+    // the backend routes to session-billed Place Details instead of
+    // Geocoding), then retire it so the next search mints a fresh one.
+    const sessionToken = sessionTokenRef.current;
+    sessionTokenRef.current = null;
+    const sessionTokenParam = sessionToken ? `&sessionToken=${encodeURIComponent(sessionToken)}` : '';
     try {
       const r = await publicFetch<{
         lat?: number; lng?: number;
         formatted_address?: string;
         address_components?: { postal_code?: string; city?: string };
-      }>(`/public/maps/geocode?token=${encodeURIComponent(token)}&place_id=${encodeURIComponent(place_id)}`);
+      }>(`/public/maps/geocode?token=${encodeURIComponent(token)}&place_id=${encodeURIComponent(place_id)}${sessionTokenParam}`);
       const next: Partial<FormState> = {};
       if (r.lat != null && r.lng != null) {
         next.gps_location = `${r.lat.toFixed(6)},${r.lng.toFixed(6)}`;
