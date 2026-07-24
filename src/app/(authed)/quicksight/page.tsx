@@ -31,7 +31,7 @@ import {
   LayoutDashboard, Lock,
   ClipboardList, Gauge, Layers, Flame, Package,
   Building2, Wrench, MapPinned, Users, BarChart3,
-  ArrowRight, Handshake, UserPen, type LucideIcon,
+  ArrowRight, Handshake, UserPen, ShieldAlert, type LucideIcon,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { useMe } from '@/lib/auth-context';
@@ -137,6 +137,13 @@ const REPORTS: ReportCardDef[] = [
     actionKey: 'isQuickSightProfileUpdateRequestsView',
     description: 'Easyfixer profile-update link funnel — sent vs submitted by technician.',
     Icon: UserPen,
+  },
+  {
+    urlBase: 'premature-confirmations',
+    label: 'Premature Confirmations',
+    actionKey: 'isQuickSightPrematureConfirmationsView',
+    description: 'Jobs moved to Pending for Scheduling without the customer confirming — no form, no real call.',
+    Icon: ShieldAlert,
   },
 ];
 
