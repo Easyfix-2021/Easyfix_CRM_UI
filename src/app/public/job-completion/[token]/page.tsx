@@ -52,6 +52,10 @@ import { publicFetch } from '@/lib/public-fetch';
 import { InfoCard } from '@/components/public/InfoCard';
 import { OverlayShell } from '@/components/public/OverlayShell';
 import { FullPageMessage } from '@/components/public/FullPageMessage';
+// Best-slot advisory — reruns on date change in the Reschedule dialog. The hook
+// is parameterised with { publicToken } so it hits the token-gated /public
+// slot-recommendations endpoint instead of the admin (JWT) route.
+import { useSlotRecommendations, SlotAdvisory } from '@/components/job/SlotRecommendations';
 
 
 type PageState =
@@ -1216,6 +1220,8 @@ export default function JobCompletionMagicLinkPage() {
           reasons={rescheduleReasons}
           busy={actionBusy === 'reschedule'}
           minDateTime={rescheduleMin}
+          token={token}
+          jobId={jobId}
           onClose={() => { if (actionBusy !== 'reschedule') setDialog(null); }}
           onSubmit={handleRescheduleSubmit}
         />
@@ -1369,12 +1375,15 @@ function OrderHeader({ clientName }: { clientName: string }) {
  * optional Remarks textarea.
  */
 function RescheduleDialog({
-  reasons, busy, minDateTime, onClose, onSubmit,
+  reasons, busy, minDateTime, token, jobId, onClose, onSubmit,
 }: {
   reasons: string[];
   busy: boolean;
   /* Earliest selectable slot — see `rescheduleMin` at the call site. */
   minDateTime: string;
+  /* Magic-link token + job id — drive the token-gated best-slot advisory. */
+  token: string;
+  jobId: number | null | undefined;
   onClose: () => void;
   onSubmit: (reason: string, preferred: string, remarks: string) => void;
 }) {
@@ -1382,6 +1391,14 @@ function RescheduleDialog({
   const [preferred, setPreferred] = React.useState('');
   const [remarks, setRemarks] = React.useState('');
   const [touched, setTouched] = React.useState(false);
+  // Best-slot advice for the picked date. Reruns whenever the preferred DAY
+  // changes (the hook slices to YYYY-MM-DD); changing only the time within a
+  // day is a no-op, which is correct — the advice is per-date. Uses the public
+  // magic-link surface via `publicToken`.
+  const rec = useSlotRecommendations(jobId, preferred, { publicToken: token });
+  // Only surface the advisory once a date has actually been picked, so its
+  // "no eligible technician" copy never flashes before the customer chooses one.
+  const hasPickedDate = /^\d{4}-\d{2}-\d{2}/.test(preferred);
   return (
     <OverlayShell title="Reschedule Order" onClose={onClose} busy={busy}>
       <Field label="Reason" required>
@@ -1406,6 +1423,15 @@ function RescheduleDialog({
           onChange={setPreferred}
           min={minDateTime}
         />
+        {hasPickedDate && (
+          <SlotAdvisory
+            best={rec.best}
+            attendanceKnown={rec.attendanceKnown}
+            candidatePool={rec.candidatePool}
+            loading={rec.loading}
+            failed={rec.failed}
+          />
+        )}
       </Field>
       <Field label="Remarks">
         <textarea value={remarks} onChange={(e) => setRemarks(e.target.value)}

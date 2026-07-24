@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
@@ -994,7 +995,7 @@ function RoleFormModal({
           <section className="space-y-3">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-end">
               <div>
-                <label className="text-sm font-medium block mb-1">Role Name *</label>
+                <Label className="block mb-1" required>Role Name</Label>
                 <Input
                   value={name}
                   onChange={(e) => setName(e.target.value)}
@@ -1033,7 +1034,7 @@ function RoleFormModal({
             </div>
 
             <div className="md:col-span-2">
-              <label className="text-sm font-medium block mb-1">Description</label>
+              <Label className="block mb-1">Description</Label>
               <textarea
                 value={desc}
                 onChange={(e) => setDesc(e.target.value)}

@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { IconButton } from '@/components/ui/icon-button';
@@ -466,12 +467,12 @@ function ZoneAddEditDialog({ open, zone, onClose, onSaved }: {
         </DialogHeader>
         <form onSubmit={save} className="space-y-3 pt-2">
           <div className="space-y-1.5">
-            <label className="text-sm">Zone name *</label>
+            <Label required>Zone name</Label>
             <Input required minLength={2} maxLength={100} value={name} onChange={(e) => setName(e.target.value)} placeholder='e.g. "South Delhi", "Whitefield"' />
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-sm">City *</label>
+            <Label required>City</Label>
             {zone ? (
               <div className="text-sm bg-muted/40 border rounded px-3 py-2">
                 {zone.city_name ?? '—'}

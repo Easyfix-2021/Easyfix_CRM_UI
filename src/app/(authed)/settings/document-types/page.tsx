@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -281,11 +282,11 @@ function DocTypeFormModal({ open, onClose, editing, onSaved }: {
         </DialogHeader>
         <div className="space-y-3">
           <div>
-            <label className="text-sm font-medium block mb-1">Document Name *</label>
+            <Label className="block mb-1" required>Document Name</Label>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder='e.g. "Aadhaar Card"' />
           </div>
           <div>
-            <label className="text-sm font-medium block mb-1">Mandatory? *</label>
+            <Label className="block mb-1" required>Mandatory?</Label>
             <div className="flex gap-4">
               <label className="flex items-center gap-2 text-sm">
                 <input type="radio" name="mandatory" checked={mandatory === 'Yes'} onChange={() => setMandatory('Yes')} />

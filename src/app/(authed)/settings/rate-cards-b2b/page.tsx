@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -346,7 +347,7 @@ function RateCardFormModal({ open, onClose, editing, categories, serviceTypes, o
         </DialogHeader>
         <div className="space-y-3">
           <div>
-            <label className="text-sm font-medium block mb-1">Service Category *</label>
+            <Label className="block mb-1" required>Service Category</Label>
             <select
               value={catgId}
               onChange={(e) => { setCatgId(e.target.value ? Number(e.target.value) : ''); setTypeId(''); }}
@@ -359,7 +360,7 @@ function RateCardFormModal({ open, onClose, editing, categories, serviceTypes, o
             </select>
           </div>
           <div>
-            <label className="text-sm font-medium block mb-1">Service Type *</label>
+            <Label className="block mb-1" required>Service Type</Label>
             <select
               value={typeId}
               onChange={(e) => setTypeId(e.target.value ? Number(e.target.value) : '')}
@@ -373,7 +374,7 @@ function RateCardFormModal({ open, onClose, editing, categories, serviceTypes, o
             </select>
           </div>
           <div>
-            <label className="text-sm font-medium block mb-1">B2B Service Name *</label>
+            <Label className="block mb-1" required>B2B Service Name</Label>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder='e.g. "AC Installation – Single Unit"' />
           </div>
           {isEdit && (

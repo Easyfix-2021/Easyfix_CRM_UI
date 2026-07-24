@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
 import { CancelButton } from '@/components/ui/cancel-button';
@@ -410,7 +411,7 @@ function TypeFormModal({ open, onClose, editing, categories, onSaved }: {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3">
           {/* Row 1 — Service Category | Service Type Name */}
           <div>
-            <label className="text-sm font-medium block mb-1">Service Category *</label>
+            <Label className="block mb-1" required>Service Category</Label>
             <select
               value={catgId}
               onChange={(e) => setCatgId(e.target.value ? Number(e.target.value) : '')}
@@ -423,13 +424,13 @@ function TypeFormModal({ open, onClose, editing, categories, onSaved }: {
             </select>
           </div>
           <div>
-            <label className="text-sm font-medium block mb-1">Service Type Name *</label>
+            <Label className="block mb-1" required>Service Type Name</Label>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder='e.g. "Split AC Installation"' />
           </div>
 
           {/* Row 2 — Description (full width) */}
           <div className="sm:col-span-2">
-            <label className="text-sm font-medium block mb-1">Description *</label>
+            <Label className="block mb-1" required>Description</Label>
             <textarea value={desc} onChange={(e) => setDesc(e.target.value)}
               placeholder="What this service type covers"
               className="w-full border rounded px-2 py-1 text-sm bg-background min-h-[80px]"
@@ -438,7 +439,7 @@ function TypeFormModal({ open, onClose, editing, categories, onSaved }: {
 
           {/* Row 3 — Display | Tools */}
           <div>
-            <label className="text-sm font-medium block mb-1">Display</label>
+            <Label className="block mb-1">Display</Label>
             <select
               value={display}
               onChange={(e) => setDisplay(Number(e.target.value))}
@@ -453,7 +454,7 @@ function TypeFormModal({ open, onClose, editing, categories, onSaved }: {
               of tool_ids in `service_type_tools`; the legacy display column
               `service_type_tool_names` is rebuilt at save time. */}
           <div>
-            <label className="text-sm font-medium block mb-1">Tools</label>
+            <Label className="block mb-1">Tools</Label>
             <SearchMultiSelect
               value={selectedToolIds.map(String)}
               onChange={(next) => setSelectedToolIds((next as Array<string | number>).map(Number).filter((n) => Number.isFinite(n) && n > 0))}
@@ -467,7 +468,7 @@ function TypeFormModal({ open, onClose, editing, categories, onSaved }: {
               beneath it within this half). Uploaded via /shared/upload, stored
               as a filename in the legacy service_type_image column. */}
           <div>
-            <label className="text-sm font-medium block mb-1">Service Type Image</label>
+            <Label className="block mb-1">Service Type Image</Label>
             <label className="flex items-center justify-center gap-2 h-9 rounded-md border border-dashed border-input bg-background px-3 text-sm cursor-pointer hover:bg-muted/40 transition-colors">
               <UploadCloud className="size-4 text-muted-foreground" />
               <span className="text-muted-foreground truncate">
@@ -496,7 +497,7 @@ function TypeFormModal({ open, onClose, editing, categories, onSaved }: {
               Service Type is always created Active. */}
           {isEdit && (
             <div className="flex flex-col items-end">
-              <label className="text-sm font-medium block mb-1">Status</label>
+              <Label className="block mb-1">Status</Label>
               <div className="flex items-center gap-2 h-9">
                 <span className={`text-sm ${active ? 'text-emerald-700' : 'text-muted-foreground'}`}>
                   {active ? 'Active' : 'Inactive'}

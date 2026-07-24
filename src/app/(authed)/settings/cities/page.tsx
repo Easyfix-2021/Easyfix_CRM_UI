@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
 import { CancelButton } from '@/components/ui/cancel-button';
@@ -496,7 +497,7 @@ function CityFormModal({
         </DialogHeader>
         <div className="space-y-3">
           <div>
-            <label className="text-sm font-medium block mb-1">City Name *</label>
+            <Label className="block mb-1" required>City Name</Label>
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -505,7 +506,7 @@ function CityFormModal({
           </div>
 
           <div>
-            <label className="text-sm font-medium block mb-1">State *</label>
+            <Label className="block mb-1" required>State</Label>
             <Input
               value={stateQuery}
               onChange={(e) => setStateQuery(e.target.value)}
@@ -539,7 +540,7 @@ function CityFormModal({
           </div>
 
           <div>
-            <label className="text-sm font-medium block mb-1">District (optional)</label>
+            <Label className="block mb-1">District (optional)</Label>
             <Input
               value={district}
               onChange={(e) => setDistrict(e.target.value)}
@@ -549,7 +550,7 @@ function CityFormModal({
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-sm font-medium block mb-1">Tier (optional)</label>
+              <Label className="block mb-1">Tier (optional)</Label>
               <Input
                 value={tier}
                 onChange={(e) => setTier(e.target.value)}
@@ -557,7 +558,7 @@ function CityFormModal({
               />
             </div>
             <div>
-              <label className="text-sm font-medium block mb-1">Reference Pincode</label>
+              <Label className="block mb-1">Reference Pincode</Label>
               <Input
                 value={refPin}
                 onChange={(e) => setRefPin(e.target.value.replace(/\D/g, '').slice(0, 6))}

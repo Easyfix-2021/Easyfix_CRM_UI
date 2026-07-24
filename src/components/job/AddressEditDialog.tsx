@@ -19,6 +19,7 @@
 import * as React from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
 import { CitySelect } from '@/components/ui/city-select';
@@ -119,7 +120,7 @@ export function AddressEditDialog({
         </DialogHeader>
         <div className="px-1 space-y-3">
           <div>
-            <label className="text-sm font-medium block mb-1">Address *</label>
+            <Label className="block mb-1" required>Address</Label>
             <AddressAutocomplete
               value={f.address}
               onChange={(v) => patch('address', v)}
@@ -145,11 +146,11 @@ export function AddressEditDialog({
           </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div>
-              <label className="text-sm font-medium block mb-1">Building</label>
+              <Label className="block mb-1">Building</Label>
               <Input value={f.building} onChange={(e) => patch('building', e.target.value)} />
             </div>
             <div>
-              <label className="text-sm font-medium block mb-1">City *</label>
+              <Label className="block mb-1" required>City</Label>
               <CitySelect
                 required
                 value={f.city_id}
@@ -158,7 +159,7 @@ export function AddressEditDialog({
               />
             </div>
             <div>
-              <label className="text-sm font-medium block mb-1">PIN *</label>
+              <Label className="block mb-1" required>PIN</Label>
               <Input
                 required
                 pattern="[0-9]{6}"
@@ -169,7 +170,7 @@ export function AddressEditDialog({
             </div>
           </div>
           <div>
-            <label className="text-sm font-medium block mb-1">GPS (auto-detected)</label>
+            <Label className="block mb-1">GPS (auto-detected)</Label>
             <Input
               value={f.gps_location}
               readOnly

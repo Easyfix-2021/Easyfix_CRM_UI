@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
 import { IconButton } from '@/components/ui/icon-button';
@@ -1134,7 +1135,7 @@ function PincodeFormModal({
             {/* Pincode — always visible. In Add mode this is the ONLY field shown
                 until a geocode lands; the rest reveal afterward. */}
             <div>
-              <label className="text-sm font-medium block mb-1">Pincode *</label>
+              <Label className="block mb-1" required>Pincode</Label>
               <div className="relative">
                 <Input
                   value={pincode}
@@ -1180,7 +1181,7 @@ function PincodeFormModal({
                 input on the left. */}
             {(isEdit || (geo && !isDuplicate)) && (
               <div>
-                <label className="text-sm font-medium block mb-1">Status</label>
+                <Label className="block mb-1">Status</Label>
                 <div className="flex h-9 items-center justify-between gap-2 rounded-md border border-input bg-background px-3">
                   <span className={`text-sm font-medium ${isActive ? 'text-emerald-700' : 'text-amber-700'}`}>
                     {isActive ? 'Serviceable' : 'Non-Serviceable'}
@@ -1213,7 +1214,7 @@ function PincodeFormModal({
               {/* Row 2: Location + District */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="text-sm font-medium block mb-1">Location</label>
+                  <Label className="block mb-1">Location</Label>
                   <Input
                     value={location}
                     onChange={(e) => setLocation(e.target.value)}
@@ -1221,7 +1222,7 @@ function PincodeFormModal({
                   />
                 </div>
                 <div>
-                  <label className="text-sm font-medium block mb-1">District (Optional)</label>
+                  <Label className="block mb-1">District (Optional)</Label>
                   <Input
                     value={district}
                     onChange={(e) => setDistrict(e.target.value)}
@@ -1234,7 +1235,7 @@ function PincodeFormModal({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
                 {/* City */}
                 <div>
-                  <label className="text-sm font-medium block mb-1">City *</label>
+                  <Label className="block mb-1" required>City</Label>
                   {isEdit ? (
                     <>
                       <CitySelect
@@ -1302,7 +1303,7 @@ function PincodeFormModal({
                   }`}
                 >
                   <div className="flex items-center gap-2">
-                    <label className="text-sm font-medium">State</label>
+                    <Label>State</Label>
                     {stateIsNew && <StatusChip tone="amber" size="sm">New</StatusChip>}
                   </div>
                   <p className="text-xs text-muted-foreground">
@@ -1465,7 +1466,7 @@ function ZoneMappingField({
   return (
     <div>
       <div className="flex items-center gap-1.5 mb-1">
-        <label className="text-sm font-medium">Map Zones</label>
+        <Label>Map Zones</Label>
         <InfoTooltip>
           <strong className="block mb-1">How recommendations are picked</strong>
           Top 3 zones ranked from the pincodes each zone already contains — zones already

@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
 import { CancelButton } from '@/components/ui/cancel-button';
@@ -378,12 +379,12 @@ function CategoryFormModal({ open, onClose, editing, onSaved }: {
           {/* Row 1 — Name (left, reduced) + Status toggle (right-aligned, edit-only) */}
           <div className="flex items-end gap-4">
             <div className="flex-1">
-              <label className="text-sm font-medium block mb-1">Service Category Name *</label>
+              <Label className="block mb-1" required>Service Category Name</Label>
               <Input value={name} onChange={(e) => setName(e.target.value)} placeholder='e.g. "Electrician"' />
             </div>
             {isEdit && (
               <div className="flex flex-col items-end">
-                <label className="text-sm font-medium block mb-1">Status</label>
+                <Label className="block mb-1">Status</Label>
                 <div className="flex items-center gap-2 h-9">
                   <span className={`text-sm ${active ? 'text-emerald-700' : 'text-muted-foreground'}`}>
                     {active ? 'Active' : 'Inactive'}
@@ -394,7 +395,7 @@ function CategoryFormModal({ open, onClose, editing, onSaved }: {
             )}
           </div>
           <div>
-            <label className="text-sm font-medium block mb-1">Service Category Desc. *</label>
+            <Label className="block mb-1" required>Service Category Desc.</Label>
             <textarea value={desc} onChange={(e) => setDesc(e.target.value)}
               placeholder="What this category covers"
               className="w-full border rounded px-2 py-1 text-sm bg-background min-h-[80px]"

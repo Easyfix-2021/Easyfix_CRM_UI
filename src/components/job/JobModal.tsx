@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { useSlotRecommendations, SlotBadge, SlotAdvisory } from '@/components/job/SlotRecommendations';
+import { useSlotRecommendations, SlotAdvisory } from '@/components/job/SlotRecommendations';
 import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import { useFetch, useUiFlags } from '@/lib/hooks';
 import { Sparkles, Search, CalendarCheck, History, Eye, Plus, X, Pencil, CalendarPlus, CheckCircle2, BarChart3, Trash2, RotateCcw } from 'lucide-react';
@@ -3967,17 +3967,19 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
   });
 
   /*
-   * BEST-SLOT ADVICE (Confirm & Schedule only, per the staged rollout).
+   * BEST-SLOT ADVICE (Confirm & Schedule + Edit modes).
    * Asks the backend which of the four windows can actually be STAFFED on the
    * chosen date — it runs the real candidate-ranking engine, so these counts
    * agree with the Schedule & Assign list rather than being a second opinion.
    *
-   * Gated to confirm mode by passing a null jobId elsewhere: the hook is still
-   * called unconditionally (rules of hooks) and simply doesn't fetch. Create
-   * mode has no job to rank against yet.
+   * Gated to edit-shaped modes by passing a null jobId in create mode: the hook
+   * is still called unconditionally (rules of hooks) and simply doesn't fetch
+   * without a job to rank against. Fed the LIVE edited `f.requested_date_time`
+   * so editing the Requested Date re-keys the fetch and the advisory re-runs
+   * for the new day (the Reschedule dialog mounts the same hook for parity).
    */
   const slotRec = useSlotRecommendations(
-    isConfirm ? Number(initial?.job_id) || null : null,
+    isEditShape ? Number(initial?.job_id) || null : null,
     f.requested_date_time,
   );
   const [submitting, setSubmitting] = useState(false);
@@ -6377,10 +6379,6 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                       }`}
                     >
                       {s.label}
-                      {/* Free-technician count. ADVISORY — the chip stays fully
-                          selectable even at 0, because ops hold context the
-                          engine can't see. Renders nothing until data lands. */}
-                      <SlotBadge rec={slotRec.bySlot.get(s.value)} />
                     </button>
                   ))}
                 </div>
@@ -7833,7 +7831,16 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
       {isEditShape && (
         <Section title={isEditShape ? 'Schedule & Type' : 'Schedule'}>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <Field label="Requested Date/Time *"><DateTimeSlotPicker required min={nowLocalIso()} value={f.requested_date_time} onChange={(v) => set('requested_date_time', v)} /></Field>
+            <Field label="Requested Date/Time *">
+              <DateTimeSlotPicker required min={nowLocalIso()} value={f.requested_date_time} onChange={(v) => set('requested_date_time', v)} />
+              <SlotAdvisory
+                best={slotRec.best}
+                attendanceKnown={slotRec.attendanceKnown}
+                candidatePool={slotRec.candidatePool}
+                loading={slotRec.loading}
+                failed={slotRec.failed}
+              />
+            </Field>
             <Field label="Time Slot"><SearchSelect value={f.time_slot} onChange={(v) => set('time_slot', v)} placeholder="— Select slot —" options={[
               { value: 'Morning 9 to 2', label: 'Morning 9 to 2' },
               { value: 'Afternoon 12 to 5', label: 'Afternoon 12 to 5' },

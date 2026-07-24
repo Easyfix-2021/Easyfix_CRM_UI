@@ -25,6 +25,7 @@ import {
 import { BulkUpdateUsersDialog } from '@/components/users/BulkUpdateUsersDialog';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
@@ -1126,9 +1127,9 @@ function UserFormModal({
               name field gracefully. */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-end">
             <div>
-              <label className="text-sm font-medium block mb-1">
-                Full Name * {isEdit && <span className="text-xs text-muted-foreground font-normal">(not editable)</span>}
-              </label>
+              <Label className="block mb-1" required>
+                Full Name {isEdit && <span className="text-xs text-muted-foreground font-normal">(not editable)</span>}
+              </Label>
               <Input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -1162,9 +1163,9 @@ function UserFormModal({
               other typeahead in the form. */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
-              <label className="text-sm font-medium block mb-1">
-                Official Email *
-              </label>
+              <Label className="block mb-1" required>
+                Official Email
+              </Label>
               {/* Add-mode: hardcode the @easyfix.in suffix as a non-editable
                   affix so operators can't accidentally type a foreign
                   domain. Only the local-part input round-trips into state.
@@ -1224,7 +1225,7 @@ function UserFormModal({
               )}
             </div>
             <div>
-              <label className="text-sm font-medium block mb-1">Role *</label>
+              <Label className="block mb-1" required>Role</Label>
               <SearchSelect
                 value={roleId === '' ? '' : roleId}
                 onChange={(v) => setRoleId(v ? Number(v) : '')}
@@ -1236,7 +1237,7 @@ function UserFormModal({
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-sm font-medium block mb-1">Mobile *</label>
+              <Label className="block mb-1" required>Mobile</Label>
               <Input
                 value={mobile}
                 onChange={(e) => setMobile(e.target.value.replace(/\D/g, '').slice(0, 10))}
@@ -1264,7 +1265,7 @@ function UserFormModal({
               )}
             </div>
             <div>
-              <label className="text-sm font-medium block mb-1">Alternate Mobile</label>
+              <Label className="block mb-1">Alternate Mobile</Label>
               <Input
                 value={altMob}
                 onChange={(e) => setAltMob(e.target.value.replace(/\D/g, '').slice(0, 10))}
@@ -1449,9 +1450,9 @@ function UserFormModal({
             */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
-              <label className="text-sm font-medium block mb-1">
+              <Label className="block mb-1">
                 Reporting Manager <span className="text-xs text-muted-foreground font-normal">(optional)</span>
-              </label>
+              </Label>
               <SearchSelect
                 value={reportingManager === '' ? '' : reportingManager}
                 onChange={(v) => setReportingManager(v ? Number(v) : '')}
@@ -1465,9 +1466,9 @@ function UserFormModal({
               />
             </div>
             <div>
-              <label className="text-sm font-medium block mb-1">
+              <Label className="block mb-1">
                 Home City <span className="text-xs text-muted-foreground font-normal">(optional)</span>
-              </label>
+              </Label>
               <SearchSelect
                 value={cityId === '' ? '' : cityId}
                 onChange={(v) => setCityId(v ? Number(v) : '')}

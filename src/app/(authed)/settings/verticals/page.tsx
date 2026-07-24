@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -288,11 +289,11 @@ function VerticalFormModal({ open, onClose, editing, onSaved }: {
         </DialogHeader>
         <div className="space-y-3">
           <div>
-            <label className="text-sm font-medium block mb-1">Vertical Name *</label>
+            <Label className="block mb-1" required>Vertical Name</Label>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder='e.g. "Retail"' />
           </div>
           <div>
-            <label className="text-sm font-medium block mb-1">Description</label>
+            <Label className="block mb-1">Description</Label>
             <textarea value={desc} onChange={(e) => setDesc(e.target.value)}
               placeholder="What this vertical covers"
               className="w-full border rounded px-2 py-1 text-sm bg-background min-h-[80px]"

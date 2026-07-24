@@ -19,6 +19,7 @@ import { useEffect, useState } from 'react';
 import { MenuSquare, Plus, Pencil, Trash2, AlertTriangle } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -240,11 +241,11 @@ function MenuFormDialog({ open, onClose, editing, rows, onSaved }: {
         <DialogHeader><DialogTitle>{isEdit ? `Edit "${editing!.menu_name}"` : 'Add Menu'}</DialogTitle></DialogHeader>
         <div className="space-y-3">
           <div>
-            <label className="text-sm font-medium block mb-1">Menu Name *</label>
+            <Label className="block mb-1" required>Menu Name</Label>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder='e.g. "Reports"' />
           </div>
           <div>
-            <label className="text-sm font-medium block mb-1">Parent Menu</label>
+            <Label className="block mb-1">Parent Menu</Label>
             <select
               value={parent}
               onChange={(e) => setParent(Number(e.target.value))}
@@ -258,27 +259,27 @@ function MenuFormDialog({ open, onClose, editing, rows, onSaved }: {
           </div>
           <div className="grid grid-cols-3 gap-2">
             <div>
-              <label className="text-sm font-medium block mb-1">Depth</label>
+              <Label className="block mb-1">Depth</Label>
               <Input type="number" min={1} max={5} value={depth} onChange={(e) => setDepth(Number(e.target.value))} />
             </div>
             <div>
-              <label className="text-sm font-medium block mb-1">Has Child</label>
+              <Label className="block mb-1">Has Child</Label>
               <select value={hasChild} onChange={(e) => setHasChild(Number(e.target.value))} className="border rounded h-9 px-2 text-sm bg-background w-full">
                 <option value={0}>No</option>
                 <option value={1}>Yes</option>
               </select>
             </div>
             <div>
-              <label className="text-sm font-medium block mb-1">Sequence</label>
+              <Label className="block mb-1">Sequence</Label>
               <Input type="number" min={0} value={sequence} onChange={(e) => setSequence(e.target.value)} placeholder="ord" />
             </div>
           </div>
           <div>
-            <label className="text-sm font-medium block mb-1">URL key (matches Sidebar.URL_MAP key)</label>
+            <Label className="block mb-1">URL key (matches Sidebar.URL_MAP key)</Label>
             <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder='e.g. "reports" or "javascript:;" for parent-only' className="font-mono" />
           </div>
           <div>
-            <label className="text-sm font-medium block mb-1">Icons (legacy FA class, optional)</label>
+            <Label className="block mb-1">Icons (legacy FA class, optional)</Label>
             <Input value={icons} onChange={(e) => setIcons(e.target.value)} placeholder='e.g. "fa-home"' className="font-mono" />
           </div>
           {isEdit && (

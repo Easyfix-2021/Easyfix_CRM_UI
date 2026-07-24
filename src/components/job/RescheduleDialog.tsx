@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { SearchSelect } from '@/components/ui/search-select';
 import { DateTimeSlotPicker } from '@/components/ui/date-time-slot-picker';
+import { useSlotRecommendations, SlotAdvisory } from '@/components/job/SlotRecommendations';
 import { api, ApiError } from '@/lib/api';
 import { useFetch } from '@/lib/hooks';
 import { showToast } from '@/components/ui/toast';
@@ -63,6 +64,12 @@ export function RescheduleDialog({ open, jobId, onClose, onDone, initialDateTime
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // Best-slot advisory for the picked new date. Keyed on the LIVE `dateTime`
+  // picker state (already 'YYYY-MM-DDTHH:mm'), so changing the date re-runs the
+  // recommendation for the new day. Gated on `open` so it doesn't fetch while
+  // the dialog is closed (mirrors the reschedule-reasons fetch above).
+  const rec = useSlotRecommendations(open ? jobId : null, dateTime);
+
   // Reset every field on each open so a prior attempt never leaks in. When
   // pre-fill props are supplied (apply-from-request flow), seed date + remarks.
   useEffect(() => {
@@ -116,6 +123,13 @@ export function RescheduleDialog({ open, jobId, onClose, onDone, initialDateTime
           <div className="space-y-1.5">
             <Label className="text-sm font-medium">New Date &amp; Time *</Label>
             <DateTimeSlotPicker min={minLocal} value={dateTime} onChange={setDateTime} />
+            <SlotAdvisory
+              best={rec.best}
+              attendanceKnown={rec.attendanceKnown}
+              candidatePool={rec.candidatePool}
+              loading={rec.loading}
+              failed={rec.failed}
+            />
           </div>
           <div>
             <Label className="text-sm font-medium block mb-1">Reschedule Reason *</Label>

@@ -175,7 +175,7 @@ type JobServiceRow = {
    *
    * Display-only: candidate matching does NOT use this yet.
    */
-  job_skills?: { deep_skill_id: number; deepskill_name: string | null; confidence: string | number | null }[];
+  job_skills?: { deep_skill_id: number; deepskill_name: string | null; confidence: string | number | null; source?: string | null }[];
   /**
    * Highest `confidence` among `job_skills`. Typed to allow string because the
    * column is DECIMAL(3,2) and mysql2 returns decimals verbatim as strings
@@ -278,6 +278,13 @@ function localInputToWallClock(local: string): string {
  */
 function jobSkillNames(s: JobServiceRow): string {
   return (s.job_skills ?? []).map((k) => k.deepskill_name).filter(Boolean).join(', ');
+}
+
+/* True when ANY mapped skill for this service was hand-made in the Job Skill
+ * Matrix (tbl_service_skill_mapping.source='Manual'). Case-insensitive to match
+ * the column's utf8mb4_0900_ai_ci collation and any un-normalised legacy rows. */
+function jobSkillIsManual(s: JobServiceRow): boolean {
+  return (s.job_skills ?? []).some((k) => String(k.source ?? '').toLowerCase() === 'manual');
 }
 
 export function ScheduleAssignModal({
@@ -801,11 +808,20 @@ export function ScheduleAssignModal({
                                * NO mapping for this service (not "zero skills
                                * needed"); the tooltip says so out loud.
                                */}
-                              <td
-                                className="py-1 pr-3 max-w-0 truncate"
-                                title={jobSkillNames(s) || 'No mapping in the Job Skill Matrix'}
-                              >
-                                {jobSkillNames(s) || '—'}
+                              <td className="py-1 pr-3 max-w-0">
+                                <div className="flex items-center gap-1 min-w-0">
+                                  <span className="truncate" title={jobSkillNames(s) || 'No mapping in the Job Skill Matrix'}>
+                                    {jobSkillNames(s) || '—'}
+                                  </span>
+                                  {jobSkillIsManual(s) && (
+                                    <span
+                                      className="shrink-0 inline-flex items-center rounded-full border border-indigo-200 bg-indigo-50 px-1.5 py-0 text-[9px] font-medium leading-tight text-indigo-600"
+                                      title="This skill mapping was made manually in the Job Skill Matrix"
+                                    >
+                                      Manual
+                                    </span>
+                                  )}
+                                </div>
                               </td>
                               {/*
                                * JOB MATRIX SCORE — the HIGHEST confidence among the
