@@ -902,6 +902,9 @@ export default function MyOrdersPage() {
         jobId={scheduleModal.jobId}
         onClose={() => closeJobAction()}
         onAssigned={() => { cacheRef.current.clear(); load(false, true); }}
+        // Cancel Job (non-assign) also mutates the list — same in-place refresh
+        // as onAssigned so the cancelled row drops out without a skeleton flash.
+        onChanged={() => { cacheRef.current.clear(); load(false, true); }}
       />
 
       {/*

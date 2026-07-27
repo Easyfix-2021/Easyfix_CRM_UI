@@ -288,11 +288,15 @@ function jobSkillIsManual(s: JobServiceRow): boolean {
 }
 
 export function ScheduleAssignModal({
-  open, onClose, onAssigned, jobId,
+  open, onClose, onAssigned, onChanged, jobId,
 }: {
   open: boolean;
   onClose: () => void;
   onAssigned?: (efrId: number, efrName: string) => void;
+  // Fired for a non-assign change that still mutates the list (e.g. Cancel Job).
+  // `onAssigned` carries (efrId, efrName) for the assign path; cancel has neither,
+  // so it gets its own arg-less refresh signal the parent wires to its list load.
+  onChanged?: () => void;
   jobId: number | null;
 }) {
   const { me } = useMe();
@@ -1256,6 +1260,10 @@ export function ScheduleAssignModal({
             });
             showToast({ variant: 'success', message: 'Job Cancelled' });
             setCancelOpen(false);
+            // Refresh the underlying list FIRST (a cancelled job leaves this
+            // Pending-for-Scheduling tab), then close. onChanged triggers the
+            // parent's in-place `load()` (revalidates without a skeleton flash).
+            onChanged?.();
             onClose();
           }}
         />
