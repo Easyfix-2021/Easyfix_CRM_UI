@@ -14,6 +14,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { SearchSelect } from '@/components/ui/search-select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { showToast } from '@/components/ui/toast';
@@ -39,6 +40,7 @@ type Catg = { service_catg_id: number; service_catg_name: string };
 type MatrixRow = {
   id: number; service_catg_name: string | null; service_name: string;
   deepskill_name: string | null; confidence: number | null; source: string;
+  deepskill_options: string | null;  // comma-joined active options of the mapped deep skill
 };
 type ListResponse = { items: MatrixRow[]; total: number };
 // Add-mapping dialog lookups.
@@ -479,6 +481,7 @@ export default function SkillMatrixPage() {
                       <SortHeader<SortKey> col="service_catg_name" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Category</SortHeader>
                       <SortHeader<SortKey> col="service_name"      sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Service</SortHeader>
                       <SortHeader<SortKey> col="deepskill_name"    sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Deep Skill</SortHeader>
+                      <th className="font-medium">Deep Skill Options</th>
                       <SortHeader<SortKey> col="confidence" align="right" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Confidence</SortHeader>
                       <SortHeader<SortKey> col="source"           sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Source</SortHeader>
                       <th className="text-right font-medium">Actions</th>
@@ -490,6 +493,7 @@ export default function SkillMatrixPage() {
                         <td>{r.service_catg_name || '—'}</td>
                         <td>{r.service_name}</td>
                         <td>{r.deepskill_name || '—'}</td>
+                        <td className="max-w-[220px] truncate" title={r.deepskill_options || undefined}>{r.deepskill_options || '—'}</td>
                         <td className="text-right">{r.confidence != null ? r.confidence : '—'}</td>
                         <td>{r.source}</td>
                         <td className="text-right">
@@ -541,16 +545,12 @@ export default function SkillMatrixPage() {
 
             <div className="space-y-1">
               <Label className="text-xs">Service Category</Label>
-              <select
+              <SearchSelect
                 value={mCatg}
-                onChange={(e) => { setMCatg(e.target.value); setMService(''); setMSkill(''); }}
-                className="w-full rounded-md border px-3 py-2 text-sm"
-              >
-                <option value="">Select a category…</option>
-                {(catgQ.data ?? []).map((c) => (
-                  <option key={c.service_catg_id} value={c.service_catg_id}>{c.service_catg_name}</option>
-                ))}
-              </select>
+                onChange={(v) => { setMCatg(v); setMService(''); setMSkill(''); }}
+                options={(catgQ.data ?? []).map((c) => ({ value: String(c.service_catg_id), label: c.service_catg_name }))}
+                placeholder="Select a category…"
+              />
             </div>
 
             <div className="space-y-1">
@@ -563,21 +563,13 @@ export default function SkillMatrixPage() {
                   </label>
                 )}
               </div>
-              <select
+              <SearchSelect
                 value={mService}
-                onChange={(e) => setMService(e.target.value)}
+                onChange={setMService}
+                options={dlgServices.map((s) => ({ value: s.service_name, label: `${s.service_name}${s.mapped ? ' · already mapped' : ''}` }))}
+                placeholder={!mCatg ? 'Pick a category first' : dlgSvcQ.loading ? 'Loading…' : 'Select a service…'}
                 disabled={!mCatg || dlgSvcQ.loading}
-                className="w-full rounded-md border px-3 py-2 text-sm disabled:opacity-60"
-              >
-                <option value="">
-                  {!mCatg ? 'Pick a category first' : dlgSvcQ.loading ? 'Loading…' : 'Select a service…'}
-                </option>
-                {dlgServices.map((s) => (
-                  <option key={s.service_name} value={s.service_name}>
-                    {s.service_name}{s.mapped ? ' · already mapped' : ''}
-                  </option>
-                ))}
-              </select>
+              />
               {mCatg && !dlgSvcQ.loading && dlgServices.length === 0 && (
                 <p className="text-[11px] text-muted-foreground">
                   {showMapped
@@ -589,21 +581,13 @@ export default function SkillMatrixPage() {
 
             <div className="space-y-1">
               <Label className="text-xs">Deep Skill</Label>
-              <select
+              <SearchSelect
                 value={mSkill}
-                onChange={(e) => setMSkill(e.target.value)}
+                onChange={setMSkill}
+                options={(dlgSkillsQ.data ?? []).map((s) => ({ value: String(s.deep_skill_id), label: `${s.deepskill_name}${s.service_type_name ? ` (${s.service_type_name})` : ''}` }))}
+                placeholder={!mCatg ? 'Pick a category first' : dlgSkillsQ.loading ? 'Loading…' : 'Select a deep skill…'}
                 disabled={!mCatg || dlgSkillsQ.loading}
-                className="w-full rounded-md border px-3 py-2 text-sm disabled:opacity-60"
-              >
-                <option value="">
-                  {!mCatg ? 'Pick a category first' : dlgSkillsQ.loading ? 'Loading…' : 'Select a deep skill…'}
-                </option>
-                {(dlgSkillsQ.data ?? []).map((s) => (
-                  <option key={s.deep_skill_id} value={s.deep_skill_id}>
-                    {s.deepskill_name}{s.service_type_name ? ` (${s.service_type_name})` : ''}
-                  </option>
-                ))}
-              </select>
+              />
               {mCatg && !dlgSkillsQ.loading && (dlgSkillsQ.data ?? []).length === 0 && (
                 <p className="text-[11px] text-amber-700">This category has no active deep skills to map to.</p>
               )}
