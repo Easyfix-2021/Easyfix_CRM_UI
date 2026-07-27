@@ -1653,11 +1653,11 @@ function PincodeListModal({
 function deepSkillStatusLabel(status: DeepSkillStatus): React.ReactNode {
   switch (status) {
     case 'both_available':
-      return <span className="text-emerald-700">Both Job and Easyfixer Skills Available</span>;
+      return <span className="text-emerald-700">Has Required Job Skill</span>;
     case 'job_skill_not_available':
-      return <span className="text-amber-700">Job Skill Not Available</span>;
+      return <span className="text-amber-700">Technician Missing Job Skill</span>;
     case 'easyfixer_skills_not_available':
-      return <span className="text-red-700">Easyfixer Skills Not Available</span>;
+      return <span className="text-red-700">Technician Has No Skills</span>;
     /*
      * Neutral, never green. The job carries no Service Category/Type, so no
      * technician can be said to match or miss it — showing this as a positive

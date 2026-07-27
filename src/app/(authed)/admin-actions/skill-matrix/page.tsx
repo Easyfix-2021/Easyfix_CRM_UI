@@ -31,6 +31,9 @@ type BuildSummary = {
   // gaps). llmFailedBatches > 0 means some batches failed even after a retry,
   // so those services are missing for a transient reason — rebuild to recover.
   servicesUnmapped?: number; llmFailedBatches?: number;
+  // "Include Completed Job Details" toggle echo + how many categories actually
+  // had usable completion history folded into the classification.
+  includeHistory?: boolean; categoriesWithHistory?: number;
 };
 type Catg = { service_catg_id: number; service_catg_name: string };
 type MatrixRow = {
@@ -56,6 +59,10 @@ const MATRIX_LIMIT_CAP = 500;
 export default function SkillMatrixPage() {
   const [categoryId, setCategoryId] = useState('');
   const [dryRun, setDryRun] = useState(true);
+  // Opt-in: fold completion-history evidence into the AI build. Default OFF — the
+  // history is only trustworthy once ops' assignment process is (see the BE's
+  // loadCompletionHistorySkills). Keeps a bad matrix + wasted AI cost off the table.
+  const [includeHistory, setIncludeHistory] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<BuildSummary | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -128,7 +135,7 @@ export default function SkillMatrixPage() {
   async function build() {
     setBusy(true); setErr(null); setResult(null);
     try {
-      const body: { categoryId?: number; dryRun: boolean } = { dryRun };
+      const body: { categoryId?: number; dryRun: boolean; includeHistory: boolean } = { dryRun, includeHistory };
       if (categoryId) body.categoryId = Number(categoryId);
       const summary = await api.post<BuildSummary>('/admin/skill-matrix/build', body);
       setResult(summary);
@@ -308,10 +315,19 @@ export default function SkillMatrixPage() {
                 ))}
               </select>
             </div>
-            <div className="flex items-end">
+            <div className="flex flex-col justify-end gap-1.5">
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} />
                 Dry run (classify &amp; count, don&apos;t write)
+              </label>
+              <label className="flex items-start gap-2 text-sm">
+                <input type="checkbox" className="mt-0.5" checked={includeHistory} onChange={(e) => setIncludeHistory(e.target.checked)} />
+                <span>
+                  Include Completed Job Details
+                  <span className="block text-[11px] text-muted-foreground">
+                    Fold in which technicians completed similar jobs &amp; the skills they hold. Keep OFF until ops&apos; assignment process is reliable.
+                  </span>
+                </span>
               </label>
             </div>
           </div>
@@ -341,6 +357,9 @@ export default function SkillMatrixPage() {
                 {result.llmCalls} · Model: {result.model}
                 {result.servicesUnmapped != null && (
                   <> · No skill: {result.servicesUnmapped}</>
+                )}
+                {result.includeHistory && (
+                  <> · History used: {result.categoriesWithHistory ?? 0} categor{(result.categoriesWithHistory ?? 0) === 1 ? 'y' : 'ies'}</>
                 )}
               </div>
               {/* Genuine (transient) misses only — visible so ops can rebuild to
