@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { useJobActionParams, useJobActionNav } from '@/lib/job-action-url';
 import {
   Search, Eye,
@@ -158,11 +158,15 @@ export default function MyOrdersPage() {
   // useSearchParams() is stable at first render in Next.js 15's App Router,
   // so we can safely hydrate state from it inside useState's initializer.
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const [tab, setTab] = useState(() => {
     const t = searchParams.get('tab');
     return t && TABS.some((x) => x.value === t) ? t : 'all';
   });
-  const [q, setQ] = useState('');
+  // Hydrate search from the URL (?q=) so it survives any remount/navigation
+  // after a modal action — same rationale as the tab initializer above.
+  const [q, setQ] = useState(() => searchParams.get('q') || '');
   /*
    * Global server-side search across ALL tabs (2026-07-03). Ops want to
    * "find any job by id / ref / customer / client / city / technician /
@@ -191,8 +195,12 @@ export default function MyOrdersPage() {
   // Server-side sort state (whitelisted BE-side) — declared here with the other
   // query state so load() and the poll effect can depend on it. `toggle` + the
   // sort refetch effect live near the render below.
-  const [sortKey, setSortKey] = useState<string | null>(null);
-  const [sortDir, setSortDir] = useState<SortDir>('desc');
+  const [sortKey, setSortKey] = useState<string | null>(() => {
+    const s = searchParams.get('sort'); return s ? (s.split(':')[0] || null) : null;
+  });
+  const [sortDir, setSortDir] = useState<SortDir>(() => {
+    const s = searchParams.get('sort'); return s && s.split(':')[1] === 'asc' ? 'asc' : 'desc';
+  });
 
   /*
    * Role-aware owner filter: admin-group users see all jobs here (matches
@@ -423,6 +431,22 @@ export default function MyOrdersPage() {
     load(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortKey, sortDir]);
+
+  // Persist search + sort into the URL (tab already lives there) so they
+  // survive any remount/navigation after a modal action. Debounced via
+  // serverQ so typing doesn't spam history. Guard prevents redundant
+  // replaces; deps deliberately EXCLUDE searchParams so this never loops
+  // with the tab-sync effect (which reads searchParams).
+  useEffect(() => {
+    const p = new URLSearchParams(searchParams);
+    if (serverQ) p.set('q', serverQ); else p.delete('q');
+    if (sortKey) p.set('sort', `${sortKey}:${sortDir}`); else p.delete('sort');
+    const nextStr = p.toString();
+    if (nextStr !== searchParams.toString()) {
+      router.replace(nextStr ? `${pathname}?${nextStr}` : pathname, { scroll: false });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverQ, sortKey, sortDir]);
 
   // Resolve the current tab's human label for the page header — each sidebar
   // sub-menu is a standalone status page, so the tab name IS the page title.

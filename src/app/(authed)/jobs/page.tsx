@@ -1,8 +1,9 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { useJobActionParams, useJobActionNav } from '@/lib/job-action-url';
+import { useDebouncedValue } from '@/lib/hooks';
 import {
   Plus, Upload, ChevronDown, ChevronUp, Repeat,
   // Row-level quick-action icons (mirror the legacy Manage Jobs action column)
@@ -123,6 +124,13 @@ export default function JobsPage() {
     // `client_opted_in` flag inside UnconfirmedJobsTable.
     'isJobMagicLinkSend',
   ]);
+  // Declared up here (ahead of the state block) so the `q`/`sort` state
+  // lazy-initializers below can hydrate from the URL, and the write-effect
+  // can persist them back. useSearchParams() is stable at first render in
+  // Next.js 15's App Router.
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const [tab, setTab] = useState('all');
   // Counts are fetched once on mount + re-fetched after any save from the
   // modal (so badges stay fresh). Null = still loading; populated = ready.
@@ -130,7 +138,7 @@ export default function JobsPage() {
   // `q` is UI-only — filters the currently-loaded page in memory rather than
   // firing a backend request per keystroke. Searching feels instant. Fetches
   // still happen on tab switch, filter changes, and pagination.
-  const [q, setQ] = useState('');
+  const [q, setQ] = useState(() => searchParams.get('q') || '');
   /*
    * `filters` mirrors the legacy CRM "Filter Job" panel. Every key
    * round-trips to the backend as a query param of the same name; the
@@ -182,8 +190,12 @@ export default function JobsPage() {
   // Server-side sort state (whitelisted BE-side) — declared here with the other
   // query state so load() and the poll effect can depend on it. `toggle` + the
   // sort refetch effect live near the render below.
-  const [sortKey, setSortKey] = useState<string | null>(null);
-  const [sortDir, setSortDir] = useState<SortDir>('desc');
+  const [sortKey, setSortKey] = useState<string | null>(() => {
+    const s = searchParams.get('sort'); return s ? (s.split(':')[0] || null) : null;
+  });
+  const [sortDir, setSortDir] = useState<SortDir>(() => {
+    const s = searchParams.get('sort'); return s && s.split(':')[1] === 'asc' ? 'asc' : 'desc';
+  });
   const [showFilters, setShowFilters] = useState(false);
 
   /*
@@ -492,7 +504,7 @@ export default function JobsPage() {
   // navigation to a deep-link URL lands the recipient straight on the
   // matching dialog. Legacy `?view=N` / `?new=1` URLs are auto-promoted
   // by `useJobActionParams` so old shared links keep working.
-  const searchParams = useSearchParams();
+  // (`searchParams`/`router`/`pathname` are declared up in the state block.)
   const { jobId: urlJobId, action: urlAction } = useJobActionParams();
   const { openJobAction, closeJobAction } = useJobActionNav();
   const modal = useMemo<{ open: boolean; mode: JobModalMode; id?: number }>(() => {
@@ -651,6 +663,25 @@ export default function JobsPage() {
     load(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortKey, sortDir]);
+
+  // Debounced view of the in-memory search box, used ONLY for the URL write
+  // below (the instant client-side `filterJobRows` above still reads raw `q`).
+  const serverQ = useDebouncedValue(q, 300).trim();
+  // Persist search + sort into the URL (tab already lives there) so they
+  // survive any remount/navigation after a modal action. Debounced via
+  // serverQ so typing doesn't spam history. Guard prevents redundant
+  // replaces; deps deliberately EXCLUDE searchParams so this never loops
+  // with the tab-sync effect (which reads searchParams).
+  useEffect(() => {
+    const p = new URLSearchParams(searchParams);
+    if (serverQ) p.set('q', serverQ); else p.delete('q');
+    if (sortKey) p.set('sort', `${sortKey}:${sortDir}`); else p.delete('sort');
+    const nextStr = p.toString();
+    if (nextStr !== searchParams.toString()) {
+      router.replace(nextStr ? `${pathname}?${nextStr}` : pathname, { scroll: false });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverQ, sortKey, sortDir]);
 
   return (
     <div className="space-y-5">
