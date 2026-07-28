@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useMe } from '@/lib/auth-context';
+import { hasAction } from '@/lib/permissions';
 import { useFetchOnce } from '@/lib/hooks';
 import { api, ApiError } from '@/lib/api';
 import { showToast } from '@/components/ui/toast';
@@ -411,7 +412,7 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="hidden md:flex w-60 shrink-0 flex-col bg-sidebar text-sidebar-foreground">
+    <aside className="relative hidden md:flex w-60 shrink-0 flex-col bg-sidebar text-sidebar-foreground">
       <div className="px-5 h-16 border-b border-sidebar-accent flex items-center justify-center relative">
         <Link
           href="/dashboard"
@@ -450,7 +451,9 @@ export function Sidebar() {
         )}
       </div>
 
-      <nav className="flex-1 overflow-y-auto py-3">
+      {/* pb-20 leaves room so the last menu items can scroll clear of the
+          bottom-pinned QuickSight footer (which overlays this scroll area). */}
+      <nav className="flex-1 overflow-y-auto pt-3 pb-20">
         {menus === null && <div className="px-5 py-3 text-xs text-sidebar-foreground/60">Loading menus…</div>}
         {menus !== null && tree.length === 0 && (
           <div className="px-5 py-3 text-xs text-sidebar-foreground/60">No menus available</div>
@@ -601,6 +604,26 @@ export function Sidebar() {
           })}
         </ul>
       </nav>
+
+      {/*
+        * QuickSight — bottom-pinned (moved here from the header). Absolutely
+        * positioned over the bottom of the scrolling <nav>, with a solid
+        * sidebar background so the menu list scrolls BEHIND it; the nav's pb-20
+        * gives the last items room to clear it. Gated on the same ef-QuickSight
+        * action as the old header button, so it's hidden for users without
+        * QuickSight access (not shown to everyone).
+        */}
+      {hasAction(me, 'ef-QuickSight') && (
+        <div className="absolute inset-x-0 bottom-0 border-t border-sidebar-accent/40 bg-sidebar p-3">
+          <Link
+            href="/quicksight"
+            className="flex items-center justify-center gap-1.5 rounded-md bg-gradient-to-br from-indigo-500 to-blue-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition-all hover:shadow-md"
+          >
+            <BarChart3 className="h-4 w-4" />
+            QuickSight
+          </Link>
+        </div>
+      )}
     </aside>
   );
 }

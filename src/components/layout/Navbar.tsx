@@ -1,7 +1,7 @@
 'use client';
 import { useState, type ReactNode } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
-import { Bell, LogOut, Menu, BarChart3, Info, AlertTriangle, Plus } from 'lucide-react';
+import { Bell, LogOut, Menu, Info, AlertTriangle, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { api } from '@/lib/api';
 import { useFetchOnce } from '@/lib/hooks';
@@ -164,27 +164,12 @@ export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
   // (`ef-QuickSight`, `isCallInfo`, `isEscalatedJob`, `isBookNewCall`) are
   // seeded against the Home menu in `menu_action`.
   const can = {
-    quickSight:   hasAction(me, 'ef-QuickSight'),
+    // QuickSight moved to the sidebar (bottom-pinned, gated on ef-QuickSight
+    // there) — it's no longer a header button.
     callInfo:     hasAction(me, 'isCallInfo'),
     escalatedJob: hasAction(me, 'isEscalatedJob'),
     bookNewCall:  hasAction(me, 'isBookNewCall'),
   };
-
-  function openQuickSight() {
-    // QuickSight is NOT a sidebar menu — it's this dashboard-header button.
-    // Reports are now NATIVE CRM pages (2026-06-14 rebuild), so the button
-    // simply navigates in-app to the QuickSight landing, which shows cards
-    // for the reports the user's role can access (gated per-report via the
-    // isQuickSight<Report>View action keys; the button itself is gated on
-    // the family key ef-QuickSight — see the `quickSight` flag below).
-    // Because the landing + report pages live under the authed route group,
-    // a shared report link only resolves if the visitor is logged into the
-    // CRM in that browser — which is exactly the access rule we want, with
-    // no JWT session-bridge or cross-subdomain cookie. The legacy
-    // /admin/quicksight/token mint + the external Angular app are now
-    // vestigial (decommission once parity is confirmed).
-    router.push('/quicksight');
-  }
 
   async function logout() {
     try { await api.post('/auth/logout'); } catch { /* ignore */ }
@@ -216,16 +201,6 @@ export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
       <div className="flex-1" />
       {showHeaderActions && (
       <nav className="hidden md:flex items-center gap-2" aria-label="Header actions">
-        {can.quickSight && (
-          <button
-            type="button"
-            onClick={openQuickSight}
-            className="inline-flex items-center gap-1.5 px-3 h-9 rounded-md bg-gradient-to-br from-indigo-500 to-blue-600 text-white text-xs font-semibold shadow-sm hover:shadow-md hover:scale-[1.02] transition-all"
-          >
-            <BarChart3 className="h-4 w-4" />
-            QuickSight
-          </button>
-        )}
         {can.callInfo && (
           <button
             type="button"

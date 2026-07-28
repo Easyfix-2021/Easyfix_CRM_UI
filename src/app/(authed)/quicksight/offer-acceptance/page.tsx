@@ -103,18 +103,24 @@ export default function OfferAcceptancePage() {
   // "Job Owner" filter uses) — no new BE lookup introduced.
   const ownerOpts = lookup.toOpts.adminUsers;
 
+  // Default the OFFERED-date filter to TODAY (IST). en-CA in Asia/Kolkata yields
+  // 'YYYY-MM-DD', matching the filter's date format + the BE's IST day compare.
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+
   // Draft (user edits) vs applied (live query). Clients/verticals/categories come
   // from the shared filter bar; offered-by + date ranges + source are report-specific.
   const [clientId, setClientId] = useState<number[]>([]);
   const [verticalId, setVerticalId] = useState<number[]>([]);
   const [serviceCategoryId, setServiceCategoryId] = useState<number[]>([]);
   const [offeredById, setOfferedById] = useState<number[]>([]);
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
+  const [dateFrom, setDateFrom] = useState(today);
+  const [dateTo, setDateTo] = useState(today);
   const [respondedFrom, setRespondedFrom] = useState('');
   const [respondedTo, setRespondedTo] = useState('');
   const [source, setSource] = useState<Source>('');
-  const [applied, setApplied] = useState<FilterBody>(emptyFilter);
+  // Seed the live query with today's offered-date range so the report loads
+  // scoped to TODAY by default (not the full offer history).
+  const [applied, setApplied] = useState<FilterBody>({ ...emptyFilter, dateFrom: today, dateTo: today });
 
   const buildDraft = useCallback((): FilterBody => {
     const body: FilterBody = { clientId, verticalId, serviceCategoryId, offeredById };
@@ -182,8 +188,9 @@ export default function OfferAcceptancePage() {
 
   function reset() {
     setClientId([]); setVerticalId([]); setServiceCategoryId([]); setOfferedById([]);
-    setDateFrom(''); setDateTo(''); setRespondedFrom(''); setRespondedTo(''); setSource('');
-    setApplied(emptyFilter);
+    // Reset returns the offered-date filter to its default (today), not blank.
+    setDateFrom(today); setDateTo(today); setRespondedFrom(''); setRespondedTo(''); setSource('');
+    setApplied({ ...emptyFilter, dateFrom: today, dateTo: today });
   }
 
   return (
