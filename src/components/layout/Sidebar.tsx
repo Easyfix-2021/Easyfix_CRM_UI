@@ -22,6 +22,16 @@ import { showToast } from '@/components/ui/toast';
 import { URL_MAP } from '@/lib/legacy-url-map';
 
 /*
+ * Retired sidebar sub-pages — rendered visible-but-DISABLED (non-clickable) so
+ * the entry stays discoverable but leads nowhere. Keyed by the RESOLVED Next.js
+ * href (post legacyToRoute). "Pending App Ack" is a legacy-only job state that
+ * the offer-based assignment flow can never produce, so its page is
+ * intentionally not built; the full rationale lives on the page body
+ * (my-orders?tab=pending-app-ack → PendingAppAckRetired) for any future dev.
+ */
+const RETIRED_MENU_HREFS = new Set<string>(['/my-orders?tab=pending-app-ack']);
+
+/*
  * Sidebar is now driven by tbl_menu (via /api/shared/lookup/menus). The
  * DB is the source of truth — anything not in the DB does not appear.
  * Local concerns this component still owns:
@@ -521,6 +531,23 @@ export function Sidebar() {
                       .map((c) => {
                       const href = legacyToRoute(c.menu_name, c.url);
                       const active = href === activeChildHref;
+                      // Retired sub-pages render as a non-interactive <span>
+                      // (visible but greyed + un-clickable) instead of a <Link>.
+                      // See RETIRED_MENU_HREFS for the why.
+                      if (RETIRED_MENU_HREFS.has(href)) {
+                        return (
+                          <li key={c.menu_id}>
+                            <span
+                              aria-disabled="true"
+                              title="Retired — not applicable under the offer-based assignment flow"
+                              className="flex items-center gap-1.5 rounded px-3 py-1.5 text-[13px] text-sidebar-foreground/40 cursor-not-allowed select-none"
+                            >
+                              <Circle className="h-1.5 w-1.5 shrink-0 fill-current opacity-40" />
+                              <span className="truncate">{c.menu_name}</span>
+                            </span>
+                          </li>
+                        );
+                      }
                       return (
                         <li key={c.menu_id}>
                           <Link

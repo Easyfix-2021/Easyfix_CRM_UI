@@ -41,6 +41,10 @@ export const TABS: TabDef[] = [
   { value: 'unconfirmed',         label: 'Unconfirmed Orders',      status: 9 },
   { value: 'pending-scheduling',  label: 'Pending for Scheduling',  status: 0, assigned: false },
   { value: 'pending-start',       label: 'Pending to Start',        status: 1 },
+  // RETIRED (legacy-only): the offer-based flow never produces BOOKED+tech, so
+  // this bucket is always empty. Sidebar entry is disabled (Sidebar.tsx
+  // RETIRED_MENU_HREFS) and the page shows PendingAppAckRetired instead of a
+  // table. Kept here so /jobs counts + deep-links still resolve the slug.
   { value: 'pending-app-ack',     label: 'Pending App Ack',         status: 0, assigned: true },
   { value: 'pending-close',       label: 'Pending to Close',        statuses: [2, 20] },
   { value: 'audit-complete',      label: 'Audit & Complete',        statuses: [3, 5] },

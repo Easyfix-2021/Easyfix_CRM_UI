@@ -458,6 +458,14 @@ export default function MyOrdersPage() {
   // tabs keep the shared table below unchanged.
   const isPendingScheduling = tab === 'pending-scheduling';
 
+  // "Pending App Ack" is a LEGACY-ONLY bucket (BOOKED with a technician
+  // attached, awaiting the tech to acknowledge in-app). The new offer-based
+  // flow never produces that state — a tech ACCEPT flips BOOKED→SCHEDULED
+  // atomically, so a job never dwells assigned-but-unacknowledged. The tab is
+  // kept visible-but-inert (see the Sidebar's RETIRED_MENU_HREFS) and this
+  // page renders an explanatory panel instead of an always-empty table.
+  const isRetiredTab = tab === 'pending-app-ack';
+
   // Whole days between a ticket-created timestamp and now, e.g. "12d".
   // Null/invalid → '—'. Negative clamps to 0d (future-dated guard).
   function jobAgeLabel(d: string | null | undefined): string {
@@ -506,7 +514,8 @@ export default function MyOrdersPage() {
         * the filter under the hood, unchanged.
         */}
 
-      {/* Search bar */}
+      {/* Search bar — hidden on the retired Pending App Ack page */}
+      {!isRetiredTab && (
       <Card>
         <CardContent className="p-3">
           <div className="relative">
@@ -526,7 +535,11 @@ export default function MyOrdersPage() {
           </div>
         </CardContent>
       </Card>
+      )}
 
+      {isRetiredTab ? (
+        <PendingAppAckRetired />
+      ) : (
       <Card>
         <RefreshBar active={refreshing} />
         <CardContent className="p-0 overflow-x-auto">
@@ -887,6 +900,7 @@ export default function MyOrdersPage() {
           )}
         </CardContent>
       </Card>
+      )}
 
       <JobModal
         open={modal.open}
@@ -956,5 +970,79 @@ export default function MyOrdersPage() {
         />
       )}
     </div>
+  );
+}
+
+/*
+ * PendingAppAckRetired — the body shown for ?tab=pending-app-ack instead of a
+ * table. "Pending App Ack" is a LEGACY concept that the new offer-based
+ * assignment flow makes structurally impossible, so this page is intentionally
+ * NOT built out. The sidebar entry is disabled (Sidebar.tsx RETIRED_MENU_HREFS);
+ * this panel is reachable only by typing the URL and exists so a future
+ * developer/operator understands WHY the bucket is empty rather than assuming
+ * it was forgotten.
+ *
+ * Background (do not delete — this is the rationale, not decoration):
+ *  - Legacy: a job was assigned to ONE technician and stayed BOOKED (status 0)
+ *    with that tech attached, waiting for them to Accept/Reject in the app.
+ *    That "assigned-but-unacknowledged" state = status 0 + fk_easyfixter_id set.
+ *  - New CRM: a job is OFFERED to MANY technicians (tbl_job_offer). Acceptance
+ *    is a single atomic UPDATE that sets fk_easyfixter_id AND flips
+ *    BOOKED→SCHEDULED together, so a job never dwells in "status 0 + tech
+ *    attached". The waiting-for-acceptance state now lives in tbl_job_offer and
+ *    surfaces on the "Pending for Scheduling" page as the "Offered to Tx" chip.
+ *  - Any pre-existing legacy rows in this state are cleared from the old portal.
+ */
+function PendingAppAckRetired() {
+  return (
+    <Card>
+      <CardContent className="p-6 space-y-4">
+        <div className="flex items-center gap-2">
+          <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            Retired
+          </span>
+          <h2 className="text-lg font-semibold">Pending App Ack — not applicable in the new CRM</h2>
+        </div>
+
+        <p className="text-sm text-muted-foreground">
+          This bucket is a leftover from the legacy assignment model and is
+          intentionally <strong>not built out</strong> in the new CRM. Under the
+          offer-based flow it can never be populated, so it is kept visible only
+          as a signpost.
+        </p>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="rounded-md border border-border/60 p-4">
+            <h3 className="text-sm font-semibold">Legacy behaviour</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              A job was assigned to <strong>one</strong> technician and stayed{' '}
+              <em>Booked</em> with that technician attached, waiting for them to{' '}
+              <strong>Accept or Reject</strong> in the app. That
+              &ldquo;assigned-but-unacknowledged&rdquo; window <em>was</em> Pending App Ack.
+            </p>
+          </div>
+          <div className="rounded-md border border-border/60 p-4">
+            <h3 className="text-sm font-semibold">New offer-based flow</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              A job is <strong>offered to many</strong> technicians at once. The
+              first to accept wins in a single atomic step that attaches the
+              technician <em>and</em> moves the job straight to{' '}
+              <strong>Pending to Start</strong> — so a job never sits
+              assigned-but-unacknowledged.
+            </p>
+          </div>
+        </div>
+
+        <p className="text-sm text-muted-foreground">
+          The &ldquo;awaiting acceptance&rdquo; state now lives on the{' '}
+          <strong>Pending for Scheduling</strong> page, shown as the{' '}
+          <span className="rounded bg-orange-100 px-1.5 py-0.5 text-xs font-medium text-orange-800">
+            Offered to Tx
+          </span>{' '}
+          chip while offers are open. Any surviving legacy jobs in the old
+          Pending App Ack state are cleared from the old portal.
+        </p>
+      </CardContent>
+    </Card>
   );
 }
