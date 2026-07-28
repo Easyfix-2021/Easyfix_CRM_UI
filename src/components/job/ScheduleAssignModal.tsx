@@ -45,8 +45,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AlertTriangle, CheckCircle2, XCircle, Info, Search, X, MapPin,
-  Calendar, CalendarClock, Phone, Loader2, Clock, ChevronDown,
+  AlertTriangle, Search, X, Loader2, Clock,
 } from 'lucide-react';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -54,16 +53,12 @@ import {
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { api, ApiError, type JobOffersResponse } from '@/lib/api';
-import { formatServiceAddress } from '@/lib/format';
-import { useFetch, invalidateFetch } from '@/lib/hooks';
-import { JobRemarksView } from './JobRemarksView';
+import { useFetch, invalidateFetch, useDebouncedValue } from '@/lib/hooks';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
 import { formatDate, relativeTime } from '@/lib/utils';
-import { CallableMobile } from '@/components/calls/CallButton';
-import { StatusChip } from '@/components/ui/StatusChip';
 import { InfoTooltip } from '@/components/ui/tooltip';
 import { TablePagination, type TablePageSize } from '@/components/ui/table-pagination';
 import { showToast } from '@/components/ui/toast';
@@ -71,6 +66,10 @@ import { AddRemarksDialog } from './AddRemarksDialog';
 import { CancelWithReasonDialog } from './CancelWithReasonDialog';
 import { RescheduleDialog } from './RescheduleDialog';
 import { ST } from './JobModal';
+import { JobContextPanel, type JobServiceRow } from './JobContextPanel';
+import {
+  CandidateTable, PincodeListModal, type ScheduleCandidate,
+} from './CandidateTable';
 
 /* ── Time-slot options — mirror the values used in JobModal's Confirm
    form so a re-fetch against an edited slot keys on the same labels the
@@ -111,81 +110,15 @@ function deriveTimeSlot(datetimeLocal: string): string {
   return 'Anytime';
 }
 
-/* ── BE row shape (exact contract). ──────────────────────────────────── */
-type DistanceTier =
-  | 'same_pincode' | 'current_pincode' | 'in_zone' | 'out_of_zone' | 'unknown';
 /*
- * 'not_applicable' is its own state on purpose: the job names no Service
- * Category/Type, so there is no skill requirement to match against. It used to
- * collapse into 'both_available', making one green label mean both "matches"
- * and "nothing to match".
+ * The technician-row shape (`ScheduleCandidate`) + the CandidateTable /
+ * PincodeListModal that render it now live in ./CandidateTable, shared with
+ * AssignTechnicianModal so both surfaces present an identical picking table.
  */
-type DeepSkillStatus =
-  | 'both_available' | 'job_skill_not_available' | 'easyfixer_skills_not_available'
-  | 'not_applicable';
 
-export type ScheduleCandidate = {
-  efr_id: number;
-  efr_name: string;
-  /** Already masked by the BE mask-mobile middleware. */
-  mobile: string | null;
-  current_pincode: string | null;
-  zone_name: string | null;
-  serviceable_pincodes: string[];
-  distance_km: number | null;
-  distance_tier: DistanceTier;
-  attendance_for_job_date: boolean;
-  deep_skill_status: DeepSkillStatus;
-  deep_skill_match: boolean;
-  worked_in_category: boolean;
-  worked_for_client: boolean;
-  payment_mode: string | null;
-  account_balance: number;
-  concurrent_jobs_count: number;
-  same_slot_conflict: boolean;
-  /** Completed jobs (status 3/5) — mirrors Manage Easyfixers job_count. < 5 => "Fresher". */
-  job_count?: number;
-  // Existing ranking fields — optional so the search endpoint (which
-  // skips ranking) can omit them.
-  score?: number;
-  grade?: 'A+' | 'A' | 'B' | 'C' | 'D' | 'E';
-  avg_rating?: number;
-};
-
-type JobServiceRow = {
-  service_name: string | null;
-  service_catg: string | null;
-  service_type: string | null;
-  quantity: number | null;
-  total_charge: number | null;
-  /**
-   * Free/Paid for THIS service line. Derived BE-side in job.service.js getById
-   * from `effective_charge` (null/0 → Free, else Paid) using the same rule as
-   * the customer job-completion form, so both surfaces always agree.
-   * NOT the same thing as the job-level `collected_by` (who collects).
-   */
-  billing_label?: 'Free' | 'Paid' | null;
-  /**
-   * Deep skill(s) the Job Skill Matrix (tbl_service_skill_mapping, built from
-   * the Admin Action) says THIS service requires. A service legitimately maps
-   * to SEVERAL skills — the matrix stores one row per (service, skill) pair —
-   * so this is an array and every entry is rendered. An EMPTY array (or an
-   * absent field on an older BE) means the matrix holds no mapping for this
-   * service, which is what the "—" in the Job Skill column means.
-   *
-   * Display-only: candidate matching does NOT use this yet.
-   */
-  job_skills?: { deep_skill_id: number; deepskill_name: string | null; confidence: string | number | null; source?: string | null }[];
-  /**
-   * Highest `confidence` among `job_skills`. Typed to allow string because the
-   * column is DECIMAL(3,2) and mysql2 returns decimals verbatim as strings
-   * ('0.90' / '0.00') — passed through unformatted so this reads identically to
-   * the Confidence column on the Skill Matrix page. `null` ⇒ no mapping (or the
-   * matrix recorded no confidence); a real 0 arrives as '0.00', never null, so
-   * the two can't be confused.
-   */
-  job_skill_score?: string | number | null;
-};
+/* The per-service row shape (JobServiceRow) + the Services table + Job Details
+   grid it feeds now live in ./JobContextPanel, shared with AssignTechnicianModal
+   so both surfaces present identical job / services / remarks context. */
 
 type ScheduleJob = {
   job_id: number;
@@ -269,22 +202,6 @@ function localInputToWallClock(local: string): string {
   if (!local) return '';
   const withSecs = local.length === 16 ? `${local}:00` : local;
   return withSecs.replace('T', ' ');
-}
-
-/*
- * Job Skill Matrix cell text. A service can require SEVERAL deep skills, so all
- * mapped names are joined; unnamed rows (deleted deep skill) are dropped. Empty
- * string ⇒ the matrix has no mapping for this service and the cell shows "—".
- */
-function jobSkillNames(s: JobServiceRow): string {
-  return (s.job_skills ?? []).map((k) => k.deepskill_name).filter(Boolean).join(', ');
-}
-
-/* True when ANY mapped skill for this service was hand-made in the Job Skill
- * Matrix (tbl_service_skill_mapping.source='Manual'). Case-insensitive to match
- * the column's utf8mb4_0900_ai_ci collation and any un-normalised legacy rows. */
-function jobSkillIsManual(s: JobServiceRow): boolean {
-  return (s.job_skills ?? []).some((k) => String(k.source ?? '').toLowerCase() === 'manual');
 }
 
 export function ScheduleAssignModal({
@@ -487,12 +404,6 @@ export function ScheduleAssignModal({
   }, [topData]);
   const job = topData?.job ?? retainedJob;
 
-  // Job Details is collapsible but starts EXPANDED — ops read it on nearly every
-  // open; collapsing is for reclaiming height once they've moved on to picking a
-  // technician.
-  const [jobDetailsOpen, setJobDetailsOpen] = useState(true);
-
-
   // Effective commit mode from the BE (mirrors its own assign-vs-offer gate).
   //   ON  → offer pool: multi-select, "Offer to N Technicians" → POST /offer.
   //   OFF → direct assign: single-select, "Assign" → PATCH /assign (→ SCHEDULED).
@@ -502,8 +413,13 @@ export function ScheduleAssignModal({
   // (c) SEARCH — debounced via the box; keyed so it re-fires on schedule
   // edits too (computed columns must match the proposed schedule).
   const term = search.trim();
-  const searchKey = open && jobId && term
-    ? `/admin/jobs/${jobId}/candidates/search?term=${encodeURIComponent(term)}${seeded ? scheduleQs : ''}`
+  // Debounce the FETCHED term so the ranking-heavy /candidates/search endpoint
+  // fires once the operator pauses typing, not on every keystroke. The search
+  // Input stays bound to `search` (instant), so typing itself never lags; only
+  // the request (and the top-10↔search toggle) waits for the pause.
+  const debouncedTerm = useDebouncedValue(term, 300);
+  const searchKey = open && jobId && debouncedTerm
+    ? `/admin/jobs/${jobId}/candidates/search?term=${encodeURIComponent(debouncedTerm)}${seeded ? scheduleQs : ''}`
     : null;
   const searchRes = useFetch<SearchResponse>(searchKey, { enabled: !!searchKey });
 
@@ -524,8 +440,10 @@ export function ScheduleAssignModal({
     return () => clearInterval(id);
   }, [open]);
 
-  // Show search results when a term is present, otherwise the top-10.
-  const showingSearch = !!term;
+  // Show search results when a (debounced) term is present, otherwise the
+  // top-10. Keying off the debounced value avoids a flash of the empty search
+  // table while the operator is still mid-word.
+  const showingSearch = !!debouncedTerm;
   const rows: ScheduleCandidate[] = showingSearch
     ? (searchRes.data?.candidates ?? [])
     : (topData?.candidates ?? []);
@@ -539,7 +457,7 @@ export function ScheduleAssignModal({
 
   // A new term is a new result set — send the operator back to page 1 rather
   // than stranding them on a page that no longer exists.
-  useEffect(() => { setSearchPage(0); }, [term]);
+  useEffect(() => { setSearchPage(0); }, [debouncedTerm]);
 
   // The slice actually rendered. `rows` stays whole: the capped-results hint,
   // offer() and assignSingle() all resolve efr_ids against the FULL match set,
@@ -685,260 +603,20 @@ export function ScheduleAssignModal({
               This order isn’t in the “Pending for Scheduling” status — opened read-only. Schedule &amp; Assign is only available for booked, unassigned orders.
             </div>
           )}
-          {/* ───────── (a) COMPLETE JOB DETAILS + editable schedule ───────── */}
-          {/* Bordered card with an uppercase header button — same shell as
-              JobRemarksView so the two collapsibles in this modal read as one
-              family. Collapsible, expanded by default. A <button> (not a bare
-              div) so it's keyboard-reachable; aria-expanded carries state to AT. */}
-          <section className="rounded-md border bg-muted/30">
-            <button
-              type="button"
-              onClick={() => setJobDetailsOpen((o) => !o)}
-              aria-expanded={jobDetailsOpen}
-              className="flex w-full items-center gap-1.5 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-sky-700"
-            >
-              <ChevronDown
-                className={`h-3.5 w-3.5 shrink-0 transition-transform ${jobDetailsOpen ? '' : '-rotate-90'}`}
-              />
-              Job Details
-            </button>
-            {jobDetailsOpen && !job && (
-              <div className="border-t px-3 text-sm text-muted-foreground py-4">Loading job details…</div>
-            )}
-            {jobDetailsOpen && job && (
-              <div className="border-t p-3">
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-2 text-sm">
-                  <ReadField label="Customer" value={job.customer_name} />
-                  <ReadField
-                    label="Customer Mobile"
-                    value={
-                      <CallableMobile jobId={job.job_id} mobile={job.customer_mob_no} />
-                    }
-                  />
-                  <ReadField label="Client" value={job.client_name} />
-                  <ReadField label="Client Ref Id" value={job.client_ref_id} />
-                  {/* client_spoc IS the mobile (raw string on tbl_job, no SPOC id);
-                      it arrives masked. Dialling routes through the spocJobId
-                      target, which re-resolves the real number BE-side. */}
-                  <ReadField
-                    label="Client SPOC"
-                    value={
-                      job.client_spoc_name || job.client_spoc ? (
-                        <span className="inline-flex flex-col items-start">
-                          <span>{job.client_spoc_name || '—'}</span>
-                          {job.client_spoc && (
-                            <CallableMobile spocJobId={job.job_id} mobile={job.client_spoc} />
-                          )}
-                        </span>
-                      ) : null
-                    }
-                  />
-                  <ReadField
-                    label="Service Address"
-                    value={
-                      <span className="inline-flex items-start gap-1">
-                        <MapPin className="h-3.5 w-3.5 mt-0.5 shrink-0 text-muted-foreground" />
-                        {/* formatServiceAddress resolves to tbl_address.address ALONE
-                            (see lib/format.ts), so City is a separate field — it is
-                            not folded into the address string. */}
-                        <span>{formatServiceAddress(job)}</span>
-                      </span>
-                    }
-                  />
-                  <ReadField label="City" value={job.city_name} />
-                  {/* Service Category / Service Type / Deep Skill deliberately NOT
-                      here (removed 2026-07-15) — the Services table below is the
-                      authoritative, per-service breakdown of exactly that, and the
-                      job-level copies were both redundant and wrong for
-                      multi-service jobs. */}
-                  <ReadField label="Job Type" value={job.job_type} />
-                  <ReadField label="Payment Mode" value={job.payment_mode} />
-                  <ReadField label="Booked By" value={job.created_by_name} />
-                  {/* formatDate renders date + IST time — no separate datetime helper. */}
-                  <ReadField label="Booked On" value={formatDate(job.created_date_time)} />
-                </div>
-
-                {/* Job Description + Additional Comments — full-width under the
-                    grid because they're free text and wrap badly in a 3-col cell.
-                    `job_desc` is the ACTUAL tbl_job.job_desc; `efr_special_notes`
-                    is the technician-facing note ("Anything Handyman should keep
-                    in mind?" in the Book-New-Call form) surfaced here as
-                    "Additional Comments". */}
-                {(job.job_desc || job.efr_special_notes) && (
-                  <div className="mt-3 pt-3 border-t grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 text-sm">
-                    <ReadField label="Job Description" value={job.job_desc} />
-                    <ReadField label="Additional Comments" value={job.efr_special_notes} />
-                  </div>
-                )}
-
-                {job.services && job.services.length > 0 && (
-                  <div className="mt-3 pt-3 border-t">
-                    <div className="text-xs font-semibold text-muted-foreground mb-1.5">Services</div>
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-xs">
-                        <thead>
-                          <tr className="text-left text-muted-foreground">
-                            {/* Widths keep each service on ONE line: the four text
-                                columns truncate under pressure, while Qty / Amount /
-                                Score / Billing are content-sized and never wrap.
-                                The percentages were rebalanced (was 30/24/24) to fit
-                                Job Skill WITHOUT widening the modal. */}
-                            <th className="font-medium py-1 pr-3 w-[22%]">Service</th>
-                            <th className="font-medium py-1 pr-3 w-[17%]">Category</th>
-                            <th className="font-medium py-1 pr-3 w-[17%]">Type</th>
-                            {/* Job Skill / Job Matrix Score — what the Job Skill Matrix
-                                (Admin Actions → Job Skill Matrix) says this service
-                                needs, and how sure it is. Display-only: candidate
-                                matching still runs on category/deep-skill. */}
-                            <th className="font-medium py-1 pr-3 w-[22%]">Job Skill</th>
-                            <th className="font-medium py-1 pr-3 text-right whitespace-nowrap w-16">Job Matrix Score</th>
-                            <th className="font-medium py-1 pr-3 text-right whitespace-nowrap w-12">Qty</th>
-                            <th className="font-medium py-1 pr-3 text-right whitespace-nowrap w-20">Amount</th>
-                            {/* Does the customer pay? Driven by tbl_job.paid_by. */}
-                            <th className="font-medium py-1 whitespace-nowrap">Payment</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {job.services.map((s, i) => (
-                            <tr key={i} className="border-t border-border/60">
-                              {/* truncate + title: long rate-card names stay on one
-                                  line and reveal in full on hover. */}
-                              <td className="py-1 pr-3 max-w-0 truncate" title={s.service_name || undefined}>{s.service_name || '—'}</td>
-                              <td className="py-1 pr-3 max-w-0 truncate" title={s.service_catg || undefined}>{s.service_catg || '—'}</td>
-                              <td className="py-1 pr-3 max-w-0 truncate" title={s.service_type || undefined}>{s.service_type || '—'}</td>
-                              {/*
-                               * JOB SKILL — every deep skill the matrix maps this
-                               * service to, comma-joined. "—" means the matrix has
-                               * NO mapping for this service (not "zero skills
-                               * needed"); the tooltip says so out loud.
-                               */}
-                              <td className="py-1 pr-3 max-w-0">
-                                <div className="flex items-center gap-1 min-w-0">
-                                  <span className="truncate" title={jobSkillNames(s) || 'No mapping in the Job Skill Matrix'}>
-                                    {jobSkillNames(s) || '—'}
-                                  </span>
-                                  {jobSkillIsManual(s) && (
-                                    <span
-                                      className="shrink-0 inline-flex items-center rounded-full border border-indigo-200 bg-indigo-50 px-1.5 py-0 text-[9px] font-medium leading-tight text-indigo-600"
-                                      title="This skill mapping was made manually in the Job Skill Matrix"
-                                    >
-                                      Manual
-                                    </span>
-                                  )}
-                                </div>
-                              </td>
-                              {/*
-                               * JOB MATRIX SCORE — the HIGHEST confidence among the
-                               * mapped skills, printed verbatim to match the
-                               * Confidence column on the Skill Matrix page.
-                               * ⚠ Strict `!= null`, never a truthiness check: a real
-                               * score of 0 arrives as '0.00' and must render as
-                               * "0.00", visibly different from the "—" that means
-                               * the matrix has no mapping at all.
-                               */}
-                              <td
-                                className="py-1 pr-3 text-right whitespace-nowrap"
-                                title={
-                                  s.job_skill_score != null
-                                    ? 'Job Skill Matrix confidence (highest of the mapped skills)'
-                                    : jobSkillNames(s)
-                                      ? 'Mapped, but the matrix recorded no confidence'
-                                      : 'No mapping in the Job Skill Matrix'
-                                }
-                              >
-                                {s.job_skill_score != null ? s.job_skill_score : '—'}
-                              </td>
-                              <td className="py-1 pr-3 text-right whitespace-nowrap">{s.quantity ?? '—'}</td>
-                              <td className="py-1 pr-3 text-right whitespace-nowrap">{s.total_charge != null ? `₹${s.total_charge}` : '—'}</td>
-                              {/*
-                               * PAYMENT — does the customer pay for this job?
-                               * Driven solely by tbl_job.paid_by (2 = the customer
-                               * pays; anything else = they don't), per ops.
-                               *
-                               * ⚠ paid_by is per-JOB, so every service line shows the
-                               * SAME chip — it sits per-row because that's where ops
-                               * read it, not because the data varies. Deliberately NOT
-                               * keyed on the per-service `billing_label` (which only
-                               * says whether a CHARGE exists) nor on `collected_by`
-                               * (who physically collects): a line can carry ₹1000 and
-                               * still be free to the customer when the client is billed.
-                               * paid_by is the only column that answers who pays.
-                               */}
-                              <td className="py-1 whitespace-nowrap">
-                                {Number(job.paid_by) === 2 ? (
-                                  <StatusChip tone="amber" title="The customer pays for this job — collect on site.">
-                                    Paid by Customer
-                                  </StatusChip>
-                                ) : (
-                                  <StatusChip tone="emerald" title="Nothing to collect from the customer — the client is billed.">
-                                    Free for Customer
-                                  </StatusChip>
-                                )}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-
-                {/* READ-ONLY schedule row — Date/Time are locked; change only via
-                    the Reschedule dialog. Time Slot shows the stored
-                    booking_cut_off_time_slot (the customer's booked window). */}
-                <div className="mt-3 pt-3 border-t">
-                  <div className="flex flex-wrap items-end justify-between gap-3">
-                    <div className="flex flex-wrap gap-x-8 gap-y-2">
-                      <div className="space-y-0.5">
-                        <div className="text-xs font-medium text-muted-foreground flex items-center gap-1">
-                          <Calendar className="h-3.5 w-3.5" /> Job Date &amp; Time
-                        </div>
-                        <div className="text-sm font-medium text-foreground">
-                          {/* While the post-reschedule refetch is in flight, show a
-                              spinner rather than the stale pre-reschedule date. */}
-                          {rescheduling
-                            ? <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> Updating…</span>
-                            : (job.requested_date_time ? formatDate(job.requested_date_time) : '—')}
-                        </div>
-                      </div>
-                      <div className="space-y-0.5">
-                        <div className="text-xs font-medium text-muted-foreground flex items-center gap-1">
-                          <Clock className="h-3.5 w-3.5" /> Time Slot
-                        </div>
-                        <div className="text-sm font-medium text-foreground">
-                          {rescheduling
-                            ? <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> Updating…</span>
-                            : (job.booking_cut_off_time_slot || '—')}
-                        </div>
-                      </div>
-                    </div>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setRescheduleOpen(true)}
-                      className="gap-1.5"
-                    >
-                      <CalendarClock className="h-4 w-4" /> Reschedule
-                    </Button>
-                  </div>
-                  <p className="mt-2 text-[11px] text-muted-foreground">
-                    Job Date &amp; Time are locked. Use <b>Reschedule</b> to change the
-                    appointment — a reason and remarks are mandatory, and technicians
-                    are re-ranked against the new schedule.
-                  </p>
-                </div>
-              </div>
-            )}
-          </section>
-
-          {/* Job comments to date. Sits BETWEEN Job Details and the technician
-              list (moved up from the modal footer 2026-07-15) — it's context for
-              choosing a technician, so it belongs before the choice, not after
-              it. Collapsed by default so a long thread can't push the Top 10
-              off-screen; the header carries the count so ops can tell at a glance
-              whether it's worth opening. */}
-          <JobRemarksView key={remarksReloadKey} jobId={jobId} collapsible defaultOpen={false} />
+          {/* ───────── (a) COMPLETE JOB DETAILS + read-only schedule + remarks ─────────
+              Shared with the Assign / Reassign modals via <JobContextPanel>. The
+              Reschedule button + "locked" helper + the post-reschedule "Updating…"
+              veil are Schedule-&-Assign-only, wired via the flags below. The
+              collapsible Job Details starts expanded and Remarks starts collapsed —
+              byte-for-byte the same as before the extraction. */}
+          <JobContextPanel
+            job={job}
+            jobId={jobId}
+            remarksReloadKey={remarksReloadKey}
+            showReschedule
+            onReschedule={() => setRescheduleOpen(true)}
+            rescheduling={rescheduling}
+          />
 
           {/* ───────── Offer history — live + rejected + expired — offer mode only ───────── */}
           {offerMode && (offers.data?.items?.length ?? 0) > 0 && (
@@ -1297,386 +975,4 @@ export function ScheduleAssignModal({
       )}
     </Dialog>
   );
-}
-
-/* ── Read-only labelled field for section (a). ───────────────────────── */
-function ReadField({ label, value }: { label: string; value: React.ReactNode }) {
-  const empty = value == null || value === '';
-  return (
-    <div className="min-w-0">
-      <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</dt>
-      <dd className="text-sm text-foreground break-words">
-        {empty ? <span className="text-muted-foreground">—</span> : value}
-      </dd>
-    </div>
-  );
-}
-
-/* ───────────────────────── Technician table ─────────────────────────── */
-function CandidateTable({
-  rows, loading, error, showingSearch, canCommit, multiSelect, selected, onToggleSelected, onOpenPincodes, jobId,
-}: {
-  rows: ScheduleCandidate[];
-  loading: boolean;
-  error: string | null;
-  showingSearch: boolean;
-  canCommit: boolean;
-  /** TRUE → offer pool (checkboxes, many); FALSE → direct assign (radio, one). */
-  multiSelect: boolean;
-  selected: Map<number, 'top10' | 'search'>;
-  onToggleSelected: (efrId: number, source: 'top10' | 'search') => void;
-  onOpenPincodes: (c: ScheduleCandidate) => void;
-  /** Job the candidates are for — tags click-to-call rows so a call to a
-   *  candidate technician shows in this job's call history. */
-  jobId: number | null;
-}) {
-  // +1 column when the operator can commit: the select control (checkbox in
-  // offer mode, radio in direct-assign mode).
-  const COLS = canCommit ? 14 : 13;
-  return (
-    // Horizontal scroll ONLY (the 13-14 columns can't fit any laptop). There is
-    // deliberately no max-height: a capped inner scroller showed ~5 rows and
-    // forced ops to scroll a nested area inside an already-scrolling modal. The
-    // list is bounded instead — Top-10 by the BE's top-N, Search Results by the
-    // page size — so it's the modal body that scrolls, once.
-    <div className="border rounded overflow-x-auto thin-scroll">
-      <table
-        className="data-table text-xs whitespace-nowrap border-separate"
-        style={{ borderSpacing: 0 }}
-      >
-        <thead className="sticky top-0 bg-background z-40 shadow-sm">
-          <tr>
-            {/* These two are FROZEN, so they need an opaque background or
-                horizontally-scrolled cells bleed through. It must be `bg-muted`
-                — the shade `.data-table th` already paints every other header
-                cell (globals.css). They previously hard-coded `bg-white`, which
-                made them read as two pale boxes cut out of the grey header row;
-                the empty w-10 select cell in particular looked like a stray
-                artifact next to "Technician", most visibly while loading, when
-                the colSpan'd "Loading technicians…" row leaves nothing under it. */}
-            {canCommit && (
-              <th className="!text-center sticky top-0 left-0 bg-muted z-50 w-10" aria-label="Select" />
-            )}
-            <th
-              className={
-                '!text-left sticky top-0 bg-muted z-50 shadow-[2px_0_0_0_var(--border)] min-w-[190px] ' +
-                (canCommit ? 'left-10' : 'left-0')
-              }
-            >
-              Technician
-            </th>
-            <th className="!text-center">Attendance for Job Date</th>
-            <th className="!text-center">Current Pincode</th>
-            <th className="!text-left min-w-[160px]">Serviceable Pincodes</th>
-            <th className="!text-center">
-              <span className="inline-flex items-center gap-1">
-                Distance
-                <DistanceTierInfo />
-              </span>
-            </th>
-            <th className="!text-left">Zone Name</th>
-            <th className="!text-left min-w-[180px]">Deep Skill Status</th>
-            <th className="!text-center">Deep Skill Match</th>
-            <th className="!text-center">Worked in Category?</th>
-            <th className="!text-center">Worked for Client?</th>
-            <th className="!text-center">Concurrent Jobs Count</th>
-            <th className="!text-right">Easyfixer Account Balance</th>
-            <th className="!text-left">Masked Mobile</th>
-          </tr>
-        </thead>
-        <tbody>
-          {loading && (
-            <tr><td colSpan={COLS} className="!text-center text-muted-foreground py-6">Loading technicians…</td></tr>
-          )}
-          {!loading && error && (
-            <tr><td colSpan={COLS} className="!text-center text-red-700 py-6">{error}</td></tr>
-          )}
-          {!loading && !error && rows.length === 0 && (
-            <tr>
-              <td colSpan={COLS} className="!text-center text-muted-foreground py-6">
-                {showingSearch
-                  ? 'No technicians match your search.'
-                  : 'No eligible technicians for this schedule.'}
-              </td>
-            </tr>
-          )}
-          {!loading && !error && rows.map((c) => {
-            const isSelected = selected.has(c.efr_id);
-            return (
-            <tr
-              key={c.efr_id}
-              className={'group hover:bg-muted/40 ' + (isSelected ? 'bg-primary/5' : '')}
-            >
-              {/* Offer-pool select checkbox — sticky left so it stays reachable
-                  no matter how far the wide table is scrolled horizontally.
-                  Toggling membership adds/removes the tech from the offer. */}
-              {canCommit && (
-                <td className={'!text-center sticky left-0 z-20 w-10 ' + (isSelected ? 'bg-primary/5' : 'bg-white group-hover:bg-slate-100')}>
-                  <input
-                    type={multiSelect ? 'checkbox' : 'radio'}
-                    name={multiSelect ? undefined : 'assign-select'}
-                    checked={isSelected}
-                    onChange={() => onToggleSelected(c.efr_id, showingSearch ? 'search' : 'top10')}
-                    aria-label={`Select ${c.efr_name}`}
-                    className="h-4 w-4 cursor-pointer accent-primary align-middle"
-                  />
-                </td>
-              )}
-              {/* Technician (name + efr_id) — sticky left identifier, offset
-                  past the checkbox column when present. */}
-              <td className={'!text-left sticky z-20 group-hover:bg-slate-100 shadow-[2px_0_0_0_var(--border)] min-w-[190px] ' + (canCommit ? 'left-10' : 'left-0') + ' ' + (isSelected ? 'bg-primary/5' : 'bg-white')}>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <span className="font-medium truncate" title={c.efr_name}>{c.efr_name}</span>
-                    {c.job_count != null && c.job_count < 5 && (
-                      <StatusChip tone="sky" size="sm" className="shrink-0" title="Completed Less Than 5 Jobs Till Now">Fresher</StatusChip>
-                    )}
-                  </div>
-                  <div className="text-[10px] text-muted-foreground">Efr #{c.efr_id}</div>
-                </div>
-              </td>
-
-              {/* Attendance for Job Date — green tick / red cross. */}
-              <td className="!text-center">
-                {c.attendance_for_job_date
-                  ? <CheckCircle2 className="inline h-4 w-4 text-emerald-600" aria-label="Present on job date" />
-                  : <XCircle className="inline h-4 w-4 text-red-500" aria-label="No attendance for job date" />}
-              </td>
-
-              {/* Current Pincode. */}
-              <td className="!text-center">
-                {c.current_pincode || <span className="text-muted-foreground">—</span>}
-              </td>
-
-              {/* Serviceable Pincodes — truncated, hover list, click-to-open. */}
-              <td className="!text-left">
-                <ServiceablePincodesCell candidate={c} onOpen={() => onOpenPincodes(c)} />
-              </td>
-
-              {/* Distance — km on top, tier label muted underneath. */}
-              <td className="!text-center">
-                <DistanceCell km={c.distance_km} tier={c.distance_tier} />
-              </td>
-
-              {/* Zone Name. */}
-              <td className="!text-left">
-                {c.zone_name || <span className="text-muted-foreground">—</span>}
-              </td>
-
-              {/* Deep Skill Status — 3-state enum → label. */}
-              <td className="!text-left">{deepSkillStatusLabel(c.deep_skill_status)}</td>
-
-              {/* Deep Skill Match. */}
-              <td className="!text-center"><YesNo value={c.deep_skill_match} /></td>
-
-              {/* Worked in Category? */}
-              <td className="!text-center"><YesNo value={c.worked_in_category} /></td>
-
-              {/* Worked for Client? */}
-              <td className="!text-center"><YesNo value={c.worked_for_client} /></td>
-
-              {/* Concurrent Jobs Count. */}
-              <td className="!text-center tabular-nums">{c.concurrent_jobs_count ?? 0}</td>
-
-              {/* Easyfixer Account Balance. */}
-              <td className="!text-right font-mono">₹{(c.account_balance ?? 0).toLocaleString('en-IN')}</td>
-
-              {/* Masked Mobile — click-to-call via the shared CallableMobile
-                  (resolves unmasked digits server-side from efr_id). */}
-              <td className="!text-left">
-                {c.mobile
-                  ? (
-                    <span className="inline-flex items-center gap-1">
-                      <CallableMobile efrId={c.efr_id} jobContextId={jobId ?? undefined} mobile={c.mobile} />
-                    </span>
-                  )
-                  : <span className="text-muted-foreground inline-flex items-center gap-1"><Phone className="h-3 w-3" />—</span>}
-              </td>
-            </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-/* ── Distance km + tier label cell. ─────────────────────────────────── */
-const TIER_LABEL: Record<DistanceTier, string | null> = {
-  same_pincode: 'Same as Job Pincode',
-  current_pincode: 'Current Pincode',
-  in_zone: 'In Job Zone',
-  out_of_zone: 'Out of Zone',
-  unknown: null,
-};
-function DistanceCell({ km, tier }: { km: number | null; tier: DistanceTier }) {
-  const label = TIER_LABEL[tier];
-  return (
-    <div className="leading-tight">
-      <div className="font-medium tabular-nums">
-        {km == null ? <span className="text-muted-foreground">—</span> : `${km.toFixed(1)} km`}
-      </div>
-      {label && <div className="text-[10px] text-muted-foreground">({label})</div>}
-    </div>
-  );
-}
-
-/* ── (i) info tooltip explaining the 3-tier distance criteria. CSS
-   group-hover popover — no shared Tooltip primitive exists in this repo
-   (the convention is native title= / details / hover popovers). ───────── */
-function DistanceTierInfo() {
-  return (
-    <span className="group/info relative inline-flex">
-      <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
-      <span
-        role="tooltip"
-        className="pointer-events-none absolute left-1/2 top-full z-50 mt-1 hidden w-64 -translate-x-1/2 rounded-md border bg-white p-2 text-left text-[11px] font-normal normal-case leading-snug text-foreground shadow-lg group-hover/info:block"
-      >
-        <strong className="block mb-1">How distance is matched</strong>
-        <span className="block"><strong>Same as Job Pincode</strong> — a serviceable pincode equals the job pincode.</span>
-        <span className="block mt-0.5"><strong>Current Pincode</strong> — the technician&apos;s current pincode compared to the job pincode.</span>
-        <span className="block mt-0.5"><strong>In Job Zone</strong> — a serviceable pincode in the same zone as the job pincode.</span>
-        <span className="block mt-1 text-muted-foreground">Distance is the real road-distance estimate between geocoded pincode centroids.</span>
-      </span>
-    </span>
-  );
-}
-
-/* ── Serviceable-pincodes cell: truncated CSV + hover ordered list +
-   click-to-open searchable modal. "Not Available" when empty. ─────────── */
-function ServiceablePincodesCell({
-  candidate, onOpen,
-}: {
-  candidate: ScheduleCandidate;
-  onOpen: () => void;
-}) {
-  const list = candidate.serviceable_pincodes ?? [];
-  if (list.length === 0) {
-    return <span className="text-muted-foreground">Not Available</span>;
-  }
-  const TRUNCATE = 3;
-  const shown = list.slice(0, TRUNCATE).join(', ');
-  const extra = list.length - TRUNCATE;
-  return (
-    <span className="group/pin relative inline-flex items-center gap-1">
-      <button
-        type="button"
-        onClick={onOpen}
-        className="text-left text-primary hover:underline"
-        title="Click to view and filter all serviceable pincodes"
-      >
-        {shown}
-        {extra > 0 && <span className="text-muted-foreground"> +{extra} more</span>}
-      </button>
-      {extra > 0 && (
-        <span
-          role="tooltip"
-          className="pointer-events-none absolute left-0 top-full z-50 mt-1 hidden max-h-48 w-44 overflow-auto rounded-md border bg-white p-2 text-left shadow-lg group-hover/pin:block"
-        >
-          <span className="block text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
-            All Serviceable Pincodes
-          </span>
-          <ol className="list-decimal list-inside space-y-0.5 text-[11px] text-foreground">
-            {list.map((p) => <li key={p}>{p}</li>)}
-          </ol>
-        </span>
-      )}
-    </span>
-  );
-}
-
-/* ── Click-to-open searchable pincode modal (filter box + full list). ─── */
-function PincodeListModal({
-  candidate, onClose,
-}: {
-  candidate: ScheduleCandidate | null;
-  onClose: () => void;
-}) {
-  const [filter, setFilter] = useState('');
-  useEffect(() => { if (!candidate) setFilter(''); }, [candidate]);
-
-  const list = candidate?.serviceable_pincodes ?? [];
-  const filtered = filter.trim()
-    ? list.filter((p) => p.includes(filter.trim()))
-    : list;
-
-  // Read-only list modal — purely a filter-and-read view of pincodes,
-  // it captures NO user input that could be lost, so the discard-changes
-  // guard is intentionally skipped here (documented disable per the
-  // house rule for read-only modals).
-  return (
-    // eslint-disable-next-line no-restricted-syntax -- read-only pincode viewer: no dirty state to guard
-    <Dialog open={!!candidate} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-md" hideClose>
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            Serviceable Pincodes
-            {candidate && (
-              <span className="text-sm font-normal text-slate-300">· {candidate.efr_name}</span>
-            )}
-          </DialogTitle>
-        </DialogHeader>
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Filter pincodes…"
-            className="pl-9"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-          />
-        </div>
-        <div className="mt-3 max-h-72 overflow-auto rounded border thin-scroll">
-          {filtered.length === 0 ? (
-            <div className="p-4 text-center text-sm text-muted-foreground">
-              {list.length === 0 ? 'Not Available' : 'No pincodes match the filter.'}
-            </div>
-          ) : (
-            <ol className="list-decimal list-inside divide-y text-sm">
-              {filtered.map((p) => (
-                <li key={p} className="px-3 py-1.5">{p}</li>
-              ))}
-            </ol>
-          )}
-        </div>
-        <p className="mt-1 text-[11px] text-muted-foreground">
-          {filtered.length} of {list.length} pincode{list.length === 1 ? '' : 's'}
-        </p>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Close</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/* ── Deep Skill Status enum → display label. ─────────────────────────── */
-function deepSkillStatusLabel(status: DeepSkillStatus): React.ReactNode {
-  switch (status) {
-    case 'both_available':
-      return <span className="text-emerald-700">Has Required Job Skill</span>;
-    case 'job_skill_not_available':
-      return <span className="text-amber-700">Technician Missing Job Skill</span>;
-    case 'easyfixer_skills_not_available':
-      return <span className="text-red-700">Technician Has No Skills</span>;
-    /*
-     * Neutral, never green. The job carries no Service Category/Type, so no
-     * technician can be said to match or miss it — showing this as a positive
-     * would claim a fit that was never assessed.
-     */
-    case 'not_applicable':
-      return (
-        <span className="text-muted-foreground" title="This job has no Service Category or Type, so there is no skill requirement to match against.">
-          Not Applicable
-        </span>
-      );
-    default:
-      return <span className="text-muted-foreground">—</span>;
-  }
-}
-
-/* ── Yes/No cell. ────────────────────────────────────────────────────── */
-function YesNo({ value }: { value: boolean }) {
-  return value
-    ? <span className="text-emerald-700 font-medium">Yes</span>
-    : <span className="text-muted-foreground">No</span>;
 }

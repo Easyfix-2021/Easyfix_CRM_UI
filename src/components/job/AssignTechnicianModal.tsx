@@ -1,33 +1,44 @@
 'use client';
 
 /*
- * Assign / Reassign Technician — wide modal driven by the layered ranking
- * pipeline in EasyFix_Backend/services/candidate-ranking.service.js.
+ * Assign / Reassign Technician.
  *
  * Used on:
- *   - /my-orders (Pending Scheduling tab)  → mode='assign'
- *   - /my-orders (Pending Start tab)       → mode='reassign'
- *   - any future surface where ops need to pick a tech for a job
+ *   - /my-orders via ?action=assign   → mode='assign'   (BOOKED / status 0)
+ *   - /my-orders via ?action=reassign → mode='reassign' (SCHEDULED / status 1,
+ *     opened from the Pending-to-Start rows)
  *
- * The hard work (eligibility, scoring, deep-skill fallback, balance gate)
- * is on the backend. This component is a thin viewer + commit button.
+ * This modal now presents the SAME technician-picking experience as
+ * Schedule & Assign: it renders the shared <CandidateTable> (distance /
+ * current pincode / serviceable pincodes / zone / deep-skill status /
+ * worked-for-client … columns) fed by the ranked Top-10, plus the SAME
+ * server-side technician search (GET /admin/jobs/:id/candidates/search) so
+ * ops can pick anyone outside the Top-10 hard filters.
  *
- * Backend response shape — see service docstring. Key fields the modal
- * reads:
- *   - candidates[]   the ranked + filtered list
- *   - note           'no_deep_skill_match' | 'no_eligible_techs' | null
- *   - rejected[]     L2 drops (saturated / time-conflict) for the small
- *                    operator-visible list at the bottom
- *   - alreadyAssigned indicates a reassign rather than a fresh assign
+ * The ONLY difference from Schedule & Assign is the COMMIT: this is always a
+ * single-technician direct assign — PATCH /admin/jobs/:id/assign
+ * { easyfixerId } — never an offer pool. That path fires (fire-and-forget):
+ *   - RescheduleTech webhook (reassign, existing tech ≠ new) OR TechAssigned
+ *     (fresh assign) — the BE picks by the job's DB state, not a client flag.
+ *   - FCM push to the chosen technician.
+ *   - Failure-notification email if anything errors before commit.
+ * All gated by per-client running_frequency + global NOTIFICATIONS_DISABLE,
+ * exactly the way auto-assign honours them — nothing extra is passed here.
+ *
+ * Backend contract (shared with ScheduleAssignModal — one endpoint, one row
+ * shape built by candidate-ranking.service.js `buildCandidateRow`):
+ *   GET /admin/jobs/:id/candidates?limit=10           → ranked Top-10
+ *   GET /admin/jobs/:id/candidates/search?term=<q>     → match-anyone search
+ * In Reassign mode the BE pins the currently-assigned technician first with
+ * `is_current=true`; <CandidateTable> highlights that row and makes it
+ * non-selectable (you can't reassign a job to the technician already on it).
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, Search, X, Loader2 } from 'lucide-react';
 import {
-  AlertTriangle, CheckCircle2, MapPin, Wallet, Briefcase, Star,
-  Clock, Zap, UserCheck, Calendar, Search, X,
-  ArrowUp, ArrowDown,
-} from 'lucide-react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { api, ApiError } from '@/lib/api';
@@ -35,68 +46,33 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
-import { useFetch } from '@/lib/hooks';
+import { useFetch, invalidateFetch, useDebouncedValue } from '@/lib/hooks';
+import { InfoTooltip } from '@/components/ui/tooltip';
+import { TablePagination, type TablePageSize } from '@/components/ui/table-pagination';
+import { showToast } from '@/components/ui/toast';
+import { JobContextPanel, type JobContextData } from './JobContextPanel';
+import { CandidateTable, PincodeListModal, type ScheduleCandidate } from './CandidateTable';
+import { AddRemarksDialog } from './AddRemarksDialog';
+import { RescheduleDialog } from './RescheduleDialog';
 
-type Candidate = {
-  efr_id: number;
-  efr_name: string;
-  efr_no: string | null;
-  efr_email: string | null;
-  city_name: string | null;
-  current_balance: number;
-  active_jobs: number;
-  avg_rating: number;
-  avg_tat_hours: number | null;
-  // tat_history / sda_history flag whether the candidate has any completed
-  // jobs in the lookback window. When false, the displayed value is "No
-  // Completed Jobs" (versus a real 0% / 0h reading), and the score uses the
-  // configured default_tat_score / default_sda_score from settings.
-  tat_history: boolean;
-  sda_rate: number | null;
-  sda_history: boolean;
-  worked_for_client: boolean;
-  worked_for_vertical: boolean;
-  attendance_marked: boolean;
-  // True when the technician has at least one ACTIVE deep-skill mapping
-  // matching the job's category (and service-type, if set). Even when the
-  // L1 fallback fires and EVERY candidate has has_deep_skill=false, the
-  // flag still drives a per-row red X so operators see the constraint
-  // they're overriding when picking from the fallback list.
-  has_deep_skill: boolean;
-  score: number;
-  performance: number;
-  grade: 'A+' | 'A' | 'B' | 'C' | 'D' | 'E';
-  breakdown: {
-    rating: number; tat: number; sda: number;
-    worked_for_client: number; worked_for_vertical: number;
-    attendance: number;
-  };
-  // True for the row representing the technician currently assigned to
-  // this job — backend pins them at the top of the list in Reassign mode.
-  is_current?: boolean;
+/* Job context carried on the candidates response — the SAME enriched job object
+   Schedule & Assign reads, rendered by the shared <JobContextPanel>. Typed as
+   JobContextData (the panel's shape) so the full details / services / remarks
+   scaffolding gets everything it needs; the BE returns a superset. */
+type CandidatesResponse = {
+  job: JobContextData;
+  alreadyAssigned?: boolean;
+  note?: 'no_deep_skill_match' | 'no_eligible_techs' | string | null;
+  l1Count?: number;
+  l2Count?: number;
+  candidates: ScheduleCandidate[];
+  rejected?: Array<{ efr_id: number; efr_name: string | null; reason: string }>;
 };
 
-type RankResponse = {
-  job: {
-    job_id: number;
-    city_name: string | null;
-    pin_code: string | null;
-    service_category: string | null;
-    requested_date_time: string | null;
-    time_slot: string | null;
-    paid_by: string | number | null;
-    /** Human label resolved from the paid_by integer ('Customer' | 'NE' | 'Easyfix' | 'NA'). */
-    paid_by_label: string;
-    /** "Carpentry › Wood Repair" — the deep-skill required for this job. */
-    deep_skill_label: string | null;
-  };
-  alreadyAssigned: boolean;
-  note: 'no_deep_skill_match' | 'no_eligible_techs' | null;
-  l1Count: number;
-  l2Count: number;
-  candidates: Candidate[];
-  rejected: Array<{ efr_id: number; efr_name: string; reason: string }>;
-  config: { account_balance_floor: number; max_concurrent: number };
+type SearchResponse = {
+  job?: JobContextData;
+  candidates: ScheduleCandidate[];
+  capped?: boolean;
 };
 
 export type AssignMode = 'assign' | 'reassign';
@@ -111,10 +87,10 @@ export function AssignTechnicianModal({
   jobId: number | null;
   mode: AssignMode;
 }) {
-  // Modal-internal permission gate. Each per-row Assign button maps to
-  // the same legacy action key as the entry icon on my-orders, so a user
-  // who can open this modal but not actually commit will see a read-only
-  // view with the Assign buttons hidden.
+  // Modal-internal permission gate. Each per-row select maps to the same legacy
+  // action key as the entry icon on my-orders, so a user who can open this modal
+  // but not actually commit sees a read-only view with the select column and
+  // commit button hidden.
   const { me } = useMe();
   // Deep-link hardening: this modal opens from a shareable ?action=assign|reassign
   // URL for ANY jobId. Assign is valid only for a BOOKED (0) job, Reassign only
@@ -128,448 +104,455 @@ export function AssignTechnicianModal({
     ? hasAction(me, 'isJobReassign')
     : hasAction(me, 'isJobAssign')) && !statusIneligible;
   const confirmAction = useConfirm();
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [data, setData] = useState<RankResponse | null>(null);
-  const [search, setSearch] = useState('');
-  const [assigning, setAssigning] = useState<number | null>(null);
 
+  const [search, setSearch] = useState('');
+  // Single-select pool — at most one technician (direct-assign, never an offer
+  // pool). Kept as a Map to satisfy <CandidateTable>'s selection contract; the
+  // toggle below enforces the single-entry invariant.
+  const [selected, setSelected] = useState<Map<number, 'top10' | 'search'>>(new Map());
+  const [committing, setCommitting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [pincodeModalFor, setPincodeModalFor] = useState<ScheduleCandidate | null>(null);
+  // Search-results paging — CLIENT-side slice over the (BE-capped) match set,
+  // mirroring Schedule & Assign. The Top-10 is a fixed top-N and is not paged.
+  const [searchPage, setSearchPage] = useState(0);
+  const [searchPageSize, setSearchPageSize] = useState<TablePageSize>(10);
+
+  // Footer "Add Remarks" + panel "Reschedule" — reuse JobModal's extracted
+  // dialogs so both behave exactly as they do in Schedule & Assign.
+  const [remarksOpen, setRemarksOpen] = useState(false);
+  const [rescheduleOpen, setRescheduleOpen] = useState(false);
+  // Bump to REMOUNT the JobContextPanel's remarks thread after a remark or a
+  // reschedule (JobRemarksView owns its own useFetch, which cache-invalidation
+  // alone can't re-run — see the onSaved / onDone handlers below).
+  const [remarksReloadKey, setRemarksReloadKey] = useState(0);
+  // True from reschedule-submit until the candidate refetch settles — veils the
+  // schedule row + Top-10 so ops never sees the pre-reschedule date / ranking.
+  const [rescheduling, setRescheduling] = useState(false);
+  // Guards the veil clear: only fire once the refetch has actually STARTED
+  // (top went refreshing) and then SETTLED — not on the render before it kicks in.
+  const rescheduleRefetchStarted = useRef(false);
+
+  // Reset transient state whenever the modal closes / the job changes.
   useEffect(() => {
-    if (!open || !jobId) {
-      setData(null); setErr(null); setSearch(''); setAssigning(null);
-      return;
-    }
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setSearch(''); setSelected(new Map()); setCommitting(false); setErr(null);
+    setPincodeModalFor(null); setSearchPage(0); setSearchPageSize(10);
+    setRemarksOpen(false); setRescheduleOpen(false);
+    setRemarksReloadKey(0); setRescheduling(false);
+    rescheduleRefetchStarted.current = false;
   }, [open, jobId]);
 
-  async function load() {
-    setLoading(true); setErr(null);
-    try {
-      const r = await api.get<RankResponse>(`/admin/jobs/${jobId}/candidates?limit=100`);
-      setData(r);
-    } catch (e) {
-      setErr(e instanceof ApiError ? e.message : 'Failed to load candidates');
-    } finally {
-      setLoading(false);
-    }
+  // Single-select toggle: picking one replaces the prior pick; re-clicking the
+  // same row clears it. Never grows beyond one entry.
+  function toggleSelected(efrId: number, source: 'top10' | 'search') {
+    setSelected((prev) => (prev.has(efrId) ? new Map() : new Map([[efrId, source]])));
   }
 
-  async function assign(c: Candidate) {
+  // (b) TOP 10 — ranked against the job's stored schedule (no date/slot editing
+  // here; reassign/assign keep the persisted appointment).
+  const topKey = open && jobId ? `/admin/jobs/${jobId}/candidates?limit=10` : null;
+  const top = useFetch<CandidatesResponse>(topKey, { enabled: !!topKey });
+
+  // Trust the payload only when it is THIS job — useFetch keeps the previous
+  // payload while a new key loads, so on a jobId swap `top.data` briefly holds
+  // the old job (see the same guard in ScheduleAssignModal).
+  const topData = top.data && Number(top.data.job?.job_id) === Number(jobId) ? top.data : null;
+
+  // Clear the post-reschedule veil once the candidate refetch has both STARTED
+  // (top.refreshing went true) and SETTLED (back to false) — so the new date +
+  // re-ranked list are in before we drop the veil. Keyed on the refetch
+  // lifecycle (not on the date changing) so it can't get stuck if ops
+  // reschedules to a coincidentally-identical time.
+  useEffect(() => {
+    if (!rescheduling) return;
+    if (top.loading || top.refreshing) { rescheduleRefetchStarted.current = true; return; }
+    if (rescheduleRefetchStarted.current) setRescheduling(false);
+  }, [rescheduling, top.loading, top.refreshing]);
+
+  // (c) SEARCH — match-anyone, keyed on the trimmed term. No schedule params:
+  // computed columns match the job's persisted schedule.
+  const term = search.trim();
+  // Debounce the FETCHED term so the ranking-heavy /candidates/search endpoint
+  // fires once the operator pauses typing, not on every keystroke. The search
+  // Input stays bound to `search` (instant), so typing itself never lags; only
+  // the request (and the top-10↔search toggle) waits for the pause.
+  const debouncedTerm = useDebouncedValue(term, 300);
+  const searchKey = open && jobId && debouncedTerm
+    ? `/admin/jobs/${jobId}/candidates/search?term=${encodeURIComponent(debouncedTerm)}`
+    : null;
+  const searchRes = useFetch<SearchResponse>(searchKey, { enabled: !!searchKey });
+
+  const showingSearch = !!debouncedTerm;
+  const rows: ScheduleCandidate[] = showingSearch
+    ? (searchRes.data?.candidates ?? [])
+    : (topData?.candidates ?? []);
+  // `top.loading` is FALSE while a stale payload is on screen (the hook reports
+  // `refreshing` instead) — treat "no payload for THIS job yet" as loading.
+  // `rescheduling` forces the loading state during the post-reschedule refetch
+  // so the Top-10 doesn't show the OLD ranking (ranked against the old date).
+  const listLoading = showingSearch ? searchRes.loading : (top.loading || !topData || rescheduling);
+  const listError = showingSearch ? searchRes.error : top.error;
+
+  // A new (debounced) term is a new result set — reset to page 1.
+  useEffect(() => { setSearchPage(0); }, [debouncedTerm]);
+
+  const pageRows = useMemo(() => {
+    if (!showingSearch || searchPageSize === 'all') return rows;
+    const start = searchPage * searchPageSize;
+    return rows.slice(start, start + searchPageSize);
+  }, [rows, showingSearch, searchPage, searchPageSize]);
+
+  const job = topData?.job ?? null;
+  const note = topData?.note ?? null;
+  const verb = mode === 'reassign' ? 'Reassign' : 'Assign';
+
+  // Commit — single-technician direct assign. PATCH /admin/jobs/:id/assign with
+  // the correct `easyfixerId` (the Joi assignBody's required field); the BE
+  // fires RescheduleTech (reassign) / TechAssigned (assign) + FCM off the job's
+  // DB state, so no notification flags are passed from here.
+  async function commitAssign() {
     if (!jobId) return;
-    const verb = mode === 'reassign' ? 'Reassign' : 'Assign';
-    /*
-     * Manual assignment from this modal hits PATCH /admin/jobs/:id/assign,
-     * which is the SAME backend path auto-assign uses post-pick. That path
-     * fires (asynchronously, fire-and-forget):
-     *   - TechAssigned webhook (or RescheduleTech on reassign) — dispatched
-     *     to subscribed clients per webhook-event mappings.
-     *   - FCM push to the chosen technician's device.
-     *   - Failure-notification email if anything errors before commit.
-     * All gated by per-client running_frequency + global NOTIFICATIONS_DISABLE,
-     * exactly the way auto-assign honours them.
-     *
-     * No additional notification flags need to be passed from this modal —
-     * we deliberately mirror auto-assign behaviour so manual and automated
-     * paths produce the same downstream effects.
-     */
+    const id = [...selected.keys()][0];
+    if (id == null) return;
+    const cand = rows.find((r) => r.efr_id === id);
+    const name = cand?.efr_name ?? `Efr #${id}`;
+    const noSkill = cand ? cand.deep_skill_match !== true : false;
     const ok = await confirmAction({
-      title: `${verb} this job to ${c.efr_name}?`,
-      description:
-        `Job #${jobId} will be ${mode === 'reassign' ? 'reassigned' : 'assigned'} to ${c.efr_name} ` +
-        `(${c.efr_no ?? '—'}, ${c.city_name ?? 'no city'}). Score ${c.score.toFixed(2)} · Grade ${c.grade}.\n\n` +
-        `The technician will receive a push notification, the configured client webhook ` +
-        `(${mode === 'reassign' ? 'RescheduleTech' : 'TechAssigned'}) will fire, and any failure ` +
-        `notifications will route per the auto-allocation settings.` +
-        (!c.has_deep_skill
-          ? '\n\n⚠ This technician does NOT hold the deep-skill required for this job.'
-          : ''),
-      confirmLabel: `Yes, ${verb.toLowerCase()}`,
+      title: `${verb} Job #${jobId} to ${name}?`,
+      icon: <AlertTriangle className="h-5 w-5" />,
+      iconAccent: 'sky',
+      description: (
+        <div className="space-y-3">
+          <p>
+            Job <b>#{jobId}</b> will be {mode === 'reassign' ? 'reassigned' : 'assigned'} to{' '}
+            <b>{name}</b> (Efr #{id}){cand?.mobile ? <> · {cand.mobile}</> : null}.
+          </p>
+          <ul className="space-y-1.5 text-sm">
+            <li>• The technician gets a <b>push notification</b></li>
+            <li>• The <b>{mode === 'reassign' ? 'RescheduleTech' : 'TechAssigned'}</b> client webhook fires</li>
+            <li>• Failure notifications route per the auto-allocation settings</li>
+          </ul>
+          {noSkill && (
+            <p className="text-amber-700">
+              ⚠ This technician does not hold the deep skill required for this job.
+            </p>
+          )}
+        </div>
+      ),
+      confirmLabel: `Yes, ${verb}`,
     });
     if (!ok) return;
-    setAssigning(c.efr_id); setErr(null);
+    setCommitting(true); setErr(null);
     try {
-      await api.patch(`/admin/jobs/${jobId}/assign`, { easyfixer_id: c.efr_id });
-      onAssigned?.(c.efr_id, c.efr_name);
+      await api.assignJob(jobId, id);
+      onAssigned?.(id, name);
       onClose();
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : 'Assign failed');
+      setErr(e instanceof ApiError ? e.message : `${verb} failed`);
     } finally {
-      setAssigning(null);
+      setCommitting(false);
     }
   }
 
-  // Sort state — defaults to backend order (score desc with the current
-  // tech pinned first in Reassign). Click cycle on the same column:
-  //   1st click → ascending
-  //   2nd click → descending
-  //   3rd click → off (returns to backend's default order)
-  // Clicking a different column starts the cycle fresh on that column.
-  // Inactive columns don't render an arrow at all — only the active sort
-  // column shows up/down. Keeps the header strip visually quiet.
-  type SortKey =
-    | 'efr_name' | 'city_name' | 'active_jobs' | 'current_balance'
-    | 'avg_rating' | 'avg_tat_hours' | 'sda_rate'
-    | 'worked_for_client' | 'worked_for_vertical' | 'attendance_marked'
-    | 'has_deep_skill'
-    | 'score' | 'grade';
-  const [sortBy,  setSortBy]  = useState<SortKey | null>(null);
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
-  function onSort(col: SortKey) {
-    if (sortBy !== col) {
-      // First click on this column: ascending.
-      setSortBy(col); setSortDir('asc');
-      return;
-    }
-    // Same column — advance through the 3-state cycle.
-    if (sortDir === 'asc')  { setSortDir('desc'); return; }
-    if (sortDir === 'desc') { setSortBy(null); setSortDir('asc'); return; }
-  }
-
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!data) return [];
-    let rows = data.candidates;
-    if (q) {
-      rows = rows.filter((c) =>
-        c.efr_name.toLowerCase().includes(q) ||
-        (c.efr_no ?? '').toLowerCase().includes(q) ||
-        (c.city_name ?? '').toLowerCase().includes(q)
-      );
-    }
-    // Sort: keep `is_current` row pinned at top, then apply user sort to
-    // the rest. Without the pin, sorting would scatter the assigned tech
-    // mid-list and defeat the visual "current vs replacements" comparison.
-    if (sortBy) {
-      const dir = sortDir === 'asc' ? 1 : -1;
-      const others = rows.filter((r) => !r.is_current).slice().sort((a, b) => {
-        const va: unknown = (a as unknown as Record<string, unknown>)[sortBy];
-        const vb: unknown = (b as unknown as Record<string, unknown>)[sortBy];
-        // null sorts last regardless of direction (so "No history" rows
-        // don't bubble to the top when sorting by TAT/SDA ascending).
-        if (va == null && vb == null) return 0;
-        if (va == null) return 1;
-        if (vb == null) return -1;
-        if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * dir;
-        if (typeof va === 'boolean' && typeof vb === 'boolean') return ((va === vb) ? 0 : (va ? 1 : -1)) * dir;
-        return String(va).localeCompare(String(vb)) * dir;
-      });
-      const current = rows.filter((r) => r.is_current);
-      rows = [...current, ...others];
-    }
-    return rows;
-  }, [data, search, sortBy, sortDir]);
-
-  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => assigning == null });
+  // No inline-editable fields — selecting a technician is not "dirty form data"
+  // to guard, so the discard prompt is skipped; the guard only blocks close
+  // while a commit is in flight.
+  const guardedOpenChange = useFormDirtyGuard(onClose, {
+    isDirty: () => false,
+    when: () => !committing,
+  });
 
   return (
     <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent
-        // Near-full-viewport per ops spec (~24px gutter all sides).
-        // This modal is data-dense (technician candidate table); the
-        // extra real estate gives the table room to breathe.
+        noPadding
+        // Near-full-viewport per ops spec — this modal is data-dense (the wide
+        // technician candidate table), so the extra real estate gives it room.
         className="!max-w-none w-[calc(100vw-48px)] h-[calc(100vh-48px)] overflow-hidden flex flex-col"
       >
-        <DialogHeader>
+        <DialogHeader className="px-6 py-4">
           <DialogTitle className="flex items-center gap-2">
             {mode === 'reassign' ? 'Reassign Technician' : 'Assign Technician'}
-            {jobId && <span className="text-sm font-normal text-muted-foreground">· Job #{jobId}</span>}
+            {jobId && <span className="text-sm font-normal text-slate-300">· Job #{jobId}</span>}
           </DialogTitle>
         </DialogHeader>
 
-        {statusIneligible && (
-          <div className="mb-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-800">
-            This order isn’t in the required status for {mode === 'reassign' ? 'reassignment' : 'assignment'} — opened read-only.
-          </div>
-        )}
-
-        {/* Job context */}
-        {data && (
-          <div className="text-xs text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1 -mt-1 mb-1">
-            {data.job.city_name && <span><MapPin className="inline h-3 w-3 mr-0.5" />{data.job.city_name}{data.job.pin_code ? ` · ${data.job.pin_code}` : ''}</span>}
-            {/*
-              * Deep skill = service category › service type. The backend
-              * resolves this from the job's FK columns; older jobs may
-              * only have the denormalised `service_category` text, in
-              * which case we use that. Either way, ALWAYS label the slot
-              * "Deep Skill" so operators see the constraint clearly.
-              */}
-            {(data.job.deep_skill_label || data.job.service_category) && (
-              <span>· Deep Skill: <strong className="text-foreground">
-                {data.job.deep_skill_label ?? data.job.service_category}
-              </strong></span>
-            )}
-            {data.job.time_slot && <span>· {data.job.time_slot}</span>}
-            {data.job.paid_by_label && data.job.paid_by_label !== 'NA' && (
-              <span>· Paid by: <strong className="text-foreground">{data.job.paid_by_label}</strong></span>
-            )}
-          </div>
-        )}
-
-        {/* Banners */}
-        {data?.note === 'no_deep_skill_match' && (
-          <div className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900 flex items-start gap-2">
-            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-            <div>
-              <strong>No technician holds the deep-skill required for this job.</strong>{' '}
-              Showing all candidates that pass the other eligibility checks (active, verified,
-              not a prior reject, in the customer&apos;s city). Pick someone with caution.
-            </div>
-          </div>
-        )}
-        {data?.note === 'no_eligible_techs' && (
-          <div className="rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-900 flex items-start gap-2">
-            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-            <strong>No technicians match the eligibility filters for this job.</strong>
-          </div>
-        )}
-        {data?.alreadyAssigned && mode === 'assign' && (
-          <div className="rounded-md border border-blue-300 bg-blue-50 p-2 text-xs text-blue-900">
-            This job is already assigned. Use Reassign to change the technician.
-          </div>
-        )}
-
-        {/* Search + summary */}
-        <div className="flex items-center justify-between gap-2 flex-wrap">
-          <div className="relative w-72">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input placeholder="Filter by name / mobile / city…" className="pl-9"
-              value={search} onChange={(e) => setSearch(e.target.value)} />
-          </div>
-          {data && (
-            <div className="text-xs text-muted-foreground">
-              <strong>{data.l1Count}</strong> eligible · <strong>{data.l2Count}</strong> available · <strong>{filtered.length}</strong> shown
+        <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-4 space-y-4">
+          {statusIneligible && (
+            <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+              This order isn’t in the required status for {mode === 'reassign' ? 'reassignment' : 'assignment'} — opened read-only.
             </div>
           )}
+
+          {/* Full job context — the collapsible Job Details grid + Services
+              table + Remarks/Comments thread, shared with Schedule & Assign via
+              <JobContextPanel> so both modals present identical job / services /
+              remarks information. Like Schedule & Assign it enables the
+              Reschedule button + post-reschedule veil (showReschedule /
+              onReschedule / rescheduling); only the offer-pool "Offered To" chips
+              stay Schedule-&-Assign-only. The currently-assigned technician is
+              highlighted by the CandidateTable's amber `is_current` row below,
+              not here. */}
+          <JobContextPanel
+            job={job}
+            jobId={jobId}
+            remarksReloadKey={remarksReloadKey}
+            showReschedule
+            onReschedule={() => setRescheduleOpen(true)}
+            rescheduling={rescheduling}
+          />
+
+          {/* Note banners. */}
+          {note === 'no_deep_skill_match' && (
+            <div className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900 flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+              <div>
+                <strong>No technician holds the deep-skill required for this job.</strong>{' '}
+                Showing all candidates that pass the other eligibility checks. Pick someone with caution.
+              </div>
+            </div>
+          )}
+
+          {topData?.alreadyAssigned && mode === 'assign' && (
+            <div className="rounded-md border border-blue-300 bg-blue-50 p-2 text-xs text-blue-900">
+              This job is already assigned. Use Reassign to change the technician.
+            </div>
+          )}
+
+          {err && (
+            <div className="text-sm text-red-700 flex items-center gap-1">
+              <AlertTriangle className="h-4 w-4" /> {err}
+            </div>
+          )}
+
+          {/* ───────── Technician list + search ───────── */}
+          <section>
+            <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
+              <h3 className="text-sm font-semibold flex items-center gap-1.5">
+                {showingSearch ? 'Search Results' : 'Top 10 Technicians'}
+                {showingSearch && (
+                  <InfoTooltip label="What you can search by">
+                    <div className="space-y-2">
+                      <div className="font-semibold text-slate-900">What you can search by</div>
+                      <div>One box — the term is matched against every field below.</div>
+                      <ul className="list-disc ml-4 space-y-0.5">
+                        <li><strong>Name</strong> — partial match</li>
+                        <li><strong>Mobile Number</strong> — partial match</li>
+                        <li><strong>City</strong> — partial match on the technician&apos;s registered city</li>
+                        <li><strong>Pincode</strong> — the technician&apos;s current pincode, matched on a full 6 digits</li>
+                        <li><strong>Technician Id</strong> — exact match</li>
+                      </ul>
+                      <div className="text-slate-500">Search ignores the Top 10 ranking filters, so it finds any <strong>Active</strong> &amp; <strong>Verified</strong> technician — including ones outside the job&apos;s area.</div>
+                    </div>
+                  </InfoTooltip>
+                )}
+                {!showingSearch && (
+                  <InfoTooltip label="How the Top 10 is ranked">
+                    <div className="space-y-2">
+                      <div className="font-semibold text-slate-900">How the Top 10 is ranked</div>
+                      <div>Technicians must clear every filter, then are ranked in priority order.</div>
+                      <div className="font-medium text-slate-900">Filters</div>
+                      <ul className="list-disc ml-4 space-y-0.5">
+                        <li><strong>Active</strong> &amp; <strong>Verified</strong> profile</li>
+                        <li>Not already <strong>rejected / rescheduled off</strong> this job</li>
+                        <li>Holds an <strong>active Deep Skill</strong> matching the job&apos;s <strong>Service Category &amp; Type</strong> — if none match, all in-area technicians are shown instead</li>
+                        <li>In the job&apos;s <strong>area</strong> — same <strong>city</strong>, widening to the pincode&apos;s <strong>zone(s)</strong> when fewer than 10 qualify</li>
+                        <li>No other <strong>booking in the same date &amp; time slot</strong></li>
+                        <li><strong>COD</strong> jobs: account balance <strong>₹500+</strong></li>
+                      </ul>
+                      <div className="text-slate-500">New technicians get neutral default performance so they still compete fairly. <strong>Concurrent-jobs count</strong> and <strong>account balance</strong> are shown as columns but don&apos;t filter the list.</div>
+                    </div>
+                  </InfoTooltip>
+                )}
+              </h3>
+              <div className="relative w-80 max-w-full">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search Any Technician by Name, Id, City or Pincode"
+                  className="pl-9 pr-9"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+                {search && (
+                  <button
+                    type="button"
+                    onClick={() => setSearch('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 hover:bg-muted"
+                    aria-label="Clear search"
+                  >
+                    <X className="h-3.5 w-3.5 text-muted-foreground" />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {showingSearch && searchRes.data?.capped && (
+              <p className="mb-2 text-[11px] text-amber-700">
+                More than {rows.length} technicians match — showing the first {rows.length}. Refine your search to see the rest.
+              </p>
+            )}
+
+            {/* Error + empty states render as a MODAL-WIDTH centered message —
+                NOT inside the wide, horizontally scrolling table. */}
+            {!listLoading && listError ? (
+              <div className="py-12 text-center text-sm text-red-700">
+                {showingSearch
+                  ? 'Something Went Wrong!! Search Failed'
+                  : 'Something Went Wrong!! Top Technicians Not Available'}
+              </div>
+            ) : !listLoading && rows.length === 0 ? (
+              showingSearch ? (
+                <div className="py-12 text-center text-sm text-muted-foreground">
+                  No Technicians Match Your Search.
+                </div>
+              ) : (
+                <div className="py-8 px-4 text-sm">
+                  <p className="text-center font-medium text-foreground">
+                    No Technicians Available For This Job.
+                  </p>
+                  {(() => {
+                    const rej = topData?.rejected ?? [];
+                    const l1 = topData?.l1Count ?? 0;
+                    if (l1 > 0 && rej.length > 0) {
+                      return (
+                        <>
+                          <p className="mt-1 text-center text-muted-foreground">
+                            {l1} technician{l1 === 1 ? '' : 's'} matched the required skill &amp; area, but {l1 === 1 ? 'is' : 'are'} unavailable for this job&apos;s date &amp; time slot:
+                          </p>
+                          <ul className="mx-auto mt-3 max-w-md space-y-1">
+                            {rej.map((r) => (
+                              <li
+                                key={r.efr_id}
+                                className="flex items-center justify-between gap-3 rounded border bg-muted/20 px-3 py-1.5 text-xs"
+                              >
+                                <span className="font-medium">{r.efr_name || `Efr #${r.efr_id}`}</span>
+                                <span className="text-right text-muted-foreground">{r.reason}</span>
+                              </li>
+                            ))}
+                          </ul>
+                          <p className="mt-3 text-center text-[11px] text-muted-foreground">
+                            Search by name / ID to pick a specific technician.
+                          </p>
+                        </>
+                      );
+                    }
+                    return (
+                      <p className="mt-1 text-center text-muted-foreground">
+                        No active, verified technician with the required skill was found in this city or its nearby zones.
+                      </p>
+                    );
+                  })()}
+                </div>
+              )
+            ) : (
+              <>
+                <CandidateTable
+                  rows={pageRows}
+                  loading={listLoading}
+                  error={null}
+                  showingSearch={showingSearch}
+                  canCommit={canCommit}
+                  multiSelect={false}
+                  selected={selected}
+                  onToggleSelected={toggleSelected}
+                  onOpenPincodes={setPincodeModalFor}
+                  jobId={jobId}
+                />
+                {showingSearch && rows.length > 0 && (
+                  <TablePagination
+                    className="mt-3"
+                    page={searchPage}
+                    pageSize={searchPageSize}
+                    total={rows.length}
+                    onPageChange={setSearchPage}
+                    onPageSizeChange={(s) => { setSearchPageSize(s); setSearchPage(0); }}
+                  />
+                )}
+              </>
+            )}
+          </section>
         </div>
 
-        {/* Body */}
-        {err && (
-          <div className="text-sm text-red-700 flex items-center gap-1">
-            <AlertTriangle className="h-4 w-4" /> {err}
+        <DialogFooter className="px-6 sm:justify-between">
+          {/* LEFT — Add Remarks. Reuses JobModal's extracted AddRemarksDialog, in
+              the SAME bottom-left position / variant / label as Schedule & Assign. */}
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              className="bg-teal-500 hover:bg-teal-600 text-white border-teal-500 hover:text-white"
+              onClick={() => setRemarksOpen(true)}
+              disabled={!jobId || committing}
+            >
+              Add Remarks
+            </Button>
           </div>
-        )}
-
-        {/*
-          * Both-side scrollable: vertical (max-h) + horizontal (overflow-auto).
-          * Technician Name is the sticky LEFT column — `position: sticky; left: 0`
-          * keeps the row identifier visible while horizontal-scrolling through the
-          * stat columns. Header is also sticky-top so column labels stay visible
-          * while scrolling long lists vertically.
-          */}
-        <div className="border rounded max-h-[60vh] overflow-auto thin-scroll">
-          <table className="data-table text-xs whitespace-nowrap border-separate" style={{ borderSpacing: 0 }}>
-            <thead className="sticky top-0 bg-background z-20 shadow-sm">
-              <tr>
-                {/*
-                  * Sticky header for the sticky-left body column: needs z higher
-                  * than every body td (which now uses z-20 to win over scroll
-                  * content), AND a solid bg so it occludes the scrolling
-                  * stat-column headers. z-40 + explicit bg-white meets both.
-                  */}
-                <SortHeaderTH col="efr_name" sortBy={sortBy} sortDir={sortDir} onSort={onSort}
-                  className="!text-left sticky left-0 bg-white z-40 shadow-[2px_0_0_0_var(--border)] min-w-[180px]"
-                >Technician Name</SortHeaderTH>
-                <SortHeaderTH col="city_name"        sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="!text-left">Location</SortHeaderTH>
-                <SortHeaderTH col="has_deep_skill"   sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="!text-center" title="Holds an active deep-skill matching the job's service category / type">Deep Skill</SortHeaderTH>
-                <SortHeaderTH col="active_jobs"      sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="!text-center" title="Active jobs (BOOKED + SCHEDULED + IN_PROGRESS)">Current Jobs</SortHeaderTH>
-                <SortHeaderTH col="current_balance"  sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="!text-right">Account Balance</SortHeaderTH>
-                <SortHeaderTH col="avg_rating"       sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="!text-center" title="90-day customer rating average">Rating</SortHeaderTH>
-                <SortHeaderTH col="avg_tat_hours"    sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="!text-center" title="Average turnaround time vs. tier target">TAT (avg hours)</SortHeaderTH>
-                <SortHeaderTH col="sda_rate"         sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="!text-center" title="Same-day attempt rate over the lookback window">SDA Rate</SortHeaderTH>
-                <SortHeaderTH col="worked_for_client"  sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="!text-center" title="Worked for this client before?">Worked for Client</SortHeaderTH>
-                <SortHeaderTH col="worked_for_vertical" sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="!text-center" title="Worked in this service category before?">Worked in Vertical</SortHeaderTH>
-                <SortHeaderTH col="attendance_marked" sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="!text-center" title="Present unless explicitly marked absent (on leave) for the job date — an unmarked technician counts as present.">Attendance Today</SortHeaderTH>
-                <SortHeaderTH col="score"            sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="!text-right">Score</SortHeaderTH>
-                <SortHeaderTH col="grade"            sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="!text-center">Grade</SortHeaderTH>
-                <th className="!text-right whitespace-nowrap">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading && (
-                <tr><td colSpan={14} className="!text-center text-muted-foreground py-6">Loading candidates…</td></tr>
-              )}
-              {!loading && data && filtered.length === 0 && (
-                <tr><td colSpan={14} className="!text-center text-muted-foreground py-6">
-                  {data.candidates.length === 0 ? 'No technicians available.' : 'No candidates match the search.'}
-                </td></tr>
-              )}
-              {!loading && filtered.map((c) => {
-                /*
-                 * Sticky-column bleed-through fix.
-                 *
-                 * The original `hover:bg-muted/40` on the row painted a
-                 * 40%-opacity overlay — and our sticky cell's matching
-                 * `group-hover:bg-muted/40` was equally translucent, so
-                 * during hover BOTH layers were see-through and content
-                 * from columns on the right showed under the sticky-left
-                 * Technician Name cell.
-                 *
-                 * Fix: use FULLY OPAQUE colours on the sticky cell for
-                 * both rest and hover states. The non-sticky stat cells
-                 * keep their translucent hover so the row still has the
-                 * subtle "you're hovering this" tint, but the sticky
-                 * column always blocks the cells behind it.
-                 */
-                const rowBg = c.is_current ? 'bg-amber-50 hover:bg-amber-100' : 'hover:bg-muted/40';
-                const stickyBgStatic = c.is_current
-                  ? 'bg-amber-50 group-hover:bg-amber-100'
-                  : 'bg-white group-hover:bg-slate-100';
-                return (
-                  <tr key={c.efr_id} className={`group ${rowBg}`}>
-                    <td className={`!text-left sticky left-0 z-20 ${stickyBgStatic} shadow-[2px_0_0_0_var(--border)] min-w-[180px]`}>
-                      <div className="font-medium flex items-center gap-1" title={c.efr_name}>
-                        {c.efr_name}
-                        {c.is_current && <CurrentTechBadge />}
-                      </div>
-                      <div className="text-[10px] text-muted-foreground">{c.efr_no ?? '—'}</div>
-                    </td>
-                    <td className="!text-left" title={c.city_name ?? ''}>
-                      {c.city_name ?? <span className="text-muted-foreground">—</span>}
-                    </td>
-                    <td className="!text-center">
-                      {c.has_deep_skill
-                        ? <CheckCircle2 className="inline h-3.5 w-3.5 text-emerald-600" />
-                        : <X            className="inline h-3.5 w-3.5 text-red-500" aria-label="No matching deep-skill" />}
-                    </td>
-                    <td className="!text-center">{c.active_jobs}</td>
-                    <td className="!text-right font-mono">
-                      <Wallet className="inline h-3 w-3 mr-0.5 text-muted-foreground" />
-                      ₹{c.current_balance.toLocaleString()}
-                    </td>
-                    <td className="!text-center">{c.avg_rating.toFixed(1)}</td>
-                    <td className="!text-center">
-                      {!c.tat_history ? <NoHistoryPill /> : `${c.avg_tat_hours}h`}
-                    </td>
-                    <td className="!text-center">
-                      {!c.sda_history ? <NoHistoryPill /> : `${Math.round((c.sda_rate ?? 0) * 100)}%`}
-                    </td>
-                    <td className="!text-center">{c.worked_for_client    ? <CheckCircle2 className="inline h-3.5 w-3.5 text-emerald-600" /> : <X className="inline h-3.5 w-3.5 text-muted-foreground" />}</td>
-                    <td className="!text-center">{c.worked_for_vertical  ? <CheckCircle2 className="inline h-3.5 w-3.5 text-emerald-600" /> : <X className="inline h-3.5 w-3.5 text-muted-foreground" />}</td>
-                    <td className="!text-center">{c.attendance_marked    ? <CheckCircle2 className="inline h-3.5 w-3.5 text-emerald-600" /> : <X className="inline h-3.5 w-3.5 text-muted-foreground" />}</td>
-                    <td className="!text-right font-medium">{c.score.toFixed(2)}</td>
-                    <td className="!text-center"><GradePill grade={c.grade} /></td>
-                    <td className="!text-right">
-                      {c.is_current ? (
-                        <span className="text-xs text-muted-foreground italic">Currently assigned</span>
-                      ) : canCommit ? (
-                        <Button size="sm" disabled={assigning != null} onClick={() => assign(c)}>
-                          {assigning === c.efr_id ? 'Assigning…' : (mode === 'reassign' ? 'Reassign' : 'Assign')}
-                        </Button>
-                      ) : (
-                        <span className="text-[10px] text-muted-foreground">view-only</span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Legend */}
-        <div className="text-[11px] text-muted-foreground flex flex-wrap gap-x-3 gap-y-1">
-          <span><Star      className="inline h-3 w-3" /> Rating (30%)</span>
-          <span><Clock     className="inline h-3 w-3" /> TAT (20%)</span>
-          <span><Zap       className="inline h-3 w-3" /> SDA (20%)</span>
-          <span><Briefcase className="inline h-3 w-3" /> Client (10%)</span>
-          <span><Calendar  className="inline h-3 w-3" /> Vertical (10%)</span>
-          <span><UserCheck className="inline h-3 w-3" /> Attendance (10%)</span>
-        </div>
-
-        {/* Rejected (L2 drops) — operator visibility */}
-        {data && data.rejected.length > 0 && (
-          <details className="text-xs">
-            <summary className="cursor-pointer text-muted-foreground">
-              {data.rejected.length} technician{data.rejected.length === 1 ? '' : 's'} dropped on Layer 2
-            </summary>
-            <ul className="mt-1 ml-4 list-disc text-muted-foreground">
-              {data.rejected.slice(0, 10).map((r) => (
-                <li key={r.efr_id}>{r.efr_name} — {r.reason}</li>
-              ))}
-            </ul>
-          </details>
-        )}
-
-        <div className="flex justify-end gap-2 pt-1">
-          <Button variant="outline" onClick={onClose}>Close</Button>
-        </div>
+          {/* RIGHT — Close, then the single-technician (Re)Assign commit. */}
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={onClose} disabled={committing}>Close</Button>
+            {canCommit && (
+              <Button
+                onClick={commitAssign}
+                disabled={!jobId || committing || selected.size !== 1}
+              >
+                {committing ? <Loader2 className="h-4 w-4 animate-spin" /> : verb}
+              </Button>
+            )}
+          </div>
+        </DialogFooter>
       </DialogContent>
+
+      {/* Serviceable-pincodes "view all" searchable modal (shared). */}
+      <PincodeListModal
+        candidate={pincodeModalFor}
+        onClose={() => setPincodeModalFor(null)}
+      />
+
+      {/* Add Remarks — legacy path (no optimistic callbacks): the dialog POSTs
+          to /admin/jobs/:id/comments then calls onSaved. On save we bust the
+          comments cache and bump remarksReloadKey so the JobContextPanel remarks
+          thread remounts and shows the new remark. */}
+      {jobId && (
+        <AddRemarksDialog
+          open={remarksOpen}
+          jobId={jobId}
+          onClose={() => setRemarksOpen(false)}
+          onSaved={() => {
+            showToast({ variant: 'success', message: 'Remark Added' });
+            setRemarksOpen(false);
+            invalidateFetch((k) => k.startsWith(`/admin/jobs/${jobId}/comments`));
+            setRemarksReloadKey((n) => n + 1);
+          }}
+        />
+      )}
+
+      {/* Reschedule — persists + audits the new schedule, then onDone re-ranks
+          the Top-10 against the job's now-updated PERSISTED schedule. This
+          modal's candidate key carries no jobDate/timeSlot params, so a plain
+          refetch re-ranks correctly — no proposed-schedule preview needed. */}
+      {jobId && (
+        <RescheduleDialog
+          open={rescheduleOpen}
+          jobId={jobId}
+          onClose={() => setRescheduleOpen(false)}
+          onDone={() => {
+            // Veil the stale date / list until the refetch settles.
+            rescheduleRefetchStarted.current = false;
+            setRescheduling(true);
+            // Drop the cached candidate lists (Top-10 + any active search) so the
+            // next fetch re-ranks against the new schedule, then actually re-run
+            // the mounted Top-10 query — invalidateFetch only DROPS the cache, it
+            // can't re-run a still-mounted hook.
+            invalidateFetch((k) => k.startsWith(`/admin/jobs/${jobId}/candidates`));
+            top.refetch();
+            // Remount the remarks thread so the reschedule comment + any actioned
+            // customer request appear.
+            invalidateFetch((k) =>
+              k.startsWith(`/admin/jobs/${jobId}/comments`)
+              || k.startsWith(`/admin/jobs/${jobId}/customer-requests`));
+            setRemarksReloadKey((n) => n + 1);
+          }}
+        />
+      )}
     </Dialog>
   );
-}
-
-/*
- * Click-to-sort header. Same column → flip direction. Different column →
- * switch to that column descending (so a click on "Score" defaults to
- * highest-first, which is what operators expect).
- */
-function SortHeaderTH<K extends string>({
-  col, sortBy, sortDir, onSort, className = '', title, children,
-}: {
-  col: K;
-  sortBy: K | null;
-  sortDir: 'asc' | 'desc';
-  onSort: (col: K) => void;
-  className?: string;
-  title?: string;
-  children: React.ReactNode;
-}) {
-  const isActive = sortBy === col;
-  // Only show an arrow on the ACTIVE sort column. Inactive columns are
-  // still clickable (cursor-pointer + hover bg signal it) but render no
-  // icon — keeps the header strip visually quiet.
-  const Icon = isActive ? (sortDir === 'asc' ? ArrowUp : ArrowDown) : null;
-  // Match the alignment of the inner span to the th's alignment so the
-  // arrow doesn't end up on the wrong side of right-aligned numeric cols.
-  const justify =
-    className.includes('!text-right')  ? 'justify-end'   :
-    className.includes('!text-center') ? 'justify-center':
-                                          'justify-start';
-  return (
-    <th
-      className={`${className} cursor-pointer select-none hover:bg-muted/50 transition-colors`}
-      onClick={() => onSort(col)}
-      title={title}
-      role="button"
-      aria-sort={isActive ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
-    >
-      <span className={`inline-flex items-center gap-1 whitespace-nowrap ${justify}`}>
-        {children}
-        {Icon && <Icon className="size-3 shrink-0 text-foreground" />}
-      </span>
-    </th>
-  );
-}
-
-function CurrentTechBadge() {
-  return (
-    <span className="inline-flex items-center px-1 py-0 rounded text-[9px] font-semibold bg-amber-200 text-amber-900 uppercase tracking-wide">
-      Current
-    </span>
-  );
-}
-
-function NoHistoryPill() {
-  // Distinguishes "no completed jobs in lookback window" (we substitute the
-  // configured default score) from a real 0% reading. Without this, a new
-  // joiner showing "0%" looks indistinguishable from a tech who's
-  // genuinely failing every same-day attempt.
-  return (
-    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-slate-100 text-slate-600 italic"
-          title="No completed jobs in the scoring window — using configured default for ranking">
-      No Completed Jobs
-    </span>
-  );
-}
-
-function GradePill({ grade }: { grade: 'A+' | 'A' | 'B' | 'C' | 'D' | 'E' }) {
-  const cls =
-    grade === 'A+' ? 'bg-emerald-100 text-emerald-800'
-    : grade === 'A' ? 'bg-emerald-50 text-emerald-700'
-    : grade === 'B' ? 'bg-sky-50 text-sky-700'
-    : grade === 'C' ? 'bg-amber-50 text-amber-700'
-    : grade === 'D' ? 'bg-orange-50 text-orange-700'
-    :                 'bg-red-50 text-red-700';
-  return <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold ${cls}`}>{grade}</span>;
 }

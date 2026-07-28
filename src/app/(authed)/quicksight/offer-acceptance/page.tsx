@@ -6,9 +6,15 @@
  * How the job-offer pool converts: per technician, how many offers they were
  * extended and how many they accepted / rejected / let expire, plus acceptance
  * rate and average response time, with a by-source breakdown (Top-10 list vs
- * manual Search vs auto-assign). Sourced from tbl_job_offer via
- * POST /admin/quicksight/offer-acceptance/summary. Gated by ef-QuickSight
- * (family) + isQuickSightOfferAcceptanceView (per-report).
+ * manual Search vs auto-assign) and an "Offered By" (job owner) breakdown.
+ * Sourced from tbl_job_offer via POST /admin/quicksight/offer-acceptance/summary.
+ * Gated by ef-QuickSight (family) + isQuickSightOfferAcceptanceView (per-report).
+ *
+ * Filters: the shared client/vertical/service-category bar, an "Offered By"
+ * (job owner) multi-select, the offered_at cohort window (Offered From/To), and
+ * a responded_at window (Responded From/To) — the acceptance date the tech
+ * actually accepted/rejected. "Offered By" = job owner because tbl_job_offer has
+ * no offered-by user column; the job owner is the closest attribution.
  */
 
 import { useCallback, useMemo, useState } from 'react';
@@ -17,12 +23,14 @@ import { Handshake, CheckCircle2, XCircle, Clock, Hourglass, Timer, Percent } fr
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { usePostFetch } from '@/lib/hooks';
+import { useLookup } from '@/lib/use-lookup';
 
 import { ReportPageScaffold } from '@/components/quicksight/ReportPageScaffold';
 import { QuickSightFilterBar } from '@/components/quicksight/QuickSightFilterBar';
 import { ChartCard, QsBarChart, QsDonut, QsKpiTile, QS_COLORS, QS_SEMANTIC } from '@/components/quicksight/charts';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { SearchMultiSelect } from '@/components/ui/search-multi-select';
 
 const ACTION_KEY = 'isQuickSightOfferAcceptanceView';
 const API_BASE = '/admin/quicksight/offer-acceptance';
@@ -37,6 +45,11 @@ type SourceRow = {
   offered: number; accepted: number; rejected: number; expired: number; open: number;
   acceptanceRate: number;
 };
+type OwnerRow = {
+  ownerId: number; ownerName: string;
+  offered: number; accepted: number; rejected: number; expired: number; open: number;
+  acceptanceRate: number;
+};
 type Totals = {
   offered: number; accepted: number; rejected: number; expired: number; open: number;
   acceptanceRate: number; avgResponseSecs: number | null;
@@ -45,12 +58,12 @@ type DayRow = {
   day: string; // 'YYYY-MM-DD'
   offered: number; accepted: number; rejected: number; expired: number; open: number;
 };
-type OfferAcceptanceData = { rows: OfferRow[]; bySource: SourceRow[]; byDay: DayRow[]; totals: Totals };
+type OfferAcceptanceData = { rows: OfferRow[]; bySource: SourceRow[]; byOwner: OwnerRow[]; byDay: DayRow[]; totals: Totals };
 
 type Source = 'top10' | 'search' | 'auto' | '';
 type FilterBody = {
-  clientId: number[]; verticalId: number[]; serviceCategoryId: number[];
-  dateFrom?: string; dateTo?: string; source?: Exclude<Source, ''>;
+  clientId: number[]; verticalId: number[]; serviceCategoryId: number[]; offeredById: number[];
+  dateFrom?: string; dateTo?: string; respondedFrom?: string; respondedTo?: string; source?: Exclude<Source, ''>;
 };
 
 // 'unknown' = offer_source was never recorded (auto-assign, an offer made
@@ -75,7 +88,7 @@ const fmtDayLabel = (iso: string) => {
   const [, m, d] = iso.split('-').map(Number);
   return `${d} ${MONTHS[(m ?? 1) - 1] ?? ''}`;
 };
-const emptyFilter: FilterBody = { clientId: [], verticalId: [], serviceCategoryId: [] };
+const emptyFilter: FilterBody = { clientId: [], verticalId: [], serviceCategoryId: [], offeredById: [] };
 
 function toNums(v: Array<string | number>): number[] {
   return v.map((x) => (typeof x === 'number' ? x : Number(x))).filter((n) => Number.isFinite(n));
@@ -84,24 +97,34 @@ function toNums(v: Array<string | number>): number[] {
 export default function OfferAcceptancePage() {
   const { me } = useMe();
   const canView = actionFlags(me, [ACTION_KEY])[ACTION_KEY];
+  const lookup = useLookup();
+  // "Offered By" (job owner) picker superset = internal admin users, reusing the
+  // existing auth-gated /shared/lookup/users list (same source the Priority Jobs
+  // "Job Owner" filter uses) — no new BE lookup introduced.
+  const ownerOpts = lookup.toOpts.adminUsers;
 
   // Draft (user edits) vs applied (live query). Clients/verticals/categories come
-  // from the shared filter bar; date range + source are report-specific.
+  // from the shared filter bar; offered-by + date ranges + source are report-specific.
   const [clientId, setClientId] = useState<number[]>([]);
   const [verticalId, setVerticalId] = useState<number[]>([]);
   const [serviceCategoryId, setServiceCategoryId] = useState<number[]>([]);
+  const [offeredById, setOfferedById] = useState<number[]>([]);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [respondedFrom, setRespondedFrom] = useState('');
+  const [respondedTo, setRespondedTo] = useState('');
   const [source, setSource] = useState<Source>('');
   const [applied, setApplied] = useState<FilterBody>(emptyFilter);
 
   const buildDraft = useCallback((): FilterBody => {
-    const body: FilterBody = { clientId, verticalId, serviceCategoryId };
+    const body: FilterBody = { clientId, verticalId, serviceCategoryId, offeredById };
     if (dateFrom) body.dateFrom = dateFrom;
     if (dateTo) body.dateTo = dateTo;
+    if (respondedFrom) body.respondedFrom = respondedFrom;
+    if (respondedTo) body.respondedTo = respondedTo;
     if (source) body.source = source;
     return body;
-  }, [clientId, verticalId, serviceCategoryId, dateFrom, dateTo, source]);
+  }, [clientId, verticalId, serviceCategoryId, offeredById, dateFrom, dateTo, respondedFrom, respondedTo, source]);
 
   const summary = usePostFetch<OfferAcceptanceData>(
     canView ? `${API_BASE}/summary` : null,
@@ -111,6 +134,7 @@ export default function OfferAcceptancePage() {
 
   const data = summary.data;
   const rows = data?.rows ?? [];
+  const byOwner = data?.byOwner ?? [];
   const totals = data?.totals;
   const accessDenied = canView === false || summary.status === 403;
   const isEmpty = !summary.loading && !summary.error && rows.length === 0;
@@ -157,8 +181,8 @@ export default function OfferAcceptancePage() {
   }, [applied]);
 
   function reset() {
-    setClientId([]); setVerticalId([]); setServiceCategoryId([]);
-    setDateFrom(''); setDateTo(''); setSource('');
+    setClientId([]); setVerticalId([]); setServiceCategoryId([]); setOfferedById([]);
+    setDateFrom(''); setDateTo(''); setRespondedFrom(''); setRespondedTo(''); setSource('');
     setApplied(emptyFilter);
   }
 
@@ -187,12 +211,31 @@ export default function OfferAcceptancePage() {
           />
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Offered By</label>
+              <SearchMultiSelect
+                value={offeredById}
+                onChange={(v) => setOfferedById(toNums(v))}
+                options={ownerOpts}
+                placeholder="All Job Owners"
+                selectedLabel="owners"
+                disabled={summary.loading}
+              />
+            </div>
+            <div className="space-y-1">
               <label className="text-xs font-medium text-muted-foreground">Offered From</label>
               <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} disabled={summary.loading} />
             </div>
             <div className="space-y-1">
               <label className="text-xs font-medium text-muted-foreground">Offered To</label>
               <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} disabled={summary.loading} />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Responded From</label>
+              <Input type="date" value={respondedFrom} onChange={(e) => setRespondedFrom(e.target.value)} disabled={summary.loading} />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Responded To</label>
+              <Input type="date" value={respondedTo} onChange={(e) => setRespondedTo(e.target.value)} disabled={summary.loading} />
             </div>
             <div className="space-y-1">
               <label className="text-xs font-medium text-muted-foreground">Offer Source</label>
@@ -309,6 +352,41 @@ export default function OfferAcceptancePage() {
           )}
         </table>
       </div>
+
+      {/* Per-owner (Offered By) breakdown — offers grouped by the job owner. */}
+      {byOwner.length > 0 && (
+        <div className="mt-4">
+          <h3 className="mb-2 text-sm font-semibold text-foreground">Acceptance By Offered By</h3>
+          <div className="overflow-x-auto rounded-md border border-border">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th className="!text-left">Offered By</th>
+                  <th className="!text-center">Offered</th>
+                  <th className="!text-center">Accepted</th>
+                  <th className="!text-center">Rejected</th>
+                  <th className="!text-center">Expired</th>
+                  <th className="!text-center">Open</th>
+                  <th className="!text-center">Acceptance %</th>
+                </tr>
+              </thead>
+              <tbody>
+                {byOwner.map((o) => (
+                  <tr key={o.ownerId}>
+                    <td className="!text-left font-medium">{o.ownerName}</td>
+                    <td className="!text-center">{o.offered}</td>
+                    <td className="!text-center text-emerald-700">{o.accepted}</td>
+                    <td className="!text-center text-rose-700">{o.rejected}</td>
+                    <td className="!text-center text-amber-700">{o.expired}</td>
+                    <td className="!text-center">{o.open}</td>
+                    <td className="!text-center font-medium">{o.acceptanceRate}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </ReportPageScaffold>
   );
 }

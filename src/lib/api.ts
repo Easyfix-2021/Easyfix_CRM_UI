@@ -143,6 +143,187 @@ export const api = {
       method: 'PATCH',
       body,
     }),
+
+  /*
+   * ─── Billing & Charges (job workspace tab) ───────────────────────────
+   *
+   * Replicates the legacy CheckIn-detail right-column actions. Every
+   * endpoint is gated server-side by the same `canManageJobCharges`
+   * feature flag surfaced on /auth/me — the FE only mirrors it for the
+   * tab affordance. See BillingChargesTab.tsx.
+   *
+   * The GET returns the full Job-Summary matrix inputs in one payload:
+   *   - materials  : Travel / Incentive / Penalty (and any Material-type)
+   *                  charge line items (each carries tx + client charge).
+   *   - services   : per-service rows for the client-approval toggles.
+   *   - documents  : Job Sheet + Purchase Order attachments (image_id+url).
+   */
+  getJobCharges: (jobId: number) =>
+    request<JobChargesResponse>(`/admin/jobs/${jobId}/charges`, { method: 'GET' }),
+
+  addJobPenalty: (jobId: number, body: PenaltyChargeInput) =>
+    request<{ id: number }>(`/admin/jobs/${jobId}/penalty`, { method: 'POST', body }),
+  addJobTravel: (jobId: number, body: TravelChargeInput) =>
+    request<{ id: number }>(`/admin/jobs/${jobId}/travel`, { method: 'POST', body }),
+  addJobIncentive: (jobId: number, body: IncentiveChargeInput) =>
+    request<{ id: number }>(`/admin/jobs/${jobId}/incentive`, { method: 'POST', body }),
+
+  // Edit a charge line item. Body shape matches the charge's own type
+  // (penalty / travel / incentive) — same fields as the POST that created it.
+  updateJobCharge: (
+    jobId: number,
+    chargeId: number,
+    body: PenaltyChargeInput | TravelChargeInput | IncentiveChargeInput,
+  ) =>
+    request<{ id: number }>(`/admin/jobs/${jobId}/charges/${chargeId}`, { method: 'PATCH', body }),
+
+  // Client-approval toggle for a single charge line item.
+  setJobChargeApproval: (jobId: number, chargeId: number, isClientApprovalNeeded: boolean) =>
+    request<{ id: number }>(`/admin/jobs/${jobId}/charges/${chargeId}/approval`, {
+      method: 'PATCH',
+      body: { isClientApprovalNeeded },
+    }),
+
+  deleteJobCharge: (jobId: number, chargeId: number) =>
+    request<{ id: number }>(`/admin/jobs/${jobId}/charges/${chargeId}`, { method: 'DELETE' }),
+
+  // Job Sheet / Purchase Order upload (multipart) + delete. The FormData
+  // path in `request` deliberately omits Content-Type so the browser sets
+  // the multipart boundary.
+  uploadJobDocument: (jobId: number, category: JobDocumentCategory, file: File) => {
+    const fd = new FormData();
+    fd.append('category', category);
+    fd.append('file', file);
+    return request<JobDocument>(`/admin/jobs/${jobId}/documents`, { method: 'POST', body: fd });
+  },
+  deleteJobDocument: (jobId: number, imageId: number) =>
+    request<{ image_id: number }>(`/admin/jobs/${jobId}/documents/${imageId}`, { method: 'DELETE' }),
+
+  // Per-service client-billing approval ("Approve Tx" data action).
+  setJobServiceApproval: (jobId: number, jobServiceId: number, approvalByClient: 0 | 1) =>
+    request<{ job_service_id: number }>(
+      `/admin/jobs/${jobId}/services/${jobServiceId}/approval`,
+      { method: 'PATCH', body: { approvalByClient } },
+    ),
+
+  // Advance requests scoped to a single job (list). Creation reuses the
+  // existing POST /admin/advances (createAdvance below).
+  getJobAdvances: (jobId: number) =>
+    request<Advance[] | { items?: Advance[] }>(`/admin/advances`, { method: 'GET', query: { jobId } }),
+  createAdvance: (body: CreateAdvanceInput) =>
+    request<{ advance_id: number }>(`/admin/advances`, { method: 'POST', body }),
+};
+
+/* ─── Billing & Charges contract types ──────────────────────────────────
+ *
+ * These mirror the BE contract for GET /admin/jobs/:id/charges and the
+ * mutation endpoints exactly. Numeric charge columns arrive as `number`
+ * but MySQL/JSON can surface them as strings, so the components coerce
+ * with Number(); the types stay `number | null` per the wire contract.
+ */
+
+/** One Travel / Incentive / Penalty (or Material) charge line item. */
+export type JobCharge = {
+  id: number;
+  /** 'Travel' | 'Incentive' | 'Penalty' | 'Material' — matched case-insensitively. */
+  type: string;
+  tx_charge: number | null;
+  client_charge: number | null;
+  reason: string | null;
+  from_city_name: string | null;
+  to_city_name: string | null;
+  total_distance: number | null;
+  tx_unit: number | null;
+  cx_unit: number | null;
+  document_name: string | null;
+  /** 1/true when the line item still needs client approval. */
+  is_client_approval_needed: number | boolean | null;
+};
+
+/** Per-service row driving the client-approval ("Approve Tx") toggles. */
+export type JobChargeService = {
+  job_service_id: number;
+  service_name: string | null;
+  total_charge: number | null;
+  quantity: number | null;
+  approval_by_client: number | boolean | null;
+  is_approved_by_pm: number | boolean | null;
+};
+
+/** A Job Sheet / Purchase Order attachment. `url` is the (authenticated) fetch source. */
+export type JobDocument = { image_id: number; url: string };
+export type JobDocumentCategory = 'JobSheet' | 'PurchaseOrder';
+
+export type JobChargesResponse = {
+  materials: JobCharge[];
+  services: JobChargeService[];
+  documents: { jobSheet: JobDocument[]; purchaseOrder: JobDocument[] };
+};
+
+export type PenaltyChargeInput = {
+  txCharge: number;
+  clientCharge: number;
+  reason: string;
+  isClientApprovalNeeded: boolean;
+};
+export type IncentiveChargeInput = {
+  reason: string;
+  txCharge: number;
+  clientCharge: number;
+  isClientApprovalNeeded: boolean;
+  documentName?: string;
+};
+export type TravelChargeInput = {
+  fromCityName: string;
+  toCityName: string;
+  totalDistance: number;
+  txUnit: number;
+  clientUnit: number;
+  txCharge: number;
+  clientCharge: number;
+  isClientApprovalNeeded: boolean;
+  documentName?: string;
+};
+
+/* ─── Advance requests ──────────────────────────────────────────────────
+ * Mirrors `tbl_efr_advance_payment` (see finance/advances page). adv_status:
+ *   0 Pending · 1 Ops Approved · 2 Finance Approved · 3 Rejected.
+ */
+export type Advance = {
+  advance_id: number;
+  client_id: number | null;
+  job_id: number | null;
+  efr_id: number;
+  adv_status: number;
+  job_total_amt: number | null;
+  advance_amt: number | null;
+  initiated_on: string | null;
+  initiated_by: number | null;
+  pm_remarks: string | null;
+  ops_action_on: string | null;
+  ops_remarks: string | null;
+  fin_action_on: string | null;
+  fin_remarks: string | null;
+  transaction_id: string | null;
+  efr_name: string | null;
+  efr_no: string | null;
+  client_name: string | null;
+};
+
+export type CreateAdvanceInput = {
+  jobId: number;
+  efrId: number;
+  clientId: number;
+  advanceAmt: number;
+  jobTotalAmt: number;
+  pmRemarks: string;
+};
+
+export const ADVANCE_STATUS_LABEL: Record<number, string> = {
+  0: 'Pending',
+  1: 'Ops Approved',
+  2: 'Finance Approved',
+  3: 'Rejected',
 };
 
 /* Optional proposed-schedule edit carried alongside an offer/assign commit. */

@@ -76,6 +76,21 @@ export type Me = {
    * FE flag — this is purely a UI affordance.
    */
   scheduledJobsAccess?: boolean;
+  /*
+   * canManageJobCharges (2026-07-28): true when the operator may view and
+   * mutate the job "Billing & Charges" workspace tab (Travel / Incentive /
+   * Penalty line items, advance requests, Job Sheet / Purchase Order
+   * documents, and per-service client-approval toggles). Resolved
+   * server-side on /auth/me — same one-off boolean shape as
+   * `scheduledJobsAccess` / the admin-actions feature flags, sitting
+   * OUTSIDE the normal menu/role permission pipeline.
+   *
+   * Fail-closed: the Billing & Charges tab (and every mutating control
+   * inside it) is hidden entirely when this is falsy. The BE additionally
+   * enforces the same gate on /admin/jobs/:id/charges/* regardless of the
+   * FE flag — this is purely a UI affordance.
+   */
+  canManageJobCharges?: boolean;
 };
 
 // Scope dimension shape — exported so the Navbar's effective-access panel

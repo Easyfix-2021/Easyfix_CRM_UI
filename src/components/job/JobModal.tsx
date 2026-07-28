@@ -4,7 +4,7 @@ import * as React from 'react';
 import { useSlotRecommendations, SlotAdvisory } from '@/components/job/SlotRecommendations';
 import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import { useFetch, useUiFlags } from '@/lib/hooks';
-import { Sparkles, Search, CalendarCheck, History, Eye, Plus, X, Pencil, CalendarPlus, CheckCircle2, BarChart3, Trash2, RotateCcw } from 'lucide-react';
+import { Sparkles, Search, CalendarCheck, History, Eye, Plus, X, Pencil, CalendarPlus, CheckCircle2, BarChart3, Trash2, RotateCcw, UserCog } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
@@ -22,6 +22,7 @@ import { SkillImageLightbox, type SkillImageLightboxValue } from '@/components/e
 import { CustomerSubmissionPanel } from './CustomerSubmissionPanel';
 import { AddRemarksDialog } from './AddRemarksDialog';
 import { CancelWithReasonDialog } from './CancelWithReasonDialog';
+import { BillingChargesTab } from './BillingChargesTab';
 // Audited reschedule dialog (PATCH /admin/jobs/:id/reschedule → job.reschedule:
 // offer-expiry + scheduling_history). Kept aliased for a descriptive name;
 // both ActionBar and the customer-request "apply" flow use it.
@@ -106,7 +107,8 @@ const canChangeOwner    = (s: number) => ![ST.COMPLETED, ST.COMPLETED_ALT, ST.CA
  * editing them back to a workable state.
  */
 const isJobClosed = (s: number) => [ST.COMPLETED, ST.COMPLETED_ALT].includes(s as never);
-const canStart          = (s: number) => [ST.SCHEDULED, ST.REVISIT].includes(s as never);
+// canStart removed 2026-07-28 — the "Start" (check-in → In-Progress) action is
+// done by the technician from the app, not by ops on the web.
 const canComplete       = (s: number) => s === ST.IN_PROGRESS;
 const canCancel         = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.IN_PROGRESS, ST.ENQUIRY, ST.REVISIT].includes(s as never);
 const canMarkIncomplete = (s: number) => [ST.COMPLETED, ST.COMPLETED_ALT].includes(s as never);
@@ -276,6 +278,21 @@ export function JobModal({
    */
   const [pendingComments, setPendingComments] = useState<Array<JobComment & { _pending?: true }>>([]);
   const { me: currentMe } = useMe();
+  /*
+   * Footer-lifted dialogs (2026-07-28). Cancel + Change Description were
+   * moved OUT of ActionBar and up to the modal root so:
+   *   - the destructive Cancel can anchor to the footer's FAR-LEFT edge,
+   *     visually separated from the lifecycle-action group, and
+   *   - the description edit is now opened by a pencil next to the
+   *     Description value in the Summary tab (ViewBody), not a footer button.
+   * State + the dialogs themselves live here so both the footer's Cancel
+   * button and ViewBody's pencil can drive them.
+   */
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [descOpen, setDescOpen] = useState(false);
+  // isJobCancel gates the destructive Cancel button (same permission key
+  // ActionBar used before Cancel was lifted here).
+  const footerCan = actionFlags(currentMe, ['isJobCancel']);
   /*
    * `compact` shrinks the modal to fit-to-content while the create-flow
    * mobile gate is showing. Once the operator submits the mobile and
@@ -483,6 +500,7 @@ export function JobModal({
                     commentsRefreshKey={commentsRefreshKey}
                     pendingComments={pendingComments}
                     onCommentsLoaded={() => setPendingComments([])}
+                    onEditDescription={() => setDescOpen(true)}
                   />}
             </>
           )}
@@ -569,16 +587,22 @@ export function JobModal({
         </div>
 
         {effectiveMode === 'view' && (
+          // Footer layout (2026-07-28): three justify-between zones —
+          //   [ FAR-LEFT: destructive Cancel ] … [ MIDDLE: lifecycle group ] … [ FAR-RIGHT: Close ]
+          // Cancel was lifted out of ActionBar so it can anchor to the left
+          // edge, apart from the constructive status actions; Close stays
+          // pinned to the right. Everything flex-wraps on narrow viewports.
           <div className="px-6 py-3 border-t bg-muted/30 flex items-center justify-between gap-2 flex-wrap">
-            {/* LEFT cluster — only Add Remarks lives here per ops 2026-05-21.
-                Mirrors the legacy "Job Transaction → Add Remarks" affordance
-                and writes to tbl_job_comment with comment_on=1 via
-                POST /admin/jobs/:id/comments. Rendered only once `job` loads
-                so it doesn't flash during the initial fetch. When the job
-                isn't Unconfirmed (status≠9) this cluster is an empty
-                placeholder div so the flex layout keeps the right cluster
-                anchored to the right edge. */}
+            {/* FAR-LEFT zone — the red destructive Cancel. Shares the zone
+                with the legacy status-9 "Add Remarks" affordance (writes to
+                tbl_job_comment with comment_on=1 via POST /admin/jobs/:id/
+                comments): Cancel excludes status 9 and Add Remarks is 9-only,
+                so at most one ever renders here. Empty placeholder otherwise
+                so justify-between keeps Close anchored right. */}
             <div className="flex items-center gap-2">
+              {!loading && job && canCancel(Number(job.job_status)) && footerCan.isJobCancel && (
+                <Button variant="destructive" onClick={() => setCancelOpen(true)}>Cancel</Button>
+              )}
               {!loading && job && Number(job.job_status) === 9 && (
                 <Button
                   variant="outline"
@@ -589,24 +613,20 @@ export function JobModal({
                 </Button>
               )}
             </div>
-            {/* RIGHT cluster — Close sits IMMEDIATELY LEFT of the primary
-                lifecycle actions, not at the far left of the footer. The
-                ordering preserves the "less-used → more-used" reading
-                direction inside the cluster: Close (exit) on the left,
-                then ActionBar's status-aware buttons (Edit, Assign, Start,
-                Complete, Cancel, …) on the right. ActionBar already
-                applies its own flex-wrap, so this composed cluster
-                degrades gracefully on narrow viewports. */}
-            <div className="flex items-center gap-2 flex-wrap justify-end">
+            {/* MIDDLE zone — ActionBar's status-aware lifecycle buttons
+                (Assign / Change Owner / Reschedule / Complete / Mark
+                InComplete / Feedback). Cancel, Start, Edit and Edit
+                Description no longer live here (2026-07-28). */}
+            {!loading && job && (
+              <ActionBar
+                job={job}
+                jobId={Number(jobId)}
+                onChanged={() => { refresh(); onSaved?.(); }}
+              />
+            )}
+            {/* FAR-RIGHT zone — Close. */}
+            <div className="flex items-center gap-2">
               <Button variant="outline" onClick={guardedClose}>Close</Button>
-              {!loading && job && (
-                <ActionBar
-                  job={job}
-                  jobId={Number(jobId)}
-                  onChanged={() => { refresh(); onSaved?.(); }}
-                  onEdit={() => setMode('edit')}
-                />
-              )}
             </div>
           </div>
         )}
@@ -647,6 +667,29 @@ export function JobModal({
           }}
         />
       )}
+      {/* Cancel + Change Description dialogs, lifted out of ActionBar
+          (2026-07-28) so the footer's far-left Cancel button and ViewBody's
+          description pencil can both drive them. Wiring is unchanged from the
+          ActionBar versions: Cancel PATCHes status → CANCELLED with a reason,
+          Change Description PATCHes job_desc; both refresh + bubble onSaved. */}
+      <CancelWithReasonDialog
+        open={cancelOpen} onClose={() => setCancelOpen(false)}
+        onSubmit={async (reasonId, comment) => {
+          await api.patch(`/admin/jobs/${jobId}/status`, {
+            status: ST.CANCELLED, reasonId, comment,
+          });
+          showToast({ variant: 'success', message: 'Job Cancelled' });
+          setCancelOpen(false); refresh(); onSaved?.();
+        }}
+      />
+      <ChangeDescriptionDialog
+        open={descOpen} onClose={() => setDescOpen(false)}
+        initialDesc={String(job?.job_desc ?? '')}
+        onSubmit={async (desc) => {
+          await api.patch(`/admin/jobs/${jobId}`, { job_desc: desc });
+          setDescOpen(false); refresh(); onSaved?.();
+        }}
+      />
     </Dialog>
   );
 }
@@ -729,37 +772,34 @@ const COLLECTED_BY_JOB_OPTIONS = [
   { value: 'Easyfixer', label: 'Paid By Customer' },
 ];
 
-function ActionBar({ job, jobId, onChanged, onEdit }: {
-  job: Job; jobId: number; onChanged: () => void; onEdit: () => void;
+function ActionBar({ job, jobId, onChanged }: {
+  job: Job; jobId: number; onChanged: () => void;
 }) {
   const s = Number(job.job_status);
   const [busy, setBusy] = useState<BusyKey>(null);
   const [assignOpen, setAssignOpen] = useState(false);
   const [autoAssignOpen, setAutoAssignOpen] = useState(false);
   const [ownerOpen, setOwnerOpen] = useState(false);
-  // Three new legacy-parity dialogs:
+  // Legacy-parity dialog still owned here:
   //   - Reschedule: change requested_date_time + time_slot (without
   //     re-assigning a tech). Legacy `jobReshedule.vm`.
-  //   - Change Description: edit job_desc inline. Legacy `changeJobDesc.vm`.
-  //   - Cancel With Reason: PATCH /:id/status with status=6 + reason picker
-  //     from /lookup/cancel-reasons. Legacy `jobCancel.vm`.
+  // (Change Description + Cancel With Reason were lifted to the modal root
+  //  on 2026-07-28 — the pencil in the Summary tab and the footer's
+  //  far-left Cancel button drive those now.)
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
-  const [descOpen, setDescOpen] = useState(false);
-  const [cancelOpen, setCancelOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
 
   // Modal-internal permission gates. Each button maps to a legacy
   // Constants.actionPermissions key so the seeded role_menu_action rows
   // for the Admin role govern visibility. Status guards (canAssign,
-  // canCancel, etc.) AND the permission flag must both be true for the
-  // button to render.
+  // canComplete, etc.) AND the permission flag must both be true for the
+  // button to render. (isJobCancel now gates the lifted footer Cancel.)
   const { me } = useMe();
   const can = actionFlags(me, [
-    'isJobEdit',          // Edit form open + Change Owner
+    'isJobEdit',          // Change Owner + Reschedule + Description pencil + Feedback
     'isJobAssign',        // Auto-assign + Manual pick (initial)
     'isJobReassign',      // Auto-reassign + Manual pick (when already assigned)
-    'isJobStatusChange',  // Start + Complete + Mark Incomplete
-    'isJobCancel',        // Cancel button (destructive — separate key)
+    'isJobStatusChange',  // Complete + Mark Incomplete
   ]);
   const isReassign = !!job.fk_easyfixter_id;
   const canPickTech = isReassign ? can.isJobReassign : can.isJobAssign;
@@ -780,16 +820,8 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
           itself across the CRM (see <CallableMobile> in
           src/components/calls/CallButton.tsx). The action bar deliberately
           carries no Call button — keeps the lifecycle controls
-          (Edit / Assign / Start / Complete / Cancel) visually distinct
-          from the contact-the-customer action. */}
-      {/*
-        * Edit button — kept visible until the job is CLOSED
-        * (status 3/5 COMPLETED). The Edit modal carries the
-        * services + materials affordances; gating it here is the
-        * single source of truth for "can the operator edit
-        * services / materials" until-closed.
-        */}
-      {can.isJobEdit && !isJobClosed(s) && <Button size="sm" variant="outline" onClick={onEdit}>Edit</Button>}
+          (Assign / Change Owner / Complete) visually distinct from the
+          contact-the-customer action. */}
       {/* Confirm & Schedule for Unconfirmed orders is exposed as a dedicated
           modal mode launched from the list row (purple CalendarCheck icon),
           not a button in this action bar. That matches the legacy flow where
@@ -813,7 +845,12 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
           Manual pick
         </Button>
       )}
-      {canChangeOwner(s)    && can.isJobEdit && <Button size="sm" variant="outline" onClick={() => setOwnerOpen(true)}>Change Owner</Button>}
+      {canChangeOwner(s)    && can.isJobEdit && (
+        <Button size="sm" variant="outline" onClick={() => setOwnerOpen(true)}>
+          <UserCog className="h-3.5 w-3.5 mr-1" />
+          Change Owner
+        </Button>
+      )}
       {/* Reschedule only makes sense AFTER the job has been assigned a
           slot (SCHEDULED, status=1) and BEFORE the technician starts
           (status >= IN_PROGRESS would conflict with the in-flight job).
@@ -823,16 +860,19 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
           POST already does this), which the JobRescheduleHistory
           component surfaces in the Summary tab. */}
       {can.isJobEdit && s === ST.SCHEDULED && <Button size="sm" variant="outline" onClick={() => setRescheduleOpen(true)}>Reschedule</Button>}
-      {can.isJobEdit && <Button size="sm" variant="outline" onClick={() => setDescOpen(true)}>Edit Description</Button>}
+      {/* Edit Description button removed 2026-07-28 — a pencil next to the
+          Description value in the Summary tab (ViewBody) opens the same
+          ChangeDescriptionDialog, now hosted at the modal root. */}
       {/* Feedback is only relevant after the job has reached a terminal
           state — COMPLETED (3 or 5) or CANCELLED (6). Logging customer
           feedback against an in-progress job lets ops capture sentiment
           before the work is done, which legacy operators flagged as
           mistake-prone. */}
       {can.isJobEdit && (isJobClosed(s) || s === ST.CANCELLED) && <Button size="sm" variant="outline" onClick={() => setFeedbackOpen(true)}>Feedback</Button>}
-      {canStart(s)          && can.isJobStatusChange && <LoadBtn size="sm" variant="outline" loading={busy === 'start'}      onClick={() => doStatus('start', ST.IN_PROGRESS)}>Start</LoadBtn>}
+      {/* Start button removed 2026-07-28 — check-in to In-Progress is done by
+          the technician from the app, not by ops on the web. */}
       {canComplete(s)       && can.isJobStatusChange && <LoadBtn size="sm" variant="outline" loading={busy === 'complete'}   onClick={() => doStatus('complete', ST.COMPLETED)}>Complete</LoadBtn>}
-      {canCancel(s)         && can.isJobCancel       && <Button size="sm" variant="destructive" onClick={() => setCancelOpen(true)}>Cancel</Button>}
+      {/* Cancel lifted to the footer's far-left zone (2026-07-28). */}
       {canMarkIncomplete(s) && can.isJobStatusChange && <LoadBtn size="sm" variant="outline" loading={busy === 'incomplete'} onClick={() => doStatus('incomplete', ST.REVISIT, undefined, 'Marked incomplete from CRM')}>Mark InComplete</LoadBtn>}
 
       <AssignDialog
@@ -867,24 +907,9 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
         onClose={() => setRescheduleOpen(false)}
         onDone={() => { setRescheduleOpen(false); onChanged(); }}
       />
-      <ChangeDescriptionDialog
-        open={descOpen} onClose={() => setDescOpen(false)}
-        initialDesc={String(job.job_desc ?? '')}
-        onSubmit={async (desc) => {
-          await api.patch(`/admin/jobs/${jobId}`, { job_desc: desc });
-          setDescOpen(false); onChanged();
-        }}
-      />
-      <CancelWithReasonDialog
-        open={cancelOpen} onClose={() => setCancelOpen(false)}
-        onSubmit={async (reasonId, comment) => {
-          await api.patch(`/admin/jobs/${jobId}/status`, {
-            status: ST.CANCELLED, reasonId, comment,
-          });
-          showToast({ variant: 'success', message: 'Job Cancelled' });
-          setCancelOpen(false); onChanged();
-        }}
-      />
+      {/* ChangeDescriptionDialog + CancelWithReasonDialog were lifted to the
+          modal root (2026-07-28) so the Summary-tab pencil and the footer's
+          far-left Cancel button can drive them. */}
       <FeedbackDialog
         open={feedbackOpen} onClose={() => setFeedbackOpen(false)}
         jobId={jobId}
@@ -896,16 +921,32 @@ function ActionBar({ job, jobId, onChanged, onEdit }: {
 
 // ─── View body (tabbed read-only display) ────────────────────────────────────
 
-function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKey = 0, pendingComments = [], onCommentsLoaded }: { job: Job; onRefresh?: () => void; initialTab?: string; onDirtyChange?: (dirty: boolean) => void; commentsRefreshKey?: number; pendingComments?: Array<JobComment & { _pending?: true }>; onCommentsLoaded?: () => void }) {
+function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKey = 0, pendingComments = [], onCommentsLoaded, onEditDescription }: { job: Job; onRefresh?: () => void; initialTab?: string; onDirtyChange?: (dirty: boolean) => void; commentsRefreshKey?: number; pendingComments?: Array<JobComment & { _pending?: true }>; onCommentsLoaded?: () => void; onEditDescription?: () => void }) {
   const images = Array.isArray((job as Record<string, unknown>).images)
     ? ((job as Record<string, unknown>).images as Array<Record<string, unknown>>)
     : [];
+  /*
+   * Billing & Charges tab gate (2026-07-28) — fail-closed on the
+   * `me.canManageJobCharges` feature flag (resolved server-side on
+   * /auth/me, same one-off boolean shape as scheduledJobsAccess). When
+   * false the tab is hidden entirely AND a `?tab=billing` deep link
+   * falls back to Summary (the value is dropped from KNOWN_TABS below).
+   * The BE additionally enforces the gate on every /charges endpoint.
+   */
+  const { me } = useMe();
+  const canManageJobCharges = me?.canManageJobCharges === true;
+  // Gates the inline Description pencil (Summary tab) — same isJobEdit key
+  // the old ActionBar "Edit Description" button used.
+  const canEditJob = actionFlags(me, ['isJobEdit']).isJobEdit;
   /*
    * Whitelist of recognised tab values so a malformed `?tab=` URL can't
    * leave the Tabs widget in an unrenderable state (no panel matches).
    * Anything not in this set falls back to 'summary'.
    */
-  const KNOWN_TABS = new Set(['summary', 'services', 'schedule', 'images', 'questionnaire', 'comments', 'materials', 'quotations']);
+  const KNOWN_TABS = new Set([
+    'summary', 'services', 'schedule', 'images', 'questionnaire', 'comments', 'materials', 'quotations',
+    ...(canManageJobCharges ? ['billing'] : []),
+  ]);
   const startingTab = initialTab && KNOWN_TABS.has(initialTab) ? initialTab : 'summary';
   return (
     <Tabs defaultValue={startingTab}>
@@ -918,6 +959,8 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
         <TabsTrigger value="comments">Comments</TabsTrigger>
         <TabsTrigger value="materials">Materials</TabsTrigger>
         <TabsTrigger value="quotations">Quotations</TabsTrigger>
+        {/* Billing & Charges — hidden unless me.canManageJobCharges (fail-closed). */}
+        {canManageJobCharges && <TabsTrigger value="billing">Billing &amp; Charges</TabsTrigger>}
       </TabsList>
 
       <TabsContent value="summary">
@@ -973,7 +1016,25 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
             ['Type', job.job_type],
             ['Source', job.source_type],
             ['Owner', job.owner_name],
-            ['Description', job.job_desc],
+            // Description carries an inline pencil (gated on isJobEdit) that
+            // opens the same ChangeDescriptionDialog the old footer "Edit
+            // Description" button used — now hosted at the modal root.
+            ['Description', (
+              <span className="inline-flex items-start justify-end gap-1.5 max-w-full">
+                <span className="break-all">{String(job.job_desc ?? '') || '—'}</span>
+                {canEditJob && onEditDescription && (
+                  <button
+                    type="button"
+                    onClick={onEditDescription}
+                    title="Edit Description"
+                    aria-label="Edit Description"
+                    className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </span>
+            )],
           ]}/>
           {/* Address — full-width because the address line is long and
               wraps awkwardly inside a one-third column. Includes an
@@ -1110,6 +1171,22 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
       <TabsContent value="quotations">
         <JobQuotationsTab jobId={job.job_id as number} />
       </TabsContent>
+
+      {/* Billing & Charges tab — legacy CheckIn-detail right-column
+          actions (Travel/Incentive/Penalty charges, advance requests,
+          Job Sheet/Purchase Order documents, per-service client approval).
+          Rendered only when me.canManageJobCharges is true; canManage is
+          threaded so every mutating control also respects the flag. */}
+      {canManageJobCharges && (
+        <TabsContent value="billing">
+          <BillingChargesTab
+            jobId={Number(job.job_id)}
+            clientId={(job as Record<string, unknown>).fk_client_id != null ? Number((job as Record<string, unknown>).fk_client_id) : null}
+            efrId={job.fk_easyfixter_id != null ? Number(job.fk_easyfixter_id) : null}
+            canManage={canManageJobCharges}
+          />
+        </TabsContent>
+      )}
     </Tabs>
   );
 }

@@ -21,6 +21,7 @@ import {
 } from '@/lib/job-tabs';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { UnconfirmedJobsTable } from '@/components/job/UnconfirmedJobsTable';
+import { PendingToStartView } from '@/components/job/PendingToStartView';
 import { AssignTechnicianModal, type AssignMode } from '@/components/job/AssignTechnicianModal';
 import { ScheduleAssignModal } from '@/components/job/ScheduleAssignModal';
 import { CallableMobile } from '@/components/calls/CallButton';
@@ -389,7 +390,11 @@ export default function MyOrdersPage() {
   // Live-location popover state — the job whose technician location is being
   // viewed (null = closed). Shown for "Pending App Ack" (status 0, assigned)
   // and "Pending to Close" (status 2/20) rows, which always have a tech.
-  const [locationJob, setLocationJob] = useState<JobRow | null>(null);
+  // Only job_id + easyfixer_name are read by LiveLocationPopover, so the state
+  // is the minimal structural shape — satisfied by BOTH JobRow (the shared
+  // table's MapPin call site) and PendingToStartView's PendingJobRow, so both
+  // call sites type-check without importing each other's row type.
+  const [locationJob, setLocationJob] = useState<{ job_id: number; easyfixer_name: string | null } | null>(null);
   const confirmAction = useConfirm();
   // Shared factory (lib/job-tabs.ts). /my-orders keeps its longer "continue
   // working" confirm copy and does NOT refresh counts (no pill bar here — see
@@ -466,6 +471,13 @@ export default function MyOrdersPage() {
   // page renders an explanatory panel instead of an always-empty table.
   const isRetiredTab = tab === 'pending-app-ack';
 
+  // "Pending to Start" (status=1 SCHEDULED) gets its own dedicated view —
+  // a PM/ZM/Client/City filter bar + three appointment-bucketed,
+  // independently-paginated sections (Over Due / Action Today / Future),
+  // matching the legacy CRM. Rendered instead of the shared table below
+  // (which stays untouched for the other ~9 tabs).
+  const isPendingStart = tab === 'pending-start';
+
   // Whole days between a ticket-created timestamp and now, e.g. "12d".
   // Null/invalid → '—'. Negative clamps to 0d (future-dated guard).
   function jobAgeLabel(d: string | null | undefined): string {
@@ -514,8 +526,9 @@ export default function MyOrdersPage() {
         * the filter under the hood, unchanged.
         */}
 
-      {/* Search bar — hidden on the retired Pending App Ack page */}
-      {!isRetiredTab && (
+      {/* Search bar — hidden on the retired Pending App Ack page and on
+          Pending to Start (which renders its own filter bar). */}
+      {!isRetiredTab && !isPendingStart && (
       <Card>
         <CardContent className="p-3">
           <div className="relative">
@@ -539,6 +552,15 @@ export default function MyOrdersPage() {
 
       {isRetiredTab ? (
         <PendingAppAckRetired />
+      ) : isPendingStart ? (
+        <PendingToStartView
+          me={me}
+          isAdmin={isAdmin}
+          canJob={canJob}
+          openView={openView}
+          openReassign={openReassign}
+          onShowLocation={(row) => setLocationJob(row)}
+        />
       ) : (
       <Card>
         <RefreshBar active={refreshing} />
@@ -960,7 +982,9 @@ export default function MyOrdersPage() {
           : undefined}
       />
 
-      {data && (
+      {/* Pending to Start renders its own per-section pagination inside
+          PendingToStartView; suppress the shared footer pagination there. */}
+      {data && !isPendingStart && (
         <TablePagination
           page={page}
           pageSize={pageSize}
