@@ -394,6 +394,9 @@ export default function MyOrdersPage() {
 
   function closeModal()                { closeJobAction(); }
   function openView(id: number)        { openJobAction('view',     id); }
+  // Pending-to-Start Check-In — same JobModal workspace as view, opened under
+  // ?action=checkin so it titles itself "Checkin · Job #N" (see JobModalMode).
+  function openCheckin(id: number)     { openJobAction('checkin',  id); }
   // Unconfirmed orders open the dedicated confirm form (edit layout +
   // services basket + "Confirm & Schedule" footer), mirroring the
   // legacy addEditJob flow.
@@ -577,7 +580,7 @@ export default function MyOrdersPage() {
           me={me}
           isAdmin={isAdmin}
           canJob={canJob}
-          openView={openView}
+          openCheckin={openCheckin}
           openReassign={openReassign}
           onShowLocation={(row) => setLocationJob(row)}
         />

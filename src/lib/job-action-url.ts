@@ -36,10 +36,16 @@ import { useCallback, useMemo } from 'react';
  *   old shape will be normalised by the page's next URL push.
  */
 
-export type JobAction = 'create' | 'view' | 'edit' | 'confirm' | 'assign' | 'reassign' | 'schedule';
+/*
+ * `checkin` opens the SAME workspace as `view` (JobModal maps it to the view
+ * layout) — it exists purely so the Pending-to-Start Check-In entry can label
+ * itself "Checkin · Job #N" and drop the status/type sub-line, while opening
+ * the same job from the Jobs list stays the neutral "Job #N" viewer.
+ */
+export type JobAction = 'create' | 'view' | 'checkin' | 'edit' | 'confirm' | 'assign' | 'reassign' | 'schedule';
 
 const KNOWN_ACTIONS: ReadonlySet<JobAction> = new Set<JobAction>([
-  'create', 'view', 'edit', 'confirm', 'assign', 'reassign', 'schedule',
+  'create', 'view', 'checkin', 'edit', 'confirm', 'assign', 'reassign', 'schedule',
 ]);
 
 export interface JobActionParams {

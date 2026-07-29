@@ -32,6 +32,26 @@ export function istNowWallClock(): string {
 }
 
 /*
+ * appointmentIsPast(requestedDateTime) — has the job's promised slot already
+ * gone, in IST? Mirrors the SERVER rule in routes/admin/jobs.js verbatim, which
+ * refuses to reschedule INTO the past or to offer a job whose slot has passed;
+ * keep the two in step or the UI will promise something the API rejects.
+ *
+ * A DATE-ONLY value carries no promised time, so it is judged by DATE — never
+ * coerced to 00:00, which would wrongly call "today, time unspecified" past.
+ *
+ * Deliberately NOT folded into magicLinkRescheduleGate below: that gate treats
+ * a date-only value as 'none' and changing it would alter the magic-link flow.
+ */
+export function appointmentIsPast(requestedDateTime: string | null | undefined): boolean {
+  if (!requestedDateTime) return false;
+  const raw = String(requestedDateTime).replace(' ', 'T');
+  const now = istNowWallClock();   // fixed-width, so lexicographic IS chronological
+  if (raw.length <= 10) return raw.slice(0, 10) < now.slice(0, 10);
+  return raw.slice(0, 16) < now.slice(0, 16);
+}
+
+/*
  * Reschedule gate for "Send Magic Link" on Unconfirmed orders, keyed on the
  * job's appointment (`requested_date_time`, an IST wall-clock string from the BE):
  *   'mandatory' — appointment is in the PAST (datetime < IST now). Includes a

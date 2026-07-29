@@ -175,11 +175,13 @@ export type PendingToStartViewProps = {
   // Permission flags from the page's actionFlags(me, …) — we only read
   // isJobStatusChange (Check-In) and isJobReassign (Reassign) here.
   canJob: Record<string, boolean>;
-  // Reused page handlers — do NOT re-implement their logic. openView opens the
-  // page-owned JobModal workspace; the Check-In icon routes there (the "CheckIn
-  // page") so ops review the full detail / Billing & Charges workspace and
-  // perform the actual check-in inside it.
-  openView: (jobId: number) => void;
+  /*
+   * Reused page handlers — do NOT re-implement their logic. `openCheckin` opens
+   * the SAME page-owned JobModal workspace as openView, under ?action=checkin —
+   * so ops get the full detail / Billing & Charges workspace, titled "Checkin ·
+   * Job #N" instead of the neutral viewer, and perform the check-in inside it.
+   */
+  openCheckin: (jobId: number) => void;
   openReassign: (jobId: number) => void;
   // Opens the page-owned LiveLocationPopover for a row's assigned technician.
   // The popover only polls (every 15s) WHILE OPEN, so this stays on-demand —
@@ -191,7 +193,7 @@ export function PendingToStartView({
   me,
   isAdmin,
   canJob,
-  openView,
+  openCheckin,
   openReassign,
   onShowLocation,
 }: PendingToStartViewProps) {
@@ -370,7 +372,7 @@ export function PendingToStartView({
         reloadKey={reloadKey}
         isAdmin={isAdmin}
         canJob={canJob}
-        onView={openView}
+        onCheckin={openCheckin}
         onReassign={openReassign}
         onShowLocation={onShowLocation}
       />
@@ -384,7 +386,7 @@ export function PendingToStartView({
         reloadKey={reloadKey}
         isAdmin={isAdmin}
         canJob={canJob}
-        onView={openView}
+        onCheckin={openCheckin}
         onReassign={openReassign}
         onShowLocation={onShowLocation}
       />
@@ -398,7 +400,7 @@ export function PendingToStartView({
         reloadKey={reloadKey}
         isAdmin={isAdmin}
         canJob={canJob}
-        onView={openView}
+        onCheckin={openCheckin}
         onReassign={openReassign}
         onShowLocation={onShowLocation}
       />
@@ -427,7 +429,7 @@ type PendingSectionProps = {
   reloadKey: number;
   isAdmin: boolean;
   canJob: Record<string, boolean>;
-  onView: (jobId: number) => void;
+  onCheckin: (jobId: number) => void;
   onReassign: (jobId: number) => void;
   onShowLocation: (row: { job_id: number; easyfixer_name: string | null }) => void;
 };
@@ -443,7 +445,7 @@ function PendingSection({
   reloadKey,
   isAdmin,
   canJob,
-  onView,
+  onCheckin,
   onReassign,
   onShowLocation,
 }: PendingSectionProps) {
@@ -652,7 +654,7 @@ function PendingSection({
                       {canJob.isJobStatusChange && (
                         <button
                           type="button"
-                          onClick={() => onView(j.job_id)}
+                          onClick={() => onCheckin(j.job_id)}
                           className="inline-flex items-center gap-1 text-amber-700 text-xs hover:underline"
                           title="Check-In — open the job workspace to review and check in"
                         >

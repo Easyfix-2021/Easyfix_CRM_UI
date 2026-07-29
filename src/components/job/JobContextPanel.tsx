@@ -39,7 +39,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatServiceAddress } from '@/lib/format';
-import { formatDate } from '@/lib/utils';
+import { formatDate, appointmentIsPast } from '@/lib/utils';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { JobRemarksView } from './JobRemarksView';
@@ -399,6 +399,18 @@ export function JobContextPanel({
                   </Button>
                 )}
               </div>
+              {/*
+                * Past-appointment notice. The server refuses to OFFER a job
+                * whose slot has already gone (routes/admin/jobs.js), so say so
+                * next to the Reschedule button — the exact action required —
+                * rather than letting ops pick technicians and meet a 400.
+                */}
+              {!rescheduling && appointmentIsPast(job.requested_date_time) && (
+                <p className="mt-2 text-[11px] font-medium text-red-700">
+                  This appointment time has already passed. Reschedule it to a future
+                  slot before offering the job to technicians.
+                </p>
+              )}
               {showReschedule && (
                 <p className="mt-2 text-[11px] text-muted-foreground">
                   Job Date &amp; Time are locked. Use <b>Reschedule</b> to change the

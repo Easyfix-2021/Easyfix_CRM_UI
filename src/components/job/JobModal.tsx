@@ -4,7 +4,7 @@ import * as React from 'react';
 import { useSlotRecommendations, SlotAdvisory } from '@/components/job/SlotRecommendations';
 import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import { useFetch, useUiFlags } from '@/lib/hooks';
-import { Sparkles, Search, CalendarCheck, History, Eye, Plus, X, Pencil, CalendarPlus, CheckCircle2, BarChart3, Trash2, RotateCcw, UserCog } from 'lucide-react';
+import { Sparkles, Search, CalendarCheck, History, Eye, Plus, X, Pencil, CalendarPlus, CheckCircle2, BarChart3, Trash2, RotateCcw } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
@@ -99,7 +99,9 @@ export const ST = { BOOKED: 0, SCHEDULED: 1, IN_PROGRESS: 2, COMPLETED: 3, COMPL
 // Confirm-and-Schedule flow (purple CalendarCheck on the row), not
 // directly assign/cancel from the View modal. Legacy CRM behaviour.
 const canAssign         = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.ENQUIRY, ST.REVISIT].includes(s as never);
-const canChangeOwner    = (s: number) => ![ST.COMPLETED, ST.COMPLETED_ALT, ST.CANCELLED].includes(s as never);
+// canChangeOwner removed with the Change Owner button (2026-07-29). Its rule
+// was "any status except COMPLETED / COMPLETED_ALT / CANCELLED" — restore that
+// predicate if owner-change is ever re-homed (the dialog is still mounted).
 /*
  * isJobClosed — true when the job has reached a terminal-completion
  * state. Operators may still VIEW closed jobs but cannot edit their
@@ -127,7 +129,14 @@ const canMarkIncomplete = (s: number) => [ST.COMPLETED, ST.COMPLETED_ALT].includ
  *             the replacement for the legacy `addEditJob?loc=home → Book Call`
  *             modal used on the Unconfirmed Orders queue.
  */
-export type JobModalMode = 'create' | 'edit' | 'view' | 'confirm';
+/*
+ * `checkin` is the VIEW workspace under a different name — same body, tabs and
+ * footer. It exists only so the Pending-to-Start Check-In entry reads as a
+ * check-in ("Checkin · Job #N", no status/type sub-line) while the generic
+ * viewer opened from a list stays neutral. Everything downstream keys off
+ * `effectiveMode`, which folds checkin → view.
+ */
+export type JobModalMode = 'create' | 'edit' | 'view' | 'checkin' | 'confirm';
 
 type Job = Record<string, unknown> & {
   job_id: number; job_status: number;
@@ -221,7 +230,8 @@ export function JobModal({
      * input occurred) which would otherwise produce a phantom
      * "Discard Unsaved Changes?" prompt on a pure-read flow.
      */
-    if (mode === 'view') {
+    // checkin is the same pure-read workspace as view — no dirty-check either.
+    if (mode === 'view' || mode === 'checkin') {
       hasUnsavedQtyRef.current = false;
       hasUnsavedFormRef.current = false;
       onClose();
@@ -391,10 +401,14 @@ export function JobModal({
   // open the full Confirm & Schedule flow with all its actions. While the job is
   // still loading (job null) confirm stays so the loader shows; a genuine
   // unconfirmed job is unaffected. create/edit/view are never downgraded.
-  const effectiveMode = (mode === 'confirm' && job && Number(job.job_status) !== 9) ? 'view' : mode;
+  // checkin folds into view FIRST so every layout branch below (body, tabs,
+  // footer) is the view workspace; only the title + header sub-line differ.
+  const effectiveMode = mode === 'checkin' ? 'view'
+    : (mode === 'confirm' && job && Number(job.job_status) !== 9) ? 'view' : mode;
   const title = effectiveMode === 'create'  ? 'Book New Call'
              : effectiveMode === 'edit'    ? `Edit Job #${jobId}`
              : effectiveMode === 'confirm' ? `Confirm & Schedule · Job #${jobId}`
+             : mode === 'checkin'           ? `Checkin · Job #${jobId}`
              : job                          ? `Job #${job.job_id}`
              :                                'Job';
 
@@ -444,7 +458,10 @@ export function JobModal({
                 <DialogTitle className="truncate">{title}</DialogTitle>
                 {/* Status badge + job-type sub-line only show once we have
                     the fresh `job` payload — gated on `!loading` so the
-                    previous job's badge can't flash on re-open. */}
+                    previous job's badge can't flash on re-open.
+                    Deliberately keyed off the RAW `mode`, not effectiveMode:
+                    the check-in workspace shows title only (no status chip, no
+                    job type), which is why 'checkin' must not fold in here. */}
                 {mode === 'view' && !loading && job && (
                   <DialogDescription className="mt-1 flex items-center gap-2">
                     <StatusChip tone={statusTone(Number(job.job_status))}>
@@ -588,24 +605,26 @@ export function JobModal({
         </div>
 
         {effectiveMode === 'view' && (
-          // Footer layout (2026-07-28): three justify-between zones —
-          //   [ FAR-LEFT: destructive Cancel ] … [ MIDDLE: lifecycle group ] … [ FAR-RIGHT: Close ]
-          // Cancel was lifted out of ActionBar so it can anchor to the left
-          // edge, apart from the constructive status actions; Close stays
-          // pinned to the right. Everything flex-wraps on narrow viewports.
+          /*
+           * Footer layout (2026-07-29, replaces the 2026-07-28 three-zone one):
+           *   [ FAR-LEFT: Add Remarks ] … [ RIGHT: Cancel · lifecycle · Close ]
+           *
+           * Every ACTION now sits in one right-aligned cluster in a fixed
+           * reading order — Cancel first, the status-aware lifecycle buttons
+           * (Reschedule / Complete / Mark InComplete / Feedback) next, Close
+           * last — so the eye lands on the same place in every job modal
+           * instead of tracking a button that moves with the status. Only
+           * Add Remarks stays left, matching Schedule & Assign and Reassign.
+           * Wraps on narrow viewports.
+           */
           <div className="px-6 py-3 border-t bg-muted/30 flex items-center justify-between gap-2 flex-wrap">
-            {/* FAR-LEFT zone — the red destructive Cancel. Shares the zone
-                with the legacy status-9 "Add Remarks" affordance (writes to
-                tbl_job_comment with comment_on=1 via POST /admin/jobs/:id/
-                comments): Cancel excludes status 9 and Add Remarks is 9-only,
-                so at most one ever renders here. Empty placeholder otherwise
-                so justify-between keeps Close anchored right. */}
+            {/* FAR-LEFT zone — Add Remarks (writes to tbl_job_comment with
+                comment_on=1 via POST /admin/jobs/:id/comments). Shown for the
+                legacy status-9 follow-up flow AND on the Check-In workspace,
+                where ops record what happened on the call. Empty placeholder
+                otherwise so justify-between keeps the cluster anchored right. */}
             <div className="flex items-center gap-2">
-              {!loading && job && canCancel(Number(job.job_status)) && footerCan.isJobCancel
-                && transitionAllowed(currentMe?.allowedStages, Number(job.job_status), ST.CANCELLED) && (
-                <Button variant="destructive" onClick={() => setCancelOpen(true)}>Cancel</Button>
-              )}
-              {!loading && job && Number(job.job_status) === 9 && (
+              {!loading && job && (Number(job.job_status) === 9 || mode === 'checkin') && (
                 <Button
                   variant="outline"
                   className="bg-teal-500 hover:bg-teal-600 text-white border-teal-500 hover:text-white"
@@ -615,19 +634,21 @@ export function JobModal({
                 </Button>
               )}
             </div>
-            {/* MIDDLE zone — ActionBar's status-aware lifecycle buttons
-                (Assign / Change Owner / Reschedule / Complete / Mark
-                InComplete / Feedback). Cancel, Start, Edit and Edit
-                Description no longer live here (2026-07-28). */}
-            {!loading && job && (
-              <ActionBar
-                job={job}
-                jobId={Number(jobId)}
-                onChanged={() => { refresh(); onSaved?.(); }}
-              />
-            )}
-            {/* FAR-RIGHT zone — Close. */}
-            <div className="flex items-center gap-2">
+            {/* RIGHT cluster — Cancel, then ActionBar's lifecycle buttons,
+                then Close. Change Owner was removed from ActionBar entirely
+                (2026-07-29). */}
+            <div className="flex items-center gap-2 flex-wrap justify-end">
+              {!loading && job && canCancel(Number(job.job_status)) && footerCan.isJobCancel
+                && transitionAllowed(currentMe?.allowedStages, Number(job.job_status), ST.CANCELLED) && (
+                <Button variant="destructive" onClick={() => setCancelOpen(true)}>Cancel</Button>
+              )}
+              {!loading && job && (
+                <ActionBar
+                  job={job}
+                  jobId={Number(jobId)}
+                  onChanged={() => { refresh(); onSaved?.(); }}
+                />
+              )}
               <Button variant="outline" onClick={guardedClose}>Close</Button>
             </div>
           </div>
@@ -847,12 +868,11 @@ function ActionBar({ job, jobId, onChanged }: {
           Manual pick
         </Button>
       )}
-      {canChangeOwner(s)    && can.isJobEdit && (
-        <Button size="sm" variant="outline" onClick={() => setOwnerOpen(true)}>
-          <UserCog className="h-3.5 w-3.5 mr-1" />
-          Change Owner
-        </Button>
-      )}
+      {/* Change Owner button removed 2026-07-29 (owner request) — the footer
+          now carries only Cancel · Reschedule · Close. The ChangeOwnerDialog
+          below stays mounted and wired so re-exposing it is a one-line revert;
+          NOTE this leaves job-owner reassignment with no entry point in the
+          CRM until it is re-homed somewhere (e.g. a Jobs-list row action). */}
       {/* Reschedule only makes sense AFTER the job has been assigned a
           slot (SCHEDULED, status=1) and BEFORE the technician starts
           (status >= IN_PROGRESS would conflict with the in-flight job).

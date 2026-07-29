@@ -67,6 +67,14 @@ type CandidatesResponse = {
   l2Count?: number;
   candidates: ScheduleCandidate[];
   rejected?: Array<{ efr_id: number; efr_name: string | null; reason: string }>;
+  /* Server-computed explanation of an EMPTY candidate list — see the same
+     field on ScheduleAssignModal's TopResponse. */
+  emptyReason?: {
+    code: string;
+    message: string;
+    counts?: Record<string, number>;
+    declined?: Array<{ efr_id: number; efr_name: string | null; reason: string | null }>;
+  } | null;
 };
 
 type SearchResponse = {
@@ -433,6 +441,36 @@ export function AssignTechnicianModal({
                           <p className="mt-3 text-center text-[11px] text-muted-foreground">
                             Search by name / ID to pick a specific technician.
                           </p>
+                        </>
+                      );
+                    }
+                    // Server diagnosis first — it knows which stage emptied the
+                    // pool. The sentence below is the pre-emptyReason fallback.
+                    if (topData?.emptyReason?.message) {
+                      const declined = topData.emptyReason.declined ?? [];
+                      return (
+                        <>
+                          <p className="mt-1 text-center text-muted-foreground">
+                            {topData.emptyReason.message}
+                          </p>
+                          {/* Decline reasons — see ScheduleAssignModal for the why. */}
+                          {declined.length > 0 && (
+                            <ul className="mx-auto mt-3 max-w-md space-y-1">
+                              {declined.map((d) => (
+                                <li
+                                  key={d.efr_id}
+                                  className="flex items-start justify-between gap-3 rounded border bg-muted/20 px-3 py-1.5 text-xs"
+                                >
+                                  <span className="font-medium shrink-0">
+                                    {d.efr_name || `Efr #${d.efr_id}`}
+                                  </span>
+                                  <span className="text-right text-muted-foreground break-words">
+                                    {d.reason || 'Declined — no reason given'}
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
                         </>
                       );
                     }

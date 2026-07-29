@@ -58,7 +58,7 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
-import { formatDate, relativeTime } from '@/lib/utils';
+import { formatDate, relativeTime, appointmentIsPast } from '@/lib/utils';
 import { InfoTooltip } from '@/components/ui/tooltip';
 import { TablePagination, type TablePageSize } from '@/components/ui/table-pagination';
 import { showToast } from '@/components/ui/toast';
@@ -170,6 +170,20 @@ type CandidatesResponse = {
   l1Count?: number;
   l2Count?: number;
   rejected?: RejectedTech[];
+  /*
+   * Server-computed explanation of an EMPTY candidate list (null when there are
+   * candidates). Replaces the old catch-all "no verified technician with the
+   * required skill in this city", which was shown for every cause — including
+   * ones that had nothing to do with skills or the city.
+   */
+  emptyReason?: {
+    code: string;
+    message: string;
+    counts?: Record<string, number>;
+    /* Technicians who DECLINED this job, with the reason each gave — the
+       actionable half of "1 declined it". Latest offer per tech, max 10. */
+    declined?: Array<{ efr_id: number; efr_name: string | null; reason: string | null }>;
+  } | null;
 };
 
 type SearchResponse = {
@@ -819,6 +833,43 @@ export function ScheduleAssignModal({
                         </>
                       );
                     }
+                    /*
+                       Prefer the SERVER's diagnosis — it knows which stage
+                       emptied the pool (nobody in the city / everyone already
+                       offered or declined / all filtered out / no skill match).
+                       The old sentence below is the last-resort fallback for a
+                       backend that predates emptyReason; it blamed skill+city
+                       for every cause, which actively misdirected ops. */
+                    if (topData?.emptyReason?.message) {
+                      const declined = topData.emptyReason.declined ?? [];
+                      return (
+                        <>
+                          <p className="mt-1 text-center text-muted-foreground">
+                            {topData.emptyReason.message}
+                          </p>
+                          {/* The decline reasons. "1 declined it" is a dead end;
+                              WHY they declined is what decides the next move
+                              (re-offer / widen / escalate). */}
+                          {declined.length > 0 && (
+                            <ul className="mx-auto mt-3 max-w-md space-y-1">
+                              {declined.map((d) => (
+                                <li
+                                  key={d.efr_id}
+                                  className="flex items-start justify-between gap-3 rounded border bg-muted/20 px-3 py-1.5 text-xs"
+                                >
+                                  <span className="font-medium shrink-0">
+                                    {d.efr_name || `Efr #${d.efr_id}`}
+                                  </span>
+                                  <span className="text-right text-muted-foreground break-words">
+                                    {d.reason || 'Declined — no reason given'}
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </>
+                      );
+                    }
                     return (
                       <p className="mt-1 text-center text-muted-foreground">
                         No active, verified technician with the required skill was found in this city
@@ -893,7 +944,19 @@ export function ScheduleAssignModal({
             {canCommit && (
               <Button
                 onClick={offerMode ? offer : assignSingle}
-                disabled={!jobId || committing || (offerMode ? selected.size === 0 : selected.size !== 1)}
+                /*
+                 * A stale appointment blocks OFFERING only — the server refuses
+                 * it, so disabling here turns a 400 into an explained control.
+                 * Direct Assign stays enabled on purpose: swapping the tech on a
+                 * job that is already running late is a legitimate recovery, and
+                 * the server does not gate it either.
+                 */
+                disabled={!jobId || committing
+                  || (offerMode ? selected.size === 0 : selected.size !== 1)
+                  || (offerMode && appointmentIsPast(job?.requested_date_time))}
+                title={offerMode && appointmentIsPast(job?.requested_date_time)
+                  ? 'The appointment time has passed — reschedule the job before offering it.'
+                  : undefined}
               >
                 {committing
                   ? <Loader2 className="h-4 w-4 animate-spin" />
