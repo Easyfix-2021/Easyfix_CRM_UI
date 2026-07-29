@@ -14,6 +14,8 @@ import { cn } from '@/lib/utils';
 import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
 import { useFetchOnce } from '@/lib/hooks';
+// Job Stage Access — clamps job-list menu rows to the user's allowed stages.
+import { jobHrefAllowedForStages } from '@/lib/job-tabs';
 import { api, ApiError } from '@/lib/api';
 import { showToast } from '@/components/ui/toast';
 // URL_MAP lives in a shared module so middleware.ts (server-side route
@@ -324,21 +326,45 @@ export function Sidebar() {
     [me?.permissions?.menuIds],
   );
 
+  /*
+   * Job Stage Access — a SECOND, independent filter layered on the menu
+   * allowlist above. Menu permissions say which pages the ROLE may open; stage
+   * access says which lifecycle stages this USER may see. A user restricted to
+   * (say) Pending to Close should not be offered "Unconfirmed Orders" at all —
+   * before this, every job link stayed in the sidebar and simply led to an
+   * empty table, which reads as a broken page rather than a permission.
+   * Unrestricted users ({mode:'all'}, i.e. anyone with no stage rows) are
+   * unaffected — jobHrefAllowedForStages short-circuits to true.
+   */
   const tree = useMemo(() => {
     if (!menus) return [];
     const roots = buildTree(menus);
     return roots
-      .map((r) => ({
-        ...r,
-        children: r.children.filter((c) => allowedMenuIds.has(c.menu_id)),
-      }))
-      // Keep a parent if EITHER it's directly granted OR it has at least
-      // one allowed child after pruning. Roots with no children at all
-      // (legacy top-level pages like Home) still need their own id in
-      // the allowlist to render — they have no implicit "via a child"
-      // path.
-      .filter((r) => allowedMenuIds.has(r.menu_id) || r.children.length > 0);
-  }, [menus, allowedMenuIds]);
+      .map((r) => {
+        const permitted = r.children.filter((c) => allowedMenuIds.has(c.menu_id));
+        const visible = permitted.filter((c) => jobHrefAllowedForStages(
+          legacyToRoute(c.menu_name, c.url), me?.allowedStages,
+        ));
+        return {
+          node: { ...r, children: visible },
+          // A parent that HAD reachable children but lost every one of them to
+          // the stage filter would otherwise render as an empty accordion.
+          emptiedByStages: permitted.length > 0 && visible.length === 0,
+        };
+      })
+      .filter(({ node, emptiedByStages }) => {
+        if (emptiedByStages) return false;
+        // Keep a parent if EITHER it's directly granted OR it has at least
+        // one allowed child after pruning. Roots with no children at all
+        // (legacy top-level pages like Home) still need their own id in
+        // the allowlist to render — they have no implicit "via a child"
+        // path, and if that page IS a job list it gets stage-checked too.
+        if (node.children.length > 0) return true;
+        return allowedMenuIds.has(node.menu_id)
+          && jobHrefAllowedForStages(legacyToRoute(node.menu_name, node.url), me?.allowedStages);
+      })
+      .map(({ node }) => node);
+  }, [menus, allowedMenuIds, me?.allowedStages]);
 
   /*
    * Single globally-active href across the entire sidebar.

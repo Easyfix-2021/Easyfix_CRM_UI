@@ -16,9 +16,10 @@ import { actionFlags } from '@/lib/permissions';
 import { formatDate, formatEasyfixerName, statusLabel, statusTone } from '@/lib/utils';
 import { StatusChip } from '@/components/ui/StatusChip';
 import {
-  TABS, filterJobRows, makeQuickStatusChange,
+  TABS, filterJobRows, filterTabsForStages, makeQuickStatusChange,
   JOB_SEARCH_PLACEHOLDER, JOB_SEARCH_HINT,
 } from '@/lib/job-tabs';
+import { transitionAllowed } from '@/lib/job-stages';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { UnconfirmedJobsTable } from '@/components/job/UnconfirmedJobsTable';
 import { PendingToStartView } from '@/components/job/PendingToStartView';
@@ -332,6 +333,25 @@ export default function MyOrdersPage() {
   }, [searchParams]);
 
   /*
+   * Job Stage Access clamp (UX + defense-in-depth). A stage-restricted user
+   * must never sit on a tab outside their allowed stages. filterTabsForStages
+   * drops tabs whose status(es) fall outside the allowed set (including the
+   * cross-stage "All" default); if the resolved tab isn't allowed, snap to the
+   * first allowed one. Admin / Finance (mode 'all') and a still-loading `me`
+   * are no-ops (fail-open — the server LIST endpoint stays authoritative).
+   */
+  useEffect(() => {
+    if (!me?.allowedStages || me.allowedStages.mode === 'all') return;
+    const allowedTabs = filterTabsForStages(TABS, me.allowedStages);
+    if (allowedTabs.length === 0) return;
+    if (!allowedTabs.some((t) => t.value === tab)) {
+      setTab(allowedTabs[0].value);
+      setPage(0);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me?.allowedStages, tab]);
+
+  /*
    * Modal state is derived from the URL — every row-level action
    * (View / Confirm / Assign / Reassign) pushes its intent into
    * `?jobId=&action=` so teammates can share the URL and land
@@ -569,7 +589,9 @@ export default function MyOrdersPage() {
             <UnconfirmedJobsTable
               rows={sorted}
               loading={loading}
-              canConfirm={!!canJob.isJobConfirm}
+              // Confirm promotes an Unconfirmed order (status 9 → 0); gate it
+              // by the stage-transition rule too, not just the permission.
+              canConfirm={!!canJob.isJobConfirm && transitionAllowed(me?.allowedStages, 9, 0)}
               canSendMagicLink={!!canJob.isJobMagicLinkSend}
               // Force Send (Override) is keyed on the literal role_name
               // = 'Admin' (matches the BE override gate). `isAdmin`
@@ -700,7 +722,7 @@ export default function MyOrdersPage() {
                   <td className="stick-col stick-right text-right whitespace-nowrap">
                     <div className="inline-flex items-center gap-1 justify-end">
                       {/* Sole action: Schedule & Assign (no View — modal shows detail). */}
-                      {canJob.isJobAssign && (
+                      {canJob.isJobAssign && transitionAllowed(me?.allowedStages, j.job_status, 1) && (
                         <button
                           type="button"
                           onClick={() => openSchedule(j.job_id)}
@@ -842,7 +864,7 @@ export default function MyOrdersPage() {
                           We mirror that: click the icon → JobModal opens; the
                           action bar there shows Edit + Confirm & Schedule so
                           ops can fill any missing fields before promoting. */}
-                      {j.job_status === 9 && canJob.isJobConfirm && (
+                      {j.job_status === 9 && canJob.isJobConfirm && transitionAllowed(me?.allowedStages, j.job_status, 0) && (
                         <button
                           type="button"
                           onClick={() => openConfirm(j.job_id)}
@@ -862,7 +884,7 @@ export default function MyOrdersPage() {
                         * (→AssignTechnicianModal) buttons are folded into
                         * this one combined flow.
                         */}
-                      {j.job_status === 0 && canJob.isJobAssign && (
+                      {j.job_status === 0 && canJob.isJobAssign && transitionAllowed(me?.allowedStages, j.job_status, 1) && (
                         <button
                           type="button"
                           onClick={() => openSchedule(j.job_id)}
@@ -874,7 +896,7 @@ export default function MyOrdersPage() {
                       )}
                       {j.job_status === 1 && (
                         <>
-                          {canJob.isJobStatusChange && (
+                          {canJob.isJobStatusChange && transitionAllowed(me?.allowedStages, j.job_status, 2) && (
                             <button
                               type="button"
                               disabled={rowBusy === j.job_id}
@@ -902,7 +924,7 @@ export default function MyOrdersPage() {
                           )}
                         </>
                       )}
-                      {(j.job_status === 2 || j.job_status === 20) && canJob.isJobStatusChange && (
+                      {(j.job_status === 2 || j.job_status === 20) && canJob.isJobStatusChange && transitionAllowed(me?.allowedStages, j.job_status, 3) && (
                         <button
                           type="button"
                           disabled={rowBusy === j.job_id}

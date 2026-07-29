@@ -61,6 +61,7 @@ import { showToast, dismissToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
+import { transitionAllowed } from '@/lib/job-stages';
 
 /*
  * Unified Job modal — create | view | edit in one component.
@@ -600,7 +601,8 @@ export function JobModal({
                 so at most one ever renders here. Empty placeholder otherwise
                 so justify-between keeps Close anchored right. */}
             <div className="flex items-center gap-2">
-              {!loading && job && canCancel(Number(job.job_status)) && footerCan.isJobCancel && (
+              {!loading && job && canCancel(Number(job.job_status)) && footerCan.isJobCancel
+                && transitionAllowed(currentMe?.allowedStages, Number(job.job_status), ST.CANCELLED) && (
                 <Button variant="destructive" onClick={() => setCancelOpen(true)}>Cancel</Button>
               )}
               {!loading && job && Number(job.job_status) === 9 && (
@@ -871,9 +873,12 @@ function ActionBar({ job, jobId, onChanged }: {
       {can.isJobEdit && (isJobClosed(s) || s === ST.CANCELLED) && <Button size="sm" variant="outline" onClick={() => setFeedbackOpen(true)}>Feedback</Button>}
       {/* Start button removed 2026-07-28 — check-in to In-Progress is done by
           the technician from the app, not by ops on the web. */}
-      {canComplete(s)       && can.isJobStatusChange && <LoadBtn size="sm" variant="outline" loading={busy === 'complete'}   onClick={() => doStatus('complete', ST.COMPLETED)}>Complete</LoadBtn>}
+      {/* Complete (In Progress → Completed) and Mark InComplete (Completed →
+          Revisit) are stage transitions — gate by Job Stage Access too, so a
+          stage-restricted user only sees the moves their stages permit. */}
+      {canComplete(s)       && can.isJobStatusChange && transitionAllowed(me?.allowedStages, s, ST.COMPLETED) && <LoadBtn size="sm" variant="outline" loading={busy === 'complete'}   onClick={() => doStatus('complete', ST.COMPLETED)}>Complete</LoadBtn>}
       {/* Cancel lifted to the footer's far-left zone (2026-07-28). */}
-      {canMarkIncomplete(s) && can.isJobStatusChange && <LoadBtn size="sm" variant="outline" loading={busy === 'incomplete'} onClick={() => doStatus('incomplete', ST.REVISIT, undefined, 'Marked incomplete from CRM')}>Mark InComplete</LoadBtn>}
+      {canMarkIncomplete(s) && can.isJobStatusChange && transitionAllowed(me?.allowedStages, s, ST.REVISIT) && <LoadBtn size="sm" variant="outline" loading={busy === 'incomplete'} onClick={() => doStatus('incomplete', ST.REVISIT, undefined, 'Marked incomplete from CRM')}>Mark InComplete</LoadBtn>}
 
       <AssignDialog
         open={assignOpen} onClose={() => setAssignOpen(false)}

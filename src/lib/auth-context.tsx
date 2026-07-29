@@ -91,6 +91,24 @@ export type Me = {
    * FE flag — this is purely a UI affordance.
    */
   canManageJobCharges?: boolean;
+  /*
+   * allowedStages (Job Stage Access) — the per-user restriction of which job
+   * lifecycle STAGES the operator may see + act on. Resolved server-side on
+   * /auth/me from tbl_user_allowed_stages.
+   *   mode 'all'  → unrestricted (the default — nobody has stage rows until an
+   *                 admin grants some). Every tab / row / transition button
+   *                 shows. NOTE: unlike scope, Admin/Finance do NOT bypass
+   *                 this; a grant applies to whoever it was set on.
+   *   mode 'list' → restricted to `stages` (STAGE_KEYS from lib/job-stages.ts).
+   *                 An EMPTY `stages` is a real grant meaning NO access, not
+   *                 a synonym for 'all'.
+   *
+   * The FE uses this for UX + defense-in-depth (tab clamping, hiding
+   * transition buttons the server would reject). The server LIST endpoint
+   * remains authoritative and row-filters regardless of this flag. Helpers:
+   * transitionAllowed / stageVisible / filterTabsForStages in lib/job-stages.
+   */
+  allowedStages?: { mode: 'all' | 'list'; stages: string[] };
 };
 
 // Scope dimension shape — exported so the Navbar's effective-access panel

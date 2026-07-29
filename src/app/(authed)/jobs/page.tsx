@@ -22,9 +22,10 @@ import { api } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
 import { formatDate, formatEasyfixerName, statusLabel, statusTone } from '@/lib/utils';
 import {
-  TABS, type CountsResp, countFor, filterJobRows, makeQuickStatusChange,
+  TABS, type CountsResp, countFor, filterJobRows, filterTabsForStages, makeQuickStatusChange,
   JOB_SEARCH_PLACEHOLDER, JOB_SEARCH_HINT,
 } from '@/lib/job-tabs';
+import { transitionAllowed } from '@/lib/job-stages';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { TransferJobOwnershipDialog } from '@/components/job/TransferJobOwnershipDialog';
 import { UnconfirmedJobsTable } from '@/components/job/UnconfirmedJobsTable';
@@ -532,6 +533,26 @@ export default function JobsPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
+
+  /*
+   * Job Stage Access clamp (UX + defense-in-depth). A stage-restricted user
+   * must never sit on a tab outside their allowed stages — including the
+   * default cross-stage 'all'. filterTabsForStages drops tabs whose
+   * status(es) fall outside the allowed set; if the current tab isn't
+   * allowed, snap to the first allowed one. Admin / Finance (mode 'all') and
+   * a still-loading `me` are no-ops (the server LIST endpoint stays
+   * authoritative and row-filters regardless).
+   */
+  useEffect(() => {
+    if (!me?.allowedStages || me.allowedStages.mode === 'all') return;
+    const allowedTabs = filterTabsForStages(TABS, me.allowedStages);
+    if (allowedTabs.length === 0) return;
+    if (!allowedTabs.some((x) => x.value === tab)) {
+      setTab(allowedTabs[0].value);
+      setPage(0);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me?.allowedStages, tab]);
 
   function closeModal() { closeJobAction(); }
   function openCreate() { openJobAction('create'); }
@@ -1060,7 +1081,9 @@ export default function JobsPage() {
             <UnconfirmedJobsTable
               rows={sorted}
               loading={loading}
-              canConfirm={!!canJob.isJobConfirm}
+              // Confirm promotes an Unconfirmed order (status 9 → 0); gate it
+              // by the stage-transition rule too, not just the permission.
+              canConfirm={!!canJob.isJobConfirm && transitionAllowed(me?.allowedStages, 9, 0)}
               canSendMagicLink={!!canJob.isJobMagicLinkSend}
               // Force Send (Override) is keyed on the literal role_name
               // = 'Admin' (matches the BE override gate). `me.role.group`
@@ -1200,8 +1223,9 @@ export default function JobsPage() {
                         />
                       )}
                       {/* Outbound call lives on the customer mobile cell (Mobile column). */}
-                      {/* Unconfirmed (status=9) → Confirm & Schedule. Gate: isJobConfirm. */}
-                      {j.job_status === 9 && canJob.isJobConfirm && (
+                      {/* Unconfirmed (status=9) → Confirm & Schedule. Gate: isJobConfirm
+                          AND the 9→0 stage transition. */}
+                      {j.job_status === 9 && canJob.isJobConfirm && transitionAllowed(me?.allowedStages, j.job_status, 0) && (
                         <IconButton
                           icon={CalendarCheck}
                           intent="primary"
@@ -1209,8 +1233,9 @@ export default function JobsPage() {
                           onClick={() => openConfirm(j.job_id)}
                         />
                       )}
-                      {/* Schedule (status=0): assign a technician. Gate: isJobAssign. */}
-                      {j.job_status === 0 && canJob.isJobAssign && (
+                      {/* Schedule (status=0): assign a technician. Gate: isJobAssign
+                          AND the 0→1 stage transition. */}
+                      {j.job_status === 0 && canJob.isJobAssign && transitionAllowed(me?.allowedStages, j.job_status, 1) && (
                         <IconButton
                           icon={CalendarClock}
                           intent="primary"
@@ -1218,8 +1243,9 @@ export default function JobsPage() {
                           onClick={() => openView(j.job_id)}
                         />
                       )}
-                      {/* Check-In + Check-Out are status mutations → isJobStatusChange. */}
-                      {j.job_status === 1 && canJob.isJobStatusChange && (
+                      {/* Check-In + Check-Out are status mutations → isJobStatusChange,
+                          also gated by the stage-transition rule (1→2 / →3). */}
+                      {j.job_status === 1 && canJob.isJobStatusChange && transitionAllowed(me?.allowedStages, j.job_status, 2) && (
                         <IconButton
                           icon={PlayCircle}
                           intent="primary"
@@ -1228,7 +1254,7 @@ export default function JobsPage() {
                           onClick={() => quickStatusChange(j.job_id, 2, 'Check in')}
                         />
                       )}
-                      {(j.job_status === 2 || j.job_status === 20) && canJob.isJobStatusChange && (
+                      {(j.job_status === 2 || j.job_status === 20) && canJob.isJobStatusChange && transitionAllowed(me?.allowedStages, j.job_status, 3) && (
                         <IconButton
                           icon={CheckCircle2}
                           intent="success"

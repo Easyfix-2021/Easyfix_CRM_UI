@@ -19,8 +19,10 @@ import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
  * button opens this. Two tabs:
  *
  *   1. Select & Apply — multi-pick users from a checkbox table, pick
- *      the same scope fields (Verticals / Clients / States / Cities /
+ *      the same scope fields (Verticals / Clients / Regions /
  *      Reporting Head / Home City) and apply to all selected users.
+ *      (Cities are no longer picked — a user handles all cities in their
+ *      Regions; bulk-updating Regions sets manage_cities = "0".)
  *
  *   2. Upload File — download a template (optionally pre-filled with
  *      the currently-selected users), upload the filled .xlsx/.csv,
@@ -182,11 +184,9 @@ function ApplyTab({
   const [verticals, setVerticals] = useState<string>('');
   const [clients,   setClients]   = useState<string>('');
   const [states,    setStates]    = useState<string>('');
-  const [cities,    setCities]    = useState<string>('');
   const [verticalsAll, setVerticalsAll] = useState(false);
   const [clientsAll,   setClientsAll]   = useState(false);
   const [statesAll,    setStatesAll]    = useState(false);
-  const [citiesAll,    setCitiesAll]    = useState(false);
   // Whether the operator touched verticals at all — gates the cascading
   // "client mandatory" rule. We compute "touched" rather than always
   // requiring clients so the operator can edit ONLY Reporting Head /
@@ -230,20 +230,6 @@ function ApplyTab({
       .filter((c) => c.verticalIds.some((v) => picked.has(v)))
       .map((c) => ({ value: String(c.id), label: c.name }));
   }, [lookups, verticals, verticalsAll]);
-
-  // Same cascading rule for cities, parented by states. `tbl_city`
-  // carries a single state_id FK (returned as `stateId` on the
-  // lookups payload).
-  const cityOptions = useMemo(() => {
-    if (!lookups) return [];
-    if (statesAll || !states) {
-      return lookups.cities.map((c) => ({ value: String(c.id), label: c.name }));
-    }
-    const picked = new Set(states.split(',').map((s) => Number(s.trim())).filter(Boolean));
-    return lookups.cities
-      .filter((c) => c.stateId != null && picked.has(c.stateId))
-      .map((c) => ({ value: String(c.id), label: c.name }));
-  }, [lookups, states, statesAll]);
 
   // When verticals change, prune any picked clients no longer in scope.
   // Also reset clientsAll if we'd otherwise be applying it under the
@@ -291,7 +277,6 @@ function ApplyTab({
     const totalVerticals = lookups?.verticals.length ?? 0;
     const totalClients   = lookups?.clients.length   ?? 0;
     const totalStates    = lookups?.states.length    ?? 0;
-    const totalCities    = lookups?.cities.length    ?? 0;
     const isFull = (csv: string, total: number) => total > 0 && countCsv(csv) >= total;
 
     const fields: Record<string, unknown> = {};
@@ -301,8 +286,10 @@ function ApplyTab({
     else if (clients) fields.manage_clients = clients;
     if (statesAll || isFull(states, totalStates)) fields.manage_states = ALL_TOKEN;
     else if (states) fields.manage_states = states;
-    if (citiesAll || isFull(cities, totalCities)) fields.manage_cities = ALL_TOKEN;
-    else if (cities) fields.manage_cities = cities;
+    // Manage Regions: cities are no longer picked here. Whenever Regions
+    // (states) are bulk-updated, cities become "0" (all) — the backend derives
+    // the effective city scope from the user's Regions.
+    if ('manage_states' in fields) fields.manage_cities = ALL_TOKEN;
     if (role)          fields.user_role        = Number(role);
     if (reportingHead) fields.reporting_manager = Number(reportingHead);
     if (homeCity)      fields.city_id          = Number(homeCity);
@@ -432,29 +419,12 @@ function ApplyTab({
               }
             />
             <MultiWithAllToggle
-              label="Manage States"
+              label="Manage Regions"
               value={states}
               onChange={setStates}
               allOn={statesAll}
               onAllChange={setStatesAll}
               options={lookups.states.map((s) => ({ value: String(s.id), label: s.name }))}
-            />
-            <MultiWithAllToggle
-              label="Manage Cities"
-              value={cities}
-              onChange={setCities}
-              allOn={citiesAll}
-              onAllChange={setCitiesAll}
-              options={cityOptions}
-              // Cities-All is gated by States: disabled until the
-              // operator has either picked a state OR toggled States-
-              // All. Mirrors the Clients ← Verticals rule.
-              disableAll={!statesAll && !states}
-              hint={
-                statesAll || !states
-                  ? 'Showing all active cities.'
-                  : `Filtered to ${cityOptions.length} city(s) in the picked states.`
-              }
             />
             {/* Role — single-pick from admin-group roles only. The BE
                 rejects non-admin roles with a 400 from updateUser, so

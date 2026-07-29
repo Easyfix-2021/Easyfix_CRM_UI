@@ -43,6 +43,7 @@ import { showToast } from '@/components/ui/toast';
 import { useLookup } from '@/lib/use-lookup';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
+import { STAGE_OPTIONS, STAGES } from '@/lib/job-stages';
 
 type User = {
   user_id: number;
@@ -63,6 +64,13 @@ type User = {
   user_status: number;
   insert_date: string | null;
   update_date: string | null;
+  /*
+   * Job Stage Access — the user's allowed lifecycle stages (STAGE_KEYS from
+   * lib/job-stages.ts). Returned by BOTH the list endpoint (batched, one query
+   * per page) and the GET user detail endpoint. NULL / absent = unrestricted
+   * (all stages); [] = explicit no access; non-empty = restricted to those keys.
+   */
+  allowed_stages?: string[] | null;
 };
 
 type ListResponse = { items: User[]; total: number };
@@ -79,7 +87,9 @@ type SortDir = 'asc' | 'desc';
 export default function ManageUsersPage() {
   const confirm = useConfirm();
   const lookup = useLookup();
-  const { me } = useMe();
+  // `refresh` re-reads /auth/me — used after a SELF-edit so a permission the
+  // operator just granted themselves applies immediately (see onSaved below).
+  const { me, refresh: refreshMe } = useMe();
   // Permission gating mirrors legacy CRM Constants.actionPermissions:
   //   - isUserEdit  : controls the Edit + Deactivate buttons on each row.
   //                   Legacy doesn't have a separate "isUserAddNew" — the
@@ -89,14 +99,14 @@ export default function ManageUsersPage() {
   //                   and re-gate the Add button here.
   const can = actionFlags(me, ['isUserEdit']);
 
-  // ID → Name map for expanding manage_cities CSV in the list. Built from
-  // the lookup cache (already loaded by useLookup). The legacy list shows
-  // "Manage City" as a comma-joined list of city names — we mirror that
-  // exactly here. (Manage Clients is form-only in legacy; not shown in
-  // the list, so no clientNameById map is needed.)
-  const cityNameById = useMemo(
-    () => new Map(lookup.cities.map((c) => [c.city_id, c.city_name])),
-    [lookup.cities]
+  // ID → Name map for expanding manage_states CSV in the list. Built from
+  // the lookup cache (already loaded by useLookup). The list shows
+  // "Manage Regions" as a comma-joined list of region (state) names.
+  // (Manage Clients is form-only in legacy; not shown in the list, so no
+  // clientNameById map is needed.)
+  const stateNameById = useMemo(
+    () => new Map(lookup.states.map((s) => [s.state_id, s.state_name])),
+    [lookup.states]
   );
 
   const [items, setItems] = useState<User[]>([]);
@@ -396,11 +406,12 @@ export default function ManageUsersPage() {
             {/*
                 Column widths (must match the th/td sequence below):
                   6 percent  User ID
-                  16 percent Name
-                  18 percent Email
-                  10 percent Mobile
-                  13 percent Role
-                  20 percent Manage Cities
+                  15 percent Name
+                  16 percent Email
+                  9 percent  Mobile
+                  12 percent Role
+                  13 percent Manage Regions
+                  12 percent Job Stages
                   8 percent  Status
                   9 percent  Actions
                 Inline JSX expression comments are illegal inside colgroup
@@ -409,11 +420,12 @@ export default function ManageUsersPage() {
             */}
             <colgroup>
               <col style={{ width: '6%' }} />
+              <col style={{ width: '15%' }} />
               <col style={{ width: '16%' }} />
-              <col style={{ width: '18%' }} />
-              <col style={{ width: '10%' }} />
+              <col style={{ width: '9%' }} />
+              <col style={{ width: '12%' }} />
               <col style={{ width: '13%' }} />
-              <col style={{ width: '20%' }} />
+              <col style={{ width: '12%' }} />
               <col style={{ width: '8%' }} />
               <col style={{ width: '9%' }} />
             </colgroup>
@@ -425,13 +437,20 @@ export default function ManageUsersPage() {
                 <SortHeader col="mobile_no"      align="left"   sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Mobile</SortHeader>
                 <SortHeader col="role_name"      align="left"   sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Role</SortHeader>
                 {/*
-                  * "Manage Cities" = expanded names from tbl_user.manage_cities CSV.
-                  * Legacy CRM list shows this as a comma-joined string of city
-                  * names; we mirror that. Not sortable because the underlying
-                  * column is a CSV — sorting it would order rows by the raw
-                  * "1,5,12" string, which is meaningless to operators.
+                  * "Manage Regions" = expanded names from tbl_user.manage_states CSV.
+                  * The list shows this as a comma-joined string of region (state)
+                  * names. Not sortable because the underlying column is a CSV —
+                  * sorting it would order rows by the raw "1,5,12" string, which
+                  * is meaningless to operators.
                   */}
-                <th className="!text-left whitespace-nowrap" title="Cities this user is allowed to manage (tbl_user.manage_cities)">Manage Cities</th>
+                <th className="!text-left whitespace-nowrap" title="Regions this user is allowed to manage (tbl_user.manage_states)">Regions</th>
+                {/*
+                  * Job Stage Access. Surfaced in the list because a restrictive
+                  * grant is invisible otherwise yet has real blast radius — a
+                  * "No Access" user sees no job pages at all. Not sortable: the
+                  * value lives in tbl_user_allowed_stages, not on the row.
+                  */}
+                <th className="!text-left whitespace-nowrap" title="Job lifecycle stages this user can see and act on (tbl_user_allowed_stages)">Job Stages</th>
                 <SortHeader col="user_status"    align="center" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Status</SortHeader>
                 <th className="!text-right whitespace-nowrap">Actions</th>
               </tr>
@@ -447,10 +466,10 @@ export default function ManageUsersPage() {
                 * put, then the additional rows append on response.
                 */}
               {loading && items.length === 0 && (
-                <tr><td colSpan={8} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
+                <tr><td colSpan={9} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
               )}
               {!loading && items.length === 0 && (
-                <tr><td colSpan={8} className="!text-center text-muted-foreground py-6">No users match the current filters.</td></tr>
+                <tr><td colSpan={9} className="!text-center text-muted-foreground py-6">No users match the current filters.</td></tr>
               )}
               {items.map((u) => (
                 <tr key={u.user_id}>
@@ -462,7 +481,10 @@ export default function ManageUsersPage() {
                     {u.role_name ?? <span className="text-muted-foreground">—</span>}
                   </td>
                   <td className="!text-left truncate">
-                    <ManageCitiesCell csv={u.manage_cities} nameById={cityNameById} />
+                    <ManageRegionsCell csv={u.manage_states} nameById={stateNameById} />
+                  </td>
+                  <td className="!text-left truncate">
+                    <JobStagesCell stages={u.allowed_stages} />
                   </td>
                   <td className="!text-center whitespace-nowrap">
                     {u.user_status === 1
@@ -553,27 +575,39 @@ export default function ManageUsersPage() {
         verticals={lookup.verticals}
         adminUsers={lookup.adminUsers}
         onSaved={() => {
+          const editedSelf = !!editing && me?.user?.user_id === editing.user_id;
           setModalOpen(false);
           // Drop the module fetch cache so any consumer reading
           // /admin/users keys sees the fresh row after a save.
           invalidateFetch((k) => k.startsWith('/admin/users'));
           void fetchList();
+          /*
+           * Editing YOURSELF changes your own identity payload — Job Stage
+           * Access, menu permissions and scope all ride on `me`, which is
+           * cached and otherwise only revalidates on window focus (throttled
+           * to 30s). Without this, granting yourself a stage leaves the
+           * sidebar stale for several seconds before it silently corrects
+           * itself, which reads as a bug rather than a permission taking
+           * effect. Only fires on a self-edit; editing someone else can't
+           * touch our own `me`.
+           */
+          if (editedSelf) void refreshMe();
         }}
       />
     </div>
   );
 }
 
-// ─── Manage-Cities / Manage-Clients cell ─────────────────────────────
+// ─── Manage-Regions cell ─────────────────────────────────────────────
 /*
  * Expands a CSV string of IDs to a comma-joined list of names. Truncates
  * gracefully with a "+N more" suffix when the row has many entries; the
  * full list is exposed in the title tooltip so operators can still read
  * everything without scrolling the cell.
  *
- * Used by the list table to show manage_cities and (potentially) manage_clients
- * as legacy-equivalent comma-separated displays. Returns "—" placeholder when
- * the CSV is empty or null.
+ * Used by the list table to show manage_states (regions) as a
+ * comma-separated display. Returns "—" placeholder when the CSV is empty
+ * or null.
  */
 function expandCsvToNames(csv: string | null | undefined, nameById: Map<number, string>): string[] {
   if (!csv) return [];
@@ -585,7 +619,7 @@ function expandCsvToNames(csv: string | null | undefined, nameById: Map<number, 
     .filter((name): name is string => !!name);
 }
 
-function ManageCitiesCell({ csv, nameById }: { csv: string | null | undefined; nameById: Map<number, string> }) {
+function ManageRegionsCell({ csv, nameById }: { csv: string | null | undefined; nameById: Map<number, string> }) {
   // '0' is the legacy "All" sentinel (lib/scope.js — mode === 'all').
   // Render it as a green pill so ops can see at a glance which users
   // have unrestricted scope.
@@ -599,11 +633,55 @@ function ManageCitiesCell({ csv, nameById }: { csv: string | null | undefined; n
   const names = expandCsvToNames(csv, nameById);
   if (names.length === 0) return <span className="text-muted-foreground">—</span>;
   // Show first 2 + "+N more" — keeps the column readable even for users
-  // who manage many cities. Hover reveals the full list.
+  // who manage many regions. Hover reveals the full list.
   const visible = names.slice(0, 2);
   const overflow = names.length - visible.length;
   return (
     <span title={names.join(', ')} className="text-xs">
+      {visible.join(', ')}
+      {overflow > 0 && <span className="text-muted-foreground"> +{overflow} more</span>}
+    </span>
+  );
+}
+
+// ─── Job-Stage-Access cell ───────────────────────────────────────────
+/*
+ * Renders the tri-state Job Stage Access grant. The two ends are pills rather
+ * than text because they are the states an operator scans for:
+ *
+ *   null / undefined → "All"        green  — unrestricted (no rows; the default)
+ *   []               → "No Access"  red    — explicitly granted nothing; this
+ *                                            user sees NO job pages at all
+ *   ['unconfirmed',…]→ stage labels        — restricted to those stages
+ *
+ * "All" is green to match ManageRegionsCell above, so the two scope columns
+ * read the same way. "No Access" is the only red pill in the table — it is the
+ * one setting that silently empties the CRM for someone.
+ */
+function JobStagesCell({ stages }: { stages?: string[] | null }) {
+  if (stages == null) {
+    return (
+      <span className="inline-flex items-center rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5 text-[11px] font-medium">
+        All
+      </span>
+    );
+  }
+  if (stages.length === 0) {
+    return (
+      <span
+        title="This user has been granted no lifecycle stages — they cannot see or act on any job."
+        className="inline-flex items-center rounded-full bg-red-100 text-red-800 px-2 py-0.5 text-[11px] font-medium"
+      >
+        No Access
+      </span>
+    );
+  }
+  // Same first-2 + "+N more" treatment as Regions — hover reveals the rest.
+  const labels = stages.map((k) => STAGES[k as keyof typeof STAGES]?.label ?? k);
+  const visible = labels.slice(0, 2);
+  const overflow = labels.length - visible.length;
+  return (
+    <span title={labels.join(', ')} className="text-xs">
       {visible.join(', ')}
       {overflow > 0 && <span className="text-muted-foreground"> +{overflow} more</span>}
     </span>
@@ -616,23 +694,29 @@ function ManageCitiesCell({ csv, nameById }: { csv: string | null | undefined; n
 
 // ─── Add/Edit modal ─────────────────────────────────────────────────
 /*
- * Create form: name + email + mobile + role + manage cities (multi) + manage clients (multi).
- * Edit form:   name + email shown read-only (OTP is keyed off these); everything else editable.
+ * Create form: name + email + mobile + role + Manage Regions (multi) +
+ * Manage Clients (multi) + Manage Verticals.
+ * Edit form:   name + email shown read-only (OTP is keyed off these);
+ *              everything else editable.
  *
- * Mirrors the legacy CRM addEditUser.vm exactly:
+ * Geo scope is REGION (state) level: a user is assigned Regions (the
+ * `tbl_user.manage_states` CSV, labelled "Manage Regions") and handles ALL
+ * cities in them. This REPLACES the legacy addEditUser.vm "Manages Cities"
+ * picker — `manage_cities` is now always saved as "0" (all) and the backend
+ * derives the effective city scope from the user's Regions (see
+ * EasyFix_Backend/lib/scope.js `expandStatesToCities`).
+ *
+ * Fields:
  *   - User Name        (read-only on edit)
  *   - Email            (read-only on edit)
  *   - Mobile Number    *
  *   - User Role        *
- *   - Manages Cities   (multi-select, CSV in tbl_user.manage_cities)
- *   - Manages Clients  (multi-select, CSV in tbl_user.manage_clients)
+ *   - Manage Regions   (multi-select, CSV in tbl_user.manage_states)
+ *   - Manage Clients   (multi-select, CSV in tbl_user.manage_clients)
  *   - Status           (edit only)
  *
- * Legacy doesn't expose a single "home City" picker — only the Manages
- * Cities multi. We keep the home City picker as a new-app addition (used
- * by other parts of the system that key off tbl_user.city_id) but it sits
- * below the Manage Cities multi-select so the legacy-parity fields are
- * primary.
+ * The "home City" picker (tbl_user.city_id) is a new-app addition kept for
+ * other flows that key off it; it sits below the scope pickers.
  */
 function UserFormModal({
   open, onClose, editing, roles, cities, clients, states, verticals, adminUsers, onSaved,
@@ -700,11 +784,12 @@ function UserFormModal({
   const cancelWithConfirm = useCancelConfirm(onClose);
   const [error, setError] = useState<string | null>(null);
 
-  // Manages Cities + Manages Clients — Sets for O(1) toggle. Persisted as
-  // CSV strings on save to match legacy `tbl_user.manage_cities` /
-  // `manage_clients` storage. Hydrated from editing.manage_cities CSV by
-  // parsing the comma-separated id list.
-  const [manageCities,    setManageCities]    = useState<Set<number>>(new Set());
+  // Manages Clients / States / Verticals — Sets for O(1) toggle. Persisted
+  // as CSV strings on save to match legacy `tbl_user.manage_*` storage.
+  // Hydrated from the editing row's CSV by parsing the comma-separated id
+  // list. Cities are no longer collected here — the form always saves
+  // manage_cities='0' and the backend derives the effective city scope
+  // from the user's states (regions).
   const [manageClients,   setManageClients]   = useState<Set<number>>(new Set());
   const [manageStates,    setManageStates]    = useState<Set<number>>(new Set());
   const [manageVerticals, setManageVerticals] = useState<Set<number>>(new Set());
@@ -714,8 +799,20 @@ function UserFormModal({
   const [verticalsAll, setVerticalsAll] = useState(false);
   const [clientsAll,   setClientsAll]   = useState(false);
   const [statesAll,    setStatesAll]    = useState(false);
-  const [citiesAll,    setCitiesAll]    = useState(false);
   const [reportingManager, setReportingManager] = useState<number | ''>('');
+  /*
+   * Job Stage Access — restrict this user to a subset of job lifecycle STAGES
+   * (STAGE_KEYS from lib/job-stages.ts). `allowedStages` holds the picked
+   * stage_keys; `stagesAll` is the "All stages" toggle. Default = All ON
+   * (unrestricted) so a new user is never accidentally locked out.
+   *
+   * Save semantics (see handleSubmit): the backend contract is NULL = ALL
+   * (unrestricted), EMPTY ARRAY [] = explicit NO ACCESS, non-empty = restricted.
+   * So All-ON → null; a specific pick → that array; All-OFF with no picks → []
+   * (the operator deliberately granted nothing — the user sees no jobs).
+   */
+  const [allowedStages, setAllowedStages] = useState<Set<string>>(new Set());
+  const [stagesAll,     setStagesAll]     = useState(true);
 
   // Reporting Manager + Home City + Role + all 4 scope multi-selects now
   // use `SearchSelect`/`SearchMultiSelect`, which own their own internal
@@ -751,23 +848,22 @@ function UserFormModal({
       setVerticalsAll(isAll(editing?.manage_verticals));
       setClientsAll(isAll(editing?.manage_clients));
       setStatesAll(isAll(editing?.manage_states));
-      setCitiesAll(isAll(editing?.manage_cities));
-      setManageCities(isAll(editing?.manage_cities) ? new Set() : csvToSet(editing?.manage_cities));
       setManageClients(isAll(editing?.manage_clients) ? new Set() : csvToSet(editing?.manage_clients));
       setManageStates(isAll(editing?.manage_states) ? new Set() : csvToSet(editing?.manage_states));
       setManageVerticals(isAll(editing?.manage_verticals) ? new Set() : csvToSet(editing?.manage_verticals));
       setReportingManager(editing?.reporting_manager ?? '');
+      // Job Stage Access — NULL / absent allowed_stages = unrestricted, so
+      // hydrate the "All stages" toggle ON with an empty pick set. An ARRAY
+      // (even an empty one) means the operator has set an explicit grant:
+      // toggle OFF, pick set = the array. [] therefore round-trips as
+      // "no access", not as All.
+      const stages = editing?.allowed_stages ?? null;
+      setStagesAll(stages === null);
+      setAllowedStages(new Set(stages ?? []));
       setError(null);
     }
   }, [open, editing]);
 
-  function toggleManageCity(id: number) {
-    setManageCities((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-  }
   function toggleManageClient(id: number) {
     setManageClients((prev) => {
       const next = new Set(prev);
@@ -825,22 +921,25 @@ function UserFormModal({
   }
 
   function applyManageStates(next: Set<number>) {
+    // Regions (states) no longer cascade into a Cities picker — this is now
+    // a plain setter. Kept as a named helper so toggleManageState and the
+    // ScopeMultiSelect onChange share one entry point.
     setManageStates(next);
-    setManageCities((prevCities) => {
-      if (next.size === 0) return new Set();
-      const pruned = new Set<number>();
-      for (const cid of prevCities) {
-        const c = cities.find((x) => x.city_id === cid);
-        if (!c || c.state_id == null) continue;
-        if (next.has(c.state_id)) pruned.add(cid);
-      }
-      return pruned;
-    });
   }
   function toggleManageState(id: number) {
     const next = new Set(manageStates);
     if (next.has(id)) next.delete(id); else next.add(id);
     applyManageStates(next);
+  }
+
+  // Job Stage Access — plain add/remove of a stage_key. Used by the chip
+  // remove-buttons and (via the picker) the multi-select onChange.
+  function toggleStage(key: string) {
+    setAllowedStages((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
   }
 
   /*
@@ -866,14 +965,6 @@ function UserFormModal({
       .filter((c) => c.vertical_id != null && manageVerticals.has(c.vertical_id))
       .map((c) => ({ value: c.client_id, label: c.client_name }));
   }, [clients, manageVerticals, verticalsAll]);
-  const filteredCityOptions = useMemo(() => {
-    if (statesAll || manageStates.size === 0) {
-      return cities.map((c) => ({ value: c.city_id, label: c.city_name }));
-    }
-    return cities
-      .filter((c) => c.state_id != null && manageStates.has(c.state_id))
-      .map((c) => ({ value: c.city_id, label: c.city_name }));
-  }, [cities, manageStates, statesAll]);
 
   /*
    * Debounced real-time mobile-uniqueness probe. Fires only when:
@@ -1051,10 +1142,25 @@ function UserFormModal({
       const csv = Array.from(set).sort((a, b) => a - b).join(',');
       return csv || null;
     };
-    const manageCitiesCsv    = csvOrAll(citiesAll,    manageCities,    cities.length);
+    // Cities are no longer collected in this form. Scope is now "Manage
+    // Regions" (states) only; the backend derives the effective city scope
+    // from the user's states. We always persist manage_cities as the '0'
+    // ("all") sentinel so nothing narrows the city dimension from here.
     const manageClientsCsv   = csvOrAll(clientsAll,   manageClients,   clients.length);
     const manageStatesCsv    = csvOrAll(statesAll,    manageStates,    states.length);
     const manageVerticalsCsv = csvOrAll(verticalsAll, manageVerticals, verticals.length);
+
+    /*
+     * Job Stage Access. Backend contract: NULL = ALL (unrestricted, stored as
+     * no rows); EMPTY ARRAY [] = explicit NO ACCESS (stored as a sentinel row);
+     * a non-empty array = restricted to those stage_keys. So:
+     *   All-ON             → null  (unrestricted)
+     *   All-OFF + no picks → []    (no access — the operator granted nothing)
+     *   specific picks     → that array
+     */
+    const allowedStagesPayload: string[] | null = stagesAll
+      ? null
+      : Array.from(allowedStages);
 
     setSubmitting(true);
     try {
@@ -1064,10 +1170,11 @@ function UserFormModal({
           alternate_no:     altMob || null,
           user_role:        Number(roleId),
           city_id:          cityId ? Number(cityId) : null,
-          manage_cities:    manageCitiesCsv,
+          manage_cities:    '0',
           manage_clients:   manageClientsCsv,
           manage_states:    manageStatesCsv,
           manage_verticals: manageVerticalsCsv,
+          allowed_stages:   allowedStagesPayload,
           reporting_manager: reportingManager ? Number(reportingManager) : null,
           is_active:        active,
         });
@@ -1079,10 +1186,11 @@ function UserFormModal({
           alternate_no:     altMob || null,
           user_role:        Number(roleId),
           city_id:          cityId ? Number(cityId) : null,
-          manage_cities:    manageCitiesCsv,
+          manage_cities:    '0',
           manage_clients:   manageClientsCsv,
           manage_states:    manageStatesCsv,
           manage_verticals: manageVerticalsCsv,
+          allowed_stages:   allowedStagesPayload,
           reporting_manager: reportingManager ? Number(reportingManager) : null,
         });
       }
@@ -1307,15 +1415,15 @@ function UserFormModal({
             * single column on narrow viewports.
             */}
           {/*
-            * Layout (2026-05-15):
+            * Layout:
             *   Row 1: Verticals | Clients
-            *   Row 2: States    | Cities
-            * The dependent pickers (Clients, Cities) sit immediately
-            * to the right of their parent (Verticals, States) so the
-            * cascade direction is visually obvious. Clients options
-            * are filtered to selected Verticals; Cities options are
-            * filtered to selected States — see `applyManageVerticals`
-            * / `applyManageStates` for the prune-on-remove rules.
+            *   Row 2: Manage Regions (writes manage_states)
+            * Clients sit immediately to the right of their parent
+            * (Verticals) so the cascade direction is visually obvious —
+            * Clients options are filtered to selected Verticals; see
+            * `applyManageVerticals` for the prune-on-remove rules.
+            * Cities were removed: the form collects Regions only and
+            * always persists manage_cities='0' (see handleSubmit).
             */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Verticals — parent of Clients */}
@@ -1376,54 +1484,53 @@ function UserFormModal({
               disableAll={!verticalsAll && manageVerticals.size === 0}
             />
 
-            {/* States — parent of Cities */}
+            {/* Regions — writes tbl_user.manage_states underneath. Only the
+                labels change; the field still serialises manage_states. */}
             <ScopeMultiSelect
-              label="Manages States"
+              label="Manage Regions"
               chipColor="violet"
               selected={manageStates}
               onChange={(next) => applyManageStates(new Set(next as number[]))}
               options={states.map((s) => ({ value: s.state_id, label: s.state_name }))}
               chipFor={(id) => states.find((x) => x.state_id === id)?.state_name}
               onRemoveOne={toggleManageState}
-              placeholder="Select states…"
-              selectedLabel="states"
+              placeholder="All Regions"
+              selectedLabel="regions"
               allOn={statesAll}
               onAllChange={(b) => {
                 setStatesAll(b);
-                // Mirror the Verticals→Clients cascade behavior:
-                // toggling either direction clears the State set AND
-                // resets the dependent City scope so the operator
-                // re-affirms it against the new state universe.
+                // Toggling either direction clears the region set so the
+                // operator gets a clean slate to re-pick.
                 setManageStates(new Set());
-                setCitiesAll(false);
-                setManageCities(new Set());
               }}
             />
 
-            {/* Cities — filtered by selected States */}
-            <ScopeMultiSelect
-              label="Manages Cities"
+            {/*
+              * Job Stage Access — restrict the user to a subset of job
+              * lifecycle STAGES. "All" ON = unrestricted (saved as null); OFF
+              * with nothing picked = no access (saved as []). Sits alongside
+              * the geo/vertical scopes because it's the same class of
+              * row-visibility control.
+              */}
+            <ScopeMultiSelect<string>
+              label="Job Stage Access"
               chipColor="blue"
-              selected={manageCities}
-              onChange={(next) => setManageCities(new Set(next as number[]))}
-              options={filteredCityOptions}
-              chipFor={(id) => cities.find((x) => x.city_id === id)?.city_name}
-              onRemoveOne={toggleManageCity}
-              placeholder="Select cities…"
-              selectedLabel="cities"
-              helperText={
-                !statesAll && manageStates.size === 0
-                  ? 'Pick at least one state above (or toggle All) to choose cities.'
-                  : undefined
-              }
-              allOn={citiesAll}
+              selected={allowedStages}
+              onChange={(next) => setAllowedStages(new Set(next as string[]))}
+              options={STAGE_OPTIONS}
+              chipFor={(key) => STAGES[key as keyof typeof STAGES]?.label}
+              onRemoveOne={toggleStage}
+              placeholder="Select stages…"
+              selectedLabel="stages"
+              helperText="Which lifecycle stages this user can see and act on. All on = unrestricted. All off with nothing selected = no access to any job."
+              allOn={stagesAll}
               onAllChange={(b) => {
-                setCitiesAll(b);
-                // Always clear chips on either direction.
-                setManageCities(new Set());
+                setStagesAll(b);
+                // Clear the pick set on either direction — matches the geo
+                // scopes. All-ON hides the picker; All-OFF gives a clean
+                // slate, and saving from there (no picks) means NO ACCESS.
+                setAllowedStages(new Set());
               }}
-              // Locked until a State (or States-All) is picked.
-              disableAll={!statesAll && manageStates.size === 0}
             />
           </div>
 
@@ -1517,7 +1624,7 @@ const CHIP_CLASSES: Record<ChipColor, { bg: string; text: string; closeHover: st
   amber:   { bg: 'bg-amber-50',   text: 'text-amber-700',   closeHover: 'hover:text-amber-900' },
 };
 
-function ScopeMultiSelect({
+function ScopeMultiSelect<V extends string | number>({
   label,
   chipColor,
   selected,
@@ -1534,11 +1641,16 @@ function ScopeMultiSelect({
 }: {
   label: string;
   chipColor: ChipColor;
-  selected: Set<number>;
+  /*
+   * Selected value set. Generic over `V extends string | number` so the same
+   * picker drives both the numeric-id scopes (cities / clients / states /
+   * verticals) and the string-keyed Job Stage Access field (STAGE_KEYS).
+   */
+  selected: Set<V>;
   onChange: (next: Array<string | number>) => void;
   options: SearchOption[];
-  chipFor: (id: number) => string | undefined;
-  onRemoveOne: (id: number) => void;
+  chipFor: (id: V) => string | undefined;
+  onRemoveOne: (id: V) => void;
   placeholder: string;
   selectedLabel: string;
   /*

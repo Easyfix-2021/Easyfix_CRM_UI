@@ -3,6 +3,16 @@ import { api } from '@/lib/api';
 import { formatDate, statusLabel } from '@/lib/utils';
 
 /*
+ * Job Stage Access lives in lib/job-stages.ts. `filterTabsForStages` narrows
+ * the shared TABS list to what a stage-restricted user may see (a tab is kept
+ * only when its status/statuses intersect the user's allowed visible
+ * statuses). Re-exported here so the two list pages can pull both TABS and
+ * the tab-filter from one module. See lib/job-stages.ts for the full contract.
+ */
+export { filterTabsForStages } from '@/lib/job-stages';
+import { filterTabsForStages as filterTabs, type AllowedStages } from '@/lib/job-stages';
+
+/*
  * Shared lifecycle-tab definitions used by BOTH /jobs (org-wide) and
  * /my-orders (user-scoped). Keeping the canonical TABS list in one place
  * means a status/bucket change lands everywhere at once instead of drifting
@@ -63,6 +73,42 @@ export const TABS: TabDef[] = [
   { value: 'call-later',          label: 'Call Later',              status: 9 },
   { value: 'cancelled',           label: 'Cancelled',               status: 6 },
 ];
+
+/*
+ * The two list pages a sidebar menu row can deep-link into with `?tab=`.
+ * Anything else is not a lifecycle surface and is never stage-clamped.
+ */
+const JOB_LIST_PATHS = new Set(['/my-orders', '/jobs']);
+
+/*
+ * Job Stage Access for the SIDEBAR. `filterTabsForStages` clamps the tab bar
+ * INSIDE a page; this clamps the menu rows that link INTO one, so a restricted
+ * user isn't offered "Unconfirmed Orders" when they can't see a single
+ * unconfirmed job. Deliberately delegates to filterTabsForStages so the two
+ * surfaces can't drift apart.
+ *
+ * Rules:
+ *   - unrestricted, or a non-job href → always visible.
+ *   - `?tab=<slug>` → visible only if that tab survives the stage filter.
+ *   - NO tab param (the bare container link, e.g. "Jobs") → visible as long as
+ *     the user has at least ONE reachable tab. The page self-clamps to their
+ *     first allowed tab, so hiding it for a partially-restricted user would
+ *     cost them a legitimate view; a NO-ACCESS user has none, so it hides.
+ *   - an unknown slug → left visible (don't hide what we can't classify).
+ */
+export function jobHrefAllowedForStages(
+  href: string,
+  allowed: AllowedStages | null | undefined,
+): boolean {
+  if (!allowed || allowed.mode === 'all') return true;
+  const [path, query] = String(href || '').split('?');
+  if (!JOB_LIST_PATHS.has(path)) return true;
+  const tabValue = new URLSearchParams(query || '').get('tab');
+  if (!tabValue) return filterTabs(TABS, allowed).length > 0;
+  const def = TABS.find((t) => t.value === tabValue);
+  if (!def) return true;
+  return filterTabs([def], allowed).length > 0;
+}
 
 export type CountsResp = {
   total: number;
