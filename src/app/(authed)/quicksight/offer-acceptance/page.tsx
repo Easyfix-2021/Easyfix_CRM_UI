@@ -6,15 +6,16 @@
  * How the job-offer pool converts: per technician, how many offers they were
  * extended and how many they accepted / rejected / let expire, plus acceptance
  * rate and average response time, with a by-source breakdown (Top-10 list vs
- * manual Search vs auto-assign) and an "Offered By" (job owner) breakdown.
+ * manual Search vs auto-assign) and an "Offered By" (who made the offer) breakdown.
  * Sourced from tbl_job_offer via POST /admin/quicksight/offer-acceptance/summary.
  * Gated by ef-QuickSight (family) + isQuickSightOfferAcceptanceView (per-report).
  *
  * Filters: the shared client/vertical/service-category bar, an "Offered By"
- * (job owner) multi-select, the offered_at cohort window (Offered From/To), and
- * a responded_at window (Responded From/To) — the acceptance date the tech
- * actually accepted/rejected. "Offered By" = job owner because tbl_job_offer has
- * no offered-by user column; the job owner is the closest attribution.
+ * multi-select, the offered_at cohort window (Offered From/To), and a
+ * responded_at window (Responded From/To) — the acceptance date the tech
+ * actually accepted/rejected. "Offered By" = the user who made the offer
+ * (tbl_job_offer.offered_by_user_id); NULL (auto / pre-migration offers) shows
+ * as "Unassigned".
  */
 
 import { useCallback, useMemo, useState } from 'react';
@@ -98,9 +99,9 @@ export default function OfferAcceptancePage() {
   const { me } = useMe();
   const canView = actionFlags(me, [ACTION_KEY])[ACTION_KEY];
   const lookup = useLookup();
-  // "Offered By" (job owner) picker superset = internal admin users, reusing the
-  // existing auth-gated /shared/lookup/users list (same source the Priority Jobs
-  // "Job Owner" filter uses) — no new BE lookup introduced.
+  // "Offered By" picker superset = internal admin users (the people who make
+  // offers via Schedule & Assign), reusing the existing auth-gated
+  // /shared/lookup/users list — no new BE lookup introduced.
   const ownerOpts = lookup.toOpts.adminUsers;
 
   // Default the OFFERED-date filter to TODAY (IST). en-CA in Asia/Kolkata yields
@@ -223,8 +224,8 @@ export default function OfferAcceptancePage() {
                 value={offeredById}
                 onChange={(v) => setOfferedById(toNums(v))}
                 options={ownerOpts}
-                placeholder="All Job Owners"
-                selectedLabel="owners"
+                placeholder="All Users"
+                selectedLabel="users"
                 disabled={summary.loading}
               />
             </div>
@@ -360,7 +361,7 @@ export default function OfferAcceptancePage() {
         </table>
       </div>
 
-      {/* Per-owner (Offered By) breakdown — offers grouped by the job owner. */}
+      {/* "Offered By" breakdown — offers grouped by the user who made the offer. */}
       {byOwner.length > 0 && (
         <div className="mt-4">
           <h3 className="mb-2 text-sm font-semibold text-foreground">Acceptance By Offered By</h3>
