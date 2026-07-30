@@ -129,21 +129,28 @@ const fmtDayLabel = (iso: string) => {
   return `${d} ${MONTHS[(m ?? 1) - 1] ?? ''}`;
 };
 /*
- * Seconds-precision timestamp for the drill-down. formatDate() renders to the
- * MINUTE, which makes an offer at 01:59:04 and its accept at 01:59:58 print
- * identically — it reads as "responded instantly / zero elapsed" when it wasn't.
- * The report tables keep formatDate (minutes are the right grain there).
+ * Timestamp as TWO non-breaking lines: date on the first, time on the second.
+ * A single string in a narrow column wraps wherever it likes ("29 Jul / 2026, /
+ * 02:58 / pm" — four lines and unreadable). Splitting it makes the break point
+ * OURS, and `whitespace-nowrap` on each half guarantees neither is ever broken
+ * mid-value; the table scrolls horizontally instead.
  */
-const fmtDateTimeSecs = (v: string | null) => {
-  if (!v) return '—';
-  const d = new Date(String(v).replace(' ', 'T'));
-  if (Number.isNaN(d.getTime())) return String(v);
-  return d.toLocaleString('en-IN', {
-    day: '2-digit', month: 'short', year: 'numeric',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-    timeZone: 'Asia/Kolkata',
+function DateTimeCell({ value, seconds }: { value: string | null; seconds?: boolean }) {
+  if (!value) return <span className="text-muted-foreground">—</span>;
+  const d = new Date(String(value).replace(' ', 'T'));
+  if (Number.isNaN(d.getTime())) return <span className="whitespace-nowrap">{String(value)}</span>;
+  const opts = { timeZone: 'Asia/Kolkata' } as const;
+  const date = d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', ...opts });
+  const time = d.toLocaleTimeString('en-IN', {
+    hour: '2-digit', minute: '2-digit', ...(seconds ? { second: '2-digit' } : {}), ...opts,
   });
-};
+  return (
+    <span className="inline-block">
+      <span className="block whitespace-nowrap">{date}</span>
+      <span className="block whitespace-nowrap text-muted-foreground">{time}</span>
+    </span>
+  );
+}
 
 const emptyFilter: FilterBody = { clientId: [], verticalId: [], serviceCategoryId: [], offeredById: [] };
 
@@ -415,7 +422,7 @@ export default function OfferAcceptancePage() {
           <tbody>
             {rows.map((r) => (
               <tr key={r.efrId}>
-                <td className="!text-left font-medium">
+                <td className="!text-left font-medium whitespace-nowrap">
                   {r.efrName} <span className="text-[10px] text-muted-foreground">#{r.efrId}</span>
                 </td>
                 <td className="!text-center">
@@ -479,7 +486,7 @@ export default function OfferAcceptancePage() {
             <tbody>
               {byOwner.map((o) => (
                 <tr key={o.ownerId}>
-                  <td className="!text-left font-medium">{o.ownerName}</td>
+                  <td className="!text-left font-medium whitespace-nowrap">{o.ownerName}</td>
                   <td className="!text-center">
                     <CountLink n={o.offered} onClick={() => setDrill({ offererId: o.ownerId, label: o.ownerName, status: 'all' })} />
                   </td>
@@ -559,7 +566,7 @@ export default function OfferAcceptancePage() {
                       #{j.jobId}
                     </Link>
                   </td>
-                  <td className="!text-left truncate" title={j.clientName ?? ''}>
+                  <td className="!text-left whitespace-nowrap" title={j.clientName ?? ''}>
                     {j.clientName ?? <span className="text-muted-foreground">—</span>}
                   </td>
                   <td className="!text-center">
@@ -583,16 +590,23 @@ export default function OfferAcceptancePage() {
                   <td className="!text-center">
                     <CountLink n={j.open} onClick={() => setDrill({ jobId: j.jobId, label: `Job #${j.jobId}`, status: 'open' })} />
                   </td>
-                  <td className="!text-left text-xs" title={j.offerers.map((o) => `${o.ownerName} — ${o.rounds} round(s)`).join(', ')}>
+                  {/* One offerer per LINE. A comma-joined string wrapped mid-name
+                      ("Priyanka / Agarwal (4), / Harkirpa / Kaur (1)"), so each
+                      entry is its own nowrap block instead. */}
+                  <td className="!text-left text-xs">
                     {j.offerers.length === 0
                       ? <span className="text-muted-foreground">—</span>
-                      : j.offerers.map((o) => `${o.ownerName} (${o.rounds})`).join(', ')}
+                      : j.offerers.map((o) => (
+                        <span key={o.ownerId} className="block whitespace-nowrap">
+                          {o.ownerName} ({o.rounds})
+                        </span>
+                      ))}
                   </td>
-                  <td className="!text-left">
+                  <td className="!text-left whitespace-nowrap">
                     {j.acceptedBy ?? <span className="text-muted-foreground">—</span>}
                   </td>
                   <td className="!text-center text-xs">
-                    {j.firstOfferedAt ? formatDate(j.firstOfferedAt) : <span className="text-muted-foreground">—</span>}
+                    <DateTimeCell value={j.firstOfferedAt} />
                   </td>
                   <td className="!text-center">{fmtDuration(j.timeToAcceptSecs)}</td>
                 </tr>
@@ -749,7 +763,7 @@ function OfferDrilldownDialog({ drill, filters, onClose }: {
                           #{o.jobId}
                         </Link>
                       </td>
-                      <td className="!text-left truncate" title={o.clientName ?? ''}>
+                      <td className="!text-left whitespace-nowrap" title={o.clientName ?? ''}>
                         {o.clientName ?? <span className="text-muted-foreground">—</span>}
                       </td>
                       <td className="!text-center">
@@ -757,17 +771,20 @@ function OfferDrilldownDialog({ drill, filters, onClose }: {
                           ? <span className="text-muted-foreground">—</span>
                           : <StatusChip tone={statusTone(o.jobStatus)}>{statusLabel(o.jobStatus)}</StatusChip>}
                       </td>
-                      <td className="!text-left">
+                      <td className="!text-left whitespace-nowrap">
                         {o.efrName || `Efr #${o.efrId}`}{' '}
                         <span className="text-[10px] text-muted-foreground">#{o.efrId}</span>
                       </td>
-                      <td className="!text-left">{o.offererName}</td>
+                      <td className="!text-left whitespace-nowrap">{o.offererName}</td>
                       <td className="!text-center">{OFFER_STATUS_LABEL[o.offerStatus] ?? o.offerStatus}</td>
                       <td className="!text-center">{o.offerCount}</td>
-                      <td className="!text-center text-xs">{fmtDateTimeSecs(o.offeredAt)}</td>
-                      <td className="!text-center text-xs">{fmtDateTimeSecs(o.respondedAt)}</td>
+                      <td className="!text-center text-xs"><DateTimeCell value={o.offeredAt} seconds /></td>
+                      <td className="!text-center text-xs"><DateTimeCell value={o.respondedAt} seconds /></td>
                       <td className="!text-center">{fmtDuration(o.responseSecs)}</td>
-                      <td className="!text-left text-xs">
+                      {/* Reason is the ONE column that should wrap — it is a
+                          sentence, not an identifier. min-w keeps it from being
+                          squeezed to one word per line. */}
+                      <td className="!text-left text-xs min-w-[14rem] whitespace-normal break-words">
                         {o.rejectReason || <span className="text-muted-foreground">—</span>}
                       </td>
                     </tr>
