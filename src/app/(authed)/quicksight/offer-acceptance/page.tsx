@@ -19,11 +19,12 @@
  */
 
 import { useCallback, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { Handshake, CheckCircle2, XCircle, Clock, Hourglass, Timer, Percent } from 'lucide-react';
 
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
-import { usePostFetch } from '@/lib/hooks';
+import { usePostFetch, useFetch } from '@/lib/hooks';
 import { useLookup } from '@/lib/use-lookup';
 
 import { ReportPageScaffold } from '@/components/quicksight/ReportPageScaffold';
@@ -32,34 +33,72 @@ import { ChartCard, QsBarChart, QsDonut, QsKpiTile, QS_COLORS, QS_SEMANTIC } fro
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
+import { GlidingTabs } from '@/components/ui/gliding-tabs';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
+import { StatusChip } from '@/components/ui/StatusChip';
+import { formatDate, statusLabel, statusTone } from '@/lib/utils';
 
 const ACTION_KEY = 'isQuickSightOfferAcceptanceView';
 const API_BASE = '/admin/quicksight/offer-acceptance';
 
+/*
+ * THREE different "how many offers" numbers, deliberately named apart because
+ * tbl_job_offer keeps ONE row per (job, technician) and a re-offer UPDATEs that
+ * row (offer_count + 1) rather than inserting:
+ *
+ *   offered   COUNT(*)                     — how many were offered
+ *   reoffers  SUM(offer_count) − COUNT(*)  — how many of those were REPEAT offers
+ *   waves     COUNT(DISTINCT offered_at)   — how many times ops pressed "Offer"
+ *             (per job only; shown as "Rounds" — 5 techs in round 1 + 3 more in
+ *             round 2 = 2)
+ *
+ * `rounds` on the wire is the raw SUM(offer_count) that `reoffers` derives from;
+ * it is never rendered directly, so "Rounds" on screen always means waves.
+ */
 type OfferRow = {
   efrId: number; efrName: string;
-  offered: number; accepted: number; rejected: number; expired: number; open: number;
+  offered: number; rounds: number; reoffers: number; accepted: number; rejected: number; expired: number; open: number;
   acceptanceRate: number; avgResponseSecs: number | null;
 };
 type SourceRow = {
   source: string;
-  offered: number; accepted: number; rejected: number; expired: number; open: number;
+  offered: number; rounds: number; reoffers: number; accepted: number; rejected: number; expired: number; open: number;
   acceptanceRate: number;
 };
 type OwnerRow = {
   ownerId: number; ownerName: string;
-  offered: number; accepted: number; rejected: number; expired: number; open: number;
+  offered: number; rounds: number; reoffers: number; accepted: number; rejected: number; expired: number; open: number;
   acceptanceRate: number;
 };
+type JobOfferer = { ownerId: number; ownerName: string; offers: number; rounds: number };
+type JobRow = {
+  jobId: number; clientName: string | null; jobStatus: number | null;
+  techsOffered: number;
+  /** Offer WAVES — how many times ops pressed "Offer" for this job. */
+  waves: number;
+  offered: number; rounds: number; reoffers: number; accepted: number; rejected: number; expired: number; open: number;
+  acceptanceRate: number;
+  acceptedBy: string | null;
+  firstOfferedAt: string | null; lastOfferedAt: string | null; acceptedAt: string | null;
+  timeToAcceptSecs: number | null;
+  offerers: JobOfferer[];
+};
 type Totals = {
-  offered: number; accepted: number; rejected: number; expired: number; open: number;
+  offered: number; rounds: number; reoffers: number; accepted: number; rejected: number; expired: number; open: number;
   acceptanceRate: number; avgResponseSecs: number | null;
 };
 type DayRow = {
   day: string; // 'YYYY-MM-DD'
   offered: number; accepted: number; rejected: number; expired: number; open: number;
 };
-type OfferAcceptanceData = { rows: OfferRow[]; bySource: SourceRow[]; byOwner: OwnerRow[]; byDay: DayRow[]; totals: Totals };
+type OfferAcceptanceData = { rows: OfferRow[]; bySource: SourceRow[]; byOwner: OwnerRow[]; byJob: JobRow[]; byDay: DayRow[]; totals: Totals };
+
+/*
+ * The three groupings share ONE API response, so switching tabs is instant —
+ * no refetch, no spinner. Only the table below the charts swaps.
+ */
+type BreakdownTab = 'technician' | 'offerer' | 'job';
 
 type Source = 'top10' | 'search' | 'auto' | '';
 type FilterBody = {
@@ -89,6 +128,23 @@ const fmtDayLabel = (iso: string) => {
   const [, m, d] = iso.split('-').map(Number);
   return `${d} ${MONTHS[(m ?? 1) - 1] ?? ''}`;
 };
+/*
+ * Seconds-precision timestamp for the drill-down. formatDate() renders to the
+ * MINUTE, which makes an offer at 01:59:04 and its accept at 01:59:58 print
+ * identically — it reads as "responded instantly / zero elapsed" when it wasn't.
+ * The report tables keep formatDate (minutes are the right grain there).
+ */
+const fmtDateTimeSecs = (v: string | null) => {
+  if (!v) return '—';
+  const d = new Date(String(v).replace(' ', 'T'));
+  if (Number.isNaN(d.getTime())) return String(v);
+  return d.toLocaleString('en-IN', {
+    day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    timeZone: 'Asia/Kolkata',
+  });
+};
+
 const emptyFilter: FilterBody = { clientId: [], verticalId: [], serviceCategoryId: [], offeredById: [] };
 
 function toNums(v: Array<string | number>): number[] {
@@ -142,7 +198,14 @@ export default function OfferAcceptancePage() {
   const data = summary.data;
   const rows = data?.rows ?? [];
   const byOwner = data?.byOwner ?? [];
+  const byJob = data?.byJob ?? [];
   const totals = data?.totals;
+  // Which breakdown the table below the charts is showing. Purely client-side —
+  // all three grains ride on the one summary response.
+  const [tab, setTab] = useState<BreakdownTab>('technician');
+  // Count drill-down: which CELL was clicked — the dimension (job / technician /
+  // offerer), its label for the dialog title, and which outcome.
+  const [drill, setDrill] = useState<Drill | null>(null);
   const accessDenied = canView === false || summary.status === 403;
   const isEmpty = !summary.loading && !summary.error && rows.length === 0;
 
@@ -313,13 +376,34 @@ export default function OfferAcceptancePage() {
         </div>
       )}
 
+      {/*
+        * Breakdown tabs — the SAME offer set sliced three ways: who was offered
+        * (Technician), who did the offering (Offerer), and how hard each job had
+        * to be worked (Job). One response feeds all three, so switching is
+        * instant. Counts on the chips are row counts, not offer counts.
+        */}
+      <div className="mt-4">
+        <GlidingTabs
+          ariaLabel="Offer breakdown"
+          value={tab}
+          onChange={(v) => setTab(v as BreakdownTab)}
+          tabs={[
+            { value: 'technician', label: 'Technician', count: rows.length },
+            { value: 'offerer',    label: 'Offerer',    count: byOwner.length },
+            { value: 'job',        label: 'Job',        count: byJob.length },
+          ]}
+        />
+      </div>
+
       {/* Per-technician table */}
+      {tab === 'technician' && (
       <div className="overflow-x-auto rounded-md border border-border mt-4">
         <table className="data-table">
           <thead>
             <tr>
               <th className="!text-left">Technician</th>
               <th className="!text-center">Offered</th>
+              <th className="!text-center" title="How many of these were REPEAT offers — the same job offered to the same technician again">Re-Offers</th>
               <th className="!text-center">Accepted</th>
               <th className="!text-center">Rejected</th>
               <th className="!text-center">Expired</th>
@@ -334,11 +418,22 @@ export default function OfferAcceptancePage() {
                 <td className="!text-left font-medium">
                   {r.efrName} <span className="text-[10px] text-muted-foreground">#{r.efrId}</span>
                 </td>
-                <td className="!text-center">{r.offered}</td>
-                <td className="!text-center text-emerald-700">{r.accepted}</td>
-                <td className="!text-center text-rose-700">{r.rejected}</td>
-                <td className="!text-center text-amber-700">{r.expired}</td>
-                <td className="!text-center">{r.open}</td>
+                <td className="!text-center">
+                  <CountLink n={r.offered} onClick={() => setDrill({ efrId: r.efrId, label: r.efrName, status: 'all' })} />
+                </td>
+                <td className="!text-center">{r.reoffers}</td>
+                <td className="!text-center">
+                  <CountLink n={r.accepted} tone="text-emerald-700" onClick={() => setDrill({ efrId: r.efrId, label: r.efrName, status: 'accepted' })} />
+                </td>
+                <td className="!text-center">
+                  <CountLink n={r.rejected} tone="text-rose-700" onClick={() => setDrill({ efrId: r.efrId, label: r.efrName, status: 'rejected' })} />
+                </td>
+                <td className="!text-center">
+                  <CountLink n={r.expired} tone="text-amber-700" onClick={() => setDrill({ efrId: r.efrId, label: r.efrName, status: 'expired' })} />
+                </td>
+                <td className="!text-center">
+                  <CountLink n={r.open} onClick={() => setDrill({ efrId: r.efrId, label: r.efrName, status: 'open' })} />
+                </td>
                 <td className="!text-center font-medium">{r.acceptanceRate}%</td>
                 <td className="!text-center">{fmtDuration(r.avgResponseSecs)}</td>
               </tr>
@@ -349,6 +444,7 @@ export default function OfferAcceptancePage() {
               <tr className="bg-muted/60 font-semibold">
                 <td className="!text-left">Total</td>
                 <td className="!text-center">{totals.offered}</td>
+                <td className="!text-center">{totals.reoffers}</td>
                 <td className="!text-center">{totals.accepted}</td>
                 <td className="!text-center">{totals.rejected}</td>
                 <td className="!text-center">{totals.expired}</td>
@@ -360,41 +456,331 @@ export default function OfferAcceptancePage() {
           )}
         </table>
       </div>
+      )}
 
-      {/* "Offered By" breakdown — offers grouped by the user who made the offer. */}
-      {byOwner.length > 0 && (
-        <div className="mt-4">
-          <h3 className="mb-2 text-sm font-semibold text-foreground">Acceptance By Offered By</h3>
-          <div className="overflow-x-auto rounded-md border border-border">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th className="!text-left">Offered By</th>
-                  <th className="!text-center">Offered</th>
-                  <th className="!text-center">Accepted</th>
-                  <th className="!text-center">Rejected</th>
-                  <th className="!text-center">Expired</th>
-                  <th className="!text-center">Open</th>
-                  <th className="!text-center">Acceptance %</th>
+      {/* Acceptance By Offerer — offers grouped by the user who MADE the offer.
+          The column header follows the tab/section name; the FILTER above keeps
+          its "Offered By" label (it reads as a verb phrase there). */}
+      {tab === 'offerer' && (
+        <div className="overflow-x-auto rounded-md border border-border mt-4">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th className="!text-left">Offerer</th>
+                <th className="!text-center">Offered</th>
+                <th className="!text-center" title="How many of these were REPEAT offers — the same job offered to the same technician again">Re-Offers</th>
+                <th className="!text-center">Accepted</th>
+                <th className="!text-center">Rejected</th>
+                <th className="!text-center">Expired</th>
+                <th className="!text-center">Open</th>
+                <th className="!text-center">Acceptance %</th>
+              </tr>
+            </thead>
+            <tbody>
+              {byOwner.map((o) => (
+                <tr key={o.ownerId}>
+                  <td className="!text-left font-medium">{o.ownerName}</td>
+                  <td className="!text-center">
+                    <CountLink n={o.offered} onClick={() => setDrill({ offererId: o.ownerId, label: o.ownerName, status: 'all' })} />
+                  </td>
+                  <td className="!text-center">{o.reoffers}</td>
+                  <td className="!text-center">
+                    <CountLink n={o.accepted} tone="text-emerald-700" onClick={() => setDrill({ offererId: o.ownerId, label: o.ownerName, status: 'accepted' })} />
+                  </td>
+                  <td className="!text-center">
+                    <CountLink n={o.rejected} tone="text-rose-700" onClick={() => setDrill({ offererId: o.ownerId, label: o.ownerName, status: 'rejected' })} />
+                  </td>
+                  <td className="!text-center">
+                    <CountLink n={o.expired} tone="text-amber-700" onClick={() => setDrill({ offererId: o.ownerId, label: o.ownerName, status: 'expired' })} />
+                  </td>
+                  <td className="!text-center">
+                    <CountLink n={o.open} onClick={() => setDrill({ offererId: o.ownerId, label: o.ownerName, status: 'open' })} />
+                  </td>
+                  <td className="!text-center font-medium">{o.acceptanceRate}%</td>
                 </tr>
-              </thead>
-              <tbody>
-                {byOwner.map((o) => (
-                  <tr key={o.ownerId}>
-                    <td className="!text-left font-medium">{o.ownerName}</td>
-                    <td className="!text-center">{o.offered}</td>
-                    <td className="!text-center text-emerald-700">{o.accepted}</td>
-                    <td className="!text-center text-rose-700">{o.rejected}</td>
-                    <td className="!text-center text-amber-700">{o.expired}</td>
-                    <td className="!text-center">{o.open}</td>
-                    <td className="!text-center font-medium">{o.acceptanceRate}%</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+              ))}
+              {byOwner.length === 0 && (
+                <tr><td colSpan={8} className="!text-center text-muted-foreground py-6">No Offers In This Window.</td></tr>
+              )}
+            </tbody>
+          </table>
         </div>
       )}
+
+      {/*
+        * Per-JOB breakdown — how hard each job had to be worked. "Offerers"
+        * collapses the (job × offerer) grain into one cell (`Meena (5)`), so a
+        * job stays ONE scannable row while still answering "who offered this,
+        * and how many times". Sorted by Offer Rounds desc server-side: the jobs
+        * that took the most work float to the top, which is the reason to open
+        * this tab at all.
+        */}
+      {tab === 'job' && (
+        <>
+          <div className="overflow-x-auto rounded-md border border-border mt-4">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th className="!text-left">Job #</th>
+                <th className="!text-left">Client</th>
+                {/* "Job Status", not "Status" — this row also carries OFFER
+                    outcomes (Accepted / Rejected / Expired / Open), so a bare
+                    "Status" reads as if it described the offer. */}
+                <th className="!text-center" title="Where the JOB is now — distinct from the offer outcomes in the columns to the right">Job Status</th>
+                <th className="!text-center" title="Distinct technicians this job was offered to — click a count to see who">Techs Offered</th>
+                {/* Honest about the derivation: Rounds is inferred from distinct
+                    offer timestamps, so it under-counts in exactly one case —
+                    a round that re-offers EVERY technician from the previous
+                    one overwrites their timestamps and the two merge. */}
+                <th className="!text-center" title="Offer WAVES — how many times ops pressed Offer for this job (5 techs in round 1 + 3 more in round 2 = 2). Approximate: counted from distinct offer timestamps, so a round that re-offers every technician from the previous round merges into one.">Rounds*</th>
+                <th className="!text-center">Accepted</th>
+                <th className="!text-center">Rejected</th>
+                <th className="!text-center">Expired</th>
+                <th className="!text-center">Open</th>
+                <th className="!text-left">Offerers</th>
+                <th className="!text-left" title="The TECHNICIAN who accepted the offer. The job itself may since have moved on (checked in, completed) — Status shows where the job is now, this shows who took it.">Accepted By (Tech)</th>
+                <th className="!text-center">First Offered</th>
+                {/* Named "Time To Fill", not "Time To Accept": it is measured
+                    from the job's FIRST offer, so on a job that took two rounds
+                    it is longer than the accepting technician's own response
+                    time (which is what the drill-down shows). Two different
+                    questions — the label has to pick one and say so. */}
+                <th className="!text-center" title="From the job's FIRST offer to the moment a technician accepted — how long the job took to fill. NOT the accepting technician's own response time: open the Techs Offered count to see each technician's own offer and response.">Time To Fill</th>
+              </tr>
+            </thead>
+            <tbody>
+              {byJob.map((j) => (
+                <tr key={j.jobId}>
+                  <td className="!text-left font-medium">
+                    {/* Deep-link into the job workspace — same ?jobId=&action=view
+                        URL contract the Jobs list uses, so the modal opens on
+                        arrival and the link is shareable. */}
+                    <Link href={`/jobs?jobId=${j.jobId}&action=view`} className="text-sky-700 hover:underline">
+                      #{j.jobId}
+                    </Link>
+                  </td>
+                  <td className="!text-left truncate" title={j.clientName ?? ''}>
+                    {j.clientName ?? <span className="text-muted-foreground">—</span>}
+                  </td>
+                  <td className="!text-center">
+                    {j.jobStatus == null
+                      ? <span className="text-muted-foreground">—</span>
+                      : <StatusChip tone={statusTone(j.jobStatus)}>{statusLabel(j.jobStatus)}</StatusChip>}
+                  </td>
+                  <td className="!text-center">
+                    <CountLink n={j.techsOffered} onClick={() => setDrill({ jobId: j.jobId, label: `Job #${j.jobId}`, status: 'all' })} />
+                  </td>
+                  <td className="!text-center font-medium">{j.waves}</td>
+                  <td className="!text-center">
+                    <CountLink n={j.accepted} tone="text-emerald-700" onClick={() => setDrill({ jobId: j.jobId, label: `Job #${j.jobId}`, status: 'accepted' })} />
+                  </td>
+                  <td className="!text-center">
+                    <CountLink n={j.rejected} tone="text-rose-700" onClick={() => setDrill({ jobId: j.jobId, label: `Job #${j.jobId}`, status: 'rejected' })} />
+                  </td>
+                  <td className="!text-center">
+                    <CountLink n={j.expired} tone="text-amber-700" onClick={() => setDrill({ jobId: j.jobId, label: `Job #${j.jobId}`, status: 'expired' })} />
+                  </td>
+                  <td className="!text-center">
+                    <CountLink n={j.open} onClick={() => setDrill({ jobId: j.jobId, label: `Job #${j.jobId}`, status: 'open' })} />
+                  </td>
+                  <td className="!text-left text-xs" title={j.offerers.map((o) => `${o.ownerName} — ${o.rounds} round(s)`).join(', ')}>
+                    {j.offerers.length === 0
+                      ? <span className="text-muted-foreground">—</span>
+                      : j.offerers.map((o) => `${o.ownerName} (${o.rounds})`).join(', ')}
+                  </td>
+                  <td className="!text-left">
+                    {j.acceptedBy ?? <span className="text-muted-foreground">—</span>}
+                  </td>
+                  <td className="!text-center text-xs">
+                    {j.firstOfferedAt ? formatDate(j.firstOfferedAt) : <span className="text-muted-foreground">—</span>}
+                  </td>
+                  <td className="!text-center">{fmtDuration(j.timeToAcceptSecs)}</td>
+                </tr>
+              ))}
+              {byJob.length === 0 && (
+                <tr><td colSpan={13} className="!text-center text-muted-foreground py-6">No Offers In This Window.</td></tr>
+              )}
+            </tbody>
+          </table>
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            <span className="font-medium">* Rounds</span> counts the distinct times this job was
+            offered, derived from the offer timestamps. It is exact when each round went to
+            different technicians; a round that re-offered <em>every</em> technician from the
+            previous round overwrites their timestamps and reads as a single round.
+          </p>
+        </>
+      )}
+      <OfferDrilldownDialog drill={drill} filters={applied} onClose={() => setDrill(null)} />
     </ReportPageScaffold>
+  );
+}
+
+/*
+ * A count rendered as a button when there is something to show. Zero stays
+ * plain text — a clickable 0 that opens an empty list is a dead end.
+ */
+function CountLink({ n, tone, onClick }: { n: number; tone?: string; onClick: () => void }) {
+  if (!n) return <span className={tone}>{n}</span>;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`underline decoration-dotted underline-offset-2 hover:decoration-solid ${tone ?? ''}`}
+      title="Show the technicians behind this number"
+    >
+      {n}
+    </button>
+  );
+}
+
+/*
+ * Drill-down — the individual offers behind a clicked count, on ANY tab.
+ *
+ * Posts to the report's own /offers endpoint with the SAME filters as the
+ * summary plus the clicked cell, so the rows returned are exactly the ones that
+ * produced the number. That filter fidelity is the reason this does NOT reuse
+ * GET /admin/jobs/:id/offers — that endpoint answers "every offer on this job,
+ * ever", which would show rows outside the report's window and make the count
+ * look wrong.
+ *
+ * Fetch-on-click rather than inlining details in the summary: the report
+ * returns up to 5000 rows, and shipping every row's offer list would multiply
+ * the payload by the pool size for data almost none of which is opened.
+ */
+type DrillStatus = 'all' | 'accepted' | 'rejected' | 'expired' | 'open';
+type Drill = {
+  jobId?: number; efrId?: number; offererId?: number;
+  /** Row identity for the dialog title — tech name, offerer name, or "Job #N". */
+  label: string;
+  status: DrillStatus;
+};
+type OfferDetail = {
+  jobId: number; clientName: string | null; jobStatus: number | null;
+  efrId: number; efrName: string | null;
+  offererName: string;
+  offerStatus: number;
+  offeredAt: string | null; respondedAt: string | null;
+  offerCount: number;
+  /** This technician's own response time (offer → answer). NULL for expired /
+   *  still-open offers, where responded_at is the sweep time, not an answer. */
+  responseSecs: number | null;
+  source: string | null; rejectReason: string | null;
+};
+// tbl_job_offer.offer_status — mirrors services/offer-status.js.
+const OFFER_STATUS_LABEL: Record<number, string> = { 0: 'Offered', 1: 'Accepted', 2: 'Rejected', 3: 'Expired' };
+const DRILL_TITLE: Record<DrillStatus, string> = {
+  all: 'All Offers', open: 'Open Offers', accepted: 'Accepted', rejected: 'Rejected', expired: 'Expired',
+};
+
+function OfferDrilldownDialog({ drill, filters, onClose }: {
+  drill: Drill | null;
+  filters: FilterBody;
+  onClose: () => void;
+}) {
+  /*
+   * The POST body IS the cache key for usePostFetch, so it must be stable —
+   * an inline object literal would refetch on every render. Null while the
+   * dialog is shut so nothing is requested until it opens.
+   */
+  const body = useMemo(() => ({
+    ...filters,
+    jobId: drill?.jobId,
+    efrId: drill?.efrId,
+    selectedOffererId: drill?.offererId,
+    status: drill && drill.status !== 'all' ? drill.status : undefined,
+  }), [drill, filters]);
+
+  const detail = usePostFetch<{ items: OfferDetail[]; capped: boolean }>(
+    drill ? `${API_BASE}/offers` : null,
+    body,
+    { enabled: drill != null },
+  );
+  const items = detail.data?.items ?? null;
+
+  /*
+   * Read-only dialog → isDirty:false so the shared guard closes immediately
+   * instead of asking "discard changes?" on a panel with no input. Routed
+   * through the guard anyway — that is the project-wide <Dialog> contract.
+   */
+  const guardedOpenChange = useFormDirtyGuard(onClose, { isDirty: false });
+
+  return (
+    <Dialog open={drill != null} onOpenChange={guardedOpenChange}>
+      <DialogContent className="max-w-5xl">
+        <DialogHeader>
+          <DialogTitle>{drill ? `${DRILL_TITLE[drill.status]} · ${drill.label}` : ''}</DialogTitle>
+        </DialogHeader>
+        {detail.error && <p className="text-sm text-rose-700">{String(detail.error)}</p>}
+        {!detail.error && items === null && (
+          <p className="py-6 text-center text-sm text-muted-foreground">Loading…</p>
+        )}
+        {!detail.error && items !== null && (
+          <>
+            {detail.data?.capped && (
+              <p className="mb-2 text-xs text-amber-700">
+                Showing the 500 most recent offers — narrow the filters to see the rest.
+              </p>
+            )}
+            <div className="max-h-[60vh] overflow-auto rounded-md border border-border">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th className="!text-left">Job #</th>
+                    <th className="!text-left">Client</th>
+                    <th className="!text-center">Job Status</th>
+                    <th className="!text-left">Technician</th>
+                    <th className="!text-left">Offerer</th>
+                    <th className="!text-center">Outcome</th>
+                    <th className="!text-center" title="Times this technician was offered THIS job">Times Offered</th>
+                    <th className="!text-center">Offered At</th>
+                    <th className="!text-center">Responded At</th>
+                    {/* The number that answers "was this tech slow?" — distinct
+                        from the job-level Time To Fill in the report table. */}
+                    <th className="!text-center" title="This technician's own response time (their offer → their answer). Blank for expired or still-open offers: an expired offer's Responded At is the expiry sweep, not a reply.">Response</th>
+                    <th className="!text-left">Reason</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((o) => (
+                    <tr key={`${o.jobId}-${o.efrId}`}>
+                      <td className="!text-left font-medium">
+                        <Link href={`/jobs?jobId=${o.jobId}&action=view`} className="text-sky-700 hover:underline">
+                          #{o.jobId}
+                        </Link>
+                      </td>
+                      <td className="!text-left truncate" title={o.clientName ?? ''}>
+                        {o.clientName ?? <span className="text-muted-foreground">—</span>}
+                      </td>
+                      <td className="!text-center">
+                        {o.jobStatus == null
+                          ? <span className="text-muted-foreground">—</span>
+                          : <StatusChip tone={statusTone(o.jobStatus)}>{statusLabel(o.jobStatus)}</StatusChip>}
+                      </td>
+                      <td className="!text-left">
+                        {o.efrName || `Efr #${o.efrId}`}{' '}
+                        <span className="text-[10px] text-muted-foreground">#{o.efrId}</span>
+                      </td>
+                      <td className="!text-left">{o.offererName}</td>
+                      <td className="!text-center">{OFFER_STATUS_LABEL[o.offerStatus] ?? o.offerStatus}</td>
+                      <td className="!text-center">{o.offerCount}</td>
+                      <td className="!text-center text-xs">{fmtDateTimeSecs(o.offeredAt)}</td>
+                      <td className="!text-center text-xs">{fmtDateTimeSecs(o.respondedAt)}</td>
+                      <td className="!text-center">{fmtDuration(o.responseSecs)}</td>
+                      <td className="!text-left text-xs">
+                        {o.rejectReason || <span className="text-muted-foreground">—</span>}
+                      </td>
+                    </tr>
+                  ))}
+                  {items.length === 0 && (
+                    <tr><td colSpan={11} className="!text-center text-muted-foreground py-6">No Offers In This Bucket.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
