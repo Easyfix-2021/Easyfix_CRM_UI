@@ -136,6 +136,187 @@ import tsPlugin from '@typescript-eslint/eslint-plugin';
 // on JobModal.tsx:3452.
 import jsxA11yPlugin from 'eslint-plugin-jsx-a11y';
 
+/*
+ * LOCAL RULE — local/no-duplicate-chart-series-color
+ *
+ * Bans two entries in the SAME chart `series={[…]}` (or `colors={[…]}`) array
+ * resolving to the same colour. This is a VALUE equality, so `no-restricted-
+ * syntax` (a purely syntactic ESQuery matcher) can't express it: it can't know
+ * that `QS_COLORS[2]` and `QS_SEMANTIC.warn` are byte-for-byte the same hex,
+ * and it certainly can't follow a local alias like `const C_OPEN = QS_SEMANTIC.warn`.
+ *
+ * Why this rule exists: the QuickSight chart palette in
+ * src/components/quicksight/charts.tsx has TWO overlapping systems —
+ *   QS_COLORS   — a 10-hue ROTATION palette ("give me N distinct categories")
+ *   QS_SEMANTIC — a MEANING palette (good/warn/bad/info/neutral)
+ * and by construction QS_COLORS[1..4] are byte-identical to
+ * QS_SEMANTIC.good/warn/bad/info. Picking one of each for two adjacent series
+ * renders both bars the same colour and the legend stops distinguishing them.
+ * That shipped once (State/User "Tickets Created" vs "Open Orders", both amber,
+ * 2026-07-30). TypeScript can't catch it — both are just `string`.
+ *
+ * HOW IT RESOLVES a colour expression to a hex (conservatively — an
+ * unresolvable entry is SKIPPED, never guessed, so the rule can only fire on a
+ * genuine, provable collision and never false-positives a build):
+ *   - '#rrggbb' string literal            → itself
+ *   - QS_COLORS[<int literal>]            → embedded palette copy below
+ *   - QS_SEMANTIC.<key>                   → embedded palette copy below
+ *   - a local `const X = <any of the above>` alias → followed via scope
+ *   - anything else (loop var, .map, fn call) → unresolved, skipped
+ *
+ * STALENESS GUARD: the palette is embedded here (a lint rule can't import app
+ * source). To stop that copy silently drifting from charts.tsx — the exact
+ * "invisible drift" failure mode that caused the original bug — the rule ALSO
+ * lints the real `QS_COLORS` / `QS_SEMANTIC` definitions and reports a `drift`
+ * error if their literal values no longer match this copy. So a palette edit
+ * that isn't mirrored here fails lint loudly instead of rotting the check.
+ */
+const QS_COLORS_COPY = [
+  '#6366f1', '#10b981', '#f59e0b', '#ef4444', '#0ea5e9',
+  '#8b5cf6', '#14b8a6', '#f97316', '#ec4899', '#84cc16',
+];
+const QS_SEMANTIC_COPY = {
+  good: '#10b981', warn: '#f59e0b', bad: '#ef4444', info: '#0ea5e9', neutral: '#94a3b8',
+};
+
+const noDuplicateChartSeriesColor = {
+  meta: {
+    type: 'problem',
+    docs: { description: 'Disallow two entries in one chart series/colors array resolving to the same colour.' },
+    schema: [],
+    messages: {
+      dup:
+        'Two entries in this chart array resolve to the SAME colour {{hex}} ({{a}} and {{b}}), so their '
+        + 'bars/slices are indistinguishable. QS_COLORS[1..4] alias QS_SEMANTIC.good/warn/bad/info (identical '
+        + 'hex) — pick a QS_COLORS index ≥5 when a hand-picked series sits beside a QS_SEMANTIC one, or choose '
+        + 'a different QS_SEMANTIC key.',
+      drift:
+        '{{name}} in charts.tsx no longer matches the copy embedded in the local/no-duplicate-chart-series-color '
+        + 'ESLint rule. Update QS_COLORS_COPY / QS_SEMANTIC_COPY in eslint.config.mjs to match, or the '
+        + 'colour-collision check is verifying against a stale palette.',
+    },
+  },
+  create(context) {
+    const sc = context.sourceCode || context.getSourceCode();
+
+    // Follow `const X = <init>` up the scope chain; returns the init node or null.
+    const resolveIdentInit = (name, scope) => {
+      for (let s = scope; s; s = s.upper) {
+        const v = s.variables.find((x) => x.name === name);
+        if (v) {
+          const def = v.defs[0];
+          return def && def.node && def.node.type === 'VariableDeclarator' ? def.node.init : null;
+        }
+      }
+      return null;
+    };
+
+    const resolveColor = (node, scope, depth = 0) => {
+      if (!node || depth > 8) return null;
+      if (node.type === 'TSAsExpression') return resolveColor(node.expression, scope, depth + 1);
+      if (node.type === 'Literal' && typeof node.value === 'string') {
+        const s = node.value.trim().toLowerCase();
+        return /^#[0-9a-f]{3,8}$/.test(s) ? s : null;
+      }
+      if (node.type === 'MemberExpression') {
+        const { object, property, computed } = node;
+        if (computed && object.type === 'Identifier' && object.name === 'QS_COLORS'
+          && property.type === 'Literal' && Number.isInteger(property.value)) {
+          return QS_COLORS_COPY[property.value] ?? null;
+        }
+        if (!computed && object.type === 'Identifier' && object.name === 'QS_SEMANTIC'
+          && property.type === 'Identifier') {
+          return QS_SEMANTIC_COPY[property.name] ?? null;
+        }
+        return null;
+      }
+      if (node.type === 'Identifier') {
+        return resolveColor(resolveIdentInit(node.name, scope), scope, depth + 1);
+      }
+      return null;
+    };
+
+    const keyName = (p) => (p.key.type === 'Identifier' ? p.key.name : p.key.value);
+
+    return {
+      // The staleness guard — only fires on the real palette definitions.
+      VariableDeclarator(node) {
+        if (node.id.type !== 'Identifier' || !node.init) return;
+        if (node.id.name === 'QS_COLORS' && node.init.type === 'ArrayExpression') {
+          const vals = node.init.elements.map(
+            (e) => (e && e.type === 'Literal' && typeof e.value === 'string' ? e.value.toLowerCase() : null),
+          );
+          if (vals.some((v) => v === null)) return; // non-literal palette — can't compare
+          if (vals.length !== QS_COLORS_COPY.length || vals.some((v, i) => v !== QS_COLORS_COPY[i])) {
+            context.report({ node, messageId: 'drift', data: { name: 'QS_COLORS' } });
+          }
+        }
+        if (node.id.name === 'QS_SEMANTIC' && node.init.type === 'ObjectExpression') {
+          const map = {};
+          for (const p of node.init.properties) {
+            if (p.type !== 'Property' || p.computed
+              || p.value.type !== 'Literal' || typeof p.value.value !== 'string') return; // give up quietly
+            map[keyName(p)] = p.value.value.toLowerCase();
+          }
+          const keys = new Set([...Object.keys(map), ...Object.keys(QS_SEMANTIC_COPY)]);
+          for (const k of keys) {
+            if (map[k] !== QS_SEMANTIC_COPY[k]) {
+              context.report({ node, messageId: 'drift', data: { name: 'QS_SEMANTIC' } });
+              return;
+            }
+          }
+        }
+      },
+
+      JSXAttribute(node) {
+        const attr = node.name && node.name.name;
+        if (attr !== 'series' && attr !== 'colors') return;
+        const val = node.value;
+        if (!val || val.type !== 'JSXExpressionContainer' || val.expression.type !== 'ArrayExpression') return;
+
+        const scope = sc.getScope(node);
+        const seen = new Map(); // hex -> first {label}
+        for (const el of val.expression.elements) {
+          if (!el) continue;
+          let colorNode = null;
+          let label = null;
+          if (attr === 'series' && el.type === 'ObjectExpression') {
+            for (const p of el.properties) {
+              if (p.type !== 'Property' || p.computed) continue;
+              const k = keyName(p);
+              if (k === 'color') colorNode = p.value;
+              else if ((k === 'label' || k === 'key') && !label && p.value.type === 'Literal') {
+                label = String(p.value.value);
+              }
+            }
+          } else if (attr === 'colors') {
+            colorNode = el;
+          }
+          if (!colorNode) continue;
+          const hex = resolveColor(colorNode, scope);
+          if (!hex) continue; // unresolved → skip; never false-positive
+          const prev = seen.get(hex);
+          if (prev) {
+            context.report({
+              node: colorNode,
+              messageId: 'dup',
+              data: {
+                hex,
+                a: prev.label ? `"${prev.label}"` : 'an earlier entry',
+                b: label ? `"${label}"` : 'this entry',
+              },
+            });
+          } else {
+            seen.set(hex, { label });
+          }
+        }
+      },
+    };
+  },
+};
+
+const localPlugin = { rules: { 'no-duplicate-chart-series-color': noDuplicateChartSeriesColor } };
+
 const config = [
   {
     files: ['src/**/*.{ts,tsx}'],
@@ -166,6 +347,7 @@ const config = [
       '@next/next': nextPlugin,
       '@typescript-eslint': tsPlugin,
       'jsx-a11y': jsxA11yPlugin,
+      local: localPlugin,
     },
     rules: {
       'no-restricted-syntax': [
@@ -174,6 +356,9 @@ const config = [
         RESTRICTED_USEEFFECT_API_CALL,
         RESTRICTED_USEEFFECT_FETCH,
       ],
+      // Colour-collision guard for QuickSight charts (rule + rationale above).
+      // Inert on files with no `series`/`colors` chart arrays.
+      'local/no-duplicate-chart-series-color': 'error',
     },
   },
 

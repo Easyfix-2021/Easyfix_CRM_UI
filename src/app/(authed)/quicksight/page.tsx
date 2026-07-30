@@ -46,6 +46,13 @@ type ReportCardDef = {
   actionKey: string;
   description: string;
   Icon: LucideIcon;
+  /*
+   * Cards that BUNDLE several reports (Performance Report = 5 tabs) are visible
+   * when the user has ANY of these keys, since each tab is gated separately
+   * inside the page. `actionKey` stays the primary/representative key so
+   * existing consumers of this list keep working.
+   */
+  anyOf?: string[];
 };
 
 /*
@@ -60,6 +67,23 @@ const REPORTS: ReportCardDef[] = [
     actionKey: 'isQuickSightOpenOrdersView',
     description: 'Owner-wise open-order alert buckets with per-owner drill-down.',
     Icon: ClipboardList,
+  },
+  {
+    // Bundles the five performance scorecards behind gliding tabs. The three
+    // standalone cards below stay — this is an additional entry point, not a
+    // replacement, so nobody's bookmark or grant changes.
+    urlBase: 'performance',
+    label: 'Performance Report',
+    actionKey: 'isQuickSightClientPerformanceView',
+    anyOf: [
+      'isQuickSightClientPerformanceView',
+      'isQuickSightCityPerformanceView',
+      'isQuickSightTechnicianPerformanceView',
+      'isQuickSightStatePerformanceView',
+      'isQuickSightUserPerformanceView',
+    ],
+    description: 'Client, City, Technician, State and User scorecards in one place.',
+    Icon: Gauge,
   },
   {
     urlBase: 'client-performance',
@@ -151,9 +175,14 @@ export default function QuickSightLandingPage() {
   const { me } = useMe();
 
   // One bulk lookup: the family key + every per-report key.
-  const flags = actionFlags(me, [FAMILY_KEY, ...REPORTS.map((r) => r.actionKey)]);
+  const flags = actionFlags(me, [
+    FAMILY_KEY,
+    ...REPORTS.map((r) => r.actionKey),
+    // Bundle cards gate on ANY of their tabs' keys, so those must be resolved too.
+    ...REPORTS.flatMap((r) => r.anyOf ?? []),
+  ]);
   const hasFamily = flags[FAMILY_KEY];
-  const visible = REPORTS.filter((r) => flags[r.actionKey]);
+  const visible = REPORTS.filter((r) => (r.anyOf ? r.anyOf.some((k) => flags[k]) : flags[r.actionKey]));
 
   return (
     <div className="space-y-4">

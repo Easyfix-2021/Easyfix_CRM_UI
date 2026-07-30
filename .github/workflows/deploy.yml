@@ -70,7 +70,7 @@ concurrency:
 
 jobs:
   precheck:
-    name: Typecheck
+    name: Typecheck & Lint
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
@@ -80,6 +80,15 @@ jobs:
       - run: npm ci
       - name: Typecheck
         run: npx tsc --noEmit -p tsconfig.json
+      # Lint via the ESLint FLAT config (eslint.config.mjs) — this is where the
+      # custom rules live (chart colour-collision guard, no-api-in-useEffect,
+      # no-inline-onOpenChange). Must be `eslint .`, NOT `npm run lint`
+      # (= `next lint`): next lint routes through @rushstack/eslint-patch, which
+      # is incompatible with ESLint 9's flat-config loader, so it would run NONE
+      # of our custom rules. `--max-warnings=0` (baked into lint:flat) fails the
+      # deploy on any lint problem, gating build-and-push (needs: precheck).
+      - name: Lint
+        run: npm run lint:flat
 
   build-and-push:
     name: Build image & push to ECR
