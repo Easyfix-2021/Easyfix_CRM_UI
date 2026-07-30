@@ -47,6 +47,10 @@ type JobRow = {
   job_reference_id: string | null;
   client_ref_id: string | null;
   job_status: number;
+  // Assigned tech FK from the /admin/jobs projection — drives the BOOKED
+  // sub-label split (Pending App Ack vs Pending for Scheduling), same as
+  // /jobs and /my-orders.
+  fk_easyfixter_id?: number | null;
   client_name: string | null;
   easyfixer_name: string | null;
   requested_date_time: string | null;
@@ -185,7 +189,7 @@ export default function CustomerDetailPage() {
                       </td>
                       <td className="font-mono text-xs">{j.job_reference_id || j.client_ref_id || '—'}</td>
                       <td>
-                        <span className="badge bg-slate-100 text-slate-700">{statusLabel(j.job_status)}</span>
+                        <span className="badge bg-slate-100 text-slate-700">{statusLabel(j.job_status, { assigned: j.fk_easyfixter_id != null })}</span>
                         {/* "No Services" pill — same shape as /jobs +
                             /my-orders. Surfaces the legacy data-quality
                             gap where a BOOKED job has zero active

@@ -19,7 +19,6 @@
  */
 
 import { useCallback, useMemo, useState } from 'react';
-import Link from 'next/link';
 import { Handshake, CheckCircle2, XCircle, Clock, Hourglass, Timer, Percent } from 'lucide-react';
 
 import { useMe } from '@/lib/auth-context';
@@ -38,6 +37,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { formatDate, statusLabel, statusTone } from '@/lib/utils';
+import { JobRefLink } from '@/components/job/JobRefLink';
+import { JobModalHost } from '@/components/job/JobModalHost';
 
 const ACTION_KEY = 'isQuickSightOfferAcceptanceView';
 const API_BASE = '/admin/quicksight/offer-acceptance';
@@ -74,6 +75,8 @@ type OwnerRow = {
 type JobOfferer = { ownerId: number; ownerName: string; offers: number; rounds: number };
 type JobRow = {
   jobId: number; clientName: string | null; jobStatus: number | null;
+  /** Whether the JOB has a tech assigned — drives the BOOKED sub-label split. */
+  assigned: boolean;
   techsOffered: number;
   /** Offer WAVES — how many times ops pressed "Offer" for this job. */
   waves: number;
@@ -213,6 +216,7 @@ export default function OfferAcceptancePage() {
   // Count drill-down: which CELL was clicked — the dimension (job / technician /
   // offerer), its label for the dialog title, and which outcome.
   const [drill, setDrill] = useState<Drill | null>(null);
+
   const accessDenied = canView === false || summary.status === 403;
   const isEmpty = !summary.loading && !summary.error && rows.length === 0;
 
@@ -559,12 +563,9 @@ export default function OfferAcceptancePage() {
               {byJob.map((j) => (
                 <tr key={j.jobId}>
                   <td className="!text-left font-medium">
-                    {/* Deep-link into the job workspace — same ?jobId=&action=view
-                        URL contract the Jobs list uses, so the modal opens on
-                        arrival and the link is shareable. */}
-                    <Link href={`/jobs?jobId=${j.jobId}&action=view`} className="text-sky-700 hover:underline">
-                      #{j.jobId}
-                    </Link>
+                    {/* Opens the JobModal in place (JobModalHost below) — closing
+                        returns here, not to Manage Jobs. Link stays shareable. */}
+                    <JobRefLink jobId={j.jobId} />
                   </td>
                   <td className="!text-left whitespace-nowrap" title={j.clientName ?? ''}>
                     {j.clientName ?? <span className="text-muted-foreground">—</span>}
@@ -572,7 +573,7 @@ export default function OfferAcceptancePage() {
                   <td className="!text-center">
                     {j.jobStatus == null
                       ? <span className="text-muted-foreground">—</span>
-                      : <StatusChip tone={statusTone(j.jobStatus)}>{statusLabel(j.jobStatus)}</StatusChip>}
+                      : <StatusChip tone={statusTone(j.jobStatus)}>{statusLabel(j.jobStatus, { assigned: j.assigned })}</StatusChip>}
                   </td>
                   <td className="!text-center">
                     <CountLink n={j.techsOffered} onClick={() => setDrill({ jobId: j.jobId, label: `Job #${j.jobId}`, status: 'all' })} />
@@ -626,6 +627,9 @@ export default function OfferAcceptancePage() {
         </>
       )}
       <OfferDrilldownDialog drill={drill} filters={applied} onClose={() => setDrill(null)} />
+
+      {/* Hosts the in-place job workspace for every <JobRefLink> on this page. */}
+      <JobModalHost />
     </ReportPageScaffold>
   );
 }
@@ -671,6 +675,8 @@ type Drill = {
 };
 type OfferDetail = {
   jobId: number; clientName: string | null; jobStatus: number | null;
+  /** Job-level tech presence — same BOOKED sub-label split as the report/modal. */
+  assigned: boolean;
   efrId: number; efrName: string | null;
   offererName: string;
   offerStatus: number;
@@ -759,9 +765,9 @@ function OfferDrilldownDialog({ drill, filters, onClose }: {
                   {items.map((o) => (
                     <tr key={`${o.jobId}-${o.efrId}`}>
                       <td className="!text-left font-medium">
-                        <Link href={`/jobs?jobId=${o.jobId}&action=view`} className="text-sky-700 hover:underline">
-                          #{o.jobId}
-                        </Link>
+                        {/* Close this drill-down first, then open the job in
+                            place — one modal at a time (beforeOpen). */}
+                        <JobRefLink jobId={o.jobId} beforeOpen={onClose} />
                       </td>
                       <td className="!text-left whitespace-nowrap" title={o.clientName ?? ''}>
                         {o.clientName ?? <span className="text-muted-foreground">—</span>}
@@ -769,7 +775,7 @@ function OfferDrilldownDialog({ drill, filters, onClose }: {
                       <td className="!text-center">
                         {o.jobStatus == null
                           ? <span className="text-muted-foreground">—</span>
-                          : <StatusChip tone={statusTone(o.jobStatus)}>{statusLabel(o.jobStatus)}</StatusChip>}
+                          : <StatusChip tone={statusTone(o.jobStatus)}>{statusLabel(o.jobStatus, { assigned: o.assigned })}</StatusChip>}
                       </td>
                       <td className="!text-left whitespace-nowrap">
                         {o.efrName || `Efr #${o.efrId}`}{' '}

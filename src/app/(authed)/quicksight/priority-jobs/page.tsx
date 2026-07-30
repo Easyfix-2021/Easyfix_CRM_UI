@@ -38,6 +38,7 @@ import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { usePostFetch } from '@/lib/hooks';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
+import { JobRefLink } from '@/components/job/JobRefLink';
 import { useLookup } from '@/lib/use-lookup';
 import type { SearchOption } from '@/components/ui/search-select';
 
@@ -590,15 +591,14 @@ export default function PriorityJobsPage() {
                   {drillData.data!.map((j) => (
                     <tr key={j.jobId}>
                       <td className="!text-left">
-                        <a
-                          href={`/jobs?jobId=${j.jobId}&action=view`}
-                          target="_blank"
-                          rel="noreferrer"
+                        <JobRefLink
+                          jobId={j.jobId}
+                          newTab
                           className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
                         >
                           {j.jobId}
                           <ExternalLink className="size-3 opacity-60" />
-                        </a>
+                        </JobRefLink>
                       </td>
                       <td className="!text-left">
                         {(j.easyFixterId ?? 'N/A')} - {j.easyFixerName || '-'}

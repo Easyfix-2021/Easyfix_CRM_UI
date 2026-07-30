@@ -55,6 +55,7 @@ import {
 } from '@/components/quicksight/charts';
 import { Button } from '@/components/ui/button';
 import { DownloadButton } from '@/components/ui/download-button';
+import { JobRefLink } from '@/components/job/JobRefLink';
 import {
   Dialog,
   DialogContent,
@@ -540,10 +541,9 @@ export default function OpenOrdersPage() {
                   {drillData.data!.map((j) => (
                     <tr key={j.jobID}>
                       <td className="!text-left">
-                        <a
-                          href={`/jobs?jobId=${j.jobID}&action=view`}
-                          target="_blank"
-                          rel="noreferrer"
+                        <JobRefLink
+                          jobId={j.jobID}
+                          newTab
                           className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
                         >
                           {j.isEscalated === 1 && (
@@ -551,7 +551,7 @@ export default function OpenOrdersPage() {
                           )}
                           {j.jobID}
                           <ExternalLink className="size-3 opacity-60" />
-                        </a>
+                        </JobRefLink>
                       </td>
                       <td className="!text-left">{j.clientName}</td>
                       <td className="!text-left">{j.clientSpocName}</td>

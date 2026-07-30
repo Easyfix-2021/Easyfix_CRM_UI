@@ -54,6 +54,9 @@ type CallRow = {
   efr_name?: string | null;
   efr_no?: string | null;
   job_status?: number | string | null;
+  /** The JOB's assigned tech (tbl_job.fk_easyfixter_id), NOT the call's efr_id —
+   *  drives the BOOKED sub-label split so the chip matches the job modal. */
+  job_efr_id?: number | null;
   job_type?: string | null;
   job_customer_name?: string | null;
   customer_name?: string | null;
@@ -214,7 +217,7 @@ export function CallInfoModal({ open, onClose }: { open: boolean; onClose: () =>
       // (not just the raw integer) so typing "completed" / "unconfirmed"
       // narrows correctly to the matching status rows.
       const statusText = r.job_status != null && r.job_status !== ''
-        ? statusLabel(Number(r.job_status))
+        ? statusLabel(Number(r.job_status), { assigned: r.job_efr_id != null })
         : '';
       const hay = [
         formatCallTime(r.insert_date_time),
@@ -264,8 +267,8 @@ export function CallInfoModal({ open, onClose }: { open: boolean; onClose: () =>
           vb = String(b.customer_name || b.job_customer_name || '').toLowerCase();
           break;
         case 'job_status':
-          va = a.job_status != null && a.job_status !== '' ? statusLabel(Number(a.job_status)).toLowerCase() : '';
-          vb = b.job_status != null && b.job_status !== '' ? statusLabel(Number(b.job_status)).toLowerCase() : '';
+          va = a.job_status != null && a.job_status !== '' ? statusLabel(Number(a.job_status), { assigned: a.job_efr_id != null }).toLowerCase() : '';
+          vb = b.job_status != null && b.job_status !== '' ? statusLabel(Number(b.job_status), { assigned: b.job_efr_id != null }).toLowerCase() : '';
           break;
         default:
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -590,7 +593,7 @@ export function CallInfoModal({ open, onClose }: { open: boolean; onClose: () =>
                                 on the joined row. */}
                             {r.job_status != null && r.job_status !== '' ? (
                               <StatusChip tone={statusTone(Number(r.job_status))}>
-                                {statusLabel(Number(r.job_status))}
+                                {statusLabel(Number(r.job_status), { assigned: r.job_efr_id != null })}
                               </StatusChip>
                             ) : '—'}
                           </td>
