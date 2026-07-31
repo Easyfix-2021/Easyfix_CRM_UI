@@ -71,44 +71,30 @@ import {
   CandidateTable, PincodeListModal, type ScheduleCandidate,
 } from './CandidateTable';
 
-/* ── Time-slot options — mirror the values used in JobModal's Confirm
-   form so a re-fetch against an edited slot keys on the same labels the
-   BE already stores in tbl_job.time_slot.
-   The slot is AUTO-DERIVED from the Job Date's hour — NOT user-selectable.
-   This array is the single source of truth for slot labels used by the
-   derivation logic below. ─────────────────────────────────────────────── */
-const TIME_SLOT_OPTIONS = [
-  { value: 'Morning 9 to 2', label: 'Morning 9 to 2' },
-  { value: 'Afternoon 12 to 5', label: 'Afternoon 12 to 5' },
-  { value: 'Evening 2 to 7', label: 'Evening 2 to 7' },
-  { value: 'Anytime', label: 'Anytime' },
-] as const;
-
 /*
- * Derive the time slot from the Job Date's wall-clock hour (IST, since the
- * picker value is always an IST wall-clock string).
+ * ── Time slot: PASS THROUGH, NEVER DERIVE ──────────────────────────────────
  *
- *   Morning 9 to 2   → 09:00–11:59  (hours 9–11)
- *   Afternoon 12 to 5 → 12:00–13:59 (hours 12–13)
- *   Evening 2 to 7   → 14:00–18:59  (hours 14–18)
- *   Anytime          → fallback for anything outside the above ranges
+ * The Job Date/Time in this modal is READ-ONLY (the Reschedule dialog is the
+ * only way to move it), so there is no hour for the modal to derive a slot
+ * from that isn't already the job's own hour. The slot shipped on the
+ * candidate-search request is therefore the job's STORED `time_slot`, verbatim.
  *
- * Overlap resolution: Morning ends before Afternoon starts (we split at 12);
- * Afternoon ends before Evening (we split at 14). Hours ≥ 19 → Anytime.
+ * This used to run the picked hour through a 4-band legacy derivation
+ * ('Morning 9 to 2' / 'Afternoon 12 to 5' / 'Evening 2 to 7' / 'Anytime') and
+ * send THAT. Since jobs now hold 1-hour frames ('3 PM–4 PM' — written by the
+ * Confirm modal and by the WhatsApp confirmation flow), the derived band
+ * matched nothing: the BE overrides `job.time_slot` with whatever we send
+ * (candidate-ranking.service searchTechniciansForJob) and then runs the
+ * same-day conflict probe as `AND time_slot = ?`. Every technician in the
+ * SEARCH table came back conflict-free while the Top-10 table — which never
+ * sent the param — correctly flagged the same technicians as double-booked.
+ * Two lists in one modal, opposite verdicts, and the operator offering a job
+ * to someone already committed to that hour.
  *
- * Input: the datetime-local picker string 'YYYY-MM-DDTHH:mm' (IST wall-clock).
- * Returns one of the TIME_SLOT_OPTIONS values, never null.
+ * Empty/absent stays EMPTY (not a fabricated 'Anytime'): the BE only overrides
+ * on a non-empty value, so an unslotted job keeps its own NULL and the conflict
+ * probe correctly skips rather than matching the literal string 'Anytime'.
  */
-function deriveTimeSlot(datetimeLocal: string): string {
-  if (!datetimeLocal) return 'Anytime';
-  const m = datetimeLocal.match(/T(\d{2}):/);
-  if (!m) return 'Anytime';
-  const hour = Number(m[1]);
-  if (hour >= 9 && hour <= 11) return 'Morning 9 to 2';
-  if (hour >= 12 && hour <= 13) return 'Afternoon 12 to 5';
-  if (hour >= 14 && hour <= 18) return 'Evening 2 to 7';
-  return 'Anytime';
-}
 
 /*
  * The technician-row shape (`ScheduleCandidate`) + the CandidateTable /
@@ -266,21 +252,19 @@ export function ScheduleAssignModal({
   const rescheduleRefetchStarted = useRef(false);
 
   // Proposed schedule — seeded from the job's current values once it
-  // loads, then operator-editable. `seeded` guards the one-time seed so
-  // a re-fetch (triggered BY editing) doesn't clobber the operator's edit.
-  // timeSlot is AUTO-DERIVED from jobDateLocal — not user-settable.
+  // loads. `seeded` guards the one-time seed so a re-fetch doesn't clobber it.
   const [jobDateLocal, setJobDateLocal] = useState('');
   const [seeded, setSeeded] = useState(false);
 
-  // Derived time slot — recomputed whenever the Job Date changes.
-  // Falls back to the job's stored slot ONLY during the seed phase (before
-  // the operator has set a date). Once seeded the hour-based rule always wins.
+  // The job's STORED time_slot, captured at seed. Shipped verbatim as the
+  // candidate-search `timeSlot` param — never re-derived from the hour. See the
+  // "PASS THROUGH, NEVER DERIVE" note at the top of this file.
   const [seedSlot, setSeedSlot] = useState('');
   // Seeded baseline date — the job's stored date at seed time. Used to detect
   // whether the operator has EDITED the schedule (vs. just the one-time seed),
   // so the expensive Top-10 fetch doesn't re-fire on open.
   const [seedDate, setSeedDate] = useState('');
-  const timeSlot = seeded ? deriveTimeSlot(jobDateLocal) : seedSlot;
+  const timeSlot = seedSlot;
 
   const [search, setSearch] = useState('');
   // Search-results paging. CLIENT-side only: the search endpoint hands back the
@@ -399,14 +383,16 @@ export function ScheduleAssignModal({
   }, [rescheduling, top.loading, top.refreshing]);
 
   // Seed the proposed schedule from the loaded job exactly once.
-  // seedSlot captures the job's stored time_slot for display during the seed
-  // phase; once seeded, deriveTimeSlot() takes over from the picked date.
+  // seedSlot captures the job's stored time_slot VERBATIM — including the empty
+  // string when the job has none, so the request omits the param entirely and
+  // the BE's conflict probe keeps skipping instead of matching a fabricated
+  // 'Anytime' literal that no job row holds.
   useEffect(() => {
     if (seeded || !topData?.job) return;
     const seededLocal = isoToLocalInput(topData.job.requested_date_time);
     setJobDateLocal(seededLocal);
     setSeedDate(seededLocal);
-    setSeedSlot(topData.job.time_slot ?? 'Anytime');
+    setSeedSlot(topData.job.time_slot ?? '');
     setSeeded(true);
   }, [seeded, topData]);
 
@@ -630,6 +616,13 @@ export function ScheduleAssignModal({
             showReschedule
             onReschedule={() => setRescheduleOpen(true)}
             rescheduling={rescheduling}
+            /*
+             * Only the OFFER path is gated server-side, and the footer button is
+             * disabled to match. In assign/reassign mode the action stays
+             * available by design, so the notice must not tell the operator to
+             * reschedule first — same condition as the button's own `disabled`.
+             */
+            pastBlocksAction={offerMode}
           />
 
           {/* ───────── Offer history — live + rejected + expired — offer mode only ───────── */}

@@ -6,6 +6,7 @@ import { api, ApiError } from '@/lib/api';
 import { formatDate, statusLabel, statusTone } from '@/lib/utils';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { maskMobile, formatServiceAddress } from '@/lib/format';
+import { formatJobAge, jobAgeTitle } from '@/lib/job-age';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { Button } from '@/components/ui/button';
 import { useMe } from '@/lib/auth-context';
@@ -176,6 +177,11 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
         <Card>
           <DLRow label="Job Id">{j.job_id}</DLRow>
           <DLRow label="Booking Date Time">{j.ticket_created_date_time ? formatDate(j.ticket_created_date_time) : formatDate(j.created_date_time)}</DLRow>
+          {/* Age — the same server-computed reading the job lists show, so this
+              read-only replica can never disagree with the row it opened from.
+              `/admin/jobs/:id/transaction` wraps getById, so it inherits the
+              detail payload's ageDays/ageSecs; an em-dash shows if absent. */}
+          <DLRow label="Age"><span title={jobAgeTitle(j)}>{formatJobAge(j)}</span></DLRow>
           <DLRow label="Order Status">
             <StatusChip tone={statusTone(Number(j.job_status))}>
               {statusLabel(Number(j.job_status), { assigned: j.fk_easyfixter_id != null })}

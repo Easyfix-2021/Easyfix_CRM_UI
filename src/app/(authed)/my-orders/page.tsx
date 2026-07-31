@@ -7,13 +7,13 @@ import {
   CalendarClock, PlayCircle, CheckCircle2, CalendarCheck,
   RefreshCw, MapPin,
 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
 import { api } from '@/lib/api';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { formatDate, formatEasyfixerName, statusLabel, statusTone } from '@/lib/utils';
+import { formatJobAge, jobAgeTitle, JOB_AGE_SORT_KEY, type JobAgeFields } from '@/lib/job-age';
 import { StatusChip } from '@/components/ui/StatusChip';
 import {
   TABS, filterJobRows, filterTabsForStages, makeQuickStatusChange,
@@ -25,6 +25,10 @@ import { UnconfirmedJobsTable } from '@/components/job/UnconfirmedJobsTable';
 import { PendingToStartView } from '@/components/job/PendingToStartView';
 import { AssignTechnicianModal, type AssignMode } from '@/components/job/AssignTechnicianModal';
 import { ScheduleAssignModal } from '@/components/job/ScheduleAssignModal';
+import {
+  PendingSchedulingFilters, psFiltersFromParams, writePsFilterParams,
+  psFilterKey, psAnyFilterSet, psQueryParams, type PsFilters,
+} from '@/components/job/PendingSchedulingFilters';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
 import { cycleSort, SortHeader, type SortDir } from '@/lib/use-sort';
@@ -68,7 +72,7 @@ const JOBS_MAX_LIMIT = 500;
  *   - statusLabel + statusColorClass
  */
 
-type JobRow = {
+type JobRow = JobAgeFields & {
   job_id: number; job_reference_id: string | null; client_ref_id: string | null;
   job_status: number; job_type: string; source_type: string | null;
   job_desc: string | null;
@@ -97,35 +101,68 @@ type JobRow = {
   // offered_efr_name is that technician's name (may be null).
   is_offered?: number | boolean;
   offered_efr_name?: string | null;
-  // Offer aggregates driving the Pending-for-Scheduling tri-state chip.
-  // offered_count = offers still OPEN; total = offers in any state;
-  // expired = offers in EXPIRED state. See offerColumns() in job.service.js.
+  // Offer aggregates — TOOLTIP COPY ONLY. They are counts, not a verdict; the
+  // chip itself reads `offer_state` below. offered_count = offers still
+  // effectively open; total = offers in any state; expired = dead offers.
+  // See offerColumns() in job.service.js.
   offered_count?: number | null;
   total_offer_count?: number | null;
   expired_offer_count?: number | null;
+  /*
+   * THE authoritative offer sub-state, derived server-side. See offerState()
+   * below for why the FE must not compute this itself.
+   */
+  offer_state?: 'offered' | 'expired' | 'pending' | 'none' | null;
 };
 type Resp = { items: JobRow[]; total: number; limit: number; offset: number };
 
 /*
- * Pending-for-Scheduling tri-state — Offered / Expired / Pending For Scheduling.
- * Ops' rule, taken literally: "Expired only when ALL the offers are expired.
- * Offered if even a single offer is active from multiple offers."
+ * Pending-for-Scheduling tri-state chip — Offered / Expired / plain status.
  *
- * Order matters: one live offer outranks any number of expired siblings, so the
- * open-offer check comes first.
+ * READ THE BACKEND'S VERDICT. Do not re-derive it.
  *
- * The Expired test is `expired === total`, NOT `offered_count === 0`. Those look
- * interchangeable and aren't: a job whose only offer was REJECTED has no open
- * offer, but its offers are not all expired — it must read as Pending For
- * Scheduling (it's back in the pool), not Expired. Don't "simplify" this.
+ * Offer expiry is a BATCH SWEEP, not a property of time, and whether it runs at
+ * all is a business switch (`job.offer_expiry.enabled` in easyfix_properties).
+ * On job #521866 the offer sat at offer_status = 0 for ~92 minutes and only
+ * flipped to EXPIRED the instant an operator opened Schedule & Assign — that
+ * modal runs a lazy sweep before it reads. This function, deriving the state
+ * from raw counts, had rendered a live "Offered to Tx" the whole time. Two
+ * implementations of one rule, disagreeing, with the modal moving the data
+ * underneath the list.
  *
- * 'none' covers both never-offered and rejected/accepted-only, which the caller
- * renders with the plain job_status label.
+ * So the BE now projects `offer_state`, derived from the SAME predicate its
+ * `offerState` query filter uses, and — crucially — under the SAME expiry
+ * regime, resolved once per request:
+ *   expiry ON  → open ⇔ offer_status = 0 AND offered_at within the TTL
+ *                (the accept path's own gate; immune to sweep lag)
+ *   expiry OFF → open ⇔ offer_status = 0, no clock at all, because offers are
+ *                then meant to stay open indefinitely
+ * plus latest-row-per-technician and technician-resolvable guards, matching what
+ * the Schedule & Assign modal lists. The FE must not re-derive ANY of that from
+ * counts: it cannot see the property, so it would get the regime wrong.
+ *
+ * Mapping: 'offered'/'expired' pass through; 'pending' (nobody holding it),
+ * 'none' (documented ACCEPTED anomaly) and null (un-migrated deploy — no
+ * tbl_job_offer) all mean "no offer chip", which the caller renders as the
+ * plain job_status label.
  */
 function offerState(j: JobRow): 'offered' | 'expired' | 'none' {
-  // is_offered is the EXISTS flag; offered_count the COUNT. Either proves a live
-  // offer — checking both keeps this correct against older BE deploys that
-  // project is_offered but not the counts (NULL → 0).
+  /*
+   * `null` is a REAL backend value (no offer table) and must read as 'none'.
+   * Only a MISSING field means we're talking to a pre-`offer_state` backend —
+   * fall back to the old count-based derivation there so the chip doesn't go
+   * blank mid-deploy. Hence the explicit `undefined` test, not a truthiness or
+   * null check.
+   */
+  if (j.offer_state !== undefined) {
+    if (j.offer_state === 'offered') return 'offered';
+    if (j.offer_state === 'expired') return 'expired';
+    return 'none';
+  }
+  // Legacy fallback ONLY (older BE deploy). is_offered is the EXISTS flag,
+  // offered_count the COUNT; the Expired test is `expired === total`, not
+  // `offered_count === 0`, because a rejected-only job has no open offer yet is
+  // back in the pool rather than Expired.
   if (j.is_offered === 1 || j.is_offered === true || (j.offered_count ?? 0) > 0) return 'offered';
   const total = j.total_offer_count ?? 0;
   const expired = j.expired_offer_count ?? 0;
@@ -205,6 +242,19 @@ export default function MyOrdersPage() {
   });
 
   /*
+   * Pending-for-Scheduling filters — hydrated from the URL on first render so
+   * the view is shareable/bookmarkable and survives the remount that follows a
+   * modal action (same rationale as the `tab` / `q` / `sort` initializers
+   * above). useSearchParams() is stable at first render in the App Router.
+   */
+  const [psFilters, setPsFilters] = useState<PsFilters>(() => psFiltersFromParams(searchParams));
+  // Serialised once per render — used as part of the result-cache key AND as
+  // the refetch effect's dependency (a stable string beats an object identity
+  // that changes on every setState).
+  const psKey = psFilterKey(psFilters);
+  const psAnySet = psAnyFilterSet(psFilters);
+
+  /*
    * Role-aware owner filter: admin-group users see all jobs here (matches
    * legacy SP behaviour where role_id determines visibility expansion);
    * everyone else gets their own jobs only. Computed fresh each render from
@@ -231,11 +281,19 @@ export default function MyOrdersPage() {
     const seq = ++loadSeqRef.current;
     const tabDef = TABS.find((t) => t.value === tab);
     const off = reset ? 0 : offset;
+    /*
+     * The Pending-for-Scheduling filter bar is scoped to THAT tab only — the
+     * other ~9 tabs keep their previous request shape byte-for-byte. Computed
+     * locally (rather than reading the `isPendingScheduling` const declared
+     * further down) so load() has no forward dependency.
+     */
+    const psActive = tab === 'pending-scheduling';
     // Cache key includes pageSize so changing rows-per-page doesn't
     // serve a stale 50-row payload. Also includes serverQ so the
     // Unconfirmed-tab search results don't collide with the
-    // unfiltered cache entry for the same offset.
-    const key = `${tab}|${off}|${limit}|${scopedOwnerId ?? 'admin-all'}|q=${serverQ}|s=${sortKey || ''}:${sortDir}`;
+    // unfiltered cache entry for the same offset, and the PS filter
+    // signature so two different filter sets never share an entry.
+    const key = `${tab}|${off}|${limit}|${scopedOwnerId ?? 'admin-all'}|q=${serverQ}|s=${sortKey || ''}:${sortDir}|f=${psActive ? psKey : ''}`;
 
     // First paint (no data) shows the skeleton; every later reload — tab/page/
     // sort/search/post-mutation — is silent so the table never flashes.
@@ -273,9 +331,22 @@ export default function MyOrdersPage() {
       // must not evict a promise another call is still awaiting.
       try {
         const reqPromise = api.get<Resp>('/admin/jobs', {
+          /*
+           * The tab's bucket pins, sent UNCONDITIONALLY and identically on
+           * every tab. Pending-for-Scheduling therefore always ships
+           * status=0 + assigned=false; no filter below can override or drop
+           * them, so the list can never leave the bucket.
+           */
           status:    tabDef?.statuses ? undefined : tabDef?.status,
           statuses:  tabDef?.statuses ? tabDef.statuses.join(',') : undefined,
           assigned:  tabDef?.assigned === undefined ? undefined : String(tabDef.assigned),
+          /*
+           * Pending-for-Scheduling filter bar → server-side WHERE clauses that
+           * NARROW the pinned bucket. `psQueryParams` emits ONLY the controls
+           * that are set, and it is spread only while that tab is active — so
+           * the other tabs send exactly the request shape they always did.
+           */
+          ...(psActive ? psQueryParams(psFilters) : {}),
           limit, offset: off,
           // Server-side sort (whitelisted BE-side); absent → BE default job_id DESC.
           sortBy: sortKey || undefined,
@@ -310,6 +381,19 @@ export default function MyOrdersPage() {
   // unfiltered paginated list.
   useEffect(() => { setPage(0); load(true, true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [tab, scopedOwnerId, serverQ]);
   useEffect(() => { load(false); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [page, pageSize]);
+  /*
+   * Pending-for-Scheduling filter change → page-0 refetch. Skips the initial
+   * mount (the tab effect above already fired the first load, including any
+   * URL-hydrated filters). `psKey` is a string, so this fires on real
+   * value changes only — not on every setState object identity.
+   */
+  const psMountRef = useRef(true);
+  useEffect(() => {
+    if (psMountRef.current) { psMountRef.current = false; return; }
+    setPage(0);
+    load(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [psKey]);
   // NOTE: no interval polling — data refreshes on ACTION (post-mutation
   // load(false, true) after saves/row-actions), now SILENT + flicker-free via
   // the data-null loading guard. Event-driven, no mid-task surprises.
@@ -460,8 +544,9 @@ export default function MyOrdersPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortKey, sortDir]);
 
-  // Persist search + sort into the URL (tab already lives there) so they
-  // survive any remount/navigation after a modal action. Debounced via
+  // Persist search + sort + the Pending-for-Scheduling filters into the URL
+  // (tab already lives there) so they survive any remount/navigation after a
+  // modal action, and so a PM can share the exact filtered view. Debounced via
   // serverQ so typing doesn't spam history. Guard prevents redundant
   // replaces; deps deliberately EXCLUDE searchParams so this never loops
   // with the tab-sync effect (which reads searchParams).
@@ -469,12 +554,16 @@ export default function MyOrdersPage() {
     const p = new URLSearchParams(searchParams);
     if (serverQ) p.set('q', serverQ); else p.delete('q');
     if (sortKey) p.set('sort', `${sortKey}:${sortDir}`); else p.delete('sort');
+    // Shared serialiser (PendingSchedulingFilters) — also scrubs the retired
+    // `psStatus` param. /jobs writes the SAME `ps*` names, so a filtered link
+    // stays portable between the two surfaces.
+    writePsFilterParams(p, psFilters);
     const nextStr = p.toString();
     if (nextStr !== searchParams.toString()) {
       router.replace(nextStr ? `${pathname}?${nextStr}` : pathname, { scroll: false });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverQ, sortKey, sortDir]);
+  }, [serverQ, sortKey, sortDir, psKey]);
 
   // Resolve the current tab's human label for the page header — each sidebar
   // sub-menu is a standalone status page, so the tab name IS the page title.
@@ -501,15 +590,18 @@ export default function MyOrdersPage() {
   // (which stays untouched for the other ~9 tabs).
   const isPendingStart = tab === 'pending-start';
 
-  // Whole days between a ticket-created timestamp and now, e.g. "12d".
-  // Null/invalid → '—'. Negative clamps to 0d (future-dated guard).
-  function jobAgeLabel(d: string | null | undefined): string {
-    if (!d) return '—';
-    const t = new Date(d).getTime();
-    if (Number.isNaN(t)) return '—';
-    const days = Math.floor((Date.now() - t) / 86_400_000);
-    return `${days < 0 ? 0 : days}d`;
-  }
+  /*
+   * The local `jobAgeLabel(ts)` helper that used to live here was RETIRED
+   * (2026-07-31) — it recomputed "created → now" client-side, which over-reports
+   * age for every closed job. The single shared implementation is
+   * `formatJobAge` / `jobAgeTitle` in '@/lib/job-age'.
+   */
+
+  /*
+   * The Pending-for-Scheduling lookup options (client / city / category) now
+   * live inside PendingSchedulingFilters, which owns its own `useLookup()` —
+   * session-cached + request-deduped, so hosting the bar costs nothing extra.
+   */
 
   return (
     <div className="space-y-5">
@@ -553,14 +645,17 @@ export default function MyOrdersPage() {
           Pending to Start (which renders its own filter bar). */}
       {!isRetiredTab && !isPendingStart && (
       <Card>
-        <CardContent className="p-3">
+        <CardContent className="p-3 space-y-3">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             {/* Placeholder + hint are DERIVED from JOB_SEARCH_FIELDS in
                 lib/job-tabs.ts — the same array filterJobRows matches on — so
                 the box can never again advertise a different set of fields than
                 it actually searches (it previously named 4 of 14, hiding the
-                Client SPOC / city / technician search entirely). */}
+                Client SPOC / city / technician search entirely).
+                This box drives BOTH: an instant client-side narrow of the
+                loaded page AND — debounced 300ms via `serverQ` — the BE `q`
+                param, so matches beyond the current page are found too. */}
             <Input
               placeholder={JOB_SEARCH_PLACEHOLDER}
               title={JOB_SEARCH_HINT}
@@ -569,6 +664,16 @@ export default function MyOrdersPage() {
               className="pl-9"
             />
           </div>
+          {/*
+            * Pending-for-Scheduling filter bar. Rendered ONLY on that tab —
+            * the other ~9 tabs keep the bare search card they had. Every
+            * control below drives the SERVER query (see load()); changing any
+            * of them resets to page 1 via the psFilterKey effect, and the
+            * selection is mirrored into the URL so the view is shareable.
+            */}
+          {isPendingScheduling && (
+            <PendingSchedulingFilters value={psFilters} onChange={setPsFilters} />
+          )}
         </CardContent>
       </Card>
       )}
@@ -625,7 +730,13 @@ export default function MyOrdersPage() {
             <thead>
               <tr>
                 <SortHeader<string> col="job_id" sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="stick-col-head stick-left">Job ID</SortHeader>
-                <SortHeader<string> col="created_date_time" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Ticket Created Date / Job Age</SortHeader>
+                {/* Age promoted OUT of the Ticket Created cell into its own
+                    sortable column. The old sub-line couldn't be sorted, and
+                    sorting on created_date_time is NOT equivalent: age stops
+                    accruing at the terminal event while the created timestamp
+                    never moves. JOB_AGE_SORT_KEY orders by precise seconds. */}
+                <SortHeader<string> col={JOB_AGE_SORT_KEY} sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="w-16">Age</SortHeader>
+                <SortHeader<string> col="created_date_time" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Ticket Created Date</SortHeader>
                 <SortHeader<string> col="client_name" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Client</SortHeader>
                 {/* client_spoc_name is already on the LIST projection (LIST_COLUMNS
                     carries it for the Unconfirmed tab) — no BE change needed. Not
@@ -644,14 +755,16 @@ export default function MyOrdersPage() {
             <tbody>
               {loading && Array.from({ length: 5 }).map((_, i) => (
                 <tr key={`sk-${i}`}>
-                  {Array.from({ length: 11 }).map((_, c) => (
+                  {Array.from({ length: 12 }).map((_, c) => (
                     <td key={c}><div className="h-3 w-24 rounded bg-muted animate-pulse" /></td>
                   ))}
                 </tr>
               ))}
               {!loading && sorted.length === 0 && (
-                <tr><td colSpan={11} className="text-center text-muted-foreground py-8">
-                  No orders in this bucket{!isAdmin ? ' owned by you' : ''}.
+                <tr><td colSpan={12} className="text-center text-muted-foreground py-8">
+                  {psAnySet
+                    ? 'No orders match these filters.'
+                    : `No orders in this bucket${!isAdmin ? ' owned by you' : ''}.`}
                 </td></tr>
               )}
               {!loading && sorted.map((j) => (
@@ -662,9 +775,9 @@ export default function MyOrdersPage() {
                       <CallHistoryButton jobId={j.job_id} />
                     </span>
                   </td>
+                  <td className="text-xs whitespace-nowrap tabular-nums" title={jobAgeTitle(j)}>{formatJobAge(j)}</td>
                   <td className="whitespace-nowrap">
                     <div className="text-xs">{formatDate(j.ticket_created_date_time)}</div>
-                    <div className="text-[10px] text-muted-foreground">{jobAgeLabel(j.ticket_created_date_time)}</div>
                   </td>
                   <td className="min-w-[18rem] max-w-[26rem] break-words">{j.client_name ?? '—'}</td>
                   {/* client_spoc IS the SPOC's mobile (a raw string on tbl_job —
@@ -746,6 +859,10 @@ export default function MyOrdersPage() {
             <thead>
               <tr>
                 <SortHeader col="job_id"             sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="stick-col-head stick-left">Job #</SortHeader>
+                {/* Age — server-computed + server-sorted (JOB_AGE_SORT_KEY).
+                    Narrow + nowrap; sits beside the pinned Job # so it reads
+                    without scrolling. */}
+                <SortHeader col={JOB_AGE_SORT_KEY} sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="w-16">Age</SortHeader>
                 <SortHeader col="client_name"        sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Client</SortHeader>
                 <SortHeader col="customer_name"      sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Customer</SortHeader>
                 <SortHeader col="customer_mob_no"    sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Mobile</SortHeader>
@@ -759,13 +876,13 @@ export default function MyOrdersPage() {
             <tbody>
               {loading && Array.from({ length: 5 }).map((_, i) => (
                 <tr key={`sk-${i}`}>
-                  {Array.from({ length: 9 }).map((_, c) => (
+                  {Array.from({ length: 10 }).map((_, c) => (
                     <td key={c}><div className="h-3 w-24 rounded bg-muted animate-pulse" /></td>
                   ))}
                 </tr>
               ))}
               {!loading && sorted.length === 0 && (
-                <tr><td colSpan={9} className="text-center text-muted-foreground py-8">
+                <tr><td colSpan={10} className="text-center text-muted-foreground py-8">
                   No orders in this bucket{!isAdmin ? ' owned by you' : ''}.
                 </td></tr>
               )}
@@ -777,6 +894,7 @@ export default function MyOrdersPage() {
                       <CallHistoryButton jobId={j.job_id} />
                     </span>
                   </td>
+                  <td className="text-xs whitespace-nowrap tabular-nums" title={jobAgeTitle(j)}>{formatJobAge(j)}</td>
                   <td className="min-w-[18rem] max-w-[26rem] break-words">{j.client_name ?? '—'}</td>
                   <td>{j.customer_name ?? '—'}</td>
                   <td className="text-xs text-muted-foreground">

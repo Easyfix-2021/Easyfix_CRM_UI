@@ -223,6 +223,39 @@ export const JOB_SEARCH_HINT =
   `Searches: ${JOB_SEARCH_FIELDS.map((f) => f.label).join(', ')}.`;
 
 /*
+ * MASKED-VALUE MATCHING.
+ *
+ * The backend masks mobile-bearing fields on every /api/admin/* response
+ * (middleware/mask-mobile.js): `customer_mob_no` becomes "9310••••••" whenever
+ * `ui.customer.number.visible` is off, and `client_spoc` is masked
+ * unconditionally. The SERVER still searches the RAW column, so a full
+ * 10-digit mobile search matches server-side and the row comes back — but a
+ * plain `includes()` against the masked string could never match it, and this
+ * filter runs ON TOP of the server result. The row was therefore DROPPED: the
+ * header said "1 matching orders" beside an empty table, and only the first 4
+ * digits ever "worked", which made the failure look intermittent.
+ *
+ * So: when the stored value is masked, compare on digits against the visible
+ * prefix only. A needle that is consistent with what we can see is a match
+ * (the server's own predicate is the authority and has already been applied);
+ * a needle that contradicts the visible digits, or is longer than the number
+ * itself, is not. Keyed off the bullet character rather than a field
+ * allow-list so any field the masker starts covering is handled for free.
+ */
+function maskedMatches(value: string, needle: string): boolean {
+  const visible = value.slice(0, value.indexOf('•')).replace(/\D/g, '');
+  const nd = needle.replace(/\D/g, '');
+  // A non-numeric needle can never be about a masked mobile.
+  if (!nd || nd !== needle.trim()) return false;
+  // Masking preserves length (visible digits + one bullet per hidden digit),
+  // so a needle longer than the number cannot be it.
+  if (nd.length > value.length) return false;
+  // Needle within the visible window → ordinary substring match.
+  // Needle longer than the window → it must agree with every digit we can see.
+  return nd.length <= visible.length ? visible.includes(nd) : nd.startsWith(visible);
+}
+
+/*
  * Client-side search over the currently-loaded page, shared by /jobs and
  * /my-orders (previously copy-pasted and drifting). The needle is lowercased
  * once; each candidate is compared as its lowercase string form. Kept as a
@@ -234,7 +267,10 @@ export function filterJobRows<T extends SearchableJobRow>(items: T[], q: string)
   const needle = q.toLowerCase();
   return items.filter((j) => JOB_SEARCH_FIELDS.some((f) => {
     const v = f.get(j);
-    return v != null && String(v).toLowerCase().includes(needle);
+    if (v == null) return false;
+    const s = String(v);
+    if (s.includes('•')) return maskedMatches(s, needle);
+    return s.toLowerCase().includes(needle);
   }));
 }
 

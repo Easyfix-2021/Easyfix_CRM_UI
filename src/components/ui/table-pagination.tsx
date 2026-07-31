@@ -45,6 +45,7 @@ export function TablePagination({
   total,
   onPageChange,
   onPageSizeChange,
+  pageSizeOptions = PAGE_SIZE_OPTIONS,
   className,
 }: {
   /* 0-indexed page number (parent uses page * pageSize as offset). */
@@ -52,6 +53,15 @@ export function TablePagination({
   pageSize: TablePageSize;
   total: number;
   onPageChange: (next: number) => void;
+  /*
+   * Page-size choices to offer. Defaults to all four. Narrow it when an option
+   * cannot tell the truth on a given endpoint: 'all' renders as a single
+   * un-navigable page whose range hint reads "Showing 1–<total> of <total>", so
+   * on an endpoint whose `limit` caps BELOW the row count (e.g. /admin/calls
+   * caps at 200) it both lies about what is on screen and strands the operator
+   * with no way to reach later rows. Drop 'all' there.
+   */
+  pageSizeOptions?: ReadonlyArray<{ value: TablePageSize; label: string }>;
   /*
    * Fires with the new size. Parent is responsible for resetting
    * `page` to 0 — we don't reset here because some callers might
@@ -125,7 +135,7 @@ export function TablePagination({
             }}
             className="h-8 rounded-md border border-input bg-background px-2 text-sm focus:outline-none focus-visible:border-foreground/40"
           >
-            {PAGE_SIZE_OPTIONS.map((o) => (
+            {pageSizeOptions.map((o) => (
               <option key={String(o.value)} value={String(o.value)}>{o.label}</option>
             ))}
           </select>

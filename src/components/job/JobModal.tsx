@@ -37,6 +37,7 @@ import { resolveParentAddressId, buildJobAddressPayload } from '@/lib/job-addres
 import { useLookup } from '@/lib/use-lookup';
 import { formatDate, formatEasyfixerName, statusLabel, statusTone, toIstClockTime } from '@/lib/utils';
 import { maskMobile, formatServiceAddress, INDIAN_MOBILE_REGEX, INDIAN_MOBILE_ERROR, isValidIndianMobile } from '@/lib/format';
+import { formatJobAge, jobAgeTitle } from '@/lib/job-age';
 
 /*
  * safeMobile(v) — defends against round-tripping a masked display value
@@ -1038,6 +1039,14 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
             // (JobCallHistory below) already shows the full party-aware log.
             ['Job ID', job.job_id],
             ['Reference', job.job_reference_id],
+            /*
+             * Age — the same server-computed reading the job LISTS show, so a
+             * row and its detail can never disagree. Measured ticket-created →
+             * terminal event (checkout / cancel / enquiry), or → now while the
+             * job is open; see lib/job-age.ts. Renders an em-dash (never "NaN"
+             * or a misleading "0") if the payload predates the field.
+             */
+            ['Age', <span key="job-age" title={jobAgeTitle(job)}>{formatJobAge(job)}</span>],
             ['Type', job.job_type],
             ['Source', job.source_type],
             ['Owner', job.owner_name],
@@ -4663,26 +4672,38 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
   }
 
   /*
-   * Auto-select the Booking Time Slot chip from the Requested Time on LOAD (and
-   * any later programmatic time change) — edit/confirm mode only. `toFormShape`
-   * seeds `time_slot` from the job row, which is frequently empty or a LEGACY
-   * value ('Morning 9 to 2') that matches NO SLOTS chip, so a loaded job showed
-   * no chip highlighted. Derive the chip from the time (out-of-window → 'After
-   * Hours') whenever the current value isn't already a valid SLOTS chip — this
-   * both fixes the highlight AND keeps the submitted time_slot coherent. Guards:
-   *   - isEditShape only: create mode uses the legacy 'Morning 9 to 2' vocabulary
-   *     (a different Booking Time Slot control) and must NOT be re-mapped.
-   *   - skip when time_slot is already a valid SLOTS value → respects a manual
-   *     chip pick (e.g. clicking 'After Hours' while the time is in-window).
+   * Auto-select the Booking Time Slot chip from the Requested Time on LOAD —
+   * edit/confirm mode only, and ONLY when the job carries no slot at all.
+   *
+   * This used to re-derive whenever the stored value wasn't a known SLOTS chip,
+   * which quietly REWROTE any unrecognised label. That was tolerable when the
+   * only unrecognised values were dead legacy strings; it is not now that the
+   * WhatsApp confirmation flow writes real, customer-chosen 1-hour frames into
+   * tbl_job.time_slot. Overwriting one of those would replace the customer's
+   * actual choice with an hour-derived guess — and would do it silently on mere
+   * page load. So: an EMPTY slot gets healed from the time; a non-empty slot is
+   * preserved verbatim and rendered by `slotChoicesFor` as an extra chip when it
+   * isn't one of the offered frames.
+   *
+   * Guards:
+   *   - isEditShape only: create mode has its own Booking Time Slot control.
    *   - setF (not set) so this load-time heal never flips the dirty flag.
    */
   React.useEffect(() => {
     if (!isEditShape) return;
     if (!f.requested_date_time) return;
-    if (SLOTS.some((s) => s.value === f.time_slot)) return;
+    if (String(f.time_slot ?? '').trim() !== '') return;
     const derived = inferSlotFromTime(f.requested_date_time);
     if (derived) setF((s) => ({ ...s, time_slot: derived }));
   }, [isEditShape, f.requested_date_time, f.time_slot]);
+
+  /*
+   * Chip options for the Booking Time Slot control — the offered 1-hour frames
+   * PLUS the job's current value when that value isn't one of them (legacy
+   * bands, or a frame from a future WhatsApp revision). Guarantees the control
+   * always shows what the job actually holds instead of nothing selected.
+   */
+  const slotChoices = React.useMemo(() => slotChoicesFor(f.time_slot), [f.time_slot]);
 
   /*
    * Client's "Collected By" preference. Read from the client profile
@@ -6461,28 +6482,37 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             <div className="md:col-span-3 grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-1.5">
                 <Label>Booking Time Slot *</Label>
+                {/* `slotChoices` (not the raw SLOTS) so a job holding a legacy
+                    or chat-written value still renders it as the selected chip
+                    instead of showing nothing picked. */}
                 <div className="flex flex-wrap gap-2">
-                  {SLOTS.map((s) => (
-                    <button
-                      key={s.value}
-                      type="button"
-                      onClick={() => {
-                        set('time_slot', s.value);
-                        if (s.fromH >= 0 && f.requested_date_time) {
-                          const [date] = f.requested_date_time.split('T');
-                          const startHH = String(s.fromH).padStart(2, '0');
-                          set('requested_date_time', `${date}T${startHH}:00`);
-                        }
-                      }}
-                      className={`px-3 py-1.5 rounded-full border text-xs transition-colors ${
-                        f.time_slot === s.value
-                          ? 'bg-sky-700 text-white border-sky-700'
-                          : 'bg-white hover:bg-muted/60'
-                      }`}
-                    >
-                      {s.label}
-                    </button>
-                  ))}
+                  {slotChoices.map((s) => {
+                    const isLegacy = !SLOTS.some((k) => k.value === s.value);
+                    return (
+                      <button
+                        key={s.value}
+                        type="button"
+                        onClick={() => {
+                          set('time_slot', s.value);
+                          if (s.fromH >= 0 && f.requested_date_time) {
+                            const [date] = f.requested_date_time.split('T');
+                            const startHH = String(s.fromH).padStart(2, '0');
+                            set('requested_date_time', `${date}T${startHH}:00`);
+                          }
+                        }}
+                        title={isLegacy
+                          ? 'Slot value already stored on this job. Pick one of the 1-hour frames to replace it.'
+                          : undefined}
+                        className={`px-3 py-1.5 rounded-full border text-xs transition-colors ${
+                          f.time_slot === s.value
+                            ? 'bg-sky-700 text-white border-sky-700'
+                            : 'bg-white hover:bg-muted/60'
+                        }`}
+                      >
+                        {s.label}
+                      </button>
+                    );
+                  })}
                 </div>
                 <SlotAdvisory
                   best={slotRec.best}
@@ -7943,12 +7973,16 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 failed={slotRec.failed}
               />
             </Field>
-            <Field label="Time Slot"><SearchSelect value={f.time_slot} onChange={(v) => set('time_slot', v)} placeholder="— Select slot —" options={[
-              { value: 'Morning 9 to 2', label: 'Morning 9 to 2' },
-              { value: 'Afternoon 12 to 5', label: 'Afternoon 12 to 5' },
-              { value: 'Evening 2 to 7', label: 'Evening 2 to 7' },
-              { value: 'Anytime', label: 'Anytime' },
-            ]} /></Field>
+            {/* Options come from `slotChoices` (slotChoicesFor(f.time_slot)) —
+                the offered 1-hour frames PLUS the job's own value when that
+                isn't one of them. This control used to hard-code the four
+                legacy bands, so a job holding a chat-confirmed frame like
+                '3 PM–4 PM' matched no option and SearchSelect fell back to
+                rendering the placeholder: the field read "— Select slot —" as
+                if no slot were set, inviting the operator to overwrite the
+                customer's confirmed window with a 5-hour band. Same
+                compatibility rule the confirm-mode chip row already follows. */}
+            <Field label="Time Slot"><SearchSelect value={f.time_slot} onChange={(v) => set('time_slot', v)} placeholder="— Select slot —" options={slotChoices.map((s) => ({ value: s.value, label: s.label }))} /></Field>
             <Field label="Client Ref ID"><Input value={f.client_ref_id} onChange={(e) => set('client_ref_id', e.target.value)} /></Field>
             <Field label="Job Type"><SearchSelect value={f.job_type} onChange={(v) => set('job_type', v)} placeholder="— Select job type —" options={[
               { value: 'Installation', label: 'Installation' }, { value: 'Repair', label: 'Repair' },
@@ -9633,6 +9667,10 @@ function CustomerHistoryDialog({
                 <thead>
                   <tr className="bg-muted/50 text-xs">
                     <th className="text-left px-3 py-2 font-medium">Job ID</th>
+                    {/* Age — same shared reading as every job list. Not
+                        sortable: this dialog loads one un-paginated page of the
+                        customer's history and has no sort state. */}
+                    <th className="text-left px-3 py-2 font-medium w-16">Age</th>
                     <th className="text-left px-3 py-2 font-medium">Requested</th>
                     <th className="text-left px-3 py-2 font-medium">Client</th>
                     <th className="text-left px-3 py-2 font-medium">Job Type</th>
@@ -9647,6 +9685,7 @@ function CustomerHistoryDialog({
                   {rows.map((j) => (
                     <tr key={String(j.job_id)} className="border-t hover:bg-muted/40">
                       <td className="px-3 py-2 font-mono text-xs">#{String(j.job_id ?? '—')}</td>
+                      <td className="px-3 py-2 text-xs whitespace-nowrap tabular-nums" title={jobAgeTitle(j)}>{formatJobAge(j)}</td>
                       <td className="px-3 py-2">{formatDate(j.requested_date_time as string | undefined)}</td>
                       <td className="px-3 py-2">{String(j.client_name ?? '—')}</td>
                       <td className="px-3 py-2">{String(j.job_type ?? '—')}</td>
@@ -10048,7 +10087,23 @@ function toFormShape(j: Job | null) {
     // only matters for fresh Book New Call.
     source_type: pick('source_type') || 'CRM - New',
     requested_date_time: isBulkSentinel ? '' : dt('requested_date_time'),
-    time_slot: isBulkSentinel ? '' : (pick('time_slot') || 'Morning 9 to 2'),
+    /*
+     * SEEDED forms (Edit / Confirm) take the job's stored slot VERBATIM —
+     * including EMPTY when the job has none. It used to fall back to the legacy
+     * band 'Morning 9 to 2' for any job with a NULL slot, which made the value
+     * permanently non-empty and therefore made the load-time heal effect
+     * (`if (String(f.time_slot ?? '').trim() !== '') return;`) unreachable. The
+     * heal is what runs `inferSlotFromTime` and produces the correct 1-hour
+     * frame; without it, an integration-created job dated 16:30 opened Confirm
+     * & Schedule pre-selected on 'Morning 9 to 2', contradicting the 4:30 PM
+     * appointment beside it, and an untouched Confirm save persisted that band
+     * into BOTH time_slot and booking_cut_off_time_slot.
+     *
+     * CREATE (j === null) keeps its own default: its Booking Time Slot chips
+     * are display-only and auto-track the picked Requested Time via
+     * `bookingSlotFor`, so nothing there depends on the heal effect.
+     */
+    time_slot: isBulkSentinel ? '' : (pick('time_slot') || (j ? '' : 'Morning 9 to 2')),
     upload_date_hint: uploadDateHint,
     job_desc: pick('job_desc'),
     client_ref_id: pick('client_ref_id'),
@@ -10143,33 +10198,96 @@ function toFormShape(j: Job | null) {
 }
 
 /*
- * Working-hour slot bands (matching legacy EasyFix_CRM Booking Time Slot UI):
- *   9 AM – 12 PM  →  in-window
- *   12 PM – 3 PM  →  in-window
- *   3 PM – 7 PM   →  in-window
- *   After Hours   →  escape hatch for out-of-band times (early mornings,
- *                    late evenings) — ops picks this manually when the
- *                    customer can only accept a visit outside 9–19.
+ * Booking Time Slot — ONE-HOUR frames (widened 2026-07-31).
  *
- * The time picker enforces no date limit but the chosen slot is auto-inferred
- * from the hour field; out-of-band hours fall into "After Hours".
+ * WHY: the WhatsApp appointment-confirmation flow
+ * (EasyFix_Backend/services/whatsapp-conversation.service.js) lets the customer
+ * pick a 1-HOUR frame and writes that label straight into tbl_job.time_slot.
+ * The CRM only offered the four legacy broad bands, so a chat-confirmed job
+ * opened here with NO chip highlighted — it read as "slot not set" when the
+ * customer had in fact chosen one.
+ *
+ * ⚠ LABEL FORMAT — MIRRORED BYTE-FOR-BYTE FROM THE BACKEND. The WhatsApp
+ * service builds each label as
+ *     `${hour12Label(h)}–${hour12Label(h + 1)}`  where hour12Label = "9 AM"
+ * i.e. an EN-DASH U+2013 ('–', bytes e2 80 93) with **NO surrounding spaces**:
+ *     "9 AM–10 AM", "12 PM–1 PM", "6 PM–7 PM"
+ * That differs from the OLD legacy bands here, which used a spaced en-dash
+ * ("9 AM – 12 PM"). The backend drops the spaces deliberately: tbl_job.time_slot
+ * is a legacy column of undeclared width whose longest legacy value is 12 chars,
+ * and candidate-ranking joins on `AND time_slot = ?`, so a truncated label would
+ * silently break matching. Do NOT "tidy" spaces back in — the two sides must
+ * stay identical or chat-confirmed slots go blank again.
+ *
+ * Frames: 9 AM → 7 PM (ten one-hour frames starting on the hour), matching
+ * SLOT_START_HOURS = [9…18] on the backend, plus:
+ *   After Hours → escape hatch for out-of-band times (early mornings, late
+ *                 evenings) — ops picks this manually when the customer can
+ *                 only accept a visit outside 9–19.
+ *
+ * BACKWARD COMPATIBILITY: existing jobs hold LEGACY values ('9 AM – 12 PM',
+ * 'Morning 9 to 2', …) that are NOT in this list. The picker must still DISPLAY
+ * whatever the job carries — see `slotChoices` at the chip render site, which
+ * appends the job's current value as an extra selected chip when it is not one
+ * of these. Never silently blank or rewrite a stored slot.
  */
+const AFTER_HOURS_SLOT = 'After Hours';
+
 export const SLOTS = [
-  { value: '9 AM – 12 PM', label: '9 AM – 12 PM', fromH: 9,  toH: 12 },
-  { value: '12 PM – 3 PM', label: '12 PM – 3 PM', fromH: 12, toH: 15 },
-  { value: '3 PM – 7 PM',  label: '3 PM – 7 PM',  fromH: 15, toH: 19 },
-  { value: 'After Hours',  label: 'After Hours',  fromH: -1, toH: -1 },
+  { value: '9 AM–10 AM',  label: '9 AM–10 AM',  fromH: 9,  toH: 10 },
+  { value: '10 AM–11 AM', label: '10 AM–11 AM', fromH: 10, toH: 11 },
+  { value: '11 AM–12 PM', label: '11 AM–12 PM', fromH: 11, toH: 12 },
+  { value: '12 PM–1 PM',  label: '12 PM–1 PM',  fromH: 12, toH: 13 },
+  { value: '1 PM–2 PM',   label: '1 PM–2 PM',   fromH: 13, toH: 14 },
+  { value: '2 PM–3 PM',   label: '2 PM–3 PM',   fromH: 14, toH: 15 },
+  { value: '3 PM–4 PM',   label: '3 PM–4 PM',   fromH: 15, toH: 16 },
+  { value: '4 PM–5 PM',   label: '4 PM–5 PM',   fromH: 16, toH: 17 },
+  { value: '5 PM–6 PM',   label: '5 PM–6 PM',   fromH: 17, toH: 18 },
+  { value: '6 PM–7 PM',   label: '6 PM–7 PM',   fromH: 18, toH: 19 },
+  { value: AFTER_HOURS_SLOT, label: AFTER_HOURS_SLOT, fromH: -1, toH: -1 },
 ] as const;
 
+/*
+ * One slot option as the chip row consumes it. Widened from the `as const`
+ * literal types above so a legacy value can be appended at runtime.
+ */
+export type SlotChoice = { value: string; label: string; fromH: number; toH: number };
+
+/*
+ * slotChoicesFor — the option list a slot picker should render for a job that
+ * currently holds `currentValue`.
+ *
+ * THE COMPATIBILITY RULE: a value the control is given is ALWAYS rendered as an
+ * option (and therefore as the selected one), even when it is not one of the
+ * offered frames. Legacy jobs hold '9 AM – 12 PM' / 'Morning 9 to 2'; the
+ * WhatsApp flow may add frames we don't know about yet. Either way the operator
+ * must see what the job actually says instead of an unselected row.
+ */
+export function slotChoicesFor(currentValue: unknown): SlotChoice[] {
+  const base: SlotChoice[] = SLOTS.map((s) => ({
+    value: s.value, label: s.label, fromH: s.fromH, toH: s.toH,
+  }));
+  const current = String(currentValue ?? '').trim();
+  if (current && !base.some((s) => s.value === current)) {
+    // fromH -1 ⇒ selecting it never nudges the time picker (same treatment as
+    // 'After Hours'), because we can't know the window a legacy label meant.
+    base.push({ value: current, label: current, fromH: -1, toH: -1 });
+  }
+  return base;
+}
+
+/*
+ * Derive the 1-hour frame containing the picked hour. Out-of-window hours
+ * (before 9 AM / from 7 PM) fall into 'After Hours'. Derived FROM `SLOTS` so
+ * the banding can never drift from the offered chips.
+ */
 export function inferSlotFromTime(dtLocal: string): string | null {
   if (!dtLocal) return null;
   const m = dtLocal.match(/T(\d{2}):/);
   if (!m) return null;
   const h = Number(m[1]);
-  if (h >= 9 && h < 12)  return '9 AM – 12 PM';
-  if (h >= 12 && h < 15) return '12 PM – 3 PM';
-  if (h >= 15 && h < 19) return '3 PM – 7 PM';
-  return 'After Hours';
+  const hit = SLOTS.find((s) => s.fromH >= 0 && h >= s.fromH && h < s.toH);
+  return hit ? hit.value : AFTER_HOURS_SLOT;
 }
 
 /*

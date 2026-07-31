@@ -1,0 +1,865 @@
+'use client';
+
+/*
+ * QuickSight — Call Tracking report.
+ *
+ * Who called, for which job, at which step of the job, to whom, and for how
+ * long. Sourced from tbl_job_caller_info via
+ * POST /admin/quicksight/call-tracking/summary.
+ * Gated by ef-QuickSight (family) + isQuickSightCallTrackingView (per-report).
+ *
+ * TWO GRAINS behind gliding tabs, both riding on the ONE summary response so
+ * switching tabs is instant (no refetch, no spinner):
+ *
+ *   By Job   one row per JOB — the calls made for it, who made them, to whom,
+ *            and which lifecycle step each was made from.
+ *   By User  one row per (DAY × USER) — a caller's daily call log: volume,
+ *            how many distinct jobs it touched, and the job status most of
+ *            those calls were made at.
+ *
+ * ⚠ Job Status is TWO different facts in this report and they must not be
+ * conflated:
+ *   - the By Job row shows `currentJobStatus` — where the job is TODAY;
+ *   - every per-call chip (drill-down) shows `jobStatusAtCall` — the SNAPSHOT
+ *     taken when the call was placed, which is the whole point of "at which
+ *     step". A job called at Unconfirmed and later Completed must still show
+ *     Unconfirmed on that call.
+ * Both go through statusLabel(code, { assigned }) with the matching `assigned`
+ * flag for that same instant — status 0 is mislabelled without it.
+ *
+ * Filters: the shared client/vertical/service-category bar + the call-date
+ * window (defaults to TODAY, IST) + "Called By" (the tbl_user who MADE the
+ * call) + Provider + Party.
+ */
+
+import { useCallback, useMemo, useState } from 'react';
+import { PhoneCall } from 'lucide-react';
+
+import { useMe } from '@/lib/auth-context';
+import { actionFlags } from '@/lib/permissions';
+import { usePostFetch } from '@/lib/hooks';
+import { useLookup } from '@/lib/use-lookup';
+
+import { ReportPageScaffold } from '@/components/quicksight/ReportPageScaffold';
+import { QuickSightFilterBar } from '@/components/quicksight/QuickSightFilterBar';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { SearchMultiSelect } from '@/components/ui/search-multi-select';
+import { GlidingTabs } from '@/components/ui/gliding-tabs';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
+import { StatusChip } from '@/components/ui/StatusChip';
+import { statusLabel, statusTone } from '@/lib/utils';
+import { JobRefLink } from '@/components/job/JobRefLink';
+import { JobModalHost } from '@/components/job/JobModalHost';
+
+import { CallTrackingCharts } from './CallTrackingCharts';
+import { fmtSecs, fmtTalkTime } from './duration';
+
+const ACTION_KEY = 'isQuickSightCallTrackingView';
+const API_BASE = '/admin/quicksight/call-tracking';
+
+/* ── Wire types (the /summary contract) ──────────────────────────────── */
+
+/** WHO called — one entry per user who placed calls for this job. */
+type CallerBreak = { userId: number | null; userName: string; calls: number };
+/** TO WHOM — Customer / Alternate / Client SPOC / Technician / Other. */
+type PartyBreak = { role: string; calls: number };
+/** AT WHICH STEP — job status SNAPSHOT at the moment of the call. */
+type StepBreak = { status: number; label: string; calls: number };
+
+type JobRow = {
+  jobId: number;
+  clientName: string | null;
+  /** Where the job is TODAY — NOT where it was when the calls were made. */
+  currentJobStatus: number | null;
+  /** Whether the job has a technician TODAY — drives the status-0 sub-label. */
+  assigned: boolean;
+  calls: number; connected: number; connectRate: number;
+  totalDurationSecs: number; avgDurationSecs: number | null; maxDurationSecs: number | null;
+  callers: CallerBreak[];
+  parties: PartyBreak[];
+  steps: StepBreak[];
+  firstCallAt: string | null; lastCallAt: string | null;
+};
+
+type UserRow = {
+  /** 'YYYY-MM-DD' — the grain is one row per (day, user), not per user. */
+  day: string;
+  userId: number | null; userName: string;
+  calls: number; uniqueJobs: number;
+  connected: number; connectRate: number;
+  totalDurationSecs: number; avgDurationSecs: number | null;
+  /*
+   * "Majorly at which job status" — the modal job status across this row's
+   * calls. `topStatusLabel` is computed SERVER-side and is authoritative: the
+   * byUser grain carries no `assigned` flag, so statusLabel() here could not
+   * resolve the status-0 sub-label (Pending for Scheduling vs Pending App Ack).
+   * The label is rendered as-is; only the chip TONE is derived locally.
+   */
+  topStatus: number | null; topStatusLabel: string; topStatusCalls: number;
+  steps: StepBreak[];
+  parties: PartyBreak[];
+  firstCallAt: string | null; lastCallAt: string | null;
+};
+
+type DayRow = { day: string; calls: number; connected: number; uniqueJobs: number };
+
+type Totals = {
+  calls: number; uniqueJobs: number; uniqueCallers: number;
+  connected: number; connectRate: number;
+  totalDurationSecs: number; avgDurationSecs: number | null;
+};
+
+type CallTrackingData = {
+  totals: Totals;
+  byJob: JobRow[];
+  byUser: UserRow[];
+  byDay: DayRow[];
+};
+
+/* ── Filters ─────────────────────────────────────────────────────────── */
+
+type Provider = '' | 'plivo' | 'kaleyra';
+type PartyRole = '' | 'Customer' | 'Alternate' | 'Client SPOC' | 'Technician' | 'Other';
+
+type FilterBody = {
+  clientId: number[]; verticalId: number[]; serviceCategoryId: number[];
+  /** tbl_user ids — who MADE the call. */
+  callerId: number[];
+  dateFrom?: string; dateTo?: string;
+  provider?: Exclude<Provider, ''>;
+  partyRole?: Exclude<PartyRole, ''>;
+};
+
+const PARTY_ROLES: Array<Exclude<PartyRole, ''>> = ['Customer', 'Alternate', 'Client SPOC', 'Technician', 'Other'];
+
+const emptyFilter: FilterBody = { clientId: [], verticalId: [], serviceCategoryId: [], callerId: [] };
+
+function toNums(v: Array<string | number>): number[] {
+  return v.map((x) => (typeof x === 'number' ? x : Number(x))).filter((n) => Number.isFinite(n));
+}
+
+/*
+ * Timestamp as TWO non-breaking lines: date on the first, time on the second.
+ * A single string in a narrow column wraps wherever it likes ("29 Jul / 2026, /
+ * 02:58 / pm" — four lines and unreadable). Splitting it makes the break point
+ * OURS, and `whitespace-nowrap` on each half guarantees neither is ever broken
+ * mid-value; the table scrolls horizontally instead. Same idiom as the Offer
+ * Acceptance report.
+ */
+function DateTimeCell({ value, seconds }: { value: string | null; seconds?: boolean }) {
+  if (!value) return <span className="text-muted-foreground">—</span>;
+  const d = new Date(String(value).replace(' ', 'T'));
+  if (Number.isNaN(d.getTime())) return <span className="whitespace-nowrap">{String(value)}</span>;
+  const opts = { timeZone: 'Asia/Kolkata' } as const;
+  const date = d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', ...opts });
+  const time = d.toLocaleTimeString('en-IN', {
+    hour: '2-digit', minute: '2-digit', ...(seconds ? { second: '2-digit' } : {}), ...opts,
+  });
+  return (
+    <span className="inline-block">
+      <span className="block whitespace-nowrap">{date}</span>
+      <span className="block whitespace-nowrap text-muted-foreground">{time}</span>
+    </span>
+  );
+}
+
+/* 'YYYY-MM-DD' → "03 Jul 2026" on one line (the By User row's Date column). */
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function fmtDay(iso: string): string {
+  const [y, m, d] = iso.split('-');
+  const mi = Number(m) - 1;
+  return MONTHS[mi] ? `${d} ${MONTHS[mi]} ${y}` : iso;
+}
+
+/*
+ * A `label (n)` breakdown rendered ONE ENTRY PER LINE. A comma-joined string
+ * wraps mid-name ("Priyanka / Agarwal (4), / Harkirpa / Kaur (1)"), so each
+ * entry gets its own nowrap block instead.
+ */
+function BreakdownCell({ items }: { items: Array<{ key: string; text: string }> }) {
+  if (items.length === 0) return <span className="text-muted-foreground">—</span>;
+  return (
+    <>
+      {items.map((i) => (
+        <span key={i.key} className="block whitespace-nowrap">{i.text}</span>
+      ))}
+    </>
+  );
+}
+
+/* Which grain the table below the charts is showing. Purely client-side. */
+type Grain = 'job' | 'user';
+
+export default function CallTrackingPage() {
+  const { me } = useMe();
+  const canView = actionFlags(me, [ACTION_KEY])[ACTION_KEY];
+  const lookup = useLookup();
+  /*
+   * "Called By" picker superset = internal admin users (the people who place
+   * click-to-call calls from the CRM), reusing the existing auth-gated
+   * /shared/lookup/users list — no new BE lookup introduced.
+   */
+  const callerOpts = lookup.toOpts.adminUsers;
+
+  /*
+   * Default the call-date filter to TODAY (IST). en-CA in Asia/Kolkata yields
+   * 'YYYY-MM-DD', matching the filter's date format + the BE's IST day compare.
+   */
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+
+  // Draft (user edits) vs applied (live query).
+  const [clientId, setClientId] = useState<number[]>([]);
+  const [verticalId, setVerticalId] = useState<number[]>([]);
+  const [serviceCategoryId, setServiceCategoryId] = useState<number[]>([]);
+  const [callerId, setCallerId] = useState<number[]>([]);
+  const [dateFrom, setDateFrom] = useState(today);
+  const [dateTo, setDateTo] = useState(today);
+  const [provider, setProvider] = useState<Provider>('');
+  const [partyRole, setPartyRole] = useState<PartyRole>('');
+  // Seed the live query with today's range so the report loads scoped to TODAY
+  // by default (not the entire call history).
+  const [applied, setApplied] = useState<FilterBody>({ ...emptyFilter, dateFrom: today, dateTo: today });
+
+  const buildDraft = useCallback((): FilterBody => {
+    const body: FilterBody = { clientId, verticalId, serviceCategoryId, callerId };
+    if (dateFrom) body.dateFrom = dateFrom;
+    if (dateTo) body.dateTo = dateTo;
+    if (provider) body.provider = provider;
+    if (partyRole) body.partyRole = partyRole;
+    return body;
+  }, [clientId, verticalId, serviceCategoryId, callerId, dateFrom, dateTo, provider, partyRole]);
+
+  const summary = usePostFetch<CallTrackingData>(
+    canView ? `${API_BASE}/summary` : null,
+    applied,
+    { enabled: canView },
+  );
+
+  const data = summary.data;
+  const byJob = data?.byJob ?? [];
+  const byUser = data?.byUser ?? [];
+  const byDay = data?.byDay ?? [];
+  const totals = data?.totals;
+
+  const [tab, setTab] = useState<Grain>('job');
+  // Count drill-down: which CELL was clicked (a job, or a user's day).
+  const [drill, setDrill] = useState<Drill | null>(null);
+
+  const accessDenied = canView === false || summary.status === 403;
+  const isEmpty = !summary.loading && !summary.error && byJob.length === 0 && byUser.length === 0;
+
+  /*
+   * Table footers are summed from the ROWS ON SCREEN, not taken from `totals`.
+   * They differ on purpose:
+   *   - By Job excludes calls with no job attached, so totals.calls ≥ Σ rows;
+   *   - By User is a (day × user) grain, so Σ uniqueJobs double-counts a job
+   *     that two users called on two days — the distinct figure can only come
+   *     from totals.uniqueJobs.
+   * Percentages are recomputed from the summed counts, never averaged.
+   */
+  const jobFoot = useMemo(() => {
+    const calls = byJob.reduce((a, r) => a + r.calls, 0);
+    const connected = byJob.reduce((a, r) => a + r.connected, 0);
+    const secs = byJob.reduce((a, r) => a + r.totalDurationSecs, 0);
+    return { calls, connected, secs, rate: calls > 0 ? Math.round((connected / calls) * 100) : 0 };
+  }, [byJob]);
+
+  const userFoot = useMemo(() => {
+    const calls = byUser.reduce((a, r) => a + r.calls, 0);
+    const connected = byUser.reduce((a, r) => a + r.connected, 0);
+    const secs = byUser.reduce((a, r) => a + r.totalDurationSecs, 0);
+    return { calls, connected, secs, rate: calls > 0 ? Math.round((connected / calls) * 100) : 0 };
+  }, [byUser]);
+
+  const [downloading, setDownloading] = useState(false);
+  const onDownload = useCallback(async () => {
+    setDownloading(true);
+    try {
+      const base = process.env.NEXT_PUBLIC_API_URL || '/api';
+      const token = typeof window !== 'undefined' ? localStorage.getItem('crm_auth_token') : null;
+      const resp = await fetch(`${base}${API_BASE}/summary`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ ...applied, format: 'xlsx' }),
+        cache: 'no-store',
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'call-tracking.xlsx';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 500);
+    } catch {
+      /* busy state simply clears; keep the page chrome quiet */
+    } finally {
+      setDownloading(false);
+    }
+  }, [applied]);
+
+  function reset() {
+    setClientId([]); setVerticalId([]); setServiceCategoryId([]); setCallerId([]);
+    // Reset returns the call-date filter to its default (today), not blank.
+    setDateFrom(today); setDateTo(today); setProvider(''); setPartyRole('');
+    setApplied({ ...emptyFilter, dateFrom: today, dateTo: today });
+  }
+
+  return (
+    <ReportPageScaffold
+      title="Call Tracking"
+      subtitle="Every call placed from the CRM — who called, for which job, at which step, to whom, and for how long."
+      icon={PhoneCall}
+      loading={summary.loading}
+      error={summary.status === 403 ? null : summary.error}
+      accessDenied={accessDenied}
+      isEmpty={isEmpty}
+      onDownload={onDownload}
+      downloading={downloading}
+      filters={
+        <div className="space-y-3">
+          <QuickSightFilterBar
+            show={{ clients: true, verticals: true, serviceCategories: true }}
+            clients={clientId}
+            onClientsChange={(v) => setClientId(toNums(v))}
+            verticals={verticalId}
+            onVerticalsChange={(v) => setVerticalId(toNums(v))}
+            serviceCategories={serviceCategoryId}
+            onServiceCategoriesChange={(v) => setServiceCategoryId(toNums(v))}
+            disabled={summary.loading}
+          />
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Called By</label>
+              <SearchMultiSelect
+                value={callerId}
+                onChange={(v) => setCallerId(toNums(v))}
+                options={callerOpts}
+                placeholder="All Users"
+                selectedLabel="users"
+                disabled={summary.loading}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Called From</label>
+              <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} disabled={summary.loading} />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Called To</label>
+              <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} disabled={summary.loading} />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Provider</label>
+              <select
+                value={provider}
+                onChange={(e) => setProvider(e.target.value as Provider)}
+                disabled={summary.loading}
+                className="w-full h-9 rounded-md border bg-background px-2 text-sm"
+              >
+                <option value="">All Providers</option>
+                <option value="plivo">Plivo</option>
+                <option value="kaleyra">Kaleyra</option>
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Party (To Whom)</label>
+              <select
+                value={partyRole}
+                onChange={(e) => setPartyRole(e.target.value as PartyRole)}
+                disabled={summary.loading}
+                className="w-full h-9 rounded-md border bg-background px-2 text-sm"
+              >
+                <option value="">All Parties</option>
+                {PARTY_ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Button onClick={() => setApplied(buildDraft())} disabled={summary.loading}>Filter</Button>
+            <Button variant="outline" onClick={reset} disabled={summary.loading}>Reset</Button>
+          </div>
+        </div>
+      }
+    >
+      {/* KPI tiles + charts (Graphical View). */}
+      <CallTrackingCharts totals={totals} byDay={byDay} byUser={byUser} />
+
+      {/*
+        * Grain tabs — the SAME call set sliced two ways. One response feeds
+        * both, so switching is instant. Chip counts are ROW counts (jobs /
+        * user-days), not call counts.
+        */}
+      <div className="mt-4">
+        <GlidingTabs
+          ariaLabel="Call Tracking Breakdown"
+          value={tab}
+          onChange={(v) => setTab(v as Grain)}
+          tabs={[
+            { value: 'job',  label: 'By Job',  count: byJob.length },
+            { value: 'user', label: 'By User', count: byUser.length },
+          ]}
+        />
+      </div>
+
+      {/* ── Tab 1: By Job ─────────────────────────────────────────────── */}
+      {tab === 'job' && (
+        <div className="overflow-x-auto rounded-md border border-border mt-4">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th className="!text-left">Job #</th>
+                <th className="!text-left">Client</th>
+                {/* "Job Status", not "Status" — this row also carries per-call
+                    step snapshots, so a bare "Status" would read ambiguously. */}
+                <th className="!text-center" title="Where the JOB is now — distinct from the At Which Step column, which is the status when each call was made">Job Status</th>
+                <th className="!text-center">Calls</th>
+                <th className="!text-center" title="Calls that actually connected, and that share of all calls">Connected</th>
+                <th className="!text-center">Total Duration</th>
+                <th className="!text-center">Avg Duration</th>
+                <th className="!text-left" title="Who placed the calls, and how many each">Called By</th>
+                <th className="!text-left" title="Who was on the other end — Customer, Alternate, Client SPOC, Technician or Other">To Whom</th>
+                <th className="!text-left" title="The job status SNAPSHOT at the moment of each call — where in the lifecycle the calls were made from">At Which Step</th>
+                <th className="!text-center">First Call</th>
+                <th className="!text-center">Last Call</th>
+              </tr>
+            </thead>
+            <tbody>
+              {byJob.map((j) => (
+                <tr key={j.jobId}>
+                  <td className="!text-left font-medium">
+                    {/* Opens the JobModal in place (JobModalHost below) — closing
+                        returns here, not to Manage Jobs. Link stays shareable. */}
+                    <JobRefLink jobId={j.jobId} />
+                  </td>
+                  <td className="!text-left whitespace-nowrap" title={j.clientName ?? ''}>
+                    {j.clientName ?? <span className="text-muted-foreground">—</span>}
+                  </td>
+                  <td className="!text-center">
+                    {j.currentJobStatus == null
+                      ? <span className="text-muted-foreground">—</span>
+                      : (
+                        <StatusChip tone={statusTone(j.currentJobStatus)}>
+                          {statusLabel(j.currentJobStatus, { assigned: j.assigned })}
+                        </StatusChip>
+                      )}
+                  </td>
+                  <td className="!text-center">
+                    <CountLink
+                      n={j.calls}
+                      title="Show the individual calls behind this number"
+                      onClick={() => setDrill({ jobId: j.jobId, label: `Job #${j.jobId}` })}
+                    />
+                  </td>
+                  <td className="!text-center">
+                    <span className="text-emerald-700">{j.connected}</span>
+                    <span className="ml-1 text-[10px] text-muted-foreground">({j.connectRate}%)</span>
+                  </td>
+                  <td className="!text-center tabular-nums">{fmtTalkTime(j.totalDurationSecs)}</td>
+                  <td
+                    className="!text-center tabular-nums"
+                    title={`Longest Call: ${fmtSecs(j.maxDurationSecs)}`}
+                  >
+                    {fmtSecs(j.avgDurationSecs)}
+                  </td>
+                  <td className="!text-left text-xs">
+                    <BreakdownCell
+                      items={j.callers.map((c) => ({
+                        key: String(c.userId ?? c.userName),
+                        text: `${c.userName} (${c.calls})`,
+                      }))}
+                    />
+                  </td>
+                  <td className="!text-left text-xs">
+                    <BreakdownCell items={j.parties.map((p) => ({ key: p.role, text: `${p.role} (${p.calls})` }))} />
+                  </td>
+                  <td className="!text-left text-xs">
+                    {/*
+                      * Keyed on the LABEL, not the status code: the BE folds
+                      * steps by label while keeping the code, so status 0
+                      * legitimately yields TWO entries (Pending for Scheduling
+                      * and Pending App Ack) that both carry status 0. The label
+                      * is the value that fold makes unique.
+                      */}
+                    <BreakdownCell items={j.steps.map((s) => ({ key: s.label, text: `${s.label} (${s.calls})` }))} />
+                  </td>
+                  <td className="!text-center text-xs"><DateTimeCell value={j.firstCallAt} /></td>
+                  <td className="!text-center text-xs"><DateTimeCell value={j.lastCallAt} /></td>
+                </tr>
+              ))}
+              {byJob.length === 0 && (
+                <tr><td colSpan={12} className="!text-center text-muted-foreground py-6">No Calls In This Window.</td></tr>
+              )}
+            </tbody>
+            {byJob.length > 0 && (
+              <tfoot>
+                <tr className="bg-muted/60 font-semibold">
+                  <td className="!text-left" colSpan={3}>Total</td>
+                  <td
+                    className="!text-center"
+                    title={
+                      totals && totals.calls !== jobFoot.calls
+                        ? `${totals.calls} calls in this window — ${totals.calls - jobFoot.calls} of them are not linked to a job, so they have no row here.`
+                        : undefined
+                    }
+                  >
+                    {jobFoot.calls}
+                  </td>
+                  <td className="!text-center">
+                    {jobFoot.connected}
+                    <span className="ml-1 text-[10px] font-normal text-muted-foreground">({jobFoot.rate}%)</span>
+                  </td>
+                  <td className="!text-center tabular-nums">{fmtTalkTime(jobFoot.secs)}</td>
+                  {/*
+                    * Averaged over CONNECTED calls, matching the rows above —
+                    * the BE's avgDurationSecs is AVG(duration) over duration > 0
+                    * only. Dividing by ALL calls reported a different metric
+                    * under the same header, and printed 0:00 for a window where
+                    * nothing connected (every row shows '—' there).
+                    */}
+                  <td className="!text-center tabular-nums">
+                    {fmtSecs(jobFoot.connected > 0 ? jobFoot.secs / jobFoot.connected : null)}
+                  </td>
+                  <td colSpan={5} />
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      )}
+
+      {/* ── Tab 2: By User (one row per day × user) ───────────────────── */}
+      {tab === 'user' && (
+        <div className="overflow-x-auto rounded-md border border-border mt-4">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th className="!text-left">Date</th>
+                <th className="!text-left">User</th>
+                <th className="!text-center">Calls</th>
+                <th className="!text-center" title="Distinct jobs this user called about on this day">Unique Jobs</th>
+                <th className="!text-center">Connected</th>
+                <th className="!text-center">Connect %</th>
+                <th className="!text-center">Total Duration</th>
+                <th className="!text-center">Avg Duration</th>
+                <th className="!text-center" title="The job status most of this day's calls were made at — hover the cell for the full step breakdown">Majority Job Status</th>
+                <th className="!text-left" title="Who was on the other end — Customer, Alternate, Client SPOC, Technician or Other">To Whom</th>
+                <th className="!text-center">First Call</th>
+                <th className="!text-center">Last Call</th>
+              </tr>
+            </thead>
+            <tbody>
+              {byUser.map((r) => (
+                <tr key={`${r.day}-${r.userId ?? r.userName}`}>
+                  {/* Date on ONE line — it is an identifier, not prose. */}
+                  <td className="!text-left whitespace-nowrap">{fmtDay(r.day)}</td>
+                  <td className="!text-left font-medium whitespace-nowrap">
+                    {r.userName}
+                    {r.userId != null && <span className="ml-1 text-[10px] text-muted-foreground">#{r.userId}</span>}
+                  </td>
+                  <td className="!text-center">
+                    {/*
+                      * Drill needs BOTH halves of the grain (day + caller). A row
+                      * with no resolvable caller can't be selected by id, and
+                      * drilling on the day alone would return every user's calls —
+                      * a number that wouldn't match the cell. So it stays plain.
+                      */}
+                    {r.userId == null ? (
+                      <span title="These calls have no caller recorded, so they can't be isolated in a drill-down.">{r.calls}</span>
+                    ) : (
+                      <CountLink
+                        n={r.calls}
+                        title="Show the individual calls behind this number"
+                        onClick={() => setDrill({
+                          day: r.day,
+                          callerId: r.userId ?? undefined,
+                          label: `${r.userName} · ${fmtDay(r.day)}`,
+                        })}
+                      />
+                    )}
+                  </td>
+                  <td className="!text-center">{r.uniqueJobs}</td>
+                  <td className="!text-center text-emerald-700">{r.connected}</td>
+                  <td className="!text-center font-medium">{r.connectRate}%</td>
+                  <td className="!text-center tabular-nums">{fmtTalkTime(r.totalDurationSecs)}</td>
+                  <td className="!text-center tabular-nums">{fmtSecs(r.avgDurationSecs)}</td>
+                  <td
+                    className="!text-center"
+                    /* Full step breakdown in the tooltip — the majority status is
+                       a summary of it, and a second column would bloat the row. */
+                    title={r.steps.map((s) => `${s.label} (${s.calls})`).join(', ')}
+                  >
+                    {/*
+                      * Gated on the LABEL, which is the server-authoritative
+                      * value (see the UserRow note above). topStatus is null
+                      * whenever the majority bucket's at-call snapshot was NULL
+                      * — the BE still labels that bucket 'Unknown', so gating on
+                      * the code threw away an answer the report does have (and
+                      * its call count with it). Tone falls back to slate.
+                      */}
+                    {!r.topStatusLabel ? (
+                      <span className="text-muted-foreground">—</span>
+                    ) : (
+                      <>
+                        <StatusChip tone={r.topStatus == null ? 'slate' : statusTone(r.topStatus)}>
+                          {r.topStatusLabel}
+                        </StatusChip>
+                        <span className="ml-1 text-[10px] text-muted-foreground">({r.topStatusCalls})</span>
+                      </>
+                    )}
+                  </td>
+                  <td className="!text-left text-xs">
+                    <BreakdownCell items={r.parties.map((p) => ({ key: p.role, text: `${p.role} (${p.calls})` }))} />
+                  </td>
+                  <td className="!text-center text-xs"><DateTimeCell value={r.firstCallAt} /></td>
+                  <td className="!text-center text-xs"><DateTimeCell value={r.lastCallAt} /></td>
+                </tr>
+              ))}
+              {byUser.length === 0 && (
+                <tr><td colSpan={12} className="!text-center text-muted-foreground py-6">No Calls In This Window.</td></tr>
+              )}
+            </tbody>
+            {byUser.length > 0 && (
+              <tfoot>
+                <tr className="bg-muted/60 font-semibold">
+                  <td className="!text-left" colSpan={2}>Total</td>
+                  <td className="!text-center">{userFoot.calls}</td>
+                  {/* NOT the column sum — a job called by two users on two days
+                      appears in both rows. Only totals.uniqueJobs is distinct. */}
+                  <td
+                    className="!text-center"
+                    title="Distinct jobs across the whole window — deliberately not the sum of the column, which double-counts a job called by more than one user or on more than one day."
+                  >
+                    {totals?.uniqueJobs ?? '—'}
+                  </td>
+                  <td className="!text-center">{userFoot.connected}</td>
+                  <td className="!text-center">{userFoot.rate}%</td>
+                  <td className="!text-center tabular-nums">{fmtTalkTime(userFoot.secs)}</td>
+                  {/* Connected-only denominator — same reason as the By Job footer. */}
+                  <td className="!text-center tabular-nums">
+                    {fmtSecs(userFoot.connected > 0 ? userFoot.secs / userFoot.connected : null)}
+                  </td>
+                  <td colSpan={4} />
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      )}
+
+      <CallDrilldownDialog drill={drill} filters={applied} onClose={() => setDrill(null)} />
+
+      {/* Hosts the in-place job workspace for every <JobRefLink> on this page. */}
+      <JobModalHost />
+    </ReportPageScaffold>
+  );
+}
+
+/*
+ * A count rendered as a button when there is something to show. Zero stays
+ * plain text — a clickable 0 that opens an empty list is a dead end.
+ */
+function CountLink({ n, tone, title, onClick }: { n: number; tone?: string; title?: string; onClick: () => void }) {
+  if (!n) return <span className={tone}>{n}</span>;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`underline decoration-dotted underline-offset-2 hover:decoration-solid ${tone ?? ''}`}
+      title={title}
+    >
+      {n}
+    </button>
+  );
+}
+
+/* ── Drill-down: the individual calls behind a clicked count ─────────── */
+
+/*
+ * Posts to the report's own /calls endpoint with the SAME filters as the summary
+ * plus the clicked selection, so the rows returned are exactly the ones that
+ * produced the number. That filter fidelity is why this does NOT reuse the job's
+ * generic call-history endpoint — that answers "every call on this job, ever",
+ * which would show rows outside the report's window and make the count look wrong.
+ *
+ * Fetch-on-click rather than inlining details in the summary: the report can
+ * return thousands of rows, and shipping every row's call list would multiply the
+ * payload for data almost none of which is opened.
+ */
+type Drill = {
+  jobId?: number;
+  /** tbl_user id of the caller (By User tab). */
+  callerId?: number;
+  /** 'YYYY-MM-DD' — pairs with callerId to pin the (day × user) grain. */
+  day?: string;
+  /** Row identity for the dialog title — "Job #N" or "Name · 03 Jul 2026". */
+  label: string;
+};
+
+type CallDetail = {
+  /** tbl_job_caller_info.job_caller_info */
+  id: number;
+  jobId: number | null;
+  callAt: string | null;
+  callerUserId: number | null; callerName: string;
+  receiverName: string | null; partyRole: string;
+  /** The SNAPSHOT — job status when the call was placed, not today's status. */
+  jobStatusAtCall: number | null; assignedAtCall: boolean;
+  durationSecs: number | null; connected: boolean;
+  provider: string | null; callerStatus: string | null;
+  recordingAvailable: boolean;
+};
+
+/** The clicked selection's identity — the remount key for the body below. */
+function drillKey(d: Drill): string {
+  return `${d.jobId ?? ''}|${d.callerId ?? ''}|${d.day ?? ''}`;
+}
+
+function CallDrilldownDialog({ drill, filters, onClose }: {
+  drill: Drill | null;
+  filters: FilterBody;
+  onClose: () => void;
+}) {
+  /*
+   * Read-only dialog → isDirty:false so the shared guard closes immediately
+   * instead of asking "discard changes?" on a panel with no input. Routed
+   * through the guard anyway — that is the project-wide <Dialog> contract.
+   */
+  const guardedOpenChange = useFormDirtyGuard(onClose, { isDirty: false });
+
+  return (
+    <Dialog open={drill != null} onOpenChange={guardedOpenChange}>
+      <DialogContent className="max-w-5xl">
+        <DialogHeader>
+          <DialogTitle>{drill ? `Calls · ${drill.label}` : ''}</DialogTitle>
+        </DialogHeader>
+        {/*
+          * The fetch lives in a child that is MOUNTED PER SELECTION and keyed by
+          * it, so its hook state can never outlive the cell it belongs to.
+          * usePostFetch deliberately KEEPS the previous response's rows when its
+          * key changes (and reports loading:false because data != null) — with
+          * one long-lived hook here, re-opening on another cell rendered the
+          * PREVIOUS cell's calls, and its "most recent calls only" banner, under
+          * the new cell's title until the new POST resolved. A fresh mount starts
+          * at data:null, so the Loading… line always belongs to what was clicked.
+          */}
+        {drill && (
+          <CallDrilldownBody key={drillKey(drill)} drill={drill} filters={filters} onClose={onClose} />
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function CallDrilldownBody({ drill, filters, onClose }: {
+  drill: Drill;
+  filters: FilterBody;
+  onClose: () => void;
+}) {
+  /*
+   * The POST body IS the cache key for usePostFetch, so it must be stable —
+   * an inline object literal would refetch on every render.
+   */
+  const body = useMemo(() => ({
+    ...filters,
+    jobId: drill.jobId,
+    selectedCallerId: drill.callerId,
+    day: drill.day,
+  }), [drill, filters]);
+
+  const detail = usePostFetch<{ items: CallDetail[]; capped: boolean }>(
+    `${API_BASE}/calls`,
+    body,
+  );
+  const items = detail.data?.items ?? null;
+
+  return (
+    <>
+      {detail.error && <p className="text-sm text-rose-700">{String(detail.error)}</p>}
+      {!detail.error && items === null && (
+        <p className="py-6 text-center text-sm text-muted-foreground">Loading…</p>
+      )}
+      {!detail.error && items !== null && (
+        <>
+          {detail.data?.capped && (
+            <p className="mb-2 text-xs text-amber-700">
+              Showing the most recent calls only — narrow the filters to see the rest.
+            </p>
+          )}
+          <div className="max-h-[60vh] overflow-auto rounded-md border border-border">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th className="!text-center">Called At</th>
+                  <th className="!text-left">Job #</th>
+                  <th className="!text-left">Called By</th>
+                  <th className="!text-left">To Whom</th>
+                  {/* The SNAPSHOT status, which is the reason this drill-down
+                      exists — see the page header note. */}
+                  <th className="!text-center" title="The job status at the MOMENT of this call — the job may have moved on since">Job Status At Call</th>
+                  <th className="!text-center">Duration</th>
+                  <th className="!text-center">Outcome</th>
+                  <th className="!text-left">Provider</th>
+                  <th className="!text-center" title="Whether a call recording was captured for this call">Recording</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((c) => (
+                  <tr key={c.id}>
+                    <td className="!text-center text-xs"><DateTimeCell value={c.callAt} seconds /></td>
+                    <td className="!text-left font-medium">
+                      {/* Close this drill-down first, then open the job in
+                          place — one modal at a time (beforeOpen). */}
+                      {c.jobId == null
+                        ? <span className="text-muted-foreground">—</span>
+                        : <JobRefLink jobId={c.jobId} beforeOpen={onClose} />}
+                    </td>
+                    <td className="!text-left whitespace-nowrap">
+                      {c.callerName}
+                      {c.callerUserId != null && (
+                        <span className="ml-1 text-[10px] text-muted-foreground">#{c.callerUserId}</span>
+                      )}
+                    </td>
+                    <td className="!text-left whitespace-nowrap">
+                      <span className="block whitespace-nowrap">
+                        {c.receiverName || <span className="text-muted-foreground">—</span>}
+                      </span>
+                      <span className="block whitespace-nowrap text-[10px] text-muted-foreground">{c.partyRole}</span>
+                    </td>
+                    <td className="!text-center">
+                      {c.jobStatusAtCall == null
+                        ? <span className="text-muted-foreground">—</span>
+                        : (
+                          <StatusChip tone={statusTone(c.jobStatusAtCall)}>
+                            {statusLabel(c.jobStatusAtCall, { assigned: c.assignedAtCall })}
+                          </StatusChip>
+                        )}
+                    </td>
+                    <td className="!text-center tabular-nums">{fmtSecs(c.durationSecs)}</td>
+                    <td className="!text-center">
+                      <StatusChip tone={c.connected ? 'emerald' : 'slate'} size="sm" title={c.callerStatus ?? undefined}>
+                        {c.connected ? 'Connected' : 'Not Connected'}
+                      </StatusChip>
+                    </td>
+                    <td className="!text-left whitespace-nowrap">
+                      {c.provider || <span className="text-muted-foreground">—</span>}
+                    </td>
+                    <td className="!text-center text-xs">
+                      {c.recordingAvailable
+                        ? <span className="text-emerald-700">Yes</span>
+                        : <span className="text-muted-foreground">No</span>}
+                    </td>
+                  </tr>
+                ))}
+                {items.length === 0 && (
+                  <tr><td colSpan={9} className="!text-center text-muted-foreground py-6">No Calls In This Selection.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </>
+  );
+}

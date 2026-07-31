@@ -18,6 +18,7 @@ import { ArrowLeft, AlertTriangle, User, Phone, Mail, MapPin, Briefcase } from '
 import { Card, CardContent } from '@/components/ui/card';
 import { useFetchOnce, useFetch } from '@/lib/hooks';
 import { formatDate, statusLabel } from '@/lib/utils';
+import { formatJobAge, jobAgeTitle, type JobAgeFields } from '@/lib/job-age';
 import { CallableMobile } from '@/components/calls/CallButton';
 
 type Address = {
@@ -42,7 +43,7 @@ type CustomerDetail = {
   addresses: Address[];
 };
 
-type JobRow = {
+type JobRow = JobAgeFields & {
   job_id: number;
   job_reference_id: string | null;
   client_ref_id: string | null;
@@ -175,7 +176,10 @@ export default function CustomerDetailPage() {
               <table className="data-table w-full">
                 <thead>
                   <tr>
-                    <th>Job</th><th>Reference</th><th>Status</th>
+                    {/* Age — same shared reading as every other job surface
+                        (lib/job-age.ts). Not sortable: this panel renders one
+                        un-paginated fetch and carries no sort state. */}
+                    <th>Job</th><th className="w-16">Age</th><th>Reference</th><th>Status</th>
                     <th>Client</th><th>Easyfixer</th><th>Scheduled</th>
                   </tr>
                 </thead>
@@ -187,6 +191,7 @@ export default function CustomerDetailPage() {
                           #{j.job_id}
                         </Link>
                       </td>
+                      <td className="text-xs whitespace-nowrap tabular-nums" title={jobAgeTitle(j)}>{formatJobAge(j)}</td>
                       <td className="font-mono text-xs">{j.job_reference_id || j.client_ref_id || '—'}</td>
                       <td>
                         <span className="badge bg-slate-100 text-slate-700">{statusLabel(j.job_status, { assigned: j.fk_easyfixter_id != null })}</span>

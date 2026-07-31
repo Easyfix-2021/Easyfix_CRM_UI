@@ -99,7 +99,21 @@ export type JobContextData = {
   job_type?: string | null;
   payment_mode?: string | null;
   requested_date_time?: string | null;
-  /** Legacy "H AM - H PM" cut-off window — shown as the read-only Time Slot. */
+  /**
+   * The LIVE appointment window (tbl_job.time_slot) — what the Time Slot field
+   * shows. This is the column every current write path maintains: the Confirm
+   * & Schedule modal, `reschedule()`, and the WhatsApp confirmation flow
+   * (whatsapp-conversation.service finaliseConfirmed → jml.writeCustomerOrderDetails)
+   * all write it.
+   */
+  time_slot?: string | null;
+  /**
+   * Legacy "H AM - H PM" cut-off window — a DERIVED companion column, and only
+   * a FALLBACK for display. The WhatsApp confirmation flow never writes it, so
+   * reading it alone showed "—" for a chat-confirmed job that had no cut-off
+   * stamped at create, and — worse — kept showing the PRE-reschedule window
+   * next to the new appointment hour after a chat reschedule.
+   */
   booking_cut_off_time_slot?: string | null;
   job_desc?: string | null;
   /** Technician-facing note ("Anything Handyman should keep in mind?") — shown as Additional Comments. */
@@ -134,6 +148,7 @@ export function JobContextPanel({
   showReschedule = false,
   onReschedule,
   rescheduling = false,
+  pastBlocksAction = false,
 }: {
   job: JobContextData | null;
   jobId: number | null;
@@ -148,6 +163,17 @@ export function JobContextPanel({
   onReschedule?: () => void;
   /** Schedule & Assign only — veils the schedule row while a reschedule refetch runs. */
   rescheduling?: boolean;
+  /*
+   * Does a PAST appointment actually block this host modal's primary action?
+   * true  → offering (the server 400s), so the notice is red + imperative.
+   * false → assign / reassign, which the server permits on purpose, so the
+   *         notice is an amber advisory instead of an instruction the operator
+   *         does not have to follow.
+   * Defaults to false: an advisory shown where a block applies is a smaller
+   * error than a block claimed where none exists (which is what produced the
+   * "message says stop, button says go" report).
+   */
+  pastBlocksAction?: boolean;
 }) {
   // Job Details is collapsible but starts EXPANDED — ops read it on nearly every
   // open; collapsing is for reclaiming height once they've moved on to picking a
@@ -356,7 +382,9 @@ export function JobContextPanel({
 
             {/* READ-ONLY schedule row — Date/Time are locked; change only via
                 the Reschedule dialog (Schedule & Assign). Time Slot shows the
-                stored booking_cut_off_time_slot (the customer's booked window). */}
+                LIVE `time_slot` (the window the customer actually holds), and
+                falls back to the derived legacy `booking_cut_off_time_slot`
+                only for old rows that never had `time_slot` populated. */}
             <div className="mt-3 pt-3 border-t">
               <div className="flex flex-wrap items-end justify-between gap-3">
                 <div className="flex flex-wrap gap-x-8 gap-y-2">
@@ -379,7 +407,7 @@ export function JobContextPanel({
                     <div className="text-sm font-medium text-foreground">
                       {rescheduling
                         ? <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> Updating…</span>
-                        : (job.booking_cut_off_time_slot || '—')}
+                        : (job.time_slot || job.booking_cut_off_time_slot || '—')}
                     </div>
                   </div>
                 </div>
@@ -400,16 +428,34 @@ export function JobContextPanel({
                 )}
               </div>
               {/*
-                * Past-appointment notice. The server refuses to OFFER a job
-                * whose slot has already gone (routes/admin/jobs.js), so say so
-                * next to the Reschedule button — the exact action required —
-                * rather than letting ops pick technicians and meet a 400.
+                * Past-appointment notice — WORDED BY WHAT THE HOST MODAL CAN DO.
+                *
+                * The server refuses to OFFER a job whose slot has gone
+                * (routes/admin/jobs.js) but deliberately still permits a direct
+                * ASSIGN / REASSIGN: swapping the technician on a job that is
+                * already running late is a legitimate recovery, and the assign
+                * route is exempt from the gate on purpose.
+                *
+                * So a single blocking sentence was wrong half the time. In
+                * Reassign it told the operator to reschedule "before offering
+                * the job to technicians" while the Reassign button — correctly —
+                * stayed enabled, which read as a contradiction. Blocking copy
+                * now renders only where the action is actually blocked; the
+                * assign/reassign surfaces get the same FACT as a non-blocking
+                * advisory.
                 */}
               {!rescheduling && appointmentIsPast(job.requested_date_time) && (
-                <p className="mt-2 text-[11px] font-medium text-red-700">
-                  This appointment time has already passed. Reschedule it to a future
-                  slot before offering the job to technicians.
-                </p>
+                pastBlocksAction ? (
+                  <p className="mt-2 text-[11px] font-medium text-red-700">
+                    This appointment time has already passed. Reschedule it to a future
+                    slot before offering the job to technicians.
+                  </p>
+                ) : (
+                  <p className="mt-2 text-[11px] font-medium text-amber-700">
+                    This appointment time has already passed. You can still reassign,
+                    or use Reschedule to move it to a future slot.
+                  </p>
+                )
               )}
               {showReschedule && (
                 <p className="mt-2 text-[11px] text-muted-foreground">

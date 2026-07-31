@@ -11,13 +11,41 @@
  * Kept as a separate component so the parent modal doesn't balloon. The
  * date range is owned by the parent and threaded in via props so both
  * tabs share the operator's chosen window.
+ *
+ * PAGINATION (2026-07-30): this used to pull ONE window of up to 200 rows and
+ * filter it in memory, so the endpoint's Joi cap was a functional ceiling — a
+ * busy day past 200 calls was simply unreachable without shrinking the date
+ * range. It now drives the endpoint's real server-side pagination (page +
+ * limit, `total` off the response) through the shared <TablePagination>, the
+ * same wiring Settings → Call Analytics uses against this very endpoint.
+ *
+ * Two consequences of that, both deliberate:
+ *
+ *  1. The fetch moved from a hand-rolled `useEffect` + `api.get` to the shared
+ *     `useFetch` hook keyed on the query string (the mandatory pattern — see
+ *     lib/hooks.ts). Paging keeps the previous rows mounted (`refreshing`, not
+ *     `loading`), so stepping through pages doesn't flash a "Loading…" panel.
+ *
+ *  2. The free-text box is now explicitly a PAGE filter, not a search. GET
+ *     /admin/calls has no free-text parameter to push it to: its filters are
+ *     jobId / customerId / mobile / flow / callerId / hasAnalysis / minScore
+ *     (validators/calls.validator.js → callListQuery), and `mobile` only
+ *     matches a COMPLETE 10-digit number (the route drops anything shorter,
+ *     silently) — which an operator can't even type here, because the Customer
+ *     Mobile column is masked. Names, statuses and unique_ids — the things this
+ *     box actually matches — are not searchable server-side at all. So it stays
+ *     client-side and SAYS SO ("Filter This Page"): a box labelled "Search"
+ *     that quietly covered only 1 page of N would be a lie. Reach for the range
+ *     + page size to widen what's on screen, then filter it.
  */
 
 import * as React from 'react';
-import { Phone, Search, PlayCircle } from 'lucide-react';
+import { Phone, Filter, PlayCircle } from 'lucide-react';
 import { Input } from '@/components/ui/input';
-import { api, ApiError } from '@/lib/api';
+import { InfoTooltip } from '@/components/ui/tooltip';
+import { useFetch } from '@/lib/hooks';
 import { maskMobile } from '@/lib/format';
+import { TablePagination, PAGE_SIZE_OPTIONS, pageSizeToLimit, type TablePageSize } from '@/components/ui/table-pagination';
 
 type CallRow = {
   id: number;
@@ -45,6 +73,28 @@ type CallRow = {
 
 type ListResp = { total: number; page: number; limit: number; items: CallRow[] };
 
+// BE Joi cap on GET /admin/calls `limit` is 200 (validators/calls.validator.js
+// → callListQuery). It is handed to `pageSizeToLimit` as that helper's explicit
+// `maxLimit` so the page-size selector's "All" option maps to 200 rather than
+// the helper's 1000 default — 1000 on this endpoint is a hard 400 ("limit must
+// be less than or equal to 200"), not a silent clamp. Raise this ONLY together
+// with the Joi max.
+const CALL_LIST_LIMIT_CAP = 200;
+
+/*
+ * Page sizes offered here — deliberately WITHOUT "All".
+ *
+ * "All" cannot tell the truth on this endpoint. It maps to limit=200 (the Joi
+ * cap), but <TablePagination> renders 'all' as ONE page: the footer reads
+ * "Showing 1–<total> of <total>" with every nav control disabled. On a range of
+ * 5,000 calls that claims 5,000 rows are on screen when 200 are, contradicts the
+ * cap notice, AND leaves rows 201+ unreachable — the operator has to change page
+ * size to escape. 10/20/50 page through the whole range honestly, so "All" was
+ * strictly worse than every other option. Never raise a size above
+ * CALL_LIST_LIMIT_CAP: the BE returns a hard 400, not a silent clamp.
+ */
+const CALL_PAGE_SIZE_OPTIONS = PAGE_SIZE_OPTIONS.filter((o) => o.value !== 'all');
+
 function fmtDateTime(v: string | null | undefined): string {
   if (!v) return '—';
   const d = new Date(v);
@@ -69,44 +119,55 @@ function fmtDuration(sec: number | null): string {
 }
 
 export function ClickToCallTab({ from, to }: { from: string; to: string }) {
-  const [rows, setRows] = React.useState<CallRow[] | null>(null);
-  const [loading, setLoading] = React.useState(false);
-  const [err, setErr] = React.useState<string | null>(null);
-  const [search, setSearch] = React.useState<string>('');
+  // 0-indexed page + shared page-size sentinel, exactly as Settings → Call
+  // Analytics drives this same endpoint. The backend list is 1-indexed, so the
+  // query sends `page + 1`.
+  const [page, setPage] = React.useState(0);
+  const [pageSize, setPageSize] = React.useState<TablePageSize>(20);
+  // Client-side filter over the CURRENT PAGE only — see the header comment for
+  // why it can't be pushed to the server, and the label that says so.
+  const [pageFilter, setPageFilter] = React.useState<string>('');
 
+  // A changed date window is a different dataset: go back to page 1 and drop a
+  // filter that was typed against the old rows. State-only effect — the fetch
+  // itself is declarative (the `useFetch` key below), so nothing here fires a
+  // request.
   React.useEffect(() => {
-    if (!from || !to) return;
-    let cancelled = false;
-    (async () => {
-      setLoading(true); setErr(null); setSearch('');
-      try {
-        // The backend treats dateTo as an exclusive upper bound (< ?),
-        // so push the picker's end-of-day forward by one day to make
-        // the range inclusive of `to`.
-        const toExclusive = new Date(to);
-        toExclusive.setDate(toExclusive.getDate() + 1);
-        const toStr = toExclusive.toISOString().slice(0, 10);
-        const resp = await api.get<ListResp>('/admin/calls', {
-          dateFrom: from,
-          dateTo:   toStr,
-          limit:    500,
-        });
-        if (cancelled) return;
-        setRows(resp.items || []);
-      } catch (e) {
-        if (cancelled) return;
-        setErr(e instanceof ApiError ? e.message : 'Failed to load click-to-call history');
-        setRows([]);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
+    setPage(0);
+    setPageFilter('');
   }, [from, to]);
+
+  const limit = pageSizeToLimit(pageSize, CALL_LIST_LIMIT_CAP);
+  /*
+   * The request key. `null` until the parent has a range, which keeps `useFetch`
+   * idle rather than firing a rangeless query.
+   *
+   * The backend treats dateTo as an exclusive upper bound (< ?), so the picker's
+   * end-of-day is pushed forward one day to make the range inclusive of `to`.
+   */
+  const listKey = React.useMemo(() => {
+    if (!from || !to) return null;
+    const toExclusive = new Date(to);
+    toExclusive.setDate(toExclusive.getDate() + 1);
+    const qs = new URLSearchParams({
+      dateFrom: from,
+      dateTo:   toExclusive.toISOString().slice(0, 10),
+      page:     String(page + 1),
+      limit:    String(limit),
+    });
+    return `/admin/calls?${qs.toString()}`;
+  }, [from, to, page, limit]);
+
+  const { data, loading, error } = useFetch<ListResp>(listKey);
+
+  // `data == null` is "nothing loaded yet" (first paint / idle); once a response
+  // lands, `items` is the CURRENT PAGE and `total` the whole range.
+  const rows = data?.items ?? null;
+  const total = data?.total ?? 0;
 
   const filteredRows = React.useMemo(() => {
     if (!rows) return null;
-    const q = search.trim().toLowerCase();
+    const q = pageFilter.trim().toLowerCase();
     if (!q) return rows;
     return rows.filter((r) => {
       const hay = [
@@ -119,35 +180,55 @@ export function ClickToCallTab({ from, to }: { from: string; to: string }) {
       ].map((x) => String(x ?? '').toLowerCase()).join(' ');
       return hay.includes(q);
     });
-  }, [rows, search]);
+  }, [rows, pageFilter]);
 
   return (
     <>
-      {/* Top band: search + count, mirrors the existing tab's UX so the
+      {/* Top band: page filter + counts, mirrors the existing tab's UX so the
           two tabs feel coherent to switch between. */}
-      {(err || (rows !== null && rows.length > 0)) && (
+      {(error || (rows !== null && rows.length > 0)) && (
         <div className="px-6 pt-2 pb-2 shrink-0">
-          {err && (
+          {error && (
             <div className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded px-2 py-1 mb-2">
-              {err}
+              {error}
             </div>
           )}
           {rows !== null && rows.length > 0 && (
             <div className="flex items-center gap-2">
+              {/* Filter (not search) icon + "Filter This Page" placeholder:
+                  the control's scope is the rows on screen, and every part of
+                  its chrome says the same thing. */}
               <div className="relative flex-1 max-w-sm">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                <Filter className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                 <Input
                   type="search"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search"
+                  value={pageFilter}
+                  onChange={(e) => setPageFilter(e.target.value)}
+                  placeholder="Filter This Page"
+                  aria-label="Filter This Page"
+                  title="Filters only the calls listed on this page — it does not search the whole date range."
                   className="pl-7 h-8"
                 />
               </div>
-              <div className="text-xs text-muted-foreground">
-                {search
-                  ? `${filteredRows?.length ?? 0} of ${rows.length}`
-                  : `${rows.length} call${rows.length === 1 ? '' : 's'}`}
+              <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                <span>
+                  {pageFilter
+                    ? `${filteredRows?.length ?? 0} of ${rows.length} On This Page`
+                    : `${total.toLocaleString('en-IN')} Call${total === 1 ? '' : 's'} In Range`}
+                </span>
+                <InfoTooltip label="About This Filter">
+                  <div className="space-y-2">
+                    <div className="font-semibold text-slate-900">Filter This Page</div>
+                    <div>
+                      Narrows the calls <strong>currently on screen</strong> by any visible value —
+                      it is not a search across the whole date range.
+                    </div>
+                    <div>
+                      To cover more calls at once, raise <strong>Show</strong> at the bottom of the
+                      table or step through the pages — every call in the range is reachable that way.
+                    </div>
+                  </div>
+                </InfoTooltip>
               </div>
             </div>
           )}
@@ -161,7 +242,13 @@ export function ClickToCallTab({ from, to }: { from: string; to: string }) {
         )}
         {rows !== null && rows.length === 0 && !loading && (
           <div className="text-sm text-muted-foreground py-8 text-center inline-flex items-center justify-center gap-2 w-full">
-            <Phone className="h-4 w-4" /> No click-to-call calls in the selected range.
+            <Phone className="h-4 w-4" />
+            {/* An empty page inside a non-empty range means the operator paged
+                past the end (or rows moved under them) — that's a different
+                problem from "no calls at all", so it gets its own wording. */}
+            {total > 0
+              ? 'No click-to-call calls on this page. Go back to an earlier page.'
+              : 'No click-to-call calls in the selected range.'}
           </div>
         )}
         {rows !== null && rows.length > 0 && (
@@ -225,7 +312,7 @@ export function ClickToCallTab({ from, to }: { from: string; to: string }) {
               {filteredRows && filteredRows.length === 0 && (
                 <tr>
                   <td colSpan={9} className="px-3 py-6 text-center text-sm text-muted-foreground">
-                    No rows match &ldquo;{search}&rdquo;.
+                    No calls on this page match &ldquo;{pageFilter}&rdquo;.
                   </td>
                 </tr>
               )}
@@ -233,6 +320,26 @@ export function ClickToCallTab({ from, to }: { from: string; to: string }) {
           </table>
         )}
       </div>
+
+      {/*
+        * Pager — outside the scroller (shrink-0) so it stays put while the table
+        * scrolls, and above the modal's own Close footer. `total` is the server's
+        * count for the whole range, so it drives the page count directly.
+        * Rendered only once there is something to page, so the empty state and
+        * the first load stay uncluttered.
+        */}
+      {total > 0 && (
+        <div className="px-6 py-2 border-t bg-muted/20 shrink-0">
+          <TablePagination
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            onPageChange={setPage}
+            onPageSizeChange={(s) => { setPageSize(s); setPage(0); }}
+            pageSizeOptions={CALL_PAGE_SIZE_OPTIONS}
+          />
+        </div>
+      )}
     </>
   );
 }

@@ -55,6 +55,7 @@ import {
 import { CallableMobile } from '@/components/calls/CallButton';
 import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
 import { useFetch, invalidateFetch, useDebouncedValue } from '@/lib/hooks';
+import { formatJobAge, jobAgeTitle, type JobAgeFields } from '@/lib/job-age';
 import { useLookup } from '@/lib/use-lookup';
 import { useJobActionParams } from '@/lib/job-action-url';
 import {
@@ -74,7 +75,7 @@ const JOBS_MAX_LIMIT = 500;
 // Row projection — the subset of the shared LIST columns this view renders.
 // Kept local (not imported from the page) to avoid a circular import; the
 // fields all come from the same /admin/jobs LIST projection.
-type PendingJobRow = {
+type PendingJobRow = JobAgeFields & {
   job_id: number;
   job_status: number;
   fk_easyfixter_id: number | null;
@@ -521,6 +522,11 @@ function PendingSection({
           <thead>
             <tr>
               <th className="stick-col-head stick-left">Job ID</th>
+              {/* Age — read-only here. This view has NO sort state: each of the
+                  three appointment buckets pins sortBy=requested_date_time asc
+                  ("soonest appointment first" is the order ops triage in), so a
+                  clickable Age header would have nothing to drive. */}
+              <th className="w-16">Age</th>
               <th>Technician</th>
               <th>City</th>
               <th>Client</th>
@@ -536,7 +542,7 @@ function PendingSection({
             {loading &&
               Array.from({ length: 4 }).map((_, i) => (
                 <tr key={`sk-${i}`}>
-                  {Array.from({ length: 10 }).map((_, c) => (
+                  {Array.from({ length: 11 }).map((_, c) => (
                     <td key={c}>
                       <div className="h-3 w-24 rounded bg-muted animate-pulse" />
                     </td>
@@ -545,7 +551,7 @@ function PendingSection({
               ))}
             {!loading && rows.length === 0 && (
               <tr>
-                <td colSpan={10} className="text-center text-muted-foreground py-8">
+                <td colSpan={11} className="text-center text-muted-foreground py-8">
                   No orders in this bucket{!isAdmin ? ' owned by you' : ''}.
                 </td>
               </tr>
@@ -558,6 +564,9 @@ function PendingSection({
                       #{j.job_id}
                       <CallHistoryButton jobId={j.job_id} />
                     </span>
+                  </td>
+                  <td className="text-xs whitespace-nowrap tabular-nums align-top" title={jobAgeTitle(j)}>
+                    {formatJobAge(j)}
                   </td>
                   {/*
                     * Technician — name on top (may wrap to multiple lines) and,

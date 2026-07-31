@@ -10,6 +10,7 @@ import { showToast } from '@/components/ui/toast';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { IconButton } from '@/components/ui/icon-button';
 import { SortHeader, type SortDir } from '@/lib/use-sort';
+import { formatJobAge, jobAgeTitle, JOB_AGE_SORT_KEY, type JobAgeFields } from '@/lib/job-age';
 
 /*
  * UnconfirmedJobsTable — the focused column set ops requested for the
@@ -18,8 +19,9 @@ import { SortHeader, type SortDir } from '@/lib/use-sort';
  *
  * Columns (left → right):
  *   1. Job ID
- *   2. Ticket Created Date  +  Job Age (e.g. "3d 4h")
- *   3. Client  +  Client Reference (Unique Code)
+ *   2. Age — server-computed (see lib/job-age.ts), sortable server-side
+ *   3. Ticket Created Date
+ *   4. Client  +  Client Reference (Unique Code)
  *   4. City
  *   5. Current Status (pill)
  *   6. Action Taken Reason  (parsed from the structured remarks prefix
@@ -38,7 +40,7 @@ import { SortHeader, type SortDir } from '@/lib/use-sort';
  * `openView`/`openConfirm` callbacks both pages already wire up for
  * their other tabs.
  */
-export type UnconfirmedJobRow = {
+export type UnconfirmedJobRow = JobAgeFields & {
   job_id: number;
   job_status: number;
   client_ref_id: string | null;
@@ -199,7 +201,14 @@ export function UnconfirmedJobsTable({
       <thead>
         <tr>
           <SortHeader<string> col="job_id" sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="stick-col-head stick-left">Job #</SortHeader>
-          <SortHeader<string> col="created_date_time" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Ticket Created · Age</SortHeader>
+          {/* Age split OUT of the Ticket Created cell into its own sortable
+              column — the sub-line reading was not sortable, and sorting by
+              created_date_time is NOT the same ordering once a job closes
+              (age freezes at checkout/cancel while created keeps its value).
+              Sends the shared JOB_AGE_SORT_KEY so the BE orders by precise
+              seconds. */}
+          <SortHeader<string> col={JOB_AGE_SORT_KEY} sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="w-16">Age</SortHeader>
+          <SortHeader<string> col="created_date_time" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Ticket Created</SortHeader>
           <SortHeader<string> col="client_name" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Client Ref Id</SortHeader>
           <SortHeader<string> col="city_name" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>City</SortHeader>
           <SortHeader<string> col="requested_date_time" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Appointment · Slot</SortHeader>
@@ -214,9 +223,9 @@ export function UnconfirmedJobsTable({
         </tr>
       </thead>
       <tbody>
-        {loading && <tr><td colSpan={13} className="text-center py-8 text-muted-foreground">Loading…</td></tr>}
+        {loading && <tr><td colSpan={14} className="text-center py-8 text-muted-foreground">Loading…</td></tr>}
         {!loading && rows.length === 0 && (
-          <tr><td colSpan={13} className="text-center py-8 text-muted-foreground">No unconfirmed orders.</td></tr>
+          <tr><td colSpan={14} className="text-center py-8 text-muted-foreground">No unconfirmed orders.</td></tr>
         )}
         {!loading && rows.map((j) => {
           const { reason, freeText } = splitRemarks(j.remarks ?? '');
@@ -237,9 +246,9 @@ export function UnconfirmedJobsTable({
                   <CallHistoryButton jobId={j.job_id} />
                 </span>
               </td>
+              <td className="text-xs whitespace-nowrap tabular-nums" title={jobAgeTitle(j)}>{formatJobAge(j)}</td>
               <td className="text-xs whitespace-nowrap">
                 <div>{ticketTs ? formatDate(ticketTs) : '—'}</div>
-                <div className="text-[10px] text-muted-foreground">{ticketTs ? jobAge(ticketTs) : ''}</div>
               </td>
               <td className="text-xs whitespace-nowrap">
                 <div className="font-medium">{j.client_name ?? '—'}</div>
@@ -600,17 +609,9 @@ function splitRemarks(remarks: string): { reason: string; freeText: string } {
 }
 
 /*
- * Job-age formatter — compact "Nd Nh" / "Nh Nm" / "Nm" depending on
- * magnitude. Used in the Ticket Created column so ops can see at a
- * glance how long a job has been sitting Unconfirmed.
+ * The local `jobAge(ts)` helper that used to live here was RETIRED (2026-07-31).
+ * It recomputed age client-side from the ticket timestamp to "now", which is
+ * only correct while a job is open — and it was one of three drifting copies.
+ * The single shared implementation is `formatJobAge` / `jobAgeTitle` in
+ * '@/lib/job-age', reading the server-computed `ageDays` / `ageSecs` fields.
  */
-function jobAge(ts: string): string {
-  const ms = Date.now() - new Date(ts).getTime();
-  if (!Number.isFinite(ms) || ms < 0) return '';
-  const mins = Math.floor(ms / 60_000);
-  if (mins < 60) return `${mins}m`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ${mins % 60}m`;
-  const days = Math.floor(hrs / 24);
-  return `${days}d ${hrs % 24}h`;
-}

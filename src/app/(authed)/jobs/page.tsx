@@ -22,11 +22,18 @@ import { api } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
 import { formatDate, formatEasyfixerName, statusLabel, statusTone } from '@/lib/utils';
 import {
+  formatJobAge, jobAgeTitle, JOB_AGE_SORT_KEY, type JobAgeFields,
+} from '@/lib/job-age';
+import {
   TABS, type CountsResp, countFor, filterJobRows, filterTabsForStages, makeQuickStatusChange,
   JOB_SEARCH_PLACEHOLDER, JOB_SEARCH_HINT,
 } from '@/lib/job-tabs';
 import { transitionAllowed } from '@/lib/job-stages';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
+import {
+  PendingSchedulingFilters, psFiltersFromParams, writePsFilterParams,
+  psFilterKey, psQueryParams, type PsFilters,
+} from '@/components/job/PendingSchedulingFilters';
 import { TransferJobOwnershipDialog } from '@/components/job/TransferJobOwnershipDialog';
 import { UnconfirmedJobsTable } from '@/components/job/UnconfirmedJobsTable';
 import { CallableMobile } from '@/components/calls/CallButton';
@@ -42,7 +49,7 @@ import { LiveLocationPopover } from '@/components/location/LiveLocationPopover';
 // "All" sends 500 instead of the default 1000 (which would 400).
 const JOBS_MAX_LIMIT = 500;
 
-type JobRow = {
+type JobRow = JobAgeFields & {
   job_id: number; job_reference_id: string | null; client_ref_id: string | null;
   job_status: number; job_type: string; source_type: string | null;
   job_desc: string | null;
@@ -175,6 +182,22 @@ export default function JobsPage() {
     // Phase-2 filters wired 2026-05-19.
     rating: '', reopen: '', dueTo: '', zonalId: '',
   });
+  /*
+   * ── Pending-for-Scheduling filter bar (2026-07-31) ────────────────────────
+   *
+   * The SAME bar /my-orders hosts (components/job/PendingSchedulingFilters) —
+   * both pages share the bucket definition via lib/job-tabs.ts, so the triage
+   * capability has to be shared too rather than living on one surface only.
+   *
+   * Scoped to the `pending-scheduling` tab: `psActive` gates BOTH the render and
+   * the request params, so every other tab's request shape is byte-for-byte
+   * unchanged. Hydrated from the URL on first render (useSearchParams() is
+   * stable at first render in the App Router) using the SAME `ps*` param names
+   * /my-orders writes, so a filtered link is portable between the two pages.
+   */
+  const [psFilters, setPsFilters] = useState<PsFilters>(() => psFiltersFromParams(searchParams));
+  const psKey = psFilterKey(psFilters);
+  const psActive = tab === 'pending-scheduling';
   // page is 0-indexed at the API boundary (offset = page * pageSize),
   // but TablePagination displays it 1-indexed. Switching pageSize
   // resets page to 0 so the operator always lands on the first row.
@@ -252,8 +275,9 @@ export default function JobsPage() {
     const tabDef = TABS.find((t) => t.value === tab);
     const off = reset ? 0 : offset;
     // Cache key includes pageSize so changing rows-per-page doesn't
-    // serve a stale fixed-50 payload.
-    const key = `${tab}|${off}|${limit}|${sortKey || ''}|${sortDir}|${filterKey()}`;
+    // serve a stale fixed-50 payload, and the Pending-for-Scheduling filter
+    // signature so two different filter sets never share an entry.
+    const key = `${tab}|${off}|${limit}|${sortKey || ''}|${sortDir}|${filterKey()}|f=${psActive ? psKey : ''}`;
 
     // First paint (no data yet) raises the skeleton; every later reload —
     // pagination, sort, post-mutation — is silent so the table body never
@@ -331,10 +355,21 @@ export default function JobsPage() {
       //      filter is set.
       // The BE service prefers `statuses` over `status` when both
       // arrive, so we deliberately send only one of the two.
-      const bucketStatuses = filters.bucketStatus
+      //
+      // ...EXCEPT on Pending for Scheduling. That tab IS the bucket
+      // `job_status = 0 AND fk_easyfixter_id IS NULL`; its pins are
+      // UNCONDITIONAL and no filter may widen or replace them (the exact
+      // inversion fixed on /my-orders — picking a status there listed jobs
+      // outside the bucket entirely). So the two status overrides are
+      // neutralised while `psActive`, which drops `status`/`statuses`/`assigned`
+      // straight through to the tab definition. Both dropdowns are hidden on
+      // that tab too, so this is unreachable in normal use — it is the
+      // structural guarantee behind the UI, and it also disarms a stale
+      // selection left over from another tab.
+      const bucketStatuses = (!psActive && filters.bucketStatus)
         ? BUCKET_STATUS_MAP[filters.bucketStatus]
         : null;
-      const explicitStatus = filters.status ? Number(filters.status) : undefined;
+      const explicitStatus = (!psActive && filters.status) ? Number(filters.status) : undefined;
       // Build the request promise and register it in the in-flight
       // Map before awaiting — so a Strict-Mode replay of this effect
       // in the same tick can attach. Cleared in `finally`.
@@ -391,6 +426,18 @@ export default function JobsPage() {
         // for the chosen quotation status (see service.list()).
         quotationStatus: tabDef?.quotationStatus,
         requestedBefore: tabDef?.requestedBefore,
+        /*
+         * Pending-for-Scheduling bar → server-side WHERE clauses that NARROW
+         * the pinned bucket (never widen it). Spread LAST and emitting ONLY the
+         * controls that are set, so:
+         *   - an unset control leaves the Filter Job card's value above intact
+         *     (a bare `undefined` key would otherwise blank it), and
+         *   - a set control wins over the card's equivalent — on this tab the
+         *     bar is the triage surface the operator is looking at.
+         * Sent only while the tab is active; every other tab's request shape is
+         * unchanged.
+         */
+        ...(psActive ? psQueryParams(psFilters) : {}),
       });
       inflightRef.current.set(key, reqPromise);
       try {
@@ -427,6 +474,19 @@ export default function JobsPage() {
   // from the navbar.
   const focusParam = useSearchParams().get('focus');
   useEffect(() => { setPage(0); load(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [focusParam]);
+  /*
+   * Pending-for-Scheduling filter change → page-0 refetch. Skips the initial
+   * mount (the tab effect above already fired the first load, including any
+   * URL-hydrated filters). `psKey` is a string, so this fires on real value
+   * changes only — not on every setState object identity.
+   */
+  const psMountRef = useRef(true);
+  useEffect(() => {
+    if (psMountRef.current) { psMountRef.current = false; return; }
+    setPage(0);
+    load(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [psKey]);
 
   /*
    * Counts fetch — runs once on mount and again after a save from the modal.
@@ -590,15 +650,17 @@ export default function JobsPage() {
       // load() call so the export is a true mirror of what's on screen.
       const tabDef = TABS.find((t) => t.value === tab);
       // Status precedence — same rule as load(): bucket-status >
-      // job-status > tab.
-      const bucketStatuses = filters.bucketStatus
+      // job-status > tab, with both overrides neutralised on Pending for
+      // Scheduling so the exported rows are the same bucket the table shows.
+      const bucketStatuses = (!psActive && filters.bucketStatus)
         ? BUCKET_STATUS_MAP[filters.bucketStatus]
         : null;
+      const explicitStatus = (!psActive && filters.status) ? filters.status : '';
       if (bucketStatuses) qs.set('statuses', bucketStatuses.join(','));
-      else if (filters.status) qs.set('status', filters.status);
+      else if (explicitStatus) qs.set('status', explicitStatus);
       else if (tabDef?.statuses) qs.set('statuses', tabDef.statuses.join(','));
       else if (tabDef?.status != null) qs.set('status', String(tabDef.status));
-      if (!bucketStatuses && !filters.status && tabDef?.assigned !== undefined) {
+      if (!bucketStatuses && !explicitStatus && tabDef?.assigned !== undefined) {
         qs.set('assigned', String(tabDef.assigned));
       }
       const isEscalated = searchParams.get('focus') === 'escalated' ? 'true' : null;
@@ -617,6 +679,12 @@ export default function JobsPage() {
         rating: filters.rating, reopen: filters.reopen, dueTo: filters.dueTo,
         zonalId: filters.zonalId,
       }).forEach(([k, v]) => { if (v) qs.set(k, String(v)); });
+      // Pending-for-Scheduling bar last, mirroring load()'s spread order so a
+      // set control wins over the Filter Job card's equivalent. The export route
+      // validates with the SAME listQuery schema, so `offerState` is accepted.
+      if (psActive) {
+        Object.entries(psQueryParams(psFilters)).forEach(([k, v]) => qs.set(k, v));
+      }
       const today = new Date().toISOString().slice(0, 10);
       try {
         await downloadXlsx({
@@ -688,8 +756,9 @@ export default function JobsPage() {
   // Debounced view of the in-memory search box, used ONLY for the URL write
   // below (the instant client-side `filterJobRows` above still reads raw `q`).
   const serverQ = useDebouncedValue(q, 300).trim();
-  // Persist search + sort into the URL (tab already lives there) so they
-  // survive any remount/navigation after a modal action. Debounced via
+  // Persist search + sort + the Pending-for-Scheduling filters into the URL
+  // (tab already lives there) so they survive any remount/navigation after a
+  // modal action, and so a PM can share the exact filtered view. Debounced via
   // serverQ so typing doesn't spam history. Guard prevents redundant
   // replaces; deps deliberately EXCLUDE searchParams so this never loops
   // with the tab-sync effect (which reads searchParams).
@@ -697,12 +766,15 @@ export default function JobsPage() {
     const p = new URLSearchParams(searchParams);
     if (serverQ) p.set('q', serverQ); else p.delete('q');
     if (sortKey) p.set('sort', `${sortKey}:${sortDir}`); else p.delete('sort');
+    // Shared serialiser — same `ps*` names /my-orders writes, so a filtered
+    // link is portable between the two surfaces.
+    writePsFilterParams(p, psFilters);
     const nextStr = p.toString();
     if (nextStr !== searchParams.toString()) {
       router.replace(nextStr ? `${pathname}?${nextStr}` : pathname, { scroll: false });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverQ, sortKey, sortDir]);
+  }, [serverQ, sortKey, sortDir, psKey]);
 
   return (
     <div className="space-y-5">
@@ -735,6 +807,28 @@ export default function JobsPage() {
           modal saves) and exposed inline alongside the dropdown option
           so operators retain the per-bucket scan-affordance without
           the double-row chrome. */}
+
+      {/*
+        * Pending-for-Scheduling filter bar — the SAME shared component
+        * /my-orders hosts, so both lifecycle surfaces triage this bucket with
+        * identical controls. Rendered ONLY on that tab (which /jobs selects via
+        * the URL's ?tab= param — there is no visible tab bar here); its params
+        * are likewise sent only while the tab is active, so every other tab is
+        * untouched. Kept in its own card ABOVE the Filter Job panel: that panel
+        * carries its own Client / City / Category fields, and interleaving two
+        * sets of same-named pickers in one card would read as duplicates.
+        */}
+      {psActive && (
+        <Card>
+          <CardContent className="p-3">
+            <PendingSchedulingFilters
+              value={psFilters}
+              onChange={setPsFilters}
+              title="Pending For Scheduling Filters"
+            />
+          </CardContent>
+        </Card>
+      )}
 
       {/* Filter Job — placement faithful to the legacy CRM panel.
           Rows 1 + 2 are always visible (10 filters); "Show More
@@ -779,6 +873,17 @@ export default function JobsPage() {
                 <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Client</label>
                 <SearchSelect placeholder="All" value={filters.clientId} onChange={(v) => setFilters({ ...filters, clientId: v })} options={lk.toOpts.clients.map((o) => ({ value: o.value, label: String(o.label) }))} />
               </div>
+              {/*
+                * Bucket Status + Job Status are HIDDEN on Pending for
+                * Scheduling. Every row in that bucket is job_status = 0 by
+                * definition, so both controls are meaningless there — and
+                * load() neutralises them anyway to keep the bucket pin
+                * unconditional. Rendering dead controls that silently do
+                * nothing is worse than not rendering them; the Scheduling
+                * Status picker in the bar above is the real axis on that tab.
+                */}
+              {!psActive && (
+              <>
               <div>
                 <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Bucket Status</label>
                 {/* Bucket Status — legacy categorical view over
@@ -823,6 +928,8 @@ export default function JobsPage() {
                   ]}
                 />
               </div>
+              </>
+              )}
             </div>
             {/* Row 2 — Client Ref / EFR ID / Job Owner / Date Type / Date Range. */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">
@@ -1107,6 +1214,13 @@ export default function JobsPage() {
                 <thead>
                   <tr>
                     <SortHeader col="job_id"             sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="stick-col-head stick-left">Job #</SortHeader>
+                    {/* Age — ticket-created → terminal event (or now, while open).
+                        Server-computed + server-sorted; the header sends the
+                        shared JOB_AGE_SORT_KEY so ordering is by PRECISE age
+                        (seconds), never the floored day label. Kept adjacent to
+                        the pinned Job # so it stays readable without scrolling
+                        this 19-column table sideways. */}
+                    <SortHeader col={JOB_AGE_SORT_KEY} sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="w-16">Age</SortHeader>
                     <SortHeader col="job_reference_id"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Job Ref</SortHeader>
                     <SortHeader col="client_ref_id"      sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Client Ref</SortHeader>
                     <SortHeader col="client_name"        sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Client</SortHeader>
@@ -1127,10 +1241,11 @@ export default function JobsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {loading && <tr><td colSpan={18} className="text-center py-8 text-muted-foreground">Loading…</td></tr>}
+                  {loading && <tr><td colSpan={19} className="text-center py-8 text-muted-foreground">Loading…</td></tr>}
                   {!loading && sorted.map((j) => (
                 <tr key={j.job_id}>
                   <td className="font-medium whitespace-nowrap stick-col stick-left">#{j.job_id}</td>
+                  <td className="text-xs whitespace-nowrap tabular-nums" title={jobAgeTitle(j)}>{formatJobAge(j)}</td>
                   <td className="text-xs">{j.job_reference_id ?? '—'}</td>
                   <td className="text-xs">{j.client_ref_id ?? '—'}</td>
                   <td className="whitespace-nowrap">{j.client_name ?? '—'}</td>

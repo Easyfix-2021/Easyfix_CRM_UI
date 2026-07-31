@@ -31,7 +31,7 @@ import {
   LayoutDashboard, Lock,
   ClipboardList, Gauge, Layers, Flame, Package,
   Building2, Wrench, MapPinned, Users, BarChart3,
-  ArrowRight, Handshake, UserPen, ShieldAlert, type LucideIcon,
+  ArrowRight, Handshake, UserPen, ShieldAlert, PhoneCall, type LucideIcon,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { useMe } from '@/lib/auth-context';
@@ -53,6 +53,16 @@ type ReportCardDef = {
    * existing consumers of this list keep working.
    */
   anyOf?: string[];
+  /*
+   * Newly-built reports render BELOW a separator so ops can tell at a glance
+   * which ones are new. This is an explicit RANK (1-based), not a boolean,
+   * because the group has a required display order that is NOT the order these
+   * entries happen to sit in REPORTS (which mirrors the canonical registry).
+   * Encoding the rank here means reordering/inserting registry entries can never
+   * silently rearrange the group. Absent => report stays in the top group, which
+   * is the safe default for anything added later.
+   */
+  newOrder?: number;
 };
 
 /*
@@ -73,7 +83,8 @@ const REPORTS: ReportCardDef[] = [
     // standalone cards below stay — this is an additional entry point, not a
     // replacement, so nobody's bookmark or grant changes.
     urlBase: 'performance',
-    label: 'Performance Report',
+    label: 'Performance',
+    newOrder: 1,
     actionKey: 'isQuickSightClientPerformanceView',
     anyOf: [
       'isQuickSightClientPerformanceView',
@@ -151,6 +162,7 @@ const REPORTS: ReportCardDef[] = [
   {
     urlBase: 'offer-acceptance',
     label: 'Offer Acceptance',
+    newOrder: 2,
     actionKey: 'isQuickSightOfferAcceptanceView',
     description: 'Job-offer acceptance, rejection & response time by technician and source.',
     Icon: Handshake,
@@ -158,6 +170,7 @@ const REPORTS: ReportCardDef[] = [
   {
     urlBase: 'profile-update-requests',
     label: 'Profile Update Requests',
+    newOrder: 5,
     actionKey: 'isQuickSightProfileUpdateRequestsView',
     description: 'Easyfixer profile-update link funnel — sent vs submitted by technician.',
     Icon: UserPen,
@@ -165,9 +178,18 @@ const REPORTS: ReportCardDef[] = [
   {
     urlBase: 'premature-confirmations',
     label: 'Premature Confirmations',
+    newOrder: 3,
     actionKey: 'isQuickSightPrematureConfirmationsView',
     description: 'Jobs moved to Pending for Scheduling without the customer confirming — no form, no real call.',
     Icon: ShieldAlert,
+  },
+  {
+    urlBase: 'call-tracking',
+    label: 'Call Tracking',
+    newOrder: 4,
+    actionKey: 'isQuickSightCallTrackingView',
+    description: 'Calls placed from the CRM — by job (who called, at which step, to whom) and by user per day.',
+    Icon: PhoneCall,
   },
 ];
 
@@ -183,6 +205,13 @@ export default function QuickSightLandingPage() {
   ]);
   const hasFamily = flags[FAMILY_KEY];
   const visible = REPORTS.filter((r) => (r.anyOf ? r.anyOf.some((k) => flags[k]) : flags[r.actionKey]));
+  // Split AFTER gating, so both groups honour the same permission result and a
+  // card lands in exactly one of them. The new group is sorted by its explicit
+  // rank (NOT registry order) — see newOrder on ReportCardDef.
+  const established = visible.filter((r) => r.newOrder == null);
+  const newlyBuilt = visible
+    .filter((r) => r.newOrder != null)
+    .sort((a, b) => (a.newOrder as number) - (b.newOrder as number));
 
   return (
     <div className="space-y-4">
@@ -230,27 +259,52 @@ export default function QuickSightLandingPage() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {visible.map((r) => (
-            <Link
-              key={r.urlBase}
-              href={`/quicksight/${r.urlBase}`}
-              className="group block focus:outline-none"
-            >
-              <Card className="h-full transition-colors group-hover:border-primary/50 group-hover:shadow-md group-focus-visible:ring-2 group-focus-visible:ring-primary/40">
-                <CardContent className="flex h-full flex-col gap-2 p-4">
-                  <div className="flex items-center gap-2">
-                    <r.Icon className="size-5 shrink-0 text-primary" />
-                    <div className="min-w-0 flex-1 font-medium">{r.label}</div>
-                    <ArrowRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
-                  </div>
-                  <p className="text-xs text-muted-foreground">{r.description}</p>
-                </CardContent>
-              </Card>
-            </Link>
-          ))}
-        </div>
+        <>
+          {/*
+            * Existing reports on top, then a labelled separator, then the newly
+            * built ones. Both groups derive from the SAME `visible` list, so
+            * permission gating is applied once and a card can never appear in
+            * both (or neither) group. Each grid renders only when it has cards,
+            * so a user granted ONLY new reports doesn't get an empty top grid
+            * with a separator floating above it.
+            */}
+          {established.length > 0 && <ReportGrid reports={established} />}
+
+          {newlyBuilt.length > 0 && (
+            <>
+              {/* Plain rule — no caption, per the requested design. */}
+              <div className="h-px w-full bg-border" role="separator" />
+              <ReportGrid reports={newlyBuilt} />
+            </>
+          )}
+        </>
       )}
+    </div>
+  );
+}
+
+/* One card grid — shared by both groups so the card markup exists once. */
+function ReportGrid({ reports }: { reports: ReportCardDef[] }) {
+  return (
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      {reports.map((r) => (
+        <Link
+          key={r.urlBase}
+          href={`/quicksight/${r.urlBase}`}
+          className="group block focus:outline-none"
+        >
+          <Card className="h-full transition-colors group-hover:border-primary/50 group-hover:shadow-md group-focus-visible:ring-2 group-focus-visible:ring-primary/40">
+            <CardContent className="flex h-full flex-col gap-2 p-4">
+              <div className="flex items-center gap-2">
+                <r.Icon className="size-5 shrink-0 text-primary" />
+                <div className="min-w-0 flex-1 font-medium">{r.label}</div>
+                <ArrowRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
+              </div>
+              <p className="text-xs text-muted-foreground">{r.description}</p>
+            </CardContent>
+          </Card>
+        </Link>
+      ))}
     </div>
   );
 }
