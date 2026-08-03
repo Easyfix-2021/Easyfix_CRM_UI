@@ -59,6 +59,7 @@ import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
 import { formatDate, relativeTime, appointmentIsPast } from '@/lib/utils';
+import { displaySlot } from '@/lib/job-slots';
 import { InfoTooltip } from '@/components/ui/tooltip';
 import { TablePagination, type TablePageSize } from '@/components/ui/table-pagination';
 import { showToast } from '@/components/ui/toast';
@@ -495,7 +496,15 @@ export function ScheduleAssignModal({
             {job?.requested_date_time && (
               <li>
                 • Schedule: <b>{formatDate(job.requested_date_time)}</b>
-                {job.booking_cut_off_time_slot ? <> · {job.booking_cut_off_time_slot}</> : null}
+                {/* The band is DERIVED from the very datetime printed beside it,
+                    not read from `booking_cut_off_time_slot`. That legacy column
+                    is COALESCE-backfilled and never overwritten, so it can state
+                    a window contradicting the time being committed — in a
+                    confirmation dialog, which is the last thing the operator
+                    reads before assigning. Same precedence as everywhere else. */}
+                {displaySlot(job.requested_date_time, job.time_slot)
+                  ? <> · {displaySlot(job.requested_date_time, job.time_slot)}</>
+                  : null}
               </li>
             )}
           </ul>
@@ -552,7 +561,15 @@ export function ScheduleAssignModal({
             {job?.requested_date_time && (
               <li>
                 • Schedule: <b>{formatDate(job.requested_date_time)}</b>
-                {job.booking_cut_off_time_slot ? <> · {job.booking_cut_off_time_slot}</> : null}
+                {/* The band is DERIVED from the very datetime printed beside it,
+                    not read from `booking_cut_off_time_slot`. That legacy column
+                    is COALESCE-backfilled and never overwritten, so it can state
+                    a window contradicting the time being committed — in a
+                    confirmation dialog, which is the last thing the operator
+                    reads before assigning. Same precedence as everywhere else. */}
+                {displaySlot(job.requested_date_time, job.time_slot)
+                  ? <> · {displaySlot(job.requested_date_time, job.time_slot)}</>
+                  : null}
               </li>
             )}
           </ul>

@@ -40,6 +40,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { formatServiceAddress } from '@/lib/format';
 import { formatDate, appointmentIsPast } from '@/lib/utils';
+import { displaySlot } from '@/lib/job-slots';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { JobRemarksView } from './JobRemarksView';
@@ -100,21 +101,19 @@ export type JobContextData = {
   payment_mode?: string | null;
   requested_date_time?: string | null;
   /**
-   * The LIVE appointment window (tbl_job.time_slot) — what the Time Slot field
-   * shows. This is the column every current write path maintains: the Confirm
-   * & Schedule modal, `reschedule()`, and the WhatsApp confirmation flow
-   * (whatsapp-conversation.service finaliseConfirmed → jml.writeCustomerOrderDetails)
-   * all write it.
+   * The stored appointment window (tbl_job.time_slot). Every current write path
+   * maintains it — the Confirm & Schedule modal, `reschedule()`, and the
+   * WhatsApp confirmation flow (whatsapp-conversation.service finaliseConfirmed
+   * → jml.writeCustomerOrderDetails) — but always through `resolveTimeSlot`,
+   * which RE-DERIVES it from `requested_date_time`.
+   *
+   * So it is a FALLBACK here, not the answer: the Time Slot field runs it
+   * through `displaySlot` alongside `requested_date_time`, and the stored string
+   * only wins for a date-only booking where there is no hour to derive from.
+   * Do not render it raw — that is what put '3pm to 7pm' next to an 05:30
+   * appointment on job #482491.
    */
   time_slot?: string | null;
-  /**
-   * Legacy "H AM - H PM" cut-off window — a DERIVED companion column, and only
-   * a FALLBACK for display. The WhatsApp confirmation flow never writes it, so
-   * reading it alone showed "—" for a chat-confirmed job that had no cut-off
-   * stamped at create, and — worse — kept showing the PRE-reschedule window
-   * next to the new appointment hour after a chat reschedule.
-   */
-  booking_cut_off_time_slot?: string | null;
   job_desc?: string | null;
   /** Technician-facing note ("Anything Handyman should keep in mind?") — shown as Additional Comments. */
   efr_special_notes?: string | null;
@@ -381,10 +380,26 @@ export function JobContextPanel({
             )}
 
             {/* READ-ONLY schedule row — Date/Time are locked; change only via
-                the Reschedule dialog (Schedule & Assign). Time Slot shows the
-                LIVE `time_slot` (the window the customer actually holds), and
-                falls back to the derived legacy `booking_cut_off_time_slot`
-                only for old rows that never had `time_slot` populated. */}
+                the Reschedule dialog (Schedule & Assign).
+
+                Time Slot shows the BAND, deliberately — the promise to the
+                customer is a window, not "the technician arrives at 5:30". But
+                it is the band the appointment beside it actually falls in
+                (`displaySlot`), not the raw stored string: `tbl_job.time_slot`
+                is DERIVED from `requested_date_time` and re-derived on every
+                write, so a stored value that disagrees with the date on the
+                left is one the next save will discard. Job #482491 stored
+                '3pm to 7pm' against an 05:30 appointment and this row printed
+                the two side by side.
+
+                The `|| booking_cut_off_time_slot` fallback is GONE. That column
+                is a second derivation of the same appointment time in a
+                different legacy vocabulary ('3 PM - 7 PM' / 'AfterHours'), so
+                it could only ever fire in the one case `displaySlot` already
+                covers — no readable time AND no stored band — and in exactly
+                that case reschedule() stamps it 'AfterHours' off the 00:00
+                midnight sentinel (job.service.js deriveBookingCutoffSlot). It
+                could therefore contribute a wrong band or nothing at all. */}
             <div className="mt-3 pt-3 border-t">
               <div className="flex flex-wrap items-end justify-between gap-3">
                 <div className="flex flex-wrap gap-x-8 gap-y-2">
@@ -407,7 +422,7 @@ export function JobContextPanel({
                     <div className="text-sm font-medium text-foreground">
                       {rescheduling
                         ? <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> Updating…</span>
-                        : (job.time_slot || job.booking_cut_off_time_slot || '—')}
+                        : (displaySlot(job.requested_date_time, job.time_slot) || '—')}
                     </div>
                   </div>
                 </div>

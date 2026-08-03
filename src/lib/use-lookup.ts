@@ -145,6 +145,7 @@ export function useLookup() {
       serviceCategories: serviceCategories.map<SelectOption>((c) => ({ value: c.service_catg_id, label: c.service_catg_name })),
       serviceTypes: serviceTypes.map<SelectOption>((t) => ({ value: t.service_type_id, label: t.service_type_name })),
       clients: clients.map<SelectOption>((c) => ({ value: c.client_id, label: c.client_name })),
+      verticals: verticals.map<SelectOption>((v) => ({ value: v.vertical_id, label: v.vertical_name })),
       adminUsers: adminUsers.map<SelectOption>((u) => ({ value: u.user_id, label: `${u.user_name} · ${u.role_name ?? ''}` })),
       roles: roles.map<SelectOption>((r) => ({ value: r.role_id, label: r.role_name })),
       // Easyfixer label embeds mobile + city so the SearchSelect typeahead

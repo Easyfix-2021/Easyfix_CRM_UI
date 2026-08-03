@@ -11,6 +11,7 @@ import { StatusChip } from '@/components/ui/StatusChip';
 import { IconButton } from '@/components/ui/icon-button';
 import { SortHeader, type SortDir } from '@/lib/use-sort';
 import { formatJobAge, jobAgeTitle, JOB_AGE_SORT_KEY, type JobAgeFields } from '@/lib/job-age';
+import { displaySlot } from '@/lib/job-slots';
 
 /*
  * UnconfirmedJobsTable — the focused column set ops requested for the
@@ -256,11 +257,19 @@ export function UnconfirmedJobsTable({
               </td>
               <td className="text-xs">{j.city_name ?? '—'}</td>
               {/* Appointment · Slot — moved here (between City and Status) so the
-                  appointment date is visible up-front for triage. Same value
-                  (requested_date_time + time_slot) as before. */}
+                  appointment date is visible up-front for triage.
+
+                  The sub-line is still the BAND (the window we commit to), but
+                  the band `requested_date_time` actually falls in rather than
+                  the raw stored `time_slot`: the column is derived and the
+                  backend re-derives it on every write, so a stale value here
+                  contradicted the date directly above it. See displaySlot. */}
               <td className="text-xs whitespace-nowrap">
                 <div>{formatDate(j.requested_date_time)}</div>
-                {j.time_slot && <div className="text-[10px] text-muted-foreground">{j.time_slot}</div>}
+                {(() => {
+                  const slot = displaySlot(j.requested_date_time, j.time_slot);
+                  return slot ? <div className="text-[10px] text-muted-foreground">{slot}</div> : null;
+                })()}
               </td>
               {/*
                 Status cell — two-row layout (2026-05-30 redesign):

@@ -17,9 +17,9 @@ import { useLookup } from '@/lib/use-lookup';
  * a second copy of the `ps*` param contract.
  *
  * Project managers triage this queue by Scheduling Status / Service Category /
- * City / Client. All four drive the SERVER query — the list is server-paginated,
- * so an in-memory filter would only narrow the rows on screen and quietly lie
- * about the rest.
+ * City / Client / Vertical. All five drive the SERVER query — the list is
+ * server-paginated, so an in-memory filter would only narrow the rows on screen
+ * and quietly lie about the rest.
  *
  * THE BUCKET PIN IS UNCONDITIONAL. This tab IS the bucket
  * `job_status = 0 AND fk_easyfixter_id IS NULL`, sent as status=0 +
@@ -32,7 +32,10 @@ import { useLookup } from '@/lib/use-lookup';
  *
  * The real sub-state inside the bucket is the OFFER lifecycle, so "Scheduling
  * Status" maps to the BE's `offerState` param on GET /admin/jobs:
- *   'pending' → nobody is holding it (never offered / rejected-only) → "Pending to Scheduling"
+ *   'pending' → NEVER OFFERED — no offer row has ever been written → "Pending to Scheduling"
+ *              (rejected-only moved OUT of here on 2026-08-03; a declined
+ *               offer is now 'expired', so this state means literally
+ *               "nobody has been asked yet")
  *   'offered' → >= 1 EFFECTIVELY OPEN offer (within the 30-min TTL)  → "Offered to Tx"
  *   'expired' → none open, none accepted, >= 1 dead offer            → "Expired"
  *   ''        → param omitted ⇒ the whole bucket
@@ -48,15 +51,36 @@ import { useLookup } from '@/lib/use-lookup';
  *   cityId      → csvIds (id OR CSV)    ⇒ SearchMultiSelect
  *   clientId    → csvIds (id OR CSV)    ⇒ SearchMultiSelect
  *   categoryId  → single intId ONLY     ⇒ SearchSelect (a CSV here 400s)
+ *   verticalId  → single intId ONLY     ⇒ SearchSelect (a CSV here 400s)
+ *
+ * ── What "Vertical" means here (2026-08-03) ─────────────────────────────────
+ * `tbl_vertical` is the master. A JOB reaches a vertical through its CLIENT,
+ * and the schema has TWO edges for that: `tbl_client.vertical_id` (the client's
+ * own vertical, 1:1 — what the QuickSight reports and the RBAC verticals-scope
+ * read) and `tbl_vertical_mapping(client_id, vertical_id, user_id)` (per-client
+ * vertical × user SPOC assignments, MANY-TO-MANY — one client may carry rows
+ * for several verticals).
+ *
+ * GET /admin/jobs?verticalId= uses the MANY-TO-MANY edge with ANY-match
+ * semantics: a job is kept when AT LEAST ONE of its client's mapped verticals
+ * is the selected one. The BE expresses that as an EXISTS subquery, so a client
+ * mapped to several verticals still yields exactly one row (a JOIN would
+ * duplicate the job and inflate the paginated COUNT). This control therefore
+ * offers ONE vertical at a time — matching both the BE validator (`intId`, so a
+ * CSV is a hard 400) and the identically-wired "Vertical" field on the /jobs
+ * "Filter Job" panel, which drives the very same param.
  */
 export type PsFilters = {
   offerState: '' | 'pending' | 'offered' | 'expired';
   categoryId: string;
   cityId: number[];
   clientId: number[];
+  verticalId: string;
 };
 
-export const EMPTY_PS_FILTERS: PsFilters = { offerState: '', categoryId: '', cityId: [], clientId: [] };
+export const EMPTY_PS_FILTERS: PsFilters = {
+  offerState: '', categoryId: '', cityId: [], clientId: [], verticalId: '',
+};
 
 /*
  * Scheduling Status options — the three offer sub-states within the bucket.
@@ -66,7 +90,7 @@ export const EMPTY_PS_FILTERS: PsFilters = { offerState: '', categoryId: '', cit
 const PS_OFFER_STATE_OPTIONS: SearchOption[] = [
   { value: 'pending', label: 'Pending to Scheduling' },
   { value: 'offered', label: 'Offered to Tx' },
-  { value: 'expired', label: 'Expired' },
+  { value: 'expired', label: 'Expired/Rejected' },
 ];
 
 /*
@@ -106,6 +130,7 @@ export function psFiltersFromParams(sp: { get(name: string): string | null }): P
     categoryId: sp.get('psCategory') || '',
     cityId:     csvNums(sp.get('psCity')),
     clientId:   csvNums(sp.get('psClient')),
+    verticalId: sp.get('psVertical') || '',
   };
 }
 
@@ -126,16 +151,21 @@ export function writePsFilterParams(p: URLSearchParams, f: PsFilters): void {
   set('psCategory', f.categoryId);
   set('psCity',     f.cityId.join(','));
   set('psClient',   f.clientId.join(','));
+  set('psVertical', f.verticalId);
 }
 
 /*
  * Stable string signature of the filter set. Used as (a) part of each page's
  * result-cache key and (b) the refetch effect's dependency — a string beats an
- * object identity that changes on every setState. Keep the 4-segment shape:
- * `psAnyFilterSet` tests it against the all-empty '|||'.
+ * object identity that changes on every setState. EVERY control must contribute
+ * a segment: one that is left out silently shares a cache key (and skips the
+ * page-1 reset) with a different filter set. `psAnyFilterSet` compares against
+ * `psFilterKey(EMPTY_PS_FILTERS)`, so the segment count is free to grow.
  */
 export function psFilterKey(f: PsFilters): string {
-  return [f.offerState, f.categoryId, f.cityId.join(','), f.clientId.join(',')].join('|');
+  return [
+    f.offerState, f.categoryId, f.cityId.join(','), f.clientId.join(','), f.verticalId,
+  ].join('|');
 }
 
 const EMPTY_PS_FILTER_KEY = psFilterKey(EMPTY_PS_FILTERS);
@@ -152,9 +182,9 @@ export function psAnyFilterSet(f: PsFilters): boolean {
  * later `undefined` win). Callers must send it ONLY while the
  * Pending-for-Scheduling tab is active.
  *
- * cityId / clientId ship as CSV (BE `csvIds` → IN (…)); categoryId is a single
- * id (the BE accepts only `intId` there); offerState is one of the three
- * literals in PS_OFFER_STATE_OPTIONS.
+ * cityId / clientId ship as CSV (BE `csvIds` → IN (…)); categoryId and
+ * verticalId are single ids (the BE accepts only `intId` there); offerState is
+ * one of the three literals in PS_OFFER_STATE_OPTIONS.
  */
 export function psQueryParams(f: PsFilters): Record<string, string> {
   const out: Record<string, string> = {};
@@ -162,6 +192,7 @@ export function psQueryParams(f: PsFilters): Record<string, string> {
   if (f.categoryId)      out.categoryId = f.categoryId;
   if (f.cityId.length)   out.cityId     = f.cityId.join(',');
   if (f.clientId.length) out.clientId   = f.clientId.join(',');
+  if (f.verticalId)      out.verticalId = f.verticalId;
   return out;
 }
 
@@ -220,6 +251,10 @@ export function PendingSchedulingFilters({
     () => [...lookup.toOpts.serviceCategories].sort((a, b) => String(a.label).localeCompare(String(b.label))),
     [lookup.toOpts.serviceCategories],
   );
+  const verticalOpts = useMemo<SearchOption[]>(
+    () => [...lookup.toOpts.verticals].sort((a, b) => String(a.label).localeCompare(String(b.label))),
+    [lookup.toOpts.verticals],
+  );
 
   const anySet = psAnyFilterSet(value);
 
@@ -228,7 +263,9 @@ export function PendingSchedulingFilters({
       {title && (
         <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{title}</div>
       )}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      {/* 5 controls: 2-up on small, 3-up on lg (the /jobs card is narrower than
+          the viewport), 5-up on xl so the bar stays one row on a wide screen. */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         <PsField label="Scheduling Status">
           {/* Sub-state WITHIN the bucket, not a replacement for it: every row
               here is job_status = 0 by definition, so the only thing worth
@@ -268,6 +305,18 @@ export function PendingSchedulingFilters({
             options={clientOpts}
             placeholder="All Clients"
             selectedLabel="clients"
+          />
+        </PsField>
+        <PsField label="Vertical">
+          {/* Single-select: the BE query validator types `verticalId` as a lone
+              positive integer (like categoryId, unlike cityId / clientId), so a
+              multi-select here would 400. The BE matches a job when ANY vertical
+              mapped to its client is the selected one — see the header note. */}
+          <SearchSelect
+            value={value.verticalId}
+            onChange={(v) => onChange({ ...value, verticalId: v })}
+            options={verticalOpts}
+            placeholder="All Verticals"
           />
         </PsField>
       </div>

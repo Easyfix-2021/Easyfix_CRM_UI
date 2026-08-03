@@ -6,6 +6,10 @@ dist/
 coverage/
 *.tsbuildinfo
 
+# `npm test` compiles src/lib/job-slots.ts here so a plain node:test file can
+# require it — this repo has no test-time transpiler. Regenerated every run.
+.test-build/
+
 .env
 .env.local
 .env.*.local

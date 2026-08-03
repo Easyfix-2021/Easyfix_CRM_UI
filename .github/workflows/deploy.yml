@@ -89,6 +89,13 @@ jobs:
       # deploy on any lint problem, gating build-and-push (needs: precheck).
       - name: Lint
         run: npm run lint:flat
+      # Value-level unit tests (node:test, no extra runner). Today: job-slots
+      # against the real production tbl_job.time_slot census — spelling variants
+      # that a type-checker cannot see, because they are facts about data this
+      # repo has no access to. `npm test` compiles the module under test into
+      # .test-build/ first; see tests/job-slots.test.js for why.
+      - name: Test
+        run: npm test
 
   build-and-push:
     name: Build image & push to ECR

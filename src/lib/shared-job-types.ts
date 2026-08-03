@@ -17,8 +17,28 @@ export type ShareJobResponse = {
   job_desc: string | null;
   schedule: {
     requested_date_time: string | null;
+    /** Date only — 'Tue, 5 Aug 2026'. */
     requested_date_label: string | null;
+    /** 12-hour appointment time — '5:30 AM'. Null on a date-only booking. */
+    requested_time_label: string | null;
+    /**
+     * The band the appointment ACTUALLY falls in, NOT the raw stored
+     * `tbl_job.time_slot`. The server resolves it (job-share.service.js
+     * resolveDisplaySlot) because the column is derived from
+     * requested_date_time and re-derived on every write, so a stored value
+     * contradicting the appointment is one the next save discards.
+     */
     time_slot: string | null;
+    /**
+     * The composed appointment line — 'Tue, 5 Aug 2026, 5:30 AM · After Hours',
+     * or 'Tue, 5 Aug 2026 · 3PM to 7PM' for a date-only booking.
+     *
+     * RENDER THIS, do not re-join the fields above. The server builds the same
+     * string into the WhatsApp/share-sheet blurb (buildShareMessage), so
+     * composing a second version here is how the link and the page it points at
+     * drift into quoting different windows — which is exactly what happened.
+     */
+    appointment_label: string | null;
   };
   address: {
     address: string | null;

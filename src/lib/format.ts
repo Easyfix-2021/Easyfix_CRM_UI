@@ -117,7 +117,12 @@ export function fmtDuration(sec: number | null): string {
  *   titleCaseLabel('Pin Code')             → 'Pin Code'   (idempotent)
  *   titleCaseLabel('ask property and building name')
  *                                          → 'Ask Property and Building Name'
- *   titleCaseLabel('issue panel qr code')  → 'Issue Panel QR Code'  (QR lower-input falls back to Title-cased; preserved if already upper)
+ *   titleCaseLabel('issue panel QR code')  → 'Issue Panel QR Code'
+ *   titleCaseLabel('issue panel qr code')  → 'Issue Panel Qr Code'
+ *        ⚠ NOT recoverable. Source casing is the only signal an acronym has, so
+ *        a lowercase 'qr' is indistinguishable from an ordinary word. Fix the DB
+ *        label, not this function — a hard-coded acronym list would mangle every
+ *        real word that collides with one.
  *   titleCaseLabel('GSTIN/UIN')            → 'GSTIN/UIN' (acronyms preserved)
  */
 const LOWERCASE_WORDS = new Set([
@@ -129,9 +134,9 @@ export function titleCaseLabel(input: unknown): string {
   if (input == null) return '';
   const raw = String(input).trim();
   if (!raw) return '';
-  // Normalise separators (underscores AND hyphens-between-words become
-  // spaces; in-word hyphens like "Magic-Link" survive because we split
-  // on whitespace, not on hyphens).
+  // Normalise separators: underscores become spaces, then runs of whitespace
+  // collapse. Hyphens are deliberately NOT touched — we split on whitespace
+  // only, so "Magic-Link" stays one word and is capitalised segment-wise below.
   const spaced = raw.replace(/_+/g, ' ').replace(/\s+/g, ' ');
   const words = spaced.split(' ');
   return words.map((word, idx) => {

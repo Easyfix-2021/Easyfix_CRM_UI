@@ -463,6 +463,9 @@ const config = [
       'node_modules/**',
       'next-env.d.ts',
       'public/**',
+      // tsc output that `npm test` regenerates each run — generated code, and
+      // linting it would just re-report whatever src/lib/job-slots.ts says.
+      '.test-build/**',
       '**/*.test.ts',
       '**/*.test.tsx',
       '**/*.spec.ts',

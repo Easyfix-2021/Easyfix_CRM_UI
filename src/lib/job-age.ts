@@ -109,10 +109,12 @@ function readAge(row: unknown): { days: number | null; secs: number | null } {
 /*
  * formatJobAge — the compact cell reading. See the display contract above.
  *
- *   formatJobAge({ ageDays: 12, ageSecs: 1_080_000 })  → '12d'
+ *   formatJobAge({ ageDays: 12, ageSecs: 1_080_000 })  → '12d 12h'
+ *   formatJobAge({ ageDays: 2,  ageSecs: 172_800 })    → '2d'      (no "2d 0h")
  *   formatJobAge({ ageDays: 0,  ageSecs: 18_000 })     → '5h'
  *   formatJobAge({ ageDays: 0,  ageSecs: 720 })        → '12m'
  *   formatJobAge({ ageDays: 0,  ageSecs: 12 })         → '<1m'
+ *   formatJobAge({ ageDays: 3 })                       → '3d'      (no ageSecs)
  *   formatJobAge({})                                   → '—'
  */
 export function formatJobAge(row: unknown): string {

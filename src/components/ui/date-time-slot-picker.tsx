@@ -19,18 +19,33 @@
  *                requested_date_time / requested_time / time_slot directly, so
  *                it uses 'hour-frame'.
  *
- *   'hour-frame' — the ten 1-HOUR booking frames from '@/lib/job-slots'
- *                (9-10 … 6-7). Picking one emits the frame's START, which is
+ *   'hour-frame' — WHOLE HOURS, all 24 of them (12:00 AM … 11:00 PM). The
+ *                chosen hour IS the start of the 1-hour booking frame, which is
  *                exactly what tbl_job.requested_time stores and what the
  *                Booking Time Slot band is derived from. Used on every surface
  *                that COMMITS a booking window (Book New Call, Confirm &
- *                Schedule, Edit). The trailing "After Hours / Custom Time" row
- *                reveals the same free `type="time"` input, which is how an
- *                out-of-hours visit (banding to 'After Hours') is entered.
+ *                Schedule, Edit).
+ *                NO minute selector and NO "Custom Time" escape row: the list
+ *                already spans midnight to 11 PM, so an out-of-hours visit is
+ *                just another hour in it (and bands to 'After Hours' on its
+ *                own). It previously offered only the ten 9-7 frames plus an
+ *                "After Hours / Custom Time" row that revealed a free
+ *                `type="time"` input — two controls stacked under the date, and
+ *                the frame rows duplicated the Booking Time Slot chips sitting
+ *                immediately to their left. One hourly dropdown replaces both.
  *
- * A stored time that is off-grid for the active granularity (legacy 16:30, or a
- * deliberate custom pick) drops the control into custom mode so the real value
- * stays visible and editable — never silently re-rounded.
+ * OFF-GRID STORED TIMES (legacy 16:30, 05:30) are never blanked and never
+ * silently re-rounded — but the two granularities keep them visible in
+ * DIFFERENT ways, and mixing the two is what produced the double-control bug:
+ *
+ *   'half-hour'  → the control drops into CUSTOM mode, revealing the free
+ *                  `type="time"` input already on offer there.
+ *   'hour-frame' → NO custom mode. The stored time is appended to the dropdown
+ *                  as a "(stored)" row, so there is exactly ONE control on
+ *                  screen and no minute selector anywhere. Custom mode on this
+ *                  granularity would select a CUSTOM row that does not exist,
+ *                  leaving the dropdown showing its placeholder while a second
+ *                  time input rendered underneath it.
  *
  * The 30-min list renders through the shared searchable <SearchSelect />
  * (typeahead combobox) so the operator can type "2:30" / "pm" to filter
@@ -47,8 +62,8 @@ import * as React from 'react';
 import { Input } from './input';
 import { SearchSelect, type SearchOption } from './search-select';
 import { cn } from '@/lib/utils';
-import { HOUR_FRAMES, isHourFrameStart } from '@/lib/job-slots';
 
+/* Half-hour mode only — 'hour-frame' offers all 24 hours and needs no escape row. */
 const CUSTOM = '__custom__';
 
 /** Which option grid the time dropdown offers. See the file header. */
@@ -61,6 +76,11 @@ function label12h(h: number, m: number): string {
 }
 function isHalfHour(v: string): boolean {
   return /^\d{2}:(00|30)$/.test(v);
+}
+
+/* 'hour-frame' grid = anything on the hour. */
+function isWholeHour(v: string): boolean {
+  return /^\d{2}:00$/.test(v);
 }
 
 export function TimeSelect({
@@ -79,22 +99,39 @@ export function TimeSelect({
   const isFrames = granularity === 'hour-frame';
   // Is this value one of the offered rows, or does it need the free input?
   const onGrid = React.useCallback(
-    (v: string) => (isFrames ? isHourFrameStart(v) : isHalfHour(v)),
+    (v: string) => (isFrames ? isWholeHour(v) : isHalfHour(v)),
     [isFrames],
   );
-  // A value off the active grid (legacy data, or a deliberate custom pick)
-  // drops the control into custom mode so the entered time stays visible.
-  const [custom, setCustom] = React.useState<boolean>(!!value && !onGrid(value));
+  /*
+   * Does this value need the free `type="time"` input?
+   *
+   * HALF-HOUR ONLY — `!isFrames` is the load-bearing clause. 'hour-frame' has
+   * no custom mode at all: an off-grid value there is appended as a "(stored)"
+   * ROW in the same dropdown (see the options memo below), which is precisely
+   * why that grid offers all 24 hours.
+   *
+   * Without the `!isFrames` guard, a booking surface opened on a job holding an
+   * off-grid time (legacy 05:30 / 16:30) latched into custom mode — and since
+   * 'hour-frame' offers no CUSTOM row, `value={CUSTOM}` matched no option and
+   * SearchSelect fell back to its placeholder. That is the bug ops reported on
+   * job #482491: the dropdown read "— Pick Time —" as though nothing were
+   * picked, while a SECOND control (a native time input, minute wheel and all)
+   * sat underneath holding the real 05:30. Two time controls where the design
+   * has one — and the minute selector this granularity exists to remove.
+   */
+  const wantsCustom = React.useCallback(
+    (v: string) => !isFrames && !!v && !onGrid(v),
+    [isFrames, onGrid],
+  );
+  const [custom, setCustom] = React.useState<boolean>(() => wantsCustom(value));
   /*
    * Remember the value WE last emitted, so the sync-effect below can tell an
    * OUTSIDE push apart from our own echo.
    *
-   * Outside pushes re-decide custom mode in BOTH directions. That matters for
-   * the paired Booking Time Slot control: clicking a band chip pushes the
-   * band's start hour down here, and a control still latched in custom mode
-   * from the job's off-grid stored time (16:30) would keep showing the free
-   * input and "After Hours / Custom Time" while actually holding 09:00 — the
-   * band and the time visibly disagreeing right next to each other.
+   * Outside pushes re-decide custom mode in BOTH directions, so a control
+   * latched open by an off-grid stored time closes again the moment a caller
+   * pushes an on-grid one (rather than showing the free input while actually
+   * holding the pushed value — the two visibly disagreeing).
    *
    * Our OWN emissions never re-decide, or typing into the free input would
    * snap the control shut the moment the half-typed value landed on the grid.
@@ -103,22 +140,43 @@ export function TimeSelect({
   React.useEffect(() => {
     if (value === selfEmitted.current) return;
     selfEmitted.current = value;
-    setCustom(!!value && !onGrid(value));
-  }, [value, onGrid]);
+    setCustom(wantsCustom(value));
+  }, [value, wantsCustom]);
   const emit = (v: string) => { selfEmitted.current = v; onChange(v); };
 
   const options = React.useMemo<SearchOption[]>(() => {
     const out: SearchOption[] = [];
     if (isFrames) {
-      // The ten booking frames, in order. `keywords` carries the 24-hour start
-      // so typing "14" finds "2 PM - 3 PM".
-      for (const f of HOUR_FRAMES) {
-        if (minTime && f.start < minTime) continue;
-        out.push({ value: f.start, label: f.label, keywords: f.start });
+      /*
+       * Every hour of the day, business-hours-first: 08:00 → 23:00 → 00:00 →
+       * 07:00. Same ordering as the half-hour list below, so the two controls
+       * feel identical; the wrap is what puts the hours ops actually books at
+       * the top without hiding the after-hours ones.
+       *
+       * No "Custom Time" row and no minute input: the list already covers all
+       * 24 hours, so an out-of-hours visit is simply one of them. Minutes are
+       * deliberately not offered — a booking frame starts on the hour.
+       */
+      for (let i = 0; i < 24; i++) {
+        const h = (8 + i) % 24;
+        const hhmm = `${String(h).padStart(2, '0')}:00`;
+        if (minTime && hhmm < minTime) continue;
+        // `keywords` carries the 24-hour form so typing "14" finds "2:00 PM".
+        out.push({ value: hhmm, label: label12h(h, 0), keywords: hhmm });
       }
-      // Out-of-hours / any-minute escape, pinned last. Picking it reveals the
-      // free time input; any time outside 9-19 bands to 'After Hours'.
-      out.push({ value: CUSTOM, label: 'After Hours / Custom Time' });
+      /*
+       * A stored OFF-GRID time (legacy 16:30, or one typed before this control
+       * offered whole hours only) is appended so it still renders as the
+       * selection instead of the field reading blank — and so opening and
+       * saving an untouched job cannot silently re-round it. Same
+       * keep-what-is-stored rule the Booking Time Slot chips follow.
+       */
+      if (value && !isWholeHour(value)) {
+        const [hh, mm] = value.split(':').map(Number);
+        if (Number.isFinite(hh) && Number.isFinite(mm)) {
+          out.push({ value, label: `${label12h(hh, mm)} (stored)`, keywords: value });
+        }
+      }
       return out;
     }
     // Ordered to START at 08:00 and wrap through midnight to 07:30 — all 48
@@ -194,9 +252,27 @@ export function DateTimeSlotPicker({
   const lastPushed = React.useRef<string>(value);
   React.useEffect(() => {
     if (value === lastPushed.current) return; // our own echo — keep local state
-    setDate(value ? value.split('T')[0] : '');
-    setTime(value ? (value.split('T')[1] || '') : '');
     lastPushed.current = value;
+    if (!value) {
+      /*
+       * '' means INCOMPLETE, not "empty this control". That is the meaning WE
+       * give it in push() — picking a date before a time emits '' while the date
+       * stays on screen — so an incoming '' has to mean the same thing, or a
+       * parent-initiated clear behaves differently from our own and takes the
+       * operator's DATE away as collateral. Clear the time; keep the date.
+       *
+       * Booking Time Slot's "After Hours" chip depends on this: it clears the
+       * time (that band has no start hour to nudge to, and guessing one commits
+       * the customer to an hour nobody picked) and relies on the date surviving
+       * so the operator only has to re-pick the hour.
+       *
+       * With no date held there is nothing to keep and this IS a full clear.
+       */
+      setTime('');
+      return;
+    }
+    setDate(value.split('T')[0]);
+    setTime(value.split('T')[1] || '');
   }, [value]);
 
   const minDate = min ? min.split('T')[0] : undefined;

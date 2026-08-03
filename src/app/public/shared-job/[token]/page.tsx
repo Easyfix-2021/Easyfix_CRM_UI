@@ -114,7 +114,19 @@ export default function SharedJobPage() {
     .map((s) => (s || '').trim())
     .filter(Boolean)
     .join(', ');
-  const apptLabel = [data.schedule.requested_date_label, data.schedule.time_slot].filter(Boolean).join(' · ');
+  /*
+   * The appointment line comes composed off the server (schedule.appointment_label)
+   * — 'Tue, 5 Aug 2026, 5:30 AM · After Hours'. Two reasons it is not assembled
+   * here any more:
+   *
+   *   1. It used to join `requested_date_label` with the RAW `time_slot`, which
+   *      is a derived column the backend re-derives on every write. Job #482491
+   *      published '3pm to 7pm' against an 05:30 appointment to anyone opening
+   *      the link.
+   *   2. buildShareMessage builds the WhatsApp/share-sheet blurb from the very
+   *      same string, so the message and the page it links to cannot disagree.
+   */
+  const apptLabel = data.schedule.appointment_label || '';
   const directionsUrl = buildDirectionsUrl(addr.gps_location, addr.address || assembledAddress || null);
 
   function openCallDialog() {

@@ -14,6 +14,7 @@ import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { formatDate, formatEasyfixerName, statusLabel, statusTone } from '@/lib/utils';
 import { formatJobAge, jobAgeTitle, JOB_AGE_SORT_KEY, type JobAgeFields } from '@/lib/job-age';
+import { displaySlot } from '@/lib/job-slots';
 import { StatusChip } from '@/components/ui/StatusChip';
 import {
   TABS, filterJobRows, filterTabsForStages, makeQuickStatusChange,
@@ -159,10 +160,21 @@ function offerState(j: JobRow): 'offered' | 'expired' | 'none' {
     if (j.offer_state === 'expired') return 'expired';
     return 'none';
   }
-  // Legacy fallback ONLY (older BE deploy). is_offered is the EXISTS flag,
-  // offered_count the COUNT; the Expired test is `expired === total`, not
-  // `offered_count === 0`, because a rejected-only job has no open offer yet is
-  // back in the pool rather than Expired.
+  /*
+   * Legacy fallback ONLY (older BE deploy, mid-rollout). is_offered is the
+   * EXISTS flag, offered_count the COUNT.
+   *
+   * ⚠ This branch CANNOT express the 2026-08-03 rule, and deliberately does not
+   * pretend to. The rule is "offers exist and none is still open ⇒
+   * Expired/Rejected", but an old backend sends no rejected count — only total,
+   * offered and expired — so a rejected-only job is indistinguishable here from
+   * one whose offers are unresolvable. It stays on the OLD `expired === total`
+   * test and lands in 'none'. That is the safe direction: under-claiming
+   * "Expired/Rejected" for a few seconds of a deploy is better than a chip that
+   * asserts every offer is spent when this code cannot actually know.
+   * The moment `offer_state` arrives, the branch above wins and the chip is
+   * exact.
+   */
   if (j.is_offered === 1 || j.is_offered === true || (j.offered_count ?? 0) > 0) return 'offered';
   const total = j.total_offer_count ?? 0;
   const expired = j.expired_offer_count ?? 0;
@@ -795,9 +807,18 @@ export default function MyOrdersPage() {
                   </td>
                   <td>{j.city_name ?? '—'}</td>
                   <td>{j.service_category ?? '—'}</td>
+                  {/* Appointment. The sub-line stays a BAND — ops quotes the
+                      window, not the minute — but it is the band derived from
+                      `requested_date_time` when that carries a real time, not
+                      the raw stored `time_slot`. The column is derived and
+                      re-derived on every write, so a stale value printed a
+                      window the job no longer sits in. See displaySlot. */}
                   <td className="whitespace-nowrap">
                     <div className="text-xs">{j.requested_date_time ? formatDate(j.requested_date_time) : '—'}</div>
-                    {j.time_slot && <div className="text-[10px] text-muted-foreground">· {j.time_slot}</div>}
+                    {(() => {
+                      const slot = displaySlot(j.requested_date_time, j.time_slot);
+                      return slot ? <div className="text-[10px] text-muted-foreground">· {slot}</div> : null;
+                    })()}
                   </td>
                   <td>
                     <div>{j.customer_name ?? '—'}</div>
@@ -824,9 +845,9 @@ export default function MyOrdersPage() {
                     ) : j.job_status === 0 && offerState(j) === 'expired' ? (
                       <StatusChip
                         tone="rose"
-                        title={`Every offer on this order expired without a response (${j.expired_offer_count} of ${j.total_offer_count}) — it needs re-offering or a manual assign`}
+                        title={`Every offer on this order is spent — expired or declined (${j.total_offer_count} offer${j.total_offer_count === 1 ? '' : 's'}, ${j.expired_offer_count} expired) — it needs re-offering or a manual assign`}
                       >
-                        Expired
+                        Expired/Rejected
                       </StatusChip>
                     ) : (
                       <StatusChip tone={statusTone(j.job_status)}>

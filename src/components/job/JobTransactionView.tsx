@@ -7,6 +7,7 @@ import { formatDate, statusLabel, statusTone } from '@/lib/utils';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { maskMobile, formatServiceAddress } from '@/lib/format';
 import { formatJobAge, jobAgeTitle } from '@/lib/job-age';
+import { displaySlot } from '@/lib/job-slots';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { Button } from '@/components/ui/button';
 import { useMe } from '@/lib/auth-context';
@@ -257,9 +258,18 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
               ? formatDate((j as Record<string, unknown>).original_appointment_date_time as string)
               : '—'}
           </DLRow>
+          {/* The band in parentheses is the one `requested_date_time` actually
+              falls in, not the raw stored `time_slot` — the column is derived
+              and re-derived on every write, so a stored value contradicting the
+              date printed immediately to its left is already dead. Still a
+              BAND, deliberately: the commitment is the window. See
+              displaySlot in @/lib/job-slots. */}
           <DLRow label="Appointment status with date time:">
             {j.requested_date_time ? formatDate(j.requested_date_time) : '—'}
-            {j.time_slot ? <span className="ml-2 text-xs text-muted-foreground">({j.time_slot})</span> : null}
+            {(() => {
+              const slot = displaySlot(j.requested_date_time, j.time_slot);
+              return slot ? <span className="ml-2 text-xs text-muted-foreground">({slot})</span> : null;
+            })()}
           </DLRow>
         </Card>
 
