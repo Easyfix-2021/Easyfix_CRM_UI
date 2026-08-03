@@ -1100,7 +1100,13 @@ function UserFormModal({
         return;
       }
     }
-    if (!/^[0-9]{10}$/.test(mobile)) { setError('Mobile must be 10 digits'); return; }
+    /*
+     * Mobile is OPTIONAL (2026-08-03) — it used to be mandatory. Blank passes;
+     * anything typed must still be exactly 10 digits, so a mistyped number is
+     * caught rather than half-stored. Mirrors the backend createBody, which now
+     * allows '' / null but keeps the same pattern.
+     */
+    if (mobile.trim() && !/^[0-9]{10}$/.test(mobile)) { setError('Mobile must be 10 digits'); return; }
     if (altMob && !/^[0-9]{10}$/.test(altMob)) { setError('Alternate number must be 10 digits or blank'); return; }
     // Block submit if the real-time probe found a collision. Backend
     // re-checks on create/update too — this is defensive UX only. We
@@ -1345,11 +1351,13 @@ function UserFormModal({
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label className="block mb-1" required>Mobile</Label>
+              {/* No `required` — mobile became optional 2026-08-03. The
+                  10-digit format is still enforced when one IS supplied. */}
+              <Label className="block mb-1">Mobile</Label>
               <Input
                 value={mobile}
                 onChange={(e) => setMobile(e.target.value.replace(/\D/g, '').slice(0, 10))}
-                placeholder="10-digit number"
+                placeholder="10-digit number (optional)"
                 className="font-mono"
               />
               {mobile && mobile.length !== 10 && (
