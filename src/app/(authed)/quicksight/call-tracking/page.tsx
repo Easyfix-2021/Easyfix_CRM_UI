@@ -13,9 +13,24 @@
  *
  *   By Job   one row per JOB — the calls made for it, who made them, to whom,
  *            and which lifecycle step each was made from.
- *   By User  one row per (DAY × USER) — a caller's daily call log: volume,
- *            how many distinct jobs it touched, and the job status most of
- *            those calls were made at.
+ *   By User  a caller's call log, at one of TWO aggregation grains (sub-tabs):
+ *              Date Wise  one row per (DAY × USER) — volume, how many distinct
+ *                         jobs it touched, and the job status most of those
+ *                         calls were made at.
+ *              Combined   one row per USER for the WHOLE window, plus the
+ *                         per-day efficiency averages.
+ *            The sub-tabs appear ONLY when the window spans more than one day —
+ *            on a single day the two grains are the same table, and a toggle
+ *            between two identical views is just noise.
+ *
+ * ⚠ "PER DAY" MEANS PER **ACTIVE** DAY on the Combined grain — divided by the
+ * days this user actually placed a call on, never by the days in the selected
+ * range. Dividing by range days would rank people by attendance (weekends,
+ * leave, a mid-month joiner) rather than by how hard they worked on the days
+ * they worked. `Active Days` is therefore a COLUMN, sitting before the averages
+ * it is the denominator of — 5 calls/day over 2 active days and over 20 are very
+ * different claims, and the operator must be able to see which one they are
+ * reading.
  *
  * ⚠ Job Status is TWO different facts in this report and they must not be
  * conflated:
@@ -33,7 +48,11 @@
  */
 
 import { useCallback, useMemo, useState } from 'react';
-import { PhoneCall } from 'lucide-react';
+import { PhoneCall, Play, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react';
+import { showToast } from '@/components/ui/toast';
+import { api, ApiError } from '@/lib/api';
+import { CallRecordingAudio } from '@/components/ui/call-recording-audio';
+import { IconButton } from '@/components/ui/icon-button';
 
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
@@ -103,6 +122,37 @@ type UserRow = {
   firstCallAt: string | null; lastCallAt: string | null;
 };
 
+/*
+ * The COMBINED grain — one row per user for the WHOLE window.
+ *
+ * `activeDays` is the number of distinct days this user placed at least one call
+ * on, counted SERVER-side with COUNT(DISTINCT day). It is the denominator of
+ * both per-day averages below, and it is deliberately NOT derivable here: byUser
+ * is row-capped, so counting a user's rows in that array would under-count the
+ * days and inflate the averages the moment the cap bites.
+ *
+ * Both averages are `null` — never 0 — when there is nothing to divide by, the
+ * same convention avgDurationSecs already uses. They render as an em-dash.
+ */
+type CombinedUserRow = {
+  userId: number | null; userName: string;
+  /** Days with at least one call. The denominator of the two per-day averages. */
+  activeDays: number;
+  calls: number; uniqueJobs: number;
+  connected: number; connectRate: number;
+  totalDurationSecs: number;
+  /** Avg over CONNECTED calls only — a ring-out must not drag talk time down. */
+  avgDurationSecs: number | null;
+  /** calls / activeDays, 1dp. */
+  avgCallsPerDay: number | null;
+  /** totalDurationSecs / activeDays, whole seconds. */
+  avgDurationPerDaySecs: number | null;
+  topStatus: number | null; topStatusLabel: string; topStatusCalls: number;
+  steps: StepBreak[];
+  parties: PartyBreak[];
+  firstCallAt: string | null; lastCallAt: string | null;
+};
+
 type DayRow = { day: string; calls: number; connected: number; uniqueJobs: number };
 
 type Totals = {
@@ -115,6 +165,7 @@ type CallTrackingData = {
   totals: Totals;
   byJob: JobRow[];
   byUser: UserRow[];
+  byUserCombined: CombinedUserRow[];
   byDay: DayRow[];
 };
 
@@ -191,6 +242,82 @@ function BreakdownCell({ items }: { items: Array<{ key: string; text: string }> 
 
 /* Which grain the table below the charts is showing. Purely client-side. */
 type Grain = 'job' | 'user';
+/* Which aggregation the By User tab is showing. Also purely client-side —
+   BOTH sub-views ride on the one summary response, so switching never refetches. */
+type UserGrain = 'date' | 'combined';
+
+/*
+ * ── Combined-grain sorting ────────────────────────────────────────────────
+ *
+ * CLIENT-side on purpose, unlike the job LIST pages which sort server-side.
+ * The whole combined grain arrives in the one summary response and is rendered
+ * unpaginated, so sorting in memory reorders EVERY row the operator can see —
+ * the objection to client-side sorting (it silently sorts only the current
+ * page) does not apply here. It also keeps sorting instant and refetch-free,
+ * which is the point of both grains riding one response.
+ *
+ * The grain exists to RANK callers, so every numeric column is sortable and the
+ * default is the most useful ranking rather than insertion order.
+ */
+type CombinedSortKey =
+  | 'userName' | 'activeDays' | 'calls' | 'uniqueJobs' | 'connected' | 'connectRate'
+  | 'avgCallsPerDay' | 'totalDurationSecs' | 'avgDurationSecs' | 'avgDurationPerDaySecs';
+
+/*
+ * Nulls ALWAYS sort last, in both directions.
+ *
+ * A null here means "no basis to compute" (nothing connected, no active days) —
+ * NOT "zero". Letting it collate as 0 would park those users at the top of an
+ * ascending "worst first" sort and read as though they were the poorest
+ * performers, when the honest answer is that they have no score at all.
+ */
+function cmpCombined(a: CombinedUserRow, b: CombinedUserRow, key: CombinedSortKey, dir: 'asc' | 'desc'): number {
+  if (key === 'userName') {
+    const r = (a.userName || '').localeCompare(b.userName || '', undefined, { sensitivity: 'base' });
+    return dir === 'asc' ? r : -r;
+  }
+  const av = a[key] as number | null;
+  const bv = b[key] as number | null;
+  if (av == null && bv == null) return 0;
+  if (av == null) return 1;
+  if (bv == null) return -1;
+  return dir === 'asc' ? av - bv : bv - av;
+}
+
+/* A sortable column header — click to sort, click again to flip direction. */
+function SortTh({
+  label, col, sort, onSort, className, title,
+}: {
+  label: string;
+  col: CombinedSortKey;
+  sort: { key: CombinedSortKey; dir: 'asc' | 'desc' };
+  onSort: (k: CombinedSortKey) => void;
+  className?: string;
+  title?: string;
+}) {
+  const active = sort.key === col;
+  const Icon = !active ? ChevronsUpDown : sort.dir === 'asc' ? ChevronUp : ChevronDown;
+  return (
+    <th className={className} title={title}>
+      <button
+        type="button"
+        onClick={() => onSort(col)}
+        aria-label={`Sort By ${label}`}
+        className={`inline-flex items-center gap-1 hover:text-primary ${active ? 'text-primary' : ''}`}
+      >
+        {label}
+        <Icon size={12} className={active ? 'opacity-90' : 'opacity-40'} />
+      </button>
+    </th>
+  );
+}
+
+/*
+ * The denominator caveat, spelled out wherever a per-day average is shown. The
+ * per-cell titles below append this row's OWN active-day count, so the operator
+ * never has to infer what a given average was divided by.
+ */
+const PER_DAY_HELP = 'Averaged over the days on which this user placed at least one call — NOT over the number of days in the selected range.';
 
 export default function CallTrackingPage() {
   const { me } = useMe();
@@ -240,10 +367,54 @@ export default function CallTrackingPage() {
   const data = summary.data;
   const byJob = data?.byJob ?? [];
   const byUser = data?.byUser ?? [];
+  const byUserCombinedRaw = data?.byUserCombined ?? [];
+
+  /*
+   * Default sort: Avg Calls / Day descending — the metric this grain exists to
+   * expose. The server returns calls DESC, which just re-ranks by raw volume and
+   * would hide exactly the finding the per-day averages were added for (a caller
+   * with fewer total calls over far fewer active days can be the more intense).
+   */
+  const [combinedSort, setCombinedSort] = useState<{ key: CombinedSortKey; dir: 'asc' | 'desc' }>(
+    { key: 'avgCallsPerDay', dir: 'desc' },
+  );
+  const onCombinedSort = useCallback((key: CombinedSortKey) => {
+    // Same column → flip direction; new column → start descending, since every
+    // sortable column here is a "most first" ranking question.
+    setCombinedSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' }));
+  }, []);
+  const byUserCombined = useMemo(
+    // Copy before sorting — Array.prototype.sort mutates, and this array is the
+    // fetch cache's own object.
+    () => [...byUserCombinedRaw].sort((a, b) => cmpCombined(a, b, combinedSort.key, combinedSort.dir)),
+    [byUserCombinedRaw, combinedSort],
+  );
   const byDay = data?.byDay ?? [];
   const totals = data?.totals;
 
   const [tab, setTab] = useState<Grain>('job');
+  const [userGrain, setUserGrain] = useState<UserGrain>('date');
+  /*
+   * Does the window span more than one day? Read off byDay — the server's own
+   * gap-filled day axis for the window it actually queried — rather than
+   * re-deriving it from the filter state. The filter dates are independently
+   * optional (either can be blank, and the BE then defaults it), so comparing
+   * them here would re-implement the backend's windowOf() and could disagree
+   * with the data on screen. byDay always carries at least one entry.
+   */
+  const multiDay = byDay.length > 1;
+  // On a single-day window the two grains are identical, so no toggle is shown
+  // and the Date Wise table renders regardless of the remembered sub-tab.
+  const effectiveUserGrain: UserGrain = multiDay ? userGrain : 'date';
+  /*
+   * "01 Apr 2026 – 30 Apr 2026" for the Combined drill-down's title, so the
+   * dialog says which span its rows cover. Taken from byDay (the server's own
+   * axis) rather than the filter inputs — the trend is clamped to a maximum
+   * span, and the title must describe the data actually on screen.
+   */
+  const windowLabel = byDay.length > 0
+    ? `${fmtDay(byDay[0].day)} – ${fmtDay(byDay[byDay.length - 1].day)}`
+    : '';
   // Count drill-down: which CELL was clicked (a job, or a user's day).
   const [drill, setDrill] = useState<Drill | null>(null);
 
@@ -272,6 +443,29 @@ export default function CallTrackingPage() {
     const secs = byUser.reduce((a, r) => a + r.totalDurationSecs, 0);
     return { calls, connected, secs, rate: calls > 0 ? Math.round((connected / calls) * 100) : 0 };
   }, [byUser]);
+
+  /*
+   * Combined-grain footer. The two per-day figures are Σcalls / ΣactiveDays and
+   * Σtalk / ΣactiveDays — a WEIGHTED average across every user-day worked, never
+   * the mean of the column above it. Averaging the per-user averages would give
+   * a caller who worked 1 day the same weight as one who worked 22.
+   */
+  const combinedFoot = useMemo(() => {
+    // Reads the UNSORTED source: a total is order-independent, so depending on
+    // the sorted array would only recompute every one of these on each sort
+    // click without ever changing a number.
+    const calls = byUserCombinedRaw.reduce((a, r) => a + r.calls, 0);
+    const connected = byUserCombinedRaw.reduce((a, r) => a + r.connected, 0);
+    const secs = byUserCombinedRaw.reduce((a, r) => a + r.totalDurationSecs, 0);
+    const days = byUserCombinedRaw.reduce((a, r) => a + r.activeDays, 0);
+    return {
+      calls, connected, secs, days,
+      rate: calls > 0 ? Math.round((connected / calls) * 100) : 0,
+      // null, not 0 — nothing to divide by is not "zero calls a day".
+      callsPerDay: days > 0 ? Math.round((calls / days) * 10) / 10 : null,
+      secsPerDay: days > 0 ? secs / days : null,
+    };
+  }, [byUserCombinedRaw]);
 
   const [downloading, setDownloading] = useState(false);
   const onDownload = useCallback(async () => {
@@ -529,8 +723,32 @@ export default function CallTrackingPage() {
         </div>
       )}
 
-      {/* ── Tab 2: By User (one row per day × user) ───────────────────── */}
+      {/* ── Tab 2: By User — the SAME calls at two aggregation grains ─── */}
       {tab === 'user' && (
+        <>
+          {/*
+            * Sub-tabs ONLY on a multi-day window. Over a single day the two
+            * grains produce the identical table, and a toggle between two
+            * identical views is a control that teaches the operator nothing.
+            * Same shared GlidingTabs as the main grain tabs, and the same
+            * response feeds both — switching never refetches.
+            */}
+          {multiDay && (
+            <div className="mt-4">
+              <GlidingTabs
+                ariaLabel="By User Aggregation"
+                value={userGrain}
+                onChange={(v) => setUserGrain(v as UserGrain)}
+                tabs={[
+                  { value: 'date', label: 'Date Wise', count: byUser.length },
+                  { value: 'combined', label: 'Combined', count: byUserCombined.length },
+                ]}
+              />
+            </div>
+          )}
+
+      {/* ── Sub-tab 1: Date Wise (one row per day × user) ─────────────── */}
+      {effectiveUserGrain === 'date' && (
         <div className="overflow-x-auto rounded-md border border-border mt-4">
           <table className="data-table">
             <thead>
@@ -648,6 +866,159 @@ export default function CallTrackingPage() {
         </div>
       )}
 
+      {/* ── Sub-tab 2: Combined (one row per user, whole window) ──────── */}
+      {effectiveUserGrain === 'combined' && (
+        <div className="overflow-x-auto rounded-md border border-border mt-4">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <SortTh label="User" col="userName" sort={combinedSort} onSort={onCombinedSort} className="!text-left" />
+                {/*
+                  * The DENOMINATOR, shown before the averages that use it. An
+                  * average per day is unreadable without it — 5 calls/day over
+                  * 2 active days is a very different claim from 5 over 20.
+                  */}
+                <SortTh
+                  label="Active Days" col="activeDays" sort={combinedSort} onSort={onCombinedSort}
+                  className="!text-right"
+                  title="Days on which this user placed at least one call. This is the denominator of both per-day averages — not the number of days in the selected range."
+                />
+                <SortTh label="Calls" col="calls" sort={combinedSort} onSort={onCombinedSort} className="!text-right" />
+                <SortTh label="Unique Jobs" col="uniqueJobs" sort={combinedSort} onSort={onCombinedSort} className="!text-right" title="Distinct jobs this user called about across the whole window" />
+                <SortTh label="Connected" col="connected" sort={combinedSort} onSort={onCombinedSort} className="!text-right" />
+                <SortTh label="Connect %" col="connectRate" sort={combinedSort} onSort={onCombinedSort} className="!text-right" />
+                <SortTh label="Avg Calls / Day" col="avgCallsPerDay" sort={combinedSort} onSort={onCombinedSort} className="!text-right" title={PER_DAY_HELP} />
+                <SortTh label="Total Duration" col="totalDurationSecs" sort={combinedSort} onSort={onCombinedSort} className="!text-right" />
+                <SortTh label="Avg Duration / Call" col="avgDurationSecs" sort={combinedSort} onSort={onCombinedSort} className="!text-right" title="Averaged over CONNECTED calls only — a call that never connected is not talk time" />
+                <SortTh label="Avg Duration / Day" col="avgDurationPerDaySecs" sort={combinedSort} onSort={onCombinedSort} className="!text-right" title={PER_DAY_HELP} />
+                <th className="!text-center" title="The job status most of this user's calls were made at — hover the cell for the full step breakdown">Majority Job Status</th>
+                <th className="!text-left" title="Who was on the other end — Customer, Alternate, Client SPOC, Technician or Other">To Whom</th>
+              </tr>
+            </thead>
+            <tbody>
+              {byUserCombined.map((r) => {
+                // Spelled out per row so the number on screen carries its own
+                // denominator, not just the column header's general caveat.
+                const perDayTitle = `${PER_DAY_HELP} This user placed calls on ${r.activeDays} of the ${byDay.length} days in the range.`;
+                return (
+                  <tr key={r.userId ?? r.userName}>
+                    <td className="!text-left font-medium whitespace-nowrap">
+                      {r.userName}
+                      {r.userId != null && <span className="ml-1 text-[10px] text-muted-foreground">#{r.userId}</span>}
+                    </td>
+                    <td className="!text-right tabular-nums whitespace-nowrap" title={perDayTitle}>{r.activeDays}</td>
+                    <td className="!text-right tabular-nums whitespace-nowrap">
+                      {/*
+                        * Drills on the caller ALONE — no day — so the dialog
+                        * spans the whole window, exactly the set this row
+                        * counts. The endpoint applies each selection key only
+                        * when present, so caller-without-day already worked.
+                        */}
+                      {r.userId == null ? (
+                        <span title="These calls have no caller recorded, so they can't be isolated in a drill-down.">{r.calls}</span>
+                      ) : (
+                        <CountLink
+                          n={r.calls}
+                          title="Show the individual calls behind this number — every call this user placed in the window"
+                          onClick={() => setDrill({
+                            callerId: r.userId ?? undefined,
+                            label: `${r.userName}${windowLabel ? ` · ${windowLabel}` : ''}`,
+                          })}
+                        />
+                      )}
+                    </td>
+                    <td className="!text-right tabular-nums whitespace-nowrap">{r.uniqueJobs}</td>
+                    <td className="!text-right tabular-nums whitespace-nowrap text-emerald-700">{r.connected}</td>
+                    <td className="!text-right tabular-nums whitespace-nowrap font-medium">{r.connectRate}%</td>
+                    {/* null renders as an em-dash — "cannot divide", never "0". */}
+                    <td className="!text-right tabular-nums whitespace-nowrap font-medium" title={perDayTitle}>
+                      {r.avgCallsPerDay == null ? <span className="text-muted-foreground">—</span> : r.avgCallsPerDay}
+                    </td>
+                    <td className="!text-right tabular-nums whitespace-nowrap">{fmtTalkTime(r.totalDurationSecs)}</td>
+                    <td className="!text-right tabular-nums whitespace-nowrap">{fmtSecs(r.avgDurationSecs)}</td>
+                    <td className="!text-right tabular-nums whitespace-nowrap" title={perDayTitle}>
+                      {fmtTalkTime(r.avgDurationPerDaySecs)}
+                    </td>
+                    <td
+                      className="!text-center"
+                      title={r.steps.map((s) => `${s.label} (${s.calls})`).join(', ')}
+                    >
+                      {/* Server-authoritative label, same reasoning as the Date
+                          Wise table — only the chip TONE is derived locally. */}
+                      {!r.topStatusLabel ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : (
+                        <>
+                          <StatusChip tone={r.topStatus == null ? 'slate' : statusTone(r.topStatus)}>
+                            {r.topStatusLabel}
+                          </StatusChip>
+                          <span className="ml-1 text-[10px] text-muted-foreground">({r.topStatusCalls})</span>
+                        </>
+                      )}
+                    </td>
+                    <td className="!text-left text-xs">
+                      <BreakdownCell items={r.parties.map((p) => ({ key: p.role, text: `${p.role} (${p.calls})` }))} />
+                    </td>
+                  </tr>
+                );
+              })}
+              {byUserCombined.length === 0 && (
+                <tr><td colSpan={12} className="!text-center text-muted-foreground py-6">No Calls In This Window.</td></tr>
+              )}
+            </tbody>
+            {byUserCombined.length > 0 && (
+              <tfoot>
+                <tr className="bg-muted/60 font-semibold">
+                  <td className="!text-left">Total</td>
+                  <td
+                    className="!text-right tabular-nums"
+                    title="Total user-days on which at least one call was placed — the denominator of the two averages in this row."
+                  >
+                    {combinedFoot.days}
+                  </td>
+                  <td className="!text-right tabular-nums">{combinedFoot.calls}</td>
+                  {/* NOT the column sum — a job called by two users appears in
+                      both rows. Only totals.uniqueJobs is distinct. */}
+                  <td
+                    className="!text-right tabular-nums"
+                    title="Distinct jobs across the whole window — deliberately not the sum of the column, which double-counts a job called by more than one user."
+                  >
+                    {totals?.uniqueJobs ?? '—'}
+                  </td>
+                  <td className="!text-right tabular-nums">{combinedFoot.connected}</td>
+                  <td className="!text-right tabular-nums">{combinedFoot.rate}%</td>
+                  {/*
+                    * Σcalls / Σactive-days — WEIGHTED across every user-day
+                    * worked, not the mean of the column above (which would give
+                    * a one-day caller the same say as a 22-day one).
+                    */}
+                  <td
+                    className="!text-right tabular-nums"
+                    title="All calls divided by all active user-days — a weighted average, not the mean of the column above."
+                  >
+                    {combinedFoot.callsPerDay == null ? <span className="text-muted-foreground">—</span> : combinedFoot.callsPerDay}
+                  </td>
+                  <td className="!text-right tabular-nums">{fmtTalkTime(combinedFoot.secs)}</td>
+                  {/* Connected-only denominator — same reason as the By Job footer. */}
+                  <td className="!text-right tabular-nums">
+                    {fmtSecs(combinedFoot.connected > 0 ? combinedFoot.secs / combinedFoot.connected : null)}
+                  </td>
+                  <td
+                    className="!text-right tabular-nums"
+                    title="All talk time divided by all active user-days — a weighted average, not the mean of the column above."
+                  >
+                    {fmtTalkTime(combinedFoot.secsPerDay)}
+                  </td>
+                  <td colSpan={2} />
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      )}
+        </>
+      )}
+
       <CallDrilldownDialog drill={drill} filters={applied} onClose={() => setDrill(null)} />
 
       {/* Hosts the in-place job workspace for every <JobRefLink> on this page. */}
@@ -711,6 +1082,46 @@ type CallDetail = {
   recordingAvailable: boolean;
 };
 
+/*
+ * Inline recording playback for a drill-down row — the SAME lazy pattern the
+ * Call Analytics list uses (settings/call-analytics/page.tsx ListenButton), not
+ * a second implementation.
+ *
+ * Lazy on purpose: GET /admin/calls/:id/recording pulls the file from the
+ * provider and caches it to S3 on first request, so pre-fetching a URL for every
+ * visible row would hammer Plivo/Kaleyra for recordings nobody plays. A ▶ button
+ * until clicked, then an inline player.
+ *
+ * ⚠ Uses <CallRecordingAudio>, never a bare <audio>: Plivo recordings are
+ * 2-channel BY DESIGN (agent left, customer right), so a plain player makes the
+ * customer audible on one side only. That component downmixes to mono and falls
+ * back to plain stereo if the browser refuses.
+ *
+ * `callId` is tbl_job_caller_info.job_caller_info — exactly the id that route
+ * takes, which is why this needed no backend change.
+ */
+function ListenButton({ callId }: { callId: number }) {
+  const [loading, setLoading] = useState(false);
+  const [url, setUrl] = useState<string | null>(null);
+
+  if (url) return <CallRecordingAudio src={url} autoPlay className="h-7 w-44" />;
+
+  async function play() {
+    setLoading(true);
+    try {
+      const r = await api.get<{ url: string }>(`/admin/calls/${callId}/recording`);
+      if (r?.url) setUrl(r.url);
+      else showToast({ variant: 'error', message: 'No recording available for this call.' });
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Could not load the recording.' });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return <IconButton icon={Play} label="Listen Recording" busy={loading} onClick={() => void play()} />;
+}
+
 /** The clicked selection's identity — the remount key for the body below. */
 function drillKey(d: Drill): string {
   return `${d.jobId ?? ''}|${d.callerId ?? ''}|${d.day ?? ''}`;
@@ -730,7 +1141,9 @@ function CallDrilldownDialog({ drill, filters, onClose }: {
 
   return (
     <Dialog open={drill != null} onOpenChange={guardedOpenChange}>
-      <DialogContent className="max-w-5xl">
+      {/* Wider than the default report dialog: this table carries 9 columns and
+          now an inline audio player, so 5xl forced the Recording column to wrap. */}
+      <DialogContent className="max-w-6xl">
         <DialogHeader>
           <DialogTitle>{drill ? `Calls · ${drill.label}` : ''}</DialogTitle>
         </DialogHeader>
@@ -847,7 +1260,7 @@ function CallDrilldownBody({ drill, filters, onClose }: {
                     </td>
                     <td className="!text-center text-xs">
                       {c.recordingAvailable
-                        ? <span className="text-emerald-700">Yes</span>
+                        ? <ListenButton callId={c.id} />
                         : <span className="text-muted-foreground">No</span>}
                     </td>
                   </tr>

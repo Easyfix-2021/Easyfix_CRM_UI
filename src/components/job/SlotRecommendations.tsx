@@ -28,7 +28,7 @@ import { useFetch } from '@/lib/hooks';
 import { publicFetch } from '@/lib/public-fetch';
 
 export type SlotRecommendation = {
-  slot: string;             // matches tbl_job.time_slot / the CRM's SLOTS values
+  slot: string;             // a tbl_job.time_slot value, as the BE spells it
   freeCount: number;        // eligible technicians with no clash in this window
   totalCandidates: number;
   topScore: number;

@@ -5,11 +5,32 @@
  * used by Book New Call (create), Confirm & Schedule (confirm) and the
  * Schedule & Assign modal.
  *
- * TIME is offered in 30-MINUTE options (12:00, 12:30, 1:00 …) instead of the
- * old minute-granular native `datetime-local` / whole-hour dropdown, with a
- * "Custom Time…" row pinned at the BOTTOM of the list that reveals a free
- * `type="time"` input for any-minute entry (per ops: "30-min options only +
- * custom input from the bottom").
+ * TWO GRANULARITIES, chosen by the caller:
+ *
+ *   'half-hour'  (DEFAULT) — 30-MINUTE options (12:00, 12:30, 1:00 …) with a
+ *                "Custom Time…" row pinned at the BOTTOM that reveals a free
+ *                `type="time"` input for any-minute entry (per ops: "30-min
+ *                options only + custom input from the bottom"). Used where the
+ *                surface only REQUESTS a time that someone else will commit —
+ *                today that is the customer's preferred-time field on the public
+ *                magic-link form, which POSTs `preferred_datetime` to
+ *                /reschedule-request and writes no job column.
+ *                ⚠ The CRM's own RescheduleDialog is NOT one of these: it writes
+ *                requested_date_time / requested_time / time_slot directly, so
+ *                it uses 'hour-frame'.
+ *
+ *   'hour-frame' — the ten 1-HOUR booking frames from '@/lib/job-slots'
+ *                (9-10 … 6-7). Picking one emits the frame's START, which is
+ *                exactly what tbl_job.requested_time stores and what the
+ *                Booking Time Slot band is derived from. Used on every surface
+ *                that COMMITS a booking window (Book New Call, Confirm &
+ *                Schedule, Edit). The trailing "After Hours / Custom Time" row
+ *                reveals the same free `type="time"` input, which is how an
+ *                out-of-hours visit (banding to 'After Hours') is entered.
+ *
+ * A stored time that is off-grid for the active granularity (legacy 16:30, or a
+ * deliberate custom pick) drops the control into custom mode so the real value
+ * stays visible and editable — never silently re-rounded.
  *
  * The 30-min list renders through the shared searchable <SearchSelect />
  * (typeahead combobox) so the operator can type "2:30" / "pm" to filter
@@ -26,8 +47,12 @@ import * as React from 'react';
 import { Input } from './input';
 import { SearchSelect, type SearchOption } from './search-select';
 import { cn } from '@/lib/utils';
+import { HOUR_FRAMES, isHourFrameStart } from '@/lib/job-slots';
 
 const CUSTOM = '__custom__';
+
+/** Which option grid the time dropdown offers. See the file header. */
+export type TimeGranularity = 'half-hour' | 'hour-frame';
 
 function label12h(h: number, m: number): string {
   const suffix = h < 12 ? 'AM' : 'PM';
@@ -40,24 +65,62 @@ function isHalfHour(v: string): boolean {
 
 export function TimeSelect({
   value, onChange, minTime, disabled, required, placeholder, className,
+  granularity = 'half-hour',
 }: {
   value: string;               // 'HH:mm' (24h) or ''
   onChange: (v: string) => void;
-  minTime?: string;            // 'HH:mm' — 30-min options strictly before this are hidden (same-day gate)
+  minTime?: string;            // 'HH:mm' — options strictly before this are hidden (same-day gate)
   disabled?: boolean;
   required?: boolean;
   placeholder?: string;
   className?: string;
+  granularity?: TimeGranularity;
 }) {
-  // A value that isn't on a 30-min boundary (legacy data, or a custom pick)
+  const isFrames = granularity === 'hour-frame';
+  // Is this value one of the offered rows, or does it need the free input?
+  const onGrid = React.useCallback(
+    (v: string) => (isFrames ? isHourFrameStart(v) : isHalfHour(v)),
+    [isFrames],
+  );
+  // A value off the active grid (legacy data, or a deliberate custom pick)
   // drops the control into custom mode so the entered time stays visible.
-  const [custom, setCustom] = React.useState<boolean>(!!value && !isHalfHour(value));
+  const [custom, setCustom] = React.useState<boolean>(!!value && !onGrid(value));
+  /*
+   * Remember the value WE last emitted, so the sync-effect below can tell an
+   * OUTSIDE push apart from our own echo.
+   *
+   * Outside pushes re-decide custom mode in BOTH directions. That matters for
+   * the paired Booking Time Slot control: clicking a band chip pushes the
+   * band's start hour down here, and a control still latched in custom mode
+   * from the job's off-grid stored time (16:30) would keep showing the free
+   * input and "After Hours / Custom Time" while actually holding 09:00 — the
+   * band and the time visibly disagreeing right next to each other.
+   *
+   * Our OWN emissions never re-decide, or typing into the free input would
+   * snap the control shut the moment the half-typed value landed on the grid.
+   */
+  const selfEmitted = React.useRef<string>(value);
   React.useEffect(() => {
-    if (value && !isHalfHour(value)) setCustom(true);
-  }, [value]);
+    if (value === selfEmitted.current) return;
+    selfEmitted.current = value;
+    setCustom(!!value && !onGrid(value));
+  }, [value, onGrid]);
+  const emit = (v: string) => { selfEmitted.current = v; onChange(v); };
 
   const options = React.useMemo<SearchOption[]>(() => {
     const out: SearchOption[] = [];
+    if (isFrames) {
+      // The ten booking frames, in order. `keywords` carries the 24-hour start
+      // so typing "14" finds "2 PM - 3 PM".
+      for (const f of HOUR_FRAMES) {
+        if (minTime && f.start < minTime) continue;
+        out.push({ value: f.start, label: f.label, keywords: f.start });
+      }
+      // Out-of-hours / any-minute escape, pinned last. Picking it reveals the
+      // free time input; any time outside 9-19 bands to 'After Hours'.
+      out.push({ value: CUSTOM, label: 'After Hours / Custom Time' });
+      return out;
+    }
     // Ordered to START at 08:00 and wrap through midnight to 07:30 — all 48
     // half-hour slots, business-hours-first (per ops). The same-day `minTime`
     // gate still hides past slots.
@@ -74,7 +137,7 @@ export function TimeSelect({
     // "Custom Time…" pinned last — picking it reveals the free time input.
     out.push({ value: CUSTOM, label: 'Custom Time…' });
     return out;
-  }, [minTime]);
+  }, [minTime, isFrames]);
 
   return (
     <div className={className}>
@@ -87,7 +150,7 @@ export function TimeSelect({
         onChange={(v) => {
           if (v === CUSTOM) { setCustom(true); return; } // reveal the free input; keep current value
           setCustom(false);
-          onChange(v);
+          emit(v);
         }}
       />
       {custom && (
@@ -96,7 +159,7 @@ export function TimeSelect({
           value={value}
           disabled={disabled}
           required={required}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={(e) => emit(e.target.value)}
           className="mt-1.5"
         />
       )}
@@ -105,7 +168,7 @@ export function TimeSelect({
 }
 
 export function DateTimeSlotPicker({
-  value, onChange, min, disabled, required, className,
+  value, onChange, min, disabled, required, className, granularity = 'half-hour',
 }: {
   value: string;               // 'YYYY-MM-DDTHH:mm' local, or ''
   onChange: (v: string) => void;
@@ -113,6 +176,8 @@ export function DateTimeSlotPicker({
   disabled?: boolean;
   required?: boolean;
   className?: string;
+  /** Forwarded to <TimeSelect>. 'hour-frame' on booking surfaces. */
+  granularity?: TimeGranularity;
 }) {
   // Internal date/time state, DECOUPLED from the parent value. The parent only
   // ever receives a COMBINED value (or '' when incomplete) so its required-gate
@@ -172,6 +237,7 @@ export function DateTimeSlotPicker({
       <TimeSelect
         value={time}
         minTime={minTime}
+        granularity={granularity}
         disabled={disabled || !date}
         required={required}
         placeholder={date ? '— Pick Time —' : 'Pick A Date First'}

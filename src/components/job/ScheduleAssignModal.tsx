@@ -81,9 +81,11 @@ import {
  *
  * This used to run the picked hour through a 4-band legacy derivation
  * ('Morning 9 to 2' / 'Afternoon 12 to 5' / 'Evening 2 to 7' / 'Anytime') and
- * send THAT. Since jobs now hold 1-hour frames ('3 PM–4 PM' — written by the
- * Confirm modal and by the WhatsApp confirmation flow), the derived band
- * matched nothing: the BE overrides `job.time_slot` with whatever we send
+ * send THAT. Jobs hold a dozen different slot spellings across the years —
+ * today's four bands ('9AM to 12PM' …, see src/lib/job-slots.ts), the backend's
+ * own legacy vocabulary, and 1-hour frames like '3 PM–4 PM' written by the
+ * WhatsApp confirmation flow — so a locally derived band matched nothing on
+ * most rows: the BE overrides `job.time_slot` with whatever we send
  * (candidate-ranking.service searchTechniciansForJob) and then runs the
  * same-day conflict probe as `AND time_slot = ?`. Every technician in the
  * SEARCH table came back conflict-free while the Top-10 table — which never

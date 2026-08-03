@@ -40,6 +40,9 @@ import { SearchSelect } from '@/components/ui/search-select';
 // Shared 30-min searchable time-slot picker (same one the Job Modal uses) —
 // built on SearchSelect + Input, no auth dependency → safe public.
 import { DateTimeSlotPicker } from '@/components/ui/date-time-slot-picker';
+// The FOUR booking bands — the single source of truth for tbl_job.time_slot.
+// Plain constants, no auth dependency → safe public.
+import { BOOKING_BANDS, inferSlotFromTime } from '@/lib/job-slots';
 // Shared masked from→to preview (also used by the CRM operator click-to-call).
 import { CallLegsPreview } from '@/components/ui/CallLegsPreview';
 // Shared presentational Button (cva-based, no auth dependency → safe on the
@@ -256,36 +259,20 @@ function toDatetimeLocal(value: string | null | undefined): string {
 }
 
 /*
- * Derive the Time Slot from a picked datetime-local value (YYYY-MM-DDTHH:mm).
- * The customer picks date+time once and the slot follows automatically — the
- * 4 slot buttons are display-only indicators, not directly selectable.
+ * The 4 customer-facing appointment windows (Appointment-card chips) come from
+ * the SHARED booking vocabulary in '@/lib/job-slots' — the same `BOOKING_BANDS`
+ * the CRM's Confirm & Schedule chip row renders, so the string this customer
+ * picks is byte-identical to the one Ops sees pre-selected and to what
+ * tbl_job.time_slot stores.
  *
- * Mapping (mirrors the CRM JobModal bookingSlotFor() banding) — the returned
- * labels match exactly the strings the BE sends in `timeSlots`
- * (['9 AM – 12 PM', '12 PM – 3 PM', '3 PM – 7 PM', 'After Hours'], note the
- * en-dash) so the highlighted button + submitted time_slot stay in sync:
- *     hour 9–<12  → "9 AM – 12 PM"
- *     hour 12–<15 → "12 PM – 3 PM"
- *     hour 15–<19 → "3 PM – 7 PM"
- *     else        → "After Hours"
- * Returns '' for an empty/invalid pick so the slot clears until a time is set.
+ * This list used to be inlined here with its OWN spelling ('9 AM – 12 PM', an
+ * EN-DASH U+2013) — a fifth vocabulary for the same column, which stopped
+ * matching the CRM the moment that picker changed. Import, never re-declare.
+ *
+ * The customer MUST pick one; `start` is the time we stamp into
+ * requested_date_time = the window's START hour, so the Confirm & Schedule
+ * modal's Requested Time reflects it (9AM to 12PM → 9 AM … After Hours → 7 PM).
  */
-// The 4 customer-facing appointment slot windows (Appointment-card chips).
-// Labels + stored values MATCH the CRM Confirm & Schedule "Booking Time Slot"
-// chips EXACTLY (JobModal `SLOTS`, value === label). The dash is an EN-DASH
-// '–' (U+2013 / bytes e2 80 93) — verified byte-for-byte against SLOTS (comments
-// elsewhere in JobModal use a plain hyphen, but the SLOTS array does not) — so
-// the slot the customer picks here is the identical string the CRM modal renders
-// and pre-selects (it matches on f.time_slot === slot value).
-// The customer MUST pick one; `start` is the time we stamp into
-// requested_date_time = the window's START hour, so the Confirm & Schedule
-// modal's Requested Time reflects it (9 AM–12 PM → 9 AM … After Hours → 7 PM).
-const APPT_SLOTS: { label: string; start: string }[] = [
-  { label: '9 AM – 12 PM', start: '09:00' },
-  { label: '12 PM – 3 PM', start: '12:00' },
-  { label: '3 PM – 7 PM',  start: '15:00' },
-  { label: 'After Hours',  start: '19:00' },
-];
 
 /* Format the naive datetime-local value (YYYY-MM-DDTHH:mm) the Reschedule
  * picker emits into the "YYYY-MM-DD HH:mm" string the BE expects. Returns
@@ -388,12 +375,11 @@ export default function JobCompletionMagicLinkPage() {
           pin_code: data.address.pin_code || '',
           gps_location: data.address.gps_location || '',
           address_instruction: data.address.address_instruction || '',
-          // Time Slot is DERIVED from the requested datetime (auto-selected),
-          // not picked directly. Seed it from the prefilled datetime so the
-          // display indicator matches; fall back to the BE's stored slot when
-          // there's no datetime yet.
-          // Cleared so the customer must actively pick one of the 4 slot chips
-          // (mandatory) in the Appointment card — see APPT_SLOTS + the submit gate.
+          // Cleared so the customer must actively pick one of the 4 band chips
+          // (mandatory) in the Appointment card — see BOOKING_BANDS + the
+          // submit gate. Deliberately NOT seeded from the job's stored slot:
+          // this form exists to have the customer confirm a window, and a
+          // pre-selected chip is a confirmation nobody actually gave.
           time_slot: '',
           requested_date_time: toDatetimeLocal(data.schedule.requested_date_time),
           additional_name: data.additional.name || '',
@@ -609,7 +595,19 @@ export default function JobCompletionMagicLinkPage() {
       landmark: form.landmark.trim() || undefined,
       city_id: form.city_id ? Number(form.city_id) : undefined,
       pin_code: form.pin_code || undefined,
-      time_slot: form.time_slot,
+      /*
+       * Send the band the APPOINTMENT TIME implies, not just the chip state.
+       *
+       * The two cannot diverge today — the chip handler is the only writer of
+       * `requested_date_time` after the initial seed, and it always sets the
+       * band's own start hour — but the BE's resolveTimeSlot gives the datetime
+       * precedence over the label, so if a future edit ever moved the time
+       * without re-selecting a chip, the customer would be shown one window and
+       * booked into another. Deriving here keeps the payload equal to what will
+       * actually be stored, permanently. `?? form.time_slot` preserves a chip
+       * pick that carries no derivable hour.
+       */
+      time_slot: inferSlotFromTime(form.requested_date_time) ?? form.time_slot,
       // datetime-local emits naive `YYYY-MM-DDTHH:mm`. Joi.date().iso() on the
       // BE treats unannotated ISO as UTC, which would shift IST wall-clock by
       // -5:30. EasyFix is IST-locked everywhere (see Asia/Kolkata scheduler),
@@ -1049,25 +1047,29 @@ export default function JobCompletionMagicLinkPage() {
                 Reschedule
               </Button>
             </div>
-            {/* Row 2: MANDATORY time-slot chips. Picking one sets the slot label
-                + a representative requested_date_time (window start hour) on the
-                existing appointment date. The submit gate already requires
-                form.time_slot, so leaving it unpicked blocks confirmation. */}
+            {/* Row 2: MANDATORY band chips — the FOUR shared BOOKING_BANDS.
+                Picking one stores the band's exact value + a representative
+                requested_date_time (the band's START hour) on the existing
+                appointment date. Customers get the band, not the ten 1-hour
+                frames: the frame is an Ops-side scheduling precision, and
+                offering eleven chips on a phone is a worse promise, not a
+                better one. The submit gate already requires form.time_slot,
+                so leaving it unpicked blocks confirmation. */}
             <div className="flex flex-col gap-1.5">
               <span className="text-xs font-medium text-slate-600">
                 Select A Time Slot <span className="text-red-500">*</span>
               </span>
               <div className="flex flex-wrap gap-2">
-                {APPT_SLOTS.map((slot) => {
-                  const active = form.time_slot === slot.label;
+                {BOOKING_BANDS.map((slot) => {
+                  const active = form.time_slot === slot.value;
                   return (
                     <button
-                      key={slot.label}
+                      key={slot.value}
                       type="button"
                       onClick={() => {
                         const datePart = (form.requested_date_time || '').split('T')[0]
                           || toDatetimeLocal(new Date().toISOString()).split('T')[0];
-                        patch({ time_slot: slot.label, requested_date_time: `${datePart}T${slot.start}` });
+                        patch({ time_slot: slot.value, requested_date_time: `${datePart}T${slot.start}` });
                       }}
                       className={
                         'rounded-full border px-3 py-1.5 text-sm transition-colors '

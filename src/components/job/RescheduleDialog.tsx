@@ -122,7 +122,17 @@ export function RescheduleDialog({ open, jobId, onClose, onDone, initialDateTime
         <div className="space-y-3">
           <div className="space-y-1.5">
             <Label className="text-sm font-medium">New Date &amp; Time *</Label>
-            <DateTimeSlotPicker min={minLocal} value={dateTime} onChange={setDateTime} />
+            {/* granularity="hour-frame": Reschedule COMMITS a booking —
+                api.rescheduleJob → job.service reschedule() writes
+                requested_date_time, requested_time (the frame START) and the
+                derived time_slot band in one transaction. On the half-hour grid
+                ops could store requested_time '16:30', which is not one of the
+                ten frame starts the model defines, and reopening the same job in
+                Confirm & Schedule (hour-frame) then dropped its TimeSelect into
+                "After Hours / Custom Time" for a 4:30 PM slot sitting squarely
+                inside '3PM to 7PM'. The custom-time row is still there for a
+                genuinely off-grid move. */}
+            <DateTimeSlotPicker min={minLocal} value={dateTime} onChange={setDateTime} granularity="hour-frame" />
             <SlotAdvisory
               best={rec.best}
               attendanceKnown={rec.attendanceKnown}

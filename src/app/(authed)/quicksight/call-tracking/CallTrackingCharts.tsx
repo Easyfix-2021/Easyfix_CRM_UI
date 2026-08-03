@@ -64,6 +64,30 @@ type UserDay = {
 const TOP_N = 10;
 
 /*
+ * What each donut slice in "Calls By Party" actually means.
+ *
+ * The backend derives the role by comparing the last 10 digits of the number
+ * dialled against the four numbers hanging off the job, in this priority order
+ * (services/quicksight/quicksight-call-tracking.service.js, PARTY_ROLE):
+ *   customer_mob_no → additional_number → client_spoc → efr_no
+ * so the labels below must stay in step with that CASE.
+ *
+ * "Other" is the one operators query, and the honest definition is a negative:
+ * the dialled number matched NONE of those four (or was unusable). Common real
+ * causes: the customer changed their number after the call, the call was placed
+ * with no job attached (custom-number / QA click-to-call), or the job simply had
+ * no number in that field at the time. It is NOT "Client SPOC" — that has its
+ * own slice and just doesn't appear when it has zero calls in the window.
+ */
+const PARTY_ROLE_HELP: Record<string, string> = {
+  Customer: 'The customer number on the job (customer_mob_no).',
+  Alternate: 'The job’s alternate contact number (additional_number).',
+  'Client SPOC': 'The client’s single point of contact for the job (client_spoc).',
+  Technician: 'The assigned technician’s number (efr_no).',
+  Other: 'The number dialled matched none of the four numbers on the job — e.g. the customer changed their number after the call, the call had no job attached (custom-number / QA), or that field was empty at the time. Open the count to see the name captured at call time.',
+};
+
+/*
  * ONE colour per METRIC, shared by the tiles and every series that plots it.
  *   C_CALLS      indigo   — QS_COLORS[0], not aliased by any QS_SEMANTIC key
  *   C_CONNECTED  emerald  — the semantic "good" (a connected call IS the good
@@ -200,6 +224,24 @@ export function CallTrackingCharts({
             {/* Default QS_COLORS rotation — role count is small and the palette's
                 first N hues are already mutually distinct. */}
             <QsDonut data={charts.parties} nameKey="name" valueKey="value" height={300} />
+            {/*
+              * Legend key. "Other" is the slice operators ask about, so it is
+              * defined explicitly rather than left to inference: the role is
+              * derived by matching the number actually dialled against the four
+              * numbers on the job, so "Other" means NONE of them matched — it is
+              * not a synonym for Client SPOC (which has its own slice, and is
+              * simply absent from the donut when it has no calls in the window).
+              * Only roles PRESENT in the current window are listed, so the key
+              * never describes a colour that isn't on the chart.
+              */}
+            <dl className="mt-3 space-y-1 border-t border-border pt-2 text-[11px] leading-snug text-muted-foreground">
+              {charts.parties.map((p) => (
+                <div key={p.name} className="flex gap-1.5">
+                  <dt className="shrink-0 font-medium text-slate-700">{p.name}:</dt>
+                  <dd>{PARTY_ROLE_HELP[p.name] ?? 'A number on this job.'}</dd>
+                </div>
+              ))}
+            </dl>
           </ChartCard>
         )}
 
