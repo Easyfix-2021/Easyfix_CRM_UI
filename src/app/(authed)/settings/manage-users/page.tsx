@@ -5,7 +5,8 @@
  *
  * Lists internal CRM staff (tbl_user where user_type_id = 5). Operates on
  * /api/admin/users (services/user.service.js). Columns:
- *   User ID | Name | Email | Mobile | Role | City | Status | Actions.
+ *   User ID | Name | Email | Personal Email | Mobile | Role | Regions |
+ *   Job Stages | Status | Actions.
  *
  * Soft-delete only — tbl_user rows are referenced by tbl_job audit columns
  * and historical assignments. Deactivation flips user_status to 0; the row
@@ -19,7 +20,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { invalidateFetch, useDebouncedValue } from '@/lib/hooks';
 import {
-  UserCog, Users, Search, Plus, Pencil, Trash2,
+  UserCog, Users, Search, Plus, Pencil, Trash2, MailWarning,
   AlertTriangle, ChevronDown, ChevronRight, Info, Layers,
 } from 'lucide-react';
 import { BulkUpdateUsersDialog } from '@/components/users/BulkUpdateUsersDialog';
@@ -39,7 +40,7 @@ import { useCancelConfirm } from '@/lib/use-cancel-confirm';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { api, ApiError } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
-import { showToast } from '@/components/ui/toast';
+import { showToast, dismissToast } from '@/components/ui/toast';
 import { useLookup } from '@/lib/use-lookup';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
@@ -50,6 +51,21 @@ type User = {
   user_code: string | null;
   user_name: string;
   official_email: string;
+  /*
+   * Personal (non-company) email. Lives in the EasyFix-owned side table
+   * tbl_user_personal_contact, NOT on tbl_user — that table is legacy and
+   * shared by five services, so it must not gain columns.
+   *
+   * Optional on the type, and genuinely absent in two normal cases:
+   *   - the caller is an admin-GROUP role other than Admin. Only Admin can
+   *     create or edit a user, so only Admin gets the address on the LIST
+   *     projection; the other nine roles would otherwise be able to page out
+   *     the home address of every member of staff with no feature to use it
+   *     for. The column simply reads "—" for them.
+   *   - the user predates the field (or the backend has not run the migration).
+   * Either way the "—" placeholder renders and nothing crashes.
+   */
+  personal_email?: string | null;
   mobile_no: string;
   alternate_no: string | null;
   user_role: number | null;
@@ -84,6 +100,33 @@ type ListResponse = { items: User[]; total: number };
  * receive email?". All fields optional — an older backend, or the feature
  * switched off, simply omits them.
  */
+/*
+ * Outcome of the sign-in-details email sent to the new user's PERSONAL address
+ * (CC'd to the ops mailbox resolved from easyfix_properties).
+ *
+ * Mirrors MAIL_STATUS in services/user-welcome-mail.service.js:
+ *   'sent'    → Graph accepted it for delivery.
+ *   'skipped' → deliberately NOT sent, `reason` says why. The main case is a
+ *               mailbox that never provisioned: mailing "here are your Outlook
+ *               credentials" for an account with no mailbox is actively
+ *               misleading, so the send is suppressed by design. Also covers
+ *               NOTIFICATIONS_DISABLE on a QA host.
+ *   'failed'  → we tried and it did not go out. THIS is the one that needs a
+ *               human: the account and mailbox are fine, but nobody has been
+ *               told the password.
+ *   'pending' → provisioning outran the inline deadline and is still running,
+ *               so the mail decision hasn't been made yet.
+ *
+ * The service never puts the temporary password on this object — it is not a
+ * field here, and must never become one: this outcome rides back on the HTTP
+ * create response, so anything on it is published to the browser.
+ */
+type MailOutcome = {
+  status?: 'sent' | 'skipped' | 'failed' | 'pending';
+  /** Operator-facing explanation, e.g. the Graph sendMail error. */
+  reason?: string;
+};
+
 type CreatedUser = {
   user_id?: number;
   provisioning?: {
@@ -97,7 +140,38 @@ type CreatedUser = {
     accountStatus?: string;
     licenceStatus?: string;
   };
+  /*
+   * The credential-mail outcome, sibling of `provisioning`.
+   *
+   * ⚠ THE KEY IS `welcome_mail` — snake_case, like every other field on this
+   * payload. The backend attaches it as `row.welcome_mail`
+   * (services/user.service.js) and its route reads `created.welcome_mail`
+   * (routes/admin/users.js); this file previously read only camelCase aliases,
+   * so the lookup ALWAYS returned undefined and a FAILED send fell through to
+   * the plain green "User Created" toast — the account and mailbox existed, the
+   * password had been minted and discarded, and nobody was told. That is the
+   * precise regression these aliases were meant to prevent, so the real key now
+   * leads and the aliases stay behind it as the cheap backstop they were
+   * intended to be.
+   */
+  welcome_mail?: MailOutcome;
+  welcomeMail?: MailOutcome;
+  credentialMail?: MailOutcome;
+  mail?: MailOutcome;
 };
+
+/** First present of the accepted key spellings; undefined when none is sent. */
+function readMailOutcome(created: CreatedUser | null): MailOutcome | undefined {
+  return created?.welcome_mail ?? created?.welcomeMail ?? created?.credentialMail ?? created?.mail;
+}
+
+/*
+ * Shared email-shape check. Deliberately loose (the same expression the
+ * Official Email probe already uses): the authoritative validation is the
+ * backend's Joi schema, and a strict RFC regex here would reject valid
+ * addresses that Joi accepts.
+ */
+const EMAIL_RE = /^\S+@\S+\.\S+$/;
 
 type SortKey =
   | 'user_id' | 'user_name' | 'official_email' | 'mobile_no'
@@ -247,6 +321,70 @@ export default function ManageUsersPage() {
     return () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedSearch, roleFilter, cityFilter, includeInactive, page, pageSize, sortBy, sortDir]);
+
+  /*
+   * RETRY MAILBOX CREATION — for a user whose Microsoft 365 provisioning did not
+   * land (no licence seat at the time, Graph consent missing, the feature was
+   * off when they were created, …). Hits the idempotent repair endpoint.
+   *
+   * ⚠ THE "IT ALREADY MADE IT BY HAND" CASE IS HANDLED SERVER-SIDE, not here.
+   * provisionUserMailbox() looks the account up by UPN BEFORE creating, so a
+   * mailbox someone created manually in the M365 admin centre in the meantime
+   * resolves as `already_exists` — no duplicate account, and the licence step
+   * reads assignedLicenses off that same lookup so it reports `already_licensed`
+   * without spending a second seat. An inconclusive lookup (Graph 5xx/timeout)
+   * aborts rather than creating blind. So this button is safe to press at any
+   * time, including twice.
+   *
+   * On success the backend also sends the credential mail, so a user rescued by
+   * a retry still receives their sign-in details rather than being silently
+   * fixed but never told.
+   */
+  async function handleRetryMailbox(u: User) {
+    const ok = await confirm({
+      title: 'Retry Mailbox Creation?',
+      description:
+        `Re-run Microsoft 365 provisioning for ${u.user_name} (${u.official_email}). `
+        + 'If the mailbox was already created manually it will be detected and reused — '
+        + 'no duplicate account, no extra licence seat. On success the sign-in details '
+        + 'are emailed to their personal address.',
+      confirmLabel: 'Retry',
+    });
+    if (!ok) return;
+    const toastId = showToast({ variant: 'loading', message: 'Retrying Mailbox Creation…' });
+    try {
+      const res = await api.post<CreatedUser>(`/admin/users/${u.user_id}/provision-mailbox`, {});
+      dismissToast(toastId);
+      const prov = res?.provisioning;
+      // Via the shared reader, not res.welcome_mail directly — it tolerates the
+      // key-spelling aliases, which is exactly the mismatch that once reported a
+      // FAILED credential send as a green success.
+      const mail = readMailOutcome(res ?? null);
+      if (prov?.mailboxReady) {
+        showToast({
+          variant: mail && mail.status === 'failed' ? 'warning' : 'success',
+          message: mail && mail.status === 'failed'
+            ? `Mailbox Ready — but the credential email failed: ${mail.reason || 'see the provisioning record'}`
+            : 'Mailbox Ready — sign-in details emailed',
+        });
+      } else {
+        // Still not ready: show the SERVER's reason verbatim (e.g. the
+        // "no free seats (67/67 used)" text) — it names the exact next action.
+        showToast({
+          variant: 'warning',
+          message: `Mailbox Still Not Ready: ${prov?.reason || 'see the provisioning record'}`,
+        });
+      }
+      invalidateFetch((k) => k.startsWith('/admin/users'));
+      void fetchList();
+    } catch (e) {
+      dismissToast(toastId);
+      showToast({
+        variant: 'error',
+        message: e instanceof ApiError ? e.message : 'Retry failed',
+      });
+    }
+  }
 
   async function handleDeactivate(u: User) {
     const ok = await confirm({
@@ -427,36 +565,53 @@ export default function ManageUsersPage() {
           </div>
           <table className="data-table w-full" style={{ tableLayout: 'fixed' }}>
             {/*
-                Column widths (must match the th/td sequence below):
-                  6 percent  User ID
-                  15 percent Name
-                  16 percent Email
-                  9 percent  Mobile
-                  12 percent Role
-                  13 percent Manage Regions
-                  12 percent Job Stages
-                  8 percent  Status
-                  9 percent  Actions
+                Column widths (must match the th/td sequence below, and must
+                total 100):
+                  5 percent  User ID
+                  13 percent Name
+                  14 percent Email
+                  14 percent Personal Email
+                  8 percent  Mobile
+                  11 percent Role
+                  11 percent Manage Regions
+                  10 percent Job Stages
+                  7 percent  Status
+                  7 percent  Actions
                 Inline JSX expression comments are illegal inside colgroup
                 (they introduce single-space text nodes that fail
                 hydration). See manage-roles for the full backstory.
             */}
             <colgroup>
-              <col style={{ width: '6%' }} />
-              <col style={{ width: '15%' }} />
-              <col style={{ width: '16%' }} />
-              <col style={{ width: '9%' }} />
-              <col style={{ width: '12%' }} />
+              <col style={{ width: '5%' }} />
               <col style={{ width: '13%' }} />
-              <col style={{ width: '12%' }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '14%' }} />
               <col style={{ width: '8%' }} />
-              <col style={{ width: '9%' }} />
+              <col style={{ width: '11%' }} />
+              <col style={{ width: '11%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '7%' }} />
+              <col style={{ width: '7%' }} />
             </colgroup>
             <thead>
               <tr>
                 <SortHeader col="user_id"        align="center" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>User ID</SortHeader>
                 <SortHeader col="user_name"      align="left"   sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Name</SortHeader>
                 <SortHeader col="official_email" align="left"   sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Email</SortHeader>
+                {/*
+                  * Personal Email. Surfaced so ops can see at a glance who
+                  * still lacks one — the field is mandatory going forward but
+                  * every pre-existing user was created without it, so this
+                  * column IS the backfill worklist.
+                  *
+                  * Deliberately NOT a <SortHeader>: sortBy values are
+                  * whitelisted against SORTABLE_COLUMNS in
+                  * services/user.service.js, and personal_email lives in a
+                  * joined side table rather than on tbl_user. Offering the
+                  * sort before the backend whitelists it would send a param
+                  * the API rejects. Same reasoning as Regions / Job Stages.
+                  */}
+                <th className="!text-left whitespace-nowrap" title="Personal (non-company) email — where sign-in details are sent (tbl_user_personal_contact)">Personal Email</th>
                 <SortHeader col="mobile_no"      align="left"   sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Mobile</SortHeader>
                 <SortHeader col="role_name"      align="left"   sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Role</SortHeader>
                 {/*
@@ -489,16 +644,22 @@ export default function ManageUsersPage() {
                 * put, then the additional rows append on response.
                 */}
               {loading && items.length === 0 && (
-                <tr><td colSpan={9} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
+                <tr><td colSpan={10} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
               )}
               {!loading && items.length === 0 && (
-                <tr><td colSpan={9} className="!text-center text-muted-foreground py-6">No users match the current filters.</td></tr>
+                <tr><td colSpan={10} className="!text-center text-muted-foreground py-6">No users match the current filters.</td></tr>
               )}
               {items.map((u) => (
                 <tr key={u.user_id}>
                   <td className="!text-center font-mono text-xs truncate">{u.user_id}</td>
                   <td className="!text-left font-medium truncate" title={u.user_name}>{u.user_name}</td>
                   <td className="!text-left truncate" title={u.official_email}>{u.official_email}</td>
+                  {/* Same treatment as Email above (left, truncate, full value
+                      in the title tooltip); "—" when the user predates the
+                      field so the gap is visible rather than looking blank. */}
+                  <td className="!text-left truncate" title={u.personal_email ?? ''}>
+                    {u.personal_email || <span className="text-muted-foreground">—</span>}
+                  </td>
                   <td className="!text-left font-mono text-xs truncate" title={u.mobile_no}>{u.mobile_no}</td>
                   <td className="!text-left truncate" title={u.role_name ?? ''}>
                     {u.role_name ?? <span className="text-muted-foreground">—</span>}
@@ -562,6 +723,17 @@ export default function ManageUsersPage() {
                           intent="danger"
                           label="Deactivate user"
                           onClick={() => handleDeactivate(u)}
+                        />
+                      )}
+                      {/* Retry Mailbox Creation — only for ACTIVE users, and
+                          only for Admins (the repair route is Admin-guarded, so
+                          showing it to anyone else would just produce a 403). */}
+                      {can.isUserEdit && u.user_status === 1 && (
+                        <IconButton
+                          icon={MailWarning}
+                          intent="primary"
+                          label="Retry Mailbox Creation"
+                          onClick={() => handleRetryMailbox(u)}
                         />
                       )}
                       {!can.isUserEdit && (
@@ -732,6 +904,10 @@ function JobStagesCell({ stages }: { stages?: string[] | null }) {
  * Fields:
  *   - User Name        (read-only on edit)
  *   - Email            (read-only on edit)
+ *   - Personal Email   * on Add and on editing an ACTIVE user; optional when
+ *                        the user is inactive or is being deactivated.
+ *                        See `personalEmailRequired` — the asterisk and the
+ *                        submit guard both read that one constant.
  *   - Mobile Number    *
  *   - User Role        *
  *   - Manage Regions   (multi-select, CSV in tbl_user.manage_states)
@@ -765,6 +941,7 @@ function UserFormModal({
   const isEdit = !!editing;
   const [name,    setName]    = useState('');
   const [email,   setEmail]   = useState('');
+  const [personalEmail, setPersonalEmail] = useState('');
   const [mobile,  setMobile]  = useState('');
   const [altMob,  setAltMob]  = useState('');
   /*
@@ -859,6 +1036,7 @@ function UserFormModal({
     if (open) {
       setName(editing?.user_name ?? '');
       setEmail(editing?.official_email ?? '');
+      setPersonalEmail(editing?.personal_email ?? '');
       setMobile(editing?.mobile_no ?? '');
       setAltMob(editing?.alternate_no ?? '');
       setRoleId(editing?.user_role ?? '');
@@ -1108,6 +1286,32 @@ function UserFormModal({
     return () => { window.clearTimeout(timer); cancelled = true; };
   }, [mobile, isEdit, editing?.user_id, editing?.mobile_no, open]);
 
+  /*
+   * ── Personal Email requiredness — ONE derived boolean, ONE rule ──────
+   *
+   * This constant is the single source of truth. The red asterisk on the
+   * Label reads it and the submit validator reads it, so the marker can
+   * never disagree with what actually blocks Save. (A form that stars a
+   * field the validator ignores — or worse, silently rejects an unstarred
+   * one — is worse than having no marker at all.)
+   *
+   *   Add User                       → required
+   *   Edit a user who is ACTIVE and stays active → required
+   *   Edit a user who is already INACTIVE        → NOT required
+   *   Edit that DEACTIVATES (Status toggled off) → NOT required
+   *
+   * Why the two exemptions: offboarding someone who has already left must
+   * never be blocked on collecting their personal address — that edit is
+   * precisely the one where nobody can still reach them to ask. Requiring
+   * it on the active path is what backfills the existing users, since a
+   * touched record has an operator present who can fill it in.
+   *
+   * It reads `active` (the live form toggle), not `editing.user_status`
+   * alone, so flipping Status off clears the asterisk and the requirement
+   * in the same render — the operator sees the rule change as they make it.
+   */
+  const personalEmailRequired = !isEdit || (editing!.user_status === 1 && active);
+
   async function handleSubmit() {
     setError(null);
     if (!isEdit) {
@@ -1122,6 +1326,22 @@ function UserFormModal({
         setError('Email already in use');
         return;
       }
+    }
+    /*
+     * Personal Email — gated on the SAME `personalEmailRequired` constant that
+     * drives the asterisk, so the two can't drift. The format check runs on any
+     * non-empty value regardless of requiredness: an optional field is still
+     * not a free-text field, and a typo'd address on an inactive user is a
+     * silent dead letter later. Backend Joi enforces the identical matrix.
+     */
+    const personal = personalEmail.trim();
+    if (personalEmailRequired && !personal) {
+      setError('Personal Email is required');
+      return;
+    }
+    if (personal && !EMAIL_RE.test(personal)) {
+      setError('Personal Email format looks wrong');
+      return;
     }
     /*
      * Mobile is OPTIONAL (2026-08-03) — it used to be mandatory. Blank passes;
@@ -1203,6 +1423,9 @@ function UserFormModal({
     try {
       if (isEdit) {
         await api.patch(`/admin/users/${editing!.user_id}`, {
+          // null (not '') when cleared — the column is NULLable and '' would
+          // store an address that can never be mailed but reads as "present".
+          personal_email:   personal || null,
           mobile_no:        mobile,
           alternate_no:     altMob || null,
           user_role:        Number(roleId),
@@ -1219,6 +1442,10 @@ function UserFormModal({
         created = await api.post<CreatedUser>('/admin/users', {
           user_name:        name.trim(),
           official_email:   email.trim(),
+          // Required on create — this is the address the sign-in details are
+          // mailed to, and the new user cannot read their official inbox until
+          // they have used them.
+          personal_email:   personal,
           mobile_no:        mobile,
           alternate_no:     altMob || null,
           user_role:        Number(roleId),
@@ -1253,8 +1480,36 @@ function UserFormModal({
        * the colour. Amber also holds for 6s rather than success's 4s, because
        * the reason is something they have to read and act on.
        */
+      /*
+       * ── Toast matrix (create flow; an edit is always a plain success) ──
+       *
+       * Exactly ONE toast fires. The branches are ordered by how much the
+       * operator has to DO about each outcome, most-actionable first —
+       * stacking three toasts would bury the one that matters.
+       *
+       *   1. provisioning / mail pending → warning: outcome not known yet
+       *   2. mailbox NOT ready           → warning: no mailbox, and by design
+       *                                    NO credential mail was sent (the
+       *                                    service reports 'skipped'). Outranks
+       *                                    branch 3 because the mail not going
+       *                                    out is a CONSEQUENCE here, not a
+       *                                    fault, and the mailbox is the thing
+       *                                    to fix.
+       *   3. mail 'failed'               → warning: the account and mailbox are
+       *                                    fine but nobody has been told the
+       *                                    password. Needs a human — ops must
+       *                                    re-share the sign-in details.
+       *   4. mail 'sent'                 → success, and say so; the operator
+       *                                    needs to know an email went out to a
+       *                                    personal address.
+       *   5. everything else             → plain success. Covers 'skipped' for
+       *                                    benign reasons (NOTIFICATIONS_DISABLE
+       *                                    on QA) and a backend that reports no
+       *                                    mail outcome at all.
+       */
       const prov = created?.provisioning;
-      if (!isEdit && prov?.pending) {
+      const mail = readMailOutcome(created);
+      if (!isEdit && (prov?.pending || mail?.status === 'pending')) {
         showToast({
           variant: 'warning',
           message: 'User Created — Microsoft 365 mailbox provisioning is still running. Check the Provisioning panel shortly.',
@@ -1263,6 +1518,16 @@ function UserFormModal({
         showToast({
           variant: 'warning',
           message: `User Created — but the Microsoft 365 mailbox is NOT ready: ${prov.reason || 'see the provisioning outcome'}`,
+        });
+      } else if (!isEdit && mail?.status === 'failed') {
+        showToast({
+          variant: 'warning',
+          message: `User Created and the mailbox is ready, but the sign-in details email FAILED to send: ${mail.reason || 'see the mail outcome'}. Share the credentials with them directly.`,
+        });
+      } else if (!isEdit && mail?.status === 'sent') {
+        showToast({
+          variant: 'success',
+          message: 'User Created — Sign-In Details Emailed',
         });
       } else {
         showToast({
@@ -1331,11 +1596,14 @@ function UserFormModal({
             )}
           </div>
 
-          {/* Row 2: Official Email | Role.
+          {/* Row 2: Official Email | Personal Email | Role.
               Email is non-editable on edit (it keys OTP delivery). Role
               uses the shared SearchSelect so the dropdown matches every
-              other typeahead in the form. */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              other typeahead in the form.
+              Three columns on lg+; two on md (Role wraps below) so the
+              Official Email field keeps enough width for its "@easyfix.in"
+              affix plus the local-part input at narrower viewports. */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             <div>
               <Label className="block mb-1" required>
                 Official Email
@@ -1397,6 +1665,42 @@ function UserFormModal({
                   )}
                 </div>
               )}
+            </div>
+            {/*
+              * Personal Email — sits directly beside Official Email because the
+              * two are read together: the official address is what the person
+              * gets, the personal one is the only way to TELL them about it
+              * before they can sign in.
+              *
+              * Editable on Edit as well as Add (unlike Official Email, which is
+              * frozen because OTP delivery keys off it). Nothing keys off the
+              * personal address, and the whole point of the column is that
+              * existing users need theirs filled in.
+              */}
+            <div>
+              <Label className="block mb-1" required={personalEmailRequired}>
+                Personal Email{' '}
+                {!personalEmailRequired && (
+                  <span className="text-xs text-muted-foreground font-normal">(optional)</span>
+                )}
+              </Label>
+              <Input
+                type="email"
+                value={personalEmail}
+                onChange={(e) => setPersonalEmail(e.target.value.replace(/\s+/g, ''))}
+                placeholder="e.g. priya.sharma@gmail.com"
+              />
+              {/* Inline format hint only — the blocking check lives in
+                  handleSubmit so every validation message surfaces in one
+                  place (the footer), where it can't scroll out of view. */}
+              {personalEmail.trim() && !EMAIL_RE.test(personalEmail.trim()) && (
+                <p className="text-xs text-amber-700 mt-1">That doesn&apos;t look like a valid email address.</p>
+              )}
+              <p className="text-xs text-muted-foreground mt-1">
+                {isEdit
+                  ? 'A non-company address, used to reach this user when their official inbox is unavailable.'
+                  : 'Sign-in details are emailed here — the new user cannot read their official inbox yet.'}
+              </p>
             </div>
             <div>
               <Label className="block mb-1" required>Role</Label>
