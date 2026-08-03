@@ -127,6 +127,12 @@ export function CustomerSubmissionPanel({
           <Row label="Customer Name" value={p.customer_name} />
           <Row label="Customer Email" value={p.customer_email} />
           <Row label="Requested Date/Time" value={p.requested_date_time} />
+          {/* eslint-disable-next-line local/no-raw-time-slot-render --
+              VERBATIM ON PURPOSE. This panel renders the customer's SUBMITTED
+              payload — an immutable audit record of what they chose on the
+              magic-link form, not the job's current state. Deriving a band from
+              the job's live appointment would falsify the record; the whole
+              value of this panel is that it still says what they said. */}
           <Row label="Time Slot" value={p.time_slot} />
           <Row label="Alternate Name" value={p.additional_name} />
           <Row label="Alternate Mobile" value={p.additional_number} />

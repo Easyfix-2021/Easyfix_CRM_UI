@@ -254,6 +254,12 @@ export function ScheduleAssignModal({
   // refreshing) and then SETTLED — not on the render before refetch kicks in.
   const rescheduleRefetchStarted = useRef(false);
 
+  // The appointment (requested_date_time|time_slot) the proposed schedule below
+  // was last seeded from. Declared here, beside the other refs, because the
+  // job-switch reset effect clears it. See the seed effect for why it replaced a
+  // one-shot boolean.
+  const seededFromRef = useRef<string | null>(null);
+
   // Proposed schedule — seeded from the job's current values once it
   // loads. `seeded` guards the one-time seed so a re-fetch doesn't clobber it.
   const [jobDateLocal, setJobDateLocal] = useState('');
@@ -304,6 +310,9 @@ export function ScheduleAssignModal({
     // new fetch landed. Worse, `selected` survived too — ops could carry a
     // technician ticked on job A into an offer on job B. retainedJob is a
     // fallback for a failed refetch of the SAME job; it must never outlive one.
+    // seededFromRef too, or job B would keep job A's seed: the ref holds A's
+    // appointment string, and B's would have to differ from it by luck.
+    seededFromRef.current = null;
     setSeeded(false); setJobDateLocal(''); setSeedSlot(''); setSeedDate('');
     setSearch(''); setCommitting(false); setErr(null); setPincodeModalFor(null);
     setRetainedJob(null); setSelected(new Map());
@@ -385,19 +394,44 @@ export function ScheduleAssignModal({
     if (rescheduleRefetchStarted.current) setRescheduling(false);
   }, [rescheduling, top.loading, top.refreshing]);
 
-  // Seed the proposed schedule from the loaded job exactly once.
-  // seedSlot captures the job's stored time_slot VERBATIM — including the empty
-  // string when the job has none, so the request omits the param entirely and
-  // the BE's conflict probe keeps skipping instead of matching a fabricated
-  // 'Anytime' literal that no job row holds.
+  /*
+   * Seed the proposed schedule from the loaded job — and RE-seed whenever the
+   * job's appointment actually CHANGES.
+   *
+   * This was a one-shot boolean latch ("seed exactly once"), which is correct
+   * only while nothing can change the appointment underneath it. Reschedule can.
+   * Its onDone calls top.refetch(); the job comes back with a new
+   * requested_date_time, but `seeded` was already true, so seedDate and seedSlot
+   * kept their PRE-reschedule values. Both feed the candidate SEARCH query
+   * (`jobDate` + `timeSlot`, via scheduleQs below), so after a reschedule,
+   * searching a technician by name ranked them against the OLD window —
+   * conflict detection and attendance computed for an appointment the job no
+   * longer has. A technician double-booked at the NEW time could be presented as
+   * free. (The Top-10 list escaped it only because `scheduleEdited` is never
+   * true, so that key omits the params and the backend falls back to the job's
+   * own — freshly rescheduled — values.)
+   *
+   * Keying on the appointment itself is self-correcting: a refetch returning the
+   * SAME appointment does not re-seed, which is what the original guard was for;
+   * one returning a DIFFERENT appointment does. There is no flag left for a
+   * future refresh path to forget to reset.
+   *
+   * seedSlot captures the job's stored time_slot VERBATIM — including the empty
+   * string when the job has none, so the request omits the param entirely and
+   * the BE's conflict probe keeps skipping instead of matching a fabricated
+   * 'Anytime' literal that no job row holds.
+   */
   useEffect(() => {
-    if (seeded || !topData?.job) return;
+    if (!topData?.job) return;
+    const appointment = `${topData.job.requested_date_time ?? ''}|${topData.job.time_slot ?? ''}`;
+    if (seededFromRef.current === appointment) return;
+    seededFromRef.current = appointment;
     const seededLocal = isoToLocalInput(topData.job.requested_date_time);
     setJobDateLocal(seededLocal);
     setSeedDate(seededLocal);
     setSeedSlot(topData.job.time_slot ?? '');
     setSeeded(true);
-  }, [seeded, topData]);
+  }, [topData]);
 
   // Retain the last good job so Job Details survive a failed candidate
   // re-fetch (resilience — the flow must not break on a Top-10 error).

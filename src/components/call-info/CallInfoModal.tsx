@@ -84,6 +84,31 @@ function formatCallTime(v: string | null | undefined): string {
   } catch { return String(v); }
 }
 
+/**
+ * The customer name for a CALL row — i.e. the customer on the JOB that call was
+ * about.
+ *
+ * Precedence is job-row FIRST: `tbl_job.job_customer_name` is the name typed on
+ * THIS booking, while `tbl_customer.customer_name` is the customer-master name
+ * shared by every job that mobile number ever booked. The master is the
+ * fallback, used only when the job carries no name of its own. (This used to be
+ * the other way round — `customer_name || job_customer_name` — which showed the
+ * master name even when the order was booked under a different one, and made
+ * this table disagree with the job modal the Job-ID link opens.)
+ *
+ * Blank/whitespace-only counts as "no name on the job" and falls through, so a
+ * booking saved with an empty name field still shows the master name instead of
+ * an em-dash. (Backend does the same with NULLIF(TRIM(...), '') — a bare SQL
+ * COALESCE would NOT, since it only skips NULL.)
+ *
+ * ONE definition, used by the cell, the search haystack and the sort comparator,
+ * so what is displayed, what is searched and what is sorted cannot drift.
+ */
+function jobCustomerName(r: CallRow): string {
+  const onJob = String(r.job_customer_name ?? '').trim();
+  return onJob || String(r.customer_name ?? '').trim();
+}
+
 export function CallInfoModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const today = todayIso();
   // Two views inside one modal — historical Easyfixer-side records (the
@@ -223,7 +248,9 @@ export function CallInfoModal({ open, onClose }: { open: boolean; onClose: () =>
         formatCallTime(r.insert_date_time),
         r.efr_name, r.efr_no,
         r.job_id,
-        r.customer_name || r.job_customer_name,
+        // The name actually rendered in the Customer cell — searching for what
+        // is on screen has to match it.
+        jobCustomerName(r),
         r.customer_mob_no,
         r.job_type, statusText,
       ].map((x) => String(x ?? '').toLowerCase()).join(' ');
@@ -237,9 +264,10 @@ export function CallInfoModal({ open, onClose }: { open: boolean; onClose: () =>
    * operator expects rather than via a single string-LC fallback:
    *   - insert_date_time → epoch ms (chronological).
    *   - job_id           → numeric (numeric IDs).
-   *   - customer         → falls back to job_customer_name when
-   *                        tbl_customer didn't join (matches what
-   *                        the UI actually displays).
+   *   - customer         → jobCustomerName(): the job-row name first,
+   *                        customer-master name as fallback — the same
+   *                        helper the cell and the search use, so the
+   *                        sort matches what the UI actually displays.
    *   - job_status       → human label via statusLabel(), so the
    *                        sort order matches the visible pill text.
    *   - everything else  → case-insensitive locale string compare.
@@ -263,8 +291,8 @@ export function CallInfoModal({ open, onClose }: { open: boolean; onClose: () =>
           return ((va as number) - (vb as number)) * dir;
         }
         case 'customer':
-          va = String(a.customer_name || a.job_customer_name || '').toLowerCase();
-          vb = String(b.customer_name || b.job_customer_name || '').toLowerCase();
+          va = jobCustomerName(a).toLowerCase();
+          vb = jobCustomerName(b).toLowerCase();
           break;
         case 'job_status':
           va = a.job_status != null && a.job_status !== '' ? statusLabel(Number(a.job_status), { assigned: a.job_efr_id != null }).toLowerCase() : '';
@@ -552,7 +580,7 @@ export function CallInfoModal({ open, onClose }: { open: boolean; onClose: () =>
                   </thead>
                   <tbody>
                     {(sortedRows || []).map((r, i) => {
-                      const customerName = r.customer_name || r.job_customer_name || '';
+                      const customerName = jobCustomerName(r);
                       return (
                         <tr key={`${r.job_id ?? ''}-${r.efr_id ?? ''}-${i}`} className="border-t hover:bg-muted/30">
                           <td className="px-3 py-2 whitespace-nowrap">{formatCallTime(r.insert_date_time)}</td>

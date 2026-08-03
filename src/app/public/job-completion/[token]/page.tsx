@@ -42,7 +42,7 @@ import { SearchSelect } from '@/components/ui/search-select';
 import { DateTimeSlotPicker } from '@/components/ui/date-time-slot-picker';
 // The FOUR booking bands — the single source of truth for tbl_job.time_slot.
 // Plain constants, no auth dependency → safe public.
-import { BOOKING_BANDS, inferSlotFromTime } from '@/lib/job-slots';
+import { BOOKING_BANDS, inferSlotFromTime, canonicalSlot } from '@/lib/job-slots';
 // Shared masked from→to preview (also used by the CRM operator click-to-call).
 import { CallLegsPreview } from '@/components/ui/CallLegsPreview';
 // Shared presentational Button (cva-based, no auth dependency → safe on the
@@ -1061,7 +1061,17 @@ export default function JobCompletionMagicLinkPage() {
               </span>
               <div className="flex flex-wrap gap-2">
                 {BOOKING_BANDS.map((slot) => {
-                  const active = form.time_slot === slot.value;
+                  /*
+                   * canonicalSlot, not raw ===. Both sides ARE canonical today —
+                   * form.time_slot seeds to '' (deliberately, see the patch
+                   * above) and can only ever be set from slot.value below — so
+                   * this is a no-op right now. It is here because that invariant
+                   * is invisible from this line: the day someone pre-selects the
+                   * job's stored slot, a cosmetic variant like '3pm to 7pm'
+                   * would silently match no chip and the customer would see the
+                   * form as unanswered. Costing nothing to not depend on it.
+                   */
+                  const active = canonicalSlot(form.time_slot) === slot.value;
                   return (
                     <button
                       key={slot.value}

@@ -315,7 +315,109 @@ const noDuplicateChartSeriesColor = {
   },
 };
 
-const localPlugin = { rules: { 'no-duplicate-chart-series-color': noDuplicateChartSeriesColor } };
+/* ───────────────────────────────────────────────────────────────────────────
+ * LOCAL RULE — local/no-raw-time-slot-render
+ *
+ * Bans rendering `tbl_job.time_slot` (or its legacy sibling
+ * `booking_cut_off_time_slot`) straight into JSX.
+ *
+ * WHY A RULE AND NOT A CODE REVIEW. `time_slot` is DERIVED — it is the booking
+ * band CONTAINING `requested_date_time`, and the backend's `resolveTimeSlot`
+ * re-derives it on every write. So a stored value can be stale, and the column
+ * additionally holds ~20 free-text spellings of four bands accumulated from four
+ * pickers over a decade. Rendering it raw produces two failures that both look
+ * fine on screen: a band contradicting the appointment time printed beside it
+ * (job #482491 stores 05:30 with '3pm to 7pm'), and cosmetic spelling variants
+ * that no equality check matches.
+ *
+ * Eight call sites had this at once. Each was individually reasonable — reading
+ * a column the row already carries — which is exactly why review kept missing
+ * it. `displaySlot(requestedDateTime, storedSlot)` in src/lib/job-slots.ts is
+ * the one correct composition; this rule makes reaching past it visible.
+ *
+ * SCOPE. Only JSX. Passing `time_slot` to an API, a query param or a helper is
+ * fine and common — `ScheduleAssignModal` ships the stored value verbatim as the
+ * candidate-search `timeSlot` param on purpose, and that must keep working.
+ * A reference inside a call to one of ALLOWED_SLOT_CALLS is also fine, which is
+ * what lets `{displaySlot(j.requested_date_time, j.time_slot)}` pass.
+ *
+ * The genuine exception is a surface rendering an immutable AUDIT SNAPSHOT of
+ * what someone submitted (CustomerSubmissionPanel) — there, deriving would
+ * falsify the record. Those carry an eslint-disable-next-line with a reason.
+ * ─────────────────────────────────────────────────────────────────────────── */
+const RAW_SLOT_PROPS = new Set(['time_slot', 'booking_cut_off_time_slot']);
+const ALLOWED_SLOT_CALLS = new Set([
+  'displaySlot', 'canonicalSlot', 'inferSlotFromTime', 'bandForTime', 'slotChoicesFor', 'isKnownBand',
+]);
+
+const noRawTimeSlotRender = {
+  meta: {
+    type: 'problem',
+    docs: { description: 'Disallow rendering a raw tbl_job.time_slot into JSX; derive it instead.' },
+    schema: [],
+    messages: {
+      raw:
+        'Rendering `{{prop}}` raw. It is DERIVED from requested_date_time and can be stale (job #482491 '
+        + 'stores 05:30 with the label \'3pm to 7pm\'), and the column holds ~20 spellings of four bands. '
+        + 'Use displaySlot(requestedDateTime, storedSlot) from @/lib/job-slots — it prefers the appointment '
+        + 'instant and falls back to the stored label, canonicalised, only for a date-only (00:00 sentinel) '
+        + 'job. If this genuinely renders an immutable audit snapshot of what someone submitted, add an '
+        + 'eslint-disable-next-line with that reason.',
+    },
+  },
+  create(context) {
+    /* Is `node` lexically inside a call to an approved slot helper? */
+    const insideAllowedCall = (node, stopAt) => {
+      for (let n = node.parent; n && n !== stopAt.parent; n = n.parent) {
+        if (n.type === 'CallExpression') {
+          const c = n.callee;
+          const name = c.type === 'Identifier' ? c.name
+            : (c.type === 'MemberExpression' && c.property.type === 'Identifier' ? c.property.name : null);
+          if (name && ALLOWED_SLOT_CALLS.has(name)) return true;
+        }
+      }
+      return false;
+    };
+
+    /*
+     * The nearest enclosing JSXExpressionContainer, or null.
+     *
+     * Visiting MemberExpression and climbing UP is deliberate. Visiting
+     * JSXExpressionContainer and walking DOWN double-reports, because JSX nests:
+     * `{rows.map(r => <Row value={r.time_slot} />)}` has a container inside a
+     * container, so the descent runs over the same node once per ancestor.
+     * Climbing up reaches each node exactly once by construction.
+     */
+    const enclosingJsxExpression = (node) => {
+      for (let n = node.parent; n; n = n.parent) {
+        if (n.type === 'JSXExpressionContainer') return n;
+        // A function boundary does NOT stop the climb: an arrow inside a
+        // container (`.map(r => …)`) still renders into that container.
+      }
+      return null;
+    };
+
+    return {
+      MemberExpression(node) {
+        // Computed access (`row[key]`) cannot be resolved statically; guessing
+        // there would be noise, and this mistake is always a plain `.time_slot`.
+        if (node.computed || node.property.type !== 'Identifier') return;
+        if (!RAW_SLOT_PROPS.has(node.property.name)) return;
+        const container = enclosingJsxExpression(node);
+        if (!container) return;                              // not JSX — fine
+        if (insideAllowedCall(node, container)) return;
+        context.report({ node, messageId: 'raw', data: { prop: node.property.name } });
+      },
+    };
+  },
+};
+
+const localPlugin = {
+  rules: {
+    'no-duplicate-chart-series-color': noDuplicateChartSeriesColor,
+    'no-raw-time-slot-render': noRawTimeSlotRender,
+  },
+};
 
 const config = [
   {
@@ -359,6 +461,10 @@ const config = [
       // Colour-collision guard for QuickSight charts (rule + rationale above).
       // Inert on files with no `series`/`colors` chart arrays.
       'local/no-duplicate-chart-series-color': 'error',
+      // Booking-band guard: a stored time_slot may not be rendered raw — it is
+      // derived, can be stale, and holds ~20 spellings of four bands. Inert on
+      // files that never touch the column.
+      'local/no-raw-time-slot-render': 'error',
     },
   },
 
