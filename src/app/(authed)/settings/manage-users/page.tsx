@@ -76,6 +76,29 @@ type User = {
 type ListResponse = { items: User[]; total: number };
 
 // Must mirror SORTABLE_COLUMNS in services/user.service.js.
+/*
+ * POST /admin/users response — the new user PLUS the Microsoft 365 mailbox
+ * outcome. The two are independent: `accountStatus:'created'` with
+ * `licenceStatus:'no_seats_available'` is an Entra account with NO mailbox, so
+ * `mailboxReady` (not accountStatus) is the field that answers "can this person
+ * receive email?". All fields optional — an older backend, or the feature
+ * switched off, simply omits them.
+ */
+type CreatedUser = {
+  user_id?: number;
+  provisioning?: {
+    attempted?: boolean;
+    /** Finished BOTH steps — the only value that means a usable mailbox. */
+    mailboxReady?: boolean;
+    /** Outran the inline deadline and is completing in the background. */
+    pending?: boolean;
+    /** Operator-facing explanation, e.g. the "no free seats (67/67 used)" text. */
+    reason?: string;
+    accountStatus?: string;
+    licenceStatus?: string;
+  };
+};
+
 type SortKey =
   | 'user_id' | 'user_name' | 'official_email' | 'mobile_no'
   | 'role_name' | 'city_name' | 'user_status' | 'insert_date';
@@ -1169,6 +1192,14 @@ function UserFormModal({
       : Array.from(allowedStages);
 
     setSubmitting(true);
+    /*
+     * The create response carries the Microsoft 365 mailbox outcome alongside
+     * the new user — see `provisioning` on CreatedUser. Captured so the toast
+     * can tell the truth: the CRM user is created either way, but the mailbox
+     * can fail INDEPENDENTLY (no licence seat, missing Graph consent, SKU not
+     * on the tenant), and a flat green "User Created" hides exactly that.
+     */
+    let created: CreatedUser | null = null;
     try {
       if (isEdit) {
         await api.patch(`/admin/users/${editing!.user_id}`, {
@@ -1185,7 +1216,7 @@ function UserFormModal({
           is_active:        active,
         });
       } else {
-        await api.post('/admin/users', {
+        created = await api.post<CreatedUser>('/admin/users', {
           user_name:        name.trim(),
           official_email:   email.trim(),
           mobile_no:        mobile,
@@ -1206,10 +1237,39 @@ function UserFormModal({
       // operator sees them within the still-open modal.
       // Title Case + no trailing period — matches the project-wide UI
       // label-casing rule (memory `feedback_easyfix_label_casing`).
-      showToast({
-        variant: 'success',
-        message: isEdit ? 'User Updated' : 'User Created',
-      });
+      /*
+       * MAILBOX OUTCOME — reported honestly, not folded into the success toast.
+       *
+       * Creating the Entra account and assigning the 365 licence are TWO
+       * independent steps: `created` + `no_seats_available` means the directory
+       * account exists but there is no mailbox, so the address will bounce.
+       * Observed live on user 8737 (vijay.nailwal@easyfix.in): the operator saw
+       * a green "User Created" while the mailbox had silently failed on
+       * "SKU O365_BUSINESS_ESSENTIALS has no free seats (67/67 used)".
+       *
+       * `warning` (amber, 6s) is the right variant, not `error`: the user WAS
+       * created — this is an operation that succeeded but not the way the
+       * operator asked. Rose on a successful action trains people to distrust
+       * the colour. Amber also holds for 6s rather than success's 4s, because
+       * the reason is something they have to read and act on.
+       */
+      const prov = created?.provisioning;
+      if (!isEdit && prov?.pending) {
+        showToast({
+          variant: 'warning',
+          message: 'User Created — Microsoft 365 mailbox provisioning is still running. Check the Provisioning panel shortly.',
+        });
+      } else if (!isEdit && prov?.attempted && !prov.mailboxReady) {
+        showToast({
+          variant: 'warning',
+          message: `User Created — but the Microsoft 365 mailbox is NOT ready: ${prov.reason || 'see the provisioning outcome'}`,
+        });
+      } else {
+        showToast({
+          variant: 'success',
+          message: isEdit ? 'User Updated' : 'User Created',
+        });
+      }
       onSaved();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Save failed');
@@ -1597,13 +1657,27 @@ function UserFormModal({
               form; moved to row 1 (alongside Full Name) so the
               identity-level metadata clusters together. */}
 
+        </div>
+        {/*
+          * The validation error lives in the FOOTER, beside the button that
+          * triggers it — NOT at the end of the form body where it used to be.
+          *
+          * The body scrolls and the footer is sticky, so a message rendered at
+          * the bottom of the body was below the fold: clicking "Add User" with
+          * an empty Role set the error, the submit correctly aborted, and the
+          * operator saw NOTHING happen. That reads as a dead button, which is
+          * exactly how it was reported. An error the user cannot see is the
+          * same as no validation at all.
+          *
+          * `flex-1 text-left` claims the space DialogFooter would otherwise
+          * leave empty on the left, so the buttons stay where they were.
+          */}
+        <DialogFooter>
           {error && (
-            <div className="text-sm text-red-600 flex items-center gap-1">
-              <AlertTriangle className="size-4" /> {error}
+            <div className="flex-1 text-left text-sm text-red-600 flex items-center gap-1">
+              <AlertTriangle className="size-4 shrink-0" /> {error}
             </div>
           )}
-        </div>
-        <DialogFooter>
           <Button variant="outline" onClick={cancelWithConfirm} disabled={submitting}>Cancel</Button>
           <Button onClick={handleSubmit} disabled={submitting}>
             {submitting ? 'Saving…' : isEdit ? 'Save Changes' : 'Add User'}
