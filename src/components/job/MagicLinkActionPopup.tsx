@@ -121,6 +121,7 @@ export function MagicLinkActionPopup({
     try {
       const result = await api.post<{
         delivered: boolean;
+        suppressed?: boolean;
         error?: string;
         token?: string;
         url?: string;
@@ -128,7 +129,30 @@ export function MagicLinkActionPopup({
         send_count: number;
         magic_link_sent_at: string;
       }>(`/admin/jobs/${jobId}/send-magic-link`, { action, override });
-      showToast({ variant: 'success', message: 'Magic link sent.' });
+      /*
+       * `delivered` was already in this type and already ignored: the toast
+       * said "Magic link sent." on every 200. So when Gallabox began rejecting
+       * `customer_interactive_msg` with an HTTP 400, EVERY send failed and every
+       * operator saw green — the only trace was a WARN line in the server log.
+       *
+       * 200 is still correct here: the conversation row IS created and an
+       * inbound reply resolves against it, so this is a PARTIAL success, not a
+       * failed request. That is exactly what `warning` is for — it succeeded,
+       * but not the way the operator asked.
+       *
+       * `suppressed` is the dev NOTIFICATIONS_DISABLE path — a deliberate
+       * silence, not a failure, so it must not read as one.
+       */
+      if (result.delivered) {
+        showToast({ variant: 'success', message: 'Magic link sent.' });
+      } else if (result.suppressed) {
+        showToast({ variant: 'success', message: 'Magic link recorded — WhatsApp sending is disabled in this environment.' });
+      } else {
+        showToast({
+          variant: 'warning',
+          message: `Magic link NOT delivered — ${result.error || 'the messaging provider rejected it'}. The order is recorded; try again or contact the customer directly.`,
+        });
+      }
       // Notify parent BEFORE closing so the parent can immediately
       // patch its row state and the next render shows the new counter
       // without a flash of stale data.
