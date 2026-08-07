@@ -5,7 +5,7 @@ import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { useJobActionParams, useJobActionNav } from '@/lib/job-action-url';
 import { useDebouncedValue } from '@/lib/hooks';
 import {
-  Plus, Upload, ChevronDown, ChevronUp, Repeat,
+  Plus, Upload, ChevronDown, ChevronUp, Repeat, Globe,
   // Row-level quick-action icons (mirror the legacy Manage Jobs action column)
   Eye, CalendarClock, PlayCircle, CheckCircle2, CalendarCheck, MapPin,
 } from 'lucide-react';
@@ -48,6 +48,33 @@ import { LiveLocationPopover } from '@/components/location/LiveLocationPopover';
 // `/admin/jobs` Joi caps limit at 500 — pass to pageSizeToLimit so
 // "All" sends 500 instead of the default 1000 (which would 400).
 const JOBS_MAX_LIMIT = 500;
+
+/*
+ * ── "Unmapped Website Bookings" preset (2026-08-07) ───────────────────────
+ *
+ * The public booking flow on the marketing website (BE
+ * routes/public/website-booking.js) creates jobs with
+ * `tbl_job.source_type = 'website'`. When the customer's QR link carries a
+ * valid `tbl_client.reference_code` the job is attributed to that client;
+ * when it does NOT, it falls back to the catch-all RETAIL client
+ * (`tbl_client.client_id = 1`) with a blank SPOC. Those are the rows ops must
+ * re-map to the real client BEFORE the technician visit — previously findable
+ * only by grepping server logs.
+ *
+ * The preset pins exactly the three columns that define that set:
+ *   job_status   = 9         ← supplied by the Unconfirmed tab itself
+ *   source_type  = 'website' ← BE `sourceType` filter (added 2026-08-07)
+ *   fk_client_id = 1         ← BE `clientId` filter (already existed)
+ *
+ * Deliberately a SAVED FILTER over the existing Unconfirmed list rather than a
+ * new page: a new page would drag in permission seeding + menu wiring for what
+ * is fundamentally one pinned query. It inherits the jobs list's RBAC as-is.
+ */
+const WEBSITE_SOURCE_TYPE = 'website';
+// tbl_client.client_id 1 = "Retail" — the hard-coded catch-all the BE booking
+// route falls back to (its FALLBACK_CLIENT_ID). Kept as a string because every
+// other value in the filter/query layer here is a string.
+const RETAIL_CLIENT_ID = '1';
 
 type JobRow = JobAgeFields & {
   job_id: number; job_reference_id: string | null; client_ref_id: string | null;
@@ -198,6 +225,19 @@ export default function JobsPage() {
   const [psFilters, setPsFilters] = useState<PsFilters>(() => psFiltersFromParams(searchParams));
   const psKey = psFilterKey(psFilters);
   const psActive = tab === 'pending-scheduling';
+  /*
+   * "Unmapped Website Bookings" quick-filter (see the preset block up top).
+   * Scoped to the Unconfirmed tab — that tab supplies the `job_status = 9` half
+   * of the definition — so `uwActive` gates BOTH the render and the request
+   * params and every other tab's request shape stays byte-for-byte unchanged
+   * (same discipline as `psActive` above). Hydrated from the URL on first
+   * render so the filtered view is shareable and survives a refresh;
+   * useSearchParams() is stable at first render in the App Router.
+   */
+  const [unmappedWebsite, setUnmappedWebsite] = useState(
+    () => searchParams.get('unmappedWebsite') === 'true',
+  );
+  const uwActive = tab === 'unconfirmed' && unmappedWebsite;
   // page is 0-indexed at the API boundary (offset = page * pageSize),
   // but TablePagination displays it 1-indexed. Switching pageSize
   // resets page to 0 so the operator always lands on the first row.
@@ -277,7 +317,10 @@ export default function JobsPage() {
     // Cache key includes pageSize so changing rows-per-page doesn't
     // serve a stale fixed-50 payload, and the Pending-for-Scheduling filter
     // signature so two different filter sets never share an entry.
-    const key = `${tab}|${off}|${limit}|${sortKey || ''}|${sortDir}|${filterKey()}|f=${psActive ? psKey : ''}`;
+    // `uw=` keeps the preset's two extra pins out of the un-presetted entry —
+    // without it, toggling the chip would serve the unfiltered Unconfirmed page
+    // straight from cache.
+    const key = `${tab}|${off}|${limit}|${sortKey || ''}|${sortDir}|${filterKey()}|f=${psActive ? psKey : ''}|uw=${uwActive ? 1 : 0}`;
 
     // First paint (no data yet) raises the skeleton; every later reload —
     // pagination, sort, post-mutation — is silent so the table body never
@@ -438,6 +481,19 @@ export default function JobsPage() {
          * unchanged.
          */
         ...(psActive ? psQueryParams(psFilters) : {}),
+        /*
+         * "Unmapped Website Bookings" preset — spread LAST so its two pins WIN
+         * over the Filter Job card's Client dropdown above. That precedence is
+         * deliberate and matches the Pending-for-Scheduling bar's rule: the
+         * preset IS "client = RETAIL", so a stale Client pick left over from
+         * another view must not silently widen it. The chip's helper text names
+         * both pins so nothing is hidden from the operator.
+         *
+         * Emitted only while the chip is on AND the Unconfirmed tab is active.
+         */
+        ...(uwActive
+          ? { sourceType: WEBSITE_SOURCE_TYPE, clientId: RETAIL_CLIENT_ID }
+          : {}),
       });
       inflightRef.current.set(key, reqPromise);
       try {
@@ -487,6 +543,23 @@ export default function JobsPage() {
     load(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [psKey]);
+
+  /*
+   * "Unmapped Website Bookings" toggle → page-0 refetch. Mirrors the psKey
+   * effect exactly, including the initial-mount skip: the tab effect above
+   * already fires the first load, and it does so with `uwActive` derived from
+   * the URL-hydrated state, so a shared link lands pre-filtered without this
+   * effect firing a second identical request. Depends on `uwActive` (not the
+   * raw flag) so leaving the Unconfirmed tab with the chip still on also
+   * refetches — the pins have to come back off.
+   */
+  const uwMountRef = useRef(true);
+  useEffect(() => {
+    if (uwMountRef.current) { uwMountRef.current = false; return; }
+    setPage(0);
+    load(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uwActive]);
 
   /*
    * Counts fetch — runs once on mount and again after a save from the modal.
@@ -685,6 +758,17 @@ export default function JobsPage() {
       if (psActive) {
         Object.entries(psQueryParams(psFilters)).forEach(([k, v]) => qs.set(k, v));
       }
+      /*
+       * "Unmapped Website Bookings" pins last — same precedence as load(), so
+       * the exported file is a true mirror of what's on screen. `qs.set`
+       * (not append) overwrites any clientId the filter loop above emitted.
+       * The export route validates with the SAME listQuery schema, so
+       * `sourceType` is accepted there too.
+       */
+      if (uwActive) {
+        qs.set('sourceType', WEBSITE_SOURCE_TYPE);
+        qs.set('clientId', RETAIL_CLIENT_ID);
+      }
       const today = new Date().toISOString().slice(0, 10);
       try {
         await downloadXlsx({
@@ -769,12 +853,17 @@ export default function JobsPage() {
     // Shared serialiser — same `ps*` names /my-orders writes, so a filtered
     // link is portable between the two surfaces.
     writePsFilterParams(p, psFilters);
+    // "Unmapped Website Bookings" preset. Persisted from the RAW flag, not
+    // `uwActive`: the operator's choice should survive a hop to another tab and
+    // back, exactly like `q` and `sort` do. Combined with `?tab=unconfirmed`
+    // this makes the whole view a single shareable/bookmarkable URL.
+    if (unmappedWebsite) p.set('unmappedWebsite', 'true'); else p.delete('unmappedWebsite');
     const nextStr = p.toString();
     if (nextStr !== searchParams.toString()) {
       router.replace(nextStr ? `${pathname}?${nextStr}` : pathname, { scroll: false });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverQ, sortKey, sortDir, psKey]);
+  }, [serverQ, sortKey, sortDir, psKey, unmappedWebsite]);
 
   return (
     <div className="space-y-5">
@@ -826,6 +915,44 @@ export default function JobsPage() {
               onChange={setPsFilters}
               title="Pending For Scheduling Filters"
             />
+          </CardContent>
+        </Card>
+      )}
+
+      {/*
+        * "Unmapped Website Bookings" quick-filter — Unconfirmed tab only.
+        *
+        * Rendered ONLY on that tab because the tab supplies the `job_status = 9`
+        * half of the definition; the chip adds the other two pins
+        * (source_type = 'website', client = Retail). Kept in its own slim card
+        * ABOVE the Filter Job panel for the same reason the Pending-for-
+        * Scheduling bar is: this is a preset that OVERRIDES a field in that
+        * panel, so nesting it inside would read as just another filter of equal
+        * weight. The helper text names both pins explicitly, so the override of
+        * the Client dropdown is stated rather than silent.
+        */}
+      {tab === 'unconfirmed' && (
+        <Card>
+          <CardContent className="p-3">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <Button
+                type="button"
+                size="sm"
+                variant={unmappedWebsite ? 'default' : 'outline'}
+                aria-pressed={unmappedWebsite}
+                onClick={() => setUnmappedWebsite((v) => !v)}
+                title={unmappedWebsite
+                  ? 'Showing only unconfirmed website bookings on the Retail catch-all client. Click to clear.'
+                  : "Show unconfirmed orders booked from the website whose QR link carried no valid client code — they land on the Retail catch-all client and need re-mapping."}
+              >
+                <Globe className="h-4 w-4 mr-1" /> Unmapped Website Bookings
+              </Button>
+              <span className="text-xs text-muted-foreground max-w-3xl">
+                {unmappedWebsite
+                  ? 'Pinned to Source = website and Client = Retail (the catch-all). These bookings arrived without a valid client code — assign the real client before the visit. This overrides the Client filter below.'
+                  : 'Website bookings whose QR link carried no valid client code land on the Retail catch-all client with a blank SPOC. Turn this on to list them.'}
+              </span>
+            </div>
           </CardContent>
         </Card>
       )}
