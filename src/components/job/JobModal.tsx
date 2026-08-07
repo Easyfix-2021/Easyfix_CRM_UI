@@ -5172,7 +5172,27 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
         // skips services to preserve historical rows untouched. Outcome-only
         // also skips services — the operator hasn't built a basket yet.
         if (isConfirm && !isOutcomeOnly) {
-          patch.services = buildServicesPayload();
+          // In a MULTI-category confirm the parent job is category #1
+          // (allCatIds[0]); the other picked categories become sibling jobs in
+          // the fan-out below, each carrying its OWN filtered services. So the
+          // parent must get only its own category's rows — otherwise it's
+          // over-stuffed with every category's services and the siblings
+          // duplicate them. With 0/1 category, all rows belong to the single
+          // category, so the basket is sent as-is (no filtering risk).
+          const fullBasket = buildServicesPayload() as Array<Record<string, unknown>>;
+          const parentCatIds = (f.fk_service_catg_ids || '')
+            .split(',').filter(Boolean).map(Number)
+            .filter((n) => Number.isInteger(n) && n > 0);
+          if (parentCatIds.length > 1) {
+            const own = fullBasket.filter((s) => Number(s.service_category_id) === parentCatIds[0]);
+            // Fallback: if NONE of the basket rows are tagged to the parent's
+            // category (mistagged data, or the operator built services only
+            // under a later tab), keep the full basket rather than PATCH the
+            // already-existing parent to an empty "services cleared" list.
+            patch.services = own.length > 0 ? own : fullBasket;
+          } else {
+            patch.services = fullBasket;
+          }
           // Customer name is written to tbl_job.job_customer_name
           // (the per-job copy) — NOT the master tbl_customer row.
           // This lets the same mobile carry a different per-job
