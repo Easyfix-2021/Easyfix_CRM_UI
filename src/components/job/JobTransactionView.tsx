@@ -61,7 +61,7 @@ type TransactionResp = {
     created_date_time: string; ticket_created_date_time: string | null;
     requested_date_time: string | null; scheduled_date_time: string | null;
     checkin_date_time: string | null; checkout_date_time: string | null;
-    job_desc: string | null; remarks: string | null; remarks_date_time: string | null;
+    job_desc: string | null; efr_special_notes: string | null; remarks: string | null; remarks_date_time: string | null;
     time_slot: string | null;
     job_type: string | null;
     helper_req: number | boolean | null;
@@ -212,6 +212,7 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
           <DLRow label="Service Type">{fmt(j.services?.[0]?.service_type_name)}</DLRow>
           <DLRow label="Service Category">{fmt(j.services?.[0]?.service_catg_name)}</DLRow>
           <DLRow label="Problem Description">{fmt(j.job_desc)}</DLRow>
+          <DLRow label="Handyman Notes">{fmt(j.efr_special_notes)}</DLRow>
           <DLRow label="Total No. of Products">{totalProducts}</DLRow>
           <DLRow label="Job Completion TAT">{j.exp_tat != null ? `${j.exp_tat} hrs` : 'hrs'}</DLRow>
 

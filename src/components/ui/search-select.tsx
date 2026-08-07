@@ -38,6 +38,14 @@ export type SearchOption = {
    * "13:00" behind a 12-hour label "1:00 PM". Never rendered.
    */
   keywords?: string;
+  /*
+   * Optional disabled state. A disabled option renders greyed and is not
+   * selectable — SearchMultiSelect ignores a click that would ADD it (but
+   * still lets you REMOVE one that is somehow already selected). When set,
+   * `disabledReason` is shown as a native hover tooltip explaining why.
+   */
+  disabled?: boolean;
+  disabledReason?: string;
 };
 
 export function SearchSelect({

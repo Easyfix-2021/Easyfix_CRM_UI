@@ -40,7 +40,7 @@ import { resolveParentAddressId, buildJobAddressPayload } from '@/lib/job-addres
 import { BOOKING_BANDS, slotChoicesFor, inferSlotFromTime, bandForTime, isKnownBand, canonicalSlot, displaySlot, AFTER_HOURS_SLOT } from '@/lib/job-slots';
 import { useLookup } from '@/lib/use-lookup';
 import { formatDate, formatEasyfixerName, statusLabel, statusTone, toIstClockTime } from '@/lib/utils';
-import { maskMobile, formatServiceAddress, INDIAN_MOBILE_REGEX, INDIAN_MOBILE_ERROR, isValidIndianMobile } from '@/lib/format';
+import { maskMobile, formatServiceAddress, INDIAN_MOBILE_REGEX, INDIAN_MOBILE_ERROR, isValidIndianMobile, normalizeMobileDigits } from '@/lib/format';
 import { formatJobAge, jobAgeTitle } from '@/lib/job-age';
 
 /*
@@ -1073,6 +1073,10 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
                 )}
               </span>
             )],
+            // Additional Comments / technician-facing notes (efr_special_notes) —
+            // captured on booking (Client Dashboard "Notes for technician") but
+            // previously never rendered in the read view.
+            ['Handyman Notes', String(job.efr_special_notes ?? '') || '—'],
           ]}/>
           {/* Address — full-width because the address line is long and
               wraps awkwardly inside a one-third column. Includes an
@@ -3969,7 +3973,7 @@ function CreateJobMobileGate({
         <Input
           autoFocus
           value={mobile}
-          onChange={(e) => setMobile(e.target.value.replace(/\D/g, '').slice(0, 10))}
+          onChange={(e) => setMobile(normalizeMobileDigits(e.target.value))}
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void lookup(); } }}
           placeholder="10-digit mobile number"
           className="font-mono"
@@ -5558,6 +5562,13 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             const allServices = buildServicesPayload() as Array<Record<string, unknown>>;
             const servicesForCat = (catId: number) =>
               allServices.filter((s) => Number(s.service_category_id) === catId);
+            // Collect sibling-create failures (as category labels) so a partial
+            // multi-category save is surfaced to the operator after the loop —
+            // never swallowed silently (previous behaviour was console.warn only).
+            const siblingFailures: string[] = [];
+            const catLabel = (id: number) =>
+              (lk.serviceCategories || []).find((c) => String(c.service_catg_id) === String(id))?.service_catg_name
+              || `Category ${id}`;
             for (const catId of siblingCats) {
               const override = (perJobFields[String(catId)] || {}) as PerJobOverride;
               const filtered = servicesForCat(catId);
@@ -5636,12 +5647,22 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                   }
                 }
               } catch (e) {
-                // Non-fatal — original is already BOOKED. Surface a
-                // console warning so the operator can manually re-confirm
-                // the missing category later.
+                // Non-fatal to the PARENT job (already BOOKED) — but NO LONGER
+                // silent: record which category failed so we can tell the
+                // operator, instead of only logging a console warning.
+                siblingFailures.push(catLabel(catId));
                 // eslint-disable-next-line no-console
                 console.warn(`Failed to create sibling job for category ${catId} during Confirm fan-out:`, e);
               }
+            }
+            // Surface any sibling-create failures so a partial multi-category
+            // save is never silent. The parent job is already saved; these are
+            // the ADDITIONAL categories that couldn't become their own job.
+            if (siblingFailures.length > 0) {
+              showToast({
+                variant: 'error',
+                message: `Saved, but ${siblingFailures.length} additional service ${siblingFailures.length === 1 ? 'category' : 'categories'} couldn’t be created as a separate job: ${siblingFailures.join(', ')}. Please add a service for each and retry from Confirm & Schedule.`,
+              });
             }
           }
         }
@@ -6500,7 +6521,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                   <>
                     <Input
                       value={raw}
-                      onChange={(e) => set('additional_number', e.target.value.replace(/\D/g, '').slice(0, 10))}
+                      onChange={(e) => set('additional_number', normalizeMobileDigits(e.target.value))}
                       inputMode="numeric"
                       placeholder="10 digits"
                       className={`tabular-nums w-full ${!isValid ? 'border-red-400 focus-visible:ring-red-300' : ''}`}
@@ -6864,15 +6885,26 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 placeholder="— Select one or more —"
                 selectedLabel="categories"
                 options={(() => {
-                  // Restrict to categories that appear in THIS client's
-                  // rate card (same rule as create-mode). When the rate
-                  // card is still loading, fall back to all categories.
+                  // Show EVERY category, but DISABLE (not hide) those with no
+                  // priced service in THIS client's rate card — with a hover
+                  // reason — so the operator sees the category exists and why it
+                  // can't be picked, and can't select a dead-end category that
+                  // would fail the per-category job fan-out on save. When the
+                  // rate card hasn't loaded yet (empty set) we can't tell, so
+                  // everything stays enabled.
                   const allowed = new Set(
                     (clientServices || []).map((cs) => String(cs.service_catg_id)),
                   );
-                  return (lk.serviceCategories || [])
-                    .filter((c) => allowed.size === 0 || allowed.has(String(c.service_catg_id)))
-                    .map((c) => ({ value: c.service_catg_id, label: c.service_catg_name }));
+                  const cardKnown = allowed.size > 0;
+                  return (lk.serviceCategories || []).map((c) => {
+                    const hasService = !cardKnown || allowed.has(String(c.service_catg_id));
+                    return {
+                      value: c.service_catg_id,
+                      label: c.service_catg_name,
+                      disabled: !hasService,
+                      disabledReason: hasService ? undefined : 'No priced services in this client’s rate card',
+                    };
+                  });
                 })()}
               />
             </Field>
@@ -8122,7 +8154,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                       <>
                         <Input
                           value={raw}
-                          onChange={(e) => set('additional_number', e.target.value.replace(/\D/g, '').slice(0, 10))}
+                          onChange={(e) => set('additional_number', normalizeMobileDigits(e.target.value))}
                           inputMode="numeric"
                           placeholder="10 digits"
                           className={`font-mono ${!isValid ? 'border-red-400 focus-visible:ring-red-300' : ''}`}
@@ -8566,17 +8598,26 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                   placeholder="— Select one or more —"
                   selectedLabel="categories"
                   options={(() => {
-                    // Build the allowed category set from the client's
-                    // rate card. If the card hasn't loaded yet
-                    // (clientServices === null) or is empty, show all
-                    // categories — the dependent Service Type picker
-                    // will still gate against the empty card.
+                    // Show EVERY category, but DISABLE (not hide) those with no
+                    // priced service in this client's rate card — with a hover
+                    // reason — so the operator can't pick a dead-end category
+                    // that would fail the per-category job fan-out on save. If
+                    // the card hasn't loaded yet (empty set) we can't tell, so
+                    // everything stays enabled; the dependent Service Type
+                    // picker still gates against the empty card.
                     const allowed = new Set(
                       (clientServices || []).map((cs) => String(cs.service_catg_id)),
                     );
-                    return (lk.serviceCategories || [])
-                      .filter((c) => allowed.size === 0 || allowed.has(String(c.service_catg_id)))
-                      .map((c) => ({ value: c.service_catg_id, label: c.service_catg_name }));
+                    const cardKnown = allowed.size > 0;
+                    return (lk.serviceCategories || []).map((c) => {
+                      const hasService = !cardKnown || allowed.has(String(c.service_catg_id));
+                      return {
+                        value: c.service_catg_id,
+                        label: c.service_catg_name,
+                        disabled: !hasService,
+                        disabledReason: hasService ? undefined : 'No priced services in this client’s rate card',
+                      };
+                    });
                   })()}
                 />
               </Field>

@@ -23,6 +23,29 @@
  */
 export const INDIAN_MOBILE_REGEX = /^[6-9]\d{9}$/;
 
+/*
+ * normalizeMobileDigits — sanitise a typed/pasted phone value to bare 10-digit
+ * form for lookup + storage. Strips non-digits, then drops a country/trunk
+ * prefix ("+91…", leading-0 STD, or "091…") — but ONLY while the value runs
+ * LONGER than 10 digits, so a genuine 10-digit number (Indian mobiles start
+ * 6-9) is never altered. Finally caps at 10.
+ *
+ *   "+91 89681 72921" → "8968172921"   (pasted country code)
+ *   "08968172921"     → "8968172921"   (leading trunk 0, 11 digits)
+ *   "8968172921"      → "8968172921"   (unchanged)
+ *
+ * Use this in every mobile input's onChange in place of a bare
+ * `.replace(/\D/g,'').slice(0,10)` — that pattern silently mangles a pasted
+ * +91 number into the wrong 10 digits (918968172921 → 9189687129).
+ */
+export function normalizeMobileDigits(raw: unknown): string {
+  let d = String(raw ?? '').replace(/\D/g, '');
+  while (d.length > 10 && (d.startsWith('91') || d.startsWith('0'))) {
+    d = d.startsWith('91') ? d.slice(2) : d.slice(1);
+  }
+  return d.slice(0, 10);
+}
+
 export function isValidIndianMobile(value: unknown, opts?: { required?: boolean }): boolean {
   const raw = String(value ?? '');
   if (raw === '') return !opts?.required;

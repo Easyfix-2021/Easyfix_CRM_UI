@@ -172,8 +172,11 @@ export function SearchMultiSelect({
   function toggle(opt: SearchOption) {
     const key = String(opt.value);
     if (selectedSet.has(key)) {
+      // Removing an already-selected option is always allowed, even if it is
+      // now disabled (so a stuck selection can be cleared).
       onChange(value.filter((v) => String(v) !== key));
     } else {
+      if (opt.disabled) return; // can't ADD a disabled option
       onChange([...value, opt.value]);
     }
   }
@@ -183,7 +186,9 @@ export function SearchMultiSelect({
     // popover. "Select all" while a filter is active selects only what's
     // visible — matches the legacy form's behaviour.
     const next = new Set(value.map(String));
-    for (const o of filtered) next.add(String(o.value));
+    // Bulk-select skips disabled options — they can't be picked individually
+    // either (e.g. a category with no priced service).
+    for (const o of filtered) { if (o.disabled) continue; next.add(String(o.value)); }
     // Preserve original option types (number vs string) on the way out.
     const lookup = new Map(uniqueOptions.map((o) => [String(o.value), o.value]));
     onChange(Array.from(next).map((k) => lookup.get(k) ?? k));
@@ -320,13 +325,20 @@ export function SearchMultiSelect({
                     key={key}
                     role="option"
                     aria-selected={isSel}
+                    aria-disabled={opt.disabled || undefined}
+                    // Native tooltip explains WHY a disabled option can't be
+                    // picked (e.g. "No priced services in this client's rate card").
+                    title={opt.disabled ? opt.disabledReason : undefined}
                     onClick={() => toggle(opt)}
                     className={cn(
-                      'flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-muted',
+                      'flex items-center gap-2 px-3 py-1.5',
+                      // Disabled rows are greyed + not-allowed; enabled rows keep
+                      // the pointer + hover wash.
+                      opt.disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:bg-muted',
                       // Selected rows read as clearly picked: a tinted bg +
                       // solid foreground text + medium weight, not the old
                       // barely-there bg-muted/40 wash.
-                      isSel && 'bg-primary/10 text-foreground font-medium hover:bg-primary/15',
+                      isSel && !opt.disabled && 'bg-primary/10 text-foreground font-medium hover:bg-primary/15',
                     )}
                   >
                     {/* Left indicator. 'plusminus' = +/- (add / drop), used by
