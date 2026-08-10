@@ -61,6 +61,30 @@ const LABEL: Record<WebCallStatus, string> = {
 };
 const AUTO_DISMISS_MS = 10000;
 
+/*
+ * ── Alone-in-the-room auto-end ────────────────────────────────────────────
+ *
+ * The operator's leg carries stayAlone="true", and that is NOT optional: the
+ * operator is alone for the moment between joining the room and the receiver
+ * being added, and Plivo's default drops a lone participant — without it every
+ * call breaks at the first second. The cost is that after everyone else hangs
+ * up the operator stays in an empty, billing room. Under the old <Dial> bridge
+ * the call simply ended when the customer hung up, so this is a behaviour
+ * change on EVERY call, not an edge case.
+ *
+ * 45 SECONDS, and the number is a judgement rather than a default. Because this
+ * fires on every ordinary call, minutes of dead air would be the common case;
+ * because "Stay On Call" has to be clickable by someone who has just started
+ * thinking about adding a technician, a few seconds would be a trap. 45s caps
+ * idle billing at under a minute per call and still leaves a comfortable window
+ * to react.
+ *
+ * The countdown is always on screen — an auto-end nobody saw coming reads as a
+ * dropped call, and an operator who has been dropped once stops trusting the
+ * panel.
+ */
+const ALONE_AUTO_END_SEC = 45;
+
 function useElapsed(startedAt: number | null, running: boolean): number {
   const [s, setS] = React.useState(0);
   React.useEffect(() => {
@@ -137,6 +161,49 @@ export function WebCallPanel() {
    * Somebody has to actually be on the line for a room to be stranded.
    */
   const strandedRoom = terminal && conf.live && conf.activeOthers > 0;
+
+  /*
+   * ── Alone in the room ─────────────────────────────────────────────────
+   *
+   * `activeOthers` counts legs that are dialling, ringing OR joined, so zero
+   * genuinely means "nobody else is on and nobody else is being dialled". That
+   * distinction is what makes this safe to arm on an ordinary call: while the
+   * receiver's phone is still ringing they are counted, so the timer stays down
+   * until they either answer or drop out.
+   */
+  const aloneOnCall = status === 'in_progress' && conf.live && conf.activeOthers === 0;
+  const [aloneSince, setAloneSince] = React.useState<number | null>(null);
+  const [autoEndOff, setAutoEndOff] = React.useState(false);
+  const [nowTick, setNowTick] = React.useState(() => Date.now());
+
+  // Arm on the transition INTO alone, and disarm the moment anyone is on or
+  // being dialled — so Remove-then-Add resets the clock rather than racing it.
+  React.useEffect(() => {
+    if (!aloneOnCall) { setAloneSince(null); setAutoEndOff(false); return; }
+    setAloneSince((s) => s ?? Date.now());
+  }, [aloneOnCall]);
+
+  // One 1s tick, and only while the countdown is actually showing.
+  const countingDown = aloneSince != null && !autoEndOff;
+  React.useEffect(() => {
+    if (!countingDown) return;
+    const t = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [countingDown]);
+
+  const aloneSecsLeft = countingDown
+    ? Math.max(0, ALONE_AUTO_END_SEC - Math.floor((nowTick - (aloneSince as number)) / 1000))
+    : null;
+
+  /*
+   * Hang up rather than POST the conference teardown: the operator's leg is the
+   * one carrying endMpcOnExit="true", so its hangup ends the room for everyone
+   * through the path that already works — and if the room somehow outlives it,
+   * the reaper is still behind that. One mechanism, not two.
+   */
+  React.useEffect(() => {
+    if (aloneSecsLeft === 0) hangup();
+  }, [aloneSecsLeft, hangup]);
   const showHeadCount = headCount > 1 || (strandedRoom && headCount > 0);
   const headerTitle = strandedRoom ? 'Call Running Without You'
     : headCount > 1 ? 'Web Conference'
@@ -494,6 +561,38 @@ export function WebCallPanel() {
               conf={conf}
               operatorPresent={operatorPresent}
             />
+
+            {/*
+              ── Alone in the room ──
+              Under the old <Dial> bridge the call ended when the customer hung
+              up. It no longer does — stayAlone keeps the operator in an empty,
+              billing room — so this is the notice that replaces a behaviour ops
+              have relied on for years, and it has to carry its own way out.
+
+              The countdown is stated, not implied. "Stay On Call" cancels it
+              outright for the drop-one-then-add-another workflow; adding anyone
+              disarms it on its own, because activeOthers stops being zero.
+            */}
+            {aloneSecsLeft != null && (
+              <div className="text-xs rounded border border-amber-300 bg-amber-50 px-2 py-1.5 space-y-1.5">
+                <p className="text-amber-900">
+                  Everyone else has left — you&apos;re alone on this call. Ending in{' '}
+                  <span className="font-semibold tabular-nums">{aloneSecsLeft}s</span>.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setAutoEndOff(true)}
+                  className="text-amber-900 font-medium underline underline-offset-2 hover:text-amber-950"
+                >
+                  Stay On Call
+                </button>
+              </div>
+            )}
+            {aloneSince != null && autoEndOff && (
+              <p className="text-xs text-muted-foreground">
+                You&apos;re alone on this call. Add someone, or hang up when you&apos;re done.
+              </p>
+            )}
 
             {/* Teardown error (e.g. 502 — the room is still reported live).
                 Bound to the control it came from: this panel is mounted once at
