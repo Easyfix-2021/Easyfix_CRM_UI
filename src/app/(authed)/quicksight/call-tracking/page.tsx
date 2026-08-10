@@ -45,6 +45,24 @@
  * Filters: the shared client/vertical/service-category bar + the call-date
  * window (defaults to TODAY, IST) + "Called By" (the tbl_user who MADE the
  * call) + Provider + Party.
+ *
+ * ⚠ CONFERENCE CALLS COUNT AS ONE CALL, EVERYWHERE IN THIS REPORT.
+ *
+ * A conference is one call that gained people, and the summary reads
+ * tbl_job_caller_info — which still holds exactly one row per call — so every
+ * aggregate here (totals, By Job, By User, By Day, connect rate, talk time) is
+ * already correct by construction. Nothing needed adding to make the counts
+ * right, and nothing may be added that would inflate them: joining the per-leg
+ * call log into the summary would both multiply the numbers and drop every
+ * Kaleyra call, which has no log row at all.
+ *
+ * What the aggregates cannot show is COMPOSITION. `Called To` is derived from
+ * the number stamped on the call at click time, so it attributes a conference
+ * wholly to whoever was dialled FIRST — a technician brought in mid-call
+ * contributes nothing to that breakdown. That is why the extra people are
+ * surfaced in the per-call DRILL-DOWN, which is the one place in this report
+ * that shows individual calls rather than counts of them, and why the Called To
+ * header says what it is counting.
  */
 
 import { useCallback, useMemo, useState } from 'react';
@@ -53,6 +71,9 @@ import { showToast } from '@/components/ui/toast';
 import { api, ApiError } from '@/lib/api';
 import { CallRecordingAudio } from '@/components/ui/call-recording-audio';
 import { IconButton } from '@/components/ui/icon-button';
+
+import { CallLegList, ConferenceBadge } from '@/components/calls/CallLegList';
+import { groupCallRows, isConferenceCall, type CallLeg } from '@/lib/call-legs';
 
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
@@ -613,7 +634,11 @@ export default function CallTrackingPage() {
                 <th className="!text-center">Total Duration</th>
                 <th className="!text-center">Avg Duration</th>
                 <th className="!text-left" title="Who placed the calls, and how many each">Called By</th>
-                <th className="!text-left" title="Who was on the other end — Customer, Alternate, Client SPOC, Technician or Other">To Whom</th>
+                {/* Counts CALLS, not people: each call is attributed to the
+                    party it was placed to, so a conference lands wholly under
+                    the first party dialled. Anyone added mid-call is listed in
+                    the drill-down, not here — see the file header. */}
+                <th className="!text-left" title="Who the call was placed to — Customer, Alternate, Client SPOC, Technician or Other. Counts calls, so a conference is attributed to the party dialled first; open the call list to see everyone who joined.">To Whom</th>
                 <th className="!text-left" title="The job status SNAPSHOT at the moment of each call — where in the lifecycle the calls were made from">At Which Step</th>
                 <th className="!text-center">First Call</th>
                 <th className="!text-center">Last Call</th>
@@ -762,7 +787,11 @@ export default function CallTrackingPage() {
                 <th className="!text-center">Total Duration</th>
                 <th className="!text-center">Avg Duration</th>
                 <th className="!text-center" title="The job status most of this day's calls were made at — hover the cell for the full step breakdown">Majority Job Status</th>
-                <th className="!text-left" title="Who was on the other end — Customer, Alternate, Client SPOC, Technician or Other">To Whom</th>
+                {/* Counts CALLS, not people: each call is attributed to the
+                    party it was placed to, so a conference lands wholly under
+                    the first party dialled. Anyone added mid-call is listed in
+                    the drill-down, not here — see the file header. */}
+                <th className="!text-left" title="Who the call was placed to — Customer, Alternate, Client SPOC, Technician or Other. Counts calls, so a conference is attributed to the party dialled first; open the call list to see everyone who joined.">To Whom</th>
                 <th className="!text-center">First Call</th>
                 <th className="!text-center">Last Call</th>
               </tr>
@@ -892,7 +921,11 @@ export default function CallTrackingPage() {
                 <SortTh label="Avg Duration / Call" col="avgDurationSecs" sort={combinedSort} onSort={onCombinedSort} className="!text-right" title="Averaged over CONNECTED calls only — a call that never connected is not talk time" />
                 <SortTh label="Avg Duration / Day" col="avgDurationPerDaySecs" sort={combinedSort} onSort={onCombinedSort} className="!text-right" title={PER_DAY_HELP} />
                 <th className="!text-center" title="The job status most of this user's calls were made at — hover the cell for the full step breakdown">Majority Job Status</th>
-                <th className="!text-left" title="Who was on the other end — Customer, Alternate, Client SPOC, Technician or Other">To Whom</th>
+                {/* Counts CALLS, not people: each call is attributed to the
+                    party it was placed to, so a conference lands wholly under
+                    the first party dialled. Anyone added mid-call is listed in
+                    the drill-down, not here — see the file header. */}
+                <th className="!text-left" title="Who the call was placed to — Customer, Alternate, Client SPOC, Technician or Other. Counts calls, so a conference is attributed to the party dialled first; open the call list to see everyone who joined.">To Whom</th>
               </tr>
             </thead>
             <tbody>
@@ -1080,6 +1113,14 @@ type CallDetail = {
   durationSecs: number | null; connected: boolean;
   provider: string | null; callerStatus: string | null;
   recordingAvailable: boolean;
+  /*
+   * Everyone who was on the call, if it was a conference — the ops agent
+   * included. These are NESTED under the call rather than returned as extra
+   * top-level rows, deliberately: this drill-down's contract is that its row
+   * count reconciles with the summary number that was clicked, and flattening
+   * legs into rows would break that the moment anyone counted them.
+   */
+  legs?: CallLeg[] | null;
 };
 
 /*
@@ -1185,7 +1226,17 @@ function CallDrilldownBody({ drill, filters, onClose }: {
     `${API_BASE}/calls`,
     body,
   );
-  const items = detail.data?.items ?? null;
+  /*
+   * Grouped before rendering, for the same reason as every other call surface:
+   * one row per CALL. It matters more here than anywhere else, because this
+   * table's row count is what an operator reconciles against the summary figure
+   * they clicked — a conference listed as three rows under a cell that said "1"
+   * reads as a broken report.
+   */
+  const items = useMemo(
+    () => (detail.data?.items ? groupCallRows(detail.data.items) : null),
+    [detail.data?.items],
+  );
 
   return (
     <>
@@ -1207,7 +1258,10 @@ function CallDrilldownBody({ drill, filters, onClose }: {
                   <th className="!text-center">Called At</th>
                   <th className="!text-left">Job #</th>
                   <th className="!text-left">Called By</th>
-                  <th className="!text-left">To Whom</th>
+                  {/* On a conference this cell lists EVERY person on the call,
+                      each with their role — the one place in this report where
+                      per-leg detail exists. */}
+                  <th className="!text-left" title="Who was on the call. A conference lists everyone who joined it, with their role.">To Whom</th>
                   {/* The SNAPSHOT status, which is the reason this drill-down
                       exists — see the page header note. */}
                   <th className="!text-center" title="The job status at the MOMENT of this call — the job may have moved on since">Job Status At Call</th>
@@ -1234,11 +1288,28 @@ function CallDrilldownBody({ drill, filters, onClose }: {
                         <span className="ml-1 text-[10px] text-muted-foreground">#{c.callerUserId}</span>
                       )}
                     </td>
-                    <td className="!text-left whitespace-nowrap">
-                      <span className="block whitespace-nowrap">
-                        {c.receiverName || <span className="text-muted-foreground">—</span>}
-                      </span>
-                      <span className="block whitespace-nowrap text-[10px] text-muted-foreground">{c.partyRole}</span>
+                    {/*
+                      * A conference replaces the single-counterparty summary
+                      * with the full roster rather than sitting beside it: the
+                      * summary line is derived from the number dialled FIRST, so
+                      * on a 3-party call it is not a summary, it is one of the
+                      * three — and printing it above the same person's leg would
+                      * read as four people on a three-person call.
+                      */}
+                    <td className="!text-left">
+                      {isConferenceCall(c) ? (
+                        <>
+                          <ConferenceBadge row={c} />
+                          <CallLegList legs={c.legs} className="mt-1" dense />
+                        </>
+                      ) : (
+                        <>
+                          <span className="block whitespace-nowrap">
+                            {c.receiverName || <span className="text-muted-foreground">—</span>}
+                          </span>
+                          <span className="block whitespace-nowrap text-[10px] text-muted-foreground">{c.partyRole}</span>
+                        </>
+                      )}
                     </td>
                     <td className="!text-center">
                       {c.jobStatusAtCall == null

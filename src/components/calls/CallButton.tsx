@@ -370,6 +370,15 @@ function useClickToCall(target: CallTarget) {
         provider?: string;
         supportsLiveStatus?: boolean;
         message?: string;
+        /*
+         * conferenceId (2026-08) — the Plivo Multi-Party Call this leg was
+         * placed into, when the BE minted one. Optional on purpose: it is
+         * absent until the call path starts every ops call as a 1-participant
+         * MPC, and while absent the live panel is byte-for-byte today's panel.
+         * The FE never creates the room itself — see LiveCallContext's note on
+         * why a browser-created conference would be a broken one.
+         */
+        conferenceId?: number | null;
       }>('/admin/calls/click-to-call', body);
 
       // Guard FIRST: the BE returns HTTP 200 with delivered:false when it
@@ -386,6 +395,7 @@ function useClickToCall(target: CallTarget) {
           id: resp.jobCallerInfoId,
           fromMasked: previewLegs?.from ?? null,
           toMasked: previewLegs?.to ?? null,
+          conferenceId: resp.conferenceId ?? null,
         });
       } else {
         setToast({ variant: 'success', message: 'Call initiated Successfully' });

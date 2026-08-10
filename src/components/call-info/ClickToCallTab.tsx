@@ -37,6 +37,11 @@
  *     client-side and SAYS SO ("Filter This Page"): a box labelled "Search"
  *     that quietly covered only 1 page of N would be a lie. Reach for the range
  *     + page size to widen what's on screen, then filter it.
+ *
+ * CONFERENCES (2026-08-06): a call that gained people is still ONE row here and
+ * counts as ONE call. Its extra legs appear as a detail row underneath, and
+ * their names/roles are matched by the page filter, so filtering for a
+ * technician finds the call they were conferenced into.
  */
 
 import * as React from 'react';
@@ -45,6 +50,8 @@ import { Input } from '@/components/ui/input';
 import { InfoTooltip } from '@/components/ui/tooltip';
 import { useFetch } from '@/lib/hooks';
 import { maskMobile } from '@/lib/format';
+import { callLegSearchText, groupCallRows, type CallLeg } from '@/lib/call-legs';
+import { CallLegsRow, ConferenceBadge } from '@/components/calls/CallLegList';
 import { TablePagination, PAGE_SIZE_OPTIONS, pageSizeToLimit, type TablePageSize } from '@/components/ui/table-pagination';
 
 type CallRow = {
@@ -69,9 +76,19 @@ type CallRow = {
   inserted_time: string | null;
   is_updated: number | null;
   transcription_status?: string | null;
+  /** Conference legs — see lib/call-legs.ts. Absent on an ordinary 1:1 call. */
+  conference_id?: number | null;
+  legs?: CallLeg[] | null;
 };
 
 type ListResp = { total: number; page: number; limit: number; items: CallRow[] };
+
+// The <thead> below. Used by the legs' full-width detail row, so a new column
+// cannot leave the conference block short of the table's width.
+const CALL_COLUMNS = [
+  'Call Time', 'Agent', 'Customer', 'Customer Mobile',
+  'Job #', 'Duration', 'Status', 'Recording', 'Transcript',
+];
 
 // BE Joi cap on GET /admin/calls `limit` is 200 (validators/calls.validator.js
 // → callListQuery). It is handed to `pageSizeToLimit` as that helper's explicit
@@ -160,9 +177,21 @@ export function ClickToCallTab({ from, to }: { from: string; to: string }) {
 
   const { data, loading, error } = useFetch<ListResp>(listKey);
 
-  // `data == null` is "nothing loaded yet" (first paint / idle); once a response
-  // lands, `items` is the CURRENT PAGE and `total` the whole range.
-  const rows = data?.items ?? null;
+  /*
+   * `data == null` is "nothing loaded yet" (first paint / idle); once a response
+   * lands, `items` is the CURRENT PAGE and `total` the whole range.
+   *
+   * Grouped before anything counts or renders them: the jci⋈pcl join behind this
+   * endpoint is 1:N now, so an ungrouped page would list a 3-party conference
+   * three times and the "N of M On This Page" figure beside the filter box would
+   * count it three times too.
+   *
+   * `total` is NOT adjusted here and must not be — it is the server's count for
+   * the whole RANGE, and the duplicates of a call may well sit on another page.
+   * Only the endpoint can count that correctly; this is a rendering guard, not a
+   * substitute for the fix.
+   */
+  const rows = React.useMemo(() => (data?.items ? groupCallRows(data.items) : null), [data?.items]);
   const total = data?.total ?? 0;
 
   const filteredRows = React.useMemo(() => {
@@ -178,7 +207,10 @@ export function ClickToCallTab({ from, to }: { from: string; to: string }) {
         r.caller_status, r.receiver_status,
         r.unique_id,
       ].map((x) => String(x ?? '').toLowerCase()).join(' ');
-      return hay.includes(q);
+      // Everyone who was on the call, not just the party it was placed to —
+      // otherwise a technician conferenced in is unfindable by name on a page
+      // that is visibly showing them.
+      return hay.includes(q) || callLegSearchText(r).includes(q);
     });
   }, [rows, pageFilter]);
 
@@ -255,10 +287,7 @@ export function ClickToCallTab({ from, to }: { from: string; to: string }) {
           <table className="w-full text-sm data-table">
             <thead>
               <tr className="text-xs">
-                {[
-                  'Call Time', 'Agent', 'Customer', 'Customer Mobile',
-                  'Job #', 'Duration', 'Status', 'Recording', 'Transcript',
-                ].map((c) => (
+                {CALL_COLUMNS.map((c) => (
                   <th
                     key={c}
                     scope="col"
@@ -271,10 +300,16 @@ export function ClickToCallTab({ from, to }: { from: string; to: string }) {
             </thead>
             <tbody>
               {(filteredRows || []).map((r) => (
-                <tr key={r.id} className="border-t hover:bg-muted/30">
+                <React.Fragment key={r.id}>
+                <tr className="border-t hover:bg-muted/30">
                   <td className="px-3 py-2 whitespace-nowrap">{fmtDateTime(r.inserted_time)}</td>
                   <td className="px-3 py-2">{r.caller_name || '—'}</td>
-                  <td className="px-3 py-2">{r.receiver_name || '—'}</td>
+                  <td className="px-3 py-2">
+                    {r.receiver_name || '—'}
+                    {/* One call, N people — stated in the column a reader would
+                        otherwise take as the call's only counterparty. */}
+                    <ConferenceBadge row={r} className="ml-1.5" />
+                  </td>
                   <td className="px-3 py-2 font-mono text-xs">{maskMobile(r.receiver)}</td>
                   <td className="px-3 py-2 font-mono text-xs">{r.job_id ?? '—'}</td>
                   <td className="px-3 py-2">{fmtDuration(r.duration)}</td>
@@ -308,10 +343,12 @@ export function ClickToCallTab({ from, to }: { from: string; to: string }) {
                     })()}
                   </td>
                 </tr>
+                <CallLegsRow row={r} colSpan={CALL_COLUMNS.length} />
+                </React.Fragment>
               ))}
               {filteredRows && filteredRows.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="px-3 py-6 text-center text-sm text-muted-foreground">
+                  <td colSpan={CALL_COLUMNS.length} className="px-3 py-6 text-center text-sm text-muted-foreground">
                     No calls on this page match &ldquo;{pageFilter}&rdquo;.
                   </td>
                 </tr>

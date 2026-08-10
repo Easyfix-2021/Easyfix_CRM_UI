@@ -30,6 +30,32 @@ export type LiveCall = {
   fromMasked: string | null;
   toMasked: string | null;
   name?: string | null;
+  /*
+   * conferenceId — the Plivo Multi-Party Call this leg belongs to, when the
+   * backend minted one for it.
+   *
+   * WHY IT IS OPTIONAL, AND WHY IT MUST STAY OPTIONAL
+   *
+   * Plivo cannot promote a live <Dial> into a conference: <Dial> and MPC are
+   * different objects with no conversion API. So the design is that EVERY ops
+   * call is placed as an MPC carrying one participant — invisible to ops, but
+   * it means "add someone" is one API call away at any moment. Minting that
+   * room is the CALL path's job (it has to, in order to name the room the
+   * operator's answer XML joins), which is why this arrives on the
+   * click-to-call response rather than being created by the browser.
+   *
+   * The FE must NOT call POST /admin/conferences itself to fill this in. Two
+   * reasons, either one sufficient:
+   *   - it would burn a second concurrency slot for every call, and
+   *   - a browser-created room would never materialise at Plivo, because the
+   *     operator's leg was answered with the plain <Dial> XML and is not in it.
+   *     Adding a participant to it would fail at the provider.
+   *
+   * So: absent ⇒ no conference surface, and the panel behaves exactly as it
+   * always has. Present ⇒ the panel grows a participant list and Add To Call.
+   * That is the whole integration, and it is deliberately one field.
+   */
+  conferenceId?: number | null;
 };
 
 type LiveCallContextValue = {

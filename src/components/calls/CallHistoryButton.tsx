@@ -11,16 +11,35 @@
  *
  * It sits on the Job # (not the customer number) precisely because a job's
  * calls span multiple parties — pinning it to one number would misrepresent it.
+ *
+ * ─── Conference calls ────────────────────────────────────────────────────
+ *
+ * This is the surface where "the complete call history for the job" is the
+ * whole promise, so it is where a conference has to read correctly. A call that
+ * gained people is still ONE call and still ONE row here; the extra people are
+ * an indented detail block underneath it, each labelled with their role. What
+ * it must never do is show a 3-party conference as three calls — see
+ * `groupCallRows` in lib/call-legs.ts for the guard, and why it is defensive.
  */
 
 import * as React from 'react';
 import { Info, PhoneIncoming, PhoneOutgoing, Loader2, Play } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { CallRecordingAudio } from '@/components/ui/call-recording-audio';
+import { StatusChip } from '@/components/ui/StatusChip';
 import { useFetch } from '@/lib/hooks';
 import { api } from '@/lib/api';
 import { showToast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
+import {
+  callLegRoleLabel,
+  counterpartyLegs,
+  groupCallRows,
+  isConferenceCall,
+  partyTone,
+  type CallLeg,
+} from '@/lib/call-legs';
+import { CallLegsRow, ConferenceBadge } from './CallLegList';
 
 export type CallRow = {
   id: number;
@@ -36,8 +55,20 @@ export type CallRow = {
   // Counterparty classification added by the backend when scoped to a job.
   party_role: string | null;
   party_name: string | null;
+  /*
+   * Conference legs — every person on this call, the ops agent included. Absent
+   * on an ordinary 1:1 call, and absent entirely against a backend that does not
+   * project them yet, which is why every reader goes through the helpers in
+   * lib/call-legs.ts rather than indexing `legs` directly.
+   */
+  conference_id?: number | null;
+  legs?: CallLeg[] | null;
 };
 type CallHistoryResp = { total: number; items: CallRow[] };
+
+// Header count — the column set below. Kept beside the <thead> it describes so
+// the legs' full-width detail row cannot fall out of step with it.
+const CALL_HISTORY_COLUMNS = 7;
 
 // Display the stored IST wall-clock verbatim (strip the ISO 'T'/'Z' if present)
 // — NO timezone math, per the app's IST wall-clock convention.
@@ -54,15 +85,29 @@ function titleCase(s: string | null): string {
   if (!s) return '—';
   return s.replace(/_/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase());
 }
-// Colour the party pill by role so ops can scan "who" at a glance.
-function partyTone(role: string | null): string {
-  switch ((role || '').toLowerCase()) {
-    case 'customer':    return 'bg-sky-100 text-sky-700';
-    case 'client spoc': return 'bg-violet-100 text-violet-700';
-    case 'technician':  return 'bg-emerald-100 text-emerald-700';
-    case 'alternate':   return 'bg-amber-100 text-amber-700';
-    default:            return 'bg-slate-100 text-slate-600';
+
+/*
+ * Who this call was with, for the "With" column.
+ *
+ * ⚠ PREFER THE LEG'S OWN ROLE over the row-level classification.
+ *
+ * The backend derives `party_role` from `jci.reciever` — the number stamped on
+ * the call at click-to-call time — so it can only ever describe the party that
+ * was dialled FIRST. On a conference every leg carries its own
+ * `participant_role`, which is the only field that knows a technician was added
+ * mid-call. Falling back to `party_role` keeps every ordinary 1:1 call reading
+ * exactly as it did.
+ */
+function primaryParty(r: CallRow): { role: string; name: string | null } {
+  const others = counterpartyLegs(r);
+  if (others.length > 0) {
+    const first = others[0];
+    return {
+      role: callLegRoleLabel(first.target_kind),
+      name: first.display_name ?? r.party_name,
+    };
   }
+  return { role: r.party_role || 'Other', name: r.party_name };
 }
 
 /*
@@ -133,7 +178,7 @@ function RecordingCell({ row }: { row: CallRow }) {
  * job-detail modal's inline "Calling History" section so the two never drift.
  */
 export function CallHistoryTable({
-  items,
+  items: rawItems,
   loading,
   error,
 }: {
@@ -141,6 +186,16 @@ export function CallHistoryTable({
   loading?: boolean;
   error?: unknown;
 }) {
+  /*
+   * One row per CALL, whatever shape the endpoint sent. See `groupCallRows` —
+   * the jci⋈pcl join is 1:N now, so an ungrouped render would show a 3-party
+   * conference as three identical rows with three duplicate React keys.
+   *
+   * Memoised on the array identity, not deep-compared: `useFetch` hands back a
+   * stable object per response, so this recomputes once per fetch.
+   */
+  const items = React.useMemo(() => groupCallRows(rawItems), [rawItems]);
+
   if (loading) {
     return (
       <div className="py-10 text-center text-sm text-muted-foreground">
@@ -178,43 +233,52 @@ export function CallHistoryTable({
       <tbody>
         {items.map((r) => {
           const out = String(r.call_type ?? '').toUpperCase() === 'OUT';
+          const party = primaryParty(r);
+          const conference = isConferenceCall(r);
           return (
-            <tr key={r.id} className="border-b border-border/60">
-              <td className="py-1.5 pr-3 whitespace-nowrap">
-                {fmtTime(r.inserted_time || r.start_time)}
-              </td>
-              <td className="py-1.5 pr-3 whitespace-nowrap">
-                <span
-                  className={cn(
-                    'inline-block rounded px-1.5 py-0.5 text-[10px] font-medium',
-                    partyTone(r.party_role),
-                  )}
-                >
-                  {r.party_role || 'Other'}
-                </span>
-                {r.party_name ? (
-                  <span className="ml-1.5 text-muted-foreground">{r.party_name}</span>
-                ) : null}
-              </td>
-              <td className="py-1.5 pr-3 whitespace-nowrap">
-                <span className="inline-flex items-center gap-1">
-                  {out ? (
-                    <PhoneOutgoing className="h-3 w-3 text-emerald-600" />
-                  ) : (
-                    <PhoneIncoming className="h-3 w-3 text-sky-600" />
-                  )}
-                  {out ? 'Outgoing' : 'Incoming'}
-                </span>
-              </td>
-              <td className="py-1.5 pr-3 whitespace-nowrap">{fmtDuration(r.duration)}</td>
-              <td className="py-1.5 pr-3">{titleCase(r.caller_status)}</td>
-              {/* "By" = the operator/agent leg. On OUT calls the operator is the
-                  caller; on IN calls the operator is the answering (receiver)
-                  side — showing caller_name there would wrongly print the
-                  customer (already in "With"). */}
-              <td className="py-1.5 pr-3">{(out ? r.caller_name : r.receiver_name) || '—'}</td>
-              <td className="py-1.5"><RecordingCell row={r} /></td>
-            </tr>
+            /* Fragment, not two loose siblings: a conference contributes the
+               call's row PLUS its legs' detail row, and they must stay adjacent
+               and keyed as one unit. */
+            <React.Fragment key={r.id}>
+              <tr className={cn('border-b border-border/60', conference && 'border-b-0')}>
+                <td className="py-1.5 pr-3 whitespace-nowrap">
+                  {fmtTime(r.inserted_time || r.start_time)}
+                </td>
+                <td className="py-1.5 pr-3 whitespace-nowrap">
+                  <StatusChip tone={partyTone(party.role)} size="sm">
+                    {party.role}
+                  </StatusChip>
+                  {party.name ? (
+                    <span className="ml-1.5 text-muted-foreground">{party.name}</span>
+                  ) : null}
+                  {/* Says "one call, N people" right where the reader would
+                      otherwise conclude the call was with one person. */}
+                  <ConferenceBadge row={r} className="ml-1.5" />
+                </td>
+                <td className="py-1.5 pr-3 whitespace-nowrap">
+                  <span className="inline-flex items-center gap-1">
+                    {out ? (
+                      <PhoneOutgoing className="h-3 w-3 text-emerald-600" />
+                    ) : (
+                      <PhoneIncoming className="h-3 w-3 text-sky-600" />
+                    )}
+                    {out ? 'Outgoing' : 'Incoming'}
+                  </span>
+                </td>
+                <td className="py-1.5 pr-3 whitespace-nowrap">{fmtDuration(r.duration)}</td>
+                <td className="py-1.5 pr-3">{titleCase(r.caller_status)}</td>
+                {/* "By" = the operator/agent leg. On OUT calls the operator is the
+                    caller; on IN calls the operator is the answering (receiver)
+                    side — showing caller_name there would wrongly print the
+                    customer (already in "With"). */}
+                <td className="py-1.5 pr-3">{(out ? r.caller_name : r.receiver_name) || '—'}</td>
+                {/* The recording belongs to the CALL, not to a leg: the room is
+                    recorded once and filed against the operator's leg, which is
+                    why this stays on the call's row and never repeats per-leg. */}
+                <td className="py-1.5"><RecordingCell row={r} /></td>
+              </tr>
+              <CallLegsRow row={r} colSpan={CALL_HISTORY_COLUMNS} />
+            </React.Fragment>
           );
         })}
       </tbody>

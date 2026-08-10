@@ -47,6 +47,8 @@ import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { TablePagination, pageSizeToLimit, type TablePageSize } from '@/components/ui/table-pagination';
 import { CallRecordingAudio } from '@/components/ui/call-recording-audio';
 import { IconButton } from '@/components/ui/icon-button';
+import { CallLegsRow, ConferenceBadge } from '@/components/calls/CallLegList';
+import { groupCallRows, type CallLeg } from '@/lib/call-legs';
 
 type CallRow = {
   id: number;
@@ -70,6 +72,15 @@ type CallRow = {
   call_flow?: string | null;
   score?: string | null;
   call_analysis_status?: string | null;
+  /*
+   * Conference legs — everyone who was on the call. The analysis itself always
+   * belongs to the OPERATOR's leg (the backend files transcription, recording
+   * and coaching against that one row), so nothing in the Score / Transcript
+   * columns changes; the legs only say who else was in the room, which is
+   * context a coach reading a 3-party call needs.
+   */
+  conference_id?: number | null;
+  legs?: CallLeg[] | null;
 };
 type ListResp = { total: number; page: number; limit: number; items: CallRow[] };
 
@@ -540,7 +551,13 @@ export default function CallAnalyticsPage() {
     );
   }
 
-  const items = data?.items ?? [];
+  /*
+   * One row per CALL. The jci⋈pcl join behind this endpoint is 1:N now, so a
+   * conference can arrive as several rows carrying the same call id — which
+   * would list one call three times for analysis and hand React three duplicate
+   * keys. See groupCallRows in lib/call-legs.ts.
+   */
+  const items = React.useMemo(() => groupCallRows(data?.items ?? []), [data?.items]);
   const total = data?.total ?? 0;
 
   return (
@@ -694,7 +711,8 @@ export default function CallAnalyticsPage() {
                   const outgoing = String(r.call_type || '').toUpperCase() === 'OUT';
                   const s = toScore(r.score);
                   return (
-                    <tr key={r.id} className="border-t hover:bg-slate-50">
+                    <React.Fragment key={r.id}>
+                    <tr className="border-t hover:bg-slate-50">
                       {/* Prefer the answered time; fall back to the initiated
                           (inserted) time, which is always present — otherwise
                           recent calls (start_time NULL) showed a bare "—". */}
@@ -712,6 +730,10 @@ export default function CallAnalyticsPage() {
                       <td className="px-3 py-2">
                         <div>{r.receiver_name || '—'}</div>
                         <div className="font-mono text-xs text-muted-foreground">{r.receiver || ''}</div>
+                        {/* A coach reading a score needs to know the call had a
+                            third person on it — the transcript will have voices
+                            the Receiver column does not name. */}
+                        <ConferenceBadge row={r} className="mt-0.5" />
                       </td>
                       <td className="px-3 py-2">
                         {r.job_id
@@ -765,6 +787,8 @@ export default function CallAnalyticsPage() {
                         </div>
                       </td>
                     </tr>
+                    <CallLegsRow row={r} colSpan={10} />
+                    </React.Fragment>
                   );
                 })}
               </tbody>
