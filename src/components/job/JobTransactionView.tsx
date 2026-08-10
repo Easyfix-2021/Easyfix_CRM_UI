@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { JobAddressEditDialog } from './JobModal';
+import { AuthImage } from './JobDocumentsCard';
 
 /*
  * JobTransactionView — read-only, single-page replica of the legacy
@@ -65,6 +66,7 @@ type TransactionResp = {
     time_slot: string | null;
     job_type: string | null;
     helper_req: number | boolean | null;
+    material_req: number | boolean | null;
     fk_easyfixter_id: number | null;
     exp_tat: number | null;
     collected_by: string | null;
@@ -211,6 +213,7 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
         <Card>
           <DLRow label="Service Type">{fmt(j.services?.[0]?.service_type_name)}</DLRow>
           <DLRow label="Service Category">{fmt(j.services?.[0]?.service_catg_name)}</DLRow>
+          <DLRow label="Job Type">{fmt(j.job_type)}</DLRow>
           <DLRow label="Problem Description">{fmt(j.job_desc)}</DLRow>
           <DLRow label="Handyman Notes">{fmt(j.efr_special_notes)}</DLRow>
           <DLRow label="Total No. of Products">{totalProducts}</DLRow>
@@ -249,6 +252,7 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
           <DLRow label="Open Job Reason:">{fmt(data.open_job_reason)}</DLRow>
           <DLRow label="Tools Required:">{fmt((j as Record<string, unknown>).tools_required) /* legacy free-text; column may not exist */}</DLRow>
           <DLRow label="Helper Required:">{j.helper_req ? 'YES' : 'NO'}</DLRow>
+          <DLRow label="Material Required:">{j.material_req ? 'YES' : 'NO'}</DLRow>
           <DLRow label="Filter Type:">{fmt((j as Record<string, unknown>).filter_type) /* legacy text column; absent in some DBs */}</DLRow>
           {/* Original Appointment — the date snapshotted at create. Distinct
               from the row below (the live/possibly auto-rescheduled date) so
@@ -373,6 +377,27 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
        * Quotation + Remarks History + Job History cards below carry
        * enough context for ops to confirm the order.
        */}
+
+      {/* ─── Photos ── customer/booking images (j.images). Distinct from the
+          per-stage execution buckets removed above (those don't exist pre-
+          confirmation). Read-only grid via the authed file endpoint. */}
+      <Card dense>
+        <SectionHeading>Photos</SectionHeading>
+        {Array.isArray(j.images) && j.images.length > 0 ? (
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2 p-2">
+            {j.images.map((img) => (
+              <AuthImage
+                key={img.image_id}
+                url={`/admin/jobs/images/${img.image_id}/file`}
+                alt={`Job ${j.job_id} photo`}
+                className="h-20 w-full rounded-md border object-cover"
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="px-3 py-4 text-center text-muted-foreground text-xs">No photos</div>
+        )}
+      </Card>
 
       {/* ─── Remarks History ──────────────────────────────────────── */}
       {/* Columns trimmed to legacy 4-column spec (2026-06-03 per ops):

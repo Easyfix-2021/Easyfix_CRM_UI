@@ -155,12 +155,21 @@ type Job = Record<string, unknown> & {
 };
 
 export function JobModal({
-  open, onClose, mode: initialMode, jobId, onSaved, initialTab,
+  open, onClose, mode: initialMode, jobId, onSaved, initialTab, siblings,
 }: {
   open: boolean;
   onClose: () => void;
   mode: JobModalMode;
   jobId?: number;
+  /*
+   * Optional sibling "family" for the Unconfirmed grouped view: all the jobs
+   * sharing one client_ref_id (a multi-category booking). When provided (and
+   * >1, and the currently-open job is among them), the status-9 read view
+   * renders a tab per category — each tab reusing JobTransactionView for that
+   * sibling — instead of a single job. Transient (not URL-backed): a fresh
+   * deep-link without it simply shows the single job.
+   */
+  siblings?: Array<{ job_id: number; service_category: string | null }>;
   /* Called after any successful save. On a CREATE (Book New Call) the newly
    * created job is passed so the parent can route straight into Schedule &
    * Assign; edit/confirm/other saves call it with no argument. */
@@ -514,7 +523,9 @@ export function JobModal({
                 </div>
               )}
               {Number(job.job_status) === 9
-                ? <JobTransactionView jobId={Number(job.job_id)} />
+                ? (siblings && siblings.length > 1 && siblings.some((s) => Number(s.job_id) === Number(job.job_id))
+                    ? <SiblingCategoryTabs siblings={siblings} />
+                    : <JobTransactionView jobId={Number(job.job_id)} />)
                 : <ViewBody
                     job={job}
                     onRefresh={refresh}
@@ -950,6 +961,36 @@ function ActionBar({ job, jobId, onChanged }: {
 }
 
 // ─── View body (tabbed read-only display) ────────────────────────────────────
+
+/*
+ * Unconfirmed grouped view — one tab per service category for a multi-category
+ * booking (sibling jobs sharing one client_ref_id). Each tab reuses
+ * JobTransactionView for that sibling job. Radix Tabs unmounts the inactive
+ * TabsContent, so each sibling's GET /admin/jobs/:id/transaction is lazy (only
+ * the active tab fetches) — no new endpoint, no eager fan-out of requests.
+ */
+function SiblingCategoryTabs({ siblings }: { siblings: Array<{ job_id: number; service_category: string | null }> }) {
+  const tabs = React.useMemo(() => {
+    const seen = new Set<number>();
+    return siblings.filter((s) => (seen.has(s.job_id) ? false : (seen.add(s.job_id), true)));
+  }, [siblings]);
+  return (
+    <Tabs defaultValue={String(tabs[0]?.job_id ?? '')}>
+      <TabsList className="flex flex-wrap h-auto">
+        {tabs.map((s, i) => (
+          <TabsTrigger key={s.job_id} value={String(s.job_id)}>
+            {s.service_category || `Service ${i + 1}`}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+      {tabs.map((s) => (
+        <TabsContent key={s.job_id} value={String(s.job_id)} className="mt-3">
+          <JobTransactionView jobId={s.job_id} />
+        </TabsContent>
+      ))}
+    </Tabs>
+  );
+}
 
 function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKey = 0, pendingComments = [], onCommentsLoaded, onEditDescription }: { job: Job; onRefresh?: () => void; initialTab?: string; onDirtyChange?: (dirty: boolean) => void; commentsRefreshKey?: number; pendingComments?: Array<JobComment & { _pending?: true }>; onCommentsLoaded?: () => void; onEditDescription?: () => void }) {
   const images = Array.isArray((job as Record<string, unknown>).images)

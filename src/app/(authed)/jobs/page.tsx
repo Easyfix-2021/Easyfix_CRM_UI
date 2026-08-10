@@ -687,10 +687,15 @@ export default function JobsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me?.allowedStages, tab]);
 
+  // Transient sibling family for the Unconfirmed grouped view — set when a
+  // grouped (multi-category) row is opened so JobModal can render a tab per
+  // category. Not URL-backed (arrays don't belong in the query string); a fresh
+  // deep-link without it shows the single job. JobModal guards against staleness.
+  const [familySiblings, setFamilySiblings] = useState<Array<{ job_id: number; service_category: string | null }> | null>(null);
   function closeModal() { closeJobAction(); }
   function openCreate() { openJobAction('create'); }
-  function openView(id: number)    { openJobAction('view',    id); }
-  function openConfirm(id: number) { openJobAction('confirm', id); }
+  function openView(id: number, siblings?: Array<{ job_id: number; service_category: string | null }>)    { setFamilySiblings(siblings ?? null); openJobAction('view',    id); }
+  function openConfirm(id: number, siblings?: Array<{ job_id: number; service_category: string | null }>) { setFamilySiblings(siblings ?? null); openJobAction('confirm', id); }
 
   /*
    * Filter-respecting XLSX export. Mirrors the EscalatedJobsModal
@@ -1519,6 +1524,7 @@ export default function JobsPage() {
         open={modal.open}
         mode={modal.mode}
         jobId={modal.id}
+        siblings={familySiblings ?? undefined}
         onClose={closeModal}
         onSaved={() => { cacheRef.current.clear(); load(false, true); refreshCounts(); }}
         // Honour `?viewTab=` so the "No Services" pill (and any future

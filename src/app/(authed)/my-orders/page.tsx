@@ -488,15 +488,17 @@ export default function MyOrdersPage() {
     return { open: false, jobId: null };
   }, [urlAction, urlJobId]);
 
+  // Transient sibling family for the Unconfirmed grouped view — see jobs/page.
+  const [familySiblings, setFamilySiblings] = useState<Array<{ job_id: number; service_category: string | null }> | null>(null);
   function closeModal()                { closeJobAction(); }
-  function openView(id: number)        { openJobAction('view',     id); }
+  function openView(id: number, siblings?: Array<{ job_id: number; service_category: string | null }>)        { setFamilySiblings(siblings ?? null); openJobAction('view',     id); }
   // Pending-to-Start Check-In — same JobModal workspace as view, opened under
   // ?action=checkin so it titles itself "Checkin · Job #N" (see JobModalMode).
   function openCheckin(id: number)     { openJobAction('checkin',  id); }
   // Unconfirmed orders open the dedicated confirm form (edit layout +
   // services basket + "Confirm & Schedule" footer), mirroring the
   // legacy addEditJob flow.
-  function openConfirm(id: number)     { openJobAction('confirm',  id); }
+  function openConfirm(id: number, siblings?: Array<{ job_id: number; service_category: string | null }>)     { setFamilySiblings(siblings ?? null); openJobAction('confirm',  id); }
   function openAssign(id: number)      { openJobAction('assign',   id); }
   function openReassign(id: number)    { openJobAction('reassign', id); }
   // Pending-for-Scheduling rows → combined Schedule & Assign modal.
@@ -1092,6 +1094,7 @@ export default function MyOrdersPage() {
         open={modal.open}
         mode={modal.mode}
         jobId={modal.id}
+        siblings={familySiblings ?? undefined}
         onClose={closeModal}
         onSaved={(job) => {
           cacheRef.current.clear();
