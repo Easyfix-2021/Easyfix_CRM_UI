@@ -5073,6 +5073,32 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
     }
 
     /*
+     * Multi-category completeness gate (BOOK only, create + confirm) — every
+     * SELECTED category must carry at least one service. Without this, the
+     * per-category fan-out creates a job ONLY for the filled categories and
+     * silently drops the rest (a warning after the fact). Force the operator to
+     * either fill each category's Products OR remove the empty categories before
+     * booking. Save Draft (draft) is exempt — it exists to persist partial work.
+     */
+    if (submitVariant === 'book') {
+      const pickedCatIds = (f.fk_service_catg_ids || '').split(',').filter(Boolean);
+      if (pickedCatIds.length > 1) {
+        const built = buildServicesPayload() as Array<Record<string, unknown>>;
+        const catsWithService = new Set(built.map((s) => String(s.service_category_id)));
+        const emptyCats = pickedCatIds.filter((cid) => !catsWithService.has(String(cid)));
+        if (emptyCats.length > 0) {
+          const catName = (id: string) =>
+            (lk.serviceCategories || []).find((c) => String(c.service_catg_id) === id)?.service_catg_name || `Category ${id}`;
+          setError(
+            `Add at least one service for each selected category, or remove the ${emptyCats.length === 1 ? 'category' : 'categories'} with no service: ${emptyCats.map(catName).join(', ')}.`,
+          );
+          setSubmitting(false);
+          return;
+        }
+      }
+    }
+
+    /*
      * Outcome-only flows (Unreachable / Enquiry) display a global toast
      * for in-flight feedback:
      *   - Loading toast appears immediately so the operator sees the
