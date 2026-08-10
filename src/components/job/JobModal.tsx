@@ -5600,6 +5600,10 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 : undefined,
               time_slot: f.time_slot || undefined,
               client_ref_id: clientRefId,
+              // Share the parent's job_reference_id across the family so every
+              // sibling carries ONE reference (the BE honours an explicit input;
+              // the parent already has REF-{parentJobId}, back-filled on confirm).
+              job_reference_id: (saved.job_reference_id as string | undefined) || undefined,
               // Explicit top-level job_customer_name (2026-06-04).
               // The BE accepts both shapes (top-level OR nested under
               // customer.customer_name) and prefers the top-level
@@ -6010,6 +6014,12 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
           const override = (perJobFields[String(catId)] || {}) as PerJobOverride;
           const payload = {
             ...basePayload,
+            // Share ONE job_reference_id across the whole multi-category family:
+            // the FIRST job auto-generates REF-{jobId} (created[0] is undefined
+            // on iteration 1 → it auto-fills), and every sibling reuses that
+            // value. The BE honours an explicit input.job_reference_id, so all N
+            // rows end up with the first job's reference.
+            job_reference_id: (created[0]?.job_reference_id as string | undefined) || undefined,
             // Per-tab overrides take precedence over basePayload's
             // common values. `??` falls back to f-derived values.
             remarks:           (override.remarks ?? f.remarks) || undefined,
