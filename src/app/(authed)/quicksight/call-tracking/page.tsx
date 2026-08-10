@@ -56,17 +56,37 @@
  * call log into the summary would both multiply the numbers and drop every
  * Kaleyra call, which has no log row at all.
  *
- * What the aggregates cannot show is COMPOSITION. `Called To` is derived from
- * the number stamped on the call at click time, so it attributes a conference
- * wholly to whoever was dialled FIRST — a technician brought in mid-call
- * contributes nothing to that breakdown. That is why the extra people are
- * surfaced in the per-call DRILL-DOWN, which is the one place in this report
+ * What the call aggregates cannot show is COMPOSITION. `Called To` is derived
+ * from the number stamped on the call at click time, so it attributes a
+ * conference wholly to whoever was dialled FIRST — a technician brought in
+ * mid-call contributes nothing to that breakdown. That is why the extra people
+ * are surfaced in the per-call DRILL-DOWN, which is the one place in this report
  * that shows individual calls rather than counts of them, and why the Called To
  * header says what it is counting.
+ *
+ * TWO TILES COUNT SOMETHING OTHER THAN CALLS, and they live in their own row for
+ * exactly that reason (see "Reach And Conference Cost" below):
+ *
+ *   Parties Reached            the PEOPLE we got on the line. A conference
+ *                              contributes everyone who joined; a call with no
+ *                              legs contributes one when it connected. It is
+ *                              therefore always >= Connected, and it is where an
+ *                              operator goes when the Called To breakdown looks
+ *                              like it is missing the people it is missing.
+ *   Conference Billed Minutes  what the provider bills for those conferences —
+ *                              and, beside it, how many of them have actually
+ *                              reported. The billed seconds arrive on an
+ *                              end-of-conference webhook, so the figure is
+ *                              partial until they all land, and a cost number
+ *                              without its coverage is worse than none at all.
+ *
+ * Neither is derived by joining the leg table into the summary. They arrive as
+ * their own fields on `totals`, from separate aggregates over the same scope, so
+ * every count above them is byte-for-byte the number it was before.
  */
 
 import { useCallback, useMemo, useState } from 'react';
-import { PhoneCall, Play, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react';
+import { PhoneCall, Play, ChevronUp, ChevronDown, ChevronsUpDown, UsersRound, Receipt } from 'lucide-react';
 import { showToast } from '@/components/ui/toast';
 import { api, ApiError } from '@/lib/api';
 import { CallRecordingAudio } from '@/components/ui/call-recording-audio';
@@ -82,6 +102,7 @@ import { useLookup } from '@/lib/use-lookup';
 
 import { ReportPageScaffold } from '@/components/quicksight/ReportPageScaffold';
 import { QuickSightFilterBar } from '@/components/quicksight/QuickSightFilterBar';
+import { QsKpiTile, QS_COLORS } from '@/components/quicksight/charts';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
@@ -180,6 +201,52 @@ type Totals = {
   calls: number; uniqueJobs: number; uniqueCallers: number;
   connected: number; connectRate: number;
   totalDurationSecs: number; avgDurationSecs: number | null;
+
+  /*
+   * ── The conference-aware four ────────────────────────────────────────
+   *
+   * Computed by SEPARATE aggregates on the backend, keyed off the same scope
+   * as every field above rather than by joining the per-leg call log into it —
+   * that join would multiply the counts above and drop Kaleyra entirely. So
+   * nothing above moved when these arrived.
+   *
+   * All four are plain numbers and are NEVER null. That is deliberate and it
+   * differs from avgDurationSecs on purpose: null in this report means "no
+   * basis to compute" and renders as an em-dash, whereas 0 here honestly means
+   * "none of this happened in this window". A backend that predates the
+   * conference tables fails soft to 0 as well, which reads the same way —
+   * absent, not broken.
+   */
+
+  /**
+   * PEOPLE we got on the line, not calls. A conference contributes every leg
+   * that reached the room (the ops operator excluded); a call with no legs
+   * (Kaleyra, or a Plivo call placed before conferencing) contributes 1 when it
+   * connected, 0 when it didn't. That fallback is what makes this ALWAYS >=
+   * `connected` — a 1:1 call has exactly one non-operator leg and so ties.
+   */
+  partiesReached: number;
+  /**
+   * Scoped calls that were MULTI-party — more than one non-operator leg reached
+   * the room. Every ops call is technically an MPC, so a 1:1 call is explicitly
+   * NOT counted as a conference here — that would report the plumbing rather
+   * than what ops did.
+   *
+   * ⚠ This is NOT the denominator of the billed-minutes coverage. See
+   * `conferenceRooms`.
+   */
+  conferenceCalls: number;
+  /** Σ billed leg seconds over every scoped ROOM. Partial until every end-of-call webhook has landed — never read without conferenceBilledCalls. */
+  conferenceBilledSecs: number;
+  /** How many of `conferenceRooms` actually contributed billed seconds. The coverage numerator that stops conferenceBilledSecs reading as a complete cost. */
+  conferenceBilledCalls: number;
+  /**
+   * Every room in scope, billed or not — and a room is minted for EVERY Plivo
+   * ops call, since a 1:1 call is a one-participant MPC. This, not
+   * `conferenceCalls`, is the population conferenceBilledSecs is summed over,
+   * and therefore the only honest denominator for its coverage.
+   */
+  conferenceRooms: number;
 };
 
 type CallTrackingData = {
@@ -244,6 +311,10 @@ function fmtDay(iso: string): string {
   const mi = Number(m) - 1;
   return MONTHS[mi] ? `${d} ${MONTHS[mi]} ${y}` : iso;
 }
+
+/* A plain count, grouped Indian-style — the same rendering the KPI tiles in
+   CallTrackingCharts already use, so the two tile rows read as one set. */
+const fmtCount = (n: number) => n.toLocaleString('en-IN');
 
 /*
  * A `label (n)` breakdown rendered ONE ENTRY PER LINE. A comma-joined string
@@ -339,6 +410,30 @@ function SortTh({
  * never has to infer what a given average was divided by.
  */
 const PER_DAY_HELP = 'Averaged over the days on which this user placed at least one call — NOT over the number of days in the selected range.';
+
+/*
+ * ── The two conference tiles' help text ───────────────────────────────────
+ *
+ * Both are long on purpose. These are the only two numbers on the page that do
+ * NOT count calls, and the whole risk with them is that they are read as though
+ * they did — Parties Reached mistaken for a second call count, Conference Billed
+ * Minutes mistaken for a settled invoice.
+ */
+const PARTIES_REACHED_HELP =
+  'Every person we actually got on the line, counted individually. A conference contributes everyone who joined it, while Total Calls counts that same conference once — so this is always at least Connected, and higher whenever a call gained people. A call with no conference legs counts as one party when it connected.';
+const CONF_BILLED_HELP =
+  'Billed talk time across every Plivo call in this window, summed per leg. It covers all of them, not only multi-party ones: each ops call runs as a one-participant conference room, which is what lets a call gain a third person at all — and those seconds are billed too. Kaleyra calls are not included. A room only reports its billed seconds when the provider’s end-of-call webhook lands, so any still waiting contribute nothing — the line under the figure says how many have reported. Read a partial figure as a floor, never as the full cost.';
+const CONF_CALLS_HELP =
+  'Calls that actually gained people — more than one party reached the room. Every ops call runs as a conference room technically, so this deliberately counts only the ones where somebody was added, which is what "we conferenced someone in" means. Not the denominator of the billed-minutes coverage beside it: that is read over every room.';
+
+/*
+ * Tile accents. Both are hues no other tile or chart series on this page uses,
+ * so neither can be mistaken for the metric it sits next to. Amber for billed
+ * minutes doubles as a nudge: it is the one tile that can be incomplete.
+ */
+const C_PARTIES = QS_COLORS[8];      // pink
+const C_CONF_CALLS = QS_COLORS[5];
+const C_CONF_BILLED = QS_COLORS[2];  // amber
 
 export default function CallTrackingPage() {
   const { me } = useMe();
@@ -488,6 +583,36 @@ export default function CallTrackingPage() {
     };
   }, [byUserCombinedRaw]);
 
+  /*
+   * Coverage for the billed-minutes tile: how many of this window's conferences
+   * have actually reported billed seconds.
+   *
+   * This is rendered ON the tile, not tucked into its tooltip, because a bare
+   * total would read as the complete cost of the window while the webhooks for
+   * the newest rooms are still outstanding. Zero rooms is a THIRD state and is
+   * not the same as an incomplete one — "nothing in this range" and "this range
+   * cost nothing" are different facts, so the value falls back to an em-dash
+   * rather than to 0:00.
+   *
+   * ⚠ THE DENOMINATOR IS `conferenceRooms`, NOT `conferenceCalls`.
+   *
+   * A room is minted for EVERY Plivo ops call — a 1:1 call is a one-participant
+   * MPC, which is the only reason a call can gain a third person at all. So the
+   * billed SUM is taken over ALL rooms (their seconds are real money), while
+   * `conferenceCalls` counts only the calls that actually GAINED people, which
+   * is a strictly smaller and differently-scoped number. Reading the coverage
+   * against it prints impossible ratios like "3 of 2". Coverage must always be
+   * read over the same population its sum was taken over.
+   */
+  const confRooms = totals?.conferenceRooms ?? 0;
+  const confBilledCalls = totals?.conferenceBilledCalls ?? 0;
+  const confPartial = confRooms > 0 && confBilledCalls < confRooms;
+  const confCoverage = confRooms === 0
+    ? 'No Calls In This Range'
+    : confPartial
+      ? `Partial · ${fmtCount(confBilledCalls)} Of ${fmtCount(confRooms)} Rooms Reported`
+      : `All ${fmtCount(confRooms)} Rooms Reported`;
+
   const [downloading, setDownloading] = useState(false);
   const onDownload = useCallback(async () => {
     setDownloading(true);
@@ -602,6 +727,80 @@ export default function CallTrackingPage() {
       <CallTrackingCharts totals={totals} byDay={byDay} byUser={byUser} />
 
       {/*
+        * ── Reach And Conference Cost ──────────────────────────────────────
+        *
+        * A SECOND tile row rather than two more tiles in the Graphical View row
+        * above, because the grain is different: every tile up there counts
+        * CALLS, and both tiles here count something that is not a call — the
+        * people who were on the line, and the seconds the provider bills for
+        * putting them there. Sitting them in the same row as Total Calls is
+        * precisely how Parties Reached gets read as a second call count.
+        *
+        * Neither number changes anything above it. They arrive as their own
+        * fields on `totals`, computed from separate aggregates over the same
+        * scope, so the call counts, connect rate and talk time on this page are
+        * the same numbers they were before conferencing existed.
+        */}
+      {totals && (
+        <section className="mt-4 space-y-3">
+          <div className="flex items-baseline justify-between">
+            <h2 className="text-sm font-semibold text-slate-800">Reach And Call Cost</h2>
+            <span className="text-xs text-muted-foreground">Counts people and billed seconds — everything above counts calls.</span>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div title={PARTIES_REACHED_HELP}>
+              <QsKpiTile
+                label="Parties Reached"
+                value={fmtCount(totals.partiesReached)}
+                accent={C_PARTIES}
+                icon={<UsersRound size={18} />}
+              />
+            </div>
+            <div title={CONF_CALLS_HELP}>
+              <QsKpiTile
+                label="Conference Calls"
+                value={fmtCount(totals.conferenceCalls)}
+                accent={C_CONF_CALLS}
+                icon={<UsersRound size={18} />}
+              />
+            </div>
+            <div title={CONF_BILLED_HELP}>
+              <QsKpiTile
+                /*
+                  * "Plivo", not "Conference". The sum is taken over every room,
+                  * and a room is minted for every ops call — so labelling it
+                  * "Conference Billed" would imply it covers only the
+                  * multi-party ones and make it look wrong beside the far
+                  * smaller Conference Calls tile next to it.
+                  */
+                label="Plivo Billed Minutes"
+                accent={C_CONF_BILLED}
+                icon={<Receipt size={18} />}
+                /*
+                  * The coverage line ships WITH the figure, inside the tile. It
+                  * turns amber the moment it is a fraction, so an incomplete
+                  * cost announces itself rather than reading as a footnote
+                  * somebody was supposed to hover for.
+                  */
+                value={(
+                  <span className="block">
+                    <span className="block">
+                      {confRooms === 0
+                        ? <span className="text-muted-foreground">—</span>
+                        : fmtTalkTime(totals.conferenceBilledSecs)}
+                    </span>
+                    <span className={`block text-[11px] font-medium ${confPartial ? 'text-amber-700' : 'text-muted-foreground'}`}>
+                      {confCoverage}
+                    </span>
+                  </span>
+                )}
+              />
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/*
         * Grain tabs — the SAME call set sliced two ways. One response feeds
         * both, so switching is instant. Chip counts are ROW counts (jobs /
         * user-days), not call counts.
@@ -637,8 +836,12 @@ export default function CallTrackingPage() {
                 {/* Counts CALLS, not people: each call is attributed to the
                     party it was placed to, so a conference lands wholly under
                     the first party dialled. Anyone added mid-call is listed in
-                    the drill-down, not here — see the file header. */}
-                <th className="!text-left" title="Who the call was placed to — Customer, Alternate, Client SPOC, Technician or Other. Counts calls, so a conference is attributed to the party dialled first; open the call list to see everyone who joined.">To Whom</th>
+                    the drill-down, not here — see the file header.
+                    This is the ONE place that names the way out of that
+                    under-attribution (the Parties Reached tile). The other two
+                    To Whom headers stay as they are: repeating it on all three
+                    would read as three separate caveats rather than one. */}
+                <th className="!text-left" title="Who the call was placed to — Customer, Alternate, Client SPOC, Technician or Other. Counts calls, so a conference is attributed to the party dialled first; open the call list to see everyone who joined. For the people rather than the calls, see the Parties Reached tile above, which counts everyone on the line.">To Whom</th>
                 <th className="!text-left" title="The job status SNAPSHOT at the moment of each call — where in the lifecycle the calls were made from">At Which Step</th>
                 <th className="!text-center">First Call</th>
                 <th className="!text-center">Last Call</th>
