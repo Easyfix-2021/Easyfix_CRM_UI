@@ -67,7 +67,6 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { transitionAllowed } from '@/lib/job-stages';
-import { candidateJobOfferEligibility } from '@/lib/easyfixer-lifecycle';
 
 /*
  * Unified Job modal — create | view | edit in one component.
@@ -5210,6 +5209,18 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
           setIf('additional_name',   f.additional_name);
           setIf('additional_number', f.additional_number);
           /*
+           * Primary SPOC / reporting contact. Collected in the form but NEVER
+           * sent on the confirm PATCH, so the parent row lost its SPOC after
+           * confirm (bulk-upload rows start NULL) while the fan-out siblings DID
+           * receive it — leaving "SPOC Phone: —" on the confirmed parent. Send it
+           * so the whole family carries the same primary SPOC. Mirrors the
+           * sibling payload's SPOC fields (safeMobile / Number coercions).
+           */
+          setIf('reporting_contact_id', f.reporting_contact_id ? Number(f.reporting_contact_id) : null);
+          setIf('client_spoc', safeMobile(f.client_spoc));
+          setIf('client_spoc_name', f.client_spoc_name);
+          setIf('client_spoc_email', f.client_spoc_email);
+          /*
            * original_appointment_* on C&S PATCH (2026-06-05). The job
            * came from a no-promise source (bulk upload / legacy
            * dashboard) where original_appointment_* was never stamped
@@ -5326,7 +5337,10 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             ? (perJobFields[String(parentCatId)] as PerJobOverride | undefined)
             : undefined;
           setIf('job_desc', (parentOverride?.job_desc ?? f.job_desc) || undefined);
-          setIf('efr_special_notes', f.efr_special_notes);
+          // Per-tab override (mirror job_desc above) — the parent's own tab may
+          // carry a distinct note; previously this used the top-level value and
+          // dropped the parent category's per-tab EFR note.
+          setIf('efr_special_notes', (parentOverride?.efr_special_notes ?? f.efr_special_notes) || undefined);
           setIf('remarks', f.remarks);
           /*
            * job_customer_name on the parent PATCH (2026-06-04). When
@@ -5348,21 +5362,30 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
           // legacy state shapes where the field might transiently be a string.
           if (typeof f.helper_req === 'boolean') patch.helper_req = f.helper_req;
           if (f.fk_service_catg_id) patch.fk_service_catg_id = Number(f.fk_service_catg_id);
-          if (f.fk_service_type_id) patch.fk_service_type_id = Number(f.fk_service_type_id);
           /*
-           * service_type_ids CSV (2026-06-05). The PATCH was sending
-           * only the singular fk_service_type_id, so tbl_job.service_type_ids
-           * stayed stale (often NULL on legacy bulk-upload rows) even
-           * after a multi-type C&S confirm. Send the full multi-pick
-           * CSV alongside the primary so both columns stay in sync.
-           * BE update() now lists `service_type_ids` in MUTABLE_COLUMNS
-           * and normalises array/CSV input the same way create() does.
+           * Job-level Service Type columns scoped to the PARENT category only.
+           * In a multi-category confirm f.fk_service_type_ids holds EVERY
+           * category's types; the parent row must carry just its own (each
+           * sibling carries theirs), matching the parent's per-category `services`
+           * filtered above. A service type maps to one category, so we filter by
+           * that. Single-category → parentTypeIds == all picked types (no change).
+           * Previously the PATCH sent ALL categories' types, over-reporting the
+           * parent's tbl_job.service_type_ids / fk_service_type_id.
            */
-          if (Array.isArray(f.fk_service_type_ids) && f.fk_service_type_ids.length > 0) {
-            patch.service_type_ids = f.fk_service_type_ids
-              .map(Number)
-              .filter((n) => Number.isFinite(n) && n > 0)
-              .join(',');
+          const parentTypeIds = parentCatId
+            ? (f.fk_service_type_ids || [])
+                .map(Number)
+                .filter((n) => Number.isFinite(n) && n > 0)
+                .filter((id) => {
+                  const t = (lk.serviceTypes || []).find((x) => Number(x.service_type_id) === id);
+                  return !!t && String(t.service_catg_id) === String(parentCatId);
+                })
+            : (f.fk_service_type_ids || []).map(Number).filter((n) => Number.isFinite(n) && n > 0);
+          if (parentTypeIds.length > 0) {
+            patch.fk_service_type_id = parentTypeIds[0];
+            patch.service_type_ids = parentTypeIds.join(',');
+          } else if (f.fk_service_type_id) {
+            patch.fk_service_type_id = Number(f.fk_service_type_id);
           }
         }
 
@@ -5604,6 +5627,12 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
               // sibling carries ONE reference (the BE honours an explicit input;
               // the parent already has REF-{parentJobId}, back-filled on confirm).
               job_reference_id: (saved.job_reference_id as string | undefined) || undefined,
+              // Inherit the parent's owner so the family shares one job_owner
+              // (else create() defaults each sibling to the confirming operator,
+              // diverging from the parent). Null parent owner → create default.
+              job_owner: (saved as Record<string, unknown>).job_owner != null
+                ? Number((saved as Record<string, unknown>).job_owner)
+                : undefined,
               // Explicit top-level job_customer_name (2026-06-04).
               // The BE accepts both shapes (top-level OR nested under
               // customer.customer_name) and prefers the top-level
@@ -6038,6 +6067,18 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             collected_by:      collectedByCode(override.collected_by ?? f.collected_by),
             services: filteredServices.length > 0 ? filteredServices : undefined,
             ...(catId > 0 ? { fk_service_catg_id: catId } : {}),
+            // Scope the job-level Service Type columns to THIS category's own
+            // services (basePayload set them to ALL picked types). Derived from
+            // filteredServices so tbl_job.fk_service_type_id / service_type_ids
+            // match the rows actually on this job. Empty → keep basePayload's.
+            ...(() => {
+              const ids = Array.from(new Set(
+                filteredServices
+                  .map((s) => Number((s as Record<string, unknown>).fk_service_type_id ?? (s as Record<string, unknown>).service_type_id))
+                  .filter((n) => Number.isFinite(n) && n > 0),
+              ));
+              return ids.length ? { fk_service_type_id: ids[0], service_type_ids: ids.join(',') } : {};
+            })(),
           };
           try {
             const saved = await api.post<Job>('/admin/jobs', payload);
@@ -10094,15 +10135,7 @@ function AutoAssignDialog({ open, onClose, jobId, currentTech, onAssigned }: {
   }
 
   const isReassign = !!currentTech;
-  // This legacy dialog is currently entry-point gated off, but keep its ranked
-  // surface safe if it is re-enabled: only the already-bounded, server-returned
-  // candidates whose lifecycle permits new work may render an assign action.
-  const eligibleCandidates = useMemo(
-    () => (data?.candidates ?? []).filter(
-      (candidate) => candidateJobOfferEligibility(candidate).canOffer,
-    ),
-    [data?.candidates],
-  );
+  const eligibleCandidates = data?.candidates ?? [];
   const top = eligibleCandidates[0];
 
   return (
