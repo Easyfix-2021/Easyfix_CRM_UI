@@ -67,6 +67,7 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { transitionAllowed } from '@/lib/job-stages';
+import { candidateJobOfferEligibility } from '@/lib/easyfixer-lifecycle';
 
 /*
  * Unified Job modal — create | view | edit in one component.
@@ -7100,18 +7101,48 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
           })()}
           <div className="mb-4">
             <Label className="mb-2 block">Products from client rate card</Label>
-            {/* Confirm mode now uses AutoServicesTable (same as create
-                mode) — the legacy per-row "Select service" dropdown
-                wasn't what ops wanted. Picking Service Type(s) above
-                renders the matching rate-card rows here with + / ×
-                toggles + an above-table search. */}
-            <AutoServicesTable
-              services={clientServices}
-              loading={loadingServices}
-              serviceTypeIds={f.fk_service_type_ids || []}
-              rows={serviceRows}
-              setRows={setServiceRows}
-            />
+            {/* Picking Service Type(s) above renders the matching rate-card rows
+                here with + / × toggles + an above-table search.
+
+                Multi-category: each Job tab must show ONLY its own category's
+                products (the Carpentry tab shouldn't list Electrician services,
+                and the list stays short). A service type maps to exactly one
+                category, so narrowing the auto-populate Service Types to the
+                active tab's category also scopes the candidate rows + the
+                "N available" count. Single category → pass everything through.
+                Mirrors the confirm-mode branch. */}
+            {(() => {
+              const pickedCatIds = (f.fk_service_catg_ids || '').split(',').filter(Boolean);
+              if (pickedCatIds.length < 2) {
+                return (
+                  <AutoServicesTable
+                    services={clientServices}
+                    loading={loadingServices}
+                    serviceTypeIds={f.fk_service_type_ids || []}
+                    rows={serviceRows}
+                    setRows={setServiceRows}
+                  />
+                );
+              }
+              const tabIdx = Math.min(activeJobTab, pickedCatIds.length - 1);
+              const activeCatId = pickedCatIds[tabIdx];
+              const typesInActiveCat = new Set(
+                (lk.serviceTypes || [])
+                  .filter((t) => String(t.service_catg_id) === String(activeCatId))
+                  .map((t) => String(t.service_type_id)),
+              );
+              const filteredTypeIds = (f.fk_service_type_ids || [])
+                .filter((id) => typesInActiveCat.has(String(id)));
+              return (
+                <AutoServicesTable
+                  services={clientServices}
+                  loading={loadingServices}
+                  serviceTypeIds={filteredTypeIds}
+                  rows={serviceRows}
+                  setRows={setServiceRows}
+                />
+              );
+            })()}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 border-t">
@@ -9981,6 +10012,10 @@ type AutoCandidate = {
   efr_id: number; efr_name: string; efr_no: string;
   active_jobs: number; avg_rating: number;
   completion_ratio: number; score: number;
+  lifecycle_status?: string | null;
+  lifecycle_reason_code?: string | null;
+  lifecycle_reason?: string | null;
+  can_offer?: boolean;
 };
 type CandidatesResp = {
   l1Count: number; rejectedCount: number;
@@ -10023,7 +10058,16 @@ function AutoAssignDialog({ open, onClose, jobId, currentTech, onAssigned }: {
   }
 
   const isReassign = !!currentTech;
-  const top = data?.candidates?.[0];
+  // This legacy dialog is currently entry-point gated off, but keep its ranked
+  // surface safe if it is re-enabled: only the already-bounded, server-returned
+  // candidates whose lifecycle permits new work may render an assign action.
+  const eligibleCandidates = useMemo(
+    () => (data?.candidates ?? []).filter(
+      (candidate) => candidateJobOfferEligibility(candidate).canOffer,
+    ),
+    [data?.candidates],
+  );
+  const top = eligibleCandidates[0];
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
@@ -10040,7 +10084,7 @@ function AutoAssignDialog({ open, onClose, jobId, currentTech, onAssigned }: {
         {loading && <div className="text-sm text-muted-foreground py-6 text-center">Scoring technicians…</div>}
         {err && <div className="text-sm text-destructive">{err}</div>}
 
-        {data && !loading && data.candidates.length === 0 && (
+        {data && !loading && eligibleCandidates.length === 0 && (
           <div className="text-sm text-muted-foreground py-6 text-center space-y-2">
             <div>
               No eligible technicians (L1 eligible: <strong>{data.l1Count ?? 0}</strong>, L2 rejected:{' '}
@@ -10051,7 +10095,7 @@ function AutoAssignDialog({ open, onClose, jobId, currentTech, onAssigned }: {
           </div>
         )}
 
-        {data && !loading && data.candidates.length > 0 && (
+        {data && !loading && eligibleCandidates.length > 0 && (
           <div className="space-y-3">
             <div className="rounded-lg border p-3 bg-emerald-50/50">
               <div className="flex items-center justify-between mb-1">
@@ -10071,10 +10115,10 @@ function AutoAssignDialog({ open, onClose, jobId, currentTech, onAssigned }: {
               </div>
             </div>
 
-            {data.candidates.length > 1 && (
+            {eligibleCandidates.length > 1 && (
               <details className="text-sm" open>
                 <summary className="cursor-pointer text-muted-foreground hover:text-foreground select-none">
-                  Other technicians ({data.candidates.length - 1})
+                  Other technicians ({eligibleCandidates.length - 1})
                 </summary>
                 <table className="data-table mt-2">
                   <thead>
@@ -10084,7 +10128,7 @@ function AutoAssignDialog({ open, onClose, jobId, currentTech, onAssigned }: {
                     </tr>
                   </thead>
                   <tbody>
-                    {data.candidates.slice(1).map((c, i) => (
+                    {eligibleCandidates.slice(1).map((c, i) => (
                       <tr key={c.efr_id}>
                         <td className="text-xs text-muted-foreground">{i + 2}</td>
                         <td>{c.efr_name}</td>
