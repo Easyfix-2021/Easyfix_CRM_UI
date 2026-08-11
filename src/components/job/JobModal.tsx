@@ -33,6 +33,7 @@ import { JobRemarksView } from './JobRemarksView';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { api, ApiError } from '@/lib/api';
+import { formatApiError } from '@/lib/api-errors';
 import { resolveParentAddressId, buildJobAddressPayload } from '@/lib/job-address';
 // Booking-window vocabulary — the FOUR bands stored in tbl_job.time_slot plus
 // the 1-hour frames the Requested Time control offers. Single source of truth
@@ -356,6 +357,17 @@ export function JobModal({
    * latency for the privacy-vs-edit trade-off.
    */
   const fetchQuery = (mode === 'edit' || mode === 'confirm') ? { unmasked: 'true' } : undefined;
+  /*
+   * The `jobId` PROP is not always present (see the create-flow note in the
+   * effect below: after Book New Call, `job` is set from the save callback
+   * while the parent hasn't re-rendered with the new id yet). The fetch path
+   * always resolved that fallback locally, but the ACTION handlers used the
+   * raw prop and built `/admin/jobs/undefined`, which the route's
+   * `validate(idParam, 'params')` rejected as a bare "Validation failed" —
+   * the Edit-Job-Description save failure. Resolve it ONCE here so every
+   * fetch/refresh/PATCH addresses the same job.
+   */
+  const resolvedJobId = jobId ?? (job?.job_id != null ? Number(job.job_id) : undefined);
   useEffect(() => {
     if (!open) return;
     /*
@@ -371,7 +383,7 @@ export function JobModal({
      * to drive the refetch instead. Falls back to the prop when
      * present so plain Edit-flow re-fetches still work.
      */
-    const effectiveJobId = jobId ?? (job?.job_id != null ? Number(job.job_id) : undefined);
+    const effectiveJobId = resolvedJobId;
     if (!effectiveJobId) { setJob(null); return; }
     // Hide stale header immediately ONLY when we're navigating to a
     // genuinely different job. If we just got `saved` from the create
@@ -388,8 +400,10 @@ export function JobModal({
   }, [open, jobId, mode]);
 
   async function refresh() {
-    if (!jobId) return;
-    try { setJob(await api.get<Job>(`/admin/jobs/${jobId}`, fetchQuery)); }
+    // Resolved id, not the raw prop — otherwise a post-create refresh silently
+    // no-ops and the modal keeps showing pre-save values.
+    if (!resolvedJobId) return;
+    try { setJob(await api.get<Job>(`/admin/jobs/${resolvedJobId}`, fetchQuery)); }
     catch { /* swallow — outer error state is set by action handlers */ }
   }
 
@@ -662,7 +676,7 @@ export function JobModal({
               {!loading && job && (
                 <ActionBar
                   job={job}
-                  jobId={Number(jobId)}
+                  jobId={Number(resolvedJobId)}
                   onChanged={() => { refresh(); onSaved?.(); }}
                 />
               )}
@@ -682,10 +696,10 @@ export function JobModal({
           inside JobCommentsTab.onLoaded → clearing pendingComments.
           POST failure → onPendingFailed removes the pending row + a
           toast surfaces the error since the dialog is already gone. */}
-      {jobId && (
+      {resolvedJobId && (
         <AddRemarksDialog
           open={addRemarksOpen}
-          jobId={Number(jobId)}
+          jobId={Number(resolvedJobId)}
           currentUserName={(currentMe?.user?.user_name || currentMe?.user?.official_email || 'You') as string}
           onClose={() => setAddRemarksOpen(false)}
           onOptimisticAdd={(row) => {
@@ -715,7 +729,7 @@ export function JobModal({
       <CancelWithReasonDialog
         open={cancelOpen} onClose={() => setCancelOpen(false)}
         onSubmit={async (reasonId, comment) => {
-          await api.patch(`/admin/jobs/${jobId}/status`, {
+          await api.patch(`/admin/jobs/${resolvedJobId}/status`, {
             status: ST.CANCELLED, reasonId, comment,
           });
           showToast({ variant: 'success', message: 'Job Cancelled' });
@@ -726,7 +740,7 @@ export function JobModal({
         open={descOpen} onClose={() => setDescOpen(false)}
         initialDesc={String(job?.job_desc ?? '')}
         onSubmit={async (desc) => {
-          await api.patch(`/admin/jobs/${jobId}`, { job_desc: desc });
+          await api.patch(`/admin/jobs/${resolvedJobId}`, { job_desc: desc });
           setDescOpen(false); refresh(); onSaved?.();
         }}
       />
@@ -10957,8 +10971,11 @@ function ChangeDescriptionDialog({ open, onClose, initialDesc, onSubmit }: {
   }, [open, initialDesc]);
   async function go() {
     setLoading(true); setErr(null);
+    // formatApiError appends the backend's field-level detail, so a 400 reads
+    // "Validation failed — id must be a number" instead of the bare message
+    // that made this failure impossible to diagnose from the UI.
     try { await onSubmit(desc.trim()); }
-    catch (e) { setErr(e instanceof ApiError ? e.message : 'Save failed'); }
+    catch (e) { setErr(formatApiError(e, { fallback: 'Save failed' })); }
     finally { setLoading(false); }
   }
   return (
