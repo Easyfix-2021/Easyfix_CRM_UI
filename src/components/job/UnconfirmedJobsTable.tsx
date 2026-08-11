@@ -202,37 +202,6 @@ export function UnconfirmedJobsTable({
     setRescheduleRow(j);
   }
 
-  /*
-   * Group unconfirmed siblings of one multi-category booking so it shows as ONE
-   * row instead of N (opening it → a tab per category). FE-only, no extra fetch.
-   *
-   * SAFE-GROUPING GUARDS (2 defences against wrong merges):
-   *   1) Group key is NOT client_ref_id alone — that's an operator/external-
-   *      entered ticket/PO reference with NO uniqueness guarantee, so two
-   *      unrelated bookings could reuse it. A real fan-out's siblings also share
-   *      the SAME customer mobile AND appointment, so we require all three;
-   *      unrelated jobs collide on all three only by accident.
-   *   2) Only group under adjacency-preserving sorts (default / job_id / age /
-   *      created). Those keep siblings next to each other and co-paged. Under a
-   *      scattering sort (city, customer, status, appointment, source) siblings
-   *      spread across the page/boundaries, so we DON'T group — individual rows
-   *      are safer than a partial/wrong family. (Same page-boundary caveat as any
-   *      FE grouping: a family split across pages shows as two rows — harmless.)
-   */
-  const canGroup = !sortBy || sortBy === 'job_id' || sortBy === JOB_AGE_SORT_KEY || sortBy === 'created_date_time';
-  const families = React.useMemo(() => {
-    if (!canGroup) return rows.map((r) => [r]);
-    const byKey = new Map<string, UnconfirmedJobRow[]>();
-    const order: string[] = [];
-    for (const r of rows) {
-      const key = r.client_ref_id
-        ? `ref:${r.client_ref_id}|${r.customer_mob_no ?? ''}|${r.requested_date_time ?? ''}`
-        : `job:${r.job_id}`;
-      if (!byKey.has(key)) { byKey.set(key, []); order.push(key); }
-      byKey.get(key)!.push(r);
-    }
-    return order.map((k) => byKey.get(k)!);
-  }, [rows, canGroup]);
 
   return (
     <>
@@ -266,14 +235,7 @@ export function UnconfirmedJobsTable({
         {!loading && rows.length === 0 && (
           <tr><td colSpan={14} className="text-center py-8 text-muted-foreground">No unconfirmed orders.</td></tr>
         )}
-        {!loading && families.map((fam) => {
-          const j = fam[0];
-          // Sibling family (>1) → pass the whole family to the modal so the
-          // status-9 read view can render a tab per category. Single job →
-          // undefined (plain single-job view, unchanged).
-          const siblings = fam.length > 1
-            ? fam.map((s) => ({ job_id: s.job_id, service_category: s.service_category ?? null }))
-            : undefined;
+        {!loading && rows.map((j) => {
           const { reason, freeText } = splitRemarks(j.remarks ?? '');
           const ticketTs = j.ticket_created_date_time ?? j.created_date_time;
           // A WhatsApp send Gallabox accepted but never delivered (e.g. number
@@ -291,16 +253,6 @@ export function UnconfirmedJobsTable({
                   #{j.job_id}
                   <CallHistoryButton jobId={j.job_id} />
                 </span>
-                {/* Multi-category family indicator — opening the row shows a tab
-                    per category. Tooltip lists the categories. */}
-                {fam.length > 1 && (
-                  <div
-                    className="mt-0.5 inline-flex items-center rounded bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold text-primary"
-                    title={fam.map((s) => s.service_category || `#${s.job_id}`).join(' · ')}
-                  >
-                    {fam.length} services
-                  </div>
-                )}
               </td>
               <td className="text-xs whitespace-nowrap tabular-nums" title={jobAgeTitle(j)}>{formatJobAge(j)}</td>
               <td className="text-xs whitespace-nowrap">
@@ -510,14 +462,14 @@ export function UnconfirmedJobsTable({
                     icon={Eye}
                     intent="default"
                     label="View details"
-                    onClick={() => openView(j.job_id, siblings)}
+                    onClick={() => openView(j.job_id)}
                   />
                   {canConfirm && (
                     <IconButton
                       icon={CalendarCheck}
                       intent="primary"
                       label="Confirm — fill details, pick services, and move to Scheduled"
-                      onClick={() => openConfirm(j.job_id, siblings)}
+                      onClick={() => openConfirm(j.job_id)}
                     />
                   )}
                   {/*

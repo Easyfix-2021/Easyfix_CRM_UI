@@ -5108,7 +5108,15 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
       const noteCatName = (id: string) =>
         (lk.serviceCategories || []).find((c) => String(c.service_catg_id) === id)?.service_catg_name || `Category ${id}`;
       const missingNotes = (noteCats.length > 0 ? noteCats : ['']).filter((cid) => {
-        const note = (cid ? perJobFields[cid]?.efr_special_notes : undefined) ?? f.efr_special_notes;
+        // For a real category id read its per-tab note (falling back to the
+        // top-level value); for the single-category case (cid === '') read via
+        // getJobField, which resolves perJobFields[activeCat] ?? f — the SAME
+        // value the operator typed. Reading f directly here missed the note when
+        // it was stored per-tab (single category with an active tab), so a typed
+        // "NA" wrongly read as empty.
+        const note = cid
+          ? (perJobFields[cid]?.efr_special_notes ?? f.efr_special_notes)
+          : (getJobField('efr_special_notes') as string | undefined);
         return !String(note || '').trim();
       });
       if (missingNotes.length > 0) {
