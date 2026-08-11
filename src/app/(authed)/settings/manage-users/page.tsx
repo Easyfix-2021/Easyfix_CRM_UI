@@ -21,7 +21,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { invalidateFetch, useDebouncedValue } from '@/lib/hooks';
 import {
   UserCog, Users, Search, Plus, Pencil, Trash2, MailWarning,
-  AlertTriangle, ChevronDown, ChevronRight, Info, Layers,
+  AlertTriangle, ChevronDown, ChevronRight, Info, Layers, KeyRound,
 } from 'lucide-react';
 import { BulkUpdateUsersDialog } from '@/components/users/BulkUpdateUsersDialog';
 import { Card, CardContent } from '@/components/ui/card';
@@ -164,6 +164,54 @@ type CreatedUser = {
 function readMailOutcome(created: CreatedUser | null): MailOutcome | undefined {
   return created?.welcome_mail ?? created?.welcomeMail ?? created?.credentialMail ?? created?.mail;
 }
+
+/*
+ * POST /admin/users/:id/reset-mailbox-password → { ok, welcomeMail }.
+ *
+ * Structurally a CreatedUser (it carries the same mail outcome, under the
+ * camelCase key), so `readMailOutcome` reads it unchanged rather than growing a
+ * second near-identical reader that could drift from the aliases above.
+ *
+ * As everywhere else on this page: the new temporary password is NOT on this
+ * payload and must never be put on it — it rides back over HTTP to the browser.
+ */
+type ResetMailboxPasswordResult = CreatedUser & { ok?: boolean };
+
+/*
+ * POST /admin/users/check-official-email → the DIRECTORY pre-flight.
+ *
+ * Distinct from the `/admin/users/check-email` probe further down, and they
+ * answer different questions — keep both:
+ *   check-email          → is this address free in tbl_user (our own CRM DB)?
+ *   check-official-email → does a Microsoft 365 account already exist at this
+ *                          UPN? An address nobody in the CRM holds can still be
+ *                          occupied in the directory (a leaver whose account was
+ *                          never removed, a namesake in another business unit).
+ *
+ * `suggested` is the next free numbered UPN (mohit.kumar2@, mohit.kumar3@, …)
+ * or null when the backend could not find one inside its probe bound.
+ *
+ * `taken` splits the two very different reasons `available` comes back false:
+ *   taken:true  → the directory definitively answered "this UPN exists".
+ *   taken:false → the probe was INCONCLUSIVE (403 / 429 / 5xx / network), so
+ *                 availability is unknown. Graph consent being absent makes
+ *                 EVERY address land here, which is why it must never be worded
+ *                 as "this name is taken".
+ * Optional because a backend that predates the flag omits it — absent is read as
+ * unknown, never as taken (see resolveOfficialEmail).
+ *
+ * WHY THIS RUNS BEFORE THE USER ROW IS WRITTEN: a collision discovered
+ * mid-create would leave a tbl_user row whose official_email no longer matches
+ * any directory account we can provision, so the pre-flight has to settle the
+ * address first and the create then carries the settled one.
+ */
+type OfficialEmailCheck = {
+  available: boolean;
+  taken?: boolean;
+  email: string;
+  suggested?: string | null;
+  reason?: string;
+};
 
 /*
  * Shared email-shape check. Deliberately loose (the same expression the
@@ -382,6 +430,91 @@ export default function ManageUsersPage() {
       showToast({
         variant: 'error',
         message: e instanceof ApiError ? e.message : 'Retry failed',
+      });
+    }
+  }
+
+  /*
+   * RESET PASSWORD & SEND WELCOME MAIL — the rescue for a STRANDED user.
+   *
+   * The stranding is structural, not a transient failure, so no amount of
+   * pressing "Retry Mailbox Creation" fixes it. When the first provisioning
+   * attempt creates the Entra account but the licence step does not confirm,
+   * that run holds a temporary password and no mailbox — so the credential mail
+   * is suppressed by design (mailing Outlook sign-in details for an account
+   * with no mailbox is worse than sending nothing), and the password is
+   * discarded, never stored. Every LATER run takes the reuse path: it finds the
+   * account already there and mints no password at all, so the mail is skipped
+   * again for the opposite reason. The only run with a credential had no
+   * mailbox; the only runs with a mailbox have no credential. Something must
+   * mint a fresh password, and that is this action.
+   *
+   * ⚠ WHY IT IS A SEPARATE, DELIBERATE CLICK and never a side effect of the
+   * retry: this REPLACES the account's Microsoft 365 password. If the account
+   * is in fact working and in use, everyone signed in to it is signed out. That
+   * is an acceptable price to rescue somebody who has never been able to sign
+   * in, and an unacceptable one to pay silently on a healthy account — so the
+   * operator states the intent explicitly, on a confirm that says exactly what
+   * it does.
+   */
+  async function handleResetMailboxPassword(u: User) {
+    const ok = await confirm({
+      title: 'Reset Password & Send Welcome Mail?',
+      description:
+        `This CHANGES the Microsoft 365 password for ${u.user_name} (${u.official_email}). `
+        + 'Anyone currently signed in to that account will be signed out. A new temporary '
+        + 'password is generated and the sign-in details are emailed to their personal address. '
+        + 'Use this only when the first provisioning attempt failed after the account was '
+        + 'created, so this user never received their credentials — a plain Retry cannot fix '
+        + 'that case, because the reuse path generates no password to share.',
+      confirmLabel: 'Reset Password & Send Mail',
+      cancelLabel: 'Cancel',
+      variant: 'destructive',
+    });
+    if (!ok) return;
+    const toastId = showToast({ variant: 'loading', message: 'Resetting Password…' });
+    try {
+      const res = await api.post<ResetMailboxPasswordResult>(
+        `/admin/users/${u.user_id}/reset-mailbox-password`, {},
+      );
+      dismissToast(toastId);
+      /*
+       * Same treatment the create flow gives a mail outcome, and read through
+       * the same alias-tolerant helper. The point of the action is the EMAIL,
+       * so a reset whose mail did not go out must never read as a flat success:
+       * the password has just been changed and nobody has been told the new one,
+       * which is strictly worse than the state we started from.
+       */
+      const mail = readMailOutcome(res ?? null);
+      if (mail?.status === 'sent') {
+        showToast({ variant: 'success', message: 'Password Reset — Sign-In Details Emailed' });
+      } else if (mail?.status === 'failed') {
+        showToast({
+          variant: 'warning',
+          message: `Password Reset — but the sign-in details email FAILED to send: ${mail.reason || 'see the mail outcome'}. Share the credentials with them directly.`,
+        });
+      } else if (mail?.status === 'pending') {
+        showToast({
+          variant: 'warning',
+          message: 'Password Reset — the sign-in details email is still sending. Check the provisioning record shortly.',
+        });
+      } else if (mail?.status === 'skipped') {
+        showToast({
+          variant: 'warning',
+          message: `Password Reset — but NO email was sent: ${mail.reason || 'see the mail outcome'}. Share the credentials with them directly.`,
+        });
+      } else {
+        // Backend reported no mail outcome at all (older build). Don't claim an
+        // email went out when nothing said one did.
+        showToast({ variant: 'success', message: 'Password Reset' });
+      }
+      invalidateFetch((k) => k.startsWith('/admin/users'));
+      void fetchList();
+    } catch (e) {
+      dismissToast(toastId);
+      showToast({
+        variant: 'error',
+        message: e instanceof ApiError ? e.message : 'Password reset failed',
       });
     }
   }
@@ -736,6 +869,24 @@ export default function ManageUsersPage() {
                           onClick={() => handleRetryMailbox(u)}
                         />
                       )}
+                      {/*
+                        * Reset Password & Send Welcome Mail — the rescue for a
+                        * user stranded with an account but no credentials (see
+                        * handleResetMailboxPassword for why a retry can never
+                        * fix that). Deliberately UNLIKE its neighbour: a key,
+                        * not an envelope, and red rather than blue, because it
+                        * rewrites a live Microsoft password and signs the
+                        * account out. Two adjacent blue envelopes would invite
+                        * exactly the mis-click this action must not receive.
+                        */}
+                      {can.isUserEdit && u.user_status === 1 && (
+                        <IconButton
+                          icon={KeyRound}
+                          intent="danger"
+                          label="Reset Password & Send Welcome Mail"
+                          onClick={() => handleResetMailboxPassword(u)}
+                        />
+                      )}
                       {!can.isUserEdit && (
                         <span className="text-[10px] text-muted-foreground">view-only</span>
                       )}
@@ -939,6 +1090,10 @@ function UserFormModal({
   onSaved: () => void;
 }) {
   const isEdit = !!editing;
+  // Used by the official-email pre-flight below. The repo forbids native
+  // confirm(); this is the same hook the row actions use, and it already
+  // stacks correctly over this modal (see useCancelConfirm, same pattern).
+  const confirm = useConfirm();
   const [name,    setName]    = useState('');
   const [email,   setEmail]   = useState('');
   const [personalEmail, setPersonalEmail] = useState('');
@@ -1312,6 +1467,123 @@ function UserFormModal({
    */
   const personalEmailRequired = !isEdit || (editing!.user_status === 1 && active);
 
+  /*
+   * ── Official-email DIRECTORY pre-flight ──────────────────────────────
+   *
+   * Returns the address to actually create the user with, or null when the
+   * operator chose to abort (nothing is submitted and the form is left exactly
+   * as they typed it, so they can edit and try again).
+   *
+   * Runs BEFORE the user row is written — see the OfficialEmailCheck type for
+   * why the order matters. The happy path costs the operator nothing: a free
+   * address returns straight away with no dialog and no extra click.
+   *
+   * Three outcomes need a human:
+   *   taken + suggestion → say who is in the way and what will be created
+   *                        instead, then adopt the suggestion on confirm. The
+   *                        visible field is updated too, so the address the
+   *                        operator can read afterwards is the one that was
+   *                        created — a form still showing the address we did
+   *                        NOT use is how the wrong person gets emailed.
+   *   taken, no suggestion → the address IS occupied and no free numbered
+   *                        alternative was found. There is nothing we can
+   *                        silently substitute, so the only honest options are a
+   *                        different address or knowingly taking this one.
+   *   not taken / no answer → we do not KNOW. Reported as "could not verify",
+   *                        never as "available": a check that is trusted and
+   *                        wrong is worse than no check, because it converts a
+   *                        question the operator would have asked into a false
+   *                        assurance.
+   *
+   * WHICH OF THE LAST TWO IS DECIDED BY `taken`, NOT BY `suggested`. Inferring it
+   * from a missing suggestion conflated three unrelated situations — a taken
+   * address whose probe bound was exhausted, a taken address whose suggestion
+   * lookup itself failed, and an address nobody could reach the directory to
+   * check — and put the "could not verify" wording in front of all of them. The
+   * server now states it outright, so we branch on the statement.
+   *
+   * A response with NO `taken` at all (a backend older than the flag) is read as
+   * unknown, never as taken: hard-blocking Add User because the UI is ahead of
+   * the API is a worse failure than asking. Such a backend still gets the swap
+   * confirm whenever it returns a `suggested`, exactly as it did before.
+   *
+   * Continuing past the last two is allowed but is the operator's explicit
+   * decision. It is not a hole in the guard — the backend refuses to reuse a
+   * directory account that is not already recorded against THIS user, so a real
+   * collision is stopped at the mailbox step rather than silently attaching
+   * this person to a stranger's mailbox.
+   */
+  async function resolveOfficialEmail(candidate: string): Promise<string | null> {
+    let check: OfficialEmailCheck | null = null;
+    try {
+      check = await api.post<OfficialEmailCheck>('/admin/users/check-official-email', { email: candidate });
+    } catch {
+      // Swallowed deliberately — an unreachable check is not a failed create.
+      // It falls through to the "could not verify" confirm below, which is the
+      // honest report of what we know.
+      check = null;
+    }
+
+    // Free — proceed exactly as before this pre-flight existed.
+    if (check?.available) return candidate;
+
+    /*
+     * Not gated on `taken`: a returned suggestion is itself proof the server got
+     * a definitive answer (it only numbers UPNs around a confirmed collision),
+     * and gating would silently discard the suggestion from a backend that has
+     * not shipped the flag yet.
+     */
+    if (check && check.suggested) {
+      const suggested = check.suggested;
+      const ok = await confirm({
+        title: 'Email Already Exists',
+        description: (
+          <span>
+            <span className="font-mono">{candidate}</span> already exists in the Microsoft 365
+            directory{check.reason ? ` (${check.reason})` : ''}. A new email will be created as{' '}
+            <span className="font-mono font-semibold">{suggested}</span> instead.
+            {' '}Confirm to create this user with <span className="font-mono">{suggested}</span>,
+            or cancel to type a different address.
+          </span>
+        ),
+        confirmLabel: 'Use Suggested Email',
+        cancelLabel: 'Cancel',
+      });
+      if (!ok) return null;
+      // Keep the field and the payload in agreement — both get the suggestion.
+      // The payload uses the returned value rather than reading `email` back,
+      // because this setState has not landed by the time the POST is built.
+      setEmail(suggested);
+      return suggested;
+    }
+
+    /*
+     * Only a definitive directory hit may be worded as "taken". Everything else
+     * — an inconclusive probe (taken:false) and an unreachable check (no
+     * response at all) — is the same fact from the operator's side: we do not
+     * know. Missing `taken` lands here too, by the older-backend rule above.
+     */
+    const isTaken = check?.taken === true;
+
+    const ok = await confirm({
+      title: isTaken ? 'No Available Email Found' : 'Email Could Not Be Verified',
+      description: isTaken
+        ? `${candidate} already exists in the Microsoft 365 directory`
+          + `${check?.reason ? ` (${check.reason})` : ''}, and no free numbered alternative was found. `
+          + 'Cancel and choose a different address, or continue to create this user on an address '
+          + 'that is already taken — the mailbox step will then refuse to attach them to somebody '
+          + 'else’s account, so they will be left without a mailbox.'
+        : `We could not confirm whether ${candidate} already exists in the Microsoft 365 directory, `
+          + 'so its availability is UNKNOWN — this is not a report that the address is taken. Cancel '
+          + 'and try again in a moment, or continue — the mailbox step will refuse to attach this '
+          + 'user to somebody else’s account.',
+      confirmLabel: 'Continue Anyway',
+      cancelLabel: 'Cancel',
+      variant: 'destructive',
+    });
+    return ok ? candidate : null;
+  }
+
   async function handleSubmit() {
     setError(null);
     if (!isEdit) {
@@ -1421,6 +1693,18 @@ function UserFormModal({
      */
     let created: CreatedUser | null = null;
     try {
+      /*
+       * Directory pre-flight, create flow only (Official Email is frozen on
+       * edit). `submitting` is already true, so the button is disabled for the
+       * duration of the probe and the confirm. Returning here still runs the
+       * `finally` below, which clears it.
+       */
+      let officialEmail = email.trim();
+      if (!isEdit) {
+        const resolved = await resolveOfficialEmail(officialEmail);
+        if (resolved === null) return;  // operator cancelled — nothing submitted
+        officialEmail = resolved;
+      }
       if (isEdit) {
         await api.patch(`/admin/users/${editing!.user_id}`, {
           // null (not '') when cleared — the column is NULLable and '' would
@@ -1441,7 +1725,9 @@ function UserFormModal({
       } else {
         created = await api.post<CreatedUser>('/admin/users', {
           user_name:        name.trim(),
-          official_email:   email.trim(),
+          // The PRE-FLIGHT's answer, not the raw field — on a collision this is
+          // the numbered address the operator confirmed.
+          official_email:   officialEmail,
           // Required on create — this is the address the sign-in details are
           // mailed to, and the new user cannot read their official inbox until
           // they have used them.
