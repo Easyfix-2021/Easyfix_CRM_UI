@@ -3,8 +3,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const guide = require('../src/lib/easyfixer-lifecycle-guide.ts');
-const lifecycle = require('../src/lib/easyfixer-lifecycle.ts');
+// Compiled by `npm run test:build` (see package.json) — Node cannot require a
+// raw .ts file, so every lib test imports the CommonJS build output, never src.
+const guide = require('../.test-build/easyfixer-lifecycle-guide.js');
+const lifecycle = require('../.test-build/easyfixer-lifecycle.js');
 
 /*
  * The CRM transition contract for a VERIFIED, UNMAPPED technician — exactly the

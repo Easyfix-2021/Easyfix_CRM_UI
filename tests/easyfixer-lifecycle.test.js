@@ -5,7 +5,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const lifecycle = require('../src/lib/easyfixer-lifecycle.ts');
+// Compiled by `npm run test:build` (see package.json) — Node cannot require a
+// raw .ts file, so every lib test imports the CommonJS build output, never src.
+const lifecycle = require('../.test-build/easyfixer-lifecycle.js');
 const contract = JSON.parse(fs.readFileSync(
   path.resolve(__dirname, '../shared/wire-contract.json'),
   'utf8',
