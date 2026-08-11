@@ -5097,6 +5097,30 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
       }
     }
 
+    // "Anything Handyman should keep in mind?" (efr_special_notes) is required
+    // (starred in the form), but the native `required` attr only fires on a
+    // single native submit — the multi-tab / programmatic book bypassed it, so an
+    // empty note saved silently. Enforce it per category (each tab keeps its own
+    // note in perJobFields, falling back to the top-level value).
+    if (submitVariant === 'book') {
+      const noteCats = (f.fk_service_catg_ids || '').split(',').filter(Boolean);
+      const noteCatName = (id: string) =>
+        (lk.serviceCategories || []).find((c) => String(c.service_catg_id) === id)?.service_catg_name || `Category ${id}`;
+      const missingNotes = (noteCats.length > 0 ? noteCats : ['']).filter((cid) => {
+        const note = (cid ? perJobFields[cid]?.efr_special_notes : undefined) ?? f.efr_special_notes;
+        return !String(note || '').trim();
+      });
+      if (missingNotes.length > 0) {
+        setError(
+          noteCats.length > 1
+            ? `"Anything Handyman should keep in mind?" is required for: ${missingNotes.map(noteCatName).join(', ')}.`
+            : '"Anything Handyman should keep in mind?" is required.',
+        );
+        setSubmitting(false);
+        return;
+      }
+    }
+
     /*
      * Outcome-only flows (Unreachable / Enquiry) display a global toast
      * for in-flight feedback:
@@ -6147,6 +6171,14 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
           setError(
             `${created.length} job(s) created; ${failures.length} failed: ${failures.join(' · ')}`,
           );
+        }
+
+        // Multi-category success — one green toast listing every job created.
+        if (created.length > 1) {
+          showToast({
+            variant: 'success',
+            message: `${created.length} jobs created successfully — ${created.map((j) => `#${j.job_id}`).join(', ')}`,
+          });
         }
 
         // If an image was uploaded AFTER the create POST, re-fetch the

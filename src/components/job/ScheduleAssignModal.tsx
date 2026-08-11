@@ -227,7 +227,7 @@ export function ScheduleAssignModal({
   // for ANY jobId. Scheduling/offering is only valid for a BOOKED (0) job; a
   // tampered link to any other status (e.g. a completed job) must NOT let the
   // operator schedule/offer. Probe the real status; while it loads we don't block.
-  const statusGate = useFetch<{ job_status?: number }>(open && jobId ? `/admin/jobs/${jobId}` : null);
+  const statusGate = useFetch<{ job_status?: number; job_reference_id?: string | null }>(open && jobId ? `/admin/jobs/${jobId}` : null);
   const statusIneligible = statusGate.data?.job_status != null && Number(statusGate.data.job_status) !== 0;
   const canCommit = hasAction(me, 'isJobAssign') && !statusIneligible;
   // Cancel Job mirrors JobModal's ActionBar gate (the destructive
@@ -647,6 +647,9 @@ export function ScheduleAssignModal({
           <DialogTitle className="flex items-center gap-2">
             Schedule &amp; Assign
             {jobId && <span className="text-sm font-normal text-slate-300">· Job #{jobId}</span>}
+            {statusGate.data?.job_reference_id && (
+              <span className="text-sm font-normal text-slate-300">· {statusGate.data.job_reference_id}</span>
+            )}
           </DialogTitle>
         </DialogHeader>
 
