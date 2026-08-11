@@ -1093,6 +1093,7 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
              */
             ['Age', <span key="job-age" title={jobAgeTitle(job)}>{formatJobAge(job)}</span>],
             ['Type', job.job_type],
+            ['Appointment', formatDate(job.requested_date_time as string)],
             ['Source', job.source_type],
             ['Owner', job.owner_name],
             // Description carries an inline pencil (gated on isJobEdit) that
@@ -9634,6 +9635,11 @@ function AutoServicesTable({
    */
   const picked = new Set(serviceTypeIds.map(String));
   const candidates = (services || []).filter((s) => picked.has(String(s.service_type_id)));
+  // "N added" must reflect the CURRENT tab's category only — the shared basket
+  // `rows` spans every category, so rows.length over-counts. Count basket rows
+  // whose client_service belongs to THIS tab's candidates.
+  const candidateCsIds = new Set(candidates.map((c) => String(c.client_service_id)));
+  const addedInCategory = rows.filter((r) => candidateCsIds.has(String(r.client_service_id))).length;
 
   if (candidates.length === 0) {
     return (
@@ -9872,7 +9878,7 @@ function AutoServicesTable({
             <td colSpan={6} className="px-3 py-2 text-right font-medium">
               Total
               <span className="text-xs text-muted-foreground ml-2">
-                ({rows.length} added of {candidates.length} available)
+                ({addedInCategory} added of {candidates.length} available)
               </span>
             </td>
             <td className="px-3 py-2 text-right tabular-nums font-semibold">
