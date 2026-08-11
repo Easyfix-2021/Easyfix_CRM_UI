@@ -87,6 +87,16 @@ type Props = {
    * is the editable Complete-Address autocomplete, `building` is Building/Floor.
    */
   serviceAddressReadOnly?: boolean;
+  /*
+   * Override the editable-mode field labels. Defaults preserve the historic
+   * labels for the Edit-Address dialog and every other caller; Book New Call
+   * passes "Search Location on Map *" / "Address" to reflect the column roles
+   * (address = the map-search anchor for GPS, building = the address detail
+   * shown in the Service Address preview). Scoped so the rename can't bleed into
+   * the other flows.
+   */
+  addressLabel?: string;
+  buildingLabel?: string;
 };
 
 /*
@@ -195,7 +205,7 @@ type SharedMapCore = {
 };
 let sharedMapCore: SharedMapCore | null = null;
 
-export function AddressPickerWithMap({ value, onChange, cities, editable = true, autoCreatePincode = false, serviceAddressReadOnly = false }: Props) {
+export function AddressPickerWithMap({ value, onChange, cities, editable = true, autoCreatePincode = false, serviceAddressReadOnly = false, addressLabel = 'Complete Address *', buildingLabel = 'Building / Floor Number' }: Props) {
   const mapRef = React.useRef<HTMLDivElement | null>(null);
   // The map + marker types are minimal at the call site — we only
   // need .panTo / .setZoom on the map and .setPosition on the marker.
@@ -639,7 +649,7 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
             `building` field below. Shown in Book New Call / edit dialog. */}
         {!serviceAddressReadOnly && (
         <div>
-          <Label className="text-xs">Complete Address *</Label>
+          <Label className="text-xs">{addressLabel}</Label>
           <AddressAutocomplete
             value={value.address}
             onChange={(v) => patch({ address: v })}
@@ -715,7 +725,7 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
         ) : (
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label className="text-xs">Building / Floor Number</Label>
+              <Label className="text-xs">{buildingLabel}</Label>
               <Input
                 value={value.building || ''}
                 onChange={(e) => patch({ building: e.target.value })}

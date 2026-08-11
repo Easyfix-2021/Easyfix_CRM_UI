@@ -5368,9 +5368,17 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
            * the per-tab description input. Mirrors the sibling-loop
            * pattern at ~line 4992.
            */
-          const parentCatId = (f.fk_service_catg_ids || '')
-            .split(',').map((s) => Number(s.trim())).filter((n) => Number.isInteger(n) && n > 0)[0];
-          const parentOverride: PerJobOverride | undefined = parentCatId
+          const parentCatIdList = (f.fk_service_catg_ids || '')
+            .split(',').map((s) => Number(s.trim())).filter((n) => Number.isInteger(n) && n > 0);
+          const parentCatId = parentCatIdList[0];
+          // Per-tab overrides exist ONLY in true multi-tab mode (2+ categories).
+          // With a single category the operator edits the shared `f`
+          // (getActiveCatId() returns '' below 2 categories) while
+          // perJobFields[parentCatId] still holds the empty/original seed captured
+          // at category-select time. Reading it via `?? f` shadowed the typed
+          // value and dropped job_desc / efr_special_notes from the Save-Draft
+          // PATCH — the "Draft saved but details not saved / no Draft tag" bug.
+          const parentOverride: PerJobOverride | undefined = (parentCatIdList.length >= 2 && parentCatId)
             ? (perJobFields[String(parentCatId)] as PerJobOverride | undefined)
             : undefined;
           setIf('job_desc', (parentOverride?.job_desc ?? f.job_desc) || undefined);
@@ -8688,13 +8696,18 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
               <textarea
                 readOnly
                 disabled
-                value={formatServiceAddress({
-                  building: f.building,
-                  address: f.address,
-                  landmark: f.landmark,
-                  city_name: f.city_id ? cityNameById.get(String(f.city_id)) : null,
-                  pin_code: f.pin_code,
-                }, { fallback: '—' })}
+                value={(() => {
+                  // Book New Call Service Address = "Address" (Building/Floor →
+                  // building col), Landmark, then "City - Pincode". The "Search
+                  // Location on Map" text (address col) is the GPS anchor and is
+                  // intentionally NOT shown here.
+                  const cityName = f.city_id ? cityNameById.get(String(f.city_id)) : '';
+                  const cityPin = [cityName, f.pin_code].map((s) => String(s || '').trim()).filter(Boolean).join(' - ');
+                  return [f.building, f.landmark, cityPin]
+                    .map((s) => String(s || '').trim())
+                    .filter(Boolean)
+                    .join(', ') || '—';
+                })()}
                 rows={2}
                 className="mt-1 w-full rounded-md border border-input bg-slate-100 px-3 py-1.5 text-sm text-slate-700 resize-none"
               />
@@ -8723,6 +8736,8 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
               }}
               cities={lk.toOpts.cities.map((o) => ({ value: String(o.value), label: String(o.label) }))}
               autoCreatePincode
+              addressLabel="Search Location on Map *"
+              buildingLabel="Address"
             />
             </div>
             <div className="mt-4 flex justify-between">
