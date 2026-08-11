@@ -64,11 +64,10 @@ export function EasyfixerModal({
   onSaved?: (record: EfRecord) => void;
 }) {
   const lk = useLookup();
-  // Modal-internal permission gates. Edit + Activate/Deactivate + Save
-  // require `isEasyfixerEdit`; the Create flow requires `isEasyfixerAddNew`
-  // so a user without add rights doesn't see a non-functional Save.
+  // These are the legacy Manage Easyfixers screen's bare action names. Keep
+  // the modal, list-page affordances, and backend guards on the same keys.
   const { me } = useMe();
-  const can = actionFlags(me, ['isEasyfixerAddNew', 'isEasyfixerEdit']);
+  const can = actionFlags(me, ['isAddNew', 'isEdit']);
   const [record, setRecord] = useState<EfRecord | null>(null);
   const [form, setForm] = useState<FormShape>(emptyForm);
   const [pristine, setPristine] = useState<FormShape>(emptyForm);
@@ -134,8 +133,20 @@ export function EasyfixerModal({
     try {
       const payload: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(form)) {
+        // Final technician verification is owned by the dedicated verification
+        // workflow and the audited lifecycle service. Never let this broad
+        // profile editor create a second, unaudited activation path.
+        if (k === 'is_technician_verified') continue;
         if (typeof v === 'boolean') { payload[k] = v; continue; }
-        if (v === '' || v === null) continue;
+        if (v === '' || v === null) {
+          // Empty fields are normally omitted, but clearing a master mapping is
+          // a real mutation. Send an explicit null so the backend can atomically
+          // move UNDER_MASTER back to ACTIVE under the lifecycle row lock.
+          if (mode === 'edit' && k === 'efr_manager_id' && pristine.efr_manager_id !== '') {
+            payload[k] = null;
+          }
+          continue;
+        }
         if (['efr_cityId', 'efr_zone_city_id', 'efr_manager_id', 'experience_id',
              'efr_children', 'efr_age', 'skill', 'skill_rating', 'tool_rating',
              'inactive_reason'].includes(k)) {
@@ -146,7 +157,7 @@ export function EasyfixerModal({
       }
       const saved = mode === 'create'
         ? await api.post<EfRecord>('/admin/easyfixers', payload)
-        : await api.patch<EfRecord>(`/admin/easyfixers/${easyfixerId}`, payload);
+        : await api.put<EfRecord>(`/admin/easyfixers/${easyfixerId}`, payload);
       onSaved?.(saved);
       onClose();
     } catch (err) {
@@ -179,7 +190,7 @@ export function EasyfixerModal({
     isDirty: () => isDirty,
   });
 
-  const canSave = mode === 'create' ? can.isEasyfixerAddNew : can.isEasyfixerEdit;
+  const canSave = mode === 'create' ? can.isAddNew : can.isEdit;
 
   return (
     <Dialog open={open} onOpenChange={guardedOpenChange}>
@@ -196,7 +207,7 @@ export function EasyfixerModal({
                 {subtitle}
               </DialogDescription>
             </div>
-            {mode === 'edit' && !can.isEasyfixerEdit && (
+            {mode === 'edit' && !can.isEdit && (
               <span className="text-xs text-white/70 italic shrink-0">view-only</span>
             )}
           </div>
@@ -232,7 +243,7 @@ export function EasyfixerModal({
 
                 <TabsContent value="flags" className="mt-4">
                   <div className="grid md:grid-cols-2 gap-5">
-                    <FlagsCard form={form} set={set} />
+                    <FlagsCard mode={mode} form={form} set={set} />
                     <InactiveReasonCard form={form} set={set} record={record} />
                   </div>
                 </TabsContent>
@@ -397,7 +408,9 @@ function ProfileAddressCard({ form, set, lk }: { form: FormShape; set: Setter; l
   );
 }
 
-function FlagsCard({ form, set }: { form: FormShape; set: Setter }) {
+function FlagsCard({
+  mode, form, set,
+}: { mode: EasyfixerModalMode; form: FormShape; set: Setter }) {
   return (
     <Card>
       <CardHeader className="pb-3">
@@ -405,7 +418,19 @@ function FlagsCard({ form, set }: { form: FormShape; set: Setter }) {
       </CardHeader>
       <CardContent>
         <dl className="divide-y">
-          <CheckRow label="Technician Verified" checked={form.is_technician_verified} onChange={(v) => set('is_technician_verified', v)} />
+          <div className="flex justify-between items-start gap-4 py-2">
+            <dt className="text-sm text-muted-foreground">Technician Verified</dt>
+            <dd className="max-w-[65%] text-right">
+              <div className="text-sm font-medium">
+                {form.is_technician_verified ? 'Verified' : 'Not verified'}
+              </div>
+              <div className="mt-0.5 text-xs text-muted-foreground">
+                {mode === 'create'
+                  ? 'New technicians start unverified.'
+                  : 'Use Verification and Status & History to change this safely.'}
+              </div>
+            </dd>
+          </div>
           <CheckRow label="Email Verified" checked={form.is_email_verified} onChange={(v) => set('is_email_verified', v)} />
           {/* legacy typo preserved verbatim — DB column is `have_driving_lisence` */}
           <CheckRow label="Driving Licence" checked={form.have_driving_lisence} onChange={(v) => set('have_driving_lisence', v)} />

@@ -1,6 +1,6 @@
 'use client';
 
-import { Pencil, Link as LinkIcon, Receipt, ClipboardList, Send, Loader2, ClipboardCopy, MoreVertical, UserX, UserCheck } from 'lucide-react';
+import { Pencil, Link as LinkIcon, Receipt, ClipboardList, Send, Loader2, ClipboardCopy, MoreVertical, History } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
   DropdownMenu,
@@ -14,7 +14,7 @@ import {
  * EasyfixerActionMenu — kebab (3-dot) dropdown menu for the Manage
  * Easyfixers row Action cell. Replaces the legacy horizontal 6-icon strip
  * with a single MoreVertical trigger that opens a portaled dropdown of
- * labeled action items. Same six actions, same gating contract:
+ * labeled action items. Existing actions plus canonical lifecycle management:
  *
  *   Read-only group:
  *     1. Edit Easyfixer          → edit modal       (Pencil)         [gated by canEdit]
@@ -25,6 +25,7 @@ import {
  *   Write group:
  *     5. Send Profile Update Link → magic-link send  (Send)           [gated by canSend; isSending → spinner+disable]
  *     6. Copy Dev URL            → mint + clipboard (ClipboardCopy)  [gated by canCopyDevUrl; isCopyingDevUrl → spinner+disable]
+ *     7. Status & History         → lifecycle dialog (History)        [gated by canManageLifecycle]
  *
  * The Edit action is gated by `canEdit` — roles without
  * `isEasyfixerEdit` action permission don't see it. Read-only roles
@@ -63,12 +64,11 @@ export function EasyfixerActionMenu({
   onAssessment,
   onSendProfileUpdateLink,
   onCopyDevUrl,
-  onToggleStatus,
+  onLifecycle,
   canEdit = true,
   canSend = false,
   canCopyDevUrl = false,
-  canToggleStatus = false,
-  isInactive = false,
+  canManageLifecycle = false,
   isSending = false,
   isCopyingDevUrl = false,
 }: {
@@ -77,12 +77,10 @@ export function EasyfixerActionMenu({
   onClientMapping: () => void;
   onTransactions: () => void;
   onAssessment: () => void;
-  /* Opens the Deactivate/Reactivate dialog; only shown when canToggleStatus. */
-  onToggleStatus?: () => void;
-  /* Whether the row is currently inactive — flips the item to "Reactivate". */
-  isInactive?: boolean;
-  /* Gate for the Deactivate/Reactivate item (parent passes isEdit). */
-  canToggleStatus?: boolean;
+  /* Opens canonical lifecycle status + history; only shown when permitted. */
+  onLifecycle?: () => void;
+  /* Gate for lifecycle management (parent passes isEdit). */
+  canManageLifecycle?: boolean;
   /* Click handler for the Send Profile Update Link action; only invoked
    * when `canSend` is true and `isSending` is false. */
   onSendProfileUpdateLink?: () => void;
@@ -104,7 +102,7 @@ export function EasyfixerActionMenu({
    * item so rapid double-clicks don't double-mint. */
   isCopyingDevUrl?: boolean;
 }) {
-  const hasWriteGroup = (canSend && onSendProfileUpdateLink) || (canCopyDevUrl && onCopyDevUrl) || (canToggleStatus && onToggleStatus);
+  const hasWriteGroup = (canSend && onSendProfileUpdateLink) || (canCopyDevUrl && onCopyDevUrl) || (canManageLifecycle && onLifecycle);
   return (
     // modal={false}: Radix's default modal dropdown locks document.body
     // pointer-events while open/closing; that lock races a Dialog opened from
@@ -175,12 +173,10 @@ export function EasyfixerActionMenu({
             <span className="ml-auto text-xs text-muted-foreground">(dev)</span>
           </DropdownMenuItem>
         )}
-        {canToggleStatus && onToggleStatus && (
-          <DropdownMenuItem onClick={onToggleStatus}>
-            {isInactive
-              ? <UserCheck className="mr-2 h-4 w-4 text-emerald-600" />
-              : <UserX className="mr-2 h-4 w-4 text-red-600" />}
-            {isInactive ? 'Reactivate' : 'Deactivate'}
+        {canManageLifecycle && onLifecycle && (
+          <DropdownMenuItem onClick={onLifecycle}>
+            <History className="mr-2 h-4 w-4 text-violet-600" />
+            Status &amp; History
           </DropdownMenuItem>
         )}
       </DropdownMenuContent>

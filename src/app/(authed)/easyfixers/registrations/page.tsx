@@ -9,6 +9,7 @@ import { SearchSelect } from '@/components/ui/search-select';
 import { DownloadButton } from '@/components/ui/download-button';
 import { StatusChip, type StatusChipTone } from '@/components/ui/StatusChip';
 import { IconButton } from '@/components/ui/icon-button';
+import { EasyfixerLifecycleChip } from '@/components/easyfixer/EasyfixerLifecycleChip';
 import { showToast } from '@/components/ui/toast';
 import {
   TablePagination,
@@ -22,6 +23,11 @@ import { downloadXlsx } from '@/lib/download-xlsx';
 import { cn, formatDate, formatEasyfixerName } from '@/lib/utils';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
+import {
+  lifecycleStatusFrom,
+  reapplicationSummary,
+  type LifecycleRowFields,
+} from '@/lib/easyfixer-lifecycle';
 
 /*
  * Registered Easyfixers — parity rewrite of the legacy CRM page
@@ -29,8 +35,8 @@ import { actionFlags } from '@/lib/permissions';
  *
  * The legacy page is the "registration intake" queue: technicians who
  * have applied (self-registration or recruiter-added) and are working
- * through the verification funnel. The single row action is "Verify
- * Easyfixer", which deep-links to the verification workflow.
+ * through the verification funnel. Row actions deep-link to verification and
+ * open the shared canonical lifecycle status/history dialog.
  *
  * Backend contract (DONE — consumed verbatim, not changed here):
  *   GET /admin/easyfixers/registered
@@ -44,7 +50,7 @@ import { actionFlags } from '@/lib/permissions';
  * operators don't lose partially-typed input mid-load.
  */
 
-type RegRow = {
+type RegRow = LifecycleRowFields & {
   efr_id: number;
   registered_date: string;
   name: string | null;
@@ -70,7 +76,8 @@ type ZonalManager = { user_id: number; user_name: string };
 type RegCounts = {
   new_lead: number; in_progress: number; details_not_available: number;
   not_eligible: number; send_to_finance: number; activation_pending: number;
-  not_suitable: number; pending_member_verification: number; total: number;
+  not_suitable: number; pending_member_verification: number;
+  reapplications: number; total: number;
 };
 // Status-count strip chips: [label, count key, registrationStatus filter value].
 const COUNT_CHIPS: ReadonlyArray<[string, keyof RegCounts, string]> = [
@@ -82,6 +89,7 @@ const COUNT_CHIPS: ReadonlyArray<[string, keyof RegCounts, string]> = [
   ['Activation Pending', 'activation_pending', '7'],
   ['Not Suitable', 'not_suitable', '8'],
   ['Pending Member Verif.', 'pending_member_verification', '9'],
+  ['Re-applications', 'reapplications', '10'],
 ];
 
 /*
@@ -144,6 +152,7 @@ const REGISTRATION_STATUS_OPTS: { value: string; label: string }[] = [
   { value: '7', label: 'Activation Pending' },
   { value: '8', label: 'Not Suitable' },
   { value: '9', label: 'Pending Member Verification' },
+  { value: '10', label: 'Re-applications' },
 ];
 
 const EASYFIXER_TYPE_OPTS: { value: string; label: string }[] = [
@@ -237,10 +246,40 @@ function fetchListOnce(params: Record<string, string | number | undefined>): Pro
 // double-mount collapses via the shared in-flight promise). Module-level so it
 // satisfies the no-raw-api-in-useEffect rule, same pattern as the list fetch.
 let countsInflight: Promise<RegCounts> | null = null;
+
+/*
+ * Coerce every count to a finite number with a 0 fallback. The chips render
+ * `counts[key].toLocaleString()` directly, so a payload missing a key (e.g. an
+ * older backend served under deploy skew that predates the `reapplications`
+ * chip) would otherwise throw on `undefined.toLocaleString` and white-screen the
+ * whole page. The explicit object literal also keeps this exhaustive: adding a
+ * key to RegCounts fails to compile until it is normalized here.
+ */
+function normalizeRegCounts(raw: unknown): RegCounts {
+  const src = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const read = (key: keyof RegCounts): number => {
+    const value = Number(src[key]);
+    return Number.isFinite(value) ? value : 0;
+  };
+  return {
+    new_lead: read('new_lead'),
+    in_progress: read('in_progress'),
+    details_not_available: read('details_not_available'),
+    not_eligible: read('not_eligible'),
+    send_to_finance: read('send_to_finance'),
+    activation_pending: read('activation_pending'),
+    not_suitable: read('not_suitable'),
+    pending_member_verification: read('pending_member_verification'),
+    reapplications: read('reapplications'),
+    total: read('total'),
+  };
+}
+
 function fetchRegisteredCountsOnce(): Promise<RegCounts> {
   if (countsInflight) return countsInflight;
   countsInflight = api
-    .get<RegCounts>('/admin/easyfixers/registered/status-counts')
+    .get<unknown>('/admin/easyfixers/registered/status-counts')
+    .then(normalizeRegCounts)
     .finally(() => {
       countsInflight = null;
     });
@@ -251,10 +290,11 @@ export default function RegisteredEasyfixersPage() {
   const router = useRouter();
   const { me } = useMe();
   /*
-   * Same bare-verb action keys as the main Manage Easyfixers screen
+   * Same bare-verb action key as the main Manage Easyfixers screen
    * (`isEdit`) — the Legacy CRM (Java) gates its registration screen on
-   * the same bare names and both CRMs share the easyfix_core DB seed.
-   * The single "Verify Easyfixer" action is gated behind isEdit.
+   * the same bare name and both CRMs share the easyfix_core DB seed.
+   * "Verify Easyfixer" is gated behind isEdit. (Lifecycle status/history is
+   * intentionally NOT on this page — it lives only on Manage Easyfixers.)
    */
   const can = actionFlags(me, ['isEdit']);
 
@@ -609,6 +649,8 @@ export default function RegisteredEasyfixersPage() {
                     const showPct =
                       SHOW_PCT_LABELS.has(label) && e.profile_perc != null;
                     const efName = formatEasyfixerName(e.name ?? '');
+                    const lifecycleStatus = lifecycleStatusFrom(e);
+                    const reapplication = reapplicationSummary(e);
                     return (
                       <tr key={e.efr_id}>
                         {/* Technician Id (+ early-activation unlock marker) —
@@ -652,10 +694,24 @@ export default function RegisteredEasyfixersPage() {
                             <StatusChip tone={regStatusTone(label)} size="sm">
                               {label}
                             </StatusChip>
+                            {lifecycleStatus && lifecycleStatus !== 'REAPPLIED' && (
+                              <EasyfixerLifecycleChip value={lifecycleStatus} />
+                            )}
+                            {reapplication.isReapplication && (
+                              <StatusChip tone="violet" size="sm">RE-APPLICATION</StatusChip>
+                            )}
                             {showPct && (
                               <span className="text-[10px] text-muted-foreground tabular-nums">
                                 ({Math.round(Number(e.profile_perc))}%)
                               </span>
+                            )}
+                            {reapplication.isReapplication && (
+                              <div className="mt-1 flex flex-col text-[10px] leading-4 text-muted-foreground">
+                                {reapplication.previousTxId != null && <span>Previous Tx: {reapplication.previousTxId}</span>}
+                                {reapplication.previousPerformanceGrade && <span>Previous grade: {reapplication.previousPerformanceGrade}</span>}
+                                {reapplication.lifetimeJobs != null && <span>Completed jobs: {reapplication.lifetimeJobs.toLocaleString('en-IN')}</span>}
+                                {reapplication.lifetimeEarnings != null && <span>Lifetime earnings: ₹{reapplication.lifetimeEarnings.toLocaleString('en-IN')}</span>}
+                              </div>
                             )}
                           </div>
                         </td>
@@ -689,17 +745,18 @@ export default function RegisteredEasyfixersPage() {
                         <td className="!text-left text-xs whitespace-nowrap text-muted-foreground">
                           {formatDate(e.registered_date)}
                         </td>
-                        {/* Action — single Verify deep-link (sticky-right). Uses
-                            the shared Pencil edit icon, same as every other CRM
-                            row action. */}
+                        {/* Actions — verification deep-link. Lifecycle status /
+                            history lives only on Manage Easyfixers, not here. */}
                         <td className="!text-center stick-col stick-right">
                           {can.isEdit && (
-                            <IconButton
-                              icon={Pencil}
-                              intent="primary"
-                              label="Verify Easyfixer"
-                              onClick={() => onVerify(e.efr_id)}
-                            />
+                            <div className="flex items-center justify-center gap-1">
+                              <IconButton
+                                icon={Pencil}
+                                intent="primary"
+                                label="Verify Easyfixer"
+                                onClick={() => onVerify(e.efr_id)}
+                              />
+                            </div>
                           )}
                         </td>
                       </tr>

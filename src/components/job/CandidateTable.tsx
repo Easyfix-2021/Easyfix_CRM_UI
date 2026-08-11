@@ -26,7 +26,7 @@
  * exactly as before there.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { CheckCircle2, XCircle, Info, Search, Phone } from 'lucide-react';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -36,6 +36,11 @@ import { Button } from '@/components/ui/button';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { InfoTooltip } from '@/components/ui/tooltip';
+import { EasyfixerLifecycleChip } from '@/components/easyfixer/EasyfixerLifecycleChip';
+import {
+  candidateJobOfferEligibility,
+  type EasyfixerLifecycleStatus,
+} from '@/lib/easyfixer-lifecycle';
 
 /* ── BE row shape (exact contract). ──────────────────────────────────── */
 export type DistanceTier =
@@ -81,6 +86,12 @@ export type ScheduleCandidate = {
   score?: number;
   grade?: 'A+' | 'A' | 'B' | 'C' | 'D' | 'E';
   avg_rating?: number;
+  /** Lifecycle projection is included in the bounded candidate response. */
+  lifecycle_status?: EasyfixerLifecycleStatus | null;
+  lifecycle_reason_code?: string | null;
+  lifecycle_reason?: string | null;
+  /** Server-authoritative offer/assignment gate for this candidate row. */
+  can_offer?: boolean;
   /**
    * TRUE for the technician currently assigned to this job (Reassign mode only).
    * The backend pins them first; the table highlights the row and disables its
@@ -110,7 +121,16 @@ export function CandidateTable({
 }) {
   // +1 column when the operator can commit: the select control (checkbox in
   // offer mode, radio in direct-assign mode).
-  const COLS = canCommit ? 15 : 14;
+  const COLS = canCommit ? 16 : 15;
+  // Multiple job dialogs can remain mounted at once. React's instance-scoped
+  // id prevents aria-describedby collisions for the same technician id.
+  const tableInstanceId = useId();
+  const eligibilityById = useMemo(() => new Map(
+    rows.map((candidate) => [
+      candidate.efr_id,
+      candidateJobOfferEligibility(candidate),
+    ]),
+  ), [rows]);
   return (
     // Horizontal scroll ONLY (the 13-14 columns can't fit any laptop). There is
     // deliberately no max-height: a capped inner scroller showed ~5 rows and
@@ -143,6 +163,7 @@ export function CandidateTable({
             >
               Technician
             </th>
+            <th className="!text-left min-w-[190px]">Technician Status</th>
             <th className="!text-center">Attendance for Job Date</th>
             <th className="!text-center">Current Pincode</th>
             <th className="!text-left min-w-[150px]">Distance Criteria</th>
@@ -202,6 +223,10 @@ export function CandidateTable({
           )}
           {!loading && !error && rows.map((c) => {
             const isSelected = selected.has(c.efr_id);
+            const offerEligibility = eligibilityById.get(c.efr_id)
+              ?? candidateJobOfferEligibility(c);
+            const offerBlocked = !offerEligibility.canOffer;
+            const lifecycleCellId = `${tableInstanceId}-candidate-lifecycle-${c.efr_id}`;
             // Reassign only: the technician already on the job. Pinned first by
             // the BE, highlighted, and NOT selectable (can't reassign to self).
             const isCurrent = c.is_current === true;
@@ -209,12 +234,18 @@ export function CandidateTable({
             // to the exact original classes, so Schedule & Assign is unchanged.
             const rowCls = isCurrent
               ? 'group bg-amber-50 hover:bg-amber-100'
+              : offerBlocked
+                ? 'group bg-rose-50/70 hover:bg-rose-100/70'
               : 'group hover:bg-muted/40 ' + (isSelected ? 'bg-primary/5' : '');
             const selectBg = isCurrent
               ? 'bg-amber-50 group-hover:bg-amber-100'
+              : offerBlocked
+                ? 'bg-rose-50 group-hover:bg-rose-100'
               : (isSelected ? 'bg-primary/5' : 'bg-white group-hover:bg-slate-100');
             const nameTd = isCurrent
               ? '!text-left sticky z-20 bg-amber-50 group-hover:bg-amber-100 shadow-[2px_0_0_0_var(--border)] min-w-[190px] ' + (canCommit ? 'left-10' : 'left-0')
+              : offerBlocked
+                ? '!text-left sticky z-20 bg-rose-50 group-hover:bg-rose-100 shadow-[2px_0_0_0_var(--border)] min-w-[190px] ' + (canCommit ? 'left-10' : 'left-0')
               : '!text-left sticky z-20 group-hover:bg-slate-100 shadow-[2px_0_0_0_var(--border)] min-w-[190px] ' + (canCommit ? 'left-10' : 'left-0') + ' ' + (isSelected ? 'bg-primary/5' : 'bg-white');
             return (
             <tr key={c.efr_id} className={rowCls}>
@@ -229,14 +260,28 @@ export function CandidateTable({
                       Now
                     </span>
                   ) : (
-                    <input
-                      type={multiSelect ? 'checkbox' : 'radio'}
-                      name={multiSelect ? undefined : 'assign-select'}
-                      checked={isSelected}
-                      onChange={() => onToggleSelected(c.efr_id, showingSearch ? 'search' : 'top10')}
-                      aria-label={`Select ${c.efr_name}`}
-                      className="h-4 w-4 cursor-pointer accent-primary align-middle"
-                    />
+                    <span
+                      className="inline-flex"
+                      title={offerBlocked ? offerEligibility.explanation : undefined}
+                      tabIndex={offerBlocked ? 0 : undefined}
+                      role={offerBlocked ? 'note' : undefined}
+                      aria-label={offerBlocked
+                        ? `${c.efr_name} cannot be selected. ${offerEligibility.explanation}`
+                        : undefined}
+                    >
+                      <input
+                        type={multiSelect ? 'checkbox' : 'radio'}
+                        name={multiSelect ? undefined : 'assign-select'}
+                        checked={isSelected}
+                        disabled={offerBlocked}
+                        onChange={() => onToggleSelected(c.efr_id, showingSearch ? 'search' : 'top10')}
+                        aria-label={offerBlocked
+                          ? `${c.efr_name} cannot be selected. ${offerEligibility.explanation}`
+                          : `Select ${c.efr_name}`}
+                        aria-describedby={offerBlocked ? lifecycleCellId : undefined}
+                        className="h-4 w-4 cursor-pointer accent-primary align-middle disabled:cursor-not-allowed disabled:opacity-50"
+                      />
+                    </span>
                   )}
                 </td>
               )}
@@ -254,6 +299,28 @@ export function CandidateTable({
                     )}
                   </div>
                   <div className="text-[10px] text-muted-foreground">Efr #{c.efr_id}</div>
+                </div>
+              </td>
+
+              {/* Lifecycle state and the server-provided block reason travel in
+                  the candidate row itself — never a per-technician fetch. Search
+                  deliberately includes blocked technicians for discovery, but
+                  the adjacent selection control remains disabled. */}
+              <td
+                id={lifecycleCellId}
+                className="!text-left min-w-[190px] max-w-[250px] whitespace-normal"
+              >
+                <div className="space-y-1 leading-tight">
+                  <EasyfixerLifecycleChip
+                    value={c}
+                    fallbackLabel={offerEligibility.canOffer ? 'Eligible' : 'Not Eligible'}
+                    fallbackTone={offerEligibility.canOffer ? 'emerald' : 'rose'}
+                  />
+                  {showingSearch && (offerEligibility.reason || offerBlocked) && (
+                    <p className={offerBlocked ? 'text-[10px] text-rose-700' : 'text-[10px] text-muted-foreground'}>
+                      {offerEligibility.reason ?? offerEligibility.explanation}
+                    </p>
+                  )}
                 </div>
               </td>
 

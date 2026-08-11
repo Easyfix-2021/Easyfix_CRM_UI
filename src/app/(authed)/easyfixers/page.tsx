@@ -1,5 +1,6 @@
 'use client';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Search, MapPin } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -34,7 +35,7 @@ import { cn, formatDate, formatEasyfixerName } from '@/lib/utils';
 import { maskMobile } from '@/lib/format';
 import { EasyfixerModal, type EasyfixerModalMode } from '@/components/easyfixer/EasyfixerModal';
 import { EasyfixerActionMenu } from '@/components/easyfixer/EasyfixerActionMenu';
-import { EasyfixerStatusDialog } from '@/components/easyfixer/EasyfixerStatusDialog';
+import { EasyfixerLifecycleChip } from '@/components/easyfixer/EasyfixerLifecycleChip';
 import { EasyfixerTransactionsModal } from '@/components/easyfixer/EasyfixerTransactionsModal';
 import { EasyfixerClientMappingModal } from '@/components/easyfixer/EasyfixerClientMappingModal';
 import { EasyfixerDeepSkillModal } from '@/components/easyfixer/EasyfixerDeepSkillModal';
@@ -42,6 +43,17 @@ import { LiveLocationPopover } from '@/components/location/LiveLocationPopover';
 import { cycleSort, SortHeader, type SortDir } from '@/lib/use-sort';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
+import {
+  EASYFIXER_LIFECYCLE_STATUSES,
+  lifecycleLabel,
+  type LifecycleRowFields,
+} from '@/lib/easyfixer-lifecycle';
+
+const EasyfixerStatusDialog = dynamic(
+  () => import('@/components/easyfixer/EasyfixerStatusDialog')
+    .then((module) => module.EasyfixerStatusDialog),
+  { ssr: false },
+);
 
 /*
  * Manage Easyfixers — parity rewrite of the legacy CRM page.
@@ -53,7 +65,7 @@ import { actionFlags } from '@/lib/permissions';
  * pagination are the only fetch triggers.
  */
 
-type Ef = {
+type Ef = LifecycleRowFields & {
   efr_id: number; efr_name: string; efr_first_name: string | null; efr_last_name: string | null;
   efr_no: string; efr_email: string | null;
   efr_cityId: number | null; city_name: string | null;
@@ -239,6 +251,7 @@ const DEFAULT_FILTERS = {
   mobileNo: '',
   efAccount: '',         // under_master | master | individual
   status: '1',           // Active default per screenshot
+  lifecycleStatus: '',   // '' = All (no filter) | UPPER_SNAKE lifecycle status
   stateId: '',
   cityId: '',
   serviceCategory: '',
@@ -253,6 +266,17 @@ const DEFAULT_FILTERS = {
 
 type Filters = typeof DEFAULT_FILTERS;
 
+/*
+ * Lifecycle-status filter options — reuse the canonical status list + label map
+ * (no second hardcoded list). Value is the UPPER_SNAKE status the BE's
+ * `lifecycleStatus` param expects; the SearchSelect placeholder covers "All"
+ * (empty value = no filter).
+ */
+const LIFECYCLE_STATUS_OPTS = EASYFIXER_LIFECYCLE_STATUSES.map((s) => ({
+  value: s,
+  label: lifecycleLabel(s),
+}));
+
 function buildQuery(f: Filters, extras: Record<string, string | number | undefined> = {}) {
   const q: Record<string, string | number | undefined> = { ...extras };
   if (f.easyfixerId) q.easyfixerId = f.easyfixerId;
@@ -260,6 +284,10 @@ function buildQuery(f: Filters, extras: Record<string, string | number | undefin
   if (f.mobileNo) q.mobileNo = f.mobileNo;
   if (f.efAccount) q.efAccount = f.efAccount;
   if (f.status !== '') q.status = f.status;
+  // Lifecycle-status filter (13-state technician machine). Sent as the canonical
+  // UPPER_SNAKE value; empty = All (no filter). Independent of the coarse
+  // `status` bucket param above.
+  if (f.lifecycleStatus) q.lifecycleStatus = f.lifecycleStatus;
   if (f.stateId) q.stateId = f.stateId;
   if (f.cityId) q.cityId = f.cityId;
   if (f.serviceCategory) q.serviceCategory = f.serviceCategory;
@@ -483,7 +511,11 @@ export default function EasyfixersPage() {
    * Future easyfixer-specific actions should also use bare names here
    * to stay consistent with the Legacy CRM seed.
    */
-  const can = actionFlags(me, ['isEdit', 'isProfileUpdateLinkSend', 'isEasyfixerTempInactive']);
+  const can = actionFlags(me, [
+    'isEdit',
+    'isEasyfixerTempInactive',
+    'isProfileUpdateLinkSend',
+  ]);
   const searchParams = useSearchParams();
   // Total comes from the base list response; rows are stored separately
   // so we can mutate them in place when aggregates/attendance land.
@@ -532,7 +564,7 @@ export default function EasyfixersPage() {
   const [clientMappingFor, setClientMappingFor] = useState<Ef | null>(null);
   const [transactionsFor, setTransactionsFor] = useState<Ef | null>(null);
   const [deepSkillFor, setDeepSkillFor] = useState<Ef | null>(null);
-  // The row whose Deactivate/Reactivate dialog is open (null = closed).
+  // The row whose canonical lifecycle + audit dialog is open (null = closed).
   const [statusFor, setStatusFor] = useState<Ef | null>(null);
   // setTimeout(0): same Radix DropdownMenu → Dialog race as openSendDialog — open
   // synchronously and the menu's teardown dismisses the just-mounted dialog
@@ -1046,7 +1078,10 @@ export default function EasyfixersPage() {
               counts={statusCounts}
               activeStatus={filters.status}
               onPick={(s) => {
-                const next = { ...filters, status: s };
+                // Legacy status bucket and the lifecycle-status filter are the
+                // same dimension — picking one clears the other (else the
+                // backend ANDs them, e.g. Active + Blacklisted → zero rows).
+                const next = { ...filters, status: s, lifecycleStatus: '' };
                 setFilters(next);
                 setPage(0);
                 load(true, next, 0);
@@ -1107,24 +1142,24 @@ export default function EasyfixersPage() {
             </Field>
             <Field label="Status">
               {/*
-                * 6-status enum (2026-06-08) — matches legacy CRM dropdown.
-                * Value=0 is "All". Default selection is '1' (Active) set
-                * in DEFAULT_FILTERS. The BE applies a priority-aware
-                * WHERE clause per value (see easyfixer.service.js list()).
+                * Lifecycle-status filter (2026-08). The Status dropdown now
+                * offers the full technician-lifecycle machine (New … Suspended)
+                * instead of the coarse Active/Inactive buckets. Selecting one
+                * sends `lifecycleStatus=<UPPER_SNAKE>` to the list endpoint;
+                * empty value (placeholder "All") = no lifecycle filter. Options
+                * reuse EASYFIXER_LIFECYCLE_STATUSES + the shared label map.
                 */}
               <SearchSelect
                 placeholder="All"
-                value={filters.status}
-                onChange={(v) => setFilters({ ...filters, status: v })}
-                /* Only Active / Inactive / All — the other legacy buckets
-                   (Idle, Not Eligible, Not Suitable, Registration In Progress)
-                   are all intrinsically UNVERIFIED, so under the verified-only
-                   view (buildQuery forces isVerified) they'd always be empty. */
-                options={[
-                  { value: '0', label: 'All' },
-                  { value: '1', label: 'Active' },
-                  { value: '2', label: 'Inactive' },
-                ]}
+                value={filters.lifecycleStatus}
+                onChange={(v) => setFilters({
+                  ...filters,
+                  lifecycleStatus: v,
+                  // Clear the legacy status bucket so it doesn't AND with the
+                  // lifecycle filter (Active + Blacklisted → zero rows).
+                  status: v ? '' : filters.status,
+                })}
+                options={LIFECYCLE_STATUS_OPTS}
               />
             </Field>
           </div>
@@ -1368,12 +1403,12 @@ export default function EasyfixersPage() {
                   row={row}
                   canEdit={!!can.isEdit}
                   canSend={!!can.isProfileUpdateLinkSend}
-                  canToggleStatus={!!can.isEdit}
+                  canManageLifecycle={!!can.isEdit}
                   isProd={isProd}
                   isSending={sendingFor.has(row.e.efr_id)}
                   isCopyingDevUrl={copyingDevUrlFor.has(row.e.efr_id)}
                   onEdit={onRowEdit}
-                  onToggleStatus={openStatusDialog}
+                  onLifecycle={openStatusDialog}
                   onClientMapping={openClientMapping}
                   onTransactions={openTransactions}
                   onAssessment={onRowAssessment}
@@ -1446,10 +1481,15 @@ export default function EasyfixersPage() {
       />
       <EasyfixerStatusDialog
         open={statusFor != null}
-        easyfixer={statusFor}
-        canScheduleReactivation={!!can.isEasyfixerTempInactive}
+        easyfixerId={statusFor?.efr_id ?? null}
+        easyfixerName={statusFor?.efr_name ?? null}
+        canChange={!!can.isEdit}
+        canSchedule={!!can.isEasyfixerTempInactive}
         onClose={() => setStatusFor(null)}
-        onDone={() => { setStatusFor(null); load(); }}
+        onChanged={() => {
+          invalidateStatusCounts();
+          void load();
+        }}
       />
 
       <EasyfixerTransactionsModal
@@ -1513,14 +1553,14 @@ type DisplayRow = {
  * merges replace row objects immutably, so affected rows still re-render.
  */
 const EfRow = memo(function EfRow({
-  row, canEdit, canSend, canToggleStatus, isProd, isSending, isCopyingDevUrl,
+  row, canEdit, canSend, canManageLifecycle, isProd, isSending, isCopyingDevUrl,
   onEdit, onClientMapping, onTransactions, onAssessment, onLiveLocation,
-  onSendProfileUpdateLink, onCopyDevUrl, onToggleStatus, onOpenCsvModal, onOpenDeepSkillModal,
+  onSendProfileUpdateLink, onCopyDevUrl, onLifecycle, onOpenCsvModal, onOpenDeepSkillModal,
 }: {
   row: DisplayRow;
   canEdit: boolean;
   canSend: boolean;
-  canToggleStatus: boolean;
+  canManageLifecycle: boolean;
   isProd: boolean;
   isSending: boolean;
   isCopyingDevUrl: boolean;
@@ -1531,7 +1571,7 @@ const EfRow = memo(function EfRow({
   onLiveLocation: (e: Ef) => void;
   onSendProfileUpdateLink: (e: Ef) => void;
   onCopyDevUrl: (e: Ef) => void;
-  onToggleStatus: (e: Ef) => void;
+  onLifecycle: (e: Ef) => void;
   onOpenCsvModal: (title: string, items: CsvCellItem[]) => void;
   onOpenDeepSkillModal: (e: Ef) => void;
 }) {
@@ -1633,9 +1673,11 @@ const EfRow = memo(function EfRow({
           : <span className="text-muted-foreground">…</span>}
       </td>
       <td className="!text-center truncate">
-        {e.efr_status_label
-          ? <StatusChip tone={statusLabelTone(e.efr_status_label)} size="sm">{e.efr_status_label}</StatusChip>
-          : <span className="text-muted-foreground">—</span>}
+        <EasyfixerLifecycleChip
+          value={e}
+          fallbackLabel={e.efr_status_label}
+          fallbackTone={statusLabelTone(e.efr_status_label)}
+        />
       </td>
       <td className="!text-right stick-col stick-right">
         {/*
@@ -1664,9 +1706,8 @@ const EfRow = memo(function EfRow({
             onAssessment={onAssessment}
             onSendProfileUpdateLink={() => onSendProfileUpdateLink(e)}
             onCopyDevUrl={() => onCopyDevUrl(e)}
-            canToggleStatus={canToggleStatus}
-            isInactive={!Number(e.efr_status)}
-            onToggleStatus={() => onToggleStatus(e)}
+            canManageLifecycle={canManageLifecycle}
+            onLifecycle={() => onLifecycle(e)}
             isSending={isSending}
             isCopyingDevUrl={isCopyingDevUrl}
           />

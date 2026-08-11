@@ -50,6 +50,11 @@ import { useFetch, invalidateFetch, useDebouncedValue } from '@/lib/hooks';
 import { InfoTooltip } from '@/components/ui/tooltip';
 import { TablePagination, type TablePageSize } from '@/components/ui/table-pagination';
 import { showToast } from '@/components/ui/toast';
+import {
+  candidateJobOfferEligibility,
+  candidateVisibleOnRankedSurface,
+  mergeCandidatesByActiveSurface,
+} from '@/lib/easyfixer-lifecycle';
 import { JobContextPanel, type JobContextData } from './JobContextPanel';
 import { CandidateTable, PincodeListModal, type ScheduleCandidate } from './CandidateTable';
 import { AddRemarksDialog } from './AddRemarksDialog';
@@ -153,6 +158,15 @@ export function AssignTechnicianModal({
   // Single-select toggle: picking one replaces the prior pick; re-clicking the
   // same row clears it. Never grows beyond one entry.
   function toggleSelected(efrId: number, source: 'top10' | 'search') {
+    const candidate = knownCandidatesById.get(efrId);
+    if (candidate) {
+      const eligibility = candidateJobOfferEligibility(candidate);
+      if (!eligibility.canOffer) {
+        setErr(eligibility.explanation);
+        return;
+      }
+    }
+    setErr(null);
     setSelected((prev) => (prev.has(efrId) ? new Map() : new Map([[efrId, source]])));
   }
 
@@ -191,9 +205,51 @@ export function AssignTechnicianModal({
   const searchRes = useFetch<SearchResponse>(searchKey, { enabled: !!searchKey });
 
   const showingSearch = !!debouncedTerm;
-  const rows: ScheduleCandidate[] = showingSearch
-    ? (searchRes.data?.candidates ?? [])
-    : (topData?.candidates ?? []);
+  const searchData = searchRes.data
+    && (!searchRes.data.job || Number(searchRes.data.job.job_id) === Number(jobId))
+    ? searchRes.data
+    : null;
+  const responseRows = useMemo<ScheduleCandidate[]>(() => (
+    showingSearch
+      ? (searchData?.candidates ?? [])
+      : (topData?.candidates ?? [])
+  ), [showingSearch, searchData?.candidates, topData?.candidates]);
+  // Search intentionally keeps blocked lifecycle states visible (with the
+  // reason and a disabled control). Top-10 is the actionable ranking surface,
+  // so a defensive client check also hides any non-offerable row should an old
+  // or partially deployed backend accidentally return one.
+  const rows = useMemo<ScheduleCandidate[]>(() => (
+    showingSearch
+      ? responseRows
+      : responseRows.filter(candidateVisibleOnRankedSurface)
+  ), [responseRows, showingSearch]);
+  // Keep the latest copy of every candidate already fetched by either bounded
+  // endpoint. This lets a lifecycle refresh revoke a prior selection without a
+  // per-row request, even after the operator switches between Top-10 and Search.
+  const knownCandidatesById = useMemo(() => mergeCandidatesByActiveSurface(
+    topData?.candidates ?? [],
+    searchData?.candidates ?? [],
+    showingSearch,
+  ), [searchData?.candidates, showingSearch, topData?.candidates]);
+
+  const blockedSelectedCandidate = useMemo(() => {
+    for (const id of selected.keys()) {
+      const candidate = knownCandidatesById.get(id);
+      if (candidate && !candidateJobOfferEligibility(candidate).canOffer) return candidate;
+    }
+    return null;
+  }, [knownCandidatesById, selected]);
+
+  useEffect(() => {
+    if (!blockedSelectedCandidate) return;
+    setSelected((previous) => {
+      if (!previous.has(blockedSelectedCandidate.efr_id)) return previous;
+      const next = new Map(previous);
+      next.delete(blockedSelectedCandidate.efr_id);
+      return next;
+    });
+    setErr(candidateJobOfferEligibility(blockedSelectedCandidate).explanation);
+  }, [blockedSelectedCandidate]);
   // `top.loading` is FALSE while a stale payload is on screen (the hook reports
   // `refreshing` instead) — treat "no payload for THIS job yet" as loading.
   // `rescheduling` forces the loading state during the post-reschedule refetch
@@ -222,7 +278,15 @@ export function AssignTechnicianModal({
     if (!jobId) return;
     const id = [...selected.keys()][0];
     if (id == null) return;
-    const cand = rows.find((r) => r.efr_id === id);
+    const cand = knownCandidatesById.get(id);
+    if (cand) {
+      const eligibility = candidateJobOfferEligibility(cand);
+      if (!eligibility.canOffer) {
+        setSelected(new Map());
+        setErr(eligibility.explanation);
+        return;
+      }
+    }
     const name = cand?.efr_name ?? `Efr #${id}`;
     const noSkill = cand ? cand.deep_skill_match !== true : false;
     const ok = await confirmAction({
@@ -350,7 +414,7 @@ export function AssignTechnicianModal({
                         <li><strong>Pincode</strong> — the technician&apos;s current pincode, matched on a full 6 digits</li>
                         <li><strong>Technician Id</strong> — exact match</li>
                       </ul>
-                      <div className="text-slate-500">Search ignores the Top 10 ranking filters, so it finds any <strong>Active</strong> &amp; <strong>Verified</strong> technician — including ones outside the job&apos;s area.</div>
+                      <div className="text-slate-500">Search can find technicians outside the Top 10 and in any lifecycle status. Each result shows its status and reason; only rows marked eligible can be assigned.</div>
                     </div>
                   </InfoTooltip>
                 )}
@@ -361,7 +425,7 @@ export function AssignTechnicianModal({
                       <div>Technicians must clear every filter, then are ranked in priority order.</div>
                       <div className="font-medium text-slate-900">Filters</div>
                       <ul className="list-disc ml-4 space-y-0.5">
-                        <li><strong>Active</strong> &amp; <strong>Verified</strong> profile</li>
+                        <li>Lifecycle is eligible to <strong>receive new jobs</strong> and the profile is <strong>verified</strong></li>
                         <li>Not already <strong>rejected / rescheduled off</strong> this job</li>
                         <li>Holds an <strong>active Deep Skill</strong> matching the job&apos;s <strong>Service Category &amp; Type</strong> — if none match, all in-area technicians are shown instead</li>
                         <li>In the job&apos;s <strong>area</strong> — same <strong>city</strong>, widening to the pincode&apos;s <strong>zone(s)</strong> when fewer than 10 qualify</li>
@@ -530,7 +594,10 @@ export function AssignTechnicianModal({
             {canCommit && (
               <Button
                 onClick={commitAssign}
-                disabled={!jobId || committing || selected.size !== 1}
+                disabled={!jobId || committing || selected.size !== 1 || blockedSelectedCandidate != null}
+                title={blockedSelectedCandidate
+                  ? candidateJobOfferEligibility(blockedSelectedCandidate).explanation
+                  : undefined}
               >
                 {committing ? <Loader2 className="h-4 w-4 animate-spin" /> : verb}
               </Button>

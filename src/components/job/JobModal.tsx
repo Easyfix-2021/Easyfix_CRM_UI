@@ -67,6 +67,7 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { transitionAllowed } from '@/lib/job-stages';
+import { candidateJobOfferEligibility } from '@/lib/easyfixer-lifecycle';
 
 /*
  * Unified Job modal — create | view | edit in one component.
@@ -10201,7 +10202,15 @@ function AutoAssignDialog({ open, onClose, jobId, currentTech, onAssigned }: {
   }
 
   const isReassign = !!currentTech;
-  const eligibleCandidates = data?.candidates ?? [];
+  // This legacy dialog is currently entry-point gated off, but keep its ranked
+  // surface safe if it is re-enabled: only the already-bounded, server-returned
+  // candidates whose lifecycle permits new work may render an assign action.
+  const eligibleCandidates = useMemo(
+    () => (data?.candidates ?? []).filter(
+      (candidate) => candidateJobOfferEligibility(candidate).canOffer,
+    ),
+    [data?.candidates],
+  );
   const top = eligibleCandidates[0];
 
   return (

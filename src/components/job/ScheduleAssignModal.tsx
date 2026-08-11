@@ -63,6 +63,11 @@ import { displaySlot } from '@/lib/job-slots';
 import { InfoTooltip } from '@/components/ui/tooltip';
 import { TablePagination, type TablePageSize } from '@/components/ui/table-pagination';
 import { showToast } from '@/components/ui/toast';
+import {
+  candidateJobOfferEligibility,
+  candidateVisibleOnRankedSurface,
+  mergeCandidatesByActiveSurface,
+} from '@/lib/easyfixer-lifecycle';
 import { AddRemarksDialog } from './AddRemarksDialog';
 import { CancelWithReasonDialog } from './CancelWithReasonDialog';
 import { RescheduleDialog } from './RescheduleDialog';
@@ -324,6 +329,15 @@ export function ScheduleAssignModal({
   // replaces the prior pick, re-clicking clears it). `offerMode` is derived
   // below from the candidates response and read here at call time (closure).
   function toggleSelected(efrId: number, source: 'top10' | 'search') {
+    const candidate = knownCandidatesById.get(efrId);
+    if (candidate) {
+      const eligibility = candidateJobOfferEligibility(candidate);
+      if (!eligibility.canOffer) {
+        setErr(eligibility.explanation);
+        return;
+      }
+    }
+    setErr(null);
     setSelected((prev) => {
       if (!offerMode) {
         return prev.has(efrId) ? new Map<number, 'top10' | 'search'>() : new Map([[efrId, source]]);
@@ -459,6 +473,10 @@ export function ScheduleAssignModal({
     ? `/admin/jobs/${jobId}/candidates/search?term=${encodeURIComponent(debouncedTerm)}${seeded ? scheduleQs : ''}`
     : null;
   const searchRes = useFetch<SearchResponse>(searchKey, { enabled: !!searchKey });
+  const searchData = searchRes.data
+    && (!searchRes.data.job || Number(searchRes.data.job.job_id) === Number(jobId))
+    ? searchRes.data
+    : null;
 
   // ── Offered-to section ──────────────────────────────────────────────
   // Who the job is currently offered to (open offers). Keyed on jobId so it
@@ -481,9 +499,45 @@ export function ScheduleAssignModal({
   // top-10. Keying off the debounced value avoids a flash of the empty search
   // table while the operator is still mid-word.
   const showingSearch = !!debouncedTerm;
-  const rows: ScheduleCandidate[] = showingSearch
-    ? (searchRes.data?.candidates ?? [])
-    : (topData?.candidates ?? []);
+  const responseRows = useMemo<ScheduleCandidate[]>(() => (
+    showingSearch
+      ? (searchData?.candidates ?? [])
+      : (topData?.candidates ?? [])
+  ), [showingSearch, searchData?.candidates, topData?.candidates]);
+  // Search is a discovery surface: keep every lifecycle state visible and let
+  // CandidateTable explain why a row cannot be offered. Top-10 is actionable,
+  // therefore only server-eligible rows are allowed onto that ranked surface.
+  const rows = useMemo<ScheduleCandidate[]>(() => (
+    showingSearch
+      ? responseRows
+      : responseRows.filter(candidateVisibleOnRankedSurface)
+  ), [responseRows, showingSearch]);
+  // Union the two already-bounded responses locally. This is used only to
+  // revoke stale selections; it does not issue a request per technician.
+  const knownCandidatesById = useMemo(() => mergeCandidatesByActiveSurface(
+    topData?.candidates ?? [],
+    searchData?.candidates ?? [],
+    showingSearch,
+  ), [searchData?.candidates, showingSearch, topData?.candidates]);
+
+  const blockedSelectedCandidate = useMemo(() => {
+    for (const id of selected.keys()) {
+      const candidate = knownCandidatesById.get(id);
+      if (candidate && !candidateJobOfferEligibility(candidate).canOffer) return candidate;
+    }
+    return null;
+  }, [knownCandidatesById, selected]);
+
+  useEffect(() => {
+    if (!blockedSelectedCandidate) return;
+    setSelected((previous) => {
+      if (!previous.has(blockedSelectedCandidate.efr_id)) return previous;
+      const next = new Map(previous);
+      next.delete(blockedSelectedCandidate.efr_id);
+      return next;
+    });
+    setErr(candidateJobOfferEligibility(blockedSelectedCandidate).explanation);
+  }, [blockedSelectedCandidate]);
   // `top.loading` is FALSE while a stale payload is on screen (the hook reports
   // `refreshing` instead). Treat "no payload for THIS job yet" as loading, or the
   // list would render another job's technicians as if settled.
@@ -512,6 +566,18 @@ export function ScheduleAssignModal({
     if (!jobId) return;
     const ids = [...selected.keys()];
     if (ids.length === 0) return;
+    const blocked = ids
+      .map((id) => knownCandidatesById.get(id))
+      .find((candidate) => candidate && !candidateJobOfferEligibility(candidate).canOffer);
+    if (blocked) {
+      setSelected((previous) => {
+        const next = new Map(previous);
+        next.delete(blocked.efr_id);
+        return next;
+      });
+      setErr(candidateJobOfferEligibility(blocked).explanation);
+      return;
+    }
     const techCount = ids.length;
     const techLabel = `${techCount} technician${techCount === 1 ? '' : 's'}`;
     const ok = await confirmAction({
@@ -578,7 +644,15 @@ export function ScheduleAssignModal({
     if (!jobId) return;
     const id = [...selected.keys()][0];
     if (id == null) return;
-    const cand = rows.find((r) => r.efr_id === id);
+    const cand = knownCandidatesById.get(id);
+    if (cand) {
+      const eligibility = candidateJobOfferEligibility(cand);
+      if (!eligibility.canOffer) {
+        setSelected(new Map());
+        setErr(eligibility.explanation);
+        return;
+      }
+    }
     const name = cand?.efr_name ?? `Efr #${id}`;
     const ok = await confirmAction({
       title: `Assign Job #${jobId} to ${name}?`,
@@ -764,7 +838,7 @@ export function ScheduleAssignModal({
                         <li><strong>Pincode</strong> — the technician&apos;s current pincode, matched on a full 6 digits</li>
                         <li><strong>Technician Id</strong> — exact match</li>
                       </ul>
-                      <div className="text-slate-500">Search ignores the Top 10 ranking filters, so it finds any <strong>Active</strong> &amp; <strong>Verified</strong> technician — including ones outside the job&apos;s area.</div>
+                      <div className="text-slate-500">Search can find technicians outside the Top 10 and in any lifecycle status. Each result shows its status and reason; only rows marked eligible can be offered or assigned.</div>
                     </div>
                   </InfoTooltip>
                 )}
@@ -775,7 +849,7 @@ export function ScheduleAssignModal({
                       <div>Technicians must clear every filter, then are ranked in priority order.</div>
                       <div className="font-medium text-slate-900">Filters</div>
                       <ul className="list-disc ml-4 space-y-0.5">
-                        <li><strong>Active</strong> &amp; <strong>Verified</strong> profile</li>
+                        <li>Lifecycle is eligible to <strong>receive new jobs</strong> and the profile is <strong>verified</strong></li>
                         <li>Not already <strong>rejected / rescheduled off</strong> this job</li>
                         <li>Holds an <strong>active Deep Skill</strong> matching the job&apos;s <strong>Service Category &amp; Type</strong> — if none match, all in-area technicians are shown instead</li>
                         <li>In the job&apos;s <strong>area</strong> — same <strong>city</strong>, widening to the pincode&apos;s <strong>zone(s)</strong> (by home zone, current pincode, or serviceable pincodes) when fewer than 10 qualify</li>
@@ -1002,10 +1076,13 @@ export function ScheduleAssignModal({
                  */
                 disabled={!jobId || committing
                   || (offerMode ? selected.size === 0 : selected.size !== 1)
+                  || blockedSelectedCandidate != null
                   || (offerMode && appointmentIsPast(job?.requested_date_time))}
-                title={offerMode && appointmentIsPast(job?.requested_date_time)
-                  ? 'The appointment time has passed — reschedule the job before offering it.'
-                  : undefined}
+                title={blockedSelectedCandidate
+                  ? candidateJobOfferEligibility(blockedSelectedCandidate).explanation
+                  : offerMode && appointmentIsPast(job?.requested_date_time)
+                    ? 'The appointment time has passed — reschedule the job before offering it.'
+                    : undefined}
               >
                 {committing
                   ? <Loader2 className="h-4 w-4 animate-spin" />
