@@ -74,6 +74,9 @@ export type ScheduleCandidate = {
   deep_skill_status: DeepSkillStatus;
   deep_skill_match: boolean;
   worked_in_category: boolean;
+  /* Same CLIENT VERTICAL (tbl_vertical_mapping) — NOT the service category.
+     Optional so a pre-deploy API response renders "No" instead of breaking. */
+  worked_for_same_vertical?: boolean;
   worked_for_client: boolean;
   payment_mode: string | null;
   account_balance: number;
@@ -121,7 +124,7 @@ export function CandidateTable({
 }) {
   // +1 column when the operator can commit: the select control (checkbox in
   // offer mode, radio in direct-assign mode).
-  const COLS = canCommit ? 16 : 15;
+  const COLS = canCommit ? 17 : 16;
   // Multiple job dialogs can remain mounted at once. React's instance-scoped
   // id prevents aria-describedby collisions for the same technician id.
   const tableInstanceId = useId();
@@ -178,6 +181,7 @@ export function CandidateTable({
             <th className="!text-left min-w-[180px]">Deep Skill Status</th>
             <th className="!text-center">Deep Skill Match</th>
             <th className="!text-center">Worked in Category?</th>
+            <th className="!text-center">Worked for Vertical?</th>
             <th className="!text-center">Worked for Client?</th>
             <th className="!text-center">
               <span className="inline-flex items-center gap-1">
@@ -364,6 +368,10 @@ export function CandidateTable({
 
               {/* Worked in Category? */}
               <td className="!text-center"><YesNo value={c.worked_in_category} /></td>
+
+              {/* Worked for Vertical? — same CLIENT VERTICAL (tbl_vertical_mapping),
+                  distinct from the service-category column above. */}
+              <td className="!text-center"><YesNo value={c.worked_for_same_vertical === true} /></td>
 
               {/* Worked for Client? */}
               <td className="!text-center"><YesNo value={c.worked_for_client} /></td>
