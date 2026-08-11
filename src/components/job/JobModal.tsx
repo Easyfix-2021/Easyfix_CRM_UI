@@ -5105,23 +5105,26 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
     // note in perJobFields, falling back to the top-level value).
     if (submitVariant === 'book') {
       const noteCats = (f.fk_service_catg_ids || '').split(',').filter(Boolean);
+      // Per-tab notes in perJobFields[cid] only exist once the operator has 2+
+      // category tabs. With a single (or zero) category, getActiveCatId()
+      // returns '' so the note the operator types is written to the shared `f`,
+      // while perJobFields[cid] still holds the empty-string seed captured when
+      // the category was first selected. Reading that seed via `?? f` kept the
+      // '' (nullish-coalescing does NOT fall back on empty string), so a filled
+      // note validated as empty (the reported "NA still errors" bug). Mirror the
+      // write path: multi-tab → read the per-tab slot; single/zero → read `f`.
+      const isMultiCat = noteCats.length >= 2;
       const noteCatName = (id: string) =>
         (lk.serviceCategories || []).find((c) => String(c.service_catg_id) === id)?.service_catg_name || `Category ${id}`;
-      const missingNotes = (noteCats.length > 0 ? noteCats : ['']).filter((cid) => {
-        // For a real category id read its per-tab note (falling back to the
-        // top-level value); for the single-category case (cid === '') read via
-        // getJobField, which resolves perJobFields[activeCat] ?? f — the SAME
-        // value the operator typed. Reading f directly here missed the note when
-        // it was stored per-tab (single category with an active tab), so a typed
-        // "NA" wrongly read as empty.
-        const note = cid
-          ? (perJobFields[cid]?.efr_special_notes ?? f.efr_special_notes)
-          : (getJobField('efr_special_notes') as string | undefined);
+      const missingNotes = (isMultiCat ? noteCats : ['']).filter((cid) => {
+        const note = (isMultiCat && cid)
+          ? perJobFields[cid]?.efr_special_notes
+          : f.efr_special_notes;
         return !String(note || '').trim();
       });
       if (missingNotes.length > 0) {
         setError(
-          noteCats.length > 1
+          isMultiCat
             ? `"Anything Handyman should keep in mind?" is required for: ${missingNotes.map(noteCatName).join(', ')}.`
             : '"Anything Handyman should keep in mind?" is required.',
         );
@@ -5660,6 +5663,10 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
               // sibling carries ONE reference (the BE honours an explicit input;
               // the parent already has REF-{parentJobId}, back-filled on confirm).
               job_reference_id: (saved.job_reference_id as string | undefined) || undefined,
+              // Family link — the confirmed PARENT job's id, so create() records
+              // a linked_job(parent→child) row for each sibling and inherits the
+              // parent's custom_property.
+              primary_job_id: Number((saved as Record<string, unknown>).job_id) || undefined,
               // Inherit the parent's owner so the family shares one job_owner
               // (else create() defaults each sibling to the confirming operator,
               // diverging from the parent). Null parent owner → create default.
@@ -6072,8 +6079,17 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
            * slots fall back to the top-level `f` values (so a tab
            * the operator never touched still inherits the form's
            * default values rather than going blank).
+           *
+           * Overrides apply ONLY in true multi-tab mode (2+ categories).
+           * With a single category the operator edits the shared `f`
+           * (getActiveCatId() returns '' below 2 categories), while
+           * perJobFields[catId] still holds the empty seed captured at
+           * category-select time. Applying that seed made `override.x ?? f.x`
+           * resolve to the seed's '' and silently DROP the typed Handyman
+           * note / Special Comments and ignore the Helper/Material toggles.
+           * So skip the override map unless there are 2+ category tabs.
            */
-          const override = (perJobFields[String(catId)] || {}) as PerJobOverride;
+          const override = ((categoryIds.length >= 2 ? perJobFields[String(catId)] : undefined) || {}) as PerJobOverride;
           const payload = {
             ...basePayload,
             // Share ONE job_reference_id across the whole multi-category family:
@@ -6082,6 +6098,10 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             // value. The BE honours an explicit input.job_reference_id, so all N
             // rows end up with the first job's reference.
             job_reference_id: (created[0]?.job_reference_id as string | undefined) || undefined,
+            // Family link — the FIRST sibling's job_id (undefined on iteration 1,
+            // so only children carry it). The BE records a linked_job(parent→child)
+            // row and inherits the parent's custom_property off this id.
+            primary_job_id: (created[0] as { job_id?: number } | undefined)?.job_id,
             // Per-tab overrides take precedence over basePayload's
             // common values. `??` falls back to f-derived values.
             remarks:           (override.remarks ?? f.remarks) || undefined,

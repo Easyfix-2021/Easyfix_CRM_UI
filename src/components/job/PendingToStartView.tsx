@@ -78,6 +78,10 @@ const JOBS_MAX_LIMIT = 500;
 type PendingJobRow = JobAgeFields & {
   job_id: number;
   job_status: number;
+  // Family reference shared across sibling jobs of a multi-category booking —
+  // already on the shared /admin/jobs LIST projection; surfaced so ops can spot
+  // linked orders. Optional so older API responses don't break the type narrow.
+  job_reference_id?: string | null;
   fk_easyfixter_id: number | null;
   easyfixer_name: string | null;
   // Assigned technician's mobile (ef.efr_no AS easyfixer_mobile) — masked in
@@ -527,6 +531,7 @@ function PendingSection({
                   ("soonest appointment first" is the order ops triage in), so a
                   clickable Age header would have nothing to drive. */}
               <th className="w-16">Age</th>
+              <th>Job Ref</th>
               <th>Technician</th>
               <th>City</th>
               <th>Client</th>
@@ -542,7 +547,7 @@ function PendingSection({
             {loading &&
               Array.from({ length: 4 }).map((_, i) => (
                 <tr key={`sk-${i}`}>
-                  {Array.from({ length: 11 }).map((_, c) => (
+                  {Array.from({ length: 12 }).map((_, c) => (
                     <td key={c}>
                       <div className="h-3 w-24 rounded bg-muted animate-pulse" />
                     </td>
@@ -551,7 +556,7 @@ function PendingSection({
               ))}
             {!loading && rows.length === 0 && (
               <tr>
-                <td colSpan={11} className="text-center text-muted-foreground py-8">
+                <td colSpan={12} className="text-center text-muted-foreground py-8">
                   No orders in this bucket{!isAdmin ? ' owned by you' : ''}.
                 </td>
               </tr>
@@ -568,6 +573,7 @@ function PendingSection({
                   <td className="text-xs whitespace-nowrap tabular-nums align-top" title={jobAgeTitle(j)}>
                     {formatJobAge(j)}
                   </td>
+                  <td className="text-xs whitespace-nowrap align-top">{j.job_reference_id ?? '—'}</td>
                   {/*
                     * Technician — name on top (may wrap to multiple lines) and,
                     * below it, the masked mobile as a single-line click-to-call.

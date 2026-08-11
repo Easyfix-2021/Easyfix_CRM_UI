@@ -45,6 +45,11 @@ export type UnconfirmedJobRow = JobAgeFields & {
   job_id: number;
   job_status: number;
   client_ref_id: string | null;
+  // Family reference shared across sibling jobs of a multi-category booking.
+  // Already on the shared /admin/jobs LIST projection; surfaced as a column so
+  // ops can spot linked orders. Optional so older API responses don't break the
+  // type narrow.
+  job_reference_id?: string | null;
   // Already returned by the shared list() projection (sc.service_catg_name AS
   // service_category). Used to group multi-category siblings by client_ref_id
   // and to label the grouped modal's per-category tabs.
@@ -216,6 +221,7 @@ export function UnconfirmedJobsTable({
               Sends the shared JOB_AGE_SORT_KEY so the BE orders by precise
               seconds. */}
           <SortHeader<string> col={JOB_AGE_SORT_KEY} sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="w-16">Age</SortHeader>
+          <SortHeader<string> col="job_reference_id" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Job Ref</SortHeader>
           <SortHeader<string> col="created_date_time" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Ticket Created</SortHeader>
           <SortHeader<string> col="client_name" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Client Ref Id</SortHeader>
           <SortHeader<string> col="city_name" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>City</SortHeader>
@@ -231,9 +237,9 @@ export function UnconfirmedJobsTable({
         </tr>
       </thead>
       <tbody>
-        {loading && <tr><td colSpan={14} className="text-center py-8 text-muted-foreground">Loading…</td></tr>}
+        {loading && <tr><td colSpan={15} className="text-center py-8 text-muted-foreground">Loading…</td></tr>}
         {!loading && rows.length === 0 && (
-          <tr><td colSpan={14} className="text-center py-8 text-muted-foreground">No unconfirmed orders.</td></tr>
+          <tr><td colSpan={15} className="text-center py-8 text-muted-foreground">No unconfirmed orders.</td></tr>
         )}
         {!loading && rows.map((j) => {
           const { reason, freeText } = splitRemarks(j.remarks ?? '');
@@ -255,6 +261,7 @@ export function UnconfirmedJobsTable({
                 </span>
               </td>
               <td className="text-xs whitespace-nowrap tabular-nums" title={jobAgeTitle(j)}>{formatJobAge(j)}</td>
+              <td className="text-xs whitespace-nowrap">{j.job_reference_id ?? '—'}</td>
               <td className="text-xs whitespace-nowrap">
                 <div>{ticketTs ? formatDate(ticketTs) : '—'}</div>
               </td>

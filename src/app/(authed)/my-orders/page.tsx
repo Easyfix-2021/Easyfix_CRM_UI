@@ -750,6 +750,7 @@ export default function MyOrdersPage() {
                     accruing at the terminal event while the created timestamp
                     never moves. JOB_AGE_SORT_KEY orders by precise seconds. */}
                 <SortHeader<string> col={JOB_AGE_SORT_KEY} sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="w-16">Age</SortHeader>
+                <SortHeader<string> col="job_reference_id" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Job Ref</SortHeader>
                 <SortHeader<string> col="created_date_time" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Ticket Created Date</SortHeader>
                 <SortHeader<string> col="client_name" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Client</SortHeader>
                 {/* client_spoc_name is already on the LIST projection (LIST_COLUMNS
@@ -769,13 +770,13 @@ export default function MyOrdersPage() {
             <tbody>
               {loading && Array.from({ length: 5 }).map((_, i) => (
                 <tr key={`sk-${i}`}>
-                  {Array.from({ length: 12 }).map((_, c) => (
+                  {Array.from({ length: 13 }).map((_, c) => (
                     <td key={c}><div className="h-3 w-24 rounded bg-muted animate-pulse" /></td>
                   ))}
                 </tr>
               ))}
               {!loading && sorted.length === 0 && (
-                <tr><td colSpan={12} className="text-center text-muted-foreground py-8">
+                <tr><td colSpan={13} className="text-center text-muted-foreground py-8">
                   {psAnySet
                     ? 'No orders match these filters.'
                     : `No orders in this bucket${!isAdmin ? ' owned by you' : ''}.`}
@@ -790,6 +791,7 @@ export default function MyOrdersPage() {
                     </span>
                   </td>
                   <td className="text-xs whitespace-nowrap tabular-nums" title={jobAgeTitle(j)}>{formatJobAge(j)}</td>
+                  <td className="text-xs whitespace-nowrap">{j.job_reference_id ?? '—'}</td>
                   <td className="whitespace-nowrap">
                     <div className="text-xs">{formatDate(j.ticket_created_date_time)}</div>
                   </td>
@@ -886,6 +888,7 @@ export default function MyOrdersPage() {
                     Narrow + nowrap; sits beside the pinned Job # so it reads
                     without scrolling. */}
                 <SortHeader col={JOB_AGE_SORT_KEY} sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="w-16">Age</SortHeader>
+                <SortHeader col="job_reference_id"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Job Ref</SortHeader>
                 <SortHeader col="client_name"        sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Client</SortHeader>
                 <SortHeader col="customer_name"      sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Customer</SortHeader>
                 <SortHeader col="customer_mob_no"    sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Mobile</SortHeader>
@@ -899,13 +902,13 @@ export default function MyOrdersPage() {
             <tbody>
               {loading && Array.from({ length: 5 }).map((_, i) => (
                 <tr key={`sk-${i}`}>
-                  {Array.from({ length: 10 }).map((_, c) => (
+                  {Array.from({ length: 11 }).map((_, c) => (
                     <td key={c}><div className="h-3 w-24 rounded bg-muted animate-pulse" /></td>
                   ))}
                 </tr>
               ))}
               {!loading && sorted.length === 0 && (
-                <tr><td colSpan={10} className="text-center text-muted-foreground py-8">
+                <tr><td colSpan={11} className="text-center text-muted-foreground py-8">
                   No orders in this bucket{!isAdmin ? ' owned by you' : ''}.
                 </td></tr>
               )}
@@ -918,6 +921,7 @@ export default function MyOrdersPage() {
                     </span>
                   </td>
                   <td className="text-xs whitespace-nowrap tabular-nums" title={jobAgeTitle(j)}>{formatJobAge(j)}</td>
+                  <td className="text-xs whitespace-nowrap">{j.job_reference_id ?? '—'}</td>
                   <td className="min-w-[18rem] max-w-[26rem] break-words">{j.client_name ?? '—'}</td>
                   <td>{j.customer_name ?? '—'}</td>
                   <td className="text-xs text-muted-foreground">
