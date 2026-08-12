@@ -200,10 +200,15 @@ export function NoticeStrip() {
         </button>
       )}
 
+      {/* onRead re-requests the active list the moment the BE records the
+          read, so the blue unread dot and the "N unread" counter in the header
+          clear immediately. Without it the modal's cache eviction never reached
+          this mounted useFetch and the count only updated on a page reload. */}
       <NoticeDetailModal
         notice={openNotice}
         open={openNotice !== null}
         onClose={() => setOpenNotice(null)}
+        onRead={() => fetched.refetch()}
       />
     </Card>
   );

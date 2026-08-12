@@ -11,6 +11,7 @@ import { LiveCallProvider } from '@/components/calls/LiveCallContext';
 import { LiveCallPanel } from '@/components/calls/LiveCallPanel';
 import { WebCallProvider } from '@/components/calls/WebCallContext';
 import { WebCallPanel } from '@/components/calls/WebCallPanel';
+import { NoticeFlash } from '@/components/notice/NoticeFlash';
 
 /*
  * Client-side auth gate.
@@ -81,6 +82,11 @@ export default function AuthedLayout({ children }: { children: React.ReactNode }
           <ToastHost />
           <LiveCallPanel />
           <WebCallPanel />
+          {/* Auto-flashes unread notices one at a time on login and on each
+              in-app navigation. Root-mounted like the overlays above so it
+              survives page changes; it renders nothing when there is nothing
+              unread. See components/notice/NoticeFlash.tsx. */}
+          <NoticeFlash />
          </WebCallProvider>
         </LiveCallProvider>
       </ConfirmDialogProvider>

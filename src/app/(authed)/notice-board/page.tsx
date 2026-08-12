@@ -272,15 +272,21 @@ export default function NoticeBoardListPage() {
                     <td className="!text-right tabular-nums">{n.read_pct ?? 0}%</td>
                     <td className="!text-right">
                       <div className="inline-flex items-center gap-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setComposeMode(n.notice_id)}
-                          disabled={lockedForEdit}
-                          title={lockedForEdit ? 'Published / archived notices cannot be edited' : 'Edit'}
-                        >
-                          <Edit2 className="size-4" />
-                        </Button>
+                        {/* Only rendered when the notice is actually editable.
+                            A published/archived notice can never be edited, so
+                            a permanently-disabled pencil just invited clicks
+                            that did nothing — same conditional-render rule the
+                            Publish and Archive actions below already follow. */}
+                        {!lockedForEdit && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setComposeMode(n.notice_id)}
+                            title="Edit"
+                          >
+                            <Edit2 className="size-4" />
+                          </Button>
+                        )}
                         {n.status === 'draft' && (
                           <Button variant="ghost" size="sm" onClick={() => handlePublish(n)} title="Publish">
                             <Send className="size-4" />
@@ -290,6 +296,12 @@ export default function NoticeBoardListPage() {
                           <Button variant="ghost" size="sm" onClick={() => handleArchive(n)} title="Archive">
                             <ArchiveIcon className="size-4" />
                           </Button>
+                        )}
+                        {/* An archived notice has no available action at all.
+                            Render the table's standard em-dash so the cell
+                            reads as "nothing to do" rather than looking broken. */}
+                        {n.status === 'archived' && (
+                          <span className="text-muted-foreground pr-2">—</span>
                         )}
                       </div>
                     </td>
