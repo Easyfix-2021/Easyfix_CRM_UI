@@ -1,10 +1,11 @@
 'use client';
 
 import * as React from 'react';
-import { Calendar } from 'lucide-react';
+import { Calendar, Megaphone } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { useFetch } from '@/lib/hooks';
-import type { Holiday } from '@/lib/notice-types';
+import { NoticeDetailModal } from '@/components/notice/NoticeDetailModal';
+import type { Holiday, Notice } from '@/lib/notice-types';
 
 /*
  * Upcoming Events rail — right column of the dashboard. Lists national
@@ -30,6 +31,20 @@ import type { Holiday } from '@/lib/notice-types';
  */
 
 type Resp = { items: Holiday[]; degraded?: boolean };
+type NoticeResp = { items: Notice[] };
+
+/*
+ * The rail shows two kinds of thing on the same timeline: national holidays
+ * (external, read-only) and NOTICES that carry an `event_date` — a notice about
+ * a specific day (a celebration, a maintenance window). Ops asked for the two
+ * together so "what's coming up" is one list rather than two places to look.
+ *
+ * A notice earns its place purely by having `event_date` set; there is no
+ * guessing a date out of the title. See the Event Date field in ComposeWizard.
+ */
+type RailEntry =
+  | { kind: 'holiday'; key: string; label: string; title?: string }
+  | { kind: 'notice'; key: string; label: string; title?: string; notice: Notice };
 
 /* Day-name pill — small circle with WEEKDAY · DD MONTH */
 function DatePill({ date }: { date: string }) {
@@ -44,23 +59,63 @@ function DatePill({ date }: { date: string }) {
   );
 }
 
-/* Group holidays by date. Returns ordered date keys + their entries. */
-function groupByDate(items: Holiday[]): Array<{ date: string; entries: Holiday[] }> {
-  const map = new Map<string, Holiday[]>();
-  for (const h of items) {
-    const arr = map.get(h.date) || [];
-    arr.push(h);
-    map.set(h.date, arr);
+/* Group dated entries by date. Returns ordered date keys + their entries. */
+function groupByDate(items: Array<{ date: string; entry: RailEntry }>): Array<{ date: string; entries: RailEntry[] }> {
+  const map = new Map<string, RailEntry[]>();
+  for (const it of items) {
+    const arr = map.get(it.date) || [];
+    arr.push(it.entry);
+    map.set(it.date, arr);
   }
   return Array.from(map.entries())
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, entries]) => ({ date, entries }));
 }
 
+/* Local YYYY-MM-DD. Deliberately NOT toISOString() — that converts to UTC and
+ * would roll an IST evening back to the previous day, dropping today's events
+ * out of the window. */
+function localDateKey(d: Date): string {
+  const m = `${d.getMonth() + 1}`.padStart(2, '0');
+  const day = `${d.getDate()}`.padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
 export function UpcomingEvents({ days = 7 }: { days?: number }) {
   const fetched = useFetch<Resp>(`/admin/holidays/upcoming?days=${days}`);
-  const items = fetched.data?.items ?? [];
-  const groups = groupByDate(items);
+  /*
+   * SAME cache key the dashboard's NoticeStrip already uses, so this adds no
+   * extra round-trip — lib/hooks dedupes and shares the response. The rail just
+   * re-reads the notices that are already on the page.
+   */
+  const noticesFetched = useFetch<NoticeResp>('/admin/notices/active?surface=crm&limit=20');
+  const [openNotice, setOpenNotice] = React.useState<Notice | null>(null);
+
+  const holidayEntries = (fetched.data?.items ?? []).map((h) => ({
+    date: h.date,
+    entry: { kind: 'holiday' as const, key: `h-${h.date}-${h.name}`, label: h.name, title: h.description || h.name },
+  }));
+
+  /* Event notices inside the same window: today → today + `days`. Past events
+   * drop off on their own the day after they happen. */
+  const today = localDateKey(new Date());
+  const horizon = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() + days);
+    return localDateKey(d);
+  })();
+  const noticeEntries = (noticesFetched.data?.items ?? [])
+    .filter((n) => {
+      if (!n.event_date) return false;
+      const key = String(n.event_date).slice(0, 10);
+      return key >= today && key <= horizon;
+    })
+    .map((n) => ({
+      date: String(n.event_date).slice(0, 10),
+      entry: { kind: 'notice' as const, key: `n-${n.notice_id}`, label: n.title, title: n.title, notice: n },
+    }));
+
+  const groups = groupByDate([...holidayEntries, ...noticeEntries]);
 
   return (
     /*
@@ -94,7 +149,7 @@ export function UpcomingEvents({ days = 7 }: { days?: number }) {
 
         {!fetched.loading && groups.length === 0 && (
           <div className="p-6 text-center text-xs text-muted-foreground">
-            No Upcoming Holidays
+            No Upcoming Events
             <div className="mt-1 opacity-70">
               Within the next {days} day{days === 1 ? '' : 's'}
             </div>
@@ -107,15 +162,31 @@ export function UpcomingEvents({ days = 7 }: { days?: number }) {
               <li key={g.date} className="flex items-start gap-3">
                 <DatePill date={g.date} />
                 <div className="flex-1 min-w-0 space-y-1.5 pt-1">
-                  {g.entries.map((h, i) => (
-                    <div
-                      key={`${h.name}-${i}`}
-                      className="rounded-md bg-emerald-600 text-white px-3 py-2 text-[13px] font-medium shadow-sm flex items-center gap-2"
-                      title={h.description || h.name}
-                    >
-                      <Calendar className="h-3.5 w-3.5 shrink-0 opacity-80" />
-                      <span className="truncate">{h.name}</span>
-                    </div>
+                  {g.entries.map((e) => (
+                    e.kind === 'notice' ? (
+                      /* Event notices are sky + clickable — the colour split
+                         tells ops at a glance which rows are ours (and
+                         actionable) versus external holidays. */
+                      <button
+                        key={e.key}
+                        type="button"
+                        onClick={() => setOpenNotice(e.notice)}
+                        className="w-full rounded-md bg-sky-600 hover:bg-sky-700 text-white px-3 py-2 text-[13px] font-medium shadow-sm flex items-center gap-2 text-left transition-colors"
+                        title={e.title}
+                      >
+                        <Megaphone className="h-3.5 w-3.5 shrink-0 opacity-80" />
+                        <span className="truncate">{e.label}</span>
+                      </button>
+                    ) : (
+                      <div
+                        key={e.key}
+                        className="rounded-md bg-emerald-600 text-white px-3 py-2 text-[13px] font-medium shadow-sm flex items-center gap-2"
+                        title={e.title}
+                      >
+                        <Calendar className="h-3.5 w-3.5 shrink-0 opacity-80" />
+                        <span className="truncate">{e.label}</span>
+                      </div>
+                    )
                   ))}
                 </div>
               </li>
@@ -123,6 +194,16 @@ export function UpcomingEvents({ days = 7 }: { days?: number }) {
           </ul>
         )}
       </CardContent>
+
+      {/* Clicking an event notice opens the same themed card the rest of the
+          CRM uses; onRead refreshes the shared active-notices key so the
+          strip's unread counter clears at the same time. */}
+      <NoticeDetailModal
+        notice={openNotice}
+        open={openNotice !== null}
+        onClose={() => setOpenNotice(null)}
+        onRead={() => noticesFetched.refetch()}
+      />
     </Card>
   );
 }

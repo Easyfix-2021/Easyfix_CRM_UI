@@ -296,3 +296,89 @@
 .thin-scroll:hover::-webkit-scrollbar-thumb {
   background-color: rgba(100, 116, 139, 0.55);
 }
+
+/* ─── Notice Board theme motion ──────────────────────────────────────────
+ * Keyframes for the notice card themes (see components/notice/noticeThemes.ts).
+ * They live here rather than in a per-component <style> tag because four
+ * themes + the celebration burst share them; one sheet beats five injections.
+ *
+ * Every one animates ONLY transform/opacity/background-position so they stay
+ * on the compositor — the flash modal can appear over any route, and a notice
+ * must never cost the page it interrupts a layout pass.
+ *
+ * All motion is disabled under prefers-reduced-motion at the bottom of this
+ * block: these are pure decoration, so reduced-motion users get the static
+ * gradient rather than a degraded animation.
+ */
+@keyframes nb-aurora {
+  0%   { transform: translate(-10%, -10%) rotate(0deg); }
+  50%  { transform: translate(10%, 5%) rotate(180deg); }
+  100% { transform: translate(-10%, -10%) rotate(360deg); }
+}
+@keyframes nb-sweep {
+  to { transform: rotate(360deg); }
+}
+@keyframes nb-shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+@keyframes nb-ticker {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+@keyframes nb-pulse-ring {
+  0%   { transform: scale(0.9); opacity: 0.7; }
+  70%  { transform: scale(1.35); opacity: 0; }
+  100% { opacity: 0; }
+}
+
+/* Aurora — two counter-rotating colour clouds behind a dark hero. */
+.nb-aurora::before,
+.nb-aurora::after {
+  content: '';
+  position: absolute;
+  inset: -40%;
+  border-radius: 9999px;
+  filter: blur(60px);
+  opacity: 0.55;
+  animation: nb-aurora 14s linear infinite;
+}
+.nb-aurora::before { background: radial-gradient(circle at 30% 30%, #38bdf8, transparent 60%); }
+.nb-aurora::after  {
+  background: radial-gradient(circle at 70% 60%, #a855f7, transparent 60%);
+  animation-duration: 19s;
+  animation-direction: reverse;
+}
+
+/* Spotlight — a conic light beam rotating behind the hero. */
+.nb-sweep::before {
+  content: '';
+  position: absolute;
+  inset: -60%;
+  background: conic-gradient(from 0deg, transparent 0 70%, rgba(255, 255, 255, 0.22) 85%, transparent 100%);
+  animation: nb-sweep 6s linear infinite;
+}
+
+/* Shimmer — the glow-swept headline, reserved for PINNED notices. */
+.nb-shimmer {
+  background: linear-gradient(90deg, #fff 25%, #bae6fd 50%, #fff 75%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: nb-shimmer 3.5s linear infinite;
+}
+
+/* Ticker — continuous marquee for the dashboard strip; pauses on hover so a
+ * passing headline can actually be read. */
+.nb-ticker { display: flex; width: max-content; animation: nb-ticker 30s linear infinite; }
+.nb-ticker-wrap:hover .nb-ticker { animation-play-state: paused; }
+
+@media (prefers-reduced-motion: reduce) {
+  .nb-aurora::before,
+  .nb-aurora::after,
+  .nb-sweep::before,
+  .nb-shimmer,
+  .nb-ticker { animation: none !important; }
+  .nb-shimmer { color: #fff; background: none; -webkit-background-clip: initial; background-clip: initial; }
+}

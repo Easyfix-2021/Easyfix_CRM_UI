@@ -33,7 +33,7 @@
 import * as React from 'react';
 import {
   ArrowLeft, ArrowRight, Plus, Save, Send, Pin, AlertTriangle,
-  Megaphone, CalendarClock, ImagePlus, X as XIcon, Loader2,
+  Megaphone, CalendarClock, ImagePlus, X as XIcon, Loader2, Lock,
 } from 'lucide-react';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
@@ -42,6 +42,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
+import { SearchSelect } from '@/components/ui/search-select';
 import { useFetchOnce, useFetch, invalidateFetch } from '@/lib/hooks';
 import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
@@ -80,6 +81,17 @@ type Form = {
   is_pinned: boolean;
   publish_at: string;       // local datetime-local (YYYY-MM-DDTHH:mm); '' when Publish Now
   expire_at: string;        // local datetime-local; '' when no expiry
+  /*
+   * The day the notice is ABOUT — a celebration, a maintenance window. Plain
+   * date input ('YYYY-MM-DD'), NOT datetime-local: ops announce the day, and a
+   * time field would force them to invent 00:00. Setting it also lists the
+   * notice in the dashboard's Upcoming Events rail.
+   */
+  event_date: string;
+  /* Push intent per app. Both only NARROW — the matching surface must also be
+   * selected above for anything to send. */
+  push_technician: boolean;
+  push_client: boolean;
 };
 
 const EMPTY: Form = {
@@ -93,6 +105,11 @@ const EMPTY: Form = {
   is_pinned: false,
   publish_at: '',
   expire_at: '',
+  event_date: '',
+  // Matches the BE default: publishing to the technician surface has always
+  // pushed, so the box starts checked and ops opts OUT rather than in.
+  push_technician: true,
+  push_client: false,
 };
 
 const MAX_IMAGES = 5;
@@ -180,6 +197,14 @@ export function ComposeWizard({
       is_pinned: Boolean(existing.is_pinned),
       publish_at: fromBeDate(existing.publish_at),
       expire_at: fromBeDate(existing.expire_at),
+      // DATE column — slice to YYYY-MM-DD. The BE may hand back a full
+      // datetime/ISO string depending on driver settings, and feeding that to a
+      // <input type="date"> silently blanks it.
+      event_date: existing.event_date ? String(existing.event_date).slice(0, 10) : '',
+      // Absent (pre-migration row) reads as TRUE for technician — same
+      // back-compat rule the BE applies — and FALSE for client.
+      push_technician: existing.push_technician == null ? true : Boolean(existing.push_technician),
+      push_client: Boolean(existing.push_client),
     });
   }, [mode, existing]);
 
@@ -330,6 +355,13 @@ export function ComposeWizard({
       is_pinned:       form.is_pinned,
       publish_at:      publishAt,
       expire_at:       toBeDate(form.expire_at),
+      // Date-only; '' must become null so the BE writes SQL NULL rather than
+      // MySQL's zero-date. NOT run through toBeDate — that produces a datetime.
+      event_date:      form.event_date || null,
+      // Push intent is only meaningful for a surface that is actually targeted;
+      // sending false for an untargeted surface keeps the stored row honest.
+      push_technician: form.push_technician && form.target_surfaces.includes('technician'),
+      push_client:     form.push_client && form.target_surfaces.includes('client'),
       status_intent:   publishWhen === 'draft' ? 'draft' : 'publish',
     };
   }
@@ -430,21 +462,45 @@ export function ComposeWizard({
         )}
 
         {step === 1 && (
-          <div className="px-6 py-5 space-y-4">
-            <div>
-              <Label htmlFor="title">Title</Label>
-              <Input
-                id="title"
-                value={form.title}
-                onChange={(e) => update('title', e.target.value)}
-                placeholder="e.g. Festive bonus is live"
-                maxLength={255}
-                disabled={!!locked}
-              />
+          /* space-y-3 (was -4): with eight stacked fields the looser rhythm
+             pushed the footer below the fold and read as gappy. */
+          <div className="px-6 py-4 space-y-3">
+            {/* Title + Pin share a row: Pin is a property OF the title/notice
+                and needs far less width than a full-bleed row gave it. */}
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+              <div className="min-w-0 flex-1">
+                <Label htmlFor="title">Title <span className="text-red-500">*</span></Label>
+                <Input
+                  id="title"
+                  value={form.title}
+                  onChange={(e) => update('title', e.target.value)}
+                  placeholder="e.g. Festive bonus is live"
+                  maxLength={255}
+                  disabled={!!locked}
+                />
+              </div>
+              {/* mt-[1.625rem] on sm+ aligns the pill with the INPUT rather than
+                  the Label above it, so the two controls sit on one baseline.
+                  The helper text is nowrap + the pill is sized to fit it, so the
+                  label never wraps onto a second line and the block stays the
+                  same height as the input beside it. */}
+              <div className="flex h-9 shrink-0 items-center justify-between gap-3 rounded-md bg-muted/30 px-3 sm:mt-[1.625rem]">
+                <div className="flex items-center gap-2 whitespace-nowrap">
+                  <Pin className="h-4 w-4 shrink-0 text-amber-500" />
+                  <Label htmlFor="is_pinned" className="cursor-pointer">Pin to Top</Label>
+                  <span className="text-xs text-muted-foreground">Keeps it above others</span>
+                </div>
+                <Switch
+                  id="is_pinned"
+                  checked={form.is_pinned}
+                  onCheckedChange={(v: boolean) => update('is_pinned', v)}
+                  disabled={!!locked}
+                />
+              </div>
             </div>
 
             <div>
-              <Label htmlFor="body">Message</Label>
+              <Label htmlFor="body">Message <span className="text-red-500">*</span></Label>
               <textarea
                 id="body"
                 value={form.body}
@@ -457,9 +513,13 @@ export function ComposeWizard({
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Both columns open with a fixed-height label row so the two
+                  inputs share a baseline. Without it the "Add Category" action
+                  made this column's header taller and pushed its select a row
+                  below the Action Link input. */}
               <div>
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="category_id">Category</Label>
+                <div className="flex h-6 items-center justify-between">
+                  <Label htmlFor="category_id">Category <span className="text-red-500">*</span></Label>
                   <button
                     type="button"
                     onClick={() => setShowCatAdd(true)}
@@ -469,18 +529,19 @@ export function ComposeWizard({
                     <Plus className="h-3 w-3" /> Add Category
                   </button>
                 </div>
-                <select
-                  id="category_id"
+                {/* Shared SearchSelect — type-to-filter, same control the rest of
+                    the CRM uses for long pick-lists. Categories grow over time
+                    and a bare <select> gets unusable. */}
+                <SearchSelect
                   value={form.category_id}
-                  onChange={(e) => update('category_id', e.target.value ? Number(e.target.value) : '')}
+                  onChange={(v) => update('category_id', v ? Number(v) : '')}
+                  options={(catsFetch.data?.items ?? []).map((c) => ({
+                    value: c.category_id,
+                    label: c.name,
+                  }))}
+                  placeholder="Pick a category…"
                   disabled={!!locked}
-                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm disabled:opacity-50"
-                >
-                  <option value="">Pick a category…</option>
-                  {(catsFetch.data?.items ?? []).map((c) => (
-                    <option key={c.category_id} value={c.category_id}>{c.name}</option>
-                  ))}
-                </select>
+                />
                 {selectedCat && (
                   <div className="pt-1">
                     <NoticeCategoryTag name={selectedCat.name} color={selectedCat.color} />
@@ -489,7 +550,9 @@ export function ComposeWizard({
               </div>
 
               <div>
-                <Label htmlFor="action_url">Action Link <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                <div className="flex h-6 items-center">
+                  <Label htmlFor="action_url">Action Link</Label>
+                </div>
                 <Input
                   id="action_url"
                   value={form.action_url}
@@ -525,6 +588,61 @@ export function ComposeWizard({
             </div>
 
             {/*
+              * Push notification opt-in. Only shown for surfaces the notice
+              * actually targets — a push checkbox for an untargeted app is a
+              * promise the publish path will not keep.
+              */}
+            {(form.target_surfaces.includes('technician') || form.target_surfaces.includes('client')) && (
+              <div>
+                <Label>Send Push Notification</Label>
+                <div className="flex flex-col gap-2 pt-1.5">
+                  {form.target_surfaces.includes('technician') && (
+                    <label className="flex items-start gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={form.push_technician}
+                        disabled={!!locked}
+                        onChange={(e) => setForm((f) => ({ ...f, push_technician: e.target.checked }))}
+                        className="mt-0.5 h-4 w-4 rounded border-input accent-sky-600 disabled:opacity-50"
+                      />
+                      <span>
+                        Technician App
+                        <span className="block text-xs text-muted-foreground">
+                          Sends on publish to every active, verified technician. Tapping it opens
+                          the app&apos;s Notices screen (older app builds open the home screen).
+                        </span>
+                      </span>
+                    </label>
+                  )}
+                  {/*
+                    * Client App push is a DISABLED chip, not a checkbox: it
+                    * cannot be delivered today. The Client App registers a
+                    * locally-generated UUID as its "device id", not an FCM
+                    * token, and ships no Firebase Messaging — so a checked box
+                    * would promise a notification that never arrives. Kept
+                    * visible (rather than hidden) so the capability is
+                    * discoverable and the column/flag are already wired for the
+                    * day the app adds push. Reason shows on hover.
+                    */}
+                  {form.target_surfaces.includes('client') && (
+                    <span
+                      className="inline-flex w-fit cursor-not-allowed items-center gap-1.5 rounded-full border border-dashed border-amber-300 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-800"
+                      title={
+                        'Client App push is not available yet — the Client App does not register '
+                        + 'push tokens, so nothing can be delivered to it. The notice still reaches '
+                        + 'clients in the app’s in-app Notice Board. This unlocks once the app '
+                        + 'ships push support.'
+                      }
+                    >
+                      <Lock className="h-3 w-3" />
+                      Client App — push unavailable
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/*
              * Image attachments — multi-file picker with inline preview.
              * Uploads fire on pick (no separate "Upload" button) so the
              * UX matches operator expectation of "click → see thumbnail".
@@ -533,7 +651,7 @@ export function ComposeWizard({
              */}
             <div>
               <div className="flex items-center justify-between">
-                <Label>Images <span className="text-muted-foreground text-xs">(optional · up to {MAX_IMAGES})</span></Label>
+                <Label>Images <span className="text-muted-foreground text-xs">(up to {MAX_IMAGES})</span></Label>
                 {uploadingCount > 0 && (
                   <span className="text-xs text-sky-700 flex items-center gap-1">
                     <Loader2 className="h-3 w-3 animate-spin" /> Uploading {uploadingCount}…
@@ -583,9 +701,13 @@ export function ComposeWizard({
               </div>
             </div>
 
+            {/* Both date pickers on one row — they are the same kind of control
+                and reading them side by side makes the distinction obvious:
+                Expires is when the notice STOPS showing, Event Date is the day
+                it is ABOUT. */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <Label htmlFor="expire_at">Expires <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                <Label htmlFor="expire_at">Expires</Label>
                 <Input
                   id="expire_at"
                   type="datetime-local"
@@ -597,20 +719,27 @@ export function ComposeWizard({
                   Notice auto-hides after this date. Leave blank for no expiry.
                 </p>
               </div>
-              <div className="flex items-center justify-between bg-muted/30 rounded-md px-3 py-2 self-end h-fit">
-                <div className="flex items-center gap-2">
-                  <Pin className="h-4 w-4 text-amber-500" />
-                  <div>
-                    <Label htmlFor="is_pinned" className="cursor-pointer">Pin to Top</Label>
-                    <p className="text-xs text-muted-foreground">Keeps this notice above others.</p>
-                  </div>
-                </div>
-                <Switch
-                  id="is_pinned"
-                  checked={form.is_pinned}
-                  onCheckedChange={(v: boolean) => update('is_pinned', v)}
+              {/*
+                * Event date — the day the notice is ABOUT, which is NOT the same
+                * as when it publishes or expires. Filling it promotes the notice
+                * into the dashboard's Upcoming Events rail. Explicit rather than
+                * parsed out of the title: "Friday, 14th August" carries no year,
+                * and a wrong guess would put an event on the wrong day in a rail
+                * ops plan around.
+                */}
+              <div>
+                <Label htmlFor="event_date">Event Date</Label>
+                <Input
+                  id="event_date"
+                  type="date"
+                  value={form.event_date}
+                  onChange={(e) => update('event_date', e.target.value)}
                   disabled={!!locked}
                 />
+                <p className="text-xs text-muted-foreground pt-1">
+                  Set this when the notice is about a specific day — it then also
+                  appears in the dashboard&apos;s Upcoming Events.
+                </p>
               </div>
             </div>
 

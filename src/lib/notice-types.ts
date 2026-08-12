@@ -57,6 +57,19 @@ export type Notice = {
   effective_status: NoticeEffectiveStatus;
   publish_at: string | null;
   expire_at: string | null;
+  /*
+   * The calendar date this notice is ABOUT (a celebration, a maintenance
+   * window) — distinct from publish_at (when it goes live) and expire_at (when
+   * it stops showing). NULL/absent = an ordinary notice; a value promotes it
+   * into the dashboard's Upcoming Events rail. DATE-only, 'YYYY-MM-DD'.
+   * Optional so a pre-migration API response still type-checks.
+   */
+  event_date?: string | null;
+  /* Whether publishing fans a push out to each app. Both only NARROW — the
+   * matching surface must still be in target_surfaces. See the Notice Board
+   * migration for why push_client cannot deliver yet. */
+  push_technician?: boolean | 0 | 1;
+  push_client?: boolean | 0 | 1;
   created_by: number;
   reviewed_by: number | null;
   published_by: number | null;

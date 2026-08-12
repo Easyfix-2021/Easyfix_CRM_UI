@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { Megaphone, Pin, ChevronDown, Image as ImageIcon } from 'lucide-react';
+import { Megaphone, Pin, ChevronDown, Image as ImageIcon, Radio, List } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { useFetch } from '@/lib/hooks';
 import { useMe } from '@/lib/auth-context';
@@ -109,6 +109,8 @@ function NoticeBanner({
   );
 }
 
+const VIEW_KEY = 'notice_strip_view_v1';
+
 export function NoticeStrip() {
   const { me } = useMe();
   const canManage = hasAction(me, 'isNoticeManage');
@@ -119,6 +121,26 @@ export function NoticeStrip() {
 
   const [showAll, setShowAll] = React.useState(false);
   const [openNotice, setOpenNotice] = React.useState<Notice | null>(null);
+  /*
+   * List ⇄ ticker view. Persisted per browser so an operator's choice survives
+   * navigation. Initialised in an effect rather than useState's initialiser
+   * because localStorage is unavailable during SSR — reading it inline would
+   * hydrate-mismatch the server's 'list' render.
+   */
+  const [mode, setMode] = React.useState<'list' | 'ticker'>('list');
+  React.useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(VIEW_KEY);
+      if (saved === 'ticker' || saved === 'list') setMode(saved);
+    } catch { /* private mode — keep the default */ }
+  }, []);
+  function toggleMode() {
+    setMode((m) => {
+      const next = m === 'list' ? 'ticker' : 'list';
+      try { window.localStorage.setItem(VIEW_KEY, next); } catch { /* non-fatal */ }
+      return next;
+    });
+  }
 
   const visibleCount = showAll ? items.length : VISIBLE_DEFAULT;
   const visible = items.slice(0, visibleCount);
@@ -146,6 +168,17 @@ export function NoticeStrip() {
             </span>
           )}
         </span>
+        {items.length > 0 && (
+          <button
+            type="button"
+            onClick={toggleMode}
+            title={mode === 'list' ? 'Switch to ticker view' : 'Switch to list view'}
+            aria-label={mode === 'list' ? 'Switch to ticker view' : 'Switch to list view'}
+            className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+          >
+            {mode === 'list' ? <Radio className="h-3.5 w-3.5" /> : <List className="h-3.5 w-3.5" />}
+          </button>
+        )}
         {canManage && items.length > 0 && (
           <Link
             href="/notice-board"
@@ -176,8 +209,44 @@ export function NoticeStrip() {
         </div>
       )}
 
+      {/* Ticker view — one continuous line instead of stacked banners. Ambient:
+          it surfaces every active notice in the height of a single row, which
+          is what ops wanted on a dashboard already dense with cards. The track
+          is rendered TWICE so the -50% translate loops seamlessly; hovering
+          pauses it (see .nb-ticker-wrap in globals.css) so a passing headline
+          can actually be read and clicked. */}
+      {!fetched.loading && items.length > 0 && mode === 'ticker' && (
+        <div className="nb-ticker-wrap overflow-hidden py-2.5">
+          <div className="nb-ticker gap-8 px-4">
+            {[0, 1].map((copy) => (
+              <React.Fragment key={copy}>
+                {items.map((n) => (
+                  <button
+                    key={`${copy}-${n.notice_id}`}
+                    type="button"
+                    onClick={() => setOpenNotice(n)}
+                    // aria-hidden on the duplicate track: it exists purely to
+                    // make the loop seamless, so screen readers should not
+                    // announce every notice twice.
+                    aria-hidden={copy === 1}
+                    tabIndex={copy === 1 ? -1 : 0}
+                    className="flex shrink-0 items-center gap-2 whitespace-nowrap text-sm hover:underline"
+                  >
+                    {!n.is_read && <span className="h-2 w-2 shrink-0 rounded-full bg-blue-500" />}
+                    <span className="font-medium">{n.title}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {compactDate(n.publish_at)}
+                    </span>
+                  </button>
+                ))}
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Banner list. Each row is its own click target → detail modal. */}
-      {!fetched.loading && items.length > 0 && (
+      {!fetched.loading && items.length > 0 && mode === 'list' && (
         <div className="divide-y">
           {visible.map((n) => (
             <NoticeBanner
@@ -190,7 +259,7 @@ export function NoticeStrip() {
       )}
 
       {/* Show more — collapsed by default when > VISIBLE_DEFAULT. */}
-      {!fetched.loading && hiddenCount > 0 && !showAll && (
+      {!fetched.loading && mode === 'list' && hiddenCount > 0 && !showAll && (
         <button
           type="button"
           onClick={() => setShowAll(true)}

@@ -3,6 +3,7 @@
 import * as React from 'react';
 import { usePathname } from 'next/navigation';
 import { useFetch } from '@/lib/hooks';
+import { Button } from '@/components/ui/button';
 import { NoticeDetailModal } from './NoticeDetailModal';
 import type { Notice } from '@/lib/notice-types';
 
@@ -65,6 +66,12 @@ export function NoticeFlash() {
   const pathname = usePathname();
   const fetched = useFetch<Resp>('/admin/notices/active?surface=crm&limit=20');
   const [queue, setQueue] = React.useState<Notice[]>([]);
+  /*
+   * How many cards this burst started with, so the deck can read "2 of 3" as
+   * the operator steps through. Reset once the last card is dismissed, so a
+   * later burst counts from 1 again rather than continuing the old total.
+   */
+  const [burstTotal, setBurstTotal] = React.useState(0);
 
   // Re-check on navigation, throttled. `refetch` is stable enough for this use;
   // the ref keeps the last-checked stamp out of the dependency list.
@@ -92,7 +99,9 @@ export function NoticeFlash() {
       // Merge without disturbing a card the operator is already reading.
       const known = new Set(prev.map((n) => n.notice_id));
       const additions = pending.filter((n) => !known.has(n.notice_id));
-      return additions.length > 0 ? [...prev, ...additions] : prev;
+      if (additions.length === 0) return prev;
+      setBurstTotal((t) => t + additions.length);
+      return [...prev, ...additions];
     });
   }, [fetched.data]);
 
@@ -100,10 +109,18 @@ export function NoticeFlash() {
 
   function dismissCurrent() {
     if (current) markSeen(current.notice_id);
-    setQueue((prev) => prev.slice(1));
+    setQueue((prev) => {
+      const next = prev.slice(1);
+      if (next.length === 0) setBurstTotal(0);
+      return next;
+    });
   }
 
   if (!current) return null;
+
+  const remaining = queue.length;
+  const position = Math.max(1, burstTotal - remaining + 1);
+  const isDeck = burstTotal > 1;
 
   return (
     <NoticeDetailModal
@@ -113,6 +130,37 @@ export function NoticeFlash() {
       // The modal marks it read; refresh the shared list so the dashboard
       // strip's unread dot + counter drop without a reload.
       onRead={() => fetched.refetch()}
+      // Stacked-paper edges hint that more cards are waiting behind this one.
+      stackDepth={Math.min(2, remaining - 1)}
+      footer={isDeck
+        ? ({ buttonClass }) => (
+          <div className="flex items-center justify-between border-t px-6 py-4">
+            <div className="flex items-center gap-2.5">
+              <div className="flex gap-1.5">
+                {/* Capped at 5 dots — beyond that the "N of M" text carries
+                    the count and a longer dot row just becomes noise. */}
+                {queue.slice(0, 5).map((n, i) => (
+                  <span
+                    key={n.notice_id}
+                    className={`h-2 w-2 rounded-full ${i === 0 ? 'bg-sky-600' : 'bg-slate-300'}`}
+                  />
+                ))}
+              </div>
+              <span className="text-xs font-medium text-muted-foreground tabular-nums">
+                {position} of {burstTotal}
+              </span>
+            </div>
+            <Button
+              type="button"
+              onClick={dismissCurrent}
+              autoFocus
+              className={`h-10 min-w-[8rem] rounded-lg px-6 text-sm font-semibold ${buttonClass}`}
+            >
+              {remaining > 1 ? 'Next →' : 'Done'}
+            </Button>
+          </div>
+        )
+        : undefined}
     />
   );
 }

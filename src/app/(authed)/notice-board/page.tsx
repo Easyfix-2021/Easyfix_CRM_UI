@@ -20,7 +20,9 @@
 
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
-import { Megaphone, Plus, Search, Edit2, Send, Archive as ArchiveIcon, AlertTriangle } from 'lucide-react';
+import { Megaphone, Plus, Search, Edit2, Send, Archive as ArchiveIcon, AlertTriangle, Trash2 } from 'lucide-react';
+import { SearchSelect } from '@/components/ui/search-select';
+import { IconButton } from '@/components/ui/icon-button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -140,6 +142,33 @@ export default function NoticeBoardListPage() {
     }
   }
 
+  /*
+   * Permanent delete — for a notice that should never have existed (typo,
+   * duplicate, test broadcast). Archive remains the right action for one that
+   * legitimately ran. The copy spells out that this is unrecoverable AND that
+   * read history goes with it, because those are the two things that make it
+   * different from archiving.
+   */
+  async function handleDelete(n: Notice) {
+    const ok = await confirm({
+      title: 'Delete This Notice?',
+      description: `"${n.title}" will be permanently removed, along with its read history. This cannot be undone — use Archive instead if you only want to hide it.`,
+      confirmLabel: 'Delete',
+      variant: 'destructive',
+    });
+    if (!ok) return;
+    const id = showToast({ variant: 'loading', message: 'Deleting…' });
+    try {
+      await api.delete(`/admin/notices/${n.notice_id}`);
+      dismissToast(id);
+      showToast({ variant: 'success', message: 'Notice deleted' });
+      invalidateFetch((k) => k.startsWith('/admin/notices'));
+    } catch (e) {
+      dismissToast(id);
+      showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Delete failed' });
+    }
+  }
+
   if (meLoading || !canManage) {
     return <div className="p-8 text-sm text-muted-foreground">Loading…</div>;
   }
@@ -180,27 +209,35 @@ export default function NoticeBoardListPage() {
               className="pl-8"
             />
           </div>
-          <select
+          {/* Both filters use the shared SearchSelect so they type-to-filter
+              like every other pick-list in the CRM. Categories in particular
+              grow over time, and a bare <select> stops being usable. */}
+          <SearchSelect
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as NoticeStatus | '')}
-            className="h-9 rounded-md border border-input bg-background px-2 text-sm"
-          >
-            <option value="">All Statuses</option>
-            <option value="draft">Draft</option>
-            <option value="scheduled">Scheduled</option>
-            <option value="published">Published</option>
-            <option value="archived">Archived</option>
-          </select>
-          <select
+            onChange={(v) => setStatusFilter(v as NoticeStatus | '')}
+            options={[
+              { value: '', label: 'All Statuses' },
+              { value: 'draft', label: 'Draft' },
+              { value: 'scheduled', label: 'Scheduled' },
+              { value: 'published', label: 'Published' },
+              { value: 'archived', label: 'Archived' },
+            ]}
+            placeholder="All Statuses"
+            className="w-44"
+          />
+          <SearchSelect
             value={categoryFilter}
-            onChange={(e) => setCategoryFilter(e.target.value ? Number(e.target.value) : '')}
-            className="h-9 rounded-md border border-input bg-background px-2 text-sm"
-          >
-            <option value="">All Categories</option>
-            {(catsFetch.data?.items ?? []).map((c) => (
-              <option key={c.category_id} value={c.category_id}>{c.name}</option>
-            ))}
-          </select>
+            onChange={(v) => setCategoryFilter(v ? Number(v) : '')}
+            options={[
+              { value: '', label: 'All Categories' },
+              ...(catsFetch.data?.items ?? []).map((c) => ({
+                value: c.category_id,
+                label: c.name,
+              })),
+            ]}
+            placeholder="All Categories"
+            className="w-48"
+          />
         </CardContent>
       </Card>
 
@@ -277,32 +314,45 @@ export default function NoticeBoardListPage() {
                             a permanently-disabled pencil just invited clicks
                             that did nothing — same conditional-render rule the
                             Publish and Archive actions below already follow. */}
+                        {/* Shared IconButton — the CRM's row-action primitive
+                            (naked icon, snug padding). The ghost <Button> used
+                            here before rendered a much larger padded box than
+                            every other table's actions. */}
                         {!lockedForEdit && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
+                          <IconButton
+                            icon={Edit2}
+                            intent="default"
+                            label="Edit"
                             onClick={() => setComposeMode(n.notice_id)}
-                            title="Edit"
-                          >
-                            <Edit2 className="size-4" />
-                          </Button>
+                          />
                         )}
                         {n.status === 'draft' && (
-                          <Button variant="ghost" size="sm" onClick={() => handlePublish(n)} title="Publish">
-                            <Send className="size-4" />
-                          </Button>
+                          <IconButton
+                            icon={Send}
+                            intent="primary"
+                            label="Publish"
+                            onClick={() => handlePublish(n)}
+                          />
                         )}
                         {n.status !== 'archived' && (
-                          <Button variant="ghost" size="sm" onClick={() => handleArchive(n)} title="Archive">
-                            <ArchiveIcon className="size-4" />
-                          </Button>
+                          <IconButton
+                            icon={ArchiveIcon}
+                            intent="default"
+                            label="Archive"
+                            onClick={() => handleArchive(n)}
+                          />
                         )}
-                        {/* An archived notice has no available action at all.
-                            Render the table's standard em-dash so the cell
-                            reads as "nothing to do" rather than looking broken. */}
-                        {n.status === 'archived' && (
-                          <span className="text-muted-foreground pr-2">—</span>
-                        )}
+                        {/* Delete is available on EVERY status, unlike Archive.
+                            Archive retires a notice that legitimately ran;
+                            Delete removes one that should never have existed —
+                            and a typo is just as likely to have been published
+                            or archived as left in draft. */}
+                        <IconButton
+                          icon={Trash2}
+                          intent="danger"
+                          label="Delete permanently"
+                          onClick={() => handleDelete(n)}
+                        />
                       </div>
                     </td>
                   </tr>
