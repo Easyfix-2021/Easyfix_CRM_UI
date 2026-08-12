@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<!-- saved from url=(0146)file:///Users/harshit/Library/Containers/net.whatsapp.WhatsApp/Data/tmp/documents/977EF6A7-BC28-48A7-82FF-EB9A12563923/EasyFix_Brand_Identity.html -->
+<html lang="en"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EasyFix — Brand Identity</title>
+<link rel="preconnect" href="https://fonts.googleapis.com/">
+<link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin="">
+<link href="./EasyFix — Brand Identity_files/css2" rel="stylesheet">
+<style>
+  :root{
+    --red-50:#FBF0F1; --red-100:#F6DEE0; --red-500:#C42430; --red-600:#A71F29; --red-700:#831820;
+    --ink-900:#171B1F; --ink-700:#363B41; --ink-500:#5C636B; --ink-300:#9AA1A9;
+    --ink-100:#E4E7EA; --ink-50:#F4F6F7; --white:#FFFFFF;
+    --blue-100:#E4EFFA; --blue-500:#2A6FBF; --blue-700:#1B4C87; --blue-900:#10294D;
+    --success:#1B9E5A; --success-tint:#E2F5EA; --success-text:#0E5C34;
+    --warning:#E0930F; --warning-tint:#FCF0D9; --warning-text:#6B4405;
+    --gold:#C99A2E; --gold-tint:#FBF1D8; --gold-text:#6B4A05;
+    --font:'IBM Plex Sans','IBM Plex Sans Devanagari','Noto Sans Devanagari',system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:var(--font);background:var(--ink-50);color:var(--ink-900);
+       -webkit-font-smoothing:antialiased;line-height:1.45}
+  .page{max-width:940px;margin:0 auto;padding:40px 24px 64px}
+
+  .masthead{background:var(--red-500);color:var(--white);padding:32px 28px;border-radius:12px}
+  .masthead h1{font-size:30px;font-weight:600;letter-spacing:-.4px}
+  .masthead p{font-size:17px;font-weight:400;margin-top:6px;color:#F3C9CC}
+
+  section{margin-top:40px}
+  h2{font-size:13px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;
+     color:var(--ink-500);padding-bottom:8px;border-bottom:1px solid var(--ink-100);margin-bottom:18px}
+  h3{font-size:15px;font-weight:600;margin:22px 0 10px}
+  h3:first-of-type{margin-top:0}
+
+  .ramp{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px}
+  .sw{background:var(--white);border:1px solid var(--ink-100);border-radius:10px;overflow:hidden}
+  .sw .chip{height:64px}
+  .sw .meta{padding:9px 10px}
+  .sw .tok{font-size:12px;font-weight:600}
+  .sw .hex{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--ink-500);margin-top:1px}
+  .sw .use{font-size:11px;color:var(--ink-500);margin-top:5px;line-height:1.35}
+
+  .meaning{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+  .mbox{border-radius:10px;padding:14px 15px;border-left:4px solid}
+  .mbox .name{font-size:15px;font-weight:600}
+  .mbox .use{font-size:13px;margin-top:3px}
+  .mbox .hex{font-family:'IBM Plex Mono',monospace;font-size:11px;margin-top:9px;opacity:.85}
+
+  .applied{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+  .phone{background:var(--white);border:1px solid var(--ink-100);border-radius:12px;overflow:hidden}
+  .phone .bar{background:var(--red-500);color:var(--white);padding:13px 15px}
+  .phone .bar b{font-size:16px;font-weight:600}
+  .phone .bar span{display:block;font-size:12px;color:#F3C9CC}
+  .phone .body{padding:14px 15px}
+  .grade{background:var(--blue-900);border-radius:10px;padding:13px;display:flex;
+         justify-content:space-between;align-items:center}
+  .grade b{color:var(--white);font-size:19px;font-weight:600}
+  .pill-gold{background:var(--gold-tint);color:var(--gold-text);font-size:12px;font-weight:600;
+             padding:4px 11px;border-radius:999px}
+  .btn{background:var(--red-500);color:var(--white);font-size:16px;font-weight:600;text-align:center;
+       padding:14px;border-radius:12px;margin-top:12px}
+  .urgent{background:var(--red-100);border-left:4px solid var(--red-600);padding:11px 12px;margin-top:12px;border-radius:0 8px 8px 0}
+  .tag{display:inline-block;background:var(--red-600);color:var(--white);font-size:11px;font-weight:600;
+       letter-spacing:.05em;padding:3px 9px;border-radius:4px}
+  .urgent .t{font-size:15px;font-weight:600;margin-top:7px}
+  .urgent .s{font-size:13px;color:var(--ink-500)}
+  .normal{background:var(--ink-50);border-left:4px solid var(--ink-300);padding:11px 12px;margin-top:9px;border-radius:0 8px 8px 0}
+  .normal .t{font-size:15px;font-weight:600}
+  .normal .s{font-size:13px;color:var(--ink-500)}
+
+  .spec{background:var(--white);border:1px solid var(--ink-100);border-radius:12px;padding:26px 24px}
+  .row{padding:13px 0;border-bottom:1px solid var(--ink-100)}
+  .row:last-child{border-bottom:0}
+  .row .lbl{font-size:12px;color:var(--ink-500);margin-top:4px}
+  .money{font-size:38px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-1px}
+  .title{font-size:24px;font-weight:600}
+  .head{font-size:18px;font-weight:500}
+  .bodyt{font-size:16px;font-weight:400}
+  .supp{font-size:14px;font-weight:400;color:var(--ink-700)}
+  .pill-green{display:inline-block;background:var(--success-tint);color:var(--success-text);
+              font-size:12px;font-weight:500;padding:5px 12px;border-radius:999px}
+
+  table{width:100%;border-collapse:collapse;font-size:14px;background:var(--white);
+        border:1px solid var(--ink-100);border-radius:10px;overflow:hidden}
+  th{text-align:left;font-size:12px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;
+     color:var(--ink-500);padding:11px 14px;background:var(--ink-50);border-bottom:1px solid var(--ink-100)}
+  td{padding:11px 14px;border-bottom:1px solid var(--ink-100)}
+  tr:last-child td{border-bottom:0}
+  td.n{font-family:'IBM Plex Mono',monospace;font-size:13px;white-space:nowrap}
+
+  ol{list-style:none;counter-reset:r}
+  ol li{counter-increment:r;position:relative;padding:9px 0 9px 38px;font-size:15px;
+        border-bottom:1px solid var(--ink-100)}
+  ol li:last-child{border-bottom:0}
+  ol li::before{content:counter(r);position:absolute;left:0;top:9px;width:24px;height:24px;
+    background:var(--red-500);color:var(--white);border-radius:50%;font-size:12px;font-weight:600;
+    display:flex;align-items:center;justify-content:center}
+
+  pre{background:var(--ink-900);color:#E8EAED;border-radius:10px;padding:18px 20px;overflow-x:auto;
+      font-family:'IBM Plex Mono',monospace;font-size:12px;line-height:1.75}
+
+  @media print{body{background:#fff}.page{padding:0}section{break-inside:avoid}}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="masthead">
+    <h1>EasyFix — Brand Identity</h1>
+    <p>Red is the action. Ink is the text. Blue is money and grade. Gold is earned.</p>
+  </div>
+
+  <section>
+    <h2>Colour</h2>
+
+    <h3>Red</h3>
+    <div class="ramp">
+      <div class="sw"><div class="chip" style="background:var(--red-50)"></div><div class="meta"><div class="tok">red-50</div><div class="hex">#FBF0F1</div><div class="use">Wash</div></div></div>
+      <div class="sw"><div class="chip" style="background:var(--red-100)"></div><div class="meta"><div class="tok">red-100</div><div class="hex">#F6DEE0</div><div class="use">Tint behind red content</div></div></div>
+      <div class="sw"><div class="chip" style="background:var(--red-500)"></div><div class="meta"><div class="tok">red-500</div><div class="hex">#C42430</div><div class="use">Header, primary button, active tab, logo</div></div></div>
+      <div class="sw"><div class="chip" style="background:var(--red-600)"></div><div class="meta"><div class="tok">red-600</div><div class="hex">#A71F29</div><div class="use">Pressed · urgent · error</div></div></div>
+      <div class="sw"><div class="chip" style="background:var(--red-700)"></div><div class="meta"><div class="tok">red-700</div><div class="hex">#831820</div><div class="use">Red text on red tint</div></div></div>
+    </div>
+
+    <h3>Ink</h3>
+    <div class="ramp">
+      <div class="sw"><div class="chip" style="background:var(--ink-900)"></div><div class="meta"><div class="tok">ink-900</div><div class="hex">#171B1F</div><div class="use">Headings, dark surfaces</div></div></div>
+      <div class="sw"><div class="chip" style="background:var(--ink-700)"></div><div class="meta"><div class="tok">ink-700</div><div class="hex">#363B41</div><div class="use">Body text</div></div></div>
+      <div class="sw"><div class="chip" style="background:var(--ink-500)"></div><div class="meta"><div class="tok">ink-500</div><div class="hex">#5C636B</div><div class="use">Supporting text, labels</div></div></div>
+      <div class="sw"><div class="chip" style="background:var(--ink-300)"></div><div class="meta"><div class="tok">ink-300</div><div class="hex">#9AA1A9</div><div class="use">Placeholder, disabled</div></div></div>
+      <div class="sw"><div class="chip" style="background:var(--ink-100)"></div><div class="meta"><div class="tok">ink-100</div><div class="hex">#E4E7EA</div><div class="use">Borders, dividers</div></div></div>
+      <div class="sw"><div class="chip" style="background:var(--ink-50)"></div><div class="meta"><div class="tok">ink-50</div><div class="hex">#F4F6F7</div><div class="use">Page background</div></div></div>
+    </div>
+
+    <h3>Blue</h3>
+    <div class="ramp">
+      <div class="sw"><div class="chip" style="background:var(--blue-100)"></div><div class="meta"><div class="tok">blue-100</div><div class="hex">#E4EFFA</div><div class="use">Information tint</div></div></div>
+      <div class="sw"><div class="chip" style="background:var(--blue-500)"></div><div class="meta"><div class="tok">blue-500</div><div class="hex">#2A6FBF</div><div class="use">Links, icons</div></div></div>
+      <div class="sw"><div class="chip" style="background:var(--blue-700)"></div><div class="meta"><div class="tok">blue-700</div><div class="hex">#1B4C87</div><div class="use">Blue text on blue tint</div></div></div>
+      <div class="sw"><div class="chip" style="background:var(--blue-900)"></div><div class="meta"><div class="tok">blue-900</div><div class="hex">#10294D</div><div class="use">Wallet and grade blocks</div></div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Meaning colours</h2>
+    <div class="meaning">
+      <div class="mbox" style="background:var(--success-tint);border-color:var(--success);color:var(--success-text)">
+        <div class="name">Success</div>
+        <div class="use">Done · on time · present · paid</div>
+        <div class="hex">#1B9E5A · #E2F5EA · #0E5C34</div>
+      </div>
+      <div class="mbox" style="background:var(--warning-tint);border-color:var(--warning);color:var(--warning-text)">
+        <div class="name">Warning</div>
+        <div class="use">Pending · work in progress</div>
+        <div class="hex">#E0930F · #FCF0D9 · #6B4405</div>
+      </div>
+      <div class="mbox" style="background:var(--red-100);border-color:var(--red-600);color:var(--red-700)">
+        <div class="name">Urgent / Error</div>
+        <div class="use">Escalation · SLA breach · error · SOS</div>
+        <div class="hex">#A71F29 · #F6DEE0 · #831820</div>
+      </div>
+      <div class="mbox" style="background:var(--gold-tint);border-color:var(--gold);color:var(--gold-text)">
+        <div class="name">Gold</div>
+        <div class="use">Grade band and rewards only</div>
+        <div class="hex">#C99A2E · #FBF1D8 · #6B4A05</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Put together</h2>
+    <div class="applied">
+      <div class="phone">
+        <div class="bar"><b>EasyFix</b><span>Ramesh · EFX2291 · Gurgaon</span></div>
+        <div class="body">
+          <div class="grade"><b>A+ · 90%</b><span class="pill-gold">Gold</span></div>
+          <div class="btn">Claim payment</div>
+        </div>
+      </div>
+      <div class="phone">
+        <div class="bar"><b>Today's jobs</b><span>3 jobs</span></div>
+        <div class="body" style="padding-top:12px">
+          <div class="urgent">
+            <span class="tag">ESCALATED</span>
+            <div class="t">AC not cooling · Sector 44</div>
+            <div class="s">10 AM – 12 noon · 3.2 km · ₹450</div>
+          </div>
+          <div class="normal">
+            <div class="t">Geyser install · DLF 3</div>
+            <div class="s">12 – 4 PM · 5.1 km · ₹700</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Type — IBM Plex Sans + IBM Plex Sans Devanagari</h2>
+    <div class="spec">
+      <div class="row"><div class="money">₹1,20,450</div><div class="lbl">Money · 32–40 · Semibold · tabular numerals</div></div>
+      <div class="row"><div class="title">Today's jobs</div><div class="lbl">Screen title · 24 · Semibold</div></div>
+      <div class="row"><div class="head">आपका काम आज</div><div class="lbl">Section heading · 18 · Medium · Devanagari</div></div>
+      <div class="row"><div class="bodyt">AC not cooling · Sector 44, Gurgaon</div><div class="lbl">Body · 16 · Regular · never smaller</div></div>
+      <div class="row"><div class="supp">10 AM – 12 noon · 3.2 km away</div><div class="lbl">Supporting · 14 · Regular</div></div>
+      <div class="row"><span class="pill-green">ON TIME</span><div class="lbl">Label · 12 · Medium · the floor</div></div>
+    </div>
+    <p style="font-size:14px;color:var(--ink-500);margin-top:12px">
+      Weights 400 · 500 · 600 only. Money in Indian format ₹1,20,450. Dates DD/MM/YYYY.
+      Numbers in English digits in both languages.
+    </p>
+  </section>
+
+  <section>
+    <h2>Shape and space</h2>
+    <table>
+      <tbody><tr><td>Grid</td><td class="n">4 pt · gaps 8, 12, 16, 24</td></tr>
+      <tr><td>Screen margin</td><td class="n">16</td></tr>
+      <tr><td>Card and button radius</td><td class="n">12 · chips fully rounded</td></tr>
+      <tr><td>Tap target</td><td class="n">48 × 48 minimum · 8 between</td></tr>
+      <tr><td>Motion</td><td class="n">150–250 ms</td></tr>
+    </tbody></table>
+  </section>
+
+  <section>
+    <h2>Rules</h2>
+    <ol>
+      <li>Only tokens in code. No hex codes anywhere else.</li>
+      <li>Urgency is always a filled red-600 tag with a word — ESCALATED, SLA BREACH. Never colour alone.</li>
+      <li>Gold is only grade and rewards. Never on red. Never a large filled area.</li>
+      <li>Meaning colours are never decorative.</li>
+      <li>Every colour carries an icon and a word with it.</li>
+      <li>Blue blocks go below the job list, never above.</li>
+      <li>Light and dark mode only. No colour picker. Light designed first.</li>
+      <li>Design in Hindi first, check in English. Never truncate — wrap to a second line.</li>
+      <li>Nothing below 12px. Body never below 16px.</li>
+      <li>No colour that is not on this page.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>Tokens</h2>
+<pre>:root {
+  --ef-red-50:#FBF0F1;  --ef-red-100:#F6DEE0; --ef-red-500:#C42430;
+  --ef-red-600:#A71F29; --ef-red-700:#831820;
+
+  --ef-ink-900:#171B1F; --ef-ink-700:#363B41; --ef-ink-500:#5C636B;
+  --ef-ink-300:#9AA1A9; --ef-ink-100:#E4E7EA; --ef-ink-50:#F4F6F7;
+  --ef-white:#FFFFFF;
+
+  --ef-blue-100:#E4EFFA; --ef-blue-500:#2A6FBF;
+  --ef-blue-700:#1B4C87; --ef-blue-900:#10294D;
+
+  --ef-success:#1B9E5A; --ef-success-tint:#E2F5EA; --ef-success-text:#0E5C34;
+  --ef-warning:#E0930F; --ef-warning-tint:#FCF0D9; --ef-warning-text:#6B4405;
+  --ef-gold:#C99A2E;    --ef-gold-tint:#FBF1D8;    --ef-gold-text:#6B4A05;
+  /* urgent and error use red-600 / red-100 / red-700 */
+
+  --ef-font:'IBM Plex Sans','IBM Plex Sans Devanagari','Noto Sans Devanagari',system-ui,sans-serif;
+  --ef-radius:12px; --ef-tap-min:48px;
+}</pre>
+  </section>
+
+</div>
+
+
+</body></html>
