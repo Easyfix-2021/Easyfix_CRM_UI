@@ -508,17 +508,46 @@ jobs:
           echo "▶ Recreating crm-ui container (backend untouched)"
           docker compose up -d --no-deps --force-recreate crm-ui
 
+          # Waiting for health without asserting it is just a slower way of
+          # not checking — the loop used to fall through and report success
+          # with a crash-looping container behind it.
+          HEALTH=unknown
           for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-            STATUS=\$(docker inspect --format '{{.State.Health.Status}}' easyfix-crm-ui 2>/dev/null || echo unknown)
-            echo "[\$i/15] crm-ui health: \$STATUS"
-            [[ "\$STATUS" == "healthy" ]] && break
+            HEALTH=\$(docker inspect --format '{{.State.Health.Status}}' easyfix-crm-ui 2>/dev/null || echo unknown)
+            echo "[\$i/15] crm-ui health: \$HEALTH"
+            [[ "\$HEALTH" == "healthy" ]] && break
             sleep 4
           done
+          if [[ "\$HEALTH" != "healthy" ]]; then
+            echo "::error::crm-ui never reported healthy (last: \$HEALTH). The swap DID happen, so the new container is the serving one — read the logs below before rolling back."
+            docker compose ps crm-ui || true
+            docker compose logs --tail 60 crm-ui || true
+            exit 1
+          fi
 
           docker image prune -af --filter "until=72h" >/dev/null 2>&1 || true
 
           docker compose ps crm-ui
+
+          # ─── PROVE THE SWAP ACTUALLY HAPPENED ───────────────────────────
+          # The smoke test below CANNOT establish this: it curls /login, and
+          # the PREVIOUS container answers that just as happily as the new
+          # one, so a deploy that changed nothing passes it perfectly. The
+          # only honest question is which image is bound to the running
+          # container — so ask that directly.
+          RUNNING=\$(docker inspect --format '{{.Config.Image}}' easyfix-crm-ui 2>/dev/null || echo none)
+          if [[ "\$RUNNING" != "$IMAGE_URI" ]]; then
+            echo "::error::Deploy did NOT take — easyfix-crm-ui is running \$RUNNING but this deploy built $IMAGE_URI."
+            echo "::error::The application is still serving the OLD code. Nothing was broken, but nothing shipped either."
+            exit 1
+          fi
+          echo "✓ Verified running image: \$RUNNING"
           echo "✓ Deployed $IMAGE_URI"
+
+          # Machine-readable end-of-script marker, asserted by the runner.
+          # Its ABSENCE is the signal — it catches the one failure mode an
+          # exit code cannot: a script that stops early and still exits 0.
+          echo "EASYFIX-DEPLOY-COMPLETE $IMAGE_URI"
           EOF
           )
 
@@ -526,9 +555,40 @@ jobs:
           # `bash -c "<json-encoded-string>"` doesn't survive the round-trip:
           # newlines arrive as literal `\n`, collapsing the script onto one
           # line. Base64 sidesteps every escape layer.
+          #
+          # DECODE TO A FILE — NEVER `base64 -d | bash` (2026-08-13 incident
+          # in EasyFix_Backend, whose deploy.yml is this file's sibling).
+          # Piping a script into bash makes STDIN THE SCRIPT. Bash reads a
+          # compound statement in full before executing it, so any command
+          # inside that block which reads stdin consumes the script's own
+          # remaining bytes; bash then hits EOF and exits 0. A truncated run
+          # is indistinguishable from a completed one — no error, exit 0,
+          # SSM reports Success, green check, nothing deployed.
+          #
+          # In the backend that was `docker compose run` in its schema gate
+          # (`-T` disables TTY allocation, NOT stdin), which ate everything
+          # after it: nine consecutive "successful" Production deploys never
+          # recreated the container. THIS file has no stdin-reading command
+          # today — its one `docker run -i` is pipe-fed, so it consumes that
+          # pipe rather than the script — meaning it works purely by luck and
+          # would break silently the first time anyone adds one.
+          #
+          # Running a FILE gives bash a seekable fd of its own and leaves the
+          # process stdin free, so no command in the script can ever eat it.
+          # `</dev/null` on the bash call keeps that stdin empty and closed.
           SCRIPT_B64=$(printf '%s' "$REMOTE_SCRIPT" | base64 -w0)
-          PARAMS_JSON=$(jq -n --arg b64 "$SCRIPT_B64" \
-            '{commands: ["echo \($b64) | base64 -d | bash"]}')
+          PARAMS_JSON=$(jq -n --arg b64 "$SCRIPT_B64" '{
+            commands: [
+              "set -e",
+              "SCRIPT=$(mktemp /tmp/easyfix-ui-deploy.XXXXXX)",
+              "echo \($b64) | base64 -d > \"$SCRIPT\"",
+              "set +e",
+              "bash \"$SCRIPT\" </dev/null",
+              "RC=$?",
+              "rm -f \"$SCRIPT\"",
+              "exit $RC"
+            ]
+          }')
 
           CMD_ID=$(aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
@@ -550,9 +610,10 @@ jobs:
 
           echo
           echo "── Remote stdout ──"
-          aws ssm get-command-invocation \
+          REMOTE_OUT=$(aws ssm get-command-invocation \
             --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
-            --query 'StandardOutputContent' --output text || true
+            --query 'StandardOutputContent' --output text || true)
+          printf '%s\n' "$REMOTE_OUT"
           echo
           echo "── Remote stderr ──"
           aws ssm get-command-invocation \
@@ -560,6 +621,21 @@ jobs:
             --query 'StandardErrorContent' --output text || true
 
           [[ "$STATUS" == "Success" ]] || { echo "::error::SSM finished with $STATUS"; exit 1; }
+
+          # A Success exit code only says the script STOPPED cleanly, not that
+          # it RAN to the end. The remote script's final line is a sentinel,
+          # so requiring it turns "stopped early and said nothing" into a
+          # failed deploy.
+          #
+          # (SSM caps StandardOutputContent at 24 KB. Normal output is ~2 KB;
+          # if a future change makes the remote script chatty enough to reach
+          # that cap the sentinel would be truncated away and this check would
+          # misfire — keep the remote output terse.)
+          if ! grep -q 'EASYFIX-DEPLOY-COMPLETE' <<< "$REMOTE_OUT"; then
+            echo "::error::The remote script exited 0 but never reached its final line — the deploy stopped partway and the container swap may not have happened."
+            echo "::error::The application is still serving whatever it was serving before. Read the remote stdout above: the last line printed is where execution stopped."
+            exit 1
+          fi
 
       - name: Smoke-test deployed UI
         run: |
@@ -583,9 +659,24 @@ jobs:
           sudo docker logs easyfix-crm-ui --tail 80 2>&1 || true
           exit 1'
 
+          # Decode to a file, never `base64 -d | bash` — see the long note on
+          # the deploy step's transport. This script has no stdin-reading
+          # command today, but the smoke test is precisely where a silent
+          # early exit is most dangerous: it would exit 0 without probing
+          # anything and report a healthy deploy it never tested.
           SCRIPT_B64=$(printf '%s' "$SMOKE_SCRIPT" | base64 -w0)
-          PARAMS_JSON=$(jq -n --arg b64 "$SCRIPT_B64" \
-            '{commands: ["echo \($b64) | base64 -d | bash"]}')
+          PARAMS_JSON=$(jq -n --arg b64 "$SCRIPT_B64" '{
+            commands: [
+              "set -e",
+              "SCRIPT=$(mktemp /tmp/easyfix-ui-smoke.XXXXXX)",
+              "echo \($b64) | base64 -d > \"$SCRIPT\"",
+              "set +e",
+              "bash \"$SCRIPT\" </dev/null",
+              "RC=$?",
+              "rm -f \"$SCRIPT\"",
+              "exit $RC"
+            ]
+          }')
 
           CMD_ID=$(aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
@@ -602,11 +693,20 @@ jobs:
             case "$STATUS" in Success|Failed|Cancelled|TimedOut) break ;; esac
           done
 
-          aws ssm get-command-invocation \
+          SMOKE_OUT=$(aws ssm get-command-invocation \
             --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
-            --query 'StandardOutputContent' --output text || true
+            --query 'StandardOutputContent' --output text || true)
+          printf '%s\n' "$SMOKE_OUT"
 
           [[ "$STATUS" == "Success" ]] || { aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" --query 'StandardErrorContent' --output text; exit 1; }
+
+          # Require the probe's own success line. Exit 0 alone would also be
+          # produced by a script that stopped before it ever probed, which is
+          # a green smoke test for a page nobody looked at.
+          if ! grep -q '✓ /login' <<< "$SMOKE_OUT"; then
+            echo "::error::Smoke test exited 0 without recording a successful /login probe — treat this as a failed smoke test, not a pass."
+            exit 1
+          fi
 
       - name: Notify on failure
         # Skip when MAIL_USERNAME isn't configured — otherwise the action
