@@ -234,6 +234,13 @@ type StatusCountsResp = {
   not_eligible: number;
   not_suitable: number;
   reg_in_progress: number;
+  /*
+   * Lifecycle bucket, not one of the six legacy status buckets — it filters
+   * on `lifecycleStatus=TRAINING_PENDING` rather than `status=<n>`. Comes back
+   * as 0 on an environment without the lifecycle migration, and the strip
+   * hides a zero, so it simply does not render there.
+   */
+  training_pending: number;
   total: number;
 };
 
@@ -1077,11 +1084,14 @@ export default function EasyfixersPage() {
             <StatusCountsStrip
               counts={statusCounts}
               activeStatus={filters.status}
-              onPick={(s) => {
+              activeLifecycleStatus={filters.lifecycleStatus}
+              onPick={({ status, lifecycleStatus }) => {
                 // Legacy status bucket and the lifecycle-status filter are the
                 // same dimension — picking one clears the other (else the
                 // backend ANDs them, e.g. Active + Blacklisted → zero rows).
-                const next = { ...filters, status: s, lifecycleStatus: '' };
+                // Each strip entry carries both fields with the unused one
+                // blank, so applying them together IS the mutual exclusion.
+                const next = { ...filters, status, lifecycleStatus };
                 setFilters(next);
                 setPage(0);
                 load(true, next, 0);
@@ -1822,6 +1832,7 @@ function PincodesCell({
 function StatusCountsStrip({
   counts,
   activeStatus,
+  activeLifecycleStatus,
   onPick,
 }: {
   counts: StatusCountsResp;
@@ -1833,26 +1844,78 @@ function StatusCountsStrip({
    * down at the dropdown.
    */
   activeStatus: string;
-  onPick: (statusValue: string) => void;
+  /* Same idea for the lifecycle dimension (UPPER_SNAKE, '' = none). */
+  activeLifecycleStatus: string;
+  onPick: (next: { status: string; lifecycleStatus: string }) => void;
 }) {
-  const items: Array<{ key: keyof StatusCountsResp; label: string; value: string; dot: string; ring: string }> = [
-    { key: 'active',          label: 'Active',                   value: '1', dot: 'bg-emerald-500', ring: 'ring-emerald-500/30' },
-    { key: 'inactive',        label: 'Inactive',                 value: '2', dot: 'bg-slate-500',   ring: 'ring-slate-500/30' },
-    { key: 'idle',            label: 'Idle',                     value: '3', dot: 'bg-slate-400',   ring: 'ring-slate-400/30' },
-    { key: 'not_eligible',    label: 'Not Eligible',             value: '4', dot: 'bg-red-500',     ring: 'ring-red-500/30' },
-    { key: 'not_suitable',    label: 'Not Suitable',             value: '5', dot: 'bg-amber-500',   ring: 'ring-amber-500/30' },
-    { key: 'reg_in_progress', label: 'Registration In Progress', value: '6', dot: 'bg-sky-500',     ring: 'ring-sky-500/30' },
+  /*
+   * Each entry drives exactly ONE filter dimension and blanks the other:
+   * `status` is the legacy 1..6 bucket, `lifecycleStatus` is the technician
+   * lifecycle machine. They are the same conceptual axis, so the backend ANDs
+   * them and a combination like Active + Blacklisted yields zero rows —
+   * carrying both fields on every entry is what makes "picking one clears the
+   * other" structural rather than something each call site has to remember.
+   */
+  /*
+   * Annotated on the literal, not on the filtered result: a type annotation
+   * does not flow backwards through a chained `.filter()`, so writing
+   * `const items: StripItem[] = [...].filter(...)` lets `key` widen to
+   * `string` and then fails to index StatusCountsResp.
+   */
+  type StripItem = {
+    key: keyof StatusCountsResp;
+    label: string;
+    status: string;
+    lifecycleStatus: string;
+    dot: string;
+    ring: string;
+  };
+  const allItems: StripItem[] = [
+    { key: 'active',          label: 'Active',                   status: '1', lifecycleStatus: '', dot: 'bg-emerald-500', ring: 'ring-emerald-500/30' },
+    { key: 'inactive',        label: 'Inactive',                 status: '2', lifecycleStatus: '', dot: 'bg-slate-500',   ring: 'ring-slate-500/30' },
+    { key: 'idle',            label: 'Idle',                     status: '3', lifecycleStatus: '', dot: 'bg-slate-400',   ring: 'ring-slate-400/30' },
+    { key: 'not_eligible',    label: 'Not Eligible',             status: '4', lifecycleStatus: '', dot: 'bg-red-500',     ring: 'ring-red-500/30' },
+    { key: 'not_suitable',    label: 'Not Suitable',             status: '5', lifecycleStatus: '', dot: 'bg-amber-500',   ring: 'ring-amber-500/30' },
+    { key: 'reg_in_progress', label: 'Registration In Progress', status: '6', lifecycleStatus: '', dot: 'bg-sky-500',     ring: 'ring-sky-500/30' },
+    /*
+     * Training Pending (2026-08-13). Earns a place here because the LMS made
+     * it actionable: completing the assigned videos now advances a technician
+     * out of TRAINING_PENDING automatically, so whoever remains in it is
+     * exactly the set who have not finished their training — a worklist, not
+     * just a state.
+     *
+     * Violet rather than the amber its in-row StatusChip uses. The strip's
+     * dots are its only colour coding and Not Suitable already owns amber;
+     * two identical dots would defeat the one-line scannability this strip
+     * exists for. The chip inside the table keeps the canonical tone.
+     */
+    { key: 'training_pending', label: 'Training Pending', status: '', lifecycleStatus: 'TRAINING_PENDING', dot: 'bg-violet-500', ring: 'ring-violet-500/30' },
   ];
+
+  /*
+   * Every entry always renders, including at zero — operators read a zero as
+   * data, and a filter that disappears when empty is a filter nobody can find.
+   *
+   * Expect Training Pending to read 0 for now: as of 2026-08-13 no technician
+   * is in TRAINING_PENDING, because nothing currently PUTS them there. The
+   * LMS completion wire moves people OUT of the state; the entrance is still
+   * a manual CRM transition. The count becomes meaningful once something
+   * assigns the state on registration.
+   */
+  const items = allItems;
+
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground mt-1">
       {items.map((it, i) => {
-        const isActive = activeStatus === it.value;
+        const isActive = it.lifecycleStatus
+          ? activeLifecycleStatus === it.lifecycleStatus
+          : activeStatus === it.status && !activeLifecycleStatus;
         return (
           <span key={it.key} className="inline-flex items-center gap-2">
             {i > 0 && <span className="text-muted-foreground/50">·</span>}
             <button
               type="button"
-              onClick={() => onPick(it.value)}
+              onClick={() => onPick({ status: it.status, lifecycleStatus: it.lifecycleStatus })}
               /*
                * Active state — bold text + slightly enlarged solid dot
                * with a subtle ring halo. Inactive entries keep the

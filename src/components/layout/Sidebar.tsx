@@ -7,7 +7,7 @@ import { usePathname, useSearchParams } from 'next/navigation';
 import {
   Home, Briefcase, UserCircle2, Users, Building2,
   BarChart3, Settings, Coins, ShoppingBag, Wallet, User, MapPin,
-  Megaphone,
+  Megaphone, GraduationCap,
   ChevronRight, ChevronDown, Circle, type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -89,6 +89,7 @@ type TreeNode = MenuRow & { children: TreeNode[] };
 const PARENT_META: Record<string, { icon: LucideIcon }> = {
   'Home':              { icon: Home },
   'Notice Board':      { icon: Megaphone },
+  'LMS':               { icon: GraduationCap },
   'Jobs':              { icon: Briefcase },
   'My Orders':         { icon: ShoppingBag },
   'Customers':         { icon: Users },

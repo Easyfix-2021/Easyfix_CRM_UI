@@ -36,6 +36,14 @@ export const URL_MAP: Record<string, string> = {
   // Tbl_menu row seeded with url='noticeBoard'; the page lives at
   // /notice-board and gates Compose/Publish/Archive on isNoticeManage.
   'noticeBoard':           '/notice-board',
+  // LMS — technician training, added 2026-08-13. Four leaves under a
+  // top-level "LMS" parent (tbl_menu seq 14). The sidebar is a hard 2-level
+  // tree, so these are siblings rather than a nested Courses > Content
+  // hierarchy. Writes across all four gate on isLmsManage.
+  'lmsCourses':            '/lms/courses',
+  'lmsVideos':             '/lms/training-videos',
+  'lmsAssign':             '/lms/assign-training',
+  'lmsReport':             '/lms/training-report',
   'job':                   '/jobs',
   'uploadJobByExcel':      '/jobs/upload',
   // Distinct ?focus param so isRouteActive() can tell Manage Jobs and
