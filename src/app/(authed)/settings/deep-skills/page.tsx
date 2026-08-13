@@ -1479,6 +1479,11 @@ function DeepSkillEditor({
         *     dialog (logos, square thumbnails)
         */}
       <Dialog open={zoomedImage != null} onOpenChange={guardedLightboxClose}>
+        {/* Nothing here can overflow: the only child is an <img> capped at
+            max-h-[80vh] object-contain inside this 85vh panel, so there is no
+            content to scroll to and no footer to hide. overflow-hidden is the
+            right call — it keeps the image's corners clipped to the panel. */}
+        {/* eslint-disable-next-line local/no-unscrollable-dialog-content */}
         <DialogContent className="max-w-2xl max-h-[85vh] p-0 overflow-hidden">
           <DialogTitle className="sr-only">Skill Image Preview</DialogTitle>
           <button

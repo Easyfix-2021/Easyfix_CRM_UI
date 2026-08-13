@@ -412,10 +412,130 @@ const noRawTimeSlotRender = {
   },
 };
 
+/* ───────────────────────────────────────────────────────────────────────────
+ * LOCAL RULE — local/no-unscrollable-dialog-content
+ *
+ * Bans a BARE `overflow-hidden` on <DialogContent> unless the modal's own
+ * subtree provides a scroll region.
+ *
+ * WHY THIS ISN'T A no-restricted-syntax SELECTOR. The condition is not
+ * "does this attribute contain a string" — it is "does this attribute contain
+ * a string AND does the subtree below it lack another one". ESQuery can't
+ * express the second half, and a rule that only checked the first would fire
+ * on the 22 call sites where `overflow-hidden` is exactly right.
+ *
+ * THE INVARIANT. DialogContent's base is `max-h-[85vh] overflow-y-auto
+ * overflow-x-hidden` (2026-08-13), which bounds every modal and lets it
+ * scroll. tailwind-merge puts `overflow-hidden` in the SAME conflict group as
+ * `overflow-y-auto`, so a call-site `overflow-hidden` doesn't merely add a
+ * clip — it DELETES the base scroll. Verified against the real class strings:
+ *
+ *     twMerge(base, 'p-0 overflow-hidden')  →  max-h-[85vh] p-0 overflow-hidden
+ *
+ * Bounded, but clipping: content past 85vh is unreachable, and if that content
+ * is the footer, the modal has hidden its own dismiss button. That shipped —
+ * a notice longer than the viewport could only be closed with Esc.
+ *
+ * Two shapes are legitimate and both pass:
+ *   1. `overflow-x-hidden` (+ the base's y-scroll) — `auto` still clips to the
+ *      border radius, so an edge-to-edge header band keeps its rounded corners.
+ *   2. `overflow-hidden` on a `flex flex-col` panel whose body child carries
+ *      `flex-1 min-h-0 overflow-y-auto` — the pinned header/footer pattern. The
+ *      rule looks for that inner region and stays quiet when it finds one.
+ *
+ * FALSE-POSITIVE SHAPE: a modal whose body is rendered by a CHILD COMPONENT
+ * (`<SomeBody />`) that owns the scroll region — the rule can't see into
+ * another file. That's the case for an eslint-disable-next-line with a
+ * one-line reason, same as the other rules here.
+ * ─────────────────────────────────────────────────────────────────────────── */
+/*
+ * Matched against RAW SOURCE TEXT, not an extracted string value — so the
+ * delimiter on either side is just as often a quote or backtick as a space
+ * (`className="overflow-y-auto …"`). A whitespace-anchored version of this
+ * silently matched nothing and reported four modals that were perfectly fine.
+ * Character-class lookaround is the boundary that actually holds, while still
+ * refusing to match inside a longer token.
+ */
+const SCROLLY_CLASS = /(?<![-\w])overflow-(y-)?(auto|scroll)(?![-\w])/;
+
+/* Is `overflow-hidden` present as a WHOLE class token? Tolerates the `!`
+ * important prefix and responsive/state variants, and deliberately does NOT
+ * match `overflow-x-hidden` / `overflow-y-hidden`, which are the fix. */
+const hasBareOverflowHidden = (text) => text.split(/\s+/).some((tok) => {
+  const bare = tok.replace(/^!/, '');
+  const base = bare.slice(bare.lastIndexOf(':') + 1);
+  return base === 'overflow-hidden';
+});
+
+const noUnscrollableDialogContent = {
+  meta: {
+    type: 'problem',
+    docs: { description: 'Disallow a bare overflow-hidden on DialogContent with no scroll region beneath it.' },
+    schema: [],
+    messages: {
+      clipped:
+        '`overflow-hidden` on <DialogContent> DELETES the base `overflow-y-auto` — tailwind-merge treats '
+        + 'them as the same conflict group — so this modal clips at max-h-[85vh] with no way to reach the '
+        + 'rest. If the footer is down there, the modal hides its own dismiss button (a notice shipped like '
+        + 'that; Esc was the only exit). Either use `overflow-x-hidden` instead — `auto` still clips to the '
+        + 'rounded corners, so an edge-to-edge header band keeps its corners — or keep `overflow-hidden` and '
+        + 'add `flex flex-col` here plus a body child with `flex-1 min-h-0 overflow-y-auto`. If the scroll '
+        + 'region lives in a child COMPONENT this rule cannot see, add an eslint-disable-next-line saying so.',
+    },
+  },
+  create(context) {
+    const sc = context.sourceCode || context.getSourceCode();
+
+    /* Every string literal anywhere inside the attribute value — covers
+     * className="…", className={`…`}, className={cn('…', x && '…')} and
+     * conditional branches, without caring which shape it is. */
+    const literalTextIn = (node) => {
+      let out = '';
+      const walk = (n) => {
+        if (!n || typeof n !== 'object') return;
+        if (n.type === 'Literal' && typeof n.value === 'string') out += ' ' + n.value;
+        else if (n.type === 'TemplateElement') out += ' ' + (n.value.cooked ?? n.value.raw ?? '');
+        for (const k of Object.keys(n)) {
+          if (k === 'parent') continue;
+          const v = n[k];
+          if (Array.isArray(v)) v.forEach(walk);
+          else if (v && typeof v.type === 'string') walk(v);
+        }
+      };
+      walk(node);
+      return out;
+    };
+
+    return {
+      JSXOpeningElement(node) {
+        if (!node.name || node.name.name !== 'DialogContent') return;
+        const classAttr = node.attributes.find(
+          (a) => a.type === 'JSXAttribute' && a.name && a.name.name === 'className',
+        );
+        if (!classAttr || !classAttr.value) return;
+        if (!hasBareOverflowHidden(literalTextIn(classAttr.value))) return;
+
+        /* Look for a scroll region in the element's own subtree. Scanning the
+         * source text of the whole JSXElement rather than walking children:
+         * the body region is often several components deep in the same file,
+         * and any `overflow-y-auto` below this point is evidence the author
+         * provided somewhere for the content to go. Deliberately generous —
+         * this rule should only fire when there is provably no escape. */
+        const element = node.parent;
+        const text = sc.getText(element);
+        if (SCROLLY_CLASS.test(text)) return;
+
+        context.report({ node: classAttr, messageId: 'clipped' });
+      },
+    };
+  },
+};
+
 const localPlugin = {
   rules: {
     'no-duplicate-chart-series-color': noDuplicateChartSeriesColor,
     'no-raw-time-slot-render': noRawTimeSlotRender,
+    'no-unscrollable-dialog-content': noUnscrollableDialogContent,
   },
 };
 
@@ -465,6 +585,10 @@ const config = [
       // derived, can be stale, and holds ~20 spellings of four bands. Inert on
       // files that never touch the column.
       'local/no-raw-time-slot-render': 'error',
+      // Modal-escape guard: a bare `overflow-hidden` on <DialogContent>
+      // out-merges the base scroll and can hide a modal's own dismiss button.
+      // Inert on files with no DialogContent.
+      'local/no-unscrollable-dialog-content': 'error',
     },
   },
 
