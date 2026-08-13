@@ -275,15 +275,39 @@ export const DialogContent = React.forwardRef<
          */
         'border border-slate-200/80 bg-background',
         'shadow-2xl ring-1 ring-black/5',
-        // overflow-hidden so the dark-slate DialogHeader band clips to
-        // the panel's rounded corners (the header uses `-mx-6 -mt-6` to
-        // sit edge-to-edge; without clipping the band's square top-edge
-        // pokes past the rounded container).
-        // `noPadding` (2026-06-11) lets a caller strip the 24px body
-        // padding cleanly — see DialogPaddingContext below; header /
-        // footer auto-strip their negative-margin compensation when
-        // the context says noPadding.
-        noPadding ? 'p-0 overflow-hidden' : 'p-6 overflow-hidden',
+        /*
+         * BOUNDED HEIGHT BY DEFAULT (2026-08-13).
+         *
+         * This box is `fixed` and centred with `-translate-y-1/2`, so content
+         * taller than the viewport used to overflow in BOTH directions with no
+         * way to reach it: `overflow-hidden` meant it couldn't scroll itself,
+         * and `fixed` meant the page couldn't scroll it into view. On a
+         * blocking modal that hides its own footer, the only exit is Esc — a
+         * real notice shipped like that and operators simply couldn't dismiss
+         * it. Unbounded was never the right default; 94 of 105 call sites just
+         * hadn't hit content long enough to notice.
+         *
+         * `max-h-[85vh]` matches what the call sites that DID handle it chose
+         * (settings/pincodes, settings/deep-skills), so nothing visibly moves
+         * for them. overflow-x stays hidden — the DialogHeader band relies on
+         * that clip for its rounded top corners — while the y-axis scrolls.
+         *
+         * OVERRIDING IS SAFE: cn() runs tailwind-merge, so a call-site
+         * `max-h-[90vh]`, `max-h-none` or `overflow-visible` replaces these
+         * rather than racing them in the stylesheet.
+         *
+         * This scrolls the WHOLE panel, header included. A modal that wants a
+         * pinned header/footer still opts into `flex flex-col` + an inner
+         * `flex-1 overflow-y-auto`, exactly as before — that pattern keeps
+         * working untouched, because its inner region absorbs the overflow and
+         * this outer one never engages.
+         *
+         * `noPadding` (2026-06-11) lets a caller strip the 24px body padding
+         * cleanly — see DialogPaddingContext below; header / footer auto-strip
+         * their negative-margin compensation when the context says noPadding.
+         */
+        'max-h-[85vh] overflow-y-auto overflow-x-hidden',
+        noPadding ? 'p-0' : 'p-6',
         /*
          * Open/close animation. Combines fade + zoom + a tiny
          * downward slide so the dialog feels like it "lands" from

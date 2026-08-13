@@ -117,7 +117,13 @@ export function ConfirmDialogProvider({ children }: { children: React.ReactNode 
             spacing. Without this opt-out, every child accumulates 24px of
             outer padding AND 16px of inter-section gap, which is what made
             the original confirm dialog look airy and empty. */}
-        <DialogContent className="sm:max-w-md !p-0 !gap-0 overflow-hidden">
+        {/* overflow-y-auto (not overflow-hidden) so a long confirmation body
+            stays reachable. `auto` still clips to the rounded corners, so the
+            edge-to-edge header band keeps its clip — while a plain
+            `overflow-hidden` here would out-merge DialogContent's base
+            `overflow-y-auto` (tailwind-merge treats it as the same conflict
+            group) and silently re-clip the content at 85vh. */}
+        <DialogContent className="sm:max-w-md !p-0 !gap-0 overflow-x-hidden overflow-y-auto">
           {/* HEADER — dark slate band, edge-to-edge.
               `!mx-0 !mt-0` cancels the negative margins DialogHeader uses
               to extend itself past DialogContent's default p-6 (we set

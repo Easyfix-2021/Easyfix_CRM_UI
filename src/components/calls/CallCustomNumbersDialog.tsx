@@ -112,7 +112,10 @@ export function CallCustomNumbersDialog({
 
   return (
     <Dialog open={open} onOpenChange={guardedOpenChange}>
-      <DialogContent className="sm:max-w-md !p-0 !gap-0 overflow-hidden">
+      {/* overflow-y-auto (not overflow-hidden) so a long number list stays
+          reachable; `auto` still clips to the rounded corners for the header
+          band, while `overflow-hidden` would out-merge the base scroll. */}
+      <DialogContent className="sm:max-w-md !p-0 !gap-0 overflow-x-hidden overflow-y-auto">
         <DialogHeader className="!mx-0 !mt-0 !mb-0 !py-4">
           <div className="flex items-center gap-3">
             <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-500/20 ring-1 ring-emerald-400/40 text-emerald-200">

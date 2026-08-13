@@ -228,7 +228,11 @@ export default function NoticeBoardListPage() {
             <Megaphone className="size-6" /> Notice Board
           </h1>
           <p className="text-sm text-muted-foreground">
-            Broadcast messages to CRM staff, clients, and technicians. Pinned + newest first.
+            {/* Was "Pinned + newest first" — the list now orders by publish date
+                alone, so pinned notices no longer sit on top of the management
+                table forever (including after they are archived). The 📌 in the
+                Title column still shows the flag; it just doesn't sort. */}
+            Broadcast messages to CRM staff, clients, and technicians. Newest first.
           </p>
         </div>
         {/* New Notice button is gated by isNoticeManage. Without the

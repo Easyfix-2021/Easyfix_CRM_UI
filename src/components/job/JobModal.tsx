@@ -10846,7 +10846,10 @@ function JobOutcomeDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="!max-w-xl p-0 gap-0 overflow-hidden">
+      {/* overflow-y-auto (not overflow-hidden) so long content stays reachable;
+          `auto` still clips to the rounded corners for the band below, while
+          `overflow-hidden` would out-merge DialogContent's base scroll. */}
+      <DialogContent className="!max-w-xl p-0 gap-0 overflow-x-hidden overflow-y-auto">
         {/* Dark-slate gradient header band with sky accent underline —
             matches the global modal-header look. Plain <div> wrapper
             (NOT DialogHeader) because DialogHeader's `-mx-6 -mt-6`

@@ -171,7 +171,11 @@ export function AddRemarksDialog({ open, jobId, onClose, onSaved, currentUserNam
     // change behaviour, so we keep the same close path.
     // eslint-disable-next-line no-restricted-syntax
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="!max-w-xl p-0 gap-0 overflow-hidden">
+      {/* overflow-y-auto (not overflow-hidden): a long remarks history must stay
+          scrollable. `auto` still clips to the rounded corners so the dark band
+          keeps its clip, whereas `overflow-hidden` out-merges DialogContent's
+          base scroll and re-clips at 85vh. */}
+      <DialogContent className="!max-w-xl p-0 gap-0 overflow-x-hidden overflow-y-auto">
         {/* Dark-slate band header matching JobOutcomeDialog. */}
         <div className="px-6 py-4 bg-gradient-to-r from-slate-900 via-slate-700 to-slate-900 text-white flex items-center gap-2.5 shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]">
           <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-sky-500/20 ring-1 ring-sky-400/40">
