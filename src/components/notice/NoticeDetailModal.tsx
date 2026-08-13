@@ -130,7 +130,26 @@ export function NoticeDetailModal({
         hideClose
         noPadding
         className={
-          'sm:max-w-[32rem] rounded-2xl border-0 '
+          /*
+           * BOUNDED HEIGHT + INTERNAL SCROLL (2026-08-13).
+           *
+           * Base DialogContent is `fixed top-1/2 -translate-y-1/2` with
+           * `overflow-hidden` and NO max-height. A notice longer than the
+           * viewport therefore grew the card past the screen in BOTH
+           * directions, could not scroll internally, and could not be scrolled
+           * into view from the page because it is `fixed` — so the footer's
+           * dismiss button became unreachable and the notice was unclosable
+           * except by Esc. A blocking modal must never be able to hide its own
+           * way out.
+           *
+           * `max-h-[85vh]` + `flex flex-col` here, with the hero and footer
+           * `shrink-0` and only the body scrolling, matches what the other
+           * long modals in this app already do (settings/pincodes,
+           * settings/deep-skills). It is a call-site fix, not a base one,
+           * because that is this codebase's convention and 105 dialogs is too
+           * wide a blast radius to change blind.
+           */
+          'sm:max-w-[32rem] rounded-2xl border-0 flex flex-col max-h-[85vh] '
           + (stackDepth >= 2
             ? 'shadow-[0_25px_50px_-12px_rgb(0_0_0_/_0.4),0_-9px_0_-4px_rgb(255_255_255_/_0.9),0_-18px_0_-8px_rgb(255_255_255_/_0.65)]'
             : stackDepth === 1
@@ -140,7 +159,7 @@ export function NoticeDetailModal({
       >
         {theme.heroClass ? (
           /* Dark themed hero — aurora / spotlight / celebration. */
-          <div className={`relative overflow-hidden px-6 pt-7 pb-6 text-center ${theme.heroClass}`}>
+          <div className={`relative shrink-0 overflow-hidden px-6 pt-7 pb-6 text-center ${theme.heroClass}`}>
             {/* Static depth blobs. The animated layers are CSS ::before/::after
                 from the theme class, so they cost no extra DOM. */}
             <div className="pointer-events-none absolute -top-16 -right-12 h-40 w-40 rounded-full bg-white/10 blur-2xl" />
@@ -171,7 +190,7 @@ export function NoticeDetailModal({
         ) : (
           /* Quiet card — routine/policy notices. Deliberately calm: no hero, no
              motion, just a coloured rail. Not every notice deserves fireworks. */
-          <div className="flex gap-4 px-6 pt-6">
+          <div className="flex shrink-0 gap-4 px-6 pt-6">
             <div className={`w-1.5 shrink-0 rounded-full ${theme.railClass}`} />
             <div className="min-w-0">
               <DialogTitle className="text-left text-lg font-bold leading-snug text-slate-900">
@@ -195,7 +214,9 @@ export function NoticeDetailModal({
         {/* Body — reading typography, always left-aligned (a consistent left
             edge scans faster; centred copy only ever flattered the shortest
             notices). Indented on the quiet card to align under its headline. */}
-        <div className={theme.heroClass ? 'px-7 py-6' : 'px-6 py-5 pl-[3.4rem]'}>
+        {/* The ONLY scrolling region. Hero above and footer below are shrink-0,
+            so however long the body runs, the dismiss button stays on screen. */}
+        <div className={`min-h-0 flex-1 overflow-y-auto ${theme.heroClass ? 'px-7 py-6' : 'px-6 py-5 pl-[3.4rem]'}`}>
           <div className="whitespace-pre-line text-left text-[15px] leading-7 text-slate-700">
             {body}
           </div>
@@ -253,22 +274,28 @@ export function NoticeDetailModal({
           </div>
         )}
 
-        {footer
-          ? footer({ buttonClass: theme.buttonClass })
-          : (
-            /* Single centred acknowledgement — a full-width bar read as a heavy
-               call-to-action for what is only "I've seen this". */
-            <div className="flex justify-center px-7 pb-7">
-              <Button
-                type="button"
-                onClick={onClose}
-                autoFocus
-                className={`h-11 min-w-[10rem] rounded-xl px-10 text-sm font-semibold shadow-sm ${theme.buttonClass}`}
-              >
-                OK
-              </Button>
-            </div>
-          )}
+        {/* shrink-0 wraps BOTH footers — the default OK and the caller-supplied
+            deck footer from NoticeFlash — so neither can be squeezed to nothing
+            by a long body. A dismiss control that is present but 0px tall is the
+            same bug wearing a different hat. */}
+        <div className="shrink-0 bg-white">
+          {footer
+            ? footer({ buttonClass: theme.buttonClass })
+            : (
+              /* Single centred acknowledgement — a full-width bar read as a heavy
+                 call-to-action for what is only "I've seen this". */
+              <div className="flex justify-center px-7 pb-7 pt-1">
+                <Button
+                  type="button"
+                  onClick={onClose}
+                  autoFocus
+                  className={`h-11 min-w-[10rem] rounded-xl px-10 text-sm font-semibold shadow-sm ${theme.buttonClass}`}
+                >
+                  OK
+                </Button>
+              </div>
+            )}
+        </div>
       </DialogContent>
     </Dialog>
   );
