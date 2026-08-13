@@ -44,6 +44,11 @@ export const URL_MAP: Record<string, string> = {
   'lmsVideos':             '/lms/training-videos',
   'lmsAssign':             '/lms/assign-training',
   'lmsReport':             '/lms/training-report',
+  // Rewards — points, shop and claims, added 2026-08-13. Three leaves under a
+  // top-level "Rewards" parent (tbl_menu seq 15). Writes gate on isRewardsManage.
+  'rewardItems':           '/rewards/items',
+  'rewardClaims':          '/rewards/claims',
+  'rewardLedger':          '/rewards/ledger',
   'job':                   '/jobs',
   'uploadJobByExcel':      '/jobs/upload',
   // Distinct ?focus param so isRouteActive() can tell Manage Jobs and

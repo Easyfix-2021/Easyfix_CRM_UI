@@ -7,7 +7,7 @@ import { usePathname, useSearchParams } from 'next/navigation';
 import {
   Home, Briefcase, UserCircle2, Users, Building2,
   BarChart3, Settings, Coins, ShoppingBag, Wallet, User, MapPin,
-  Megaphone, GraduationCap,
+  Megaphone, GraduationCap, Gift,
   ChevronRight, ChevronDown, Circle, type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -90,6 +90,7 @@ const PARENT_META: Record<string, { icon: LucideIcon }> = {
   'Home':              { icon: Home },
   'Notice Board':      { icon: Megaphone },
   'LMS':               { icon: GraduationCap },
+  'Rewards':           { icon: Gift },
   'Jobs':              { icon: Briefcase },
   'My Orders':         { icon: ShoppingBag },
   'Customers':         { icon: Users },
