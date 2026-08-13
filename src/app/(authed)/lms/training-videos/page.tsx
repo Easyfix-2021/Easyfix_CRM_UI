@@ -17,7 +17,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Video, Search, Plus, Pencil, Trash2, AlertTriangle } from 'lucide-react';
+import { Video, Search, Plus, Pencil, Trash2, AlertTriangle, Play, Youtube, FileVideo } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -34,6 +34,8 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
+import { VideoPreviewDialog } from '@/components/lms/VideoPreviewDialog';
+import { isYouTubeUrl } from '@/lib/video-url';
 
 type TrainingVideo = {
   id: number;
@@ -55,32 +57,11 @@ type TrainingVideo = {
 };
 
 /*
- * Client-side mirror of the backend's YouTube check (lms.service.js
- * ::parseYouTubeUrl). Duplicated deliberately and kept deliberately loose:
- * the backend is the authority and re-validates on every write, so this only
- * decides whether the operator sees the complaint in the form or as a 400.
- * Accepts the same four shapes — /watch?v=, youtu.be/, /embed/, /shorts/.
+ * The YouTube check lives in @/lib/video-url, shared with VideoPreviewDialog —
+ * the same function that decides a link is valid must be the one that decides
+ * which player renders it, or a link can pass validation and then play in
+ * nothing.
  */
-function isYouTubeUrl(value: string): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
-    return false;
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
-  const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
-  const id = host === 'youtu.be'
-    ? parsed.pathname.slice(1).split('/')[0]
-    : (host === 'youtube.com' || host === 'm.youtube.com' || host === 'music.youtube.com')
-        ? (parsed.pathname === '/watch'
-            ? parsed.searchParams.get('v') ?? ''
-            : (['embed', 'shorts', 'live', 'v'].includes(parsed.pathname.split('/')[1] ?? '')
-                ? parsed.pathname.split('/')[2] ?? ''
-                : ''))
-        : '';
-  return /^[A-Za-z0-9_-]{11}$/.test(id);
-}
 
 type ListResponse = { rows: TrainingVideo[]; total: number; limit: number; offset: number };
 
@@ -134,6 +115,9 @@ export default function TrainingVideosPage() {
   const [pageSize, setPageSize] = useState<TablePageSize>(50);
   const [editing, setEditing] = useState<TrainingVideo | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  /* The row being previewed, or null. Holds the whole row rather than just the
+   * url so the dialog header can name the video. */
+  const [previewing, setPreviewing] = useState<TrainingVideo | null>(null);
   /* Tracks the row whose delete is in flight so only that IconButton spins. */
   const [deletingId, setDeletingId] = useState<number | null>(null);
 
@@ -267,13 +251,15 @@ export default function TrainingVideosPage() {
                 React as a hydration error.
               */}
               {/* Title */}
-              <col style={{ width: '34%' }} />
+              <col style={{ width: '30%' }} />
               {/* Sub Title */}
-              <col style={{ width: '28%' }} />
+              <col style={{ width: '24%' }} />
+              {/* Video */}
+              <col style={{ width: '11%' }} />
               {/* Technicians */}
-              <col style={{ width: '13%' }} />
+              <col style={{ width: '12%' }} />
               {/* Courses */}
-              <col style={{ width: '13%' }} />
+              <col style={{ width: '11%' }} />
               {/* Actions */}
               <col style={{ width: '12%' }} />
             </colgroup>
@@ -281,6 +267,11 @@ export default function TrainingVideosPage() {
               <tr>
                 <th className="!text-left whitespace-nowrap">Title</th>
                 <th className="!text-left whitespace-nowrap">Sub Title</th>
+                {/* A catalogue entry with no link is invisible to technicians —
+                    it lists in the app and plays nothing. Surfacing it as a
+                    column means an operator spots the gap while scanning,
+                    instead of opening each row to find out. */}
+                <th className="!text-center whitespace-nowrap">Video</th>
                 {/* Both count columns exist to explain a refused delete before
                     it is attempted — they are the delete guard, surfaced. */}
                 <th className="!text-center whitespace-nowrap">Technicians</th>
@@ -290,10 +281,10 @@ export default function TrainingVideosPage() {
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={5} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
+                <tr><td colSpan={6} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
               )}
               {!loading && rows.length === 0 && (
-                <tr><td colSpan={5} className="!text-center text-muted-foreground py-6">No training videos match the current search.</td></tr>
+                <tr><td colSpan={6} className="!text-center text-muted-foreground py-6">No training videos match the current search.</td></tr>
               )}
               {!loading && rows.map((v) => {
                 const blocked = deleteBlockReason(v);
@@ -304,6 +295,34 @@ export default function TrainingVideosPage() {
                     </td>
                     <td className="!text-left truncate" title={v.sub_title ?? ''}>
                       {v.sub_title || <span className="text-muted-foreground">—</span>}
+                    </td>
+                    {/*
+                      Link indicator. The icon distinguishes the two kinds that
+                      exist — a YouTube embed from a legacy direct file — because
+                      they behave differently in the app and an operator
+                      debugging "it won't play" needs to know which they have.
+                      "Not Linked" is styled as a warning, not a neutral dash:
+                      it means technicians see the entry and get nothing.
+                    */}
+                    <td className="!text-center whitespace-nowrap">
+                      {v.video_url ? (
+                        <StatusChip
+                          tone={isYouTubeUrl(v.video_url) ? 'rose' : 'slate'}
+                          size="sm"
+                          title={v.video_url}
+                        >
+                          <span className="inline-flex items-center gap-1">
+                            {isYouTubeUrl(v.video_url)
+                              ? <Youtube className="size-3" />
+                              : <FileVideo className="size-3" />}
+                            {isYouTubeUrl(v.video_url) ? 'YouTube' : 'File'}
+                          </span>
+                        </StatusChip>
+                      ) : (
+                        <StatusChip tone="amber" size="sm" title="No video is attached — technicians will see this entry but nothing will play">
+                          Not Linked
+                        </StatusChip>
+                      )}
                     </td>
                     {/* A non-zero count is a delete blocker, so it gets a chip
                         (amber = "this holds something back"); zero is inert and
@@ -328,6 +347,18 @@ export default function TrainingVideosPage() {
                     </td>
                     <td className="!text-right whitespace-nowrap">
                       <div className="inline-flex items-center justify-end gap-0.5">
+                        {/*
+                          Play is NOT gated on isLmsManage. Watching a training
+                          video is a read, and someone reviewing what technicians
+                          are being taught needs it whether or not they can edit
+                          the catalogue.
+                        */}
+                        <IconButton
+                          icon={Play}
+                          label={v.video_url ? 'Play Training Video' : 'No Video Linked'}
+                          disabled={!v.video_url}
+                          onClick={() => setPreviewing(v)}
+                        />
                         {can.isLmsManage && (
                           <IconButton
                             icon={Pencil}
@@ -377,6 +408,21 @@ export default function TrainingVideosPage() {
           onClose={() => setModalOpen(false)}
           editing={editing}
           onSaved={() => { setModalOpen(false); refreshList(); }}
+        />
+      )}
+
+      {/*
+        Mounted only while a row is selected, so closing the dialog UNMOUNTS the
+        player. That is what actually stops playback: a hidden-but-mounted
+        <iframe> or <video> keeps playing audio behind the dialog, which is the
+        classic "why is this page talking to me" bug.
+      */}
+      {previewing && (
+        <VideoPreviewDialog
+          open
+          onClose={() => setPreviewing(null)}
+          title={previewing.title}
+          url={previewing.video_url}
         />
       )}
     </div>
