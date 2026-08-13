@@ -34,6 +34,7 @@ import {
   callLegStatusLabel,
   callLegStatusTone,
   callPartyCount,
+  callParties,
   fmtLegDuration,
   isConferenceCall,
   partyTone,
@@ -158,7 +159,10 @@ export function CallLegsRow({
           <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
             {label}
           </div>
-          <CallLegList legs={row?.legs} dense />
+          {/* Deduped to one entry per PERSON, not per leg. A participant
+              re-added after they drop writes a second leg row, which used to
+              list the same name twice with no hint they were the same person. */}
+          <CallLegList legs={callParties(row).map((p) => p.leg)} dense />
         </div>
       </td>
     </tr>

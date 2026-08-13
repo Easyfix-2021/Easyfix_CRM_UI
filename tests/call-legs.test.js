@@ -181,6 +181,70 @@ test('a single-leg conference is NOT badged as one', () => {
   assert.equal(L.isConferenceCall({ id: 4, conference_id: 43 }), false);
 });
 
+test('an ordinary 1:1 call is NOT a conference, even though it writes two legs', () => {
+  /*
+   * REGRESSION (prod, job #526835). Since conferencing shipped, EVERY call
+   * writes two rows: the operator's own call-log row and the leg for the person
+   * dialled. `legs.length > 1` therefore made every 1:1 call render as
+   * "Conference · 2 People".
+   *
+   * Worse, the operator's row carries the RECEIVER's name and number (it is the
+   * "Aryan → Kannan" log row), so the callee was listed TWICE under one name.
+   * Both real rows are reproduced here verbatim.
+   */
+  const row = {
+    id: 5,
+    conference_id: 52,
+    legs: [
+      leg(1031, 'operator', { display_name: 'Kannan', masked_number: '9930••••••', joined_at: '2026-08-12 17:03:52' }),
+      leg(1032, 'customer', { display_name: 'Kannan', masked_number: '9930••••••', joined_at: '2026-08-12 17:04:04' }),
+    ],
+  };
+  assert.equal(L.isConferenceCall(row), false);
+  // The agent and the person they called are two distinct parties...
+  assert.equal(L.callPartyCount(row), 2);
+  // ...but only ONE of them is a counterparty, listed once.
+  assert.equal(L.counterpartyLegs(row).length, 1);
+  assert.equal(L.counterpartyLegs(row)[0].target_kind, 'customer');
+});
+
+test('a person re-added after dropping counts once, not twice', () => {
+  /*
+   * The backend's duplicate guard only blocks a re-add while the previous leg
+   * is ACTIVE, so a re-add after someone drops legitimately writes a second
+   * row. That is one person on the call, not two.
+   */
+  const row = {
+    id: 6,
+    conference_id: 53,
+    legs: [
+      leg(1, 'operator', { display_name: 'Aryan', masked_number: '9187••••••' }),
+      leg(2, 'technician', { display_name: 'Ravi', masked_number: '9812••••••' }),
+      leg(3, 'technician', { display_name: 'Ravi', masked_number: '9812••••••' }),
+    ],
+  };
+  assert.equal(L.callPartyCount(row), 2);
+  assert.equal(L.counterpartyLegs(row).length, 1);
+  assert.equal(L.isConferenceCall(row), false);
+  const parties = L.callParties(row);
+  assert.equal(parties.find((p) => p.leg.display_name === 'Ravi').attempts, 2);
+});
+
+test('a genuine multi-party call IS still a conference', () => {
+  const row = {
+    id: 7,
+    conference_id: 54,
+    legs: [
+      leg(1, 'operator', { display_name: 'Aryan', masked_number: '9187••••••' }),
+      leg(2, 'customer', { display_name: 'Kannan', masked_number: '9930••••••' }),
+      leg(3, 'technician', { display_name: 'Ravi', masked_number: '9812••••••' }),
+    ],
+  };
+  assert.equal(L.isConferenceCall(row), true);
+  assert.equal(L.callPartyCount(row), 3);
+  assert.equal(L.counterpartyLegs(row).length, 2);
+});
+
 test('rows with an unusable id are kept IN PLACE, never dropped or reordered', () => {
   const out = L.groupCallRows([
     { id: 1 },

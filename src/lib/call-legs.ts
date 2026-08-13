@@ -317,8 +317,64 @@ export function sortCallLegs(legs: readonly CallLeg[]): CallLeg[] {
  * too — badging those "Conference" would put the label on nearly every row and
  * teach operators to ignore it.
  */
+/*
+ * Identity of the PERSON behind a leg, for counting and de-duplication.
+ *
+ * A leg is one dial attempt, not one human: the same person re-added after they
+ * drop gets a second row (the backend's duplicate guard only blocks a re-add
+ * while the previous leg is still ACTIVE — a terminal one is allowed through by
+ * design). Counting rows therefore over-counts people.
+ *
+ * Role is part of the key on purpose. The operator's own leg carries the
+ * RECEIVER's name and number (it is the "Aryan → Kannan" call-log row), so a
+ * name+number key alone would silently merge the agent with the person they
+ * called. Number is the strongest signal but is masked to four digits, so it is
+ * paired with the name to keep two different people on a shared prefix apart.
+ */
+function legPartyKey(leg: CallLeg): string {
+  const role = String(leg.target_kind ?? '').trim().toLowerCase();
+  const num = String(leg.masked_number ?? '').trim();
+  const name = String(leg.display_name ?? '').trim().toLowerCase();
+  if (num || name) return `${role}|${num}|${name}`;
+  return `id:${leg.id}`;
+}
+
+/*
+ * Distinct PEOPLE on a call, in first-appearance order, each carrying how many
+ * legs (dial attempts) they accounted for. Two rows for one person collapse to
+ * one entry with `attempts: 2` rather than reading as two participants.
+ */
+export type CallParty = { leg: CallLeg; attempts: number };
+
+export function callParties(row: CallRowWithLegs | null | undefined): CallParty[] {
+  const out = new Map<string, CallParty>();
+  for (const leg of row?.legs ?? []) {
+    const key = legPartyKey(leg);
+    const seen = out.get(key);
+    // Keep the FIRST leg as the representative but prefer one that actually
+    // connected, so a person whose first attempt failed still shows their real
+    // join/leave times rather than the dead attempt's.
+    if (!seen) out.set(key, { leg, attempts: 1 });
+    else {
+      seen.attempts += 1;
+      if (!seen.leg.joined_at && leg.joined_at) seen.leg = leg;
+    }
+  }
+  return [...out.values()];
+}
+
+/*
+ * Is this actually a conference — i.e. did the agent have MORE THAN ONE other
+ * party on the call?
+ *
+ * Was `legs.length > 1`, which became true for every ordinary call the moment
+ * conferencing shipped: a plain 1:1 writes two legs (the operator's own row and
+ * the person they dialled), so every call rendered as "Conference · 2 People"
+ * with the callee listed twice. The operator is never a "party" for this
+ * purpose, and repeat legs for one person are not extra people.
+ */
 export function isConferenceCall(row: CallRowWithLegs | null | undefined): boolean {
-  return (row?.legs?.length ?? 0) > 1;
+  return callParties(row).filter((p) => p.leg.target_kind !== 'operator').length > 1;
 }
 
 /*
@@ -330,7 +386,7 @@ export function isConferenceCall(row: CallRowWithLegs | null | undefined): boole
  * it is already returning.
  */
 export function callPartyCount(row: CallRowWithLegs | null | undefined): number {
-  return row?.legs?.length ?? 0;
+  return callParties(row).length;
 }
 
 /*
@@ -338,7 +394,9 @@ export function callPartyCount(row: CallRowWithLegs | null | undefined): number 
  * one-line summary a narrow column can afford, where the full list cannot fit.
  */
 export function counterpartyLegs(row: CallRowWithLegs | null | undefined): CallLeg[] {
-  return (row?.legs ?? []).filter((l) => l.target_kind !== 'operator');
+  return callParties(row)
+    .filter((p) => p.leg.target_kind !== 'operator')
+    .map((p) => p.leg);
 }
 
 /*
