@@ -134,12 +134,18 @@ function fromBeDate(v: string | null): string {
 }
 
 export function ComposeWizard({
-  open, onClose, mode, noticeId,
+  open, onClose, mode, noticeId, onSaved,
 }: {
   open: boolean;
   onClose: () => void;
   mode: 'create' | 'edit';
   noticeId?: number;
+  /*
+   * Fired after a successful save. invalidateFetch below clears the module
+   * cache but never reaches a MOUNTED useFetch, so the list behind this modal
+   * kept its pre-save rows until a page reload. The owner wires this to refetch.
+   */
+  onSaved?: () => void;
 }) {
   const { me } = useMe();
   const canManage = hasAction(me, 'isNoticeManage');
@@ -408,6 +414,7 @@ export function ComposeWizard({
       dismissToast(toastId);
       showToast({ variant: 'success', message: labels[publishWhen].success });
       invalidateFetch((k) => k.startsWith('/admin/notices'));
+      onSaved?.();
       onClose();
     } catch (e) {
       dismissToast(toastId);

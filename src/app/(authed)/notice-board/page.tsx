@@ -4,7 +4,7 @@
  * Notice Board — All Notices (Screen A from the spec).
  *
  * Table columns (matching the spec wireframe):
- *   Title · Category · Audience · Status · Published · Reach · Read% · Actions
+ *   Title · Category · Audience · Status · Published · Reach · Read · Actions
  *
  * Filters: search (title/body), category, status.
  * Actions:
@@ -23,6 +23,7 @@ import { useRouter } from 'next/navigation';
 import { Megaphone, Plus, Search, Edit2, Send, Archive as ArchiveIcon, AlertTriangle, Trash2 } from 'lucide-react';
 import { SearchSelect } from '@/components/ui/search-select';
 import { IconButton } from '@/components/ui/icon-button';
+import { TablePagination, type TablePageSize } from '@/components/ui/table-pagination';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -38,6 +39,17 @@ import { parseSurfaces, type Notice, type NoticeCategory, type NoticeStatus } fr
 
 type ListResp = { items: Notice[]; total: number };
 type CatResp  = { items: NoticeCategory[] };
+
+/*
+ * Page sizes offered on the Notice Board. 'All' is intentionally absent — see
+ * the pagination block in the component: /admin/notices caps limit at 200, so
+ * "All" could silently truncate while claiming to show everything.
+ */
+const NOTICE_PAGE_SIZES: ReadonlyArray<{ value: TablePageSize; label: string }> = [
+  { value: 10, label: '10' },
+  { value: 20, label: '20' },
+  { value: 50, label: '50' },
+];
 
 const STATUS_PILL: Record<string, string> = {
   draft:     'bg-slate-100 text-slate-700 border-slate-300',
@@ -83,13 +95,34 @@ export default function NoticeBoardListPage() {
   const [categoryFilter, setCategoryFilter] = React.useState<number | ''>('');
   const dq = useDebouncedValue(search, 300);
 
+  /*
+   * Server-side pagination. The list was pinned at limit=50/offset=0, so notice
+   * 51 onward simply could not be reached.
+   *
+   * 'all' is deliberately NOT offered: /admin/notices caps `limit` at 200 (Joi),
+   * so on a bigger board "All" would render one un-navigable page whose range
+   * hint claims to show every row while the response was silently truncated —
+   * the exact failure the TablePagination docs warn about.
+   */
+  const [page, setPage] = React.useState(0);
+  const [pageSize, setPageSize] = React.useState<TablePageSize>(20);
+  const limit = pageSize === 'all' ? 200 : pageSize;
+
   const qs = new URLSearchParams();
   if (dq.trim())        qs.set('q', dq.trim());
   if (statusFilter)     qs.set('status', statusFilter);
   if (categoryFilter)   qs.set('category_id', String(categoryFilter));
-  qs.set('limit', '50');
+  qs.set('limit', String(limit));
+  qs.set('offset', String(page * limit));
 
   const listFetch = useFetch<ListResp>(`/admin/notices?${qs.toString()}`, { enabled: canManage });
+
+  /*
+   * Any filter change re-queries from row 0. Without this, narrowing a filter
+   * while on page 3 asks for an offset the smaller result set no longer has and
+   * the table renders empty with no obvious cause.
+   */
+  React.useEffect(() => { setPage(0); }, [dq, statusFilter, categoryFilter]);
   const catsFetch = useFetchOnce<CatResp>('/admin/notice-categories');
 
   const confirm = useConfirm();
@@ -116,6 +149,10 @@ export default function NoticeBoardListPage() {
       dismissToast(id);
       showToast({ variant: 'success', message: 'Notice published' });
       invalidateFetch((k) => k.startsWith('/admin/notices'));
+      // Eviction alone never reaches a MOUNTED useFetch — it clears the module
+      // cache but nothing re-requests, so the row stayed on screen until a full
+      // page reload. Same trap as the notice strip's unread counter.
+      listFetch.refetch();
     } catch (e) {
       dismissToast(id);
       showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Publish failed' });
@@ -136,6 +173,10 @@ export default function NoticeBoardListPage() {
       dismissToast(id);
       showToast({ variant: 'success', message: 'Notice archived' });
       invalidateFetch((k) => k.startsWith('/admin/notices'));
+      // Eviction alone never reaches a MOUNTED useFetch — it clears the module
+      // cache but nothing re-requests, so the row stayed on screen until a full
+      // page reload. Same trap as the notice strip's unread counter.
+      listFetch.refetch();
     } catch (e) {
       dismissToast(id);
       showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Archive failed' });
@@ -163,6 +204,10 @@ export default function NoticeBoardListPage() {
       dismissToast(id);
       showToast({ variant: 'success', message: 'Notice deleted' });
       invalidateFetch((k) => k.startsWith('/admin/notices'));
+      // Eviction alone never reaches a MOUNTED useFetch — it clears the module
+      // cache but nothing re-requests, so the row stayed on screen until a full
+      // page reload. Same trap as the notice strip's unread counter.
+      listFetch.refetch();
     } catch (e) {
       dismissToast(id);
       showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Delete failed' });
@@ -261,7 +306,7 @@ export default function NoticeBoardListPage() {
                 <th className="!text-center">Status</th>
                 <th className="!text-left">Published</th>
                 <th className="!text-right">Reach</th>
-                <th className="!text-right">Read %</th>
+                <th className="!text-right">Read</th>
                 <th className="!text-right">Actions</th>
               </tr>
             </thead>
@@ -306,7 +351,21 @@ export default function NoticeBoardListPage() {
                     </td>
                     <td>{formatPublishedAt(n.publish_at)}</td>
                     <td className="!text-right tabular-nums">{(n.reach_estimate ?? 0).toLocaleString('en-IN')}</td>
-                    <td className="!text-right tabular-nums">{n.read_pct ?? 0}%</td>
+                    {/* Head COUNT, not a percentage. Against a reach of
+                        thousands the percentage is a fraction that reads as
+                        "nobody" ("0.2%") even when a useful number of people
+                        have opened the notice — a plain count is the honest
+                        headline. The percentage keeps its context on hover. */}
+                    <td
+                      className="!text-right tabular-nums"
+                      title={
+                        `${(n.read_count ?? 0).toLocaleString('en-IN')} of `
+                        + `${(n.reach_estimate ?? 0).toLocaleString('en-IN')} recipients `
+                        + `(${n.read_pct ?? 0}%)`
+                      }
+                    >
+                      {(n.read_count ?? 0).toLocaleString('en-IN')}
+                    </td>
                     <td className="!text-right">
                       <div className="inline-flex items-center gap-1">
                         {/* Only rendered when the notice is actually editable.
@@ -360,6 +419,18 @@ export default function NoticeBoardListPage() {
               })}
             </tbody>
           </table>
+
+          {/* Shared pager — 'all' withheld because the endpoint caps at 200. */}
+          <div className="border-t px-3 py-2">
+            <TablePagination
+              page={page}
+              pageSize={pageSize}
+              total={listFetch.data?.total ?? 0}
+              onPageChange={setPage}
+              onPageSizeChange={(s) => { setPageSize(s); setPage(0); }}
+              pageSizeOptions={NOTICE_PAGE_SIZES}
+            />
+          </div>
         </CardContent>
       </Card>
 
@@ -372,6 +443,7 @@ export default function NoticeBoardListPage() {
         onClose={() => setComposeMode(null)}
         mode={composeMode === 'new' ? 'create' : 'edit'}
         noticeId={typeof composeMode === 'number' ? composeMode : undefined}
+        onSaved={() => listFetch.refetch()}
       />
     </div>
   );

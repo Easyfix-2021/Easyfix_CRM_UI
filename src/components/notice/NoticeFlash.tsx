@@ -33,11 +33,16 @@ type Resp = { items: Notice[] };
 
 const SEEN_KEY = 'notice_flash_seen_v1';
 /*
- * Re-check for newly published notices at most this often. Without a throttle a
- * click-heavy operator would fire a request per navigation; 60s is well under
- * how quickly anyone needs to see a new broadcast.
+ * Re-check for newly published notices at most this often.
+ *
+ * Without a throttle a click-heavy operator fires a request per navigation.
+ * Raised 60s → 5 min (2026-08-12): this component is mounted at the authed root
+ * for EVERY operator, so the interval is multiplied by headcount — at 60s, 50
+ * concurrent operators meant ~50 req/min against the active-notices feed,
+ * permanently, purely to discover a broadcast that nobody is waiting on to the
+ * second. Five minutes is still far faster than a notice's useful lifetime.
  */
-const RECHECK_MS = 60_000;
+const RECHECK_MS = 5 * 60_000;
 
 function readSeen(): Set<number> {
   if (typeof window === 'undefined') return new Set();
