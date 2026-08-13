@@ -43,6 +43,12 @@ type PayoutRow = {
   processed_on: string | null;
   processed_by: number | null;
   remarks: string | null;
+  bank_details_id: number | null;
+  bank_account_number: string | null;
+  bank_ifsc: string | null;
+  bank_account_holder_name: string | null;
+  bank_id: number | null;
+  bank_name: string | null;
   efr_name: string | null;
   efr_no: string | null;
   current_balance: number | string | null;
@@ -73,6 +79,21 @@ function inr(v: number | string | null | undefined): string {
   if (v == null || v === '') return '—';
   const n = Number(v);
   return Number.isFinite(n) ? n.toFixed(2) : '—';
+}
+
+function hasPayoutDestination(row: PayoutRow): boolean {
+  return Boolean(
+    row.bank_account_number?.trim()
+      && row.bank_ifsc?.trim()
+      && row.bank_account_holder_name?.trim(),
+  );
+}
+
+function maskedAccount(account: string | null): string {
+  const value = account?.trim() ?? '';
+  if (!value) return '—';
+  const visible = value.slice(-4);
+  return `${'•'.repeat(Math.max(4, value.length - visible.length))}${visible}`;
 }
 
 export default function PayoutRequestsPage() {
@@ -124,20 +145,37 @@ export default function PayoutRequestsPage() {
     const who = row.efr_name || 'the technician';
 
     const ok = await confirm({
-      title: isPay ? 'Pay Withdrawal?' : 'Reject Withdrawal?',
+      title: isPay ? 'Mark Withdrawal Paid?' : 'Reject Withdrawal?',
       variant: isPay ? 'default' : 'destructive',
-      confirmLabel: isPay ? 'Pay' : 'Reject',
+      confirmLabel: isPay ? 'Mark Paid' : 'Reject',
       iconAccent: isPay ? 'emerald' : 'rose',
       icon: isPay ? <CheckCircle2 className="size-5" /> : <XCircle className="size-5" />,
       description: (
         <div className="space-y-3">
           <p>
             {isPay ? (
-              <>This will debit <b>&#8377;{amt}</b> from the wallet of <b>{who}</b> and mark the request <b>Paid</b>. This cannot be undone.</>
+              <>Transfer <b>&#8377;{amt}</b> externally to the immutable account below and verify settlement first. Marking paid will debit the wallet of <b>{who}</b>. This cannot be undone.</>
             ) : (
               <>This will mark the <b>&#8377;{amt}</b> withdrawal request from <b>{who}</b> as <b>Rejected</b>. No money is debited.</>
             )}
           </p>
+          {isPay && (
+            <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-left text-sm">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Immutable payout destination
+              </p>
+              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                <dt className="text-muted-foreground">Holder</dt>
+                <dd className="font-medium">{row.bank_account_holder_name}</dd>
+                <dt className="text-muted-foreground">Bank</dt>
+                <dd className="font-medium">{row.bank_name || (row.bank_id ? `Bank #${row.bank_id}` : '—')}</dd>
+                <dt className="text-muted-foreground">Account</dt>
+                <dd className="font-mono font-medium">{row.bank_account_number}</dd>
+                <dt className="text-muted-foreground">IFSC</dt>
+                <dd className="font-mono font-medium">{row.bank_ifsc}</dd>
+              </dl>
+            </div>
+          )}
           <div>
             <label className="mb-1 block text-xs font-medium text-muted-foreground">Remarks (Optional)</label>
             <textarea
@@ -154,14 +192,14 @@ export default function PayoutRequestsPage() {
     if (!ok) return;
 
     setBusyId(row.request_id);
-    const toastId = showToast({ variant: 'loading', message: isPay ? 'Processing Payment…' : 'Rejecting Request…' });
+    const toastId = showToast({ variant: 'loading', message: isPay ? 'Marking Withdrawal Paid…' : 'Rejecting Request…' });
     try {
       await api.post(`/admin/withdrawals/${row.request_id}/process`, {
         action,
         remarks: remarksRef.current.trim() || undefined,
       });
       dismissToast(toastId);
-      showToast({ variant: 'success', message: isPay ? 'Withdrawal Paid' : 'Withdrawal Rejected' });
+      showToast({ variant: 'success', message: isPay ? 'Withdrawal Marked Paid' : 'Withdrawal Rejected' });
       // Bust the cached list AND re-run the mounted hook (invalidateFetch only
       // evicts the cache; it doesn't refetch a live subscriber).
       invalidateFetch((k) => k.startsWith('/admin/withdrawals'));
@@ -186,7 +224,7 @@ export default function PayoutRequestsPage() {
           <Wallet className="size-6" /> Payout Requests
         </h1>
         <p className="text-sm text-muted-foreground">
-          Technician wallet withdrawal requests. Pay to debit the wallet and settle, or reject.
+          Transfer externally to each request's immutable bank destination, then mark it paid to debit the wallet; or reject it.
         </p>
       </div>
 
@@ -238,6 +276,7 @@ export default function PayoutRequestsPage() {
                   <th>Mobile</th>
                   <th className="!text-right">Amount &#8377;</th>
                   <th className="!text-right">Current Balance &#8377;</th>
+                  <th>Destination</th>
                   <th>Requested On</th>
                   <th className="!text-center">Status</th>
                   <th className="!text-right">Actions</th>
@@ -247,6 +286,7 @@ export default function PayoutRequestsPage() {
                 {rows.map((r) => {
                   const meta = STATUS_META[r.status] ?? { label: r.status, tone: 'slate' as StatusChipTone };
                   const actionable = canProcess && OPEN_STATUSES.has(r.status);
+                  const destinationComplete = hasPayoutDestination(r);
                   const rowBusy = busyId === r.request_id;
                   return (
                     <tr key={r.request_id} className="hover:bg-slate-50">
@@ -258,6 +298,22 @@ export default function PayoutRequestsPage() {
                       <td className="font-mono text-xs">{r.efr_no || '—'}</td>
                       <td className="!text-right font-mono">{inr(r.amount)}</td>
                       <td className="!text-right font-mono">{inr(r.current_balance)}</td>
+                      <td className="text-xs">
+                        {destinationComplete ? (
+                          <>
+                            <span className="font-medium">{r.bank_account_holder_name}</span>
+                            <br />
+                            <span className="text-muted-foreground">
+                              {r.bank_name || (r.bank_id ? `Bank #${r.bank_id}` : 'Bank')} ·{' '}
+                              <span className="font-mono">{maskedAccount(r.bank_account_number)}</span>
+                            </span>
+                            <br />
+                            <span className="font-mono text-muted-foreground">{r.bank_ifsc}</span>
+                          </>
+                        ) : (
+                          <span className="text-red-600">Missing — cannot pay</span>
+                        )}
+                      </td>
                       <td className="text-xs">{r.requested_on ? formatDate(r.requested_on) : '—'}</td>
                       <td className="!text-center"><StatusChip tone={meta.tone} size="sm">{meta.label}</StatusChip></td>
                       <td className="!text-right whitespace-nowrap">
@@ -266,8 +322,9 @@ export default function PayoutRequestsPage() {
                             <IconButton
                               icon={CheckCircle2}
                               intent="success"
-                              label="Pay Withdrawal"
+                              label={destinationComplete ? 'Mark Withdrawal Paid' : 'Payout Destination Missing'}
                               busy={rowBusy}
+                              disabled={rowBusy || !destinationComplete}
                               onClick={() => processRow(r, 'pay')}
                             />
                             <IconButton
