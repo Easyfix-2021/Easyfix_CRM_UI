@@ -8,21 +8,27 @@
 # where it then BLOCKED A DEPLOY BRANCH rather than being caught before it got
 # there. Same outcome, most expensive possible moment.
 #
-# WHY IT ALSO TRIGGERS ON `push: HotFix`, and not just on pull_request.
-# EasyFix_Backend has the equivalent PR-path workflow, and as of 2026-08-13 it
-# has NEVER RUN — `gh run list --workflow=ci.yml` returns nothing across its
-# whole history. The reason is visible in the graph: `git log --merges
-# origin/QA` is a wall of plain "Merge branch 'HotFix' into QA" commits. This
-# team integrates with a local `git merge` and a push, not through pull
-# requests, so a pull_request-only trigger is dead code. The PR trigger is kept
-# anyway — it costs nothing and starts working the day PRs are adopted — but
-# the push on HotFix is what actually fires today, which is the entire point.
+# PULL-REQUEST PATH ONLY — deliberate, and it means this stays quiet until
+# changes are integrated via PRs.
+#
+# Worth knowing so a silent CI tab isn't mistaken for a broken workflow: as of
+# 2026-08-13 the equivalent EasyFix_Backend ci.yml has never run
+# (`gh run list --workflow=ci.yml` returns nothing across its whole history),
+# because integration today is a local `git merge` + push — `git log --merges
+# origin/QA` is a wall of plain "Merge branch 'HotFix' into QA" commits. A
+# branch-push trigger was considered and rejected: the PR path is the intended
+# workflow, and gating direct dev-branch pushes is not wanted.
+#
+# Until a change arrives as a PR into QA/Production, deploy.yml's `precheck`
+# remains the enforcing gate — it runs these same three steps and blocks the
+# image build, so nothing ships unchecked either way. This job exists to move
+# that signal earlier for changes that DO come through a PR.
 #
 # WHY THESE THREE STEPS AND NOT `next build`. It mirrors `precheck` exactly, so
 # the guarantee is clean: green here means precheck will be green there. The
 # real bundle is built once, by the Docker image build on the deploy path;
 # running `next build` here too would gate PRs on something the push path
-# doesn't check at this stage, and cost minutes on every commit. (The backend's
+# doesn't check at this stage, and cost minutes on every PR. (The backend's
 # ci.yml looks like it builds, but its `npm run build` is
 # `node scripts/build-check.js` — a cheap syntax check, not a bundle. The
 # faithful equivalent here is `tsc --noEmit`.)
@@ -34,8 +40,6 @@ name: CI (typecheck + lint + tests)
 on:
   pull_request:
     branches: [QA, Production]
-  push:
-    branches: [HotFix]
   workflow_dispatch:
 
 # Deliberately does NOT overlap deploy.yml, which owns QA/Production pushes.
