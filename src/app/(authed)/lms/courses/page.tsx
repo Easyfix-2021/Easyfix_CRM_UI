@@ -25,7 +25,7 @@
 import * as React from 'react';
 import {
   GraduationCap, Plus, Search, Pencil, ListVideo, Trash2, RotateCcw,
-  ChevronUp, ChevronDown, X, AlertTriangle,
+  ChevronUp, ChevronDown, X, AlertTriangle, Play,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -47,6 +47,7 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { api, ApiError } from '@/lib/api';
+import { VideoPreviewDialog } from '@/components/lms/VideoPreviewDialog';
 
 /* ── Types ──────────────────────────────────────────────────────────────── */
 
@@ -70,6 +71,10 @@ type CourseVideo = {
   title: string;
   sub_title: string | null;
   description: string | null;
+  /* Playable link, already repaired by the backend. Null when the catalogue
+   * entry has no video attached — which is worth seeing HERE, because such a
+   * video can never be completed and so caps the whole course. */
+  video_url: string | null;
 };
 
 /* A row of the training-video catalogue (`id` here IS the video_id). */
@@ -78,6 +83,7 @@ type CatalogueVideo = {
   title: string;
   sub_title: string | null;
   description: string | null;
+  video_url: string | null;
   progress_count: number;
   course_count: number;
 };
@@ -93,6 +99,10 @@ type DraftVideo = {
   video_id: number;
   title: string;
   sub_title: string | null;
+  /* Carried so the draft row can be previewed before the course is saved —
+   * a video added from the catalogue is playable immediately, without a
+   * round trip to re-read the content list. */
+  video_url: string | null;
 };
 
 /*
@@ -193,9 +203,9 @@ export default function ManageCoursesPage() {
     setSortDir(next.sortDir);
   }
 
-  /* `'new'` opens a blank add form; a Course opens it pre-filled for edit. */
+  /* `'new'` opens a blank add form; a Course opens it pre-filled for edit.
+   * One piece of state for one modal — content used to have its own. */
   const [formCourse, setFormCourse] = React.useState<Course | 'new' | null>(null);
-  const [contentCourse, setContentCourse] = React.useState<Course | null>(null);
 
   /*
    * Every mutation path ends here. invalidateFetch only EVICTS the module
@@ -371,22 +381,25 @@ export default function ManageCoursesPage() {
                   <td className="!text-left whitespace-nowrap">{formatDate(c.created_at)}</td>
                   <td className="!text-right">
                     <div className="inline-flex items-center justify-end gap-1">
-                      {canManage && (
-                        <IconButton
-                          icon={Pencil}
-                          intent="primary"
-                          label="Edit Course"
-                          onClick={() => setFormCourse(c)}
-                        />
-                      )}
-                      {canManage && (
-                        <IconButton
-                          icon={ListVideo}
-                          intent="default"
-                          label="Manage Content"
-                          onClick={() => setContentCourse(c)}
-                        />
-                      )}
+                      {/*
+                        One action, not two. Course details and course content
+                        used to live in separate dialogs, so this row carried an
+                        Edit button and a Manage Content button that opened
+                        overlapping views of the same course. They are now one
+                        modal, so there is one way in.
+
+                        Shown to viewers as well, read-only. The modal contains
+                        the content list with an ungated Play button — a viewer
+                        who cannot reach the modal could never use it, and
+                        "what is actually in this course" is a fair question for
+                        someone reviewing training without editing rights.
+                      */}
+                      <IconButton
+                        icon={canManage ? Pencil : ListVideo}
+                        intent={canManage ? 'primary' : 'default'}
+                        label={canManage ? 'Edit Course' : 'View Course Content'}
+                        onClick={() => setFormCourse(c)}
+                      />
                       {/* Retire and Reactivate are mutually exclusive — the
                           row shows whichever transition is actually available
                           rather than a greyed-out pair. */}
@@ -429,27 +442,48 @@ export default function ManageCoursesPage() {
         </CardContent>
       </Card>
 
-      {/* Both dialogs are rendered unconditionally with `open` derived from
-          state so their open-transition reset effects actually fire. */}
-      <CourseFormDialog
+      {/* Rendered unconditionally with `open` derived from state so its
+          open-transition reset effects actually fire. */}
+      <CourseModal
         course={formCourse}
+        canManage={canManage}
         onClose={() => setFormCourse(null)}
         onSaved={() => { setFormCourse(null); refreshCourses(); }}
-      />
-      <ManageContentDialog
-        course={contentCourse}
-        canManage={canManage}
-        onClose={() => setContentCourse(null)}
-        onSaved={() => { setContentCourse(null); refreshCourses(); }}
       />
     </div>
   );
 }
 
-/* ── Add / Edit dialog ──────────────────────────────────────────────────── */
+/* ── Course modal (Add / Edit, details + content in one) ────────────────── */
 
-function CourseFormDialog({ course, onClose, onSaved }: {
+/*
+ * ONE modal for a course, not two.
+ *
+ * Details and content used to be separate dialogs reached by separate row
+ * actions, which made "create a usable course" a two-step ritual: add it, find
+ * it in the list, open a different dialog, add the videos. A course with no
+ * content is assignable but uncompletable, so that second step was the one
+ * that actually mattered and the one easiest to forget.
+ *
+ * ─── Why the save is ordered, and what happens when half of it fails ─────
+ *
+ * Content is saved through PUT /courses/:id/videos, which needs an id — and on
+ * the Add path there is no id until the POST returns. So the save is
+ * necessarily two calls, and the interesting case is the POST succeeding and
+ * the PUT failing: the course now EXISTS. Reporting that as "create failed"
+ * would be a lie that costs the operator real money — they would retry, hit
+ * the backend's name-uniqueness check, and get a 409 blaming them for a
+ * duplicate they cannot see.
+ *
+ * `createdIdRef` is what makes the retry honest. Once a create has succeeded
+ * in this modal session the id is remembered, so a second Save PATCHes that
+ * course instead of POSTing a new one. The modal stays open, the error names
+ * exactly which half failed, and pressing Save again resumes rather than
+ * duplicates.
+ */
+function CourseModal({ course, canManage, onClose, onSaved }: {
   course: Course | 'new' | null;
+  canManage: boolean;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -461,162 +495,80 @@ function CourseFormDialog({ course, onClose, onSaved }: {
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
-  // Skip the discard prompt while a save is in flight — the modal is closing
-  // on its own at that point and the prompt would fire over a completed action.
-  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !submitting });
+  /* Content editing state. */
+  const [draft, setDraft] = React.useState<DraftVideo[]>([]);
+  const [vq, setVq] = React.useState('');
+  const [previewing, setPreviewing] = React.useState<DraftVideo | null>(null);
 
-  React.useEffect(() => {
-    if (!open) return;
-    setName(editing?.name ?? '');
-    setDescription(editing?.description ?? '');
-    setError(null);
-    // `editing?.id` rather than the object: the row identity changes on every
-    // list refetch, and reseeding mid-edit would wipe what the operator typed.
-  }, [open, editing?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  /*
+   * Survives a partial save: set once the POST succeeds so a retry PATCHes the
+   * course that now exists rather than creating a second one. Cleared when the
+   * modal closes, since the next open is a different course.
+   */
+  const createdIdRef = React.useRef<number | null>(null);
 
-  async function handleSubmit() {
-    const trimmedName = name.trim();
-    const trimmedDesc = description.trim();
-    // Validate client-side first so the common mistakes never cost a round trip
-    // — the backend enforces the same bounds and stays the real authority.
-    if (trimmedName.length < NAME_MIN || trimmedName.length > NAME_MAX) {
-      setError(`Course name must be between ${NAME_MIN} and ${NAME_MAX} characters.`);
-      return;
-    }
-    if (trimmedDesc.length > DESC_MAX) {
-      setError(`Description must be ${DESC_MAX} characters or fewer.`);
-      return;
-    }
-    setError(null);
-    setSubmitting(true);
-    const t = showToast({ variant: 'loading', message: editing ? 'Saving course…' : 'Creating course…' });
-    try {
-      if (editing) {
-        await api.patch(`/admin/lms/courses/${editing.id}`, {
-          name: trimmedName,
-          description: trimmedDesc,
-        });
-      } else {
-        await api.post('/admin/lms/courses', {
-          name: trimmedName,
-          description: trimmedDesc,
-        });
-      }
-      dismissToast(t);
-      showToast({ variant: 'success', message: editing ? 'Course Updated' : 'Course Created' });
-      onSaved();
-    } catch (e) {
-      dismissToast(t);
-      const msg = errText(e, 'Save failed');
-      setError(msg);
-      showToast({ variant: 'error', message: msg });
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={guardedOpenChange}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>{editing ? 'Edit Course' : 'Add Course'}</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3">
-          <div>
-            <Label className="block mb-1" required>Course Name</Label>
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              maxLength={NAME_MAX}
-              placeholder='e.g. "Treadmill Servicing Basics"'
-            />
-          </div>
-          <div>
-            <Label className="block mb-1">Description</Label>
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              maxLength={DESC_MAX}
-              rows={4}
-              placeholder="What this course covers and who should take it (optional)"
-              className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus:outline-none focus-visible:border-foreground/40"
-            />
-            <div className="mt-1 text-[11px] text-muted-foreground text-right tabular-nums">
-              {description.length} / {DESC_MAX}
-            </div>
-          </div>
-          {error && (
-            <div className="text-sm text-red-600 flex items-start gap-1">
-              <AlertTriangle className="size-4 shrink-0 mt-0.5" /> {error}
-            </div>
-          )}
-          <div className="flex justify-end gap-2 pt-2">
-            <CancelButton onCancel={onClose} disabled={submitting} />
-            <Button onClick={handleSubmit} disabled={submitting}>
-              {submitting ? 'Saving…' : editing ? 'Save Changes' : 'Add Course'}
-            </Button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/* ── Manage Content dialog ──────────────────────────────────────────────── */
-
-function ManageContentDialog({ course, canManage, onClose, onSaved }: {
-  course: Course | null;
-  canManage: boolean;
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const open = course !== null;
-
+  /* Existing content — only an edit has any. */
   const videosFetch = useFetch<CourseVideo[]>(
-    course ? `/admin/lms/courses/${course.id}/videos` : null,
+    editing ? `/admin/lms/courses/${editing.id}/videos` : null,
   );
 
   /* Catalogue for the picker, server-filtered by the typed query. */
-  const [vq, setVq] = React.useState('');
   const dvq = useDebouncedValue(vq, 300);
   const catQs = new URLSearchParams();
   if (dvq.trim()) catQs.set('q', dvq.trim());
   catQs.set('limit', '50');
   catQs.set('offset', '0');
   const catFetch = useFetch<CatalogueResp>(
-    open ? `/admin/aux/training-videos?${catQs.toString()}` : null,
+    open && canManage ? `/admin/aux/training-videos?${catQs.toString()}` : null,
   );
 
-  const [draft, setDraft] = React.useState<DraftVideo[]>([]);
-  const [saving, setSaving] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
+  /*
+   * Form fields seed on OPEN only, keyed on the course id — deliberately NOT
+   * on `videosFetch.data`. Reseeding when the content list arrives would wipe
+   * whatever the operator had already typed into Name or Description.
+   */
+  React.useEffect(() => {
+    if (!open) return;
+    setName(editing?.name ?? '');
+    setDescription(editing?.description ?? '');
+    setError(null);
+  }, [open, editing?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /*
-   * Seed the working copy from the server list ONCE per course-open. Guarded
-   * by a ref rather than by `draft.length === 0`, because "the operator removed
-   * every video" is a legitimate state that must survive — a length-based guard
-   * would immediately re-seed the list they just cleared.
+   * Content seeds ONCE per course-open, guarded by a ref rather than by
+   * `draft.length === 0` — "the operator removed every video" is a legitimate
+   * state, and a length-based guard would immediately re-seed the list they
+   * just cleared.
    */
   const seededFor = React.useRef<number | null>(null);
   React.useEffect(() => {
     if (!open) {
       seededFor.current = null;
+      createdIdRef.current = null;
       setDraft([]);
-      setError(null);
       setVq('');
+      setPreviewing(null);
       return;
     }
-    if (course && videosFetch.data && seededFor.current !== course.id) {
-      seededFor.current = course.id;
+    /* Add: nothing to load, start empty. `0` stands in for "the new course". */
+    if (!editing) {
+      if (seededFor.current !== 0) { seededFor.current = 0; setDraft([]); }
+      return;
+    }
+    if (videosFetch.data && seededFor.current !== editing.id) {
+      seededFor.current = editing.id;
       setDraft(videosFetch.data.map((v) => ({
         video_id: v.video_id,
         title: v.title,
         sub_title: v.sub_title,
+        video_url: v.video_url,
       })));
     }
-  }, [open, course, videosFetch.data]);
+  }, [open, editing, videosFetch.data]);
 
-  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !saving });
+  // Skip the discard prompt while a save is in flight — the modal is closing
+  // on its own at that point and the prompt would fire over a completed action.
+  const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !submitting });
 
   const draftIds = new Set(draft.map((d) => d.video_id));
 
@@ -633,6 +585,16 @@ function ManageContentDialog({ course, canManage, onClose, onSaved }: {
       label: v.sub_title ? `${v.title} — ${v.sub_title}` : v.title,
     }));
 
+  /*
+   * Whether the content PUT is worth making. Compared as a joined id string
+   * because ORDER is part of the content — reordering the same videos is a
+   * real change the technician sees as a different syllabus, so a set
+   * comparison would miss it.
+   */
+  const serverOrder = (videosFetch.data ?? []).map((v) => v.video_id).join(',');
+  const draftOrder = draft.map((d) => d.video_id).join(',');
+  const contentDirty = editing ? draftOrder !== serverOrder : draft.length > 0;
+
   function addVideo(rawId: string) {
     const id = Number(rawId);
     if (!Number.isFinite(id) || id <= 0) return;
@@ -641,7 +603,12 @@ function ManageContentDialog({ course, canManage, onClose, onSaved }: {
     if (draftIds.has(id)) return;
     // Appended, not inserted: new content belongs at the end of the syllabus
     // by default, and the operator can move it with the reorder buttons.
-    setDraft((d) => [...d, { video_id: v.id, title: v.title, sub_title: v.sub_title }]);
+    setDraft((d) => [...d, {
+      video_id: v.id,
+      title: v.title,
+      sub_title: v.sub_title,
+      video_url: v.video_url,
+    }]);
   }
 
   function removeAt(idx: number) {
@@ -658,71 +625,168 @@ function ManageContentDialog({ course, canManage, onClose, onSaved }: {
     });
   }
 
-  async function handleSave() {
-    if (!course) return;
+  async function handleSubmit() {
+    const trimmedName = name.trim();
+    const trimmedDesc = description.trim();
+    // Validate client-side first so the common mistakes never cost a round trip
+    // — the backend enforces the same bounds and stays the real authority.
+    if (trimmedName.length < NAME_MIN || trimmedName.length > NAME_MAX) {
+      setError(`Course name must be between ${NAME_MIN} and ${NAME_MAX} characters.`);
+      return;
+    }
+    if (trimmedDesc.length > DESC_MAX) {
+      setError(`Description must be ${DESC_MAX} characters or fewer.`);
+      return;
+    }
     setError(null);
-    setSaving(true);
-    const t = showToast({ variant: 'loading', message: 'Saving course content…' });
+    setSubmitting(true);
+
+    const existingId = editing?.id ?? createdIdRef.current;
+    const t = showToast({
+      variant: 'loading',
+      message: existingId ? 'Saving course…' : 'Creating course…',
+    });
+
+    let courseId: number;
     try {
-      // The PUT REPLACES the whole content list, so array order here is the
-      // sequence the technician sees. An empty array is a valid payload — it
-      // clears the course — which is why there's no "must have ≥1" guard.
-      await api.put(`/admin/lms/courses/${course.id}/videos`, {
-        video_ids: draft.map((d) => d.video_id),
-      });
-      dismissToast(t);
-      showToast({ variant: 'success', message: 'Course Content Saved' });
-      // The videos key lives under the same prefix, so this eviction covers
-      // both the list row counts and this dialog's own content fetch.
-      invalidateFetch((k) => k.startsWith('/admin/lms/courses'));
-      videosFetch.refetch();
-      onSaved();
+      if (existingId) {
+        await api.patch(`/admin/lms/courses/${existingId}`, {
+          name: trimmedName,
+          description: trimmedDesc,
+        });
+        courseId = existingId;
+      } else {
+        const created = await api.post<{ id: number }>('/admin/lms/courses', {
+          name: trimmedName,
+          description: trimmedDesc,
+        });
+        courseId = created.id;
+        // Remember it BEFORE the content call, so a failure there leaves a
+        // retry that patches rather than duplicates.
+        createdIdRef.current = created.id;
+      }
     } catch (e) {
       dismissToast(t);
       const msg = errText(e, 'Save failed');
       setError(msg);
       showToast({ variant: 'error', message: msg });
-    } finally {
-      setSaving(false);
+      setSubmitting(false);
+      return;
     }
+
+    /*
+     * Content is a SECOND call and can fail on its own. The course is already
+     * saved by this point, so the failure path says so explicitly, refreshes
+     * the list (the course is really there), and leaves the modal open so
+     * pressing Save again resumes from the content step.
+     */
+    if (contentDirty) {
+      try {
+        // The PUT REPLACES the whole content list, so array order here is the
+        // sequence the technician sees. An empty array is a valid payload — it
+        // clears the course — which is why there's no "must have >= 1" guard.
+        await api.put(`/admin/lms/courses/${courseId}/videos`, {
+          video_ids: draft.map((d) => d.video_id),
+        });
+      } catch (e) {
+        dismissToast(t);
+        const msg = errText(e, 'Content could not be saved');
+        setError(
+          `The course was ${editing ? 'updated' : 'created'}, but its content could not be saved: `
+          + `${msg} Press Save again to retry — this will not create a duplicate.`,
+        );
+        showToast({ variant: 'error', message: `Course Saved, Content Failed — ${msg}` });
+        invalidateFetch((k) => k.startsWith('/admin/lms/courses'));
+        onSaved();
+        setSubmitting(false);
+        return;
+      }
+    }
+
+    dismissToast(t);
+    showToast({
+      variant: 'success',
+      message: editing || createdIdRef.current ? 'Course Saved' : 'Course Created',
+    });
+    // The videos key lives under the same prefix, so this eviction covers both
+    // the list row counts and this modal's own content fetch.
+    invalidateFetch((k) => k.startsWith('/admin/lms/courses'));
+    onSaved();
+    setSubmitting(false);
   }
+
+  const title = !editing
+    ? 'Add Course'
+    : canManage
+      ? `Edit Course — ${editing.name}`
+      : `Course — ${editing.name}`;
 
   return (
     <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>
-            Manage Content{course ? ` — ${course.name}` : ''}
-          </DialogTitle>
+          <DialogTitle className="truncate">{title}</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-3">
-          {canManage && (
-            <div>
-              <Label className="block mb-1">Add Video</Label>
-              {/*
-                `value` is pinned to '' so the control behaves as an "add"
-                action rather than a selection: pick a video, it lands in the
-                list below, and the picker resets for the next one.
-              */}
-              <SearchSelect
-                value=""
-                onChange={addVideo}
-                onQueryChange={setVq}
-                options={pickerOptions}
-                placeholder="Search The Training Video Catalogue…"
-                emptyText={catFetch.loading ? 'Loading…' : 'No Matching Videos'}
-              />
-            </div>
-          )}
+        <div className="space-y-3 max-h-[75vh] overflow-y-auto pr-1">
+          <div>
+            <Label className="block mb-1" required>Course Name</Label>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              maxLength={NAME_MAX}
+              disabled={!canManage}
+              placeholder='e.g. "Treadmill Servicing Basics"'
+            />
+          </div>
 
           <div>
+            <Label className="block mb-1">Description</Label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              maxLength={DESC_MAX}
+              rows={3}
+              disabled={!canManage}
+              placeholder="What this course covers and who should take it (optional)"
+              className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus:outline-none focus-visible:border-foreground/40 disabled:opacity-60"
+            />
+            <div className="mt-1 text-[11px] text-muted-foreground text-right tabular-nums">
+              {description.length} / {DESC_MAX}
+            </div>
+          </div>
+
+          {/*
+            Content sits directly under Description, in the same modal and the
+            same save. Adding a course and giving it a syllabus is one intent;
+            splitting it across two dialogs is what let empty courses ship.
+          */}
+          <div className="border-t pt-3">
+            {canManage && (
+              <div className="mb-2">
+                <Label className="block mb-1">Add Video</Label>
+                {/*
+                  `value` is pinned to '' so the control behaves as an "add"
+                  action rather than a selection: pick a video, it lands in the
+                  list below, and the picker resets for the next one.
+                */}
+                <SearchSelect
+                  value=""
+                  onChange={addVideo}
+                  onQueryChange={setVq}
+                  options={pickerOptions}
+                  placeholder="Search The Training Video Catalogue…"
+                  emptyText={catFetch.loading ? 'Loading…' : 'No Matching Videos'}
+                />
+              </div>
+            )}
+
             <Label className="block mb-1">Course Content ({draft.length})</Label>
-            <div className="rounded-md border divide-y max-h-[45vh] overflow-y-auto">
-              {videosFetch.loading && (
+            <div className="rounded-md border divide-y max-h-[32vh] overflow-y-auto">
+              {editing && videosFetch.loading && (
                 <div className="p-4 text-sm text-muted-foreground">Loading…</div>
               )}
-              {!videosFetch.loading && draft.length === 0 && (
+              {!(editing && videosFetch.loading) && draft.length === 0 && (
                 /*
                  * Not a neutral blank slate on purpose. An empty course is
                  * assignable but uncompletable — a technician who opens it has
@@ -738,7 +802,7 @@ function ManageContentDialog({ course, canManage, onClose, onSaved }: {
                   </div>
                 </div>
               )}
-              {!videosFetch.loading && draft.map((v, idx) => (
+              {!(editing && videosFetch.loading) && draft.map((v, idx) => (
                 <div key={v.video_id} className="flex items-center gap-2 px-3 py-2">
                   {/* Position is derived from array order, so it renumbers
                       itself on every move/remove — no stale sequence values. */}
@@ -753,28 +817,45 @@ function ManageContentDialog({ course, canManage, onClose, onSaved }: {
                       </div>
                     )}
                   </div>
-                  {canManage && (
-                    <div className="flex items-center gap-1 shrink-0">
-                      <IconButton
-                        icon={ChevronUp}
-                        label="Move Up"
-                        disabled={idx === 0}
-                        onClick={() => moveAt(idx, -1)}
-                      />
-                      <IconButton
-                        icon={ChevronDown}
-                        label="Move Down"
-                        disabled={idx === draft.length - 1}
-                        onClick={() => moveAt(idx, 1)}
-                      />
-                      <IconButton
-                        icon={X}
-                        intent="danger"
-                        label="Remove Video"
-                        onClick={() => removeAt(idx)}
-                      />
-                    </div>
-                  )}
+                  <div className="flex items-center gap-1 shrink-0">
+                    {/*
+                      Play sits OUTSIDE the canManage gate — watching is a read,
+                      and someone reviewing a syllabus they cannot edit still
+                      needs to see what is in it. Disabled with the reason in the
+                      label when the catalogue entry has no video attached, which
+                      is worth noticing here: an unplayable entry can never be
+                      completed, so it caps the whole course at incomplete for
+                      every technician assigned to it.
+                    */}
+                    <IconButton
+                      icon={Play}
+                      label={v.video_url ? 'Play Video' : 'No Video Linked'}
+                      disabled={!v.video_url}
+                      onClick={() => setPreviewing(v)}
+                    />
+                    {canManage && (
+                      <>
+                        <IconButton
+                          icon={ChevronUp}
+                          label="Move Up"
+                          disabled={idx === 0}
+                          onClick={() => moveAt(idx, -1)}
+                        />
+                        <IconButton
+                          icon={ChevronDown}
+                          label="Move Down"
+                          disabled={idx === draft.length - 1}
+                          onClick={() => moveAt(idx, 1)}
+                        />
+                        <IconButton
+                          icon={X}
+                          intent="danger"
+                          label="Remove Video"
+                          onClick={() => removeAt(idx)}
+                        />
+                      </>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -787,15 +868,34 @@ function ManageContentDialog({ course, canManage, onClose, onSaved }: {
           )}
 
           <div className="flex justify-end gap-2 pt-2">
-            <CancelButton onCancel={onClose} disabled={saving} />
+            <CancelButton onCancel={onClose} disabled={submitting} />
             {canManage && (
-              <Button onClick={handleSave} disabled={saving || videosFetch.loading}>
-                {saving ? 'Saving…' : 'Save Content'}
+              <Button onClick={handleSubmit} disabled={submitting}>
+                {submitting ? 'Saving…' : editing ? 'Save Changes' : 'Add Course'}
               </Button>
             )}
           </div>
         </div>
       </DialogContent>
+
+      {/*
+        Rendered as a SIBLING of DialogContent, not inside it. Nested, the
+        player would be a descendant of the course modal — closing the outer
+        one would tear it down mid-playback, and the two would contend over
+        focus restoration on close. As a sibling it layers cleanly on top and
+        owns its own lifecycle.
+
+        Mounted only while a row is selected: unmounting is what actually stops
+        playback, since a hidden-but-mounted iframe keeps playing audio.
+      */}
+      {previewing && (
+        <VideoPreviewDialog
+          open
+          onClose={() => setPreviewing(null)}
+          title={previewing.title}
+          url={previewing.video_url}
+        />
+      )}
     </Dialog>
   );
 }
