@@ -26,6 +26,7 @@ import { UnconfirmedJobsTable } from '@/components/job/UnconfirmedJobsTable';
 import { PendingToStartView } from '@/components/job/PendingToStartView';
 import { AssignTechnicianModal, type AssignMode } from '@/components/job/AssignTechnicianModal';
 import { ScheduleAssignModal } from '@/components/job/ScheduleAssignModal';
+import { OfferHoverCard } from '@/components/job/OfferHoverCard';
 import {
   PendingSchedulingFilters, psFiltersFromParams, writePsFilterParams,
   psFilterKey, psAnyFilterSet, psQueryParams, type PsFilters,
@@ -833,6 +834,12 @@ export default function MyOrdersPage() {
                     </div>
                   </td>
                   <td>
+                    {/* Hovering the status reveals WHO the job was offered to and
+                        where each offer stands. `enabled` is false when the job
+                        has no offers at all, so ordinary rows get no hover card.
+                        The roster is fetched lazily (and side-effect-free) —
+                        see OfferHoverCard. */}
+                    <OfferHoverCard jobId={j.job_id} enabled={(j.total_offer_count ?? 0) > 0}>
                     {/* Offer tri-state only overrides the chip on BOOKED (0)
                         rows — on any other status the job_status label wins. */}
                     {j.job_status === 0 && offerState(j) === 'offered' ? (
@@ -858,6 +865,7 @@ export default function MyOrdersPage() {
                         {statusLabel(j.job_status, { assigned: j.fk_easyfixter_id != null })}
                       </StatusChip>
                     )}
+                    </OfferHoverCard>
                   </td>
                   <td className="max-w-[16rem] truncate" title={j.remarks ?? undefined}>{j.remarks || '—'}</td>
                   <td className="stick-col stick-right text-right whitespace-nowrap">

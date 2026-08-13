@@ -68,6 +68,7 @@ import {
   candidateVisibleOnRankedSurface,
   mergeCandidatesByActiveSurface,
 } from '@/lib/easyfixer-lifecycle';
+import { CallableMobile } from '@/components/calls/CallButton';
 import { AddRemarksDialog } from './AddRemarksDialog';
 import { CancelWithReasonDialog } from './CancelWithReasonDialog';
 import { RescheduleDialog } from './RescheduleDialog';
@@ -769,48 +770,82 @@ export function ScheduleAssignModal({
                 declined or whose offer expired. Whoever accepts first on the app
                 is assigned; open offers expire after 30 minutes.
               </p>
-              <div className="flex flex-wrap gap-2">
-                {offers.data!.items.map((o) => {
-                  // Colour the status chip by offer_status: REJECTED=rose, EXPIRED=slate,
-                  // OFFERED (live) / anything else = amber.
-                  const chip =
-                    o.offer_status === 2
-                      ? 'bg-rose-100 text-rose-700 border-rose-200'
-                      : o.offer_status === 3
-                        ? 'bg-slate-100 text-slate-600 border-slate-200'
-                        : 'bg-amber-100 text-amber-700 border-amber-200';
-                  return (
-                    <div
-                      key={o.efr_id}
-                      className="inline-flex items-center gap-2 rounded-full border bg-muted/30 pl-3 pr-3.5 py-1"
-                    >
-                      <span className="text-sm font-medium text-foreground">{o.efr_name}</span>
-                      <span className="text-[10px] text-muted-foreground">#{o.efr_id}</span>
-                      {o.offer_status_label && (
-                        <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium border ${chip}`}>
-                          {o.offer_status_label}
-                        </span>
-                      )}
-                      {o.offer_status === 2 && o.reject_reason && (
-                        <span className="text-[10px] text-rose-600" title="Reason given by technician">
-                          &ldquo;{o.reject_reason}&rdquo;
-                        </span>
-                      )}
-                      {o.offer_source && (
-                        <span className="text-[10px] text-slate-500" title="Where this offer was made from">
-                          {o.offer_source === 'top10' ? 'Top-10' : o.offer_source === 'search' ? 'Search' : 'Auto'}
-                        </span>
-                      )}
-                      {(o.offer_count ?? 1) > 1 && (
-                        <span className="text-[10px] text-slate-500" title="Times offered">×{o.offer_count}</span>
-                      )}
-                      <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-                        <Clock className="h-3 w-3" />
-                        offered {relativeTime(o.offered_at)}
-                      </span>
-                    </div>
-                  );
-                })}
+              {/* Table rather than chips: a chip row wrapped unpredictably and
+                  had no room for the mobile number ops needs to chase an offer.
+                  Uses the shared .data-table so it reads like every other list
+                  in the CRM. */}
+              <div className="overflow-x-auto rounded-md border">
+                <table className="data-table w-full text-xs">
+                  <thead>
+                    <tr>
+                      <th className="!text-left">Technician</th>
+                      <th className="!text-left">Mobile</th>
+                      <th className="!text-left">Offer Status</th>
+                      <th className="!text-left">Offered</th>
+                      <th className="!text-left">Source</th>
+                      <th className="!text-left">Offered By</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {offers.data!.items.map((o) => {
+                      /* Colour as TEXT, not a chip: inside a table the chip
+                         competed with the row's own status pills and made the
+                         column read as an action. REJECTED=rose, EXPIRED=slate,
+                         OFFERED (live)=amber. */
+                      const statusText =
+                        o.offer_status === 2 ? 'text-rose-600'
+                          : o.offer_status === 3 ? 'text-slate-500'
+                            : 'text-amber-600';
+                      return (
+                        <tr key={o.efr_id}>
+                          <td className="!text-left">
+                            <div className="font-medium">{o.efr_name}</div>
+                            <div className="text-[10px] text-muted-foreground">#{o.efr_id}</div>
+                          </td>
+                          {/* Click-to-call resolves the real number server-side
+                              from efr_id — the masked digits here are display
+                              only. jobContextId files the call under this job. */}
+                          <td className="!text-left whitespace-nowrap">
+                            {o.mobile
+                              ? <CallableMobile efrId={o.efr_id} jobContextId={jobId ?? undefined} mobile={o.mobile} />
+                              : <span className="text-muted-foreground">—</span>}
+                          </td>
+                          <td className="!text-left">
+                            <div className="flex flex-col gap-0.5">
+                              {o.offer_status_label && (
+                                <span className={`font-medium ${statusText}`}>{o.offer_status_label}</span>
+                              )}
+                              {o.offer_status === 2 && o.reject_reason && (
+                                <span className="text-[10px] text-rose-600" title="Reason given by technician">
+                                  &ldquo;{o.reject_reason}&rdquo;
+                                </span>
+                              )}
+                              {(o.offer_count ?? 1) > 1 && (
+                                <span className="text-[10px] text-slate-500" title="Times offered">
+                                  Offered ×{o.offer_count}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          {/* Plain text — the clock icon read as a control in a
+                              dense table and added nothing the label doesn't. */}
+                          <td className="!text-left whitespace-nowrap text-muted-foreground">
+                            {relativeTime(o.offered_at)}
+                          </td>
+                          <td className="!text-left">
+                            {o.offer_source
+                              ? (o.offer_source === 'top10' ? 'Top-10' : o.offer_source === 'search' ? 'Search' : 'Auto')
+                              : <span className="text-muted-foreground">—</span>}
+                          </td>
+                          <td className="!text-left">
+                            {o.offered_by_name
+                              || <span className="text-muted-foreground" title="Auto-assigned, or offered before this was recorded">—</span>}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             </section>
           )}

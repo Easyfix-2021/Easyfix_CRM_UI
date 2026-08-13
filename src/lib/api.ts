@@ -375,6 +375,15 @@ export type JobOffer = {
   offer_count?: number | null;
   /** Where the offer was made from: Top-10 list, Search, or auto-assign. */
   offer_source?: 'top10' | 'search' | 'auto' | null;
+  /**
+   * Technician's mobile, masked in transit by the BE middleware. Display only —
+   * click-to-call re-resolves the real number server-side from `efr_id`, so the
+   * CRM never holds the clear digits.
+   */
+  mobile?: string | null;
+  /** Who made the offer. NULL for auto-assign and for pre-column offers. */
+  offered_by_user_id?: number | null;
+  offered_by_name?: string | null;
 };
 
 /*
