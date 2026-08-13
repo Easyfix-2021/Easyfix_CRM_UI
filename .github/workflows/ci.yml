@@ -1,0 +1,74 @@
+# Easyfix_CRM_UI — pre-deploy gate: typecheck, lint and unit-test a change
+# BEFORE it reaches a deploy branch.
+#
+# WHY THIS EXISTS. deploy.yml's `precheck` job already runs exactly these three
+# steps and gates the image build (`build-and-push` needs: precheck), but it
+# only triggers on `push: [QA, Production]`. So a type error or a lint
+# violation authored on HotFix stayed invisible until the HotFix→QA merge —
+# where it then BLOCKED A DEPLOY BRANCH rather than being caught before it got
+# there. Same outcome, most expensive possible moment.
+#
+# WHY IT ALSO TRIGGERS ON `push: HotFix`, and not just on pull_request.
+# EasyFix_Backend has the equivalent PR-path workflow, and as of 2026-08-13 it
+# has NEVER RUN — `gh run list --workflow=ci.yml` returns nothing across its
+# whole history. The reason is visible in the graph: `git log --merges
+# origin/QA` is a wall of plain "Merge branch 'HotFix' into QA" commits. This
+# team integrates with a local `git merge` and a push, not through pull
+# requests, so a pull_request-only trigger is dead code. The PR trigger is kept
+# anyway — it costs nothing and starts working the day PRs are adopted — but
+# the push on HotFix is what actually fires today, which is the entire point.
+#
+# WHY THESE THREE STEPS AND NOT `next build`. It mirrors `precheck` exactly, so
+# the guarantee is clean: green here means precheck will be green there. The
+# real bundle is built once, by the Docker image build on the deploy path;
+# running `next build` here too would gate PRs on something the push path
+# doesn't check at this stage, and cost minutes on every commit. (The backend's
+# ci.yml looks like it builds, but its `npm run build` is
+# `node scripts/build-check.js` — a cheap syntax check, not a bundle. The
+# faithful equivalent here is `tsc --noEmit`.)
+#
+# No DB, no network, no secrets — this needs nothing but Node.
+
+name: CI (typecheck + lint + tests)
+
+on:
+  pull_request:
+    branches: [QA, Production]
+  push:
+    branches: [HotFix]
+  workflow_dispatch:
+
+# Deliberately does NOT overlap deploy.yml, which owns QA/Production pushes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Typecheck, lint & unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: 'npm' }
+      - run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit -p tsconfig.json
+
+      # Must be `eslint .` (via lint:flat), NOT `npm run lint` (= `next lint`).
+      # next lint routes through @rushstack/eslint-patch, which is incompatible
+      # with ESLint 9's flat-config loader, so it would run NONE of the custom
+      # rules in eslint.config.mjs — the chart colour-collision guard, the raw
+      # time_slot guard, no-api-in-useEffect, no-inline-onOpenChange, and the
+      # unscrollable-DialogContent guard. `--max-warnings=0` is baked into the
+      # script, so any problem fails the job.
+      - name: Lint (flat config — where the custom rules live)
+        run: npm run lint:flat
+
+      # Value-level unit tests (node:test, no extra runner). `npm test`
+      # compiles the modules under test into .test-build/ first — see
+      # tests/job-slots.test.js for why that step exists.
+      - name: Test
+        run: npm test
