@@ -1,7 +1,7 @@
 'use client';
 
 /*
- * "Rewards Programme Is Paused" — shown across all three Rewards pages.
+ * "Rewards Programme Is Paused" — shown across all Rewards pages.
  *
  * Pausing (`rewards.earn.enabled = false`) stops FURTHER earning and nothing
  * else. It is not a kill switch, and the copy is careful to say so, because
