@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { ExternalLink, X as XIcon } from 'lucide-react';
+import { ExternalLink, ImageOff, X as XIcon } from 'lucide-react';
 import {
   Dialog, DialogContent, DialogTitle, DialogDescription,
 } from '@/components/ui/dialog';
@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { NoticeCelebration } from './NoticeCelebration';
 import { themeForNotice, pinnedIcon } from './noticeThemes';
 import { api } from '@/lib/api';
-import { invalidateFetch } from '@/lib/hooks';
+import { invalidateFetch, useFetch } from '@/lib/hooks';
 import type { Notice } from '@/lib/notice-types';
 
 /*
@@ -101,12 +101,52 @@ export function NoticeDetailModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, notice]);
 
+  /*
+   * RE-MINT THE IMAGE URLS AT RENDER TIME.
+   *
+   * The notice objects handed to this modal come from a LIST payload
+   * (/admin/notices/active, or the All-Notices table) whose presigned S3 URLs
+   * were minted when that list was fetched — and NoticeFlash deliberately
+   * holds a card in state without refreshing it. So by the time the operator
+   * scrolls down to the attachment, the URL can already be dead: production
+   * returned `403 AccessDenied · "Request has expired"` for exactly this on
+   * 2026-08-14.
+   *
+   * The detail route re-signs on every request (getNoticeById → decorate →
+   * resolveStoredImages), so asking for it on open yields URLs seconds old
+   * rather than minutes. Keyed by notice id, so useFetch's module cache dedupes
+   * repeat opens of the same card inside its 30s window.
+   *
+   * FAIL-SOFT: on error we keep the URLs we were handed. They may well still be
+   * valid, and a failed refresh must never blank an attachment that would
+   * otherwise have rendered.
+   */
+  const wantsFreshImages = open && (notice?.images?.length ?? 0) > 0;
+  const fresh = useFetch<Notice>(
+    wantsFreshImages && notice ? `/admin/notices/${notice.notice_id}` : null,
+  );
+
+  /*
+   * Sources whose <img> actually failed to load.
+   *
+   * Keyed by the URL string, which self-heals by construction: a re-mint
+   * produces a different signature, so a previously-failed entry can never
+   * suppress a freshly-signed URL for the same object.
+   */
+  const [failedSrcs, setFailedSrcs] = React.useState<Set<string>>(new Set());
+  const markFailed = React.useCallback((src: string) => {
+    setFailedSrcs((prev) => (prev.has(src) ? prev : new Set(prev).add(src)));
+  }, []);
+
   if (!notice) return null;
 
   const theme = themeForNotice(notice);
   const isPinned = !!notice.is_pinned;
   const Medallion = isPinned ? pinnedIcon() : theme.icon;
   const body = notice.body ?? '';
+  // Freshly-signed URLs when the detail refresh landed; otherwise the ones we
+  // were handed. Never empty-on-error — see the useFetch note above.
+  const images: string[] = fresh.data?.images ?? notice.images ?? [];
 
   const publishedLabel = notice.publish_at
     ? new Date(notice.publish_at).toLocaleString('en-IN', {
@@ -221,9 +261,29 @@ export function NoticeDetailModal({
             {body}
           </div>
 
-          {Array.isArray(notice.images) && notice.images.length > 0 && (
+          {images.length > 0 && (
             <div className="mt-5 grid grid-cols-2 sm:grid-cols-3 gap-2">
-              {notice.images.map((src, i) => (
+              {images.map((src, i) => (failedSrcs.has(src) ? (
+                /*
+                 * A tile that could not load renders as a quiet placeholder,
+                 * NOT as a button. Two reasons it isn't just a styled <img>:
+                 * the browser's own broken-image glyph plus the alt text is
+                 * what the operator saw in the 2026-08-14 report and it reads
+                 * as a bug in the notice; and leaving it clickable would open
+                 * the lightbox on a dead URL — trading a small broken square
+                 * for a full-screen one.
+                 */
+                <div
+                  key={`${src}-${i}`}
+                  className="flex aspect-square flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed bg-muted/40 px-2 text-center"
+                  title="This attachment could not be loaded"
+                >
+                  <ImageOff className="h-5 w-5 text-slate-400" aria-hidden />
+                  <span className="text-[11px] font-medium leading-tight text-slate-500">
+                    Image unavailable
+                  </span>
+                </div>
+              ) : (
                 <button
                   key={`${src}-${i}`}
                   type="button"
@@ -232,9 +292,14 @@ export function NoticeDetailModal({
                   aria-label={`Open image ${i + 1}`}
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={src} alt={`Notice attachment ${i + 1}`} className="h-full w-full object-cover" />
+                  <img
+                    src={src}
+                    alt={`Notice attachment ${i + 1}`}
+                    className="h-full w-full object-cover"
+                    onError={() => markFailed(src)}
+                  />
                 </button>
-              ))}
+              )))}
             </div>
           )}
 
@@ -270,6 +335,14 @@ export function NoticeDetailModal({
               alt="Full size"
               className="max-h-full max-w-full object-contain rounded"
               onClick={(e) => e.stopPropagation()}
+              /*
+               * Backstop: a URL can die between the thumbnail loading and the
+               * lightbox opening (the signature has a clock on it). Falling
+               * back here closes the overlay and marks the tile, so the
+               * failure is reported in the grid instead of stranding the
+               * operator on a full-screen broken image.
+               */
+              onError={() => { markFailed(lightboxSrc); setLightboxSrc(null); }}
             />
           </div>
         )}
