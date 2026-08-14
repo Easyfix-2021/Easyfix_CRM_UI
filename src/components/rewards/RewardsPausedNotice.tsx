@@ -58,16 +58,32 @@ export function RewardsEarnRates() {
 
   return (
     <div className="rounded-md border bg-muted/30 px-3 py-2">
-      <div className="text-xs font-semibold mb-1">How Points Are Earned</div>
-      <div className="flex flex-wrap gap-x-5 gap-y-1">
-        {data.rules.map((rule) => (
-          <div key={rule.code} className="text-xs">
-            <span className="font-semibold text-amber-600 tabular-nums">+{rule.points}</span>{' '}
-            <span className="font-medium">{rule.label}</span>{' '}
-            <span className="text-muted-foreground">— {rule.detail}</span>
-          </div>
-        ))}
-      </div>
+      <div className="text-xs font-semibold mb-1.5">How Points Are Earned</div>
+      {/*
+        One rule per ROW, not a wrapping row of inline items. Wrapping packed
+        two rules onto the first line and orphaned the third, which read as a
+        layout accident rather than a list — and these are three parallel
+        terms, so they should scan as three.
+
+        Sorted by value, highest first. An operator asked "what earns the most?"
+        should be able to read the answer off the top of the list rather than
+        compare three numbers. Sorted HERE rather than trusting the order the
+        API happened to send, so a future rate change cannot silently reshuffle
+        it into something misleading.
+      */}
+      <ul className="flex flex-col gap-1">
+        {[...data.rules]
+          .sort((a, b) => b.points - a.points)
+          .map((rule) => (
+            <li key={rule.code} className="text-xs flex items-baseline gap-1.5">
+              <span className="font-semibold text-amber-600 tabular-nums w-10 shrink-0">
+                +{rule.points}
+              </span>
+              <span className="font-medium shrink-0">{rule.label}</span>
+              <span className="text-muted-foreground">— {rule.detail}</span>
+            </li>
+          ))}
+      </ul>
       <div className="mt-1 text-[11px] text-muted-foreground">
         These rates are fixed and cannot be changed from the CRM — they are the terms technicians
         are told, so changing one is a deliberate release.
