@@ -120,6 +120,22 @@ function primaryParty(r: CallRow): { role: string; name: string | null } {
 function RecordingCell({ row }: { row: CallRow }) {
   const [loading, setLoading] = React.useState(false);
   const [url, setUrl] = React.useState<string | null>(null);
+  /*
+   * Set once the endpoint has told us there is no audio for this row.
+   *
+   * WHY THIS ISN'T GATED ON A recording_url FIELD INSTEAD. The obvious version
+   * of "hide Play when recording_url is NULL" would break playback almost
+   * everywhere: the backend does not read that column to play a call — when it
+   * is blank it PULLS fresh from Plivo by call_uuid and self-heals the row,
+   * because (per its own comment) "the Plivo push callback has proven
+   * unreliable (never populated the column)". A blank recording_url is the
+   * NORMAL state of a call whose audio exists and plays fine, so gating on it
+   * would turn a cosmetic annoyance into a loss of function.
+   *
+   * The attempt is the only trustworthy signal, so we keep it and remember the
+   * answer — the same reasoning as the notice-attachment onError.
+   */
+  const [unavailable, setUnavailable] = React.useState(false);
 
   // Kaleyra rows carry an https recording URL; Plivo rows only *might* have one
   // (recorded + connected) — the endpoint 404s cleanly when there's none.
@@ -150,24 +166,42 @@ function RecordingCell({ row }: { row: CallRow }) {
     try {
       const r = await api.get<{ url: string }>(`/admin/calls/${row.id}/recording`);
       if (r?.url) setUrl(r.url);
-      else showToast({ variant: 'error', message: 'No recording available for this call.' });
+      else { setUnavailable(true); showToast({ variant: 'error', message: 'No recording available for this call.' }); }
     } catch (e) {
+      setUnavailable(true);
       showToast({ variant: 'error', message: e instanceof Error ? e.message : 'No recording available for this call.' });
     } finally {
       setLoading(false);
     }
   }
 
+  /*
+   * Once we know there's nothing, stop advertising "Play" — that was the
+   * complaint: a green Play that answers with an error toast, still sitting
+   * there inviting the next click.
+   *
+   * STILL CLICKABLE, deliberately. The endpoint returns one 404 for two
+   * different situations — "never recorded" and "not ready yet", since Plivo's
+   * mp3 lags a minute or so after hangup — so a permanent dead label would
+   * block a legitimate retry. The label tells the truth about now; the click
+   * keeps the retry available, and the tooltip says which is which.
+   */
   return (
     <button
       type="button"
       onClick={play}
       disabled={loading}
-      title="Play call recording"
-      className="inline-flex items-center gap-1 text-emerald-700 hover:underline disabled:opacity-50"
+      title={unavailable
+        ? 'No recording found. Recordings can take a minute to appear after a call ends — click to check again.'
+        : 'Play call recording'}
+      className={unavailable
+        ? 'inline-flex items-center gap-1 text-xs italic text-muted-foreground hover:underline disabled:opacity-50'
+        : 'inline-flex items-center gap-1 text-emerald-700 hover:underline disabled:opacity-50'}
     >
-      {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
-      Play
+      {loading
+        ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        : (unavailable ? null : <Play className="h-3.5 w-3.5" />)}
+      {unavailable ? 'No recording' : 'Play'}
     </button>
   );
 }
