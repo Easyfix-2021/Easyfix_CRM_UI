@@ -28,6 +28,7 @@ import {
   pageSizeToLimit,
 } from '@/components/ui/table-pagination';
 import { api, ApiError } from '@/lib/api';
+import { CallableMobile } from '@/components/calls/CallButton';
 import { showToast } from '@/components/ui/toast';
 import { downloadXlsx } from '@/lib/download-xlsx';
 import { useLookup } from '@/lib/use-lookup';
@@ -1597,7 +1598,14 @@ const EfRow = memo(function EfRow({
           )}
         </span>
       </td>
-      <td className="!text-left font-mono text-xs truncate" title={e.efr_no}>{e.efr_no}</td>
+      {/* Dial the technician straight from the list — the point is not having
+          to open the profile just to call after sending a link. Mirrors the
+          Registered EasyFixer page. CallableMobile dials by efrId and the BE
+          re-resolves the real number; `mobile` is display-only and already
+          bullet-masked by the response middleware, so nothing here unmasks. */}
+      <td className="!text-left font-mono text-xs truncate" title={e.efr_no}>
+        <CallableMobile efrId={e.efr_id} mobile={e.efr_no} />
+      </td>
       <td className="!text-left text-xs truncate" title={e.efr_email ?? ''}>{e.efr_email ?? <span className="text-muted-foreground">—</span>}</td>
       <td className="!text-left truncate" title={e.state_name ?? ''}>{e.state_name ?? <span className="text-muted-foreground">—</span>}</td>
       <td className="!text-left truncate" title={e.city_name ?? ''}>{e.city_name ?? <span className="text-muted-foreground">—</span>}</td>
