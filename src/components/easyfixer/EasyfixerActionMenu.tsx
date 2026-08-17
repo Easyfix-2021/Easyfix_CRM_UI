@@ -1,6 +1,6 @@
 'use client';
 
-import { Pencil, Link as LinkIcon, Receipt, ClipboardList, Send, Loader2, ClipboardCopy, MoreVertical, History } from 'lucide-react';
+import { Pencil, Link as LinkIcon, Receipt, ClipboardList, Send, Loader2, ClipboardCopy, MoreVertical, History, Smartphone, Landmark } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
   DropdownMenu,
@@ -26,6 +26,8 @@ import {
  *     5. Send Profile Update Link → magic-link send  (Send)           [gated by canSend; isSending → spinner+disable]
  *     6. Copy Dev URL            → mint + clipboard (ClipboardCopy)  [gated by canCopyDevUrl; isCopyingDevUrl → spinner+disable]
  *     7. Status & History         → lifecycle dialog (History)        [gated by canManageLifecycle]
+ *     8. Update Mobile Number     → mobile dialog    (Smartphone)     [gated by canUpdateMobile]
+ *     9. Update Bank Details      → bank OTP dialog  (Landmark)       [gated by canUpdateBank]
  *
  * The Edit action is gated by `canEdit` — roles without
  * `isEasyfixerEdit` action permission don't see it. Read-only roles
@@ -65,10 +67,14 @@ export function EasyfixerActionMenu({
   onSendProfileUpdateLink,
   onCopyDevUrl,
   onLifecycle,
+  onUpdateMobile,
+  onUpdateBank,
   canEdit = true,
   canSend = false,
   canCopyDevUrl = false,
   canManageLifecycle = false,
+  canUpdateMobile = false,
+  canUpdateBank = false,
   isSending = false,
   isCopyingDevUrl = false,
 }: {
@@ -81,6 +87,16 @@ export function EasyfixerActionMenu({
   onLifecycle?: () => void;
   /* Gate for lifecycle management (parent passes isEdit). */
   canManageLifecycle?: boolean;
+  /* Opens the change-mobile dialog. The mobile is the technician's LOGIN
+   * identity, so this is gated on its own action permission rather than
+   * riding along with the general edit right. */
+  onUpdateMobile?: () => void;
+  /* Opens the OTP-gated change-bank-details dialog. */
+  onUpdateBank?: () => void;
+  /* Roles without `isEasyfixerMobileUpdate` shouldn't see the mobile item. */
+  canUpdateMobile?: boolean;
+  /* Roles without `isEasyfixerBankUpdate` shouldn't see the bank item. */
+  canUpdateBank?: boolean;
   /* Click handler for the Send Profile Update Link action; only invoked
    * when `canSend` is true and `isSending` is false. */
   onSendProfileUpdateLink?: () => void;
@@ -102,7 +118,11 @@ export function EasyfixerActionMenu({
    * item so rapid double-clicks don't double-mint. */
   isCopyingDevUrl?: boolean;
 }) {
-  const hasWriteGroup = (canSend && onSendProfileUpdateLink) || (canCopyDevUrl && onCopyDevUrl) || (canManageLifecycle && onLifecycle);
+  const hasWriteGroup = (canSend && onSendProfileUpdateLink)
+    || (canCopyDevUrl && onCopyDevUrl)
+    || (canManageLifecycle && onLifecycle)
+    || (canUpdateMobile && onUpdateMobile)
+    || (canUpdateBank && onUpdateBank);
   return (
     // modal={false}: Radix's default modal dropdown locks document.body
     // pointer-events while open/closing; that lock races a Dialog opened from
@@ -177,6 +197,18 @@ export function EasyfixerActionMenu({
           <DropdownMenuItem onClick={onLifecycle}>
             <History className="mr-2 h-4 w-4 text-violet-600" />
             Status &amp; History
+          </DropdownMenuItem>
+        )}
+        {canUpdateMobile && onUpdateMobile && (
+          <DropdownMenuItem onClick={onUpdateMobile}>
+            <Smartphone className="mr-2 h-4 w-4 text-sky-600" />
+            Update Mobile Number
+          </DropdownMenuItem>
+        )}
+        {canUpdateBank && onUpdateBank && (
+          <DropdownMenuItem onClick={onUpdateBank}>
+            <Landmark className="mr-2 h-4 w-4 text-emerald-600" />
+            Update Bank Details
           </DropdownMenuItem>
         )}
       </DropdownMenuContent>

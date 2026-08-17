@@ -40,6 +40,8 @@ import { EasyfixerLifecycleChip } from '@/components/easyfixer/EasyfixerLifecycl
 import { EasyfixerTransactionsModal } from '@/components/easyfixer/EasyfixerTransactionsModal';
 import { EasyfixerClientMappingModal } from '@/components/easyfixer/EasyfixerClientMappingModal';
 import { EasyfixerDeepSkillModal } from '@/components/easyfixer/EasyfixerDeepSkillModal';
+import { EasyfixerMobileDialog } from '@/components/easyfixer/EasyfixerMobileDialog';
+import { EasyfixerBankDialog } from '@/components/easyfixer/EasyfixerBankDialog';
 import { LiveLocationPopover } from '@/components/location/LiveLocationPopover';
 import { cycleSort, SortHeader, type SortDir } from '@/lib/use-sort';
 import { useMe } from '@/lib/auth-context';
@@ -523,6 +525,19 @@ export default function EasyfixersPage() {
     'isEdit',
     'isEasyfixerTempInactive',
     'isProfileUpdateLinkSend',
+    /*
+     * Change-mobile / change-bank (2026-08-17). Both follow the
+     * `isEasyfixer<Verb>` shape the two most recent additions on this screen
+     * use (`isEasyfixerTempInactive`), NOT the bare-verb legacy names — these
+     * actions have no Legacy CRM counterpart to stay compatible with.
+     *
+     * Fail-closed by construction: actionFlags returns false for a key that
+     * isn't in the /auth/me payload, so until the `menu_action` rows are
+     * seeded neither item renders. The BE must gate the routes on these exact
+     * key names (see the handoff note).
+     */
+    'isEasyfixerMobileUpdate',
+    'isEasyfixerBankUpdate',
   ]);
   const searchParams = useSearchParams();
   // Total comes from the base list response; rows are stored separately
@@ -578,6 +593,16 @@ export default function EasyfixersPage() {
   // synchronously and the menu's teardown dismisses the just-mounted dialog
   // (it flashes open then auto-closes). Defer so the dropdown closes first.
   const openStatusDialog = useCallback((e: Ef) => { setTimeout(() => setStatusFor(e), 0); }, []);
+  /*
+   * Change-mobile / change-bank dialog targets (null = closed). Both open
+   * from the row kebab, so both go through the same setTimeout(0) deferral
+   * as every other menu-launched dialog on this page — see openSendDialog
+   * below for the full write-up of the Radix DropdownMenu → Dialog race.
+   */
+  const [mobileDialogFor, setMobileDialogFor] = useState<Ef | null>(null);
+  const [bankDialogFor, setBankDialogFor] = useState<Ef | null>(null);
+  const openMobileDialog = useCallback((e: Ef) => { setTimeout(() => setMobileDialogFor(e), 0); }, []);
+  const openBankDialog = useCallback((e: Ef) => { setTimeout(() => setBankDialogFor(e), 0); }, []);
   // Live technician-location popover target (null = closed). Polls
   // GET /admin/easyfixers/:id/location every 15s while open.
   const [locationFor, setLocationFor] = useState<Ef | null>(null);
@@ -1415,6 +1440,8 @@ export default function EasyfixersPage() {
                   canEdit={!!can.isEdit}
                   canSend={!!can.isProfileUpdateLinkSend}
                   canManageLifecycle={!!can.isEdit}
+                  canUpdateMobile={!!can.isEasyfixerMobileUpdate}
+                  canUpdateBank={!!can.isEasyfixerBankUpdate}
                   isProd={isProd}
                   isSending={sendingFor.has(row.e.efr_id)}
                   isCopyingDevUrl={copyingDevUrlFor.has(row.e.efr_id)}
@@ -1426,6 +1453,8 @@ export default function EasyfixersPage() {
                   onLiveLocation={openLiveLocation}
                   onSendProfileUpdateLink={openSendDialog}
                   onCopyDevUrl={copyDevUrl}
+                  onUpdateMobile={openMobileDialog}
+                  onUpdateBank={openBankDialog}
                   onOpenCsvModal={openCsvModal}
                   onOpenDeepSkillModal={openDeepSkillModal}
                 />
@@ -1511,6 +1540,31 @@ export default function EasyfixersPage() {
         easyfixerMobile={transactionsFor?.efr_no ?? null}
       />
 
+      {/*
+        * Change-mobile — the technician's LOGIN identity, so the dialog states
+        * that consequence outright. On success we reload the list the same way
+        * every other mutation on this page does; the masked `efr_no` in the
+        * Mobile column is re-derived server-side.
+        */}
+      <EasyfixerMobileDialog
+        open={mobileDialogFor !== null}
+        easyfixer={mobileDialogFor}
+        onClose={() => setMobileDialogFor(null)}
+        onUpdated={() => { void load(); }}
+      />
+
+      {/*
+        * Change-bank — two-step, OTP-gated (the code goes to the TECHNICIAN's
+        * WhatsApp, not the operator's). No bank column exists on this table, so
+        * the reload is purely for consistency with the other mutations.
+        */}
+      <EasyfixerBankDialog
+        open={bankDialogFor !== null}
+        easyfixer={bankDialogFor}
+        onClose={() => setBankDialogFor(null)}
+        onUpdated={() => { void load(); }}
+      />
+
       <SendProfileUpdateLinkDialog
         open={sendDialogFor !== null}
         easyfixer={sendDialogFor}
@@ -1564,14 +1618,18 @@ type DisplayRow = {
  * merges replace row objects immutably, so affected rows still re-render.
  */
 const EfRow = memo(function EfRow({
-  row, canEdit, canSend, canManageLifecycle, isProd, isSending, isCopyingDevUrl,
+  row, canEdit, canSend, canManageLifecycle, canUpdateMobile, canUpdateBank,
+  isProd, isSending, isCopyingDevUrl,
   onEdit, onClientMapping, onTransactions, onAssessment, onLiveLocation,
-  onSendProfileUpdateLink, onCopyDevUrl, onLifecycle, onOpenCsvModal, onOpenDeepSkillModal,
+  onSendProfileUpdateLink, onCopyDevUrl, onLifecycle, onUpdateMobile, onUpdateBank,
+  onOpenCsvModal, onOpenDeepSkillModal,
 }: {
   row: DisplayRow;
   canEdit: boolean;
   canSend: boolean;
   canManageLifecycle: boolean;
+  canUpdateMobile: boolean;
+  canUpdateBank: boolean;
   isProd: boolean;
   isSending: boolean;
   isCopyingDevUrl: boolean;
@@ -1583,6 +1641,8 @@ const EfRow = memo(function EfRow({
   onSendProfileUpdateLink: (e: Ef) => void;
   onCopyDevUrl: (e: Ef) => void;
   onLifecycle: (e: Ef) => void;
+  onUpdateMobile: (e: Ef) => void;
+  onUpdateBank: (e: Ef) => void;
   onOpenCsvModal: (title: string, items: CsvCellItem[]) => void;
   onOpenDeepSkillModal: (e: Ef) => void;
 }) {
@@ -1726,6 +1786,10 @@ const EfRow = memo(function EfRow({
             onCopyDevUrl={() => onCopyDevUrl(e)}
             canManageLifecycle={canManageLifecycle}
             onLifecycle={() => onLifecycle(e)}
+            canUpdateMobile={canUpdateMobile}
+            canUpdateBank={canUpdateBank}
+            onUpdateMobile={() => onUpdateMobile(e)}
+            onUpdateBank={() => onUpdateBank(e)}
             isSending={isSending}
             isCopyingDevUrl={isCopyingDevUrl}
           />
