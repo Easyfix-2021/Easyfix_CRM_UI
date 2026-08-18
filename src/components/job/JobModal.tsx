@@ -6353,7 +6353,21 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
     const clientId = Number(f.fk_client_id) || Number(initial?.fk_client_id);
     if (!clientId) { setClientCustomProps(new Map()); return; }
     let cancelled = false;
-    api.get<CustomProp[]>(`/admin/clients/${clientId}/custom-properties`)
+    /*
+     * ?bookingOnly=1 — active, non-config rows only.
+     *
+     * The same endpoint also serves the client-properties EDITOR
+     * (components/client/CustomPropsTab), which must see is_config rows so an
+     * operator can manage Order Confirmation Mode / Auto Process Unconfirmed
+     * Order. So the narrowing is asked for HERE, by the booking surface, rather
+     * than imposed on the route — see the note at routes/admin/clients.js.
+     *
+     * Today this changes nothing visible: the three canonical props are all
+     * active data-entry rows. It matters for what comes next — a generic
+     * renderer over the remaining properties must never offer a backend switch
+     * as a booking field, nor a soft-deleted one.
+     */
+    api.get<CustomProp[]>(`/admin/clients/${clientId}/custom-properties?bookingOnly=1`)
       .then((rows) => {
         if (cancelled) return;
         const map = new Map<string, CustomProp>();
