@@ -5727,6 +5727,15 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
               // Match the parent's post-save status: Save Draft keeps the job
               // Unconfirmed (9); Confirm & Schedule promotes to BOOKED (0).
               initial_status: submitVariant === 'draft' ? 9 : 0,
+              /*
+               * Non-canonical client custom properties, flattened to
+               * tbl_job.custom_property ("Label:Value|…"). `|| undefined` so a
+               * job with none omits the key entirely — the BE inherits a
+               * parent's custom_property for multi-category siblings only when
+               * the caller sends nothing (job.service.js), and an empty string
+               * would suppress that inheritance.
+               */
+              custom_property:   extraPropsFlat || undefined,
               branch_details:    f.branch_details || undefined,
               product_code:      f.product_code || undefined,
               building_name:     f.building_name || undefined,
@@ -5993,6 +6002,12 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             : undefined,  // default is 0 = BOOKED
           // Legacy Book-New-Call extras. Backend composeRemarks() folds
           // these into the remarks column with named prefixes.
+          /*
+           * Non-canonical client custom properties → tbl_job.custom_property.
+           * `|| undefined` so siblings still inherit the parent's value when
+           * this job has none (see job.service.js).
+           */
+          custom_property: extraPropsFlat || undefined,
           branch_details: f.branch_details || undefined,
           product_code: f.product_code || undefined,
           building_name: f.building_name || undefined,
@@ -6394,6 +6409,55 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
   const buildingProp   = clientCustomProps.get('building_name');
   const productProp    = clientCustomProps.get('product_code');
   const branchIsMandatory = !!branchProp?.mandatory;
+
+  /*
+   * EVERY OTHER client custom property (2026-08-18).
+   *
+   * The three above have dedicated tbl_job columns and dedicated inputs.
+   * Everything else used to be fetched and silently dropped — this file said so
+   * itself ("Anything else in the response is captured but currently unused"),
+   * which is why a client whose only property is GSTIN/UIN saw no field at all
+   * while the data was sitting in the response. QA shows ~14 such names in use.
+   *
+   * These persist to tbl_job.custom_property, the flat "Label:Value|…" string,
+   * NOT to columns of their own — that is the existing storage for
+   * non-canonical props (job.service.js parseCustomPropertyString decodes it
+   * back on read).
+   */
+  const CANONICAL_PROP_KEYS = React.useMemo(
+    () => new Set(['branch_details', 'building_name', 'product_code']), [],
+  );
+  const extraProps = React.useMemo(
+    () => [...clientCustomProps.values()].filter((p) => !CANONICAL_PROP_KEYS.has(p.name)),
+    [clientCustomProps, CANONICAL_PROP_KEYS],
+  );
+  const [extraPropValues, setExtraPropValues] = useState<Record<string, string>>({});
+  /*
+   * Clear on client change. Without this, switching client carries the previous
+   * client's answers into a form that no longer shows the fields they belong
+   * to — they would be invisible and still submitted.
+   */
+  useEffect(() => { setExtraPropValues({}); }, [clientCustomProps]);
+
+  /*
+   * The flat string the BE stores. Empty answers are omitted entirely rather
+   * than written as "Label:" — a blank is the absence of an answer, and the
+   * decoder would otherwise hand every reader an empty-valued property.
+   *
+   * The column is varchar(2000) (widened 2026-08-18 from 510, which the old
+   * three-field surface never approached). Joi rejects past that, so truncating
+   * here would trade a clear 400 for silent data loss — instead the input is
+   * capped per-field below, which keeps the total bounded and visible.
+   */
+  const extraPropsFlat = React.useMemo(() => {
+    const parts: string[] = [];
+    for (const p of extraProps) {
+      const v = String(extraPropValues[p.name] ?? '').trim();
+      if (!v) continue;
+      parts.push(`${p.label || p.name}:${v}`);
+    }
+    return parts.join('|');
+  }, [extraProps, extraPropValues]);
 
   // Section 1 (Client Details) is complete once BOTH Client Reference
   // ID is non-empty AND a Reporting Contact has been picked. Client
@@ -7929,7 +7993,14 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
     !!f.reporting_contact_id &&
     (!branchProp || !branchProp.mandatory || !!(f.branch_details && String(f.branch_details).trim())) &&
     (!buildingProp || !buildingProp.mandatory || !!(f.building_name && String(f.building_name).trim())) &&
-    (!productProp || !productProp.mandatory || !!(f.product_code && String(f.product_code).trim()));
+    (!productProp || !productProp.mandatory || !!(f.product_code && String(f.product_code).trim())) &&
+    /*
+     * Mandatory NON-canonical properties gate the section too. Rendering a
+     * required field that does not block submission is worse than not
+     * rendering it: the operator sees the asterisk, skips it, and the booking
+     * goes through without the value the client asked for.
+     */
+    extraProps.every((p) => !p.mandatory || !!String(extraPropValues[p.name] ?? '').trim());
 
   /*
    * Date + Time helpers for the "Requested Date / Time / Booking Slot"
@@ -8254,6 +8325,23 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                     />
                   </Field>
                 )}
+                {/* Every other property this client defines. Same Field/Input
+                    chrome as the three above so they do not read as a
+                    second-class section — to an operator they are all just
+                    "things this client wants captured". maxLength keeps the
+                    flattened string inside the column without truncating on
+                    submit, where the loss would be invisible. */}
+                {extraProps.map((p) => (
+                  <Field key={p.name} label={p.mandatory ? `${p.label || p.name} *` : (p.label || p.name)}>
+                    <Input
+                      required={p.mandatory}
+                      maxLength={120}
+                      value={extraPropValues[p.name] ?? ''}
+                      onChange={(e) => setExtraPropValues((prev) => ({ ...prev, [p.name]: e.target.value }))}
+                      placeholder={`Client-specific ${(p.label || p.name).toLowerCase()}`}
+                    />
+                  </Field>
+                ))}
               </>
             )}
 
