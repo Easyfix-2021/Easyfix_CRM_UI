@@ -543,11 +543,13 @@ export default function JobsPage() {
     }
   }
 
-  useEffect(() => { setPage(0); load(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [tab]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `load` is recreated every render; see the note above the refetch effect.
+  useEffect(() => { setPage(0); load(true); }, [tab]);
   // Refetch on page or pageSize change. pageSize change resets page
   // via the onPageSizeChange handler below, so an explicit reset isn't
   // needed here.
-  useEffect(() => { load(false); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [page, pageSize]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `load` is recreated every render; see the note above the refetch effect.
+  useEffect(() => { load(false); }, [page, pageSize]);
   // NOTE: no interval polling — data refreshes on ACTION (post-mutation
   // load(false, true) after saves/row-actions), which is now SILENT + flicker-
   // free thanks to the data-null loading guard above. Event-driven is cheaper
@@ -555,7 +557,8 @@ export default function JobsPage() {
   // Reload when ?focus=… changes — drives the Escalated Jobs deep-link
   // from the navbar.
   const focusParam = useSearchParams().get('focus');
-  useEffect(() => { setPage(0); load(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [focusParam]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `load` is recreated every render; see the note above the refetch effect.
+  useEffect(() => { setPage(0); load(true); }, [focusParam]);
   /*
    * Pending-for-Scheduling filter change → page-0 refetch. Skips the initial
    * mount (the tab effect above already fired the first load, including any
@@ -659,7 +662,6 @@ export default function JobsPage() {
       window.clearTimeout(transferAlertTimerRef.current);
       transferAlertTimerRef.current = null;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     filters.clientId, filters.cityId, filters.stateId,
     filters.ownerId, filters.easyfixerId,
@@ -722,7 +724,6 @@ export default function JobsPage() {
       setTab(allowedTabs[0].value);
       setPage(0);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me?.allowedStages, tab]);
 
   // Transient sibling family for the Unconfirmed grouped view — set when a

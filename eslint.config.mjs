@@ -38,6 +38,8 @@
  * resort.
  */
 
+import reactHooks from 'eslint-plugin-react-hooks';
+
 const RESTRICTED_DIALOG_ONOPENCHANGE = {
   // ESQuery selector — match a JSXOpeningElement whose name is "Dialog"
   // with a JSXAttribute named "onOpenChange" whose value is a
@@ -684,6 +686,43 @@ const config = [
     rules: {
       'no-restricted-syntax': ['error', RESTRICTED_DIALOG_ONOPENCHANGE],
     },
+  },
+
+  /*
+   * react-hooks/exhaustive-deps — ERROR, scoped to Manage Jobs (2026-08-18).
+   *
+   * WHY THIS FILE, AS AN ERROR, WHILE THE REST OF THE APP IS UNGATED
+   *
+   * A dependency omission here shipped a user-visible bug twice in one day.
+   * The search box was wired into the request payload and the response cache
+   * key but not into the refetch effect's deps, so typing triggered nothing:
+   * the table kept the page it already had and narrowed it in memory. That is
+   * indistinguishable from the behaviour the fix was meant to replace, which
+   * is why it survived review and a deploy.
+   *
+   * The file is clean as of this commit, so the rule is an ERROR rather than a
+   * warning — a warning in a codebase that emits 55 of them app-wide is read
+   * as noise and scrolls past. Enabling it everywhere at once would mean
+   * either 55 warnings nobody actions, or a `useCallback` refactor of `load`
+   * across ~20 pages in a single change. Neither belongs in a bug fix.
+   *
+   * reportUnusedDisableDirectives is the other half and arguably the more
+   * important one. Three disables in this file were written as
+   * `eslint-disable-next-line` INSIDE a single-line effect — which suppresses
+   * the following line and therefore nothing at all. They read as considered
+   * decisions while silencing no warning; only the unused-directive check
+   * surfaces that.
+   *
+   * The remaining disables are legitimate: `load` is redeclared on every
+   * render, so listing it would loop. Fixing that properly means wrapping it
+   * in useCallback with its own dependency set — worth doing, but as its own
+   * change with its own testing.
+   */
+  {
+    files: ['src/app/(authed)/jobs/page.tsx'],
+    plugins: { 'react-hooks': reactHooks },
+    linterOptions: { reportUnusedDisableDirectives: 'error' },
+    rules: { 'react-hooks/exhaustive-deps': 'error' },
   },
 
   // Exclusions — never lint these.
