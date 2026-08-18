@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { BUCKET_STATUS_MAP, jobStatusOptionsFor } from '@/lib/job-buckets';
 import Link from 'next/link';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { useJobActionParams, useJobActionNav } from '@/lib/job-action-url';
@@ -110,22 +111,6 @@ type Resp = { items: JobRow[]; total: number; limit: number; offset: number };
 // Default rows-per-page; operator-controlled via the TablePagination
 // footer. "All" maps to JOBS_MAX_LIMIT (the BE Joi cap on /admin/jobs).
 const DEFAULT_PAGE_SIZE: TablePageSize = 10;
-
-/*
- * Bucket Status mapping — the legacy CRM's 3-way categorical view
- * over job_status. Wider than the per-status tabs; the rule (verified
- * 2026-05-19):
- *   closed    → 3 (COMPLETED), 5 (COMPLETED_ALT)
- *   cancelled → 6 (CANCELLED), 7 (ENQUIRY)
- *   open      → everything else valid (0,1,2,9,10,15,20,21)
- * `open` is the complement, so adding a new active status only
- * requires adding it here.
- */
-const BUCKET_STATUS_MAP: Record<string, number[]> = {
-  open:      [0, 1, 2, 9, 10, 15, 20, 21],
-  closed:    [3, 5],
-  cancelled: [6, 7],
-};
 
 export default function JobsPage() {
   const lk = useLookup();
@@ -1028,7 +1013,15 @@ export default function JobsPage() {
                 <SearchSelect
                   placeholder="--All--"
                   value={filters.bucketStatus}
-                  onChange={(v) => setFilters({ ...filters, bucketStatus: v })}
+                  /*
+                   * Changing the bucket RESETS Job Status. Clearing it must,
+                   * because the status the operator picked was chosen from a
+                   * list this bucket produced — leaving it behind hides a
+                   * still-active narrowing under a filter that now reads
+                   * "--All--". Switching buckets must too: the old status is
+                   * usually outside the new one, which ANDs to zero rows.
+                   */
+                  onChange={(v) => setFilters({ ...filters, bucketStatus: v, status: '' })}
                   options={[
                     { value: 'open',      label: 'Open' },
                     { value: 'closed',    label: 'Closed / Completed' },
@@ -1045,19 +1038,8 @@ export default function JobsPage() {
                   placeholder="-- All --"
                   value={filters.status ?? ''}
                   onChange={(v) => setFilters({ ...filters, status: v })}
-                  options={[
-                    { value: '0',  label: 'Booked' },
-                    { value: '1',  label: 'Scheduled' },
-                    { value: '2',  label: 'In Progress' },
-                    { value: '3',  label: 'Completed' },
-                    { value: '6',  label: 'Cancelled' },
-                    { value: '7',  label: 'Enquiry' },
-                    { value: '9',  label: 'Unconfirmed' },
-                    { value: '10', label: 'Revisit' },
-                    { value: '15', label: 'Estimate Pending' },
-                    { value: '20', label: 'Pending to Close' },
-                    { value: '21', label: 'Followup' },
-                  ]}
+                  /* Scoped to the selected bucket — see jobStatusOptionsFor. */
+                  options={jobStatusOptionsFor(filters.bucketStatus)}
                 />
               </div>
               </>

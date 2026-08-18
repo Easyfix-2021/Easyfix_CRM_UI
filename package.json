@@ -10,7 +10,7 @@
     "lint:flat": "eslint . --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:build && node --test tests/*.test.js",
-    "test:build": "tsc src/lib/job-slots.ts src/lib/job-age.ts src/lib/job-stages.ts src/lib/format.ts src/lib/call-legs.ts src/lib/easyfixer-lifecycle.ts src/lib/easyfixer-lifecycle-guide.ts --outDir .test-build --rootDir src/lib --module commonjs --target es2020 --skipLibCheck",
+    "test:build": "tsc src/lib/job-slots.ts src/lib/job-age.ts src/lib/job-buckets.ts src/lib/job-stages.ts src/lib/format.ts src/lib/call-legs.ts src/lib/easyfixer-lifecycle.ts src/lib/easyfixer-lifecycle-guide.ts --outDir .test-build --rootDir src/lib --module commonjs --target es2020 --skipLibCheck",
     "verify:env": "node scripts/env-verify.js"
   },
   "dependencies": {
