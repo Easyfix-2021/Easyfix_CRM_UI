@@ -1,10 +1,10 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { BUCKET_STATUS_MAP, jobStatusOptionsFor } from '@/lib/job-buckets';
+import { buildStatusParams, jobStageOptionsFor } from '@/lib/job-buckets';
 import Link from 'next/link';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { useJobActionParams, useJobActionNav } from '@/lib/job-action-url';
-import { useDebouncedValue } from '@/lib/hooks';
+import { useDebouncedValue, useFetchOnce } from '@/lib/hooks';
 import {
   Plus, Upload, ChevronDown, ChevronUp, Repeat, Globe,
   // Row-level quick-action icons (mirror the legacy Manage Jobs action column)
@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
 import { SearchSelect } from '@/components/ui/search-select';
+import { SearchMultiSelect } from '@/components/ui/search-multi-select';
 import { CitySelect } from '@/components/ui/city-select';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { DownloadButton } from '@/components/ui/download-button';
@@ -114,6 +115,14 @@ const DEFAULT_PAGE_SIZE: TablePageSize = 10;
 
 export default function JobsPage() {
   const lk = useLookup();
+  /*
+   * Zonal MANAGERS — tbl_user rows owning at least one city (tbl_city.state_user).
+   * Not in useLookup() because no other page needed them; fetched here with the
+   * shared once-only hook rather than a raw effect.
+   */
+  const zonalManagersRes = useFetchOnce<Array<{ user_id: number; user_name: string }>>(
+    '/shared/lookup/zonal-managers',
+  );
   const { me } = useMe();
   // Permission gating. View remains open; create + bulk upload require
   // explicit actions. The View-modal opened on row-click handles its own
@@ -178,21 +187,27 @@ export default function JobsPage() {
     startDate: '', endDate: '', dateType: '',
     customerQ: '', clientRef: '', efrMobile: '', pin: '',
     categoryId: '', verticalId: '',
-    // Job Status — single-code narrowing. `filters.status` now ALWAYS
-    // wins over the tab's status (the load() builder uses it first),
-    // so picking "Booked" while on the "Pending to Start" tab actually
-    // narrows to status=0 instead of silently keeping status=1.
-    status: '',
+    /*
+     * Job Status (stages) — legacy parity, 2026-08-18. The legacy CRM filters
+     * by workflow STAGE, multi-select, not by raw job_status code, so the two
+     * dropdowns could never agree: they filter different axes under the same
+     * label. Resolved into the backend's `statuses` + `assigned` pair by
+     * buildStatusParams(). The old single-code `status` field is gone: it was
+     * never hydrated from the URL, so once the numeric dropdown was replaced
+     * it could only ever hold '' — dead state rather than a deep-link.
+     */
+    stages: [] as string[],
     // Bucket Status — the LEGACY 3-way categorical (Open / Closed /
     // Cancelled). Distinct from Job Status:
     //   open      → job_status IN (0,1,2,9,10,15,20,21)
     //   closed    → job_status IN (3,5)        (Completed)
     //   cancelled → job_status IN (6,7)        (Cancelled + Enquiry)
-    // The mapping lives in BUCKET_STATUS_MAP near load(); the
-    // dropdown options pull from there too.
+    // The mapping lives in BUCKET_STATUS_MAP (lib/job-buckets); the dropdown
+    // options and buildStatusParams() both read it, so the categorical view
+    // and the request can never disagree.
     bucketStatus: '',
     // Phase-2 filters wired 2026-05-19.
-    rating: '', reopen: '', dueTo: '', zonalId: '',
+    rating: '', reopen: '', dueTo: '', zonalId: '', zonalManagerId: '',
   });
   /*
    * ── Pending-for-Scheduling filter bar (2026-07-31) ────────────────────────
@@ -283,15 +298,24 @@ export default function JobsPage() {
   const TAB_CACHE_TTL = 30_000;
 
   function filterKey() {
-    // `q` intentionally excluded — it's a UI-only filter, doesn't change the
-    // backend request, so we cache the same underlying result regardless of query.
+    /*
+     * `serverQ` is part of the key (2026-08-18). It used to be excluded on the
+     * grounds that `q` "doesn't change the backend request" — true only while
+     * search was an in-memory narrowing of the loaded page. Now that `q` is
+     * sent, omitting it here would serve a cached page built under a different
+     * search and the results would silently not match what was typed.
+     */
     return [
       filters.clientId, filters.cityId, filters.stateId,
       filters.ownerId, filters.easyfixerId,
       filters.startDate, filters.endDate, filters.dateType,
       filters.customerQ, filters.clientRef, filters.efrMobile, filters.pin,
-      filters.categoryId, filters.verticalId, filters.status, filters.bucketStatus,
-      filters.rating, filters.reopen, filters.dueTo, filters.zonalId,
+      filters.categoryId, filters.verticalId, filters.bucketStatus,
+      filters.stages.join(','),
+      filters.rating, filters.reopen, filters.dueTo, filters.zonalId, filters.zonalManagerId,
+    filters.stages, filters.zonalManagerId,
+      filters.stages,
+      serverQ,
     ].join('|');
   }
 
@@ -373,12 +397,11 @@ export default function JobsPage() {
       const noServices = searchParams.get('noServices') === 'true' ? 'true' : undefined;
       // Status precedence (highest → lowest):
       //   1. filters.bucketStatus (Open/Closed/Cancelled) — sends
-      //      `statuses` as a CSV of the matching IN-set. WINS over
-      //      everything else: an explicit categorical pick should
-      //      never be silently overridden by a tab or a single-status
-      //      dropdown.
-      //   2. filters.status (legacy "Job Status" dropdown) — single
-      //      code, also wins over the tab.
+      //      `statuses` as a CSV of the matching IN-set.
+      //   2. filters.stages (legacy multi-select Job Status) — OUTRANKS
+      //      Bucket Status, matching legacy resolveJobStatus(), where a
+      //      stage pick REPLACES the Open/Closed/Cancelled group rather
+      //      than intersecting it.
       //   3. tab.statuses / tab.status — applied when neither
       //      filter is set.
       // The BE service prefers `statuses` over `status` when both
@@ -394,31 +417,39 @@ export default function JobsPage() {
       // that tab too, so this is unreachable in normal use — it is the
       // structural guarantee behind the UI, and it also disarms a stale
       // selection left over from another tab.
-      const bucketStatuses = (!psActive && filters.bucketStatus)
-        ? BUCKET_STATUS_MAP[filters.bucketStatus]
-        : null;
-      const explicitStatus = (!psActive && filters.status) ? Number(filters.status) : undefined;
+      /*
+       * Stage selection OUTRANKS Bucket Status — legacy's own precedence.
+       * resolveJobStatus() returns the Open/Closed/Cancelled group ONLY when no
+       * stage is ticked; the moment one is, the stage ids replace the group
+       * rather than intersecting it. Since the backend takes a single
+       * `statuses` list, reproducing that ordering is also the only way to send
+       * one coherent set.
+       */
+      const statusParams = buildStatusParams({
+        psActive,
+        stages: filters.stages,
+        bucketStatus: filters.bucketStatus,
+        tab: tabDef,
+      });
       // Build the request promise and register it in the in-flight
       // Map before awaiting — so a Strict-Mode replay of this effect
       // in the same tick can attach. Cleared in `finally`.
       const reqPromise = api.get<Resp>('/admin/jobs', {
-        status:    bucketStatuses
-          ? undefined
-          : (explicitStatus
-              ?? (tabDef?.statuses ? undefined : tabDef?.status)),
-        statuses:  bucketStatuses
-          ? bucketStatuses.join(',')
-          : (explicitStatus != null
-              ? undefined
-              : (tabDef?.statuses ? tabDef.statuses.join(',') : undefined)),
-        // `assigned` is a per-tab refinement (assigned/unassigned
-        // split of BOOKED). Bucket Status doesn't address it, so we
-        // keep the tab's assigned flag UNLESS the operator overrode
-        // status via bucket/job dropdowns — in those cases the tab's
-        // assigned hint is no longer semantically aligned.
-        assigned:  (bucketStatuses || explicitStatus != null)
-          ? undefined
-          : (tabDef?.assigned === undefined ? undefined : String(tabDef.assigned)),
+        /*
+         * Server-side search (2026-08-18). `q` used to be withheld deliberately
+         * — it narrowed only the rows already on screen, so searching for a job
+         * on page 3 from page 1 found nothing. The backend has always accepted
+         * `q` (job_id, reference id, client ref, customer name + mobile), so
+         * this is a wiring fix, not a new capability.
+         */
+        q: serverQ || undefined,
+        /*
+         * status / statuses / assigned — derived once by buildStatusParams and
+         * spread, never re-implemented here. Export and the bulk-action prop
+         * call the same function; when three copies of this precedence existed,
+         * two of them drifted.
+         */
+        ...statusParams,
         isEscalated,
         noServices,
         limit, offset: off,
@@ -449,6 +480,7 @@ export default function JobsPage() {
         reopen: filters.reopen || undefined,
         dueTo:  filters.dueTo  || undefined,
         zonalId: filters.zonalId || undefined,
+        zonalManagerId: filters.zonalManagerId || undefined,
         // Dashboard AttentionSummary drill-down tabs carry these.
         // BE list endpoint clamps the result to "still actionable"
         // for the chosen quotation status (see service.list()).
@@ -591,8 +623,10 @@ export default function JobsPage() {
       filters.ownerId, filters.easyfixerId,
       filters.startDate, filters.endDate, filters.dateType,
       filters.customerQ, filters.clientRef, filters.efrMobile, filters.pin,
-      filters.categoryId, filters.verticalId, filters.status, filters.bucketStatus,
-      filters.rating, filters.reopen, filters.dueTo, filters.zonalId,
+      filters.categoryId, filters.verticalId, filters.bucketStatus,
+      filters.rating, filters.reopen, filters.dueTo, filters.zonalId, filters.zonalManagerId,
+    filters.stages, filters.zonalManagerId,
+      filters.stages,
     ]);
 
   /*
@@ -613,8 +647,9 @@ export default function JobsPage() {
     filters.ownerId, filters.easyfixerId,
     filters.startDate, filters.endDate, filters.dateType,
     filters.customerQ, filters.clientRef, filters.efrMobile, filters.pin,
-    filters.categoryId, filters.verticalId, filters.status, filters.bucketStatus,
-    filters.rating, filters.reopen, filters.dueTo, filters.zonalId,
+    filters.categoryId, filters.verticalId, filters.bucketStatus,
+    filters.rating, filters.reopen, filters.dueTo, filters.zonalId, filters.zonalManagerId,
+    filters.stages,
   ]);
 
   // Modal state is derived from the URL — every row-level action
@@ -715,17 +750,15 @@ export default function JobsPage() {
       // Status precedence — same rule as load(): bucket-status >
       // job-status > tab, with both overrides neutralised on Pending for
       // Scheduling so the exported rows are the same bucket the table shows.
-      const bucketStatuses = (!psActive && filters.bucketStatus)
-        ? BUCKET_STATUS_MAP[filters.bucketStatus]
-        : null;
-      const explicitStatus = (!psActive && filters.status) ? filters.status : '';
-      if (bucketStatuses) qs.set('statuses', bucketStatuses.join(','));
-      else if (explicitStatus) qs.set('status', explicitStatus);
-      else if (tabDef?.statuses) qs.set('statuses', tabDef.statuses.join(','));
-      else if (tabDef?.status != null) qs.set('status', String(tabDef.status));
-      if (!bucketStatuses && !explicitStatus && tabDef?.assigned !== undefined) {
-        qs.set('assigned', String(tabDef.assigned));
-      }
+      Object.entries(buildStatusParams({
+        psActive,
+        stages: filters.stages,
+        bucketStatus: filters.bucketStatus,
+        tab: tabDef,
+      })).forEach(([k, v]) => qs.set(k, String(v)));
+      // Search is server-side now, so the sheet must be narrowed by it too —
+      // otherwise Export silently returns more rows than the screen shows.
+      if (serverQ) qs.set('q', serverQ);
       const isEscalated = searchParams.get('focus') === 'escalated' ? 'true' : null;
       if (isEscalated) qs.set('isEscalated', 'true');
       // Mirror the same `dateType` gate as load() so the export
@@ -741,6 +774,7 @@ export default function JobsPage() {
         categoryId: filters.categoryId, verticalId: filters.verticalId,
         rating: filters.rating, reopen: filters.reopen, dueTo: filters.dueTo,
         zonalId: filters.zonalId,
+        zonalManagerId: filters.zonalManagerId,
       }).forEach(([k, v]) => { if (v) qs.set(k, String(v)); });
       // Pending-for-Scheduling bar last, mirroring load()'s spread order so a
       // set control wins over the Filter Job card's equivalent. The export route
@@ -1003,13 +1037,13 @@ export default function JobsPage() {
               <>
               <div>
                 <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Bucket Status</label>
-                {/* Bucket Status — legacy categorical view over
-                    job_status (Open / Closed / Cancelled). Distinct
-                    from Job Status (single-code dropdown to the
-                    right). The 3 values map to multi-status IN-sets
-                    in load() via BUCKET_STATUS_MAP — picking "Closed"
-                    sends statuses=3,5 to the BE. Wins over Job Status
-                    + tab when set. */}
+                {/* Bucket Status — legacy categorical view over job_status
+                    (Open / Closed / Cancelled). Distinct from Job Status, the
+                    stage multi-select to the right. The 3 values map to
+                    multi-status IN-sets via BUCKET_STATUS_MAP — picking
+                    "Closed" sends statuses=3,5. Beats the tab, but LOSES to a
+                    stage selection: legacy's resolveJobStatus() returns this
+                    group only while no stage is ticked. */}
                 <SearchSelect
                   placeholder="--All--"
                   value={filters.bucketStatus}
@@ -1021,7 +1055,7 @@ export default function JobsPage() {
                    * "--All--". Switching buckets must too: the old status is
                    * usually outside the new one, which ANDs to zero rows.
                    */
-                  onChange={(v) => setFilters({ ...filters, bucketStatus: v, status: '' })}
+                  onChange={(v) => setFilters({ ...filters, bucketStatus: v, stages: [] })}
                   options={[
                     { value: 'open',      label: 'Open' },
                     { value: 'closed',    label: 'Closed / Completed' },
@@ -1034,12 +1068,13 @@ export default function JobsPage() {
                 {/* Single-code status — narrows within the current
                     bucket. When the tab already enforces a status, this
                     is a no-op; when tab='all' it sends `status=N` to BE. */}
-                <SearchSelect
+                <SearchMultiSelect
                   placeholder="-- All --"
-                  value={filters.status ?? ''}
-                  onChange={(v) => setFilters({ ...filters, status: v })}
-                  /* Scoped to the selected bucket — see jobStatusOptionsFor. */
-                  options={jobStatusOptionsFor(filters.bucketStatus)}
+                  value={filters.stages}
+                  onChange={(next) => setFilters({ ...filters, stages: next.map(String) })}
+                  /* Scoped to the selected bucket — see jobStageOptionsFor. */
+                  options={jobStageOptionsFor(filters.bucketStatus)}
+                  selectedLabel="stages"
                 />
               </div>
               </>
@@ -1178,11 +1213,23 @@ export default function JobsPage() {
                   </div>
                   <div>
                     <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Zonal</label>
+                    {/*
+                      * Zonal MANAGERS, not zones (fixed 2026-08-18). Legacy binds
+                      * this control to $zonalUsers — getNDMListByCityStatus(1),
+                      * i.e. tbl_user rows that own at least one city — and the
+                      * new CRM was listing tbl_zone_master rows instead. Both
+                      * shipped the selection as a parameter called `zonalId`, so
+                      * a zone id arrived where a user id was expected and the
+                      * list filtered by the wrong entity in silence rather than
+                      * erroring. Now sends `zonalManagerId`, which the backend
+                      * resolves against tbl_city.state_user — the same column
+                      * legacy uses.
+                      */}
                     <SearchSelect
                       placeholder="All"
-                      value={filters.zonalId}
-                      onChange={(v) => setFilters({ ...filters, zonalId: v })}
-                      options={lk.zones.map((z) => ({ value: z.zone_id, label: z.zone_name }))}
+                      value={filters.zonalManagerId}
+                      onChange={(v) => setFilters({ ...filters, zonalManagerId: v })}
+                      options={(zonalManagersRes.data ?? []).map((u) => ({ value: u.user_id, label: u.user_name }))}
                     />
                   </div>
                 </div>
@@ -1210,8 +1257,8 @@ export default function JobsPage() {
                       startDate: '', endDate: '', dateType: '',
                       customerQ: '', clientRef: '', efrMobile: '', pin: '',
                       categoryId: '', verticalId: '',
-                      status: '', bucketStatus: '',
-                      rating: '', reopen: '', dueTo: '', zonalId: '',
+                      bucketStatus: '',
+                      rating: '', reopen: '', dueTo: '', zonalId: '', zonalManagerId: '', stages: [],
                     });
                   }}
                 >
@@ -1557,14 +1604,24 @@ export default function JobsPage() {
             pin: filters.pin,
             categoryId: filters.categoryId,
             verticalId: filters.verticalId,
-            status: filters.bucketStatus ? undefined : filters.status,
-            statuses: filters.bucketStatus
-              ? BUCKET_STATUS_MAP[filters.bucketStatus].join(',')
-              : undefined,
+            /*
+             * Same precedence as load(): stages outrank Bucket Status, which
+             * outranks the single code. Without this the export would ignore a
+             * stage selection entirely and hand back a WIDER sheet than the
+             * list on screen — the failure mode nobody notices until the
+             * numbers are already in a client's inbox.
+             */
+            ...buildStatusParams({
+              psActive,
+              stages: filters.stages,
+              bucketStatus: filters.bucketStatus,
+              tab: TABS.find((t) => t.value === tab),
+            }),
             rating: filters.rating,
             reopen: filters.reopen,
             dueTo: filters.dueTo,
             zonalId: filters.zonalId,
+            zonalManagerId: filters.zonalManagerId,
           }}
           onApplied={() => { cacheRef.current.clear(); load(true); refreshCounts(); }}
         />
