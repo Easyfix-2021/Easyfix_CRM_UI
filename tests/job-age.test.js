@@ -49,11 +49,19 @@ test('formatJobAge renders days with the REMAINDER hours, never the total', () =
     [MIN,                     '1m'],
     [12 * MIN,                '12m'],
     [59 * MIN + 59,           '59m'],
-    [HOUR,                    '1h'],
+    [HOUR,                    '1h'],          // clean hour: no noisy "1h 0m"
     [5 * HOUR,                '5h'],
-    [23 * HOUR + 59 * MIN,    '23h'],
-    [DAY,                     '1d'],          // clean multiple: no noisy "1d 0h"
-    [DAY + 2 * HOUR,          '1d 2h'],       // 26h is "1d 2h", NEVER "1d 26h"
+    // THE CHANGE (2026-08-18): under 24h the minutes are carried. This used to
+    // read a bare '7h', collapsing 7:00 through 7:59 into one label — the very
+    // range where an operator is judging whether a ticket is about to breach.
+    [7 * HOUR + 15 * MIN,     '7h 15m'],
+    [HOUR + MIN,              '1h 1m'],     // smallest non-zero of each: no padding, no "01m"
+    [23 * HOUR + 59 * MIN,    '23h 59m'],
+    // ...and at 24h the minutes STOP. A day-old ticket's minutes are noise, and
+    // carrying them would make the most alarming ages the widest cells.
+    [DAY,                     '1d'],         // clean multiple: no noisy "1d 0h"
+    [DAY + 2 * HOUR,          '1d 2h'],    // 26h is "1d 2h", NEVER "1d 26h"
+    [DAY + 2 * HOUR + 59 * MIN, '1d 2h'],  // the 59 minutes are DELIBERATELY dropped
     [2 * DAY,                 '2d'],
     [3 * DAY + HOUR,          '3d 1h'],
     [12 * DAY + 12 * HOUR,    '12d 12h'],

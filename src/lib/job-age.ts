@@ -109,9 +109,24 @@ function readAge(row: unknown): { days: number | null; secs: number | null } {
 /*
  * formatJobAge — the compact cell reading. See the display contract above.
  *
+ * PRECISION CHANGES AT 24 HOURS (2026-08-18), by request:
+ *   under 24h → hours AND minutes ("7h 15m") — at this range the minutes are
+ *               what an operator is actually judging, and "7h" alone hid a
+ *               59-minute spread inside one label.
+ *   24h and over → days and whole hours, NEVER minutes ("1d 3h"). Once a
+ *               ticket is a day old the minutes are noise, and carrying them
+ *               would make the longest, most alarming ages the widest cells.
+ *
+ * UNITS STAY COMPACT (d/h/m, not day/hrs/mins). These cells live in dense
+ * tables — "7hrs 15mins" is ~4x the width of "7h 15m" for the same information,
+ * and the Age column sits between other data the operator is scanning across.
+ * The precision changed; the footprint deliberately did not.
+ *
  *   formatJobAge({ ageDays: 12, ageSecs: 1_080_000 })  → '12d 12h'
  *   formatJobAge({ ageDays: 2,  ageSecs: 172_800 })    → '2d'      (no "2d 0h")
- *   formatJobAge({ ageDays: 0,  ageSecs: 18_000 })     → '5h'
+ *   formatJobAge({ ageDays: 1,  ageSecs: 97_200 })     → '1d 3h'
+ *   formatJobAge({ ageDays: 0,  ageSecs: 26_100 })     → '7h 15m'
+ *   formatJobAge({ ageDays: 0,  ageSecs: 25_200 })     → '7h'      (no "7h 0m")
  *   formatJobAge({ ageDays: 0,  ageSecs: 720 })        → '12m'
  *   formatJobAge({ ageDays: 0,  ageSecs: 12 })         → '<1m'
  *   formatJobAge({ ageDays: 3 })                       → '3d'      (no ageSecs)
@@ -122,25 +137,30 @@ export function formatJobAge(row: unknown): string {
   if (days == null && secs == null) return EM_DASH;
 
   /*
-   * Days + REMAINDER HOURS ("1d 2h", "2d", "3d 1h"). The hours part is the
-   * remainder AFTER whole days, not the total — 26 hours is "1d 2h", never
-   * "1d 26h". It is omitted when zero so a clean multiple of a day reads "2d"
-   * rather than a noisy "2d 0h".
+   * Every component is a REMAINDER of the one above it, never a total: 26
+   * hours is "1day 2hrs", never "1day 26hrs". A zero remainder is omitted, so
+   * a clean multiple reads "2days" rather than a noisy "2days 0hrs".
    */
   if (secs != null) {
     const d = Math.floor(secs / SEC_PER_DAY);
     const h = Math.floor((secs % SEC_PER_DAY) / SEC_PER_HOUR);
     if (d >= 1) return h > 0 ? `${d}d ${h}h` : `${d}d`;
-    // Sub-day: hours, then minutes, so a fresh job never reads as a bare "0".
-    if (h >= 1) return `${h}h`;
-    const mins = Math.floor(secs / SEC_PER_MIN);
+
+    /*
+     * Under 24h the minutes are shown. This is the half that changed: it used
+     * to return a bare "5h", which collapsed everything from 5:00 to 5:59 into
+     * one label — the exact range where an operator is deciding whether a
+     * ticket is about to breach.
+     */
+    const mins = Math.floor((secs % SEC_PER_HOUR) / SEC_PER_MIN);
+    if (h >= 1) return mins > 0 ? `${h}h ${mins}m` : `${h}h`;
     return mins >= 1 ? `${mins}m` : '<1m';
   }
 
   /*
    * ageSecs absent (older backend payload): ageDays alone cannot yield the
-   * hours part, so fall back to whole days. Never fabricate an hours component
-   * we don't have.
+   * hours part, so fall back to whole days. Never fabricate a component we
+   * don't have.
    */
   if (days != null && days >= 1) return `${days}d`;
   return '0d';
