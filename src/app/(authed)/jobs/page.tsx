@@ -164,10 +164,19 @@ export default function JobsPage() {
   // Counts are fetched once on mount + re-fetched after any save from the
   // modal (so badges stay fresh). Null = still loading; populated = ready.
   const [counts, setCounts] = useState<CountsResp | null>(null);
-  // `q` is UI-only — filters the currently-loaded page in memory rather than
-  // firing a backend request per keystroke. Searching feels instant. Fetches
-  // still happen on tab switch, filter changes, and pagination.
+  /*
+   * `q` is the search box. It drives TWO things:
+   *   - `serverQ`, debounced 300ms, which is sent to the backend and searches
+   *     every matching job — not just the loaded page;
+   *   - filterJobRows over the rows already on screen, which gives instant
+   *     feedback while the debounce settles.
+   *
+   * `serverQ` is declared HERE rather than beside its effect because dependency
+   * arrays are evaluated during render: referencing it further down the
+   * component put it in the temporal dead zone.
+   */
   const [q, setQ] = useState(() => searchParams.get('q') || '');
+  const serverQ = useDebouncedValue(q, 300).trim();
   /*
    * `filters` mirrors the legacy CRM "Filter Job" panel. Every key
    * round-trips to the backend as a query param of the same name; the
@@ -604,7 +613,7 @@ export default function JobsPage() {
     }
   }
   useEffect(() => { refreshCounts(); }, []);
-  // Filter changes refetch (backend-driven); the search box doesn't — see below.
+  // Filter changes AND the search box both refetch (all backend-driven).
   /*
    * Refetch trigger. `filters.dateType` is included in the deps so
    * that changing OR clearing Date Type while a date range is set
@@ -625,8 +634,17 @@ export default function JobsPage() {
       filters.customerQ, filters.clientRef, filters.efrMobile, filters.pin,
       filters.categoryId, filters.verticalId, filters.bucketStatus,
       filters.rating, filters.reopen, filters.dueTo, filters.zonalId, filters.zonalManagerId,
-    filters.stages, filters.zonalManagerId,
       filters.stages,
+      /*
+       * `serverQ` belongs here, not just in the request payload (2026-08-18).
+       * Wiring `q` into api.get without this dep left the search box unable to
+       * trigger anything: the effect never re-ran, the table kept the page it
+       * already had, and filterJobRows narrowed those rows in memory — the
+       * exact pre-fix symptom, which is why it looked unchanged. The effect
+       * also setPage(0), so a new search always lands on page 1 rather than
+       * searching from whatever page the operator was on.
+       */
+      serverQ,
     ]);
 
   /*
@@ -649,7 +667,7 @@ export default function JobsPage() {
     filters.customerQ, filters.clientRef, filters.efrMobile, filters.pin,
     filters.categoryId, filters.verticalId, filters.bucketStatus,
     filters.rating, filters.reopen, filters.dueTo, filters.zonalId, filters.zonalManagerId,
-    filters.stages,
+    filters.stages, serverQ,
   ]);
 
   // Modal state is derived from the URL — every row-level action
@@ -863,7 +881,6 @@ export default function JobsPage() {
 
   // Debounced view of the in-memory search box, used ONLY for the URL write
   // below (the instant client-side `filterJobRows` above still reads raw `q`).
-  const serverQ = useDebouncedValue(q, 300).trim();
   // Persist search + sort + the Pending-for-Scheduling filters into the URL
   // (tab already lives there) so they survive any remount/navigation after a
   // modal action, and so a PM can share the exact filtered view. Debounced via
@@ -1000,15 +1017,16 @@ export default function JobsPage() {
                 eliminate the dual-input confusion. */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">
               <div>
-                {/* Relabelled from "Job ID / RefID" (2026-07-23): `q` feeds
-                    filterJobRows, which matches 19 fields — the old label named
-                    2 of them, so operators had no idea this box also narrows by
-                    technician, client SPOC, city, status or date. Placeholder +
-                    hint derive from JOB_SEARCH_FIELDS so the copy can't drift
-                    from the filter again. Distinct from the "Customer Name / No."
-                    box beside it: that one is a SERVER-side filter, this only
-                    narrows rows already loaded for the current tab. */}
-                <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Quick Search (This Page)</label>
+                {/* Searches ALL matching jobs, not just the loaded page
+                    (2026-08-18) — the label said "(This Page)" and meant it,
+                    so an operator searching a job id from page 1 found nothing
+                    unless they happened to already be on the page holding it.
+                    `q` now goes to the backend (job id, reference id, client
+                    ref, customer name + mobile) and resets to page 1.
+                    filterJobRows still runs over the loaded rows for instant
+                    feedback during the 300ms debounce; it matches a superset of
+                    the backend's fields, so it never hides a server match. */}
+                <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Quick Search</label>
                 <Input
                   placeholder={JOB_SEARCH_PLACEHOLDER}
                   title={JOB_SEARCH_HINT}
