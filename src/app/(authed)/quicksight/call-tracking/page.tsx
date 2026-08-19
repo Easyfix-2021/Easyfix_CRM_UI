@@ -1310,11 +1310,17 @@ type CallDetail = {
   jobId: number | null;
   callAt: string | null;
   callerUserId: number | null; callerName: string;
+  // Which table resolved the caller. caller_id holds a tbl_user id on rows this
+  // backend writes and an efr_id on rows the legacy CRM writes, so the id alone
+  // cannot say — see CALLER_NAME in quicksight-call-tracking.service.js.
+  callerKind?: 'user' | 'technician' | 'unresolved';
   receiverName: string | null; partyRole: string;
   /** The SNAPSHOT — job status when the call was placed, not today's status. */
   jobStatusAtCall: number | null; assignedAtCall: boolean;
   durationSecs: number | null; connected: boolean;
-  provider: string | null; callerStatus: string | null;
+  /** Never null — see PROVIDER_RULE in quicksight-call-tracking.service.js. */
+  provider: string; providerAssumed?: boolean; providerRaw?: string | null;
+  callerStatus: string | null;
   recordingAvailable: boolean;
   /*
    * Everyone who was on the call, if it was a conference — the ops agent
@@ -1487,8 +1493,18 @@ function CallDrilldownBody({ drill, filters, onClose }: {
                     </td>
                     <td className="!text-left whitespace-nowrap">
                       {c.callerName}
-                      {c.callerUserId != null && (
+                      {/*
+                        * The id renders ONLY when the backend resolved it to a real CRM
+                        * user. caller_id holds a tbl_user id on rows this backend writes
+                        * and an efr_id on rows the legacy CRM writes, so an unqualified
+                        * "#352882" asserted a CRM user that does not exist — which is how
+                        * Called By and To Whom read as the same person on job 529116.
+                        */}
+                      {c.callerUserId != null && c.callerKind === 'user' && (
                         <span className="ml-1 text-[10px] text-muted-foreground">#{c.callerUserId}</span>
+                      )}
+                      {c.callerKind === 'technician' && (
+                        <span className="ml-1 text-[10px] text-muted-foreground">Technician</span>
                       )}
                     </td>
                     {/*
@@ -1529,8 +1545,24 @@ function CallDrilldownBody({ drill, filters, onClose }: {
                         {c.connected ? 'Connected' : 'Not Connected'}
                       </StatusChip>
                     </td>
-                    <td className="!text-left whitespace-nowrap">
-                      {c.provider || <span className="text-muted-foreground">—</span>}
+                    {/*
+                      * Never blank: the backend labels every call with the vendor its own
+                      * provider FILTER would place it under, so the cell always names the
+                      * tab the row appears in. `providerAssumed` marks rows where the
+                      * column named no vendor and "only two vendors have ever existed" was
+                      * used instead — without it, an unattributable row renders a confident
+                      * claim. The tooltip carries whatever WAS stored, including 2021
+                      * telecom-carrier values like 'JIO' which must never be printed here
+                      * as though they were the vendor.
+                      */}
+                    <td
+                      className="!text-left whitespace-nowrap"
+                      title={c.providerRaw ? `Stored value: ${c.providerRaw}` : undefined}
+                    >
+                      {c.provider}
+                      {c.providerAssumed && (
+                        <span className="ml-1 text-[10px] text-muted-foreground">(assumed)</span>
+                      )}
                     </td>
                     <td className="!text-center text-xs">
                       {c.recordingAvailable
