@@ -3,6 +3,14 @@
 /*
  * TAT Calculator — Admin Action (isTatCalculatorView).
  *
+ * REACHED ONLY FROM THE ADMIN ACTIONS HUB — there is deliberately no sidebar
+ * entry. The tbl_menu leaf exists solely to give `isTatCalculatorView` a
+ * menu_action to hang off, and is seeded with menu_status = 0 so it never
+ * renders in the nav (see migrations/2026-08-21-tat-calculator-hide-from-
+ * sidebar.sql for why menu_status is the right lever and dropping the id from
+ * the visibility allowlist is NOT — the latter would redirect this route to
+ * /coming-soon).
+ *
  * Read-only preview of the centralised TAT engine
  * (EasyFix_Backend/services/tat.service.js), which implements
  * EasyFix_TAT_Final_August2026.xlsx "Developer Specification v1.0".
