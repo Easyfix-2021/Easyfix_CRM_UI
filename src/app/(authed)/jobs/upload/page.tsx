@@ -197,14 +197,14 @@ export default function JobUploadPage() {
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-4 gap-3 mb-4">
-              <Stat label="Total rows" v={report.summary.totalRows} tint="bg-slate-100" />
-              <Stat label="Created / Valid" v={report.summary.createdCount || report.results.filter(r => r.status === 'valid').length} tint="bg-emerald-100 text-emerald-700" />
-              <Stat label="Failed" v={report.summary.failedCount} tint="bg-red-100 text-red-700" />
-              <Stat label="Skipped" v={report.summary.skipCount} tint="bg-slate-100 text-slate-600" />
+              <Stat label="Total rows" v={report.summary.totalRows} tint="bg-ink-100" />
+              <Stat label="Created / Valid" v={report.summary.createdCount || report.results.filter(r => r.status === 'valid').length} tint="bg-success-tint text-success-strong" />
+              <Stat label="Failed" v={report.summary.failedCount} tint="bg-urgent-tint text-urgent-strong" />
+              <Stat label="Skipped" v={report.summary.skipCount} tint="bg-ink-100 text-ink-700" />
             </div>
             {createdAny && (
               <div className="mb-3">
-                <Link href={unconfirmedLink} className="inline-flex items-center gap-1 text-sm text-sky-700 hover:underline">
+                <Link href={unconfirmedLink} className="inline-flex items-center gap-1 text-sm text-primary hover:underline">
                   → Open the Unconfirmed bucket and start confirming these orders
                 </Link>
               </div>
@@ -237,7 +237,7 @@ export default function JobUploadPage() {
                         <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
                           valid
                             ? statusColorClass(1)
-                            : 'bg-red-100 text-red-700'
+                            : 'bg-urgent-tint text-urgent-strong'
                         }`}>
                           {displayStatus(r.status)}
                         </span>

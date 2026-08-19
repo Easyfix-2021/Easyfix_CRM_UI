@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 315.361" role="presentation" aria-hidden="true">
+<!--
+  Independence Day / Republic Day ornament — overlays the tagline lockup
+  (viewBox 0 0 1000 315.361), so coordinates are in the lockup's own units.
+
+  PALETTE: the ONE documented exception to rule 10. Saffron #FF9933 and India
+  green #138808 are not brand tokens and never will be; they are admitted
+  solely for the two national days, and only as thin rules plus a small roof
+  flag. Never a field, never a background, never anywhere else in the product.
+  A national flag cannot be rendered in brand colours, so the alternative is
+  not observing the day at all. Mirrors `tricolour` in src/brand/palette.ts,
+  which is deliberately kept out of the semantic tokens.
+  The pole is ink-500 #5C636B; the flag's middle band is the named colour
+  `white` (palette.white) rather than a hex, so the ornament hex allowlist
+  stays exactly the brand accent list.
+
+  GEOMETRY: the house mark occupies x 121.4..341.7, y 2..196.3 with its apex
+  at (231.6, 2). The apex is flush with the top of the box, so the pole is
+  planted on the right roof slope just below the apex — at x 300 the roof
+  surface is y 54.3 — and the flag flies into the clear wedge above the slope
+  and left of the "S" (x < 344.1). The mark itself is never overdrawn.
+
+  The two rules bracket the tagline, in the only two free bands the lockup
+  leaves: the wordmark baseline band (y 196.3..239.6) and the strip below the
+  tagline (y 300.4..315.36). Each rule is 9 units tall, which is ~2px at the
+  ~222px render width the sidebar lockup uses.
+
+  Animation is CSS, not SMIL: SMIL cannot be media-queried, and the
+  reduced-motion opt-out has to travel with the asset.
+-->
+<style>
+.flag{transform-box:fill-box;transform-origin:0% 50%;animation:wave 3.6s ease-in-out infinite}
+@keyframes wave{
+0%,100%{transform:skewY(0deg) scaleX(1)}
+25%{transform:skewY(-2.4deg) scaleX(.97)}
+50%{transform:skewY(0deg) scaleX(1)}
+75%{transform:skewY(2.4deg) scaleX(.97)}
+}
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+
+<!-- Flag on a thin pole, planted on the roof slope beside the apex. -->
+<path d="M300 54V6" stroke="#5C636B" stroke-width="2.4" stroke-linecap="round"/>
+<circle cx="300" cy="5" r="1.8" fill="#C99A2E"/>
+<g class="flag">
+<path d="M302 8h38v6h-38z" fill="#FF9933"/>
+<path d="M302 14h38v6h-38z" fill="white"/>
+<path d="M302 20h38v6h-38z" fill="#138808"/>
+</g>
+
+<!-- Tricolour rule above the tagline, on the wordmark baseline band. -->
+<path d="M0 210h1000v3H0z" fill="#FF9933"/>
+<path d="M0 213h1000v3H0z" fill="white"/>
+<path d="M0 216h1000v3H0z" fill="#138808"/>
+
+<!-- Tricolour rule below the tagline. -->
+<path d="M0 304h1000v3H0z" fill="#FF9933"/>
+<path d="M0 307h1000v3H0z" fill="white"/>
+<path d="M0 310h1000v3H0z" fill="#138808"/>
+</svg>

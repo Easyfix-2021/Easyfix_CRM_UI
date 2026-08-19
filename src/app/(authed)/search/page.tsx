@@ -219,7 +219,7 @@ export default function SearchPage() {
 
       {error && (
         <Card>
-          <CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
+          <CardContent className="p-3 flex items-center gap-2 text-sm text-urgent">
             <AlertTriangle className="h-4 w-4" /> {error}
           </CardContent>
         </Card>
@@ -227,7 +227,7 @@ export default function SearchPage() {
 
       {/* ─── EasyFixer matches ───────────────────────────────────────── */}
       <section className="space-y-2">
-        <h2 className="text-sm font-semibold flex items-center gap-1.5 text-slate-700">
+        <h2 className="text-sm font-semibold flex items-center gap-1.5 text-ink-700">
           <Wrench className="h-4 w-4" /> EasyFixer matches
           {hasQuery && !loading && <span className="text-xs text-muted-foreground font-normal">({efs.length})</span>}
         </h2>
@@ -260,7 +260,7 @@ export default function SearchPage() {
               </thead>
               <tbody>
                 {efs.map((e) => (
-                  <tr key={e.efr_id} className="hover:bg-slate-50">
+                  <tr key={e.efr_id} className="hover:bg-ink-50">
                     <td className="!text-center font-mono text-xs">{e.efr_id}</td>
                     <td className="font-medium whitespace-nowrap">{e.name}</td>
                     <td className="font-mono text-xs">{e.mobile ?? '—'}</td>
@@ -273,7 +273,7 @@ export default function SearchPage() {
                       {e.loading ? <span className="text-muted-foreground">…</span> :
                         e.activeJobs != null ? (
                           e.activeJobs > 0 ? (
-                            <span className="inline-flex items-center rounded-full bg-amber-100 text-amber-700 px-2 py-0.5 text-xs font-medium">
+                            <span className="inline-flex items-center rounded-full bg-warning-tint text-warning-strong px-2 py-0.5 text-xs font-medium">
                               {e.activeJobs}
                             </span>
                           ) : (
@@ -297,7 +297,7 @@ export default function SearchPage() {
 
       {/* ─── Customer matches ────────────────────────────────────────── */}
       <section className="space-y-2">
-        <h2 className="text-sm font-semibold flex items-center gap-1.5 text-slate-700">
+        <h2 className="text-sm font-semibold flex items-center gap-1.5 text-ink-700">
           <User className="h-4 w-4" /> Customer matches
           {hasQuery && !loading && (
             <span className="text-xs text-muted-foreground font-normal">({customers.length})</span>
@@ -328,7 +328,7 @@ export default function SearchPage() {
                 {customers.map((c) => {
                   const jc = c.job_count != null ? Number(c.job_count) : 0;
                   return (
-                    <tr key={c.customer_id} className="hover:bg-slate-50">
+                    <tr key={c.customer_id} className="hover:bg-ink-50">
                       <td className="!text-center font-mono text-xs">{c.customer_id}</td>
                       <td className="font-medium whitespace-nowrap">{c.customer_name || '—'}</td>
                       <td className="font-mono text-xs">
@@ -340,7 +340,7 @@ export default function SearchPage() {
                       <td className="text-xs">{c.customer_email ?? '—'}</td>
                       <td className="!text-center text-xs">
                         {jc > 0 ? (
-                          <span className="inline-flex items-center rounded-full bg-sky-100 text-sky-700 px-2 py-0.5 text-xs font-medium">
+                          <span className="inline-flex items-center rounded-full bg-info-tint text-info-strong px-2 py-0.5 text-xs font-medium">
                             {jc}
                           </span>
                         ) : (

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 315.361" role="presentation" aria-hidden="true">
+<!--
+  Mourning treatment — deliberately EMPTY. There is no ornament, and that is
+  the design, not an unfinished file.
+
+  THE INK TREATMENT IS ACHIEVED BY VARIANT SELECTION, NOT BY THIS OVERLAY.
+  On a day of mourning the logo renders as the ink lockup (the `-ink` /
+  two-ink asset) with nothing drawn over it. Restraint is the whole point: an
+  overlay that dimmed or veiled the mark would be a decoration, which is
+  exactly what the occasion excludes.
+
+  The file exists so the scheduler can select "mourning" like any other
+  festival id and get a valid, resolvable asset back. Without it, the resolver
+  would have to special-case a null src at every call site, and the day would
+  be one missing file away from silently falling back to a festive ornament.
+
+  Same viewBox as the tagline lockup (0 0 1000 315.361) so it composites
+  exactly like the other three overlays and needs no special sizing.
+
+  PALETTE: none. Nothing is drawn.
+
+  The reduced-motion block is kept even though there is nothing to animate, so
+  every ornament in this directory carries the same accessibility contract and
+  the asset test can assert it uniformly.
+-->
+<style>
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</svg>

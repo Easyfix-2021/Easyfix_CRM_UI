@@ -76,13 +76,13 @@ const ACTION_OPTIONS = [
 
 function statusChip(status: BulkResult['status']) {
   const map: Record<BulkResult['status'], string> = {
-    updated: 'bg-emerald-100 text-emerald-800 border border-emerald-200',
-    invalid: 'bg-red-100 text-red-800 border border-red-200',
-    skipped: 'bg-amber-100 text-amber-800 border border-amber-200',
-    failed:  'bg-red-100 text-red-800 border border-red-200',
+    updated: 'bg-success-tint text-success-strong border border-success/30',
+    invalid: 'bg-urgent-tint text-urgent-strong border border-urgent/30',
+    skipped: 'bg-warning-tint text-warning-strong border border-warning/30',
+    failed:  'bg-urgent-tint text-urgent-strong border border-urgent/30',
   };
   return (
-    <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${map[status]}`}>
+    <span className={`inline-block rounded px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wide ${map[status]}`}>
       {status}
     </span>
   );
@@ -238,7 +238,7 @@ export default function BulkUploadPage() {
           <ArrowLeft className="size-4" /> Back
         </Button>
         <div>
-          <h1 className="text-xl font-bold">Bulk Upload</h1>
+          <h1 className="text-xl font-semibold">Bulk Upload</h1>
           <p className="text-xs text-muted-foreground">Upload Client SPOCs or Monthly Revenue in bulk via .xlsx template.</p>
         </div>
       </div>
@@ -343,8 +343,8 @@ export default function BulkUploadPage() {
 
           {/* Dry-Run Banner + Apply Changes button */}
           {phase === 'previewing' && result && (
-            <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <div className="text-sm text-amber-800 font-medium leading-snug">
+            <div className="rounded-md border border-warning/30 bg-warning-tint px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div className="text-sm text-warning-strong font-medium leading-snug">
                 Dry Run — No Changes Applied Yet. Review Below, Then Apply.
               </div>
               <Button
@@ -360,7 +360,7 @@ export default function BulkUploadPage() {
 
           {/* Applied banner */}
           {phase === 'applied' && (
-            <div className="rounded-md border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 font-medium">
+            <div className="rounded-md border border-success/30 bg-success-tint px-4 py-3 text-sm text-success-strong font-medium">
               Applied — Changes have been saved successfully.
             </div>
           )}
@@ -370,11 +370,11 @@ export default function BulkUploadPage() {
             <div className="space-y-2 pt-1">
               <div className="text-sm font-medium">
                 {phase === 'previewing' ? 'Dry Run Preview' : 'Upload Results'} — Total {result.summary.total} ·{' '}
-                <span className="text-emerald-700">Updated {result.summary.updated}</span> ·{' '}
+                <span className="text-success-strong">Updated {result.summary.updated}</span> ·{' '}
                 {result.summary.skipped !== undefined && (
-                  <><span className="text-amber-700">Skipped {result.summary.skipped}</span> · </>
+                  <><span className="text-warning-strong">Skipped {result.summary.skipped}</span> · </>
                 )}
-                <span className="text-red-700">
+                <span className="text-urgent-strong">
                   Invalid {result.summary.invalid}
                   {result.summary.failed !== undefined ? ` · Failed ${result.summary.failed}` : ''}
                 </span>
@@ -395,10 +395,10 @@ export default function BulkUploadPage() {
                         key={i}
                         className={
                           r.status === 'updated'
-                            ? 'bg-emerald-50/30'
+                            ? 'bg-success-tint/30'
                             : r.status === 'skipped'
-                              ? 'bg-amber-50/30'
-                              : 'bg-red-50/30'
+                              ? 'bg-warning-tint/30'
+                              : 'bg-urgent-tint/30'
                         }
                       >
                         <td className="px-2 py-1.5 font-mono">{r.rowNumber}</td>

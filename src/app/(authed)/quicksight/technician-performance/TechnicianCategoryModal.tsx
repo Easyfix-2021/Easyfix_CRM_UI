@@ -59,7 +59,7 @@ function pctCell(v: number | null) {
   if (v == null) return <span className="text-muted-foreground">-</span>;
   const ok = v >= 85;
   return (
-    <span className={ok ? 'text-emerald-600 font-medium' : 'text-rose-600 font-medium'}>
+    <span className={ok ? 'text-success font-medium' : 'text-urgent font-medium'}>
       {v}%
     </span>
   );
@@ -139,7 +139,7 @@ export function TechnicianCategoryModal({
               <Loader2 className="h-4 w-4 animate-spin" /> Loading…
             </div>
           ) : error ? (
-            <div className="p-8 text-center text-sm text-rose-600">{error}</div>
+            <div className="p-8 text-center text-sm text-urgent">{error}</div>
           ) : categories.length === 0 ? (
             <div className="p-8 text-center text-sm text-muted-foreground">
               No data available

@@ -131,7 +131,7 @@ export default function DeepSkillsBulkUploadPage() {
             </p>
             <Link
               href="/settings/deep-skills"
-              className="mt-3 inline-flex items-center gap-1 text-sm text-sky-700 hover:underline"
+              className="mt-3 inline-flex items-center gap-1 text-sm text-primary hover:underline"
             >
               <ArrowLeft className="h-4 w-4" /> Back to Manage Deep Skills
             </Link>
@@ -265,7 +265,7 @@ export default function DeepSkillsBulkUploadPage() {
         </div>
         <Link
           href="/settings/deep-skills"
-          className="inline-flex items-center gap-1 text-sm text-sky-700 hover:underline"
+          className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
         >
           <ArrowLeft className="h-4 w-4" /> Back to Manage Deep Skills
         </Link>
@@ -335,7 +335,7 @@ export default function DeepSkillsBulkUploadPage() {
         <Card>
           <CardHeader>
             <CardTitle>
-              <span className="inline-flex items-center gap-1.5 text-emerald-700">
+              <span className="inline-flex items-center gap-1.5 text-success-strong">
                 <CheckCircle2 className="h-5 w-5" /> Upload Committed
               </span>
             </CardTitle>
@@ -345,22 +345,22 @@ export default function DeepSkillsBulkUploadPage() {
               <Stat
                 label="Categories Created"
                 v={committed.committed.categoriesCreated.length}
-                tint="bg-emerald-100 text-emerald-700"
+                tint="bg-success-tint text-success-strong"
               />
               <Stat
                 label="Types Created"
                 v={committed.committed.typesCreated.length}
-                tint="bg-emerald-100 text-emerald-700"
+                tint="bg-success-tint text-success-strong"
               />
               <Stat
                 label="Skills Created"
                 v={committed.committed.skillsCreated}
-                tint="bg-emerald-100 text-emerald-700"
+                tint="bg-success-tint text-success-strong"
               />
               <Stat
                 label="Options Created"
                 v={committed.committed.optionsCreated}
-                tint="bg-emerald-100 text-emerald-700"
+                tint="bg-success-tint text-success-strong"
               />
             </div>
             {committed.committed.categoriesCreated.length > 0 && (
@@ -438,31 +438,31 @@ export default function DeepSkillsBulkUploadPage() {
 function PreviewSummary({ summary }: { summary: BulkUploadSummary }) {
   return (
     <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-4">
-      <Stat label="Total Rows" v={summary.totalRows} tint="bg-slate-100" />
+      <Stat label="Total Rows" v={summary.totalRows} tint="bg-ink-100" />
       <Stat
         label="Will Create"
         v={summary.willCreate}
-        tint="bg-emerald-100 text-emerald-700"
+        tint="bg-success-tint text-success-strong"
       />
       <Stat
         label="Will Skip"
         v={summary.willSkip}
-        tint="bg-slate-100 text-slate-600"
+        tint="bg-ink-100 text-ink-700"
       />
       <Stat
         label="Errors"
         v={summary.errors}
-        tint={summary.errors > 0 ? 'bg-red-100 text-red-700' : 'bg-slate-100'}
+        tint={summary.errors > 0 ? 'bg-urgent-tint text-urgent-strong' : 'bg-ink-100'}
       />
       <Stat
         label="Categories New"
         v={summary.categoriesNew}
-        tint="bg-sky-100 text-sky-700"
+        tint="bg-info-tint text-info-strong"
       />
       <Stat
         label="Types New"
         v={summary.typesNew}
-        tint="bg-sky-100 text-sky-700"
+        tint="bg-info-tint text-info-strong"
       />
     </div>
   );

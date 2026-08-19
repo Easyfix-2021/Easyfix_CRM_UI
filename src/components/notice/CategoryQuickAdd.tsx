@@ -28,15 +28,25 @@ import type { NoticeCategory } from '@/lib/notice-types';
  * Power-users can edit a category from the Settings page (deferred).
  */
 
+/*
+ * Brand swatches only.
+ *
+ * This was eight arbitrary hexes (amber, violet, blue, red, cyan, pink, slate).
+ * The identity document's rule 7 is "no colour picker" and rule 10 is "no colour
+ * that is not on this page" — an open palette lets any operator tag a category
+ * in a colour the brand does not contain, permanently.
+ *
+ * The feature survives; the freedom to go off-brand does not. Six semantic
+ * tokens cover every distinction a category tag actually needs, and they follow
+ * the theme into dark mode, which raw hexes never did.
+ */
 const SWATCHES = [
-  '#16a34a',  // emerald
-  '#f59e0b',  // amber
-  '#7c3aed',  // violet
-  '#2563eb',  // blue
-  '#ef4444',  // red
-  '#0891b2',  // cyan
-  '#db2777',  // pink
-  '#64748b',  // slate
+  'hsl(var(--success))',
+  'hsl(var(--warning))',
+  'hsl(var(--urgent))',
+  'hsl(var(--info))',
+  'hsl(var(--gold))',
+  'hsl(var(--neutral))',
 ];
 
 export function CategoryQuickAdd({
@@ -123,7 +133,7 @@ export function CategoryQuickAdd({
           </div>
           <div className="pt-1">
             <span
-              className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+              className="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wide"
               style={{ color, backgroundColor: `${color}22`, border: `1px solid ${color}55` }}
             >
               {name.trim() || 'Preview'}

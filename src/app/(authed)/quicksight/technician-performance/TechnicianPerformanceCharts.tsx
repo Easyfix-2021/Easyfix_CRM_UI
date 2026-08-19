@@ -154,7 +154,7 @@ export function TechnicianPerformanceCharts({
   return (
     <section className="space-y-4">
       <div className="flex items-baseline justify-between">
-        <h2 className="text-sm font-semibold text-slate-800">Graphical View</h2>
+        <h2 className="text-sm font-semibold text-ink-900">Graphical View</h2>
         <span className="text-xs text-muted-foreground">Charts reflect the current page.</span>
       </div>
 

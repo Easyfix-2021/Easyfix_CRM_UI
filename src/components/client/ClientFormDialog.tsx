@@ -348,7 +348,7 @@ export function ClientFormDialog({ open, onClose, onSaved, mode, initial }: Prop
        *     container.
        */}
       <DialogContent className="!max-w-3xl max-h-[calc(100vh-48px)] !p-0 gap-0 overflow-hidden flex flex-col">
-        <DialogHeader className="!mx-0 !mt-0 !mb-0 shrink-0 px-6 py-4 bg-gradient-to-r from-slate-900 via-slate-700 to-slate-900 text-white shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]">
+        <DialogHeader className="!mx-0 !mt-0 !mb-0 shrink-0 px-6 py-4 bg-gradient-to-r from-ink-900 via-ink-700 to-ink-900 text-white shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]">
           <DialogTitle className="text-white text-base font-semibold">
             {isEdit ? `Edit Client — ${initial?.client_name ?? ''}` : 'Add New Client'}
           </DialogTitle>
@@ -551,7 +551,7 @@ export function ClientFormDialog({ open, onClose, onSaved, mode, initial }: Prop
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="space-y-2">
-      <div className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium">{title}</div>
+      <div className="text-xs uppercase tracking-wide text-muted-foreground font-medium">{title}</div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">{children}</div>
     </div>
   );
@@ -562,7 +562,7 @@ function Field({ label, required, full, children }: { label: string; required?: 
     <div className={full ? 'sm:col-span-2' : ''}>
       <Label className="text-xs">
         {label}
-        {required && <span className="text-red-600 ml-0.5">*</span>}
+        {required && <span className="text-urgent-strong ml-0.5">*</span>}
       </Label>
       <div className="mt-0.5">{children}</div>
     </div>
@@ -594,7 +594,7 @@ function FileField({
         disabled={disabled}
       />
       {hint && (
-        <div className="text-[10px] text-muted-foreground mt-1 flex items-center gap-1">
+        <div className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
           <UploadCloud className="size-2.5" /> {hint}
         </div>
       )}

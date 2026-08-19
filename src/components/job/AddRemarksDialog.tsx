@@ -177,9 +177,9 @@ export function AddRemarksDialog({ open, jobId, onClose, onSaved, currentUserNam
           base scroll and re-clips at 85vh. */}
       <DialogContent className="!max-w-xl p-0 gap-0 overflow-x-hidden overflow-y-auto">
         {/* Dark-slate band header matching JobOutcomeDialog. */}
-        <div className="px-6 py-4 bg-gradient-to-r from-slate-900 via-slate-700 to-slate-900 text-white flex items-center gap-2.5 shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]">
-          <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-sky-500/20 ring-1 ring-sky-400/40">
-            <Pencil className="h-3.5 w-3.5 text-sky-300" />
+        <div className="px-6 py-4 bg-gradient-to-r from-ink-900 via-ink-700 to-ink-900 text-white flex items-center gap-2.5 shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]">
+          <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-info/20 ring-1 ring-info/40">
+            <Pencil className="h-3.5 w-3.5 text-info-tint" />
           </span>
           <DialogTitle className="text-[15px] font-semibold tracking-tight">Job CheckOut Remarks</DialogTitle>
         </div>
@@ -195,7 +195,7 @@ export function AddRemarksDialog({ open, jobId, onClose, onSaved, currentUserNam
         <div className="p-5 space-y-4">
           <div className="grid grid-cols-[150px_1fr] items-center gap-3">
             <label className="text-sm font-medium text-right">
-              Open Due To<span className="text-rose-600">*</span>
+              Open Due To<span className="text-urgent-strong">*</span>
             </label>
             <div className="flex flex-wrap items-center gap-4">
               {REMARK_DUE_TO_OPTIONS.map((opt) => (
@@ -206,7 +206,7 @@ export function AddRemarksDialog({ open, jobId, onClose, onSaved, currentUserNam
                     value={opt}
                     checked={dueTo === opt}
                     onChange={() => setDueTo(opt)}
-                    className="accent-purple-600"
+                    className="accent-gold"
                   />
                   {opt === 'Customer' ? 'By Customer' : opt}
                 </label>
@@ -215,7 +215,7 @@ export function AddRemarksDialog({ open, jobId, onClose, onSaved, currentUserNam
           </div>
           <div className="grid grid-cols-[150px_1fr] items-center gap-3">
             <label className="text-sm font-medium text-right">
-              Reason<span className="text-rose-600">*</span>
+              Reason<span className="text-urgent-strong">*</span>
             </label>
             <SearchSelect
               value={reasonId}
@@ -228,7 +228,7 @@ export function AddRemarksDialog({ open, jobId, onClose, onSaved, currentUserNam
           </div>
           <div className="grid grid-cols-[150px_1fr] items-start gap-3">
             <label className="text-sm font-medium text-right pt-2">
-              Remarks<span className="text-rose-600">*</span>
+              Remarks<span className="text-urgent-strong">*</span>
             </label>
             <textarea
               required
@@ -240,19 +240,19 @@ export function AddRemarksDialog({ open, jobId, onClose, onSaved, currentUserNam
               maxLength={2000}
             />
           </div>
-          {err && <div className="text-sm text-red-600 text-right">{err}</div>}
+          {err && <div className="text-sm text-urgent-strong text-right">{err}</div>}
           <div className="flex justify-end gap-2 pt-2 border-t">
             <Button
               onClick={go}
               disabled={loading || !reasonId || !text.trim()}
-              className="bg-teal-500 hover:bg-teal-600 text-white"
+              className="bg-success hover:bg-success-strong text-white"
             >
               {loading ? 'Saving…' : 'Submit'}
             </Button>
             <Button
               type="button"
               variant="outline"
-              className="bg-rose-500 hover:bg-rose-600 text-white border-rose-500 hover:text-white"
+              className="bg-urgent hover:bg-urgent-strong text-white border-urgent hover:text-white"
               onClick={onClose}
             >
               Cancel

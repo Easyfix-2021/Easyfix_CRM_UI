@@ -206,7 +206,7 @@ export function AddParticipantPicker({
       <DialogContent className="sm:max-w-md z-[9999] !gap-0" noPadding>
         <DialogHeader className="!py-4 px-6">
           <div className="flex items-center gap-3">
-            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-500/20 ring-1 ring-emerald-400/40 text-emerald-200">
+            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-success/20 ring-1 ring-success/40 text-success-tint">
               <UserPlus className="h-4 w-4" />
             </span>
             <div className="flex-1 min-w-0">
@@ -221,14 +221,14 @@ export function AddParticipantPicker({
         <div className="px-6 py-4 space-y-3 max-h-[60vh] overflow-y-auto">
           {/* ── The roster ─────────────────────────────────────────────── */}
           {roster.length === 0 ? (
-            <p className="text-xs text-slate-500">
+            <p className="text-xs text-ink-500">
               {jobless
                 ? 'This call is not linked to a job, so there is no roster to add from.'
                 : 'Nobody on this job has a mobile number on file.'}
             </p>
           ) : (
             <div className="space-y-1.5">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+              <p className="text-xs font-semibold uppercase tracking-wide text-ink-500">
                 On This Job
               </p>
               {roster.map((row) => {
@@ -246,19 +246,19 @@ export function AddParticipantPicker({
                     className={cn(
                       'flex items-center gap-2 rounded-md border px-2.5 py-2',
                       row.on_call
-                        ? 'border-emerald-200 bg-emerald-50/60'
-                        : 'border-slate-200 bg-white',
+                        ? 'border-success bg-success-tint/60'
+                        : 'border-ink-100 bg-card',
                     )}
                   >
-                    <Icon className="h-4 w-4 shrink-0 text-slate-500" aria-hidden />
+                    <Icon className="h-4 w-4 shrink-0 text-ink-500" aria-hidden />
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-xs font-semibold text-slate-800">
+                      <div className="truncate text-xs font-semibold text-ink-900">
                         {row.name || row.label}
                       </div>
                       <div className="flex items-center gap-1.5">
-                        <span className="truncate text-[11px] text-slate-500">{row.label}</span>
+                        <span className="truncate text-xs text-ink-500">{row.label}</span>
                         {/* Masked, for recognition only — never the full number. */}
-                        <span className="font-mono text-[11px] text-slate-500">
+                        <span className="font-mono text-xs text-ink-500">
                           {row.available ? row.masked_number || '—' : 'No Number On File'}
                         </span>
                       </div>
@@ -299,16 +299,16 @@ export function AddParticipantPicker({
             arm (number format, rate limit, and an audit of actor + digits).
           */}
           {(
-            <div className="pt-1 border-t border-slate-200">
+            <div className="pt-1 border-t border-ink-100">
               {!customOpen ? (
                 <button
                   type="button"
                   onClick={() => setCustomOpen(true)}
-                  className="mt-2 inline-flex w-full items-center gap-2 rounded-md border border-dashed border-slate-300 px-2.5 py-2 text-left text-xs font-semibold text-slate-600 hover:border-slate-400 hover:bg-slate-50 transition-colors"
+                  className="mt-2 inline-flex w-full items-center gap-2 rounded-md border border-dashed border-ink-300 px-2.5 py-2 text-left text-xs font-semibold text-ink-700 hover:border-ink-500 hover:bg-ink-50 transition-colors"
                 >
-                  <UserPlus className="h-4 w-4 shrink-0 text-slate-400" aria-hidden />
+                  <UserPlus className="h-4 w-4 shrink-0 text-ink-500" aria-hidden />
                   Other Number
-                  <span className="ml-auto font-normal text-[11px] text-slate-400">
+                  <span className="ml-auto font-normal text-xs text-ink-500">
                     Dial someone not on this job
                   </span>
                 </button>
@@ -329,7 +329,7 @@ export function AddParticipantPicker({
                       aria-invalid={customTouched && !customValid}
                     />
                     {customTouched && !customValid && (
-                      <p className="text-xs text-rose-600">{INDIAN_MOBILE_ERROR}</p>
+                      <p className="text-xs text-urgent-strong">{INDIAN_MOBILE_ERROR}</p>
                     )}
                   </div>
                   <div className="space-y-1">
@@ -346,7 +346,7 @@ export function AddParticipantPicker({
                   </div>
                   {/* This add is audited with the actor AND the digits, and is
                       capped at 5 per minute per operator. Say so. */}
-                  <p className="text-[11px] text-slate-500">
+                  <p className="text-xs text-ink-500">
                     This number is recorded against your name in the call audit.
                   </p>
                   <div className="flex items-center gap-2">

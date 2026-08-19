@@ -16,7 +16,7 @@ import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog';
  * through `useFormDirtyGuard` — which is the project-canonical close handler
  * (the `no-restricted-syntax` ESLint rule forbids inline `onOpenChange`).
  *
- * Visual: a soft slate background with a centred column. Adaptive width —
+ * Visual: a soft ink-tinted background with a centred column. Adaptive width —
  * narrow-ish on mobile (single-task focus) but opens up to a wide container
  * on desktop (md+) so the form can lay its shorter sections out side-by-side
  * via responsive grids inside each Section rather than running one tall
@@ -32,7 +32,7 @@ import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog';
 export default function PublicLayout({ children }: { children: React.ReactNode }) {
   return (
     <ConfirmDialogProvider>
-      <div className="min-h-screen bg-slate-50 text-slate-900 px-4 py-6 md:px-8 md:py-8 lg:px-12">
+      <div className="min-h-screen bg-ink-50 text-ink-900 px-4 py-6 md:px-8 md:py-8 lg:px-12">
         <div className="mx-auto max-w-7xl">{children}</div>
       </div>
     </ConfirmDialogProvider>

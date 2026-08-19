@@ -142,7 +142,7 @@ export function TransferJobOwnershipDialog({
       <DialogContent className="!max-w-3xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Repeat className="h-4 w-4 text-sky-300" /> Transfer Job Ownership
+            <Repeat className="h-4 w-4 text-info-tint" /> Transfer Job Ownership
           </DialogTitle>
         </DialogHeader>
 
@@ -153,7 +153,7 @@ export function TransferJobOwnershipDialog({
                 <Label className="!mb-1">
                   From Owner *
                   {lockedFromOwnerId != null && (
-                    <span className="ml-1 text-[11px] text-muted-foreground font-normal">(locked — from filter)</span>
+                    <span className="ml-1 text-xs text-muted-foreground font-normal">(locked — from filter)</span>
                   )}
                 </Label>
                 <SearchSelect
@@ -237,9 +237,9 @@ export function TransferJobOwnershipDialog({
         {report && (
           <div className="space-y-3">
             <div className="text-sm font-medium">
-              <span className="text-emerald-700">{report.summary.transferred} Transferred</span>
+              <span className="text-success-strong">{report.summary.transferred} Transferred</span>
               {' · '}
-              <span className="text-red-700">{report.summary.failed} Failed</span>
+              <span className="text-urgent-strong">{report.summary.failed} Failed</span>
               {' · '}
               <span className="text-muted-foreground">{report.summary.skipped} Skipped</span>
               {' · '}
@@ -254,8 +254,8 @@ export function TransferJobOwnershipDialog({
                       <td className="font-mono">{r.jobId}</td>
                       <td>
                         <span className={
-                          r.status === 'transferred' ? 'text-emerald-700' :
-                          r.status === 'failed'      ? 'text-red-700' :
+                          r.status === 'transferred' ? 'text-success-strong' :
+                          r.status === 'failed'      ? 'text-urgent-strong' :
                                                        'text-muted-foreground'
                         }>
                           {r.status.charAt(0).toUpperCase() + r.status.slice(1)}

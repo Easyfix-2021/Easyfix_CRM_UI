@@ -39,13 +39,13 @@ import { CallInfoModal } from '@/components/call-info/CallInfoModal';
  * call-site owns the open/close state, the click-target, and the
  * positioning wrapper.
  *
- * Background fix (still 2026-06-05): `bg-popover` /
- * `text-popover-foreground` are shadcn design-token classes defined as
- * CSS variables in globals.css but the matching `popover` /
- * `popover-foreground` color aliases were never added to
- * `tailwind.config.js`, so those classes compile to no CSS rule and
- * the panel rendered transparent. Using explicit `bg-white` /
- * `text-slate-900` is the safest minimal fix.
+ * Background fix (2026-06-05, root-caused 2026-08-18): `bg-popover` used to
+ * compile to no CSS rule at all — the `--popover` variables existed but the
+ * matching Tailwind colour alias was never added to the config — so the panel
+ * rendered transparent, and the workaround was a hardcoded `bg-white`. That
+ * workaround does not flip in dark mode: it would stay a white card with dark
+ * text on an otherwise dark page. The alias is now mapped in
+ * tailwind.config.ts, so the token works and the panel follows the theme.
  */
 function EffectiveAccessPopover({
   scope,
@@ -56,7 +56,7 @@ function EffectiveAccessPopover({
 }) {
   return (
     <div
-      className="absolute right-0 top-full mt-1 z-50 w-56 rounded-md border border-slate-200 bg-white text-slate-900 shadow-lg p-2"
+      className="absolute right-0 top-full mt-1 z-50 w-56 rounded-md border border-ink-100 bg-popover text-popover-foreground shadow-lg p-2"
       role="dialog"
       aria-label="Effective Access"
     >
@@ -104,7 +104,7 @@ function ScopeRow({ label, dim }: { label: string; dim: ScopeDimension }) {
     value = dim.ids.length;
   } else {
     value = 'None';
-    valueClass = 'text-amber-600 font-medium';
+    valueClass = 'text-warning-strong font-medium';
   }
   return (
     <tr>
@@ -205,7 +205,7 @@ export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
           <button
             type="button"
             onClick={() => setCallInfoOpen(true)}
-            className="inline-flex items-center gap-1.5 px-3 h-9 rounded-md bg-teal-600 text-white text-xs font-semibold shadow-sm hover:bg-teal-700 hover:shadow-md hover:scale-[1.02] transition-all"
+            className="inline-flex items-center gap-1.5 px-3 h-9 rounded-md bg-success text-white text-xs font-semibold shadow-sm hover:bg-success-strong hover:shadow-md hover:scale-[1.02] transition-all"
           >
             <Info className="h-4 w-4" />
             Call Info
@@ -215,12 +215,12 @@ export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
           <button
             type="button"
             onClick={() => setEscalatedOpen(true)}
-            className="inline-flex items-center gap-1.5 px-3 h-9 rounded-md bg-sky-600 text-white text-xs font-semibold shadow-sm hover:bg-sky-700 hover:shadow-md hover:scale-[1.02] transition-all"
+            className="inline-flex items-center gap-1.5 px-3 h-9 rounded-md bg-primary text-white text-xs font-semibold shadow-sm hover:bg-brand-600 hover:shadow-md hover:scale-[1.02] transition-all"
           >
             <AlertTriangle className="h-4 w-4" />
             Escalated Jobs
             {escalatedCount !== null && escalatedCount > 0 && (
-              <span className="inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1 rounded-full bg-rose-100 text-rose-700 text-[11px] font-bold">
+              <span className="inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1 rounded-full bg-urgent-tint text-urgent-strong text-xs font-semibold">
                 {escalatedCount > 999 ? '999+' : escalatedCount}
               </span>
             )}
@@ -262,7 +262,7 @@ export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
       >
         <Bell className="h-5 w-5" />
         {unread > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 h-4 w-4 rounded-full bg-destructive text-[10px] text-destructive-foreground grid place-items-center font-semibold">
+          <span className="absolute -top-0.5 -right-0.5 h-4 w-4 rounded-full bg-destructive text-xs text-destructive-foreground grid place-items-center font-semibold">
             {unread > 9 ? '9+' : unread}
           </span>
         )}

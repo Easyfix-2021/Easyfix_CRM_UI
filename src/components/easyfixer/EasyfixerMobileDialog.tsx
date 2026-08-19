@@ -58,7 +58,7 @@ export type EasyfixerMobileTarget = {
 /* Matches DeleteEntityDialog's reason textarea — the shared Input primitive
  * is single-line, and there is no shared Textarea component in this repo. */
 const TEXTAREA_CLASS =
-  'flex w-full rounded-md border border-input bg-white px-3 py-2 text-sm shadow-sm '
+  'flex w-full rounded-md border border-input bg-card px-3 py-2 text-sm shadow-sm '
   + 'transition-colors placeholder:text-muted-foreground focus:outline-none '
   + 'focus-visible:outline-none focus-visible:border-foreground/40';
 
@@ -212,13 +212,13 @@ export function EasyfixerMobileDialog({
             * The one consequence that matters, said once. This number is the
             * login identity for the technician app.
             */}
-          <div className="rounded border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+          <div className="rounded border border-warning bg-warning-tint p-3 text-xs text-warning-strong">
             This number is the technician&apos;s login identity — after this change they sign in
             to the app with the new number.
           </div>
 
           {conflict && (
-            <div className="rounded border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
+            <div className="rounded border border-urgent bg-urgent-tint p-3 text-sm text-urgent-strong">
               {conflict}
             </div>
           )}

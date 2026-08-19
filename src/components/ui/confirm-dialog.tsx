@@ -65,15 +65,15 @@ const ConfirmContext = React.createContext<ConfirmFn | null>(null);
  * spelled out so the JIT compiler picks them up at build time —
  * dynamic class composition with template strings doesn't survive
  * the purge pass. Each tone uses a translucent backplate over the
- * dark header band so the icon glow reads against the slate gradient.
+ * dark header band so the icon glow reads against the ink gradient.
  */
 function accentPlateClass(accent?: 'sky' | 'emerald' | 'rose' | 'amber'): string {
   switch (accent) {
-    case 'emerald': return 'bg-emerald-500/20 ring-1 ring-emerald-400/40 text-emerald-200';
-    case 'rose':    return 'bg-rose-500/20 ring-1 ring-rose-400/40 text-rose-200';
-    case 'amber':   return 'bg-amber-500/20 ring-1 ring-amber-400/40 text-amber-200';
+    case 'emerald': return 'bg-success/20 ring-1 ring-success/40 text-success-tint dark:text-success-strong';
+    case 'rose':    return 'bg-urgent/20 ring-1 ring-urgent/40 text-urgent-tint dark:text-urgent-strong';
+    case 'amber':   return 'bg-warning/20 ring-1 ring-warning/40 text-warning-tint dark:text-warning-strong';
     case 'sky':
-    default:        return 'bg-sky-500/20 ring-1 ring-sky-400/40 text-sky-200';
+    default:        return 'bg-info/20 ring-1 ring-info/40 text-info-tint dark:text-info-strong';
   }
 }
 
@@ -170,7 +170,7 @@ export function ConfirmDialogProvider({ children }: { children: React.ReactNode 
             <DialogDescription asChild>
               {/* Tailwind `!` modifiers force-override the shared
                   DialogDescription wrapper's defaults (text-[12px] +
-                  text-slate-300/85) which are tuned for the dark
+                  text-ink-300/85) which are tuned for the dark
                   header band, not the white body. Without `!`, Radix
                   Slot concatenates classNames without tailwind-merge
                   and the wrapper's styles win via CSS source order,

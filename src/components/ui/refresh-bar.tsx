@@ -6,5 +6,5 @@
  */
 export function RefreshBar({ active }: { active?: boolean }) {
   if (!active) return null;
-  return <div className="h-0.5 w-full animate-pulse bg-sky-500/70" aria-hidden="true" />;
+  return <div className="h-0.5 w-full animate-pulse bg-info/70" aria-hidden="true" />;
 }

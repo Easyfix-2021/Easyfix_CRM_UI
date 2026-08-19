@@ -721,16 +721,16 @@ export function ScheduleAssignModal({
         <DialogHeader className="px-6 py-4">
           <DialogTitle className="flex items-center gap-2">
             Schedule &amp; Assign
-            {jobId && <span className="text-sm font-normal text-slate-300">· Job #{jobId}</span>}
+            {jobId && <span className="text-sm font-normal text-ink-300">· Job #{jobId}</span>}
             {statusGate.data?.job_reference_id && (
-              <span className="text-sm font-normal text-slate-300">· {statusGate.data.job_reference_id}</span>
+              <span className="text-sm font-normal text-ink-300">· {statusGate.data.job_reference_id}</span>
             )}
           </DialogTitle>
         </DialogHeader>
 
         <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-4 space-y-5">
           {statusIneligible && (
-            <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+            <div className="rounded-md border border-warning bg-warning-tint px-4 py-2 text-sm text-warning-strong">
               This order isn’t in the “Pending for Scheduling” status — opened read-only. Schedule &amp; Assign is only available for booked, unassigned orders.
             </div>
           )}
@@ -761,11 +761,11 @@ export function ScheduleAssignModal({
             <section>
               <h3 className="text-sm font-semibold mb-2 flex items-center gap-1.5">
                 Offered To
-                <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700 border border-slate-200">
+                <span className="inline-flex items-center rounded-full bg-ink-100 px-2 py-0.5 text-xs font-medium text-ink-700 border border-ink-100">
                   {offers.data!.items.length}
                 </span>
               </h3>
-              <p className="mb-2 text-[11px] text-muted-foreground">
+              <p className="mb-2 text-xs text-muted-foreground">
                 Technicians this job has been offered to — including those who
                 declined or whose offer expired. Whoever accepts first on the app
                 is assigned; open offers expire after 30 minutes.
@@ -793,14 +793,14 @@ export function ScheduleAssignModal({
                          column read as an action. REJECTED=rose, EXPIRED=slate,
                          OFFERED (live)=amber. */
                       const statusText =
-                        o.offer_status === 2 ? 'text-rose-600'
-                          : o.offer_status === 3 ? 'text-slate-500'
-                            : 'text-amber-600';
+                        o.offer_status === 2 ? 'text-urgent-strong'
+                          : o.offer_status === 3 ? 'text-ink-500'
+                            : 'text-warning-strong';
                       return (
                         <tr key={o.efr_id}>
                           <td className="!text-left">
                             <div className="font-medium">{o.efr_name}</div>
-                            <div className="text-[10px] text-muted-foreground">#{o.efr_id}</div>
+                            <div className="text-xs text-muted-foreground">#{o.efr_id}</div>
                           </td>
                           {/* Click-to-call resolves the real number server-side
                               from efr_id — the masked digits here are display
@@ -816,12 +816,12 @@ export function ScheduleAssignModal({
                                 <span className={`font-medium ${statusText}`}>{o.offer_status_label}</span>
                               )}
                               {o.offer_status === 2 && o.reject_reason && (
-                                <span className="text-[10px] text-rose-600" title="Reason given by technician">
+                                <span className="text-xs text-urgent-strong" title="Reason given by technician">
                                   &ldquo;{o.reject_reason}&rdquo;
                                 </span>
                               )}
                               {(o.offer_count ?? 1) > 1 && (
-                                <span className="text-[10px] text-slate-500" title="Times offered">
+                                <span className="text-xs text-ink-500" title="Times offered">
                                   Offered ×{o.offer_count}
                                 </span>
                               )}
@@ -851,7 +851,7 @@ export function ScheduleAssignModal({
           )}
 
           {err && (
-            <div className="text-sm text-red-700 flex items-center gap-1">
+            <div className="text-sm text-urgent-strong flex items-center gap-1">
               <AlertTriangle className="h-4 w-4" /> {err}
             </div>
           )}
@@ -864,7 +864,7 @@ export function ScheduleAssignModal({
                 {showingSearch && (
                   <InfoTooltip label="What you can search by">
                     <div className="space-y-2">
-                      <div className="font-semibold text-slate-900">What you can search by</div>
+                      <div className="font-semibold text-ink-900">What you can search by</div>
                       <div>One box — the term is matched against every field below.</div>
                       <ul className="list-disc ml-4 space-y-0.5">
                         <li><strong>Name</strong> — partial match</li>
@@ -873,16 +873,16 @@ export function ScheduleAssignModal({
                         <li><strong>Pincode</strong> — the technician&apos;s current pincode, matched on a full 6 digits</li>
                         <li><strong>Technician Id</strong> — exact match</li>
                       </ul>
-                      <div className="text-slate-500">Search can find technicians outside the Top 10 and in any lifecycle status. Each result shows its status and reason; only rows marked eligible can be offered or assigned.</div>
+                      <div className="text-ink-500">Search can find technicians outside the Top 10 and in any lifecycle status. Each result shows its status and reason; only rows marked eligible can be offered or assigned.</div>
                     </div>
                   </InfoTooltip>
                 )}
                 {!showingSearch && (
                   <InfoTooltip label="How the Top 10 is ranked">
                     <div className="space-y-2">
-                      <div className="font-semibold text-slate-900">How the Top 10 is ranked</div>
+                      <div className="font-semibold text-ink-900">How the Top 10 is ranked</div>
                       <div>Technicians must clear every filter, then are ranked in priority order.</div>
-                      <div className="font-medium text-slate-900">Filters</div>
+                      <div className="font-medium text-ink-900">Filters</div>
                       <ul className="list-disc ml-4 space-y-0.5">
                         <li>Lifecycle is eligible to <strong>receive new jobs</strong> and the profile is <strong>verified</strong></li>
                         <li>Not already <strong>rejected / rescheduled off</strong> this job</li>
@@ -891,14 +891,14 @@ export function ScheduleAssignModal({
                         <li>No other <strong>booking in the same date &amp; time slot</strong></li>
                         <li><strong>COD</strong> jobs: account balance <strong>₹500+</strong></li>
                       </ul>
-                      <div className="font-medium text-slate-900">Ranked in this order</div>
+                      <div className="font-medium text-ink-900">Ranked in this order</div>
                       <ol className="list-decimal ml-4 space-y-0.5">
                         <li><strong>Present</strong> for the job date (attendance marked) — present technicians rank first; if fewer than 10 are present, the rest are still listed with a <strong>✗</strong> so the list is never empty</li>
                         <li>then <strong>Worked in this Vertical</strong> before — existing techs first</li>
                         <li>then <strong>Worked for this Client</strong> before</li>
                         <li>then <strong>Past performance</strong> — Rating, TAT &amp; Same-Day-Attempt (tiebreaker)</li>
                       </ol>
-                      <div className="text-slate-500">New technicians get neutral default performance so they still compete fairly within each group. <strong>Concurrent-jobs count</strong> and <strong>account balance</strong> are shown as columns but don&apos;t filter the list.</div>
+                      <div className="text-ink-500">New technicians get neutral default performance so they still compete fairly within each group. <strong>Concurrent-jobs count</strong> and <strong>account balance</strong> are shown as columns but don&apos;t filter the list.</div>
                     </div>
                   </InfoTooltip>
                 )}
@@ -927,7 +927,7 @@ export function ScheduleAssignModal({
                 Below that the footer pages through every match, so there is
                 nothing to warn about — "Refine your search" would be a lie. */}
             {showingSearch && searchRes.data?.capped && (
-              <p className="mb-2 text-[11px] text-amber-700">
+              <p className="mb-2 text-xs text-warning-strong">
                 More than {rows.length} technicians match — showing the first {rows.length}. Refine your search to see the rest.
               </p>
             )}
@@ -939,7 +939,7 @@ export function ScheduleAssignModal({
                 and the search box above stay usable regardless, so a Top-10
                 failure never blocks searching + assigning a technician. */}
             {!listLoading && listError ? (
-              <div className="py-12 text-center text-sm text-red-700">
+              <div className="py-12 text-center text-sm text-urgent-strong">
                 {showingSearch
                   ? 'Something Went Wrong!! Search Failed'
                   : 'Something Went Wrong!! Top Technicians Not Available'}
@@ -985,7 +985,7 @@ export function ScheduleAssignModal({
                               </li>
                             ))}
                           </ul>
-                          <p className="mt-3 text-center text-[11px] text-muted-foreground">
+                          <p className="mt-3 text-center text-xs text-muted-foreground">
                             Change the Job Date/time above, or search by name/ID to offer a specific technician.
                           </p>
                         </>
@@ -1077,7 +1077,7 @@ export function ScheduleAssignModal({
           <div className="flex items-center gap-2">
             <Button
               variant="outline"
-              className="bg-teal-500 hover:bg-teal-600 text-white border-teal-500 hover:text-white"
+              className="bg-success hover:bg-success-strong text-white border-success hover:text-white"
               onClick={() => setRemarksOpen(true)}
               disabled={!jobId || committing}
             >

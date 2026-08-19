@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 315.361" role="presentation" aria-hidden="true">
+<!--
+  Holi ornament — overlays the tagline lockup (viewBox 0 0 1000 315.361), so
+  coordinates are in the lockup's own units.
+
+  PALETTE: brand tokens only — blue #2A6FBF, success #1B9E5A, warning #E0930F,
+  gold #C99A2E, red #C42430, each at 45% so the colour reads as a soft wash
+  rather than a festive scene. No colour that is not on the brand page.
+
+  KEEP-OUT: the house mark occupies x 121.4..341.7, y 2..196.3 and carries no
+  dot. The five dots sit in the measured free zones only: the wedge above the
+  "x" (x 855..1000, y 0..56), the wordmark baseline band (y 196.3..239.6) and
+  the strip below the tagline (y 300.4..315.36). Drift is small enough that no
+  dot travels out of its zone.
+
+  Animation is CSS, not SMIL: SMIL cannot be media-queried, and the
+  reduced-motion opt-out has to travel with the asset.
+-->
+<style>
+.d{transform-box:fill-box;transform-origin:50% 50%;animation:drift 12s ease-in-out infinite}
+.d2{animation-duration:15s;animation-delay:-4s}
+.d3{animation-duration:13.5s;animation-delay:-8s}
+.d4{animation-duration:16s;animation-delay:-2.5s}
+.d5{animation-duration:14s;animation-delay:-6.5s}
+@keyframes drift{
+0%,100%{transform:translate(0,0) scale(1);opacity:.45}
+50%{transform:translate(4px,-2px) scale(1.06);opacity:.55}
+}
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+
+<circle class="d" cx="912" cy="26" r="15" fill="#C99A2E" opacity=".45"/>
+<circle class="d d2" cx="52" cy="216" r="14" fill="#2A6FBF" opacity=".45"/>
+<circle class="d d3" cx="958" cy="220" r="12" fill="#1B9E5A" opacity=".45"/>
+<circle class="d d4" cx="470" cy="308" r="6" fill="#E0930F" opacity=".45"/>
+<circle class="d d5" cx="700" cy="309" r="6" fill="#C42430" opacity=".45"/>
+</svg>

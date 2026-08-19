@@ -78,7 +78,7 @@ export default function ReportsLandingPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
+        <h1 className="text-2xl font-semibold flex items-center gap-2">
           <BarChart3 className="size-6" /> Reports
         </h1>
         <p className="text-sm text-muted-foreground">
@@ -103,10 +103,10 @@ export default function ReportsLandingPage() {
         {/* Escalation + Finance cards close the legacy sidebar links
             (manageEscalationReport / manageFinanceReport). The focus
             query param scrolls the matching card into view. */}
-        <div ref={focus === 'escalation' ? focusRef : null} className={focus === 'escalation' ? 'ring-2 ring-sky-400 rounded-lg' : undefined}>
+        <div ref={focus === 'escalation' ? focusRef : null} className={focus === 'escalation' ? 'ring-2 ring-primary rounded-lg' : undefined}>
           <EscalationReportCard />
         </div>
-        <div ref={focus === 'finance' ? focusRef : null} className={focus === 'finance' ? 'ring-2 ring-sky-400 rounded-lg' : undefined}>
+        <div ref={focus === 'finance' ? focusRef : null} className={focus === 'finance' ? 'ring-2 ring-primary rounded-lg' : undefined}>
           <FinanceReportCard />
         </div>
       </div>
@@ -160,7 +160,7 @@ function CompletedJobsCard() {
         <option value="">All clients</option>
         {lookup.clients.map((c) => <option key={c.client_id} value={c.client_id}>{c.client_name}</option>)}
       </select>
-      {err && <div className="text-xs text-red-600 flex items-center gap-1"><AlertTriangle className="size-3.5" /> {err}</div>}
+      {err && <div className="text-xs text-urgent flex items-center gap-1"><AlertTriangle className="size-3.5" /> {err}</div>}
       <Button size="sm" onClick={run} disabled={busy || !from || !to}>
         <FileDown className="size-3.5 mr-1" /> {busy ? 'Downloading…' : 'Download XLSX'}
       </Button>
@@ -184,7 +184,7 @@ function PayoutSheetCard() {
         <Input type="date" value={from} onChange={(e) => setRange((r) => ({ ...r, from: e.target.value }))} />
         <Input type="date" value={to}   onChange={(e) => setRange((r) => ({ ...r, to:   e.target.value }))} />
       </div>
-      {err && <div className="text-xs text-red-600 flex items-center gap-1"><AlertTriangle className="size-3.5" /> {err}</div>}
+      {err && <div className="text-xs text-urgent flex items-center gap-1"><AlertTriangle className="size-3.5" /> {err}</div>}
       <Button size="sm" onClick={run} disabled={busy || !from || !to}>
         <FileDown className="size-3.5 mr-1" /> {busy ? 'Downloading…' : 'Download XLSX'}
       </Button>
@@ -210,7 +210,7 @@ function EasyfixerReportCard() {
         <Input type="date" value={to}   onChange={(e) => setRange((r) => ({ ...r, to:   e.target.value }))} />
       </div>
       <Input placeholder="Easyfixer ID (optional)" value={efrId} onChange={(e) => setEfrId(e.target.value.replace(/\D/g, ''))} className="font-mono" />
-      {err && <div className="text-xs text-red-600 flex items-center gap-1"><AlertTriangle className="size-3.5" /> {err}</div>}
+      {err && <div className="text-xs text-urgent flex items-center gap-1"><AlertTriangle className="size-3.5" /> {err}</div>}
       <Button size="sm" onClick={run} disabled={busy}>
         <FileDown className="size-3.5 mr-1" /> {busy ? 'Downloading…' : 'Download XLSX'}
       </Button>
@@ -242,7 +242,7 @@ function UserProductivityCard() {
         {lookup.roles.map((r) => <option key={r.role_id} value={r.role_id}>{r.role_name}</option>)}
       </select>
       <Input placeholder="User ID (optional)" value={userId} onChange={(e) => setUserId(e.target.value.replace(/\D/g, ''))} className="font-mono" />
-      {err && <div className="text-xs text-red-600 flex items-center gap-1"><AlertTriangle className="size-3.5" /> {err}</div>}
+      {err && <div className="text-xs text-urgent flex items-center gap-1"><AlertTriangle className="size-3.5" /> {err}</div>}
       <Button size="sm" onClick={run} disabled={busy || !from || !to}>
         <FileDown className="size-3.5 mr-1" /> {busy ? 'Downloading…' : 'Download XLSX'}
       </Button>
@@ -261,7 +261,7 @@ function CityAnalysisCard() {
   }
   return (
     <ReportCard title="City Analysis" blurb="All active cities ranked by job volume (total / completed / cancelled). No date filter — full lifetime." Icon={Building2}>
-      {err && <div className="text-xs text-red-600 flex items-center gap-1"><AlertTriangle className="size-3.5" /> {err}</div>}
+      {err && <div className="text-xs text-urgent flex items-center gap-1"><AlertTriangle className="size-3.5" /> {err}</div>}
       <Button size="sm" onClick={run} disabled={busy}>
         <FileDown className="size-3.5 mr-1" /> {busy ? 'Downloading…' : 'Download XLSX'}
       </Button>
@@ -307,12 +307,12 @@ function UserHoursCard() {
         <Input type="date" value={to}   onChange={(e) => setRange((r) => ({ ...r, to:   e.target.value }))} />
       </div>
       <Input placeholder="User ID (optional)" value={userId} onChange={(e) => setUserId(e.target.value.replace(/\D/g, ''))} className="font-mono" />
-      {err && <div className="text-xs text-red-600 flex items-center gap-1"><AlertTriangle className="size-3.5" /> {err}</div>}
+      {err && <div className="text-xs text-urgent flex items-center gap-1"><AlertTriangle className="size-3.5" /> {err}</div>}
       <Button size="sm" onClick={run} disabled={busy}>
         <Activity className="size-3.5 mr-1" /> {busy ? 'Loading…' : 'Preview'}
       </Button>
       {preview.length > 0 && (
-        <div className="rounded border bg-slate-50 p-2 text-xs max-h-40 overflow-auto">
+        <div className="rounded border bg-ink-50 p-2 text-xs max-h-40 overflow-auto">
           <div className="font-medium mb-1">{preview.length} rows · showing top 10:</div>
           <ul className="space-y-0.5 font-mono">
             {preview.slice(0, 10).map((r, i) => (
@@ -362,7 +362,7 @@ function EscalationReportCard() {
         <option value="">All clients</option>
         {lookup.clients.map((c) => <option key={c.client_id} value={c.client_id}>{c.client_name}</option>)}
       </select>
-      {err && <div className="text-xs text-red-600 flex items-center gap-1"><AlertTriangle className="size-3.5" /> {err}</div>}
+      {err && <div className="text-xs text-urgent flex items-center gap-1"><AlertTriangle className="size-3.5" /> {err}</div>}
       <Button size="sm" onClick={run} disabled={busy || !from || !to}>
         <FileDown className="size-3.5 mr-1" /> {busy ? 'Downloading…' : 'Download XLSX'}
       </Button>
@@ -401,7 +401,7 @@ function FinanceReportCard() {
         <Input type="date" value={from} onChange={(e) => setRange((r) => ({ ...r, from: e.target.value }))} />
         <Input type="date" value={to}   onChange={(e) => setRange((r) => ({ ...r, to:   e.target.value }))} />
       </div>
-      {err && <div className="text-xs text-red-600 flex items-center gap-1"><AlertTriangle className="size-3.5" /> {err}</div>}
+      {err && <div className="text-xs text-urgent flex items-center gap-1"><AlertTriangle className="size-3.5" /> {err}</div>}
       <div className="flex flex-wrap gap-2">
         <Button size="sm" onClick={run} disabled={busy || !from || !to}>
           <FileDown className="size-3.5 mr-1" /> {busy ? 'Downloading…' : 'Download EFR Ledger'}

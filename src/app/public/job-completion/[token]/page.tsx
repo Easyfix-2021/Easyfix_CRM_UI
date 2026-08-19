@@ -31,7 +31,7 @@
  */
 
 import { useParams } from 'next/navigation';
-import Image from 'next/image';
+import { Logo } from '@/components/brand/Logo';
 import { X, CalendarClock, CheckCircle2, LifeBuoy, MapPin, Wrench, Phone, User } from 'lucide-react';
 import * as React from 'react';
 import type { PrefillResponse, SubmitPayload } from '@/lib/magic-link-types';
@@ -480,7 +480,7 @@ export default function JobCompletionMagicLinkPage() {
     return apptDayStart > nowLocal ? apptDayStart : nowLocal;
   }, [form?.requested_date_time]);
 
-  if (state.kind === 'loading') return <div className="text-center text-slate-500 py-12">Loading…</div>;
+  if (state.kind === 'loading') return <div className="text-center text-ink-500 py-12">Loading…</div>;
   if (state.kind === 'expired_state') return (
     <FullPageMessage
       title="This Booking Has Already Been Confirmed"
@@ -851,8 +851,8 @@ export default function JobCompletionMagicLinkPage() {
           role="status"
           className={`fixed bottom-24 left-1/2 z-50 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 rounded-md border px-4 py-3 text-sm shadow-lg ${
             toast.tone === 'ok'
-              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-              : 'bg-red-50 border-red-200 text-red-700'
+              ? 'bg-success-tint border-success/30 text-success-strong'
+              : 'bg-urgent-tint border-urgent/30 text-urgent-strong'
           }`}
         >
           {toast.text}
@@ -860,7 +860,7 @@ export default function JobCompletionMagicLinkPage() {
       )}
 
       {submitError && (
-        <div className="bg-red-50 border border-red-200 text-red-700 rounded-md px-4 py-3 text-sm">{submitError}</div>
+        <div className="bg-urgent-tint border border-urgent/30 text-urgent-strong rounded-md px-4 py-3 text-sm">{submitError}</div>
       )}
 
       <form id="order-form" onSubmit={handleSubmit} className="space-y-4">
@@ -869,8 +869,8 @@ export default function JobCompletionMagicLinkPage() {
             greeting chip. (serviceName is still used below as the Service
             Requested fallback when the job has no description.) */}
         <div className="space-y-2 px-1">
-          <div className="text-sm text-slate-500">Job ID #{jobId}</div>
-          <div className="rounded-md bg-sky-100 px-4 py-3 text-sm font-medium text-sky-900 ring-1 ring-inset ring-sky-200">
+          <div className="text-sm text-ink-500">Job ID #{jobId}</div>
+          <div className="rounded-md bg-info-tint px-4 py-3 text-sm font-medium text-info-strong ring-1 ring-inset ring-info/30">
             Hi {customerFirstName} — please confirm your service visit below.
           </div>
         </div>
@@ -886,15 +886,15 @@ export default function JobCompletionMagicLinkPage() {
               className={
                 'inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset ' +
                 (billingLabel === 'Paid'
-                  ? 'bg-amber-50 text-amber-800 ring-amber-200'
-                  : 'bg-emerald-50 text-emerald-700 ring-emerald-200')
+                  ? 'bg-warning-tint text-warning-strong ring-warning/30'
+                  : 'bg-success-tint text-success-strong ring-success/30')
               }
             >
               {billingLabel}
             </span>
           }
         >
-          <p className="text-sm leading-relaxed text-slate-600 whitespace-pre-wrap">
+          <p className="text-sm leading-relaxed text-ink-700 whitespace-pre-wrap">
             {(form.job_desc && form.job_desc.trim()) || serviceName}
           </p>
         </InfoCard>
@@ -981,7 +981,7 @@ export default function JobCompletionMagicLinkPage() {
         <InfoCard icon={<MapPin className="h-4 w-4" />} title="Service Address">
           {/* Read-only assembled address (display-only; the customer edits the
               underlying fields via the map reveal below, not here). */}
-          <div className="flex w-full rounded-md border border-slate-300 bg-slate-100 px-3 py-2 text-base text-slate-600">
+          <div className="flex w-full rounded-md border border-ink-300 bg-ink-100 px-3 py-2 text-base text-ink-700">
             {assembledAddress || '—'}
           </div>
           <div className="flex flex-wrap items-center justify-center gap-3">
@@ -989,13 +989,13 @@ export default function JobCompletionMagicLinkPage() {
               type="button"
               variant="outline"
               onClick={() => setMapOpen((o) => !o)}
-              className="gap-2 border-sky-300 text-sky-700 hover:bg-sky-50 hover:text-sky-800"
+              className="gap-2 border-primary/40 text-primary hover:bg-brand-50 hover:text-brand-600"
             >
               <MapPin className="h-4 w-4" />
               {mapOpen ? 'Hide Map' : 'Pin Exact Location On Map'}
             </Button>
             {form.gps_location && !mapOpen && (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-success-tint px-2.5 py-1 text-xs font-medium text-success-strong ring-1 ring-inset ring-success/30">
                 <MapPin className="h-3.5 w-3.5 shrink-0" />
                 Location Captured
               </span>
@@ -1005,7 +1005,7 @@ export default function JobCompletionMagicLinkPage() {
               search + draggable pin). It writes gps_location / address / city /
               pin back into form state via patch() exactly as before. */}
           {mapOpen && (
-            <div className="rounded-md border border-slate-200 bg-slate-50/60 p-3">
+            <div className="rounded-md border border-ink-100 bg-ink-50/60 p-3">
               <AddressMapWidget
                 token={token}
                 cityOptions={data.cityOptions}
@@ -1035,13 +1035,13 @@ export default function JobCompletionMagicLinkPage() {
           <div className="flex flex-col gap-3">
             {/* Row 1: DATE only (time/slot removed) + Reschedule. */}
             <div className="flex items-center justify-between gap-3">
-              <span className="text-lg font-semibold text-slate-900">{apptDateLabel}</span>
+              <span className="text-lg font-semibold text-ink-900">{apptDateLabel}</span>
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
                 onClick={() => setDialog('reschedule')}
-                className="shrink-0 gap-1.5 border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 hover:text-amber-900"
+                className="shrink-0 gap-1.5 border-warning/40 bg-warning-tint text-warning-strong hover:bg-warning/20 hover:text-warning-strong"
               >
                 <CalendarClock className="h-4 w-4" />
                 Reschedule
@@ -1056,8 +1056,8 @@ export default function JobCompletionMagicLinkPage() {
                 better one. The submit gate already requires form.time_slot,
                 so leaving it unpicked blocks confirmation. */}
             <div className="flex flex-col gap-1.5">
-              <span className="text-xs font-medium text-slate-600">
-                Select A Time Slot <span className="text-red-500">*</span>
+              <span className="text-xs font-medium text-ink-700">
+                Select A Time Slot <span className="text-urgent">*</span>
               </span>
               <div className="flex flex-wrap gap-2">
                 {BOOKING_BANDS.map((slot) => {
@@ -1084,8 +1084,8 @@ export default function JobCompletionMagicLinkPage() {
                       className={
                         'rounded-full border px-3 py-1.5 text-sm transition-colors '
                         + (active
-                          ? 'border-emerald-600 bg-emerald-600 text-white'
-                          : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50')
+                          ? 'border-success bg-success text-white'
+                          : 'border-ink-300 bg-card text-ink-700 hover:bg-ink-50')
                       }
                     >
                       {slot.label}
@@ -1100,13 +1100,13 @@ export default function JobCompletionMagicLinkPage() {
         {/* CARD: Your coordinator — single point of contact + click-to-call. */}
         <InfoCard icon={<User className="h-4 w-4" />} title="Your Coordinator">
           <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-sky-100 text-sm font-semibold text-sky-700">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-info-tint text-sm font-semibold text-info-strong">
               {coordinatorInitials}
             </div>
             <div className="min-w-0 flex-1">
               {/* Smaller than the card title (text-base) so the section header
                   and the person's name read as a clear hierarchy, not twins. */}
-              <div className="truncate text-sm font-semibold text-slate-800">{coordinatorName}</div>
+              <div className="truncate text-sm font-semibold text-ink-900">{coordinatorName}</div>
             </div>
             {/* Green Call button → existing bridged SPOC call flow (spoc_confirm).
                 Green = "go / place call", mirroring the Call EasyFix SPOC CTA. */}
@@ -1114,7 +1114,7 @@ export default function JobCompletionMagicLinkPage() {
               type="button"
               onClick={() => setDialog('spoc_confirm')}
               disabled={actionBusy === 'spoc'}
-              className="shrink-0 gap-1.5 bg-emerald-600 text-white hover:bg-emerald-700"
+              className="shrink-0 gap-1.5 bg-success text-white hover:bg-success-strong"
             >
               <Phone className="h-4 w-4" />
               {actionBusy === 'spoc' ? 'Connecting…' : 'Call'}
@@ -1129,13 +1129,13 @@ export default function JobCompletionMagicLinkPage() {
               <input type="text" required value={form.customer_name}
                 autoComplete="name"
                 onChange={(e) => patch({ customer_name: e.target.value })}
-                className={nameError ? `${inputClass} !border-red-400 focus:!border-red-500` : inputClass} />
+                className={nameError ? `${inputClass} !border-urgent focus:!border-urgent` : inputClass} />
             </Field>
             <Field label="Mobile">
               {/* Read-only — the customer's OWN number is the identity field on
                   the magic-link JWT; changing it would break the link binding.
                   Shown UNMASKED (it's their own number). */}
-              <div className="px-3 py-2 rounded-md bg-slate-100 text-slate-700 text-base font-mono">
+              <div className="px-3 py-2 rounded-md bg-ink-100 text-ink-700 text-base font-mono">
                 {customerMob}
               </div>
             </Field>
@@ -1161,12 +1161,12 @@ export default function JobCompletionMagicLinkPage() {
               dropzone has room to breathe (a cramped half-column read poorly).
               Label + counter share one row; the tiles sit in a horizontal strip.
               Naturally stacks under the fields on mobile. */}
-          <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50/60 p-3">
+          <div className="rounded-lg border border-dashed border-ink-300 bg-ink-50/60 p-3">
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5">
-              <label className="text-xs font-medium text-slate-700">
+              <label className="text-xs font-medium text-ink-700">
                 Add Reference Photo Of Appliance / Issue
               </label>
-              <span className="text-xs text-slate-500">
+              <span className="text-xs text-ink-500">
                 Up To 5 Photos ({images.length}/5) · 2 Videos ({videos.length}/2)
               </span>
             </div>
@@ -1189,7 +1189,7 @@ export default function JobCompletionMagicLinkPage() {
               type="button"
               onClick={() => setDialog('support_confirm')}
               disabled={actionBusy === 'support'}
-              className="inline-flex items-center gap-1.5 text-sm text-slate-500 underline-offset-4 hover:text-sky-700 hover:underline disabled:opacity-60"
+              className="inline-flex items-center gap-1.5 text-sm text-ink-500 underline-offset-4 hover:text-primary hover:underline disabled:opacity-60"
             >
               <LifeBuoy className="h-4 w-4" />
               {actionBusy === 'support' ? 'Connecting…' : 'Contact EasyFix Support'}
@@ -1198,17 +1198,17 @@ export default function JobCompletionMagicLinkPage() {
         )}
 
         {/* Sticky footer action bar. The outer wrapper is a bottom-anchored
-            gradient that fades to the page bg (slate-50), so cards dissolve
+            gradient that fades to the page bg (ink-50), so cards dissolve
             into it as they scroll underneath instead of colliding with the
             hard edge of the button bar. The inner bar is solid white with a
-            soft upward shadow. Cancel = red, Confirm = blue. */}
-        <div className="sticky bottom-0 z-30 bg-gradient-to-t from-slate-50 from-60% via-slate-50/95 to-transparent pb-3 pt-8">
-          <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-[0_-2px_16px_rgba(15,23,42,0.10)]">
+            soft upward shadow. Cancel = urgent, Confirm = primary. */}
+        <div className="sticky bottom-0 z-30 bg-gradient-to-t from-ink-50 from-60% via-ink-50/95 to-transparent pb-3 pt-8">
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-ink-100 bg-card px-4 py-3 shadow-[0_-2px_16px_rgba(15,23,42,0.10)]">
             <Button
               type="button"
               size="lg"
               onClick={() => setDialog('cancel')}
-              className="gap-2 bg-rose-600 text-white hover:bg-rose-700"
+              className="gap-2 bg-urgent text-white hover:bg-urgent-strong"
             >
               <X className="h-5 w-5" />
               Cancel
@@ -1217,7 +1217,7 @@ export default function JobCompletionMagicLinkPage() {
               type="submit"
               size="lg"
               disabled={isSubmitting || !mandatoryCustomPropsComplete}
-              className="gap-2 bg-sky-600 text-white hover:bg-sky-700"
+              className="gap-2 bg-primary text-primary-foreground hover:bg-brand-600"
             >
               <CheckCircle2 className="h-5 w-5" />
               {isSubmitting ? 'Confirming…' : 'Confirm Details'}
@@ -1256,7 +1256,7 @@ export default function JobCompletionMagicLinkPage() {
           busy={actionBusy === 'spoc'}
           onClose={() => { if (actionBusy !== 'spoc') setDialog(null); }}
         >
-          <p className="text-sm text-slate-600">
+          <p className="text-sm text-ink-700">
             Call EasyFix SPOC? We&apos;ll Connect You To Your EasyFix Point Of Contact.
           </p>
           {/* Masked from→to the bridge will dial — customer visibility, all
@@ -1277,7 +1277,7 @@ export default function JobCompletionMagicLinkPage() {
             </Button>
             <Button type="button" size="lg" disabled={actionBusy === 'spoc'}
               onClick={() => { setDialog(null); void handleSpocCall(); }}
-              className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white">
+              className="w-full sm:w-auto bg-success hover:bg-success-strong text-white">
               {actionBusy === 'spoc' ? 'Connecting…' : 'Call EasyFix SPOC'}
             </Button>
           </div>
@@ -1293,12 +1293,12 @@ export default function JobCompletionMagicLinkPage() {
           onClose={() => { if (actionBusy !== 'support') setDialog(null); }}
         >
           {supportPreview === 'unavailable' ? (
-            <p className="text-sm text-slate-600">
+            <p className="text-sm text-ink-700">
               Support calling isn&apos;t available right now. Please try the EasyFix Point Of Contact above, or reach us through your usual support channel.
             </p>
           ) : (
             <>
-              <p className="text-sm text-slate-600">
+              <p className="text-sm text-ink-700">
                 Contact EasyFix Support? We&apos;ll Connect You To Our Support Team.
               </p>
               <CallLegsPreview
@@ -1318,7 +1318,7 @@ export default function JobCompletionMagicLinkPage() {
             {supportPreview !== 'unavailable' && (
               <Button type="button" size="lg" disabled={actionBusy === 'support' || supportPreview === 'loading'}
                 onClick={() => { setDialog(null); void handleSupportCall(); }}
-                className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white">
+                className="w-full sm:w-auto bg-success hover:bg-success-strong text-white">
                 {actionBusy === 'support' ? 'Connecting…' : 'Call EasyFix Support'}
               </Button>
             )}
@@ -1339,7 +1339,7 @@ export default function JobCompletionMagicLinkPage() {
 //     iOS HIG / WCAG touch-target minimum without needing explicit
 //     height classes.
 const inputClass =
-  'flex w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-base focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500';
+  'flex w-full rounded-md border border-ink-300 bg-card px-3 py-2 text-base focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary';
 
 /*
  * Order header band — a blue brand band with the CLIENT name on the left and a
@@ -1350,9 +1350,9 @@ const inputClass =
 function OrderHeader({ clientName }: { clientName: string }) {
   return (
     // Same band treatment as every CRM modal header (see DialogHeader):
-    // slate-900 → 700 → 900 gradient + a 3px sky-500 inset underline.
-    <div className="rounded-lg bg-gradient-to-r from-slate-900 via-slate-700 to-slate-900 px-5 py-4 text-white shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]">
-      <div className="text-[11px] font-semibold uppercase tracking-wider text-white/70">Order For</div>
+    // ink-900 → 700 → 900 gradient + a 3px sky-500 inset underline.
+    <div className="rounded-lg bg-gradient-to-r from-ink-900 via-ink-700 to-ink-900 px-5 py-4 text-white shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]">
+      <div className="text-xs font-semibold uppercase tracking-wider text-white/70">Order For</div>
       {/* Always side-by-side. On mobile the chip stacks its own two parts
           ("Fulfilled by" over the logo) so it's narrow enough to leave the
           client name real room (it was clipping to "For Testi…"); on sm+ it's
@@ -1361,12 +1361,12 @@ function OrderHeader({ clientName }: { clientName: string }) {
           (the chip's bottom element), so name ↔ logo read as one line with
           "Fulfilled by" as a caption above. sm+ keeps the centered inline row. */}
       <div className="mt-1 flex items-end justify-between gap-3 sm:items-center">
-        <div className="min-w-0 truncate text-2xl font-bold leading-tight">{clientName}</div>
-        {/* logo-full.png is light-on-transparent, so it reads directly on the
-            dark band (no backing pill needed). */}
+        <div className="min-w-0 truncate text-2xl font-semibold leading-tight">{clientName}</div>
+        {/* The band is the ink-900 gradient, so the on-dark lockup is the
+            correct surface — white wordmark, red house. */}
         <span className="flex shrink-0 flex-col items-end gap-0.5 text-xs font-medium text-white/80 sm:flex-row sm:items-center sm:gap-2">
           <span>Fulfilled by</span>
-          <Image src="/logo-full.png" alt="EasyFix" width={139} height={34} className="h-5 w-auto" priority />
+          <Logo variant="horizontal" surface="dark" height={20} />
         </span>
       </div>
     </div>
@@ -1375,7 +1375,7 @@ function OrderHeader({ clientName }: { clientName: string }) {
 
 /*
  * Generic white card shell for the redesigned form — mirrors <Section>'s
- * bg-white/rounded/border look but adds a small tinted leading icon and a
+ * bg-card/rounded/border look but adds a small tinted leading icon and a
  * free-form (non-grid) body. Used for the Service Requested / Address /
  * Appointment / Coordinator / Your Details cards.
  */
@@ -1418,7 +1418,7 @@ function RescheduleDialog({
           <option value="">— Select A Reason —</option>
           {reasons.map((r) => <option key={r} value={r}>{r}</option>)}
         </select>
-        {touched && !reason && <p className="text-xs text-red-600 mt-1">Please Select A Reason.</p>}
+        {touched && !reason && <p className="text-xs text-urgent mt-1">Please Select A Reason.</p>}
       </Field>
       <Field label="Preferred Date & Time">
         {/* 30-min searchable time dropdown (with a "Custom Time…" escape) — the
@@ -1459,7 +1459,7 @@ function RescheduleDialog({
         </Button>
         <Button type="button" size="lg" disabled={busy}
           onClick={() => { setTouched(true); if (reason) onSubmit(reason, preferred, remarks); }}
-          className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white">
+          className="w-full sm:w-auto bg-success hover:bg-success-strong text-white">
           {busy ? 'Submitting…' : 'Request Reschedule'}
         </Button>
       </div>
@@ -1484,7 +1484,7 @@ function CancelDialog({
   const [touched, setTouched] = React.useState(false);
   return (
     <OverlayShell title="Cancel Order" onClose={onClose} busy={busy}>
-      <p className="text-sm text-slate-600">
+      <p className="text-sm text-ink-700">
         Let Us Know Why You&apos;d Like To Cancel — Our Team Will Reach Out To Confirm.
       </p>
       <Field label="Reason" required>
@@ -1492,7 +1492,7 @@ function CancelDialog({
           <option value="">— Select A Reason —</option>
           {reasons.map((r) => <option key={r} value={r}>{r}</option>)}
         </select>
-        {touched && !reason && <p className="text-xs text-red-600 mt-1">Please Select A Reason.</p>}
+        {touched && !reason && <p className="text-xs text-urgent mt-1">Please Select A Reason.</p>}
       </Field>
       <Field label="Remarks">
         <textarea value={remarks} onChange={(e) => setRemarks(e.target.value)}
@@ -1508,7 +1508,7 @@ function CancelDialog({
         </Button>
         <Button type="button" size="lg" variant="destructive" disabled={busy}
           onClick={() => { setTouched(true); if (reason) onSubmit(reason, remarks); }}
-          className="w-full sm:w-auto bg-rose-600 hover:bg-rose-700 text-white">
+          className="w-full sm:w-auto bg-urgent hover:bg-urgent-strong text-white">
           {busy ? 'Submitting…' : 'Request Cancellation'}
         </Button>
       </div>
@@ -1545,11 +1545,11 @@ function Section({
       ? 'grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-3'
       : 'space-y-3';
   return (
-    <div className="bg-white rounded-lg border p-5 space-y-3">
+    <div className="bg-card rounded-lg border p-5 space-y-3">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-baseline gap-2 min-w-0">
-          <h2 className="text-base font-semibold text-slate-700">{title}</h2>
-          {subtitle && <span className="text-xs text-slate-500 shrink-0">{subtitle}</span>}
+          <h2 className="text-base font-semibold text-ink-700">{title}</h2>
+          {subtitle && <span className="text-xs text-ink-500 shrink-0">{subtitle}</span>}
         </div>
         {action && <div className="shrink-0">{action}</div>}
       </div>
@@ -1561,8 +1561,8 @@ function Section({
 function Field({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) {
   return (
     <div>
-      <label className="block text-xs font-medium text-slate-600 mb-1">
-        {label}{required && <span className="text-red-500 ml-0.5">*</span>}
+      <label className="block text-xs font-medium text-ink-700 mb-1">
+        {label}{required && <span className="text-urgent ml-0.5">*</span>}
       </label>
       {children}
     </div>
@@ -1857,11 +1857,11 @@ function AddressMapWidget({
             placeholder={mapOnly ? 'Search an address or landmark to drop the pin' : "Start typing — we'll suggest matches"}
           />
           {showSuggestions && suggestions.length > 0 && (
-            <div className="absolute left-0 right-0 top-full mt-1 z-10 bg-white border rounded-md shadow-md max-h-64 overflow-y-auto">
+            <div className="absolute left-0 right-0 top-full mt-1 z-10 bg-popover border rounded-md shadow-md max-h-64 overflow-y-auto">
               {suggestions.map((s) => (
                 <button key={s.place_id} type="button"
                   onMouseDown={(e) => { e.preventDefault(); void pickSuggestion(s.place_id, s.description); }}
-                  className="block w-full text-left px-3 py-2 text-sm hover:bg-slate-100">
+                  className="block w-full text-left px-3 py-2 text-sm hover:bg-ink-100">
                   {s.description}
                 </button>
               ))}
@@ -1928,14 +1928,14 @@ function AddressMapWidget({
           the container's grid placement moved. On mobile this column comes
           AFTER the inputs (single-column stack). */}
       <div className="md:col-span-7">
-        <label className="block text-xs font-medium text-slate-600 mb-1">Location On Map</label>
-        <div className="relative h-72 md:h-[420px] rounded-md border overflow-hidden bg-slate-50">
+        <label className="block text-xs font-medium text-ink-700 mb-1">Location On Map</label>
+        <div className="relative h-72 md:h-[420px] rounded-md border overflow-hidden bg-ink-50">
           {mapsError ? (
-            <div className="absolute inset-0 grid place-items-center text-xs text-slate-500 p-4 text-center">
+            <div className="absolute inset-0 grid place-items-center text-xs text-ink-500 p-4 text-center">
               <div>
                 <div className="font-medium">Map Unavailable</div>
                 <div className="mt-1">{mapsError}</div>
-                <div className="mt-2 text-[10px] leading-snug">You can still proceed — fill the address fields manually.</div>
+                <div className="mt-2 text-xs leading-snug">You can still proceed — fill the address fields manually.</div>
               </div>
             </div>
           ) : (
@@ -1943,7 +1943,7 @@ function AddressMapWidget({
           )}
         </div>
         {!mapsError && (
-          <p className="text-[10px] text-slate-500 mt-1">
+          <p className="text-xs text-ink-500 mt-1">
             {mapOnly
               ? 'Drag the marker or search to set your exact location. This saves GPS coordinates only — your address stays as booked.'
               : 'Drag the marker to drop a new pin. Address, PIN and City update automatically.'}
@@ -2148,7 +2148,7 @@ function MediaUploader({
       <div className="flex flex-wrap gap-2">
         {images.map((img, idx) => (
           <div key={`img-${img.image_id}`}
-            className="relative w-[72px] h-[72px] rounded-md border bg-slate-100 overflow-hidden">
+            className="relative w-[72px] h-[72px] rounded-md border bg-ink-100 overflow-hidden">
             {img.url ? (
               // Real thumbnail — tap to enlarge in the lightbox.
               <button type="button" onClick={() => setLightbox({ type: 'image', src: img.url! })}
@@ -2160,20 +2160,20 @@ function MediaUploader({
               // Presign missing (older upload / transient S3 issue) → text tile.
               <div className="absolute inset-0 flex items-center justify-center text-center">
                 <div>
-                  <div className="text-[10px] text-slate-500">Photo</div>
-                  <div className="text-xs font-semibold text-slate-700">#{idx + 1}</div>
-                  <div className="text-[9px] text-emerald-600 font-medium">uploaded</div>
+                  <div className="text-xs text-ink-500">Photo</div>
+                  <div className="text-xs font-semibold text-ink-700">#{idx + 1}</div>
+                  <div className="text-xs text-success font-medium">uploaded</div>
                 </div>
               </div>
             )}
             <button type="button" onClick={() => handleDeleteImage(img.image_id)}
-              className="absolute z-10 -top-1.5 -right-1.5 w-5 h-5 bg-red-500 text-white rounded-full text-xs font-bold leading-none flex items-center justify-center hover:bg-red-600"
+              className="absolute z-10 -top-1.5 -right-1.5 w-5 h-5 bg-urgent text-white rounded-full text-xs font-semibold leading-none flex items-center justify-center hover:bg-urgent-strong"
               aria-label="Remove photo">×</button>
           </div>
         ))}
         {videos.map((vid, idx) => (
           <div key={`vid-${vid.media_id}`}
-            className="relative w-[72px] h-[72px] rounded-md border bg-slate-800 text-white overflow-hidden">
+            className="relative w-[72px] h-[72px] rounded-md border bg-ink-900 text-white overflow-hidden">
             {/* The whole tile is a play button when we have a playback URL:
                 poster-frame thumbnail (just-picked video) + play-glyph overlay.
                 Tap → lightbox <video>. Falls back to a non-clickable dark tile
@@ -2193,30 +2193,30 @@ function MediaUploader({
                 </svg>
               </span>
             </button>
-            <div className="pointer-events-none absolute z-10 bottom-0 inset-x-0 text-[9px] text-center bg-black/60 py-0.5">
+            <div className="pointer-events-none absolute z-10 bottom-0 inset-x-0 text-xs text-center bg-black/60 py-0.5">
               Video #{idx + 1}
             </div>
             <button type="button" onClick={() => handleDeleteVideo(vid.media_id)}
-              className="absolute z-20 -top-1.5 -right-1.5 w-5 h-5 bg-red-500 text-white rounded-full text-xs font-bold leading-none flex items-center justify-center hover:bg-red-600"
+              className="absolute z-20 -top-1.5 -right-1.5 w-5 h-5 bg-urgent text-white rounded-full text-xs font-semibold leading-none flex items-center justify-center hover:bg-urgent-strong"
               aria-label="Remove video">×</button>
           </div>
         ))}
         {!fullyFull && (
           <button type="button" onClick={() => fileInputRef.current?.click()} disabled={uploading}
-            className="w-[72px] h-[72px] rounded-md border-2 border-dashed border-slate-300 text-slate-500 hover:border-sky-400 hover:text-sky-600 transition flex flex-col items-center justify-center text-[11px] leading-tight">
-            {uploading ? '…' : (<><span>+ Add</span><span className="text-[9px]">Photo / Video</span></>)}
+            className="w-[72px] h-[72px] rounded-md border-2 border-dashed border-ink-300 text-ink-500 hover:border-primary hover:text-primary transition flex flex-col items-center justify-center text-xs leading-tight">
+            {uploading ? '…' : (<><span>+ Add</span><span className="text-xs">Photo / Video</span></>)}
           </button>
         )}
       </div>
       <input ref={fileInputRef} type="file" accept={ACCEPT_ATTR} className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleFile(f); }} />
-      {fullyFull && <p className="text-xs text-slate-500">Maximum {MAX_PHOTOS} photos and {MAX_VIDEOS} videos reached.</p>}
+      {fullyFull && <p className="text-xs text-ink-500">Maximum {MAX_PHOTOS} photos and {MAX_VIDEOS} videos reached.</p>}
       {!fullyFull && (photoFull || videoFull) && (
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-ink-500">
           {photoFull ? `Photo limit reached (${MAX_PHOTOS}). You can still add a video.` : `Video limit reached (${MAX_VIDEOS}). You can still add a photo.`}
         </p>
       )}
-      {uploadError && <p className="text-xs text-red-600">{uploadError}</p>}
+      {uploadError && <p className="text-xs text-urgent">{uploadError}</p>}
     </div>
 
     {/* Full-screen preview overlay — tap backdrop / Esc / ✕ to dismiss.

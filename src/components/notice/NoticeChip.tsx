@@ -28,11 +28,11 @@ export function NoticeCategoryTag({
   // by arbitrary runtime colours without a generated config. The tag
   // uses ~15% colour for the background + the raw colour for text +
   // border, which keeps it legible across every hex in the seed.
-  const safeColor = /^#[0-9a-fA-F]{6}$/.test(color) ? color : '#64748b';
+  const safeColor = /^#[0-9a-fA-F]{6}$/.test(color) ? color : 'hsl(var(--neutral))';
   return (
     <span
       className={cn(
-        'inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide whitespace-nowrap',
+        'inline-flex items-center rounded px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wide whitespace-nowrap',
         className,
       )}
       style={{
@@ -78,7 +78,7 @@ export function NoticeTitleChip({
       {unread && (
         <span
           aria-label="Unread"
-          className="ml-auto inline-block h-2 w-2 rounded-full bg-blue-500 shrink-0"
+          className="ml-auto inline-block h-2 w-2 rounded-full bg-info shrink-0"
         />
       )}
     </button>

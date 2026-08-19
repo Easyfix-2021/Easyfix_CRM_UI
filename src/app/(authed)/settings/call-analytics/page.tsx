@@ -196,17 +196,17 @@ function fmtDuration(sec: number | null | undefined): string {
  */
 function txBadge(status?: string | null, durationSec?: number | null): { label: string; cls: string } | null {
   const s = (status || '').toLowerCase();
-  if (s === 'completed') return { label: 'Ready', cls: 'bg-emerald-100 text-emerald-700' };
-  if (s === 'not_available') return { label: 'None', cls: 'bg-slate-100 text-slate-500' };
-  if (s === 'failed') return { label: 'Failed', cls: 'bg-rose-100 text-rose-700' };
+  if (s === 'completed') return { label: 'Ready', cls: 'bg-success-tint text-success-strong' };
+  if (s === 'not_available') return { label: 'None', cls: 'bg-ink-100 text-ink-500' };
+  if (s === 'failed') return { label: 'Failed', cls: 'bg-urgent-tint text-urgent-strong' };
   if (durationSec == null || !Number.isFinite(durationSec) || durationSec <= 0) return null;
-  return { label: 'Pending', cls: 'bg-amber-100 text-amber-700' };
+  return { label: 'Pending', cls: 'bg-warning-tint text-warning-strong' };
 }
 function scoreColor(n?: number): string {
   const v = Number(n) || 0;
-  if (v >= 8) return 'text-emerald-600';
-  if (v >= 5) return 'text-amber-600';
-  return 'text-rose-600';
+  if (v >= 8) return 'text-success';
+  if (v >= 5) return 'text-warning';
+  return 'text-urgent';
 }
 // Prettify a raw flow key for display. Known keys use the curated label;
 // anything else falls back to Title-Cased words.
@@ -540,8 +540,8 @@ export default function CallAnalyticsPage() {
     return (
       <Card className="max-w-lg">
         <CardContent className="pt-6 pb-6 text-center space-y-2">
-          <AlertTriangle className="h-6 w-6 text-amber-500 mx-auto" />
-          <h2 className="text-base font-semibold text-slate-900">Not Authorised</h2>
+          <AlertTriangle className="h-6 w-6 text-warning mx-auto" />
+          <h2 className="text-base font-semibold text-ink-900">Not Authorised</h2>
           <p className="text-sm text-muted-foreground">
             You don&apos;t have access to Call Analytics. Ask an admin to grant the
             &quot;View Call Analytics&quot; permission.
@@ -563,8 +563,8 @@ export default function CallAnalyticsPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2">
-        <PhoneCall className="h-5 w-5 text-sky-600" />
-        <h1 className="text-lg font-semibold text-slate-900">Call Analytics</h1>
+        <PhoneCall className="h-5 w-5 text-info" />
+        <h1 className="text-lg font-semibold text-ink-900">Call Analytics</h1>
       </div>
       <p className="text-sm text-muted-foreground -mt-2">
         Call history with AI coaching analysis. Click <span className="font-medium">Analyse Call</span> to
@@ -573,7 +573,7 @@ export default function CallAnalyticsPage() {
       </p>
 
       {/* Tab switcher — Calls table vs the per-caller coaching rollup. */}
-      <div className="inline-flex gap-1 rounded-md border bg-white p-1">
+      <div className="inline-flex gap-1 rounded-md border bg-card p-1">
         <Button size="sm" variant={tab === 'calls' ? 'default' : 'ghost'} onClick={() => setTab('calls')}>
           <PhoneCall className="h-4 w-4 mr-1.5" /> Calls
         </Button>
@@ -587,7 +587,7 @@ export default function CallAnalyticsPage() {
           {/* Filters — wired to the extended list query params. */}
           <div className="flex flex-wrap items-end gap-3">
             <div className="w-40">
-              <label className="block text-xs font-medium text-slate-500 mb-1">Job #</label>
+              <label className="block text-xs font-medium text-ink-500 mb-1">Job #</label>
               <Input
                 value={jobQuery}
                 onChange={(e) => { setJobQuery(e.target.value.replace(/\D/g, '')); setPage(0); }}
@@ -596,7 +596,7 @@ export default function CallAnalyticsPage() {
               />
             </div>
             <div className="w-52">
-              <label className="block text-xs font-medium text-slate-500 mb-1">Flow</label>
+              <label className="block text-xs font-medium text-ink-500 mb-1">Flow</label>
               <SearchSelect
                 value={flow}
                 onChange={(v) => { setFlow(v); setPage(0); }}
@@ -605,7 +605,7 @@ export default function CallAnalyticsPage() {
               />
             </div>
             <div className="w-40">
-              <label className="block text-xs font-medium text-slate-500 mb-1">Min Score</label>
+              <label className="block text-xs font-medium text-ink-500 mb-1">Min Score</label>
               <SearchSelect
                 value={minScore}
                 onChange={(v) => { setMinScore(v); setPage(0); }}
@@ -613,7 +613,7 @@ export default function CallAnalyticsPage() {
                 placeholder="Any"
               />
             </div>
-            <label className="flex h-9 items-center gap-2 text-sm text-slate-700">
+            <label className="flex h-9 items-center gap-2 text-sm text-ink-700">
               <Switch
                 checked={hasAnalysisOnly}
                 onCheckedChange={(v) => { setHasAnalysisOnly(v); setPage(0); }}
@@ -631,11 +631,11 @@ export default function CallAnalyticsPage() {
              */}
             {(modeCfgLoading || modeSupported) && (
               <div className="w-56 sm:ml-auto">
-                <div className="flex items-center gap-1 text-xs font-medium text-slate-500 mb-1">
+                <div className="flex items-center gap-1 text-xs font-medium text-ink-500 mb-1">
                   <span>Analysis Mode</span>
                   <InfoTooltip label="About Analysis Mode" align="end">
                     <div className="space-y-2">
-                      <div className="font-semibold text-slate-900">Analysis Mode</div>
+                      <div className="font-semibold text-ink-900">Analysis Mode</div>
                       <div>
                         The source the AI coach reads when it scores a call. Existing analyses keep the
                         mode they were generated with — this applies to new ones only.
@@ -645,7 +645,7 @@ export default function CallAnalyticsPage() {
                         <li><strong>Call Recording</strong> — {MODE_HINT.recording}</li>
                       </ul>
                       {modeSupported && !recordingAvailable && (
-                        <div className="text-rose-700">
+                        <div className="text-urgent-strong">
                           Call Recording is switched off here because the Gemini API key is not
                           configured in this environment.
                         </div>
@@ -678,9 +678,9 @@ export default function CallAnalyticsPage() {
             )}
           </div>
 
-          <div className="rounded-md border bg-white overflow-x-auto">
+          <div className="rounded-md border bg-card overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-left text-xs text-slate-500">
+              <thead className="bg-ink-50 text-left text-xs text-ink-500">
                 <tr>
                   <th className="px-3 py-2">Date / Time</th>
                   <th className="px-3 py-2">Direction</th>
@@ -701,7 +701,7 @@ export default function CallAnalyticsPage() {
                   </td></tr>
                 )}
                 {!loading && error && (
-                  <tr><td colSpan={10} className="px-3 py-6 text-center text-rose-600">{error}</td></tr>
+                  <tr><td colSpan={10} className="px-3 py-6 text-center text-urgent">{error}</td></tr>
                 )}
                 {!loading && !error && items.length === 0 && (
                   <tr><td colSpan={10} className="px-3 py-6 text-center text-muted-foreground">No calls found.</td></tr>
@@ -712,7 +712,7 @@ export default function CallAnalyticsPage() {
                   const s = toScore(r.score);
                   return (
                     <React.Fragment key={r.id}>
-                    <tr className="border-t hover:bg-slate-50">
+                    <tr className="border-t hover:bg-ink-50">
                       {/* Prefer the answered time; fall back to the initiated
                           (inserted) time, which is always present — otherwise
                           recent calls (start_time NULL) showed a bare "—". */}
@@ -720,7 +720,7 @@ export default function CallAnalyticsPage() {
                       <td className="px-3 py-2">{outgoing ? 'Outgoing' : 'Incoming'}</td>
                       <td className="px-3 py-2">
                         {r.call_flow
-                          ? <Badge className="bg-slate-100 text-slate-700">{prettyFlow(r.call_flow)}</Badge>
+                          ? <Badge className="bg-ink-100 text-ink-700">{prettyFlow(r.call_flow)}</Badge>
                           : <span className="text-muted-foreground">—</span>}
                       </td>
                       <td className="px-3 py-2">
@@ -737,7 +737,7 @@ export default function CallAnalyticsPage() {
                       </td>
                       <td className="px-3 py-2">
                         {r.job_id
-                          ? <Link href={`/jobs?jobId=${r.job_id}`} className="text-sky-600 hover:underline font-mono">#{r.job_id}</Link>
+                          ? <Link href={`/jobs?jobId=${r.job_id}`} className="text-primary hover:underline font-mono">#{r.job_id}</Link>
                           : '—'}
                       </td>
                       <td className="px-3 py-2 font-mono">{fmtDuration(r.duration)}</td>
@@ -795,7 +795,7 @@ export default function CallAnalyticsPage() {
             </table>
           </div>
 
-          <div className="rounded-md border bg-white px-3 py-2">
+          <div className="rounded-md border bg-card px-3 py-2">
             <TablePagination
               page={page}
               pageSize={pageSize}
@@ -878,8 +878,8 @@ function ModeChip({ mode }: { mode: AnalysisMode }) {
   const audio = mode === 'recording';
   return (
     <span
-      className={`inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
-        audio ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600'
+      className={`inline-flex rounded-full px-1.5 py-0.5 text-xs font-medium ${
+        audio ? 'bg-info-tint text-info-strong' : 'bg-ink-100 text-ink-700'
       }`}
       title={audio
         ? 'Generated from the call recording (audio).'
@@ -932,7 +932,7 @@ function AnalysisModePicker({ initial, available, onChange }: {
           </label>
         );
       })}
-      <div className="text-[11px] text-muted-foreground">
+      <div className="text-xs text-muted-foreground">
         Applies to this call only — the default for everything else stays as it is.
       </div>
     </div>
@@ -942,9 +942,9 @@ function AnalysisModePicker({ initial, available, onChange }: {
 // Per-caller coaching rollup — the "who is improving" view.
 function CallerScorecard({ rows, loading, error }: { rows: ScorecardRow[]; loading: boolean; error: string | null }) {
   return (
-    <div className="rounded-md border bg-white overflow-x-auto">
+    <div className="rounded-md border bg-card overflow-x-auto">
       <table className="w-full text-sm">
-        <thead className="bg-slate-50 text-left text-xs text-slate-500">
+        <thead className="bg-ink-50 text-left text-xs text-ink-500">
           <tr>
             <th className="px-3 py-2">Caller</th>
             <th className="px-3 py-2">Calls</th>
@@ -979,7 +979,7 @@ function CallerScorecard({ rows, loading, error }: { rows: ScorecardRow[]; loadi
             </td></tr>
           )}
           {!loading && error && (
-            <tr><td colSpan={7} className="px-3 py-6 text-center text-rose-600">{error}</td></tr>
+            <tr><td colSpan={7} className="px-3 py-6 text-center text-urgent">{error}</td></tr>
           )}
           {!loading && !error && rows.length === 0 && (
             <tr><td colSpan={7} className="px-3 py-6 text-center text-muted-foreground">No Caller Scores Yet</td></tr>
@@ -988,8 +988,8 @@ function CallerScorecard({ rows, loading, error }: { rows: ScorecardRow[]; loadi
             const avg = r.avgOverall;
             const dims = Object.entries(r.dimensions || {});
             return (
-              <tr key={r.callerUserId} className="border-t hover:bg-slate-50 align-top">
-                <td className="px-3 py-2 font-medium text-slate-800">{r.callerName || '—'}</td>
+              <tr key={r.callerUserId} className="border-t hover:bg-ink-50 align-top">
+                <td className="px-3 py-2 font-medium text-ink-900">{r.callerName || '—'}</td>
                 <td className="px-3 py-2 font-mono">{r.callsCount}</td>
                 <td className="px-3 py-2">
                   {avg != null && Number.isFinite(avg)
@@ -1003,7 +1003,7 @@ function CallerScorecard({ rows, loading, error }: { rows: ScorecardRow[]; loadi
                     : (
                       <div className="flex flex-wrap gap-1">
                         {dims.map(([name, val]) => (
-                          <span key={name} className="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px]">
+                          <span key={name} className="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs">
                             <span className="text-muted-foreground">{name}</span>
                             <span className={`font-semibold ${scoreColor(val)}`}>{Number(val).toFixed(1)}</span>
                           </span>
@@ -1045,7 +1045,7 @@ function Sparkline({ trend }: { trend: { score: number | null; when: string | nu
   });
   return (
     <div className="flex items-center gap-2">
-      <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="text-sky-500 shrink-0" aria-hidden="true">
+      <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="text-info shrink-0" aria-hidden="true">
         <polyline
           points={coords.join(' ')}
           fill="none"
@@ -1126,7 +1126,7 @@ function AnalysisModal({ call, mode, onClose, onAnalysed }: {
       <DialogContent className="!max-w-2xl max-h-[calc(100vh-64px)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Sparkles className="h-5 w-5 text-sky-600" /> Call Analysis{call.job_id ? ` · Job #${call.job_id}` : ''}
+            <Sparkles className="h-5 w-5 text-info" /> Call Analysis{call.job_id ? ` · Job #${call.job_id}` : ''}
           </DialogTitle>
         </DialogHeader>
 
@@ -1137,7 +1137,7 @@ function AnalysisModal({ call, mode, onClose, onAnalysed }: {
         )}
         {err && (
           <div className="py-8 text-center text-sm text-muted-foreground flex flex-col items-center gap-2">
-            <AlertTriangle className="h-6 w-6 text-amber-500" />{err}
+            <AlertTriangle className="h-6 w-6 text-warning" />{err}
           </div>
         )}
         {resp && (
@@ -1148,12 +1148,12 @@ function AnalysisModal({ call, mode, onClose, onAnalysed }: {
                 the chip says which, since the two aren't comparable. */}
             <div>
               <div className="flex items-center gap-2 mb-2">
-                <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Coaching</span>
+                <span className="text-xs font-semibold uppercase tracking-wide text-ink-500">Coaching</span>
                 {normaliseMode(resp.mode) && <ModeChip mode={normaliseMode(resp.mode)!} />}
               </div>
               {resp.status === 'ready' && resp.analysis
                 ? <AnalysisBody a={resp.analysis} />
-                : <div className="text-sm text-muted-foreground flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />{coachingReason}</div>}
+                : <div className="text-sm text-muted-foreground flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-warning shrink-0" />{coachingReason}</div>}
             </div>
           </div>
         )}
@@ -1166,9 +1166,9 @@ function sentimentLabel(n?: number | null): { label: string; cls: string } {
   if (n == null) return { label: '—', cls: 'text-muted-foreground' };
   // Transcribe OverallSentiment is a signed score (roughly -5..5); sign-based
   // bucketing is robust to the exact scale.
-  if (n > 0.5) return { label: 'Positive', cls: 'text-emerald-600' };
-  if (n < -0.5) return { label: 'Negative', cls: 'text-rose-600' };
-  return { label: 'Neutral', cls: 'text-slate-600' };
+  if (n > 0.5) return { label: 'Positive', cls: 'text-success' };
+  if (n < -0.5) return { label: 'Negative', cls: 'text-urgent' };
+  return { label: 'Neutral', cls: 'text-ink-700' };
 }
 
 function MetricsBody({ metrics, status }: { metrics?: Metrics | null; status?: string | null }) {
@@ -1179,7 +1179,7 @@ function MetricsBody({ metrics, status }: { metrics?: Metrics | null; status?: s
       : 'Call metrics are not available yet.';
     return (
       <div>
-        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Call Metrics</div>
+        <div className="text-xs font-semibold uppercase tracking-wide text-ink-500 mb-2">Call Metrics</div>
         <div className="text-sm text-muted-foreground">{msg}</div>
       </div>
     );
@@ -1189,7 +1189,7 @@ function MetricsBody({ metrics, status }: { metrics?: Metrics | null; status?: s
   const sc = sentimentLabel(metrics.sentiment?.customer);
   return (
     <div>
-      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Call Metrics</div>
+      <div className="text-xs font-semibold uppercase tracking-wide text-ink-500 mb-2">Call Metrics</div>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         <Metric label="Agent Sentiment" value={sa.label} cls={sa.cls} />
         <Metric label="Customer Sentiment" value={sc.label} cls={sc.cls} />
@@ -1203,8 +1203,8 @@ function MetricsBody({ metrics, status }: { metrics?: Metrics | null; status?: s
 function Metric({ label, value, cls }: { label: string; value: string; cls?: string }) {
   return (
     <div className="rounded-md border px-3 py-2">
-      <div className={`text-sm font-semibold ${cls || 'text-slate-800'}`}>{value}</div>
-      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className={`text-sm font-semibold ${cls || 'text-ink-900'}`}>{value}</div>
+      <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
     </div>
   );
 }
@@ -1212,14 +1212,14 @@ function Metric({ label, value, cls }: { label: string; value: string; cls?: str
 function AnalysisBody({ a }: { a: Analysis }) {
   return (
     <div className="space-y-4 text-sm">
-      <div className="flex items-center gap-3 rounded-md border bg-slate-50 px-3 py-2">
+      <div className="flex items-center gap-3 rounded-md border bg-ink-50 px-3 py-2">
         <div className="text-center shrink-0">
-          <div className={`text-2xl font-bold ${scoreColor(a.overall_score)}`}>
+          <div className={`text-2xl font-semibold ${scoreColor(a.overall_score)}`}>
             {a.overall_score ?? '—'}<span className="text-sm text-muted-foreground">/10</span>
           </div>
-          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Overall</div>
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">Overall</div>
         </div>
-        {a.summary && <p className="flex-1 text-slate-700">{a.summary}</p>}
+        {a.summary && <p className="flex-1 text-ink-700">{a.summary}</p>}
       </div>
 
       {Array.isArray(a.dimensions) && a.dimensions.length > 0 && (
@@ -1236,10 +1236,10 @@ function AnalysisBody({ a }: { a: Analysis }) {
         </div>
       )}
 
-      <ListBlock icon={<ThumbsUp className="h-4 w-4 text-emerald-600" />} title="Strengths" items={a.strengths} />
-      <ListBlock icon={<TrendingUp className="h-4 w-4 text-sky-600" />} title="Areas of Improvement" items={a.areas_of_improvement} />
-      <ListBlock icon={<Ban className="h-4 w-4 text-rose-600" />} title="What to Avoid Saying" items={a.what_to_avoid} />
-      <ListBlock icon={<PlusCircle className="h-4 w-4 text-indigo-600" />} title="What to Add" items={a.what_to_add} />
+      <ListBlock icon={<ThumbsUp className="h-4 w-4 text-success" />} title="Strengths" items={a.strengths} />
+      <ListBlock icon={<TrendingUp className="h-4 w-4 text-info" />} title="Areas of Improvement" items={a.areas_of_improvement} />
+      <ListBlock icon={<Ban className="h-4 w-4 text-urgent" />} title="What to Avoid Saying" items={a.what_to_avoid} />
+      <ListBlock icon={<PlusCircle className="h-4 w-4 text-info-deep" />} title="What to Add" items={a.what_to_add} />
     </div>
   );
 }
@@ -1249,7 +1249,7 @@ function ListBlock({ icon, title, items }: { icon: React.ReactNode; title: strin
   return (
     <div>
       <div className="flex items-center gap-1.5 font-medium mb-1">{icon} {title}</div>
-      <ul className="list-disc pl-6 space-y-0.5 text-slate-700">
+      <ul className="list-disc pl-6 space-y-0.5 text-ink-700">
         {items.map((it, i) => <li key={i}>{it}</li>)}
       </ul>
     </div>

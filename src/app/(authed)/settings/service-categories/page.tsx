@@ -178,7 +178,7 @@ export default function ManageServiceCategoryPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
+          <h1 className="text-2xl font-semibold flex items-center gap-2">
             <Package className="size-6" /> Manage Service Category
           </h1>
           <p className="text-sm text-muted-foreground">
@@ -199,7 +199,7 @@ export default function ManageServiceCategoryPage() {
           <button type="button" onClick={() => setHowOpen((o) => !o)}
             className="w-full flex items-center gap-2 px-4 py-3 text-left hover:bg-muted/50 transition-colors" aria-expanded={howOpen}>
             {howOpen ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
-            <Info className="size-4 shrink-0 text-blue-600" />
+            <Info className="size-4 shrink-0 text-info" />
             <span className="font-medium">How Service Category Management Works</span>
             <span className="ml-auto text-xs text-muted-foreground">{howOpen ? 'Hide' : 'Show'}</span>
           </button>
@@ -226,7 +226,7 @@ export default function ManageServiceCategoryPage() {
       </Card>
 
       {(fetchError || mutationError) && (
-        <Card><CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
+        <Card><CardContent className="p-3 flex items-center gap-2 text-sm text-urgent">
           <AlertTriangle className="size-4" /> {fetchError || mutationError}
         </CardContent></Card>
       )}
@@ -265,7 +265,7 @@ export default function ManageServiceCategoryPage() {
                   <td className="!text-center font-mono text-xs">{c.service_type_count}</td>
                   <td className="!text-center whitespace-nowrap">
                     {c.service_catg_status === 1
-                      ? <span className="text-emerald-700 text-xs">Active</span>
+                      ? <span className="text-success-strong text-xs">Active</span>
                       : <span className="text-muted-foreground text-xs">Inactive</span>}
                   </td>
                   <td className="!text-right whitespace-nowrap">
@@ -295,7 +295,7 @@ export default function ManageServiceCategoryPage() {
                         />
                       )}
                       {!can.isServiceCategoryEdit && (
-                        <span className="text-[10px] text-muted-foreground">view-only</span>
+                        <span className="text-xs text-muted-foreground">view-only</span>
                       )}
                     </div>
                   </td>
@@ -386,7 +386,7 @@ function CategoryFormModal({ open, onClose, editing, onSaved }: {
               <div className="flex flex-col items-end">
                 <Label className="block mb-1">Status</Label>
                 <div className="flex items-center gap-2 h-9">
-                  <span className={`text-sm ${active ? 'text-emerald-700' : 'text-muted-foreground'}`}>
+                  <span className={`text-sm ${active ? 'text-success-strong' : 'text-muted-foreground'}`}>
                     {active ? 'Active' : 'Inactive'}
                   </span>
                   <Switch checked={active} onCheckedChange={setActive} ariaLabel="Active status" />
@@ -401,7 +401,7 @@ function CategoryFormModal({ open, onClose, editing, onSaved }: {
               className="w-full border rounded px-2 py-1 text-sm bg-background min-h-[80px]"
               maxLength={500} />
           </div>
-          {error && <div className="text-sm text-red-600 flex items-center gap-1"><AlertTriangle className="size-4" /> {error}</div>}
+          {error && <div className="text-sm text-urgent flex items-center gap-1"><AlertTriangle className="size-4" /> {error}</div>}
           <div className="flex justify-end gap-2 pt-2">
             <CancelButton onCancel={onClose} disabled={submitting} />
             <Button onClick={handleSubmit} disabled={submitting}>

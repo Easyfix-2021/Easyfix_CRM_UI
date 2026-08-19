@@ -95,10 +95,10 @@ function TechnicianCell({ technician }: { technician: ReferralTechnician }) {
       >
         {label}
       </Link>
-      <div className="mt-0.5 text-[11px] text-muted-foreground tabular-nums">
+      <div className="mt-0.5 text-xs text-muted-foreground tabular-nums">
         EFR ID {technician.efrId}
       </div>
-      <div className="font-mono text-[11px] text-muted-foreground">
+      <div className="font-mono text-xs text-muted-foreground">
         {technician.mobileMasked || '—'}
       </div>
     </div>
@@ -110,10 +110,10 @@ function ProfileFlag({ label, complete }: { label: string; complete: boolean }) 
   return (
     <span
       className={[
-        'inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium whitespace-nowrap',
+        'inline-flex items-center gap-1 rounded-full border px-2 py-1 text-xs font-medium whitespace-nowrap',
         complete
-          ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
-          : 'border-slate-300 bg-slate-50 text-slate-600',
+          ? 'border-success/30 bg-success-tint text-success-strong'
+          : 'border-ink-300 bg-ink-50 text-ink-700',
       ].join(' ')}
       aria-label={`${label}: ${complete ? 'complete' : 'pending'}`}
     >
@@ -178,7 +178,7 @@ export default function RewardReferralsPage() {
       <RewardsPausedNotice />
 
       <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
+        <h1 className="text-2xl font-semibold flex items-center gap-2">
           <UserRoundCheck className="size-6" /> Referral Qualifications
         </h1>
         <p className="text-sm text-muted-foreground">
@@ -207,7 +207,7 @@ export default function RewardReferralsPage() {
             <select
               value={status}
               onChange={(event) => setStatus(event.target.value as ReferralStatus | '')}
-              className="h-9 rounded-md border border-input bg-white px-3 text-sm focus:outline-none focus-visible:border-foreground/40"
+              className="h-9 rounded-md border border-input bg-card px-3 text-sm focus:outline-none focus-visible:border-foreground/40"
               aria-label="Referral Status"
             >
               <option value="">All</option>
@@ -221,7 +221,7 @@ export default function RewardReferralsPage() {
             <select
               value={limit}
               onChange={(event) => setLimit(Number(event.target.value) as PageSize)}
-              className="h-9 rounded-md border border-input bg-white px-3 text-sm focus:outline-none focus-visible:border-foreground/40"
+              className="h-9 rounded-md border border-input bg-card px-3 text-sm focus:outline-none focus-visible:border-foreground/40"
               aria-label="Referrals Per Page"
             >
               {PAGE_SIZES.map((size) => <option key={size} value={size}>{size}</option>)}
@@ -232,7 +232,7 @@ export default function RewardReferralsPage() {
 
       {listFetch.error && (
         <Card>
-          <CardContent className="p-3 flex items-center justify-between gap-3 text-sm text-red-700">
+          <CardContent className="p-3 flex items-center justify-between gap-3 text-sm text-urgent-strong">
             <span className="flex items-center gap-2">
               <AlertTriangle className="size-4 shrink-0" aria-hidden="true" />
               {listFetch.error}
@@ -292,7 +292,7 @@ export default function RewardReferralsPage() {
                       <ProfileFlag label="Identity" complete={referral.profile.identityComplete} />
                       <ProfileFlag label="Work Area" complete={referral.profile.workAreaComplete} />
                     </div>
-                    <div className="mt-1.5 text-[11px] text-muted-foreground">
+                    <div className="mt-1.5 text-xs text-muted-foreground">
                       {referral.profile.complete ? 'All profile sections complete' : 'Waiting for profile completion'}
                     </div>
                   </td>

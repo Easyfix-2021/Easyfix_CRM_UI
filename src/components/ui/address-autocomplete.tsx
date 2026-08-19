@@ -279,7 +279,7 @@ export function AddressAutocomplete({
         autoComplete="off"
       />
       {open && (loading || items.length > 0) && (
-        <div className="absolute z-50 mt-1 w-full rounded-md border bg-white shadow-lg max-h-64 overflow-y-auto">
+        <div className="absolute z-50 mt-1 w-full rounded-md border bg-popover shadow-lg max-h-64 overflow-y-auto">
           {loading && (
             <div className="px-3 py-2 text-xs text-muted-foreground">Searching…</div>
           )}

@@ -214,7 +214,7 @@ export function CandidateTable({
             <tr><td colSpan={COLS} className="!text-center text-muted-foreground py-6">Loading technicians…</td></tr>
           )}
           {!loading && error && (
-            <tr><td colSpan={COLS} className="!text-center text-red-700 py-6">{error}</td></tr>
+            <tr><td colSpan={COLS} className="!text-center text-urgent-strong py-6">{error}</td></tr>
           )}
           {!loading && !error && rows.length === 0 && (
             <tr>
@@ -237,20 +237,20 @@ export function CandidateTable({
             // Row + sticky-cell backgrounds. When isCurrent=false these collapse
             // to the exact original classes, so Schedule & Assign is unchanged.
             const rowCls = isCurrent
-              ? 'group bg-amber-50 hover:bg-amber-100'
+              ? 'group bg-warning-tint hover:bg-warning/15'
               : offerBlocked
-                ? 'group bg-rose-50/70 hover:bg-rose-100/70'
+                ? 'group bg-urgent-tint/70 hover:bg-urgent/15/70'
               : 'group hover:bg-muted/40 ' + (isSelected ? 'bg-primary/5' : '');
             const selectBg = isCurrent
-              ? 'bg-amber-50 group-hover:bg-amber-100'
+              ? 'bg-warning-tint group-hover:bg-warning/15'
               : offerBlocked
-                ? 'bg-rose-50 group-hover:bg-rose-100'
-              : (isSelected ? 'bg-primary/5' : 'bg-white group-hover:bg-slate-100');
+                ? 'bg-urgent-tint group-hover:bg-urgent/15'
+              : (isSelected ? 'bg-primary/5' : 'bg-card group-hover:bg-ink-100');
             const nameTd = isCurrent
-              ? '!text-left sticky z-20 bg-amber-50 group-hover:bg-amber-100 shadow-[2px_0_0_0_var(--border)] min-w-[190px] ' + (canCommit ? 'left-10' : 'left-0')
+              ? '!text-left sticky z-20 bg-warning-tint group-hover:bg-warning/15 shadow-[2px_0_0_0_var(--border)] min-w-[190px] ' + (canCommit ? 'left-10' : 'left-0')
               : offerBlocked
-                ? '!text-left sticky z-20 bg-rose-50 group-hover:bg-rose-100 shadow-[2px_0_0_0_var(--border)] min-w-[190px] ' + (canCommit ? 'left-10' : 'left-0')
-              : '!text-left sticky z-20 group-hover:bg-slate-100 shadow-[2px_0_0_0_var(--border)] min-w-[190px] ' + (canCommit ? 'left-10' : 'left-0') + ' ' + (isSelected ? 'bg-primary/5' : 'bg-white');
+                ? '!text-left sticky z-20 bg-urgent-tint group-hover:bg-urgent/15 shadow-[2px_0_0_0_var(--border)] min-w-[190px] ' + (canCommit ? 'left-10' : 'left-0')
+              : '!text-left sticky z-20 group-hover:bg-ink-100 shadow-[2px_0_0_0_var(--border)] min-w-[190px] ' + (canCommit ? 'left-10' : 'left-0') + ' ' + (isSelected ? 'bg-primary/5' : 'bg-card');
             return (
             <tr key={c.efr_id} className={rowCls}>
               {/* Select control — sticky left so it stays reachable no matter how
@@ -260,7 +260,7 @@ export function CandidateTable({
               {canCommit && (
                 <td className={'!text-center sticky left-0 z-20 w-10 ' + selectBg}>
                   {isCurrent ? (
-                    <span className="text-[9px] font-semibold uppercase tracking-wide text-amber-700" title="Currently assigned to this job">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-warning-strong" title="Currently assigned to this job">
                       Now
                     </span>
                   ) : (
@@ -302,7 +302,7 @@ export function CandidateTable({
                       <StatusChip tone="sky" size="sm" className="shrink-0" title="Completed Less Than 5 Jobs Till Now">Fresher</StatusChip>
                     )}
                   </div>
-                  <div className="text-[10px] text-muted-foreground">Efr #{c.efr_id}</div>
+                  <div className="text-xs text-muted-foreground">Efr #{c.efr_id}</div>
                 </div>
               </td>
 
@@ -321,7 +321,7 @@ export function CandidateTable({
                     fallbackTone={offerEligibility.canOffer ? 'emerald' : 'rose'}
                   />
                   {showingSearch && (offerEligibility.reason || offerBlocked) && (
-                    <p className={offerBlocked ? 'text-[10px] text-rose-700' : 'text-[10px] text-muted-foreground'}>
+                    <p className={offerBlocked ? 'text-xs text-urgent-strong' : 'text-xs text-muted-foreground'}>
                       {offerEligibility.reason ?? offerEligibility.explanation}
                     </p>
                   )}
@@ -331,8 +331,8 @@ export function CandidateTable({
               {/* Attendance for Job Date — green tick / red cross. */}
               <td className="!text-center">
                 {c.attendance_for_job_date
-                  ? <CheckCircle2 className="inline h-4 w-4 text-emerald-600" aria-label="Present on job date" />
-                  : <XCircle className="inline h-4 w-4 text-red-500" aria-label="No attendance for job date" />}
+                  ? <CheckCircle2 className="inline h-4 w-4 text-success-strong" aria-label="Present on job date" />
+                  : <XCircle className="inline h-4 w-4 text-urgent" aria-label="No attendance for job date" />}
               </td>
 
               {/* Current Pincode. */}
@@ -417,7 +417,7 @@ function DistanceCell({ km, tier }: { km: number | null; tier: DistanceTier }) {
       <div className="font-medium tabular-nums">
         {km == null ? <span className="text-muted-foreground">—</span> : `${km.toFixed(1)} km`}
       </div>
-      {label && <div className="text-[10px] text-muted-foreground">({label})</div>}
+      {label && <div className="text-xs text-muted-foreground">({label})</div>}
     </div>
   );
 }
@@ -432,7 +432,7 @@ function DistanceCriteriaCell({ criteria, value }: { criteria: string; value: st
   return (
     <div className="leading-tight">
       <div className="font-medium">{criteria}</div>
-      {value && <div className="text-[10px] text-muted-foreground tabular-nums">{value}</div>}
+      {value && <div className="text-xs text-muted-foreground tabular-nums">{value}</div>}
     </div>
   );
 }
@@ -446,7 +446,7 @@ function DistanceTierInfo() {
       <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
       <span
         role="tooltip"
-        className="pointer-events-none absolute left-1/2 top-full z-50 mt-1 hidden w-64 -translate-x-1/2 rounded-md border bg-white p-2 text-left text-[11px] font-normal normal-case leading-snug text-foreground shadow-lg group-hover/info:block"
+        className="pointer-events-none absolute left-1/2 top-full z-50 mt-1 hidden w-64 -translate-x-1/2 rounded-md border bg-popover p-2 text-left text-xs font-normal normal-case leading-snug text-foreground shadow-lg group-hover/info:block"
       >
         <strong className="block mb-1">How distance is matched</strong>
         <span className="block"><strong>Same as Job Pincode</strong> — a serviceable pincode equals the job pincode.</span>
@@ -487,12 +487,12 @@ function ServiceablePincodesCell({
       {extra > 0 && (
         <span
           role="tooltip"
-          className="pointer-events-none absolute left-0 top-full z-50 mt-1 hidden max-h-48 w-44 overflow-auto rounded-md border bg-white p-2 text-left shadow-lg group-hover/pin:block"
+          className="pointer-events-none absolute left-0 top-full z-50 mt-1 hidden max-h-48 w-44 overflow-auto rounded-md border bg-popover p-2 text-left shadow-lg group-hover/pin:block"
         >
-          <span className="block text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+          <span className="block text-xs uppercase tracking-wide text-muted-foreground mb-1">
             All Serviceable Pincodes
           </span>
-          <ol className="list-decimal list-inside space-y-0.5 text-[11px] text-foreground">
+          <ol className="list-decimal list-inside space-y-0.5 text-xs text-foreground">
             {list.map((p) => <li key={p}>{p}</li>)}
           </ol>
         </span>
@@ -528,7 +528,7 @@ export function PincodeListModal({
           <DialogTitle className="flex items-center gap-2">
             Serviceable Pincodes
             {candidate && (
-              <span className="text-sm font-normal text-slate-300">· {candidate.efr_name}</span>
+              <span className="text-sm font-normal text-ink-300">· {candidate.efr_name}</span>
             )}
           </DialogTitle>
         </DialogHeader>
@@ -554,7 +554,7 @@ export function PincodeListModal({
             </ol>
           )}
         </div>
-        <p className="mt-1 text-[11px] text-muted-foreground">
+        <p className="mt-1 text-xs text-muted-foreground">
           {filtered.length} of {list.length} pincode{list.length === 1 ? '' : 's'}
         </p>
         <DialogFooter>
@@ -569,11 +569,11 @@ export function PincodeListModal({
 function deepSkillStatusLabel(status: DeepSkillStatus): React.ReactNode {
   switch (status) {
     case 'both_available':
-      return <span className="text-emerald-700">Has Required Job Skill</span>;
+      return <span className="text-success-strong">Has Required Job Skill</span>;
     case 'job_skill_not_available':
-      return <span className="text-amber-700">Technician Missing Job Skill</span>;
+      return <span className="text-warning-strong">Technician Missing Job Skill</span>;
     case 'easyfixer_skills_not_available':
-      return <span className="text-red-700">Technician Has No Skills</span>;
+      return <span className="text-urgent-strong">Technician Has No Skills</span>;
     /*
      * Neutral, never green. The job carries no Service Category/Type, so no
      * technician can be said to match or miss it — showing this as a positive
@@ -593,6 +593,6 @@ function deepSkillStatusLabel(status: DeepSkillStatus): React.ReactNode {
 /* ── Yes/No cell. ────────────────────────────────────────────────────── */
 function YesNo({ value }: { value: boolean }) {
   return value
-    ? <span className="text-emerald-700 font-medium">Yes</span>
+    ? <span className="text-success-strong font-medium">Yes</span>
     : <span className="text-muted-foreground">No</span>;
 }

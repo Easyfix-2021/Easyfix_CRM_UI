@@ -216,7 +216,7 @@ export default function QuickSightLandingPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
+        <h1 className="text-2xl font-semibold flex items-center gap-2">
           <LayoutDashboard className="size-6" /> QuickSight Reports
         </h1>
         <p className="text-sm text-muted-foreground">
@@ -229,7 +229,7 @@ export default function QuickSightLandingPage() {
       {!hasFamily ? (
         <Card>
           <CardContent className="flex flex-col items-center gap-3 p-10 text-center">
-            <span className="flex size-12 items-center justify-center rounded-full bg-amber-100 text-amber-700">
+            <span className="flex size-12 items-center justify-center rounded-full bg-warning-tint text-warning-strong">
               <Lock className="size-6" />
             </span>
             <div className="space-y-1">

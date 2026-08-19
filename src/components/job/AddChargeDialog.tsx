@@ -274,10 +274,10 @@ export function AddChargeDialog({
 
           <label className="flex items-center gap-2 pt-1">
             <Switch checked={approvalNeeded} onCheckedChange={setApprovalNeeded} />
-            <span className="text-sm text-slate-700">Client Approval?</span>
+            <span className="text-sm text-ink-700">Client Approval?</span>
           </label>
 
-          {err && <div className="text-sm text-red-600">{err}</div>}
+          {err && <div className="text-sm text-urgent-strong">{err}</div>}
         </div>
 
         <div className="mt-2 flex justify-end gap-2">

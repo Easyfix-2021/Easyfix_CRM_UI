@@ -221,7 +221,7 @@ export function ClickToCallTab({ from, to }: { from: string; to: string }) {
       {(error || (rows !== null && rows.length > 0)) && (
         <div className="px-6 pt-2 pb-2 shrink-0">
           {error && (
-            <div className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded px-2 py-1 mb-2">
+            <div className="text-sm text-urgent-strong bg-urgent-tint border border-urgent rounded px-2 py-1 mb-2">
               {error}
             </div>
           )}
@@ -250,7 +250,7 @@ export function ClickToCallTab({ from, to }: { from: string; to: string }) {
                 </span>
                 <InfoTooltip label="About This Filter">
                   <div className="space-y-2">
-                    <div className="font-semibold text-slate-900">Filter This Page</div>
+                    <div className="font-semibold text-ink-900">Filter This Page</div>
                     <div>
                       Narrows the calls <strong>currently on screen</strong> by any visible value —
                       it is not a search across the whole date range.
@@ -291,7 +291,7 @@ export function ClickToCallTab({ from, to }: { from: string; to: string }) {
                   <th
                     key={c}
                     scope="col"
-                    className="sticky top-0 z-10 bg-slate-100 text-left px-3 py-2 font-medium border-b"
+                    className="sticky top-0 z-10 bg-ink-100 text-left px-3 py-2 font-medium border-b"
                   >
                     {c}
                   </th>
@@ -320,11 +320,11 @@ export function ClickToCallTab({ from, to }: { from: string; to: string }) {
                         within 4 hours). */}
                     {r.is_updated === 1
                       ? (r.caller_status || r.receiver_status || '—')
-                      : <span className="text-amber-700 text-xs">Pending sync</span>}
+                      : <span className="text-warning-strong text-xs">Pending sync</span>}
                   </td>
                   <td className="px-3 py-2">
                     {r.recording
-                      ? <a href={r.recording} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-sky-700 hover:underline text-xs">
+                      ? <a href={r.recording} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline text-xs">
                           <PlayCircle className="h-3.5 w-3.5" /> Play
                         </a>
                       : '—'}
@@ -332,10 +332,10 @@ export function ClickToCallTab({ from, to }: { from: string; to: string }) {
                   <td className="px-3 py-2 text-xs">
                     {(() => {
                       const s = (r.transcription_status || '').toLowerCase();
-                      const b = s === 'completed' ? { t: 'Ready', c: 'bg-emerald-100 text-emerald-700' }
-                        : s === 'not_available' ? { t: 'None', c: 'bg-slate-100 text-slate-500' }
-                        : s === 'failed' ? { t: 'Failed', c: 'bg-rose-100 text-rose-700' }
-                        : s ? { t: 'Pending', c: 'bg-amber-100 text-amber-700' }
+                      const b = s === 'completed' ? { t: 'Ready', c: 'bg-success-tint text-success-strong' }
+                        : s === 'not_available' ? { t: 'None', c: 'bg-ink-100 text-ink-500' }
+                        : s === 'failed' ? { t: 'Failed', c: 'bg-urgent-tint text-urgent-strong' }
+                        : s ? { t: 'Pending', c: 'bg-warning-tint text-warning-strong' }
                         : { t: '', c: '' };
                       return b.c
                         ? <span className={`inline-flex rounded-full px-2 py-0.5 font-medium ${b.c}`}>{b.t}</span>

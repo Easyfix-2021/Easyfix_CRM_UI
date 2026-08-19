@@ -75,7 +75,7 @@ export function BillingTab({ clientId, canEdit }: Props) {
         )}
       </div>
       {error && (
-        <div className="text-xs text-red-600 flex items-center gap-1">
+        <div className="text-xs text-urgent-strong flex items-center gap-1">
           <AlertCircle className="size-3.5" /> {error}
         </div>
       )}
@@ -101,7 +101,7 @@ export function BillingTab({ clientId, canEdit }: Props) {
                 <Button size="sm" variant="ghost" onClick={() => setEditing(b)}>
                   <Pencil className="size-3.5" />
                 </Button>
-                <Button size="sm" variant="ghost" onClick={() => onDelete(b)} className="text-red-600 hover:text-red-700">
+                <Button size="sm" variant="ghost" onClick={() => onDelete(b)} className="text-urgent hover:text-urgent-strong">
                   <Trash2 className="size-3.5" />
                 </Button>
               </div>
@@ -264,7 +264,7 @@ function BillingFormDialog({
 function Field({ label, required, full, children }: { label: string; required?: boolean; full?: boolean; children: React.ReactNode }) {
   return (
     <div className={full ? 'col-span-2' : ''}>
-      <Label className="text-xs">{label}{required && <span className="text-red-600 ml-0.5">*</span>}</Label>
+      <Label className="text-xs">{label}{required && <span className="text-urgent-strong ml-0.5">*</span>}</Label>
       <div className="mt-0.5">{children}</div>
     </div>
   );

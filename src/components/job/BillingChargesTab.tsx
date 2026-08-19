@@ -207,7 +207,7 @@ export function BillingChargesTab({
     <div className="space-y-5">
       {/* ─── Job Summary matrix ─────────────────────────────────────── */}
       <div className="rounded-lg border bg-card overflow-hidden">
-        <div className="border-b px-4 py-2 text-sm font-semibold text-slate-700">Job Summary</div>
+        <div className="border-b px-4 py-2 text-sm font-semibold text-ink-700">Job Summary</div>
         <div className="overflow-x-auto">
           <table className="data-table">
             <thead>
@@ -227,7 +227,7 @@ export function BillingChargesTab({
                   <td className="!text-right font-mono">{inr(r.client - r.tx)}</td>
                 </tr>
               ))}
-              <tr className="bg-slate-50/60">
+              <tr className="bg-ink-50/60">
                 <td className="!text-left font-semibold">Total</td>
                 <td className="!text-right font-mono font-semibold">{inr(matrix.total.client)}</td>
                 <td className="!text-right font-mono font-semibold">{inr(matrix.total.tx)}</td>
@@ -241,7 +241,7 @@ export function BillingChargesTab({
       {/* ─── Charge line items (Travel / Incentive / Penalty) ───────── */}
       <div className="rounded-lg border bg-card overflow-hidden">
         <div className="flex items-center justify-between border-b px-4 py-2">
-          <div className="text-sm font-semibold text-slate-700">Charges</div>
+          <div className="text-sm font-semibold text-ink-700">Charges</div>
           {canManage && (
             <div className="flex gap-2">
               <Button size="sm" variant="outline" onClick={() => setChargeDialog({ mode: 'penalty', editing: null })}>
@@ -305,7 +305,7 @@ export function BillingChargesTab({
                             type="button"
                             aria-label="Edit charge"
                             onClick={() => setChargeDialog({ mode, editing: m })}
-                            className="text-slate-500 hover:text-slate-800"
+                            className="text-ink-500 hover:text-ink-900"
                           >
                             <Pencil className="size-4" />
                           </button>
@@ -313,7 +313,7 @@ export function BillingChargesTab({
                             type="button"
                             aria-label="Delete charge"
                             onClick={() => void deleteCharge(m)}
-                            className="text-rose-500 hover:text-rose-700"
+                            className="text-urgent hover:text-urgent-strong"
                           >
                             <Trash2 className="size-4" />
                           </button>
@@ -330,7 +330,7 @@ export function BillingChargesTab({
 
       {/* ─── Service billing approval ("Approve Tx") ────────────────── */}
       <div className="rounded-lg border bg-card overflow-hidden">
-        <div className="border-b px-4 py-2 text-sm font-semibold text-slate-700">Service Billing Approval</div>
+        <div className="border-b px-4 py-2 text-sm font-semibold text-ink-700">Service Billing Approval</div>
         <div className="overflow-x-auto">
           <table className="data-table">
             <thead>
@@ -375,8 +375,8 @@ export function BillingChargesTab({
       {/* ─── Advance requests ───────────────────────────────────────── */}
       <div className="rounded-lg border bg-card overflow-hidden">
         <div className="flex items-center justify-between border-b px-4 py-2">
-          <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-            <Coins className="size-4 text-amber-600" /> Advance Requests
+          <div className="flex items-center gap-2 text-sm font-semibold text-ink-700">
+            <Coins className="size-4 text-warning-strong" /> Advance Requests
           </div>
           {canManage && (
             <Button size="sm" variant="outline" onClick={() => setAdvanceOpen(true)}>

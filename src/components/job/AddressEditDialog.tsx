@@ -178,7 +178,7 @@ export function AddressEditDialog({
               placeholder="Pick an address suggestion above to auto-fill"
             />
           </div>
-          {err && <div className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded px-2 py-1">{err}</div>}
+          {err && <div className="text-sm text-urgent-strong bg-urgent-tint border border-urgent rounded px-2 py-1">{err}</div>}
         </div>
         <DialogFooter>
           <CancelButton onCancel={onClose} disabled={saving} />

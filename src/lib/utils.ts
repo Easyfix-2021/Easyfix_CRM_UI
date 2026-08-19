@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { TONE_SURFACE_CLASSES, type StatusChipTone } from '@/components/ui/StatusChip';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -208,52 +209,48 @@ export function formatEasyfixerName(name: string | null | undefined): string {
   return `Trainee · ${match[1].trim()}`;
 }
 
+/*
+ * statusColorClass — bare tint surface (`bg-*-tint text-*-strong`) for a job
+ * status, used where the shape is a plain span rather than a `<StatusChip />`.
+ *
+ * It DELEGATES to `statusTone()` and looks the answer up in StatusChip's own
+ * `TONE_SURFACE_CLASSES`. Previously this held a second, hand-maintained
+ * code→colour table alongside `statusTone()`, and the two had already drifted
+ * (this one still pointed at a `status-*` palette that no longer exists, so
+ * half the statuses rendered no colour at all). Now there is exactly one
+ * code→meaning mapping and exactly one meaning→classes mapping.
+ */
 export function statusColorClass(code: number): string {
-  const map: Record<number, string> = {
-    0:  'bg-status-booked/10 text-status-booked',
-    1:  'bg-status-scheduled/10 text-status-scheduled',
-    2:  'bg-status-inprogress/10 text-status-inprogress',
-    3:  'bg-status-completed/10 text-status-completed',
-    5:  'bg-status-completed/10 text-status-completed',
-    6:  'bg-status-cancelled/10 text-status-cancelled',
-    7:  'bg-slate-100 text-slate-700',
-    9:  'bg-rose-100 text-rose-700',     // Unconfirmed — attention colour
-    10: 'bg-status-revisit/10 text-status-revisit',
-    15: 'bg-purple-100 text-purple-700', // Estimate pending
-    20: 'bg-status-inprogress/10 text-status-inprogress', // same visual as 2
-    21: 'bg-amber-100 text-amber-700',   // On hold — warm warning
-  };
-  return map[code] ?? 'bg-muted text-muted-foreground';
+  return TONE_SURFACE_CLASSES[statusTone(code)];
 }
 
 /*
- * statusTone — parallel helper to `statusColorClass`, returns a
+ * statusTone — THE code→meaning mapping for job statuses. Returns a
  * `StatusChipTone` token consumable by the shared `<StatusChip />` primitive
  * at `src/components/ui/StatusChip.tsx`. Use this when rendering a status
  * via `<StatusChip tone={statusTone(code)} />` so every consumer reaches
  * the same one-component-one-shape pill (added 2026-05-30 to retire the
  * copy-pasted `<span className="rounded-full ...">` snippets across tables).
  *
- * Visual mapping mirrors `statusColorClass` as closely as the StatusChip
- * palette allows — see StatusChip.tsx for the tone palette.
+ * `statusColorClass()` above is derived from this — do not add a colour
+ * decision anywhere else.
  */
-export type StatusTone =
-  | 'red' | 'amber' | 'sky' | 'emerald' | 'slate' | 'violet' | 'rose' | 'orange';
+export type StatusTone = StatusChipTone;
 
 export function statusTone(code: number): StatusTone {
   const map: Record<number, StatusTone> = {
-    0:  'sky',     // Booked
-    1:  'sky',     // Scheduled
-    2:  'amber',   // In Progress
-    3:  'emerald', // Completed
-    5:  'emerald', // Completed (alt)
-    6:  'red',     // Cancelled
-    7:  'slate',   // Enquiry
-    9:  'rose',    // Unconfirmed — attention colour
-    10: 'violet',  // Revisit
-    15: 'violet',  // Estimate pending
-    20: 'amber',   // In progress (alt — same visual as 2)
-    21: 'orange',  // On hold — warm warning
+    0:  'info',    // Booked
+    1:  'info',    // Scheduled
+    2:  'warning', // In Progress
+    3:  'success', // Completed
+    5:  'success', // Completed (alt)
+    6:  'urgent',  // Cancelled
+    7:  'neutral', // Enquiry
+    9:  'urgent',  // Unconfirmed — attention colour
+    10: 'gold',    // Revisit
+    15: 'gold',    // Estimate pending
+    20: 'warning', // In progress (alt — same visual as 2)
+    21: 'warning', // On hold — warm warning
   };
-  return map[code] ?? 'slate';
+  return map[code] ?? 'neutral';
 }

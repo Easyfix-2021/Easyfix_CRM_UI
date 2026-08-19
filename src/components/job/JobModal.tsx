@@ -477,11 +477,11 @@ export function JobModal({
                   instead of a lone text title. CalendarPlus signals
                   "schedule a new call" for create; Pencil for edit;
                   Eye for view. */}
-              <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-sky-500/20 ring-1 ring-sky-400/40">
-                {effectiveMode === 'create'  ? <CalendarPlus className="h-4 w-4 text-sky-300" />
-                 : effectiveMode === 'edit'  ? <Pencil className="h-4 w-4 text-sky-300" />
-                 : effectiveMode === 'confirm' ? <CheckCircle2 className="h-4 w-4 text-sky-300" />
-                 : <Eye className="h-4 w-4 text-sky-300" />}
+              <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-info/20 ring-1 ring-info/40">
+                {effectiveMode === 'create'  ? <CalendarPlus className="h-4 w-4 text-info-tint" />
+                 : effectiveMode === 'edit'  ? <Pencil className="h-4 w-4 text-info-tint" />
+                 : effectiveMode === 'confirm' ? <CheckCircle2 className="h-4 w-4 text-info-tint" />
+                 : <Eye className="h-4 w-4 text-info-tint" />}
               </span>
               <div className="min-w-0">
                 <DialogTitle className="truncate">{title}</DialogTitle>
@@ -533,7 +533,7 @@ export function JobModal({
                   downgraded to read-only — tell the operator why so it isn't
                   mistaken for a broken Confirm & Schedule. */}
               {mode === 'confirm' && (
-                <div className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+                <div className="mb-3 rounded-md border border-warning bg-warning-tint px-4 py-2 text-sm text-warning-strong">
                   This order isn’t Unconfirmed, so Confirm &amp; Schedule isn’t available — opened in read-only view.
                 </div>
               )}
@@ -658,7 +658,7 @@ export function JobModal({
               {!loading && job && (Number(job.job_status) === 9 || mode === 'checkin') && (
                 <Button
                   variant="outline"
-                  className="bg-teal-500 hover:bg-teal-600 text-white border-teal-500 hover:text-white"
+                  className="bg-success hover:bg-success-strong text-white border-success hover:text-white"
                   onClick={() => setAddRemarksOpen(true)}
                 >
                   Add Remarks
@@ -1542,8 +1542,8 @@ function JobCustomerRequests({ jobId, jobStatus, onJobChanged }: { jobId: number
       {pending.map((r) => {
         const isCancel = r.request_type === 'cancel';
         const band = isCancel
-          ? 'border-rose-300 bg-rose-50'
-          : 'border-amber-300 bg-amber-50';
+          ? 'border-urgent bg-urgent-tint'
+          : 'border-warning bg-warning-tint';
         return (
           <div key={r.request_id} className={`rounded-lg border px-4 py-3 ${band}`}>
             <div className="flex items-start justify-between gap-3">
@@ -1556,14 +1556,14 @@ function JobCustomerRequests({ jobId, jobStatus, onJobChanged }: { jobId: number
                     Customer Requested {isCancel ? 'Cancellation' : 'Reschedule'}
                   </span>
                 </div>
-                <div className="mt-1.5 space-y-0.5 text-xs text-slate-700">
+                <div className="mt-1.5 space-y-0.5 text-xs text-ink-700">
                   {r.reason ? <div><span className="font-medium">Reason:</span> {r.reason}</div> : null}
                   {r.remarks ? <div><span className="font-medium">Remarks:</span> {r.remarks}</div> : null}
                   {!isCancel && r.preferred_datetime ? (
                     <div><span className="font-medium">Preferred:</span> {formatDate(r.preferred_datetime)}</div>
                   ) : null}
                   {r.created_at ? (
-                    <div className="text-slate-500">Requested {formatDate(r.created_at)}</div>
+                    <div className="text-ink-500">Requested {formatDate(r.created_at)}</div>
                   ) : null}
                 </div>
               </div>
@@ -1782,7 +1782,7 @@ function JobQuotationsTab({ jobId }: { jobId: number }) {
   }
 
   if (loading) return <div className="text-sm text-muted-foreground py-6 text-center">Loading…</div>;
-  if (error)   return <div className="text-sm text-red-600 py-3">{error}</div>;
+  if (error)   return <div className="text-sm text-urgent-strong py-3">{error}</div>;
   if (rows.length === 0) {
     return (
       <div className="rounded-lg border bg-card p-8 text-center text-sm text-muted-foreground">
@@ -1828,23 +1828,23 @@ function JobQuotationsTab({ jobId }: { jobId: number }) {
                 <tr key={r.id}>
                   <td className="!text-center text-xs text-muted-foreground">{i + 1}</td>
                   <td className="!text-left text-xs">
-                    <span className="inline-block bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">{type}</span>
+                    <span className="inline-block bg-info-tint text-info-strong rounded px-1.5 py-0.5">{type}</span>
                   </td>
                   <td className="!text-left">{name}</td>
                   <td className="!text-right font-mono text-xs">{String(r.quantity ?? '')}</td>
                   <td className="!text-right font-mono text-xs">{r.unit_price != null ? Number(r.unit_price).toFixed(2) : '—'}</td>
                   <td className="!text-right font-mono">{r.total_price != null ? Number(r.total_price).toFixed(2) : '—'}</td>
                   <td className="!text-center text-xs">
-                    {isApproved && <span className="inline-block bg-emerald-50 text-emerald-700 rounded px-1.5 py-0.5">Approved</span>}
-                    {isRejected && <span className="inline-block bg-rose-50 text-rose-700 rounded px-1.5 py-0.5">Rejected</span>}
-                    {isPending  && <span className="inline-block bg-amber-50 text-amber-700 rounded px-1.5 py-0.5">Pending</span>}
+                    {isApproved && <span className="inline-block bg-success-tint text-success-strong rounded px-1.5 py-0.5">Approved</span>}
+                    {isRejected && <span className="inline-block bg-urgent-tint text-urgent-strong rounded px-1.5 py-0.5">Rejected</span>}
+                    {isPending  && <span className="inline-block bg-warning-tint text-warning-strong rounded px-1.5 py-0.5">Pending</span>}
                   </td>
                   <td className="!text-right">
                     {isPending && can.isQuotationApprove ? (
                       <div className="inline-flex gap-1 justify-end">
                         <button
                           type="button"
-                          className="text-xs px-2 py-1 rounded border bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                          className="text-xs px-2 py-1 rounded border bg-success-tint border-success text-success-strong hover:bg-success/15 disabled:opacity-50"
                           onClick={() => approveRow(r)}
                           disabled={busy}
                         >
@@ -1852,7 +1852,7 @@ function JobQuotationsTab({ jobId }: { jobId: number }) {
                         </button>
                         <button
                           type="button"
-                          className="text-xs px-2 py-1 rounded border bg-rose-50 border-rose-200 text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+                          className="text-xs px-2 py-1 rounded border bg-urgent-tint border-urgent text-urgent-strong hover:bg-urgent/15 disabled:opacity-50"
                           onClick={() => rejectRow(r)}
                           disabled={busy}
                         >
@@ -2462,7 +2462,7 @@ function ServicesTabBody({ job, onMutated, onDirtyChange }: { job: Job; onMutate
                       see pending unsaved edits at a glance. */}
                   <tr className={
                     (isActive ? '' : 'opacity-60')
-                    + (isDirty ? ' bg-amber-50' : '')
+                    + (isDirty ? ' bg-warning-tint' : '')
                   }>
                     {/* Column order: Job# · Service Name · Service Type · Service Category */}
                     <td className="text-xs text-muted-foreground">{String(sr.job_service_id ?? '')}</td>
@@ -2548,8 +2548,8 @@ function ServicesTabBody({ job, onMutated, onDirtyChange }: { job: Job; onMutate
                           className={
                             'inline-flex items-center justify-center w-7 h-7 rounded border ' +
                             (isOpen
-                              ? 'bg-sky-50 border-sky-300 text-sky-700'
-                              : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50')
+                              ? 'bg-brand-50 border-primary text-primary'
+                              : 'bg-card border-ink-100 text-ink-700 hover:bg-ink-50')
                           }
                           onClick={async () => {
                             await ensureBreakdown();
@@ -2564,7 +2564,7 @@ function ServicesTabBody({ job, onMutated, onDirtyChange }: { job: Job; onMutate
                             type="button"
                             title="Remove Service"
                             aria-label="Remove Service"
-                            className="inline-flex items-center justify-center w-7 h-7 rounded border bg-white border-rose-200 text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                            className="inline-flex items-center justify-center w-7 h-7 rounded border bg-card border-urgent text-urgent-strong hover:bg-urgent/15 disabled:opacity-50"
                             onClick={() => removeService(id)}
                             disabled={busy}
                           >
@@ -2576,7 +2576,7 @@ function ServicesTabBody({ job, onMutated, onDirtyChange }: { job: Job; onMutate
                             type="button"
                             title="Restore Service"
                             aria-label="Restore Service"
-                            className="inline-flex items-center justify-center w-7 h-7 rounded border bg-white border-emerald-200 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                            className="inline-flex items-center justify-center w-7 h-7 rounded border bg-card border-success text-success-strong hover:bg-success/15 disabled:opacity-50"
                             onClick={() => restoreService(id)}
                             disabled={busy}
                           >
@@ -2588,14 +2588,14 @@ function ServicesTabBody({ job, onMutated, onDirtyChange }: { job: Job; onMutate
                   </tr>
                   {isOpen && line && (
                     <tr>
-                      <td colSpan={6} className="bg-slate-50 p-3">
+                      <td colSpan={6} className="bg-ink-50 p-3">
                         <BreakdownTable line={line} />
                       </td>
                     </tr>
                   )}
                   {isOpen && !line && breakdown && (
                     <tr>
-                      <td colSpan={6} className="bg-slate-50 p-3 text-xs text-muted-foreground italic">
+                      <td colSpan={6} className="bg-ink-50 p-3 text-xs text-muted-foreground italic">
                         No rate-card cost data available for this service.
                       </td>
                     </tr>
@@ -2610,7 +2610,7 @@ function ServicesTabBody({ job, onMutated, onDirtyChange }: { job: Job; onMutate
           the breakdown also collapses the totals strip so the Services tab
           returns to its clean read-only state (2026-05-26 ops feedback). */}
       {openLineId !== null && breakdown && breakdown.lineItems.length > 0 && (
-        <div className="rounded-lg border bg-slate-50 p-3 text-xs">
+        <div className="rounded-lg border bg-ink-50 p-3 text-xs">
           <div className="font-medium mb-1">Job Totals</div>
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
             <Stat label="Total Charge"   value={breakdown.totals.totalCharge} />
@@ -2671,17 +2671,17 @@ function BreakdownTable({ line }: { line: ServiceBreakdownLine }) {
   const EasyfixerShareRow = ({ amount, total }: { amount: number; total: number }) => {
     const pct = total > 0 ? (amount / total) * 100 : 0;
     return (
-      <tr className="bg-emerald-50/50" title={formulaTooltip}>
+      <tr className="bg-success-tint/50" title={formulaTooltip}>
         <td className="px-2 py-1 font-medium">
           Easyfixer Share
-          <span className="ml-1 text-[10px] text-muted-foreground cursor-help">ⓘ</span>
+          <span className="ml-1 text-xs text-muted-foreground cursor-help">ⓘ</span>
         </td>
         <td className="px-2 py-1 font-mono !text-center text-muted-foreground" colSpan={2}>
           residual
         </td>
         <td className="px-2 py-1 font-mono !text-center font-medium">
           {amount.toFixed(2)}
-          <span className="ml-1 text-[10px] text-muted-foreground">({pct.toFixed(1)}%)</span>
+          <span className="ml-1 text-xs text-muted-foreground">({pct.toFixed(1)}%)</span>
         </td>
       </tr>
     );
@@ -2691,7 +2691,7 @@ function BreakdownTable({ line }: { line: ServiceBreakdownLine }) {
       <div>
         <div className="font-medium mb-1">Per Unit · Total ₹{line.perUnit.totalCharge.toFixed(2)}</div>
         <table className="w-full border">
-          <thead className="bg-slate-100">
+          <thead className="bg-ink-100">
             <tr>
               <th className="text-left px-2 py-1">Layer</th>
               <th className="!text-center px-2 py-1">Variable</th>
@@ -2710,7 +2710,7 @@ function BreakdownTable({ line }: { line: ServiceBreakdownLine }) {
       <div>
         <div className="font-medium mb-1">Line Total · qty {line.quantity} · ₹{line.lineTotal.totalCharge.toFixed(2)}</div>
         <table className="w-full border">
-          <thead className="bg-slate-100">
+          <thead className="bg-ink-100">
             <tr>
               <th className="text-left px-2 py-1">Layer</th>
               <th className="!text-center px-2 py-1">Variable</th>
@@ -2732,8 +2732,8 @@ function BreakdownTable({ line }: { line: ServiceBreakdownLine }) {
 
 function Stat({ label, value, highlight }: { label: string; value: number; highlight?: boolean }) {
   return (
-    <div className={`rounded border px-2 py-1 ${highlight ? 'bg-emerald-50 border-emerald-200' : 'bg-white'}`}>
-      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
+    <div className={`rounded border px-2 py-1 ${highlight ? 'bg-success-tint border-success' : 'bg-card'}`}>
+      <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
       <div className="font-mono text-sm font-medium">₹{Number(value).toFixed(2)}</div>
     </div>
   );
@@ -2791,7 +2791,7 @@ function JobMaterialsTab({ jobId, jobStatus }: { jobId: number; jobStatus: numbe
         </div>
         {canEdit && <Button size="sm" onClick={() => setAddOpen(true)}>Add Material</Button>}
       </div>
-      {error && <div className="text-sm text-red-600">{error}</div>}
+      {error && <div className="text-sm text-urgent-strong">{error}</div>}
       {loading && <div className="text-sm text-muted-foreground py-6 text-center">Loading…</div>}
       {!loading && items.length === 0 && (
         <div className="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
@@ -2826,7 +2826,7 @@ function JobMaterialsTab({ jobId, jobStatus }: { jobId: number; jobStatus: numbe
                   <td className="!text-right font-mono">{m.total_price != null ? Number(m.total_price).toFixed(2) : '—'}</td>
                   <td className="!text-right">
                     {canEdit && (
-                      <button onClick={() => deleteItem(m.id)} className="text-xs text-red-600 hover:underline">Delete</button>
+                      <button onClick={() => deleteItem(m.id)} className="text-xs text-urgent-strong hover:underline">Delete</button>
                     )}
                   </td>
                 </tr>
@@ -2890,7 +2890,7 @@ function AddMaterialDialog({ open, onClose, onSubmit }: {
   }
   // Tailwind doesn't compose `aria-invalid` styles by default — we
   // toggle a red border class explicitly so the visual cue is obvious.
-  const errCls = (f: string) => invalid.has(f) ? 'border-red-500 focus-visible:ring-red-500' : '';
+  const errCls = (f: string) => invalid.has(f) ? 'border-urgent focus-visible:ring-urgent' : '';
 
   async function go() {
     // Collect EVERY missing/invalid field in one pass so the operator
@@ -3001,7 +3001,7 @@ function AddMaterialDialog({ open, onClose, onSubmit }: {
               />
             </div>
           </div>
-          {err && <div className="text-sm text-red-600">{err}</div>}
+          {err && <div className="text-sm text-urgent-strong">{err}</div>}
           <div className="flex justify-end gap-2 pt-2">
             <CancelButton onCancel={onClose} disabled={loading} />
             <Button onClick={go} disabled={loading}>{loading ? 'Saving…' : 'Add'}</Button>
@@ -3140,7 +3140,7 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
         </div>
       </div>
 
-      {error && <div className="text-sm text-red-600">{error}</div>}
+      {error && <div className="text-sm text-urgent-strong">{error}</div>}
 
       {/* List
        * Loading UX rules:
@@ -3165,8 +3165,8 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
       {allRows.length > 0 && (
         <>
           {loading && (
-            <div className="text-[11px] text-muted-foreground text-center py-1.5 inline-flex items-center justify-center gap-1.5 w-full">
-              <span className="inline-block h-3 w-3 rounded-full border-2 border-sky-500/30 border-t-sky-500 animate-spin" aria-hidden />
+            <div className="text-xs text-muted-foreground text-center py-1.5 inline-flex items-center justify-center gap-1.5 w-full">
+              <span className="inline-block h-3 w-3 rounded-full border-2 border-info/30 border-t-info animate-spin" aria-hidden />
               Refreshing comments…
             </div>
           )}
@@ -3204,7 +3204,7 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
                 {allRows.map((c) => (
                   <tr
                     key={c.id}
-                    className={c._pending ? 'opacity-75 bg-sky-50/40' : ''}
+                    className={c._pending ? 'opacity-75 bg-info-tint/40' : ''}
                   >
                     <td className="!text-left text-muted-foreground whitespace-nowrap align-top">
                       {formatDate(c.created_on)}
@@ -3212,8 +3212,8 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
                     <td className="!text-left align-top">
                       <div className="whitespace-pre-wrap">{c.comments}</div>
                       {c._pending && (
-                        <span className="inline-flex items-center gap-1 mt-1 bg-sky-100 text-sky-800 rounded px-1.5 py-0.5 text-[11px]">
-                          <span className="inline-block h-2 w-2 rounded-full border-2 border-sky-600/30 border-t-sky-600 animate-spin" aria-hidden />
+                        <span className="inline-flex items-center gap-1 mt-1 bg-info-tint text-info-strong rounded px-1.5 py-0.5 text-xs">
+                          <span className="inline-block h-2 w-2 rounded-full border-2 border-info/30 border-t-info animate-spin" aria-hidden />
                           Sending…
                         </span>
                       )}
@@ -3310,7 +3310,7 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pe
   if (compact) {
     return (
       <div
-        className={`relative border rounded-md overflow-hidden ${pendingDelete ? 'border-rose-400 ring-1 ring-rose-300' : 'bg-muted/40'} ${deleting ? 'opacity-50 pointer-events-none' : ''}`}
+        className={`relative border rounded-md overflow-hidden ${pendingDelete ? 'border-urgent ring-1 ring-urgent' : 'bg-muted/40'} ${deleting ? 'opacity-50 pointer-events-none' : ''}`}
         style={{ width: 72, height: 72 }}
         title={pendingDelete ? `${tooltip} — marked for deletion (click ↺ to undo)` : tooltip}
       >
@@ -3322,7 +3322,7 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pe
           className="block w-full h-full"
         >
           {broken ? (
-            <div className="w-full h-full flex flex-col items-center justify-center text-[9px] text-muted-foreground p-1 text-center">
+            <div className="w-full h-full flex flex-col items-center justify-center text-xs text-muted-foreground p-1 text-center">
               <span className="text-base leading-none">⚠️</span>
               <span className="mt-0.5">Lost</span>
             </div>
@@ -3354,7 +3354,7 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pe
             aria-hidden="true"
             className="pointer-events-none absolute inset-0 flex items-center justify-center"
           >
-            <div className="w-[110%] h-[2px] bg-rose-500 rotate-[-25deg] origin-center shadow-[0_0_0_1px_rgba(255,255,255,0.6)]" />
+            <div className="w-[110%] h-[2px] bg-urgent rotate-[-25deg] origin-center shadow-[0_0_0_1px_rgba(255,255,255,0.6)]" />
           </div>
         )}
         {/* Caption row removed in compact mode — the 72px footprint
@@ -3380,7 +3380,7 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pe
               onDelete();
             }}
             disabled={deleting}
-            className={`absolute top-0 right-0 text-white rounded-bl-md w-5 h-5 flex items-center justify-center text-xs font-bold leading-none disabled:opacity-60 ${pendingDelete ? 'bg-amber-600 hover:bg-amber-700' : 'bg-black/65 hover:bg-black/90'}`}
+            className={`absolute top-0 right-0 text-white rounded-bl-md w-5 h-5 flex items-center justify-center text-xs font-semibold leading-none disabled:opacity-60 ${pendingDelete ? 'bg-warning hover:bg-warning-strong' : 'bg-black/65 hover:bg-black/90'}`}
             title={pendingDelete ? 'Undo — keep this image' : 'Mark for deletion'}
           >
             {pendingDelete ? '↺' : '×'}
@@ -3402,10 +3402,10 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pe
         title={tooltip}
       >
         {broken ? (
-          <div className="flex h-32 w-full flex-col items-center justify-center gap-1 bg-muted text-[11px] text-muted-foreground">
+          <div className="flex h-32 w-full flex-col items-center justify-center gap-1 bg-muted text-xs text-muted-foreground">
             <span className="text-base">⚠️</span>
             <span>Image not found</span>
-            <span className="text-[10px]">Re-upload to restore</span>
+            <span className="text-xs">Re-upload to restore</span>
           </div>
         ) : (
           // eslint-disable-next-line @next/next/no-img-element
@@ -3417,7 +3417,7 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pe
             onError={() => setBroken(true)}
           />
         )}
-        <div className="px-2 py-1 text-[10px] text-muted-foreground truncate">
+        <div className="px-2 py-1 text-xs text-muted-foreground truncate">
           {label}
         </div>
       </a>
@@ -3438,7 +3438,7 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pe
             onDelete();
           }}
           disabled={deleting}
-          className="absolute top-1 right-1 bg-black/65 hover:bg-black/90 text-white rounded w-6 h-6 flex items-center justify-center text-sm font-bold leading-none disabled:opacity-60"
+          className="absolute top-1 right-1 bg-black/65 hover:bg-black/90 text-white rounded w-6 h-6 flex items-center justify-center text-sm font-semibold leading-none disabled:opacity-60"
           title="Delete image"
         >
           ×
@@ -3633,8 +3633,8 @@ function JobImagesTab({ images, onChanged, compact, onImageDeleted, deferDelete,
 // the public web form both feed tbl_job_media; the badge tells ops which.
 function videoSourceBadge(source?: string | null): { label: string; cls: string } | null {
   switch (source) {
-    case 'customer_whatsapp':    return { label: 'Chat', cls: 'bg-emerald-600' };
-    case 'customer_public_form': return { label: 'Form', cls: 'bg-sky-600' };
+    case 'customer_whatsapp':    return { label: 'Chat', cls: 'bg-success' };
+    case 'customer_public_form': return { label: 'Form', cls: 'bg-info' };
     default:                     return null;
   }
 }
@@ -3726,7 +3726,7 @@ function LazyVideoPosterTile({ mediaId, url, source, contentType, tileSize }: {
       href={url}
       target="_blank"
       rel="noopener noreferrer"
-      className={`relative ${tileSize} rounded border bg-slate-800 overflow-hidden flex items-center justify-center group`}
+      className={`relative ${tileSize} rounded border bg-ink-900 overflow-hidden flex items-center justify-center group`}
       title={`Customer video #${mediaId}${badge ? ` · via ${badge.label}` : ''}${contentType ? ` · ${contentType}` : ''}`}
     >
       {/* Poster frame — only rendered once the tile is visible. `#t=0.1` makes
@@ -3748,11 +3748,11 @@ function LazyVideoPosterTile({ mediaId, url, source, contentType, tileSize }: {
         </svg>
       </span>
       {badge && (
-        <span className={`absolute z-10 top-0.5 left-0.5 text-[8px] font-semibold text-white px-1 py-px rounded ${badge.cls}`}>
+        <span className={`absolute z-10 top-0.5 left-0.5 text-xs font-semibold text-white px-1 py-px rounded ${badge.cls}`}>
           {badge.label}
         </span>
       )}
-      <span className="absolute z-10 bottom-0 right-0 left-0 text-[9px] text-center bg-black/55 text-white py-0.5">
+      <span className="absolute z-10 bottom-0 right-0 left-0 text-xs text-center bg-black/55 text-white py-0.5">
         Video #{mediaId}
       </span>
     </a>
@@ -3790,7 +3790,7 @@ function JobQuestionnaireTab({ jobId }: { jobId: number }) {
   }, [jobId]);
 
   if (loading) return <div className="text-sm text-muted-foreground py-6 text-center">Loading…</div>;
-  if (error)   return <div className="text-sm text-red-600 py-3">{error}</div>;
+  if (error)   return <div className="text-sm text-urgent-strong py-3">{error}</div>;
   if (answers.length === 0) {
     return (
       <div className="rounded-lg border bg-card p-8 text-center text-sm text-muted-foreground">
@@ -3982,7 +3982,7 @@ function CreateJobMobileGate({
         {/* Banner reflects which branch of the legacy flow we landed on.
             Lets the operator confirm at a glance whether their typed
             mobile matched an existing customer. */}
-        <div className={`mb-3 rounded-md border px-3 py-2 text-sm flex items-center justify-between gap-3 ${prefill.found ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
+        <div className={`mb-3 rounded-md border px-3 py-2 text-sm flex items-center justify-between gap-3 ${prefill.found ? 'border-success bg-success-tint text-success-strong' : 'border-warning bg-warning-tint text-warning-strong'}`}>
           <div>
             {prefill.found
               ? <>Existing customer <strong>{prefill.customer?.customer_name || '—'}</strong> · {prefill.addresses?.length ?? 0} saved address{(prefill.addresses?.length ?? 0) === 1 ? '' : 'es'} · pre-filled below.</>
@@ -6547,9 +6547,9 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
           * off the same strip. Kept visually minimal (2-column grid) so it
           * doesn't dominate the modal.
           */}
-        <div className="rounded-lg border bg-sky-50/60 px-4 py-3 text-sm">
+        <div className="rounded-lg border bg-info-tint/60 px-4 py-3 text-sm">
           <div className="flex items-center justify-between gap-3 mb-2">
-            <div className="text-xs font-semibold text-sky-900 uppercase tracking-wide">Job Summary</div>
+            <div className="text-xs font-semibold text-info-deep uppercase tracking-wide">Job Summary</div>
             {/* Click-to-call via Kaleyra rather than the OS dialer:
                 the `tel:` href used to feed the dialer the raw digits,
                 but with BE-side masking those digits arrive as
@@ -6591,7 +6591,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
           title="1 · Client Details"
           expanded={confirmOpenSection === 1}
           onToggle={() => setConfirmOpenSection(1)}
-          badge={confirmSection1Complete ? <span className="text-emerald-600 text-xs">✓</span> : null}
+          badge={confirmSection1Complete ? <span className="text-success-strong text-xs">✓</span> : null}
         >
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Field label="Client">
@@ -6760,7 +6760,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
           expanded={confirmOpenSection === 2}
           onToggle={() => { if (confirmSection1Complete) setConfirmOpenSection(2); }}
           disabled={!confirmSection1Complete}
-          badge={confirmSection2Complete ? <span className="text-emerald-600 text-xs">✓</span> : null}
+          badge={confirmSection2Complete ? <span className="text-success-strong text-xs">✓</span> : null}
         >
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Field label="Customer Name *">
@@ -6825,11 +6825,11 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                       onChange={(e) => set('additional_number', normalizeMobileDigits(e.target.value))}
                       inputMode="numeric"
                       placeholder="10 digits"
-                      className={`tabular-nums w-full ${!isValid ? 'border-red-400 focus-visible:ring-red-300' : ''}`}
+                      className={`tabular-nums w-full ${!isValid ? 'border-urgent focus-visible:ring-urgent' : ''}`}
                       aria-invalid={!isValid}
                     />
                     {!isValid && (
-                      <p className="text-[11px] text-red-600 mt-1">{INDIAN_MOBILE_ERROR}</p>
+                      <p className="text-xs text-urgent-strong mt-1">{INDIAN_MOBILE_ERROR}</p>
                     )}
                   </>
                 );
@@ -6864,8 +6864,8 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                           : undefined}
                         className={`px-3 py-1.5 rounded-full border text-xs transition-colors ${
                           selectedSlot === s.value
-                            ? 'bg-sky-700 text-white border-sky-700'
-                            : 'bg-white hover:bg-muted/60'
+                            ? 'bg-brand-600 text-white border-brand-600'
+                            : 'bg-card hover:bg-muted/60'
                         }`}
                       >
                         {s.label}
@@ -6907,7 +6907,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                     intentionally blank so they must explicitly pick a
                     time slot — see toFormShape's isBulkSentinel branch. */}
                 {f.upload_date_hint && !f.requested_date_time && (
-                  <p className="text-[11px] text-amber-700">
+                  <p className="text-xs text-warning-strong">
                     From upload: <strong>{f.upload_date_hint}</strong> — pick a time slot to proceed.
                   </p>
                 )}
@@ -6915,7 +6915,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                     with the requested NEW time, show the ORIGINAL appointment
                     (from the job) underneath for context. */}
                 {pendingReschedule && initial?.requested_date_time ? (
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-xs text-muted-foreground">
                     Original Date/Time: {formatDate(initial.requested_date_time as string)}
                   </p>
                 ) : null}
@@ -6942,7 +6942,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                     disabled
                     value={clientAddr}
                     rows={2}
-                    className="mt-1 w-full rounded-md border border-input bg-slate-100 px-3 py-1.5 text-sm text-slate-700 resize-none"
+                    className="mt-1 w-full rounded-md border border-input bg-ink-100 px-3 py-1.5 text-sm text-ink-700 resize-none"
                   />
                 </div>
               ) : null;
@@ -6973,7 +6973,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                       : savedAddresses;
                     if (filtered.length === 0) {
                       return (
-                        <div className="text-[11px] text-muted-foreground py-1">
+                        <div className="text-xs text-muted-foreground py-1">
                           No saved addresses match “{confirmAddrQuery}”.
                         </div>
                       );
@@ -7011,7 +7011,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                     ));
                   })()}
                 </div>
-                <p className="text-[11px] text-muted-foreground mt-2">
+                <p className="text-xs text-muted-foreground mt-2">
                   Pick an address to auto-fill the form below. You can still edit it.
                 </p>
               </div>
@@ -7033,7 +7033,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                   pin_code: f.pin_code,
                 }, { fallback: '—' })}
                 rows={2}
-                className="mt-1 w-full rounded-md border border-input bg-slate-100 px-3 py-1.5 text-sm text-slate-700 resize-none"
+                className="mt-1 w-full rounded-md border border-input bg-ink-100 px-3 py-1.5 text-sm text-ink-700 resize-none"
               />
             </div>
             <div className="col-span-1 md:col-span-3">
@@ -7327,7 +7327,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                       className={
                         'px-3 py-1.5 text-sm -mb-px border-b-2 transition-colors ' +
                         (active
-                          ? 'border-sky-600 text-sky-700 font-medium'
+                          ? 'border-primary text-primary font-medium'
                           : 'border-transparent text-muted-foreground hover:text-foreground')
                       }
                     >
@@ -7490,14 +7490,14 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                         OR the presence of any tbl_job_media (videos are
                         currently chat-only). */}
                     {collectedViaWhatsapp && (
-                      <div className="mb-2 inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-800">
+                      <div className="mb-2 inline-flex items-center gap-1.5 rounded-full border border-success bg-success-tint px-2.5 py-1 text-xs font-medium text-success-strong">
                         <span aria-hidden>💬</span>
                         Collected via WhatsApp Chat
                       </div>
                     )}
                     {initialVideos.length > 0 && (
                       <div className="mb-3">
-                        <p className="text-[11px] text-muted-foreground mb-1">
+                        <p className="text-xs text-muted-foreground mb-1">
                           {initialVideos.length} video{initialVideos.length === 1 ? '' : 's'} shared by the customer:
                         </p>
                         <JobVideosStrip videos={initialVideos} compact />
@@ -7505,7 +7505,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                     )}
                     {localImages.length > 0 && (
                       <div className="mb-3">
-                        <p className="text-[11px] text-muted-foreground mb-1">
+                        <p className="text-xs text-muted-foreground mb-1">
                           {localImages.length} image{localImages.length === 1 ? '' : 's'} already uploaded
                           {pendingDeleteIds.size > 0 ? ` (${pendingDeleteIds.size} marked for deletion)` : ''}:
                         </p>
@@ -7550,7 +7550,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                      * tile-by-tile, not all-or-nothing.
                      */}
                     {pendingDeleteIds.size > 0 && (
-                      <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-2 inline-block">
+                      <p className="text-xs text-warning-strong bg-warning-tint border border-warning rounded px-2 py-1 mb-2 inline-block">
                         {pendingDeleteIds.size} image{pendingDeleteIds.size === 1 ? '' : 's'} marked for deletion. Click the ↺ on a tile to undo, Cancel to discard all, or Save Draft / Book Call to confirm.
                       </p>
                     )}
@@ -7569,7 +7569,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                     />
                     {stashed.length > 0 && (
                       <>
-                        <p className="text-[11px] text-muted-foreground mt-1">
+                        <p className="text-xs text-muted-foreground mt-1">
                           {stashed.length} file{stashed.length === 1 ? '' : 's'} staged. Will upload on Save Draft / Book Call.
                         </p>
                         {/*
@@ -7613,8 +7613,8 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                                     className="w-full h-full object-cover"
                                   />
                                 ) : (
-                                  <div className="w-full h-full flex flex-col items-center justify-center text-[9px] text-muted-foreground text-center p-1 break-all">
-                                    <span className="font-bold text-xs">PDF</span>
+                                  <div className="w-full h-full flex flex-col items-center justify-center text-xs text-muted-foreground text-center p-1 break-all">
+                                    <span className="font-semibold text-xs">PDF</span>
                                     <span className="line-clamp-2">{file.name}</span>
                                   </div>
                                 )}
@@ -7632,12 +7632,12 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                                   </div>
                                 )}
                                 {status === 'done' && (
-                                  <div className="absolute inset-0 bg-emerald-500/70 flex items-center justify-center text-white text-2xl font-bold">
+                                  <div className="absolute inset-0 bg-success/70 flex items-center justify-center text-white text-2xl font-semibold">
                                     ✓
                                   </div>
                                 )}
                                 {status === 'error' && (
-                                  <div className="absolute inset-0 bg-rose-600/75 flex items-center justify-center text-white text-2xl font-bold">
+                                  <div className="absolute inset-0 bg-urgent/75 flex items-center justify-center text-white text-2xl font-semibold">
                                     !
                                   </div>
                                 )}
@@ -7646,7 +7646,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                                     type="button"
                                     aria-label={`Remove ${file.name}`}
                                     onClick={() => removeAt(i)}
-                                    className="absolute top-0 right-0 bg-black/65 hover:bg-black/90 text-white rounded-bl-md w-5 h-5 flex items-center justify-center text-xs font-bold leading-none"
+                                    className="absolute top-0 right-0 bg-black/65 hover:bg-black/90 text-white rounded-bl-md w-5 h-5 flex items-center justify-center text-xs font-semibold leading-none"
                                   >
                                     ×
                                   </button>
@@ -7702,7 +7702,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                   rows={3}
                   value={getJobField('job_desc') ?? ''}
                   onChange={(e) => setJobField('job_desc', e.target.value)}
-                  className="flex w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 resize-y"
+                  className="flex w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary resize-y"
                   placeholder="Describe the work required"
                 />
               </Field>
@@ -7712,7 +7712,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                   rows={3}
                   value={getJobField('efr_special_notes') ?? ''}
                   onChange={(e) => setJobField('efr_special_notes', e.target.value)}
-                  className="flex w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 resize-y"
+                  className="flex w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary resize-y"
                   placeholder="Notes for the technician"
                 />
               </Field>
@@ -7742,7 +7742,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 }
               />
               {collectedByPref && (
-                <p className="text-[11px] text-muted-foreground mt-1">
+                <p className="text-xs text-muted-foreground mt-1">
                   Locked by client profile (Collected By = {collectedByDisplay(collectedByPref)}).
                 </p>
               )}
@@ -7775,7 +7775,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             <Button
               type="button"
               variant="outline"
-              className="bg-teal-500 hover:bg-teal-600 text-white border-teal-500 hover:text-white"
+              className="bg-success hover:bg-success-strong text-white border-success hover:text-white"
               onClick={() => setAddRemarksFormOpen(true)}
               disabled={!initial?.job_id}
               title={initial?.job_id ? 'Add a remark / note to this job' : 'Save the job first, then add remarks'}
@@ -7846,7 +7846,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             }}
             disabled={submitting}
             title="Save current details to DB without changing status. Reopen this job later to continue."
-            className="border-amber-400 text-amber-700 hover:bg-amber-50"
+            className="border-warning text-warning-strong hover:bg-warning/15"
           >
             {submitting && submitVariant === 'draft' ? 'Saving Draft…' : 'Save Draft'}
           </Button>
@@ -7870,7 +7870,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                   ? 'Add at least one service in the Products section before booking.'
                   : ''
             }
-            className="bg-purple-600 hover:bg-purple-700 text-white"
+            className="bg-gold hover:bg-gold-strong text-white"
           >
             Book Call
           </LoadBtn>
@@ -8140,7 +8140,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
           title="1. Client Details"
           expanded={openSection === 1}
           onToggle={() => setOpenSection(1)}
-          badge={section1Complete ? <span className="text-emerald-600 text-xs">✓</span> : null}
+          badge={section1Complete ? <span className="text-success-strong text-xs">✓</span> : null}
         >
           {/*
             * Section 1 — Client Details (legacy "Book New Call" parity).
@@ -8442,7 +8442,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             expanded={openSection === 2}
             onToggle={() => { if (section1Complete) setOpenSection(2); }}
             disabled={!section1Complete}
-            badge={section2Complete ? <span className="text-emerald-600 text-xs">✓</span> : null}
+            badge={section2Complete ? <span className="text-success-strong text-xs">✓</span> : null}
           >
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <Field label="Customer Name *"><Input required value={f.customer_name} onChange={(e) => set('customer_name', e.target.value)} /></Field>
@@ -8474,7 +8474,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                     />
                   </div>
                 ) : (
-                  <p className="mt-1.5 text-xs text-amber-700">
+                  <p className="mt-1.5 text-xs text-warning-strong">
                     Calling becomes available after the call is booked — this is a new customer not yet on file.
                   </p>
                 )}
@@ -8512,11 +8512,11 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                           onChange={(e) => set('additional_number', normalizeMobileDigits(e.target.value))}
                           inputMode="numeric"
                           placeholder="10 digits"
-                          className={`font-mono ${!isValid ? 'border-red-400 focus-visible:ring-red-300' : ''}`}
+                          className={`font-mono ${!isValid ? 'border-urgent focus-visible:ring-urgent' : ''}`}
                           aria-invalid={!isValid}
                         />
                         {!isValid && (
-                          <p className="text-[11px] text-red-600 mt-1">{INDIAN_MOBILE_ERROR}</p>
+                          <p className="text-xs text-urgent-strong mt-1">{INDIAN_MOBILE_ERROR}</p>
                         )}
                       </>
                     );
@@ -8697,7 +8697,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                         <button
                           type="button"
                           title="Edit this saved address"
-                          className="text-sky-600 hover:text-sky-800 px-1"
+                          className="text-primary hover:text-brand-600 px-1"
                           onClick={(e) => {
                             e.preventDefault();
                             setAddressEdit({ open: true, address: a });
@@ -8710,7 +8710,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                         <button
                           type="button"
                           title="Delete this saved address"
-                          className="text-rose-600 hover:text-rose-800 disabled:opacity-30 px-1"
+                          className="text-urgent hover:text-urgent-strong disabled:opacity-30 px-1"
                           disabled={(prefillCustomer.addresses?.length ?? 0) <= 1}
                           onClick={async (e) => {
                             e.preventDefault();
@@ -8766,7 +8766,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                   {hiddenCount > 0 && (
                     <button
                       type="button"
-                      className="text-xs text-sky-700 hover:text-sky-900 hover:underline pt-1"
+                      className="text-xs text-primary hover:text-brand-700 hover:underline pt-1"
                       onClick={() => setAddressShowAll(true)}
                     >
                       View all {matches.length} addresses ({hiddenCount} more)
@@ -8825,7 +8825,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                     .join(', ') || '—';
                 })()}
                 rows={2}
-                className="mt-1 w-full rounded-md border border-input bg-slate-100 px-3 py-1.5 text-sm text-slate-700 resize-none"
+                className="mt-1 w-full rounded-md border border-input bg-ink-100 px-3 py-1.5 text-sm text-ink-700 resize-none"
               />
             </div>
             <AddressPickerWithMap
@@ -9088,7 +9088,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                         className={
                           'px-3 py-1.5 text-sm -mb-px border-b-2 transition-colors ' +
                           (active
-                            ? 'border-sky-600 text-sky-700 font-medium'
+                            ? 'border-primary text-primary font-medium'
                             : 'border-transparent text-muted-foreground hover:text-foreground')
                         }
                       >
@@ -9174,7 +9174,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                           }}
                         />
                         {stashed.length > 0 && (
-                          <p className="text-[11px] text-muted-foreground mt-1">
+                          <p className="text-xs text-muted-foreground mt-1">
                             {stashed.length} file{stashed.length === 1 ? '' : 's'} ready for this job tab.
                           </p>
                         )}
@@ -9216,7 +9216,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                     rows={3}
                     value={getJobField('job_desc') ?? ''}
                     onChange={(e) => setJobField('job_desc', e.target.value)}
-                    className="w-full border rounded px-3 py-2 text-sm bg-white resize-y"
+                    className="w-full border rounded px-3 py-2 text-sm bg-card resize-y"
                     placeholder="Describe the work required"
                   />
                 </Field>
@@ -9226,7 +9226,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                     rows={3}
                     value={getJobField('efr_special_notes') ?? ''}
                     onChange={(e) => setJobField('efr_special_notes', e.target.value)}
-                    className="w-full border rounded px-3 py-2 text-sm bg-white resize-y"
+                    className="w-full border rounded px-3 py-2 text-sm bg-card resize-y"
                     placeholder="Notes for the technician"
                   />
                 </Field>
@@ -9265,7 +9265,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                     }
                   />
                   {collectedByPref && (
-                    <p className="text-[11px] text-muted-foreground mt-1">
+                    <p className="text-xs text-muted-foreground mt-1">
                       Locked by client profile (Collected By = {collectedByDisplay(collectedByPref)}).
                     </p>
                   )}
@@ -9306,7 +9306,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             <Button
               type="button"
               variant="outline"
-              className="bg-teal-500 hover:bg-teal-600 text-white border-teal-500 hover:text-white"
+              className="bg-success hover:bg-success-strong text-white border-success hover:text-white"
               onClick={() => setAddRemarksFormOpen(true)}
               title="Add a remark / note to this job"
             >
@@ -9347,7 +9347,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
               type="submit"
               loading={submitting && submitVariant === 'book'}
               onClick={() => setSubmitVariant('book')}
-              className="bg-purple-600 hover:bg-purple-700 text-white"
+              className="bg-gold hover:bg-gold-strong text-white"
             >
               Book Call
             </LoadBtn>
@@ -9585,7 +9585,7 @@ function ServicesBasket({
   }
   if (services !== null && services.length === 0) {
     return (
-      <div className="text-sm text-amber-900 rounded border border-amber-200 bg-amber-50 px-3 py-2">
+      <div className="text-sm text-warning-strong rounded border border-warning bg-warning-tint px-3 py-2">
         This client has no active rate-carded services. Map them under <em>Settings → Manage Services</em> (or ask the BD owner) before picking services here.
       </div>
     );
@@ -9668,7 +9668,7 @@ function ServicesBasket({
                   ? <span className="text-muted-foreground">—</span>
                   : <>₹{lineAmount.toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })}</>}
                 {rate !== null && qty > 0 && (
-                  <span className="text-[10px] text-muted-foreground ml-1.5">
+                  <span className="text-xs text-muted-foreground ml-1.5">
                     ({qty} × ₹{rate.toLocaleString('en-IN', { maximumFractionDigits: 2 })})
                   </span>
                 )}
@@ -9703,7 +9703,7 @@ function ServicesBasket({
           <span className="text-muted-foreground mr-2">Total:</span>
           <strong>₹{grandTotal.toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })}</strong>
           {anyMissingRate && (
-            <span className="text-[10px] text-amber-700 ml-2">(some services have no rate — total excludes them)</span>
+            <span className="text-xs text-warning-strong ml-2">(some services have no rate — total excludes them)</span>
           )}
         </div>
       </div>
@@ -9765,7 +9765,7 @@ function AutoServicesTable({
   }
   if (services.length === 0) {
     return (
-      <div className="text-sm text-amber-900 rounded border border-amber-200 bg-amber-50 px-3 py-2">
+      <div className="text-sm text-warning-strong rounded border border-warning bg-warning-tint px-3 py-2">
         This client has no active rate-carded services. Map them under <em>Settings → Manage Services</em> before booking.
       </div>
     );
@@ -9803,7 +9803,7 @@ function AutoServicesTable({
 
   if (candidates.length === 0) {
     return (
-      <div className="text-sm text-amber-900 rounded border border-amber-200 bg-amber-50 px-3 py-2">
+      <div className="text-sm text-warning-strong rounded border border-warning bg-warning-tint px-3 py-2">
         The selected Service Type(s) aren&apos;t mapped on this client&apos;s rate card. Pick a different type or map the service under <em>Settings → Manage Services</em>.
       </div>
     );
@@ -9951,7 +9951,7 @@ function AutoServicesTable({
             const qty = added && row ? (Number(row.quantity) || 0) : 0;
             const lineAmount = added && kind === 'fixed' && rate !== null ? rate * qty : null;
             return (
-              <tr key={csId} className={`border-t transition-colors ${added ? 'bg-sky-50/40' : 'hover:bg-muted/30'}`}>
+              <tr key={csId} className={`border-t transition-colors ${added ? 'bg-info-tint/40' : 'hover:bg-muted/30'}`}>
                 <td className="px-2 py-2 text-center">
                   {/* Cleaner inline toggle — flat icon button, no
                       coloured chip. The row's own background tint is
@@ -9964,7 +9964,7 @@ function AutoServicesTable({
                       onClick={() => removeService(csId)}
                       title="Remove from booking"
                       aria-label="Remove from booking"
-                      className="inline-flex items-center justify-center h-7 w-7 rounded text-rose-600 hover:bg-rose-50 hover:text-rose-700 transition-colors"
+                      className="inline-flex items-center justify-center h-7 w-7 rounded text-urgent hover:bg-urgent/15 hover:text-urgent-strong transition-colors"
                     >
                       <X className="h-4 w-4" />
                     </button>
@@ -9974,7 +9974,7 @@ function AutoServicesTable({
                       onClick={() => addService(s)}
                       title="Add to booking"
                       aria-label="Add to booking"
-                      className="inline-flex items-center justify-center h-7 w-7 rounded text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 transition-colors"
+                      className="inline-flex items-center justify-center h-7 w-7 rounded text-success-strong hover:bg-success/15 hover:text-success-strong transition-colors"
                     >
                       <Plus className="h-4 w-4" />
                     </button>
@@ -10021,12 +10021,12 @@ function AutoServicesTable({
                       as "variable" — see `resolveRate` docblock. */}
                   {kind === 'fixed' && rate !== null
                     ? `₹${rate.toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`
-                    : <span className="text-[11px] text-amber-700" title="Rate not configured on this client's rate card">Not set</span>}
+                    : <span className="text-xs text-warning-strong" title="Rate not configured on this client's rate card">Not set</span>}
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums">
                   {!added ? <span className="text-muted-foreground">—</span>
                     : lineAmount === null
-                      ? <span className="text-[11px] text-amber-700">—</span>
+                      ? <span className="text-xs text-warning-strong">—</span>
                       : `₹${lineAmount.toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`}
                 </td>
               </tr>
@@ -10044,7 +10044,7 @@ function AutoServicesTable({
             <td className="px-3 py-2 text-right tabular-nums font-semibold">
               ₹{grandTotal.toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })}
               {anyAddedMissingRate && (
-                <div className="text-[10px] text-amber-700 font-normal">
+                <div className="text-xs text-warning-strong font-normal">
                   (some services have no rate configured — excluded from total)
                 </div>
               )}
@@ -10122,7 +10122,7 @@ function CustomerHistoryDialog({
             <div className="text-sm text-muted-foreground py-8 text-center">Loading…</div>
           )}
           {err && (
-            <div className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded px-2 py-1">{err}</div>
+            <div className="text-sm text-urgent-strong bg-urgent-tint border border-urgent rounded px-2 py-1">{err}</div>
           )}
           {!loading && !err && rows && rows.length === 0 && (
             <div className="text-sm text-muted-foreground py-8 text-center">
@@ -10372,9 +10372,9 @@ function AutoAssignDialog({ open, onClose, jobId, currentTech, onAssigned }: {
 
         {data && !loading && eligibleCandidates.length > 0 && (
           <div className="space-y-3">
-            <div className="rounded-lg border p-3 bg-emerald-50/50">
+            <div className="rounded-lg border p-3 bg-success-tint/50">
               <div className="flex items-center justify-between mb-1">
-                <div className="text-xs uppercase tracking-wider text-emerald-700 font-semibold">Recommended</div>
+                <div className="text-xs uppercase tracking-wider text-success-strong font-semibold">Recommended</div>
                 <div className="flex items-center gap-3">
                   <div className="text-xs text-muted-foreground">Match score: {top!.score}</div>
                   <LoadBtn size="sm" onClick={() => pick(top!.efr_id)} loading={picking === top!.efr_id} disabled={picking !== null}>
@@ -10958,16 +10958,16 @@ function JobOutcomeDialog({
             assumes the parent has p-6 padding, but we use `!p-0` to
             let the band sit edge-to-edge. DialogTitle alone satisfies
             Radix's a11y check. */}
-        <div className="px-6 py-4 bg-gradient-to-r from-slate-900 via-slate-700 to-slate-900 text-white flex items-center gap-2.5 shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]">
-          <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-sky-500/20 ring-1 ring-sky-400/40">
-            <Pencil className="h-3.5 w-3.5 text-sky-300" />
+        <div className="px-6 py-4 bg-gradient-to-r from-ink-900 via-ink-700 to-ink-900 text-white flex items-center gap-2.5 shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]">
+          <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-info/20 ring-1 ring-info/40">
+            <Pencil className="h-3.5 w-3.5 text-info-tint" />
           </span>
           <DialogTitle className="text-[15px] font-semibold tracking-tight">{title}</DialogTitle>
         </div>
         <form onSubmit={handleSubmit} className="p-5 space-y-4">
           <div className="grid grid-cols-[150px_1fr] items-center gap-3">
             <label className="text-sm font-medium text-right">
-              {dueLabel}<span className="text-rose-600">*</span>
+              {dueLabel}<span className="text-urgent-strong">*</span>
             </label>
             <div className="flex flex-wrap items-center gap-4">
               {DUE_TO_OPTIONS.map((opt) => (
@@ -10978,7 +10978,7 @@ function JobOutcomeDialog({
                     value={opt}
                     checked={dueTo === opt}
                     onChange={() => setDueTo(opt)}
-                    className="accent-purple-600"
+                    className="accent-gold"
                   />
                   {opt === 'Customer' ? 'By Customer' : opt}
                 </label>
@@ -10987,7 +10987,7 @@ function JobOutcomeDialog({
           </div>
           <div className="grid grid-cols-[150px_1fr] items-center gap-3">
             <label className="text-sm font-medium text-right">
-              {reasonLabel}<span className="text-rose-600">*</span>
+              {reasonLabel}<span className="text-urgent-strong">*</span>
             </label>
             <SearchSelect
               value={reason}
@@ -11000,7 +11000,7 @@ function JobOutcomeDialog({
           </div>
           <div className="grid grid-cols-[150px_1fr] items-start gap-3">
             <label className="text-sm font-medium text-right pt-2">
-              Remarks<span className="text-rose-600">*</span>
+              Remarks<span className="text-urgent-strong">*</span>
             </label>
             <textarea
               required
@@ -11014,7 +11014,7 @@ function JobOutcomeDialog({
           <div className="flex justify-end gap-2 pt-2 border-t">
             <Button
               type="submit"
-              className="bg-teal-500 hover:bg-teal-600 text-white"
+              className="bg-success hover:bg-success-strong text-white"
               disabled={!reason || !remarks.trim()}
             >
               Submit
@@ -11022,7 +11022,7 @@ function JobOutcomeDialog({
             <Button
               type="button"
               variant="outline"
-              className="bg-rose-500 hover:bg-rose-600 text-white border-rose-500 hover:text-white"
+              className="bg-urgent hover:bg-urgent-strong text-white border-urgent hover:text-white"
               onClick={onClose}
             >
               Cancel
@@ -11037,8 +11037,8 @@ function JobOutcomeDialog({
 function NumberedSection({ num, title, children }: { num: number; title: string; children: React.ReactNode }) {
   return (
     <section className="rounded-lg border bg-card">
-      <div className="flex items-center gap-3 px-5 py-3 border-b bg-sky-700 text-white rounded-t-lg">
-        <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-white text-sky-800 text-sm font-semibold">{num}</span>
+      <div className="flex items-center gap-3 px-5 py-3 border-b bg-info-strong text-info-tint rounded-t-lg">
+        <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-card text-info-strong text-sm font-semibold">{num}</span>
         <h3 className="text-sm font-semibold">{title}</h3>
       </div>
       <div className="p-5">{children}</div>
@@ -11095,8 +11095,8 @@ function ChangeDescriptionDialog({ open, onClose, initialDesc, onSubmit }: {
             placeholder="Describe the work to be done…"
             maxLength={2000}
           />
-          <div className="text-[10px] text-muted-foreground text-right">{desc.length} / 2000</div>
-          {err && <div className="text-sm text-red-600">{err}</div>}
+          <div className="text-xs text-muted-foreground text-right">{desc.length} / 2000</div>
+          {err && <div className="text-sm text-urgent-strong">{err}</div>}
           <div className="flex justify-end gap-2 pt-2">
             <CancelButton onCancel={onClose} disabled={loading} />
             <Button onClick={go} disabled={loading}>{loading ? 'Saving…' : 'Save'}</Button>
@@ -11230,7 +11230,7 @@ function FeedbackDialog({ open, onClose, jobId, onSaved }: {
               <option value="0">No</option>
             </select>
           </div>
-          {err && <div className="text-sm text-red-600">{err}</div>}
+          {err && <div className="text-sm text-urgent-strong">{err}</div>}
           <div className="flex justify-end gap-2 pt-2">
             <CancelButton onCancel={onClose} disabled={loading} />
             <Button onClick={go} disabled={loading}>{loading ? 'Saving…' : 'Save Feedback'}</Button>

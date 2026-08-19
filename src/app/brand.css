@@ -1,0 +1,128 @@
+/*
+ * GENERATED FILE — do not edit.
+ *
+ * Source: src/brand/tokens.ts (semantic map) over src/brand/palette.ts (the
+ * brand primitives). Regenerate with `npm run brand:gen`; `npm run
+ * brand:verify` fails the build if this file has drifted from its source.
+ *
+ * Values are space-separated HSL triplets because Tailwind consumes them as
+ * hsl(var(--token)) — that is what lets `bg-primary/10` and `border-border/40`
+ * work. Authoring happens in hex, in palette.ts.
+ *
+ * Deliberately NOT wrapped in @layer base: an @import gives this file its own
+ * PostCSS scope, where `@layer base` has no matching `@tailwind base` and the
+ * build fails outright. Custom-property declarations need no layering — they
+ * are definitions, not rules competing on specificity.
+ */
+:root {
+  --background: 200 15.79% 96.27%;
+  --foreground: 210 14.81% 10.59%;
+  --card: 0 0% 100%;
+  --card-foreground: 210 14.81% 10.59%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 210 14.81% 10.59%;
+  --primary: 355.5 68.97% 45.49%;
+  --primary-foreground: 0 0% 100%;
+  --primary-pressed: 355.59 68.69% 38.82%;
+  --secondary: 210 12.5% 90.59%;
+  --secondary-foreground: 210 14.81% 10.59%;
+  --muted: 210 12.5% 90.59%;
+  --muted-foreground: 212 7.54% 39.02%;
+  --accent: 354.55 57.89% 96.27%;
+  --accent-foreground: 355.51 69.03% 30.39%;
+  --destructive: 355.59 68.69% 38.82%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 210 12.5% 90.59%;
+  --input: 210 12.5% 90.59%;
+  --ring: 355.5 68.97% 45.49%;
+  --sidebar: 210 14.81% 10.59%;
+  --sidebar-foreground: 212 8.02% 63.33%;
+  --sidebar-accent: 212.73 9.24% 23.33%;
+  --ink-900: 210 14.81% 10.59%;
+  --ink-700: 212.73 9.24% 23.33%;
+  --ink-500: 212 7.54% 39.02%;
+  --ink-300: 212 8.02% 63.33%;
+  --ink-100: 210 12.5% 90.59%;
+  --ink-50: 200 15.79% 96.27%;
+  --brand-50: 354.55 57.89% 96.27%;
+  --brand-100: 355 57.14% 91.76%;
+  --brand-500: 355.5 68.97% 45.49%;
+  --brand-600: 355.59 68.69% 38.82%;
+  --brand-700: 355.51 69.03% 30.39%;
+  --success: 148.85 70.81% 36.27%;
+  --success-tint: 145.26 48.72% 92.35%;
+  --success-strong: 149.23 73.58% 20.78%;
+  --warning: 37.89 87.45% 46.86%;
+  --warning-tint: 39.43 85.37% 91.96%;
+  --warning-strong: 37.06 91.07% 21.96%;
+  --urgent: 355.59 68.69% 38.82%;
+  --urgent-tint: 355 57.14% 91.76%;
+  --urgent-strong: 355.51 69.03% 30.39%;
+  --info: 212.21 63.95% 45.69%;
+  --info-tint: 210 68.75% 93.73%;
+  --info-strong: 212.78 66.67% 31.76%;
+  --info-deep: 215.41 65.59% 18.24%;
+  --gold: 41.81 62.75% 48.43%;
+  --gold-tint: 42.86 81.4% 91.57%;
+  --gold-strong: 40.59 91.07% 21.96%;
+  --neutral: 212 7.54% 39.02%;
+  --neutral-tint: 210 12.5% 90.59%;
+  --neutral-strong: 212.73 9.24% 23.33%;
+  --radius: 0.75rem;
+}
+
+.dark {
+  --background: 210 14.81% 10.59%;
+  --foreground: 200 15.79% 96.27%;
+  --card: 212.73 9.24% 23.33%;
+  --card-foreground: 200 15.79% 96.27%;
+  --popover: 212.73 9.24% 23.33%;
+  --popover-foreground: 200 15.79% 96.27%;
+  --primary: 355.5 68.97% 45.49%;
+  --primary-foreground: 0 0% 100%;
+  --primary-pressed: 355.59 68.69% 38.82%;
+  --secondary: 212.73 9.24% 23.33%;
+  --secondary-foreground: 200 15.79% 96.27%;
+  --muted: 212.73 9.24% 23.33%;
+  --muted-foreground: 212 8.02% 63.33%;
+  --accent: 355.51 69.03% 30.39%;
+  --accent-foreground: 355 57.14% 91.76%;
+  --destructive: 355.59 68.69% 38.82%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 212.73 9.24% 23.33%;
+  --input: 212.73 9.24% 23.33%;
+  --ring: 355.5 68.97% 45.49%;
+  --sidebar: 210 14.81% 10.59%;
+  --sidebar-foreground: 212 8.02% 63.33%;
+  --sidebar-accent: 212.73 9.24% 23.33%;
+  --ink-900: 200 15.79% 96.27%;
+  --ink-700: 210 12.5% 90.59%;
+  --ink-500: 212 8.02% 63.33%;
+  --ink-300: 212 7.54% 39.02%;
+  --ink-100: 212.73 9.24% 23.33%;
+  --ink-50: 210 14.81% 10.59%;
+  --brand-50: 355.51 69.03% 30.39%;
+  --brand-100: 355.59 68.69% 38.82%;
+  --brand-500: 355.5 68.97% 45.49%;
+  --brand-600: 355.59 68.69% 38.82%;
+  --brand-700: 355 57.14% 91.76%;
+  --success: 148.85 70.81% 36.27%;
+  --success-tint: 149.23 73.58% 20.78%;
+  --success-strong: 145.26 48.72% 92.35%;
+  --warning: 37.89 87.45% 46.86%;
+  --warning-tint: 37.06 91.07% 21.96%;
+  --warning-strong: 39.43 85.37% 91.96%;
+  --urgent: 355.59 68.69% 38.82%;
+  --urgent-tint: 355.51 69.03% 30.39%;
+  --urgent-strong: 355 57.14% 91.76%;
+  --info: 212.21 63.95% 45.69%;
+  --info-tint: 215.41 65.59% 18.24%;
+  --info-strong: 210 68.75% 93.73%;
+  --info-deep: 210 68.75% 93.73%;
+  --gold: 41.81 62.75% 48.43%;
+  --gold-tint: 40.59 91.07% 21.96%;
+  --gold-strong: 42.86 81.4% 91.57%;
+  --neutral: 212 8.02% 63.33%;
+  --neutral-tint: 212.73 9.24% 23.33%;
+  --neutral-strong: 210 12.5% 90.59%;
+}

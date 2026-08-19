@@ -176,7 +176,7 @@ export default function ManageZoneDetail() {
   }
 
   if (!validZone) return <div className="p-4 text-sm text-destructive">Invalid Zone Id</div>;
-  if (loadErr) return <div className="p-4 text-sm text-red-600">{loadErr}</div>;
+  if (loadErr) return <div className="p-4 text-sm text-urgent">{loadErr}</div>;
   if (!zone) return <div className="p-4 text-sm text-muted-foreground">Loading…</div>;
 
   return (
@@ -191,10 +191,10 @@ export default function ManageZoneDetail() {
         <div>
           <h1 className="text-2xl font-semibold">{zone.zone_name}</h1>
           <div className="text-sm text-muted-foreground mt-0.5">
-            <Building2 className="inline h-4 w-4 mr-1 text-sky-700" />
+            <Building2 className="inline h-4 w-4 mr-1 text-info" />
             {zone.city_name ?? 'No City'} · ID {zone.zone_id}
             {zone.zone_status
-              ? <span className="ml-3 text-emerald-700 text-xs">● Active</span>
+              ? <span className="ml-3 text-success-strong text-xs">● Active</span>
               : <span className="ml-3 text-muted-foreground text-xs">○ Inactive</span>}
           </div>
         </div>
@@ -205,18 +205,18 @@ export default function ManageZoneDetail() {
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <SummaryCard icon={<MapPin className="h-4 w-4 text-violet-700" />} label="Pincodes In Zone" value={picked.size} />
-        <SummaryCard icon={<Search className="h-4 w-4 text-amber-600" />}  label="Matching Search"  value={resultTotal} />
-        <SummaryCard icon={<Building2 className="h-4 w-4 text-sky-700" />} label="Technicians"      value={zone.technician_count} />
+        <SummaryCard icon={<MapPin className="h-4 w-4 text-gold-strong" />} label="Pincodes In Zone" value={picked.size} />
+        <SummaryCard icon={<Search className="h-4 w-4 text-warning" />}  label="Matching Search"  value={resultTotal} />
+        <SummaryCard icon={<Building2 className="h-4 w-4 text-info" />} label="Technicians"      value={zone.technician_count} />
       </div>
 
-      {err     && <Card><CardContent className="p-3 text-sm text-red-600    flex items-center gap-2"><AlertTriangle className="h-4 w-4" /> {err}</CardContent></Card>}
-      {success && <Card><CardContent className="p-3 text-sm text-emerald-700 flex items-center gap-2"><CheckCircle2  className="h-4 w-4" /> {success}</CardContent></Card>}
+      {err     && <Card><CardContent className="p-3 text-sm text-urgent    flex items-center gap-2"><AlertTriangle className="h-4 w-4" /> {err}</CardContent></Card>}
+      {success && <Card><CardContent className="p-3 text-sm text-success-strong flex items-center gap-2"><CheckCircle2  className="h-4 w-4" /> {success}</CardContent></Card>}
 
       {rejected.length > 0 && (
         <Card>
           <CardContent className="p-3 text-sm space-y-1">
-            <div className="font-medium text-amber-700">Rejected Rows ({rejected.length})</div>
+            <div className="font-medium text-warning-strong">Rejected Rows ({rejected.length})</div>
             <ul className="list-disc pl-5 text-xs text-muted-foreground">
               {rejected.slice(0, 20).map((r, i) => (
                 <li key={i}>
@@ -303,7 +303,7 @@ export default function ManageZoneDetail() {
                           <td className="!text-left">{p.district ?? <span className="text-muted-foreground">—</span>}</td>
                           <td className="!text-center text-xs">
                             {checked
-                              ? <span className="text-emerald-700">In This Zone</span>
+                              ? <span className="text-success-strong">In This Zone</span>
                               : <span className="text-muted-foreground">Not In This Zone</span>}
                           </td>
                         </tr>

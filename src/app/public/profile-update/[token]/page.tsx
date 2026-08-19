@@ -43,7 +43,7 @@
  */
 
 import { useParams } from 'next/navigation';
-import Image from 'next/image';
+import { Logo } from '@/components/brand/Logo';
 import * as React from 'react';
 import {
   ChevronDown,
@@ -167,12 +167,12 @@ function OtpGate({
   }
 
   return (
-    <div className="rounded-md border border-sky-200 bg-sky-50 p-4 space-y-3">
+    <div className="rounded-md border border-info/30 bg-info-tint p-4 space-y-3">
       <div className="flex items-start gap-2">
-        <CheckCircle2 className="h-5 w-5 text-sky-600 shrink-0 mt-0.5" />
+        <CheckCircle2 className="h-5 w-5 text-info shrink-0 mt-0.5" />
         <div>
-          <p className="text-sm font-semibold text-sky-900">Verify Via WhatsApp OTP</p>
-          <p className="text-xs text-sky-700 mt-0.5">
+          <p className="text-sm font-semibold text-info-strong">Verify Via WhatsApp OTP</p>
+          <p className="text-xs text-info-strong mt-0.5">
             We'll send a 4-digit code to your registered WhatsApp number to confirm this change.
           </p>
         </div>
@@ -182,7 +182,7 @@ function OtpGate({
         <Button
           onClick={handleSendOtp}
           disabled={otpSending}
-          className="w-full sm:w-auto h-10 bg-sky-600 hover:bg-sky-700 text-white"
+          className="w-full sm:w-auto h-10 bg-primary hover:bg-brand-600 text-primary-foreground"
         >
           {otpSending ? (
             <><Loader2 className="h-4 w-4 animate-spin mr-2" />Sending OTP…</>
@@ -192,7 +192,7 @@ function OtpGate({
         </Button>
       ) : (
         <div className="space-y-2">
-          <p className="text-xs text-sky-700">
+          <p className="text-xs text-info-strong">
             OTP sent! Enter the 4-digit code you received on WhatsApp.
           </p>
           <div className="flex gap-2 items-center">
@@ -213,7 +213,7 @@ function OtpGate({
             <Button
               onClick={handleVerify}
               disabled={sending || otpValue.length !== 4}
-              className="h-11 sm:h-9 bg-emerald-600 hover:bg-emerald-700 text-white"
+              className="h-11 sm:h-9 bg-success hover:bg-success-strong text-white"
             >
               {sending ? (
                 <><Loader2 className="h-4 w-4 animate-spin mr-2" />Saving…</>
@@ -226,7 +226,7 @@ function OtpGate({
             type="button"
             onClick={handleSendOtp}
             disabled={otpSending}
-            className="text-xs text-sky-600 underline underline-offset-2 hover:text-sky-800 disabled:opacity-50"
+            className="text-xs text-primary underline underline-offset-2 hover:text-brand-600 disabled:opacity-50"
           >
             Resend OTP
           </button>
@@ -235,7 +235,7 @@ function OtpGate({
 
       {/* Errors: either OTP gate errors or the parent's save error */}
       {(otpError || saveError) ? (
-        <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+        <div className="rounded-md border border-urgent/30 bg-urgent-tint px-3 py-2 text-sm text-urgent-strong">
           {otpError || saveError}
         </div>
       ) : null}
@@ -243,7 +243,7 @@ function OtpGate({
       <button
         type="button"
         onClick={onCancel}
-        className="text-xs text-slate-500 underline underline-offset-2 hover:text-slate-700"
+        className="text-xs text-ink-500 underline underline-offset-2 hover:text-ink-700"
       >
         Cancel
       </button>
@@ -445,29 +445,29 @@ function SectionShell({
       <button
         type="button"
         onClick={onToggle}
-        className="w-full flex items-center gap-3 px-4 py-4 sm:px-5 text-left bg-white hover:bg-slate-50 transition-colors"
+        className="w-full flex items-center gap-3 px-4 py-4 sm:px-5 text-left bg-card hover:bg-ink-50 transition-colors"
         aria-expanded={open}
       >
-        <span className="shrink-0 rounded-md bg-sky-50 text-sky-600 p-2">{icon}</span>
+        <span className="shrink-0 rounded-md bg-info-tint text-info-strong p-2">{icon}</span>
         <span className="flex-1 min-w-0">
-          <span className="block text-base font-semibold text-slate-900 truncate">{title}</span>
+          <span className="block text-base font-semibold text-ink-900 truncate">{title}</span>
           {subtitle ? (
-            <span className="block text-xs text-slate-500 truncate">{subtitle}</span>
+            <span className="block text-xs text-ink-500 truncate">{subtitle}</span>
           ) : null}
         </span>
         {saved ? (
-          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 text-emerald-700 text-xs font-medium px-2 py-0.5">
+          <span className="inline-flex items-center gap-1 rounded-full bg-success-tint text-success-strong text-xs font-medium px-2 py-0.5">
             <Check className="h-3.5 w-3.5" /> Saved
           </span>
         ) : null}
         {open ? (
-          <ChevronUp className="h-5 w-5 text-slate-500" />
+          <ChevronUp className="h-5 w-5 text-ink-500" />
         ) : (
-          <ChevronDown className="h-5 w-5 text-slate-500" />
+          <ChevronDown className="h-5 w-5 text-ink-500" />
         )}
       </button>
       {open ? (
-        <CardContent className="border-t border-slate-100 bg-slate-50/40 pt-4">{children}</CardContent>
+        <CardContent className="border-t border-ink-100 bg-ink-50/40 pt-4">{children}</CardContent>
       ) : null}
     </Card>
   );
@@ -506,7 +506,7 @@ export default function ProfileUpdatePage() {
       <>
         <ToastHost />
         <div className="min-h-[60vh] flex items-center justify-center">
-          <div className="flex items-center gap-2 text-slate-600">
+          <div className="flex items-center gap-2 text-ink-700">
             <Loader2 className="h-5 w-5 animate-spin" />
             <span className="text-sm">Loading Your Profile…</span>
           </div>
@@ -775,17 +775,10 @@ function ReadyForm({
        *  and the save feedback never renders. */}
       <ToastHost />
       {/* Header band — keeps the logo + the technician's name visible while
-       *  they scroll. No sidebar / no navbar — the layout's bg-slate-50
+       *  they scroll. No sidebar / no navbar — the layout's bg-ink-50
        *  wraps everything. */}
       <header className="mb-4 sm:mb-6 flex items-center gap-3 px-1">
-        <Image
-          src="/logo-icon.png"
-          alt="EasyFix"
-          width={40}
-          height={40}
-          className="rounded-md shrink-0"
-          priority
-        />
+        <Logo variant="icon" surface="auto" height={40} priority />
         <div className="min-w-0">
           {/*
             * Name + mobile removed from this top band (2026-06-11) —
@@ -795,7 +788,7 @@ function ReadyForm({
             * the page-level "Update Your Profile" title here gives the
             * strip room to be the canonical personal-info surface.
             */}
-          <h1 className="text-lg sm:text-xl font-bold text-slate-900 truncate">Update Your Profile</h1>
+          <h1 className="text-lg sm:text-xl font-semibold text-ink-900 truncate">Update Your Profile</h1>
         </div>
       </header>
 
@@ -807,23 +800,23 @@ function ReadyForm({
       {/* Completion banner — both Skills Mapping AND Service Area are required.
           Stays until both have at least one entry saved on the server. */}
       {(!skillsDone || !pincodesDone) ? (
-        <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 flex items-start gap-2">
-          <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+        <div className="mb-4 rounded-md border border-warning/30 bg-warning-tint px-4 py-3 flex items-start gap-2">
+          <AlertTriangle className="h-5 w-5 text-warning shrink-0 mt-0.5" />
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-amber-900">
+            <p className="text-sm font-semibold text-warning-strong">
               Both sections are required to complete your profile.
             </p>
-            <ul className="mt-1.5 space-y-1 text-xs text-amber-800">
+            <ul className="mt-1.5 space-y-1 text-xs text-warning-strong">
               <li className="flex items-center gap-1.5">
                 {skillsDone
-                  ? <Check className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
-                  : <X className="h-3.5 w-3.5 text-amber-600 shrink-0" />}
+                  ? <Check className="h-3.5 w-3.5 text-success shrink-0" />
+                  : <X className="h-3.5 w-3.5 text-warning shrink-0" />}
                 <span>Skills Mapping — {skillsDone ? 'done' : 'still pending'}</span>
               </li>
               <li className="flex items-center gap-1.5">
                 {pincodesDone
-                  ? <Check className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
-                  : <X className="h-3.5 w-3.5 text-amber-600 shrink-0" />}
+                  ? <Check className="h-3.5 w-3.5 text-success shrink-0" />
+                  : <X className="h-3.5 w-3.5 text-warning shrink-0" />}
                 <span>Service Area — {pincodesDone ? 'done' : 'still pending'}</span>
               </li>
             </ul>
@@ -879,9 +872,9 @@ function ReadyForm({
       {/* ───── Single combined action area — sticky to the viewport bottom on
           mobile so the Save button stays reachable after a long scroll through
           Skills + Service Area; reverts to a normal static block on sm+. ───── */}
-      <div className="mt-6 space-y-3 sticky bottom-0 z-20 border-t border-slate-200 bg-slate-50/95 supports-[backdrop-filter]:bg-slate-50/80 backdrop-blur px-1 py-3 sm:static sm:z-auto sm:border-0 sm:bg-transparent sm:px-0 sm:py-0 sm:backdrop-blur-none">
+      <div className="mt-6 space-y-3 sticky bottom-0 z-20 border-t border-ink-100 bg-ink-50/95 supports-[backdrop-filter]:bg-ink-50/80 backdrop-blur px-1 py-3 sm:static sm:z-auto sm:border-0 sm:bg-transparent sm:px-0 sm:py-0 sm:backdrop-blur-none">
         {!bothFilled ? (
-          <p className="text-center text-xs font-medium text-amber-700">
+          <p className="text-center text-xs font-medium text-warning-strong">
             Both Skills Mapping and Service Area are required to save.
           </p>
         ) : null}
@@ -902,10 +895,10 @@ function ReadyForm({
         {!otpGateOpen ? (
           <>
             {error ? (
-              <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>
+              <div className="rounded-md border border-urgent/30 bg-urgent-tint px-3 py-2 text-sm text-urgent-strong">{error}</div>
             ) : null}
             {!enoughPincodes ? (
-              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              <div className="rounded-md border border-warning/30 bg-warning-tint px-3 py-2 text-xs text-warning-strong">
                 Please add at least {MIN_PINCODES} serviceable pincodes to submit — {selPincodes.size} selected.
               </div>
             ) : null}
@@ -916,7 +909,7 @@ function ReadyForm({
                   ? () => { setError(null); setOtpGateOpen(true); }
                   : () => { setError(null); void save(); }}
                 disabled={!canSave || saving}
-                className="h-11 sm:h-9 w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white"
+                className="h-11 sm:h-9 w-full sm:w-auto bg-success hover:bg-success-strong text-white"
               >
                 {saved && !dirty ? 'Saved · Tap To Re-Save' : 'Save Profile'}
               </Button>
@@ -925,7 +918,7 @@ function ReadyForm({
         ) : null}
       </div>
 
-      <p className="mt-6 text-center text-xs text-slate-400 px-2">
+      <p className="mt-6 text-center text-xs text-ink-500 px-2">
         You can re-open this link any time before it expires to make more updates.
       </p>
     </div>
@@ -981,17 +974,17 @@ function ProfileHeaderStrip({ header }: { header: HeaderBlock }) {
             <img
               src={header.profile_image_url}
               alt={header.full_name}
-              className="h-16 w-16 rounded-full object-cover border border-slate-200 shrink-0"
+              className="h-16 w-16 rounded-full object-cover border border-ink-100 shrink-0"
             />
           ) : (
-            <div className="h-16 w-16 rounded-full bg-slate-200 flex items-center justify-center text-slate-600 font-semibold text-lg shrink-0">
+            <div className="h-16 w-16 rounded-full bg-ink-100 flex items-center justify-center text-ink-700 font-semibold text-lg shrink-0">
               {initials}
             </div>
           )}
           <div className="flex-1 min-w-0 space-y-2">
-            <div className="text-base font-semibold text-slate-900">
+            <div className="text-base font-semibold text-ink-900">
               <span>{header.full_name || 'Easyfixer'}</span>
-              <span className="ml-1 text-xs font-normal text-slate-500">(ID: {header.efr_id})</span>
+              <span className="ml-1 text-xs font-normal text-ink-500">(ID: {header.efr_id})</span>
             </div>
             {/*
               * Mobile on its own labelled row (2026-06-11). Was inline
@@ -1003,8 +996,8 @@ function ProfileHeaderStrip({ header }: { header: HeaderBlock }) {
               */}
             {header.efr_no ? (
               <div className="text-xs">
-                <span className="text-slate-500">Mobile:</span>{' '}
-                <span className="text-slate-800 font-medium">{header.efr_no}</span>
+                <span className="text-ink-500">Mobile:</span>{' '}
+                <span className="text-ink-900 font-medium">{header.efr_no}</span>
               </div>
             ) : null}
             <div className="space-y-1.5 text-xs">
@@ -1017,13 +1010,13 @@ function ProfileHeaderStrip({ header }: { header: HeaderBlock }) {
                    * list — reads as natural English instead of the
                    * always-plural "Service Categories: Plumbing".
                    */}
-                  <span className="text-slate-500">
+                  <span className="text-ink-500">
                     {categories.length === 1 ? 'Service Category:' : 'Service Categories:'}
                   </span>{' '}
                   {categories.length === 1 ? (
-                    <span className="text-slate-800 font-medium">{categories[0]}</span>
+                    <span className="text-ink-900 font-medium">{categories[0]}</span>
                   ) : (
-                    <ul className="mt-1 ml-4 list-disc text-slate-800 font-medium space-y-0.5">
+                    <ul className="mt-1 ml-4 list-disc text-ink-900 font-medium space-y-0.5">
                       {categories.map((c, i) => (
                         <li key={i}>{c}</li>
                       ))}
@@ -1033,8 +1026,8 @@ function ProfileHeaderStrip({ header }: { header: HeaderBlock }) {
               ) : null}
               {header.current_city ? (
                 <div>
-                  <span className="text-slate-500">Current Location:</span>{' '}
-                  <span className="text-slate-800 font-medium">{header.current_city}</span>
+                  <span className="text-ink-500">Current Location:</span>{' '}
+                  <span className="text-ink-900 font-medium">{header.current_city}</span>
                 </div>
               ) : null}
               {/*
@@ -1047,14 +1040,14 @@ function ProfileHeaderStrip({ header }: { header: HeaderBlock }) {
                 */}
               {header.pincode ? (
                 <div>
-                  <span className="text-slate-500">Pincode:</span>{' '}
-                  <span className="text-slate-800 font-medium">{header.pincode}</span>
+                  <span className="text-ink-500">Pincode:</span>{' '}
+                  <span className="text-ink-900 font-medium">{header.pincode}</span>
                 </div>
               ) : null}
               {header.joining_date ? (
                 <div>
-                  <span className="text-slate-500">Date of Joining:</span>{' '}
-                  <span className="text-slate-800 font-medium">{formatJoiningDate(header.joining_date)}</span>
+                  <span className="text-ink-500">Date of Joining:</span>{' '}
+                  <span className="text-ink-900 font-medium">{formatJoiningDate(header.joining_date)}</span>
                 </div>
               ) : null}
             </div>
@@ -1072,11 +1065,11 @@ function FullPageError({ title, message, retry }: { title: string; message: stri
     <div className="min-h-[70vh] flex items-center justify-center">
       <Card className="max-w-md w-full">
         <CardContent className="pt-6 pb-6 text-center space-y-3">
-          <div className="mx-auto inline-flex items-center justify-center h-12 w-12 rounded-full bg-rose-100">
-            <AlertTriangle className="h-6 w-6 text-rose-600" />
+          <div className="mx-auto inline-flex items-center justify-center h-12 w-12 rounded-full bg-urgent-tint">
+            <AlertTriangle className="h-6 w-6 text-urgent" />
           </div>
-          <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
-          <p className="text-sm text-slate-600">{message}</p>
+          <h2 className="text-lg font-semibold text-ink-900">{title}</h2>
+          <p className="text-sm text-ink-700">{message}</p>
           {retry ? (
             <Button onClick={retry} className="mt-2">Try Again</Button>
           ) : null}
@@ -1092,12 +1085,12 @@ function FullPageSuccess() {
     <div className="min-h-[70vh] flex items-center justify-center px-4">
       <Card className="max-w-md w-full">
         <CardContent className="pt-8 pb-8 text-center space-y-3">
-          <div className="mx-auto inline-flex items-center justify-center h-14 w-14 rounded-full bg-emerald-100">
-            <CheckCircle2 className="h-7 w-7 text-emerald-600" />
+          <div className="mx-auto inline-flex items-center justify-center h-14 w-14 rounded-full bg-success-tint">
+            <CheckCircle2 className="h-7 w-7 text-success" />
           </div>
-          <h2 className="text-xl font-semibold text-slate-900">Thank You!</h2>
-          <p className="text-sm text-slate-600">Your Profile is Saved.</p>
-          <p className="text-xs text-slate-500">You can close this page now.</p>
+          <h2 className="text-xl font-semibold text-ink-900">Thank You!</h2>
+          <p className="text-sm text-ink-700">Your Profile is Saved.</p>
+          <p className="text-xs text-ink-500">You can close this page now.</p>
         </CardContent>
       </Card>
     </div>
@@ -1119,10 +1112,10 @@ function Field({
   return (
     <div className="space-y-1.5">
       <div className="flex items-baseline justify-between gap-2">
-        <Label htmlFor={htmlFor} className="text-xs font-semibold text-slate-700 uppercase tracking-wide">
+        <Label htmlFor={htmlFor} className="text-xs font-semibold text-ink-700 uppercase tracking-wide">
           {label}
         </Label>
-        {hint ? <span className="text-[11px] text-slate-400 tabular-nums">{hint}</span> : null}
+        {hint ? <span className="text-xs text-ink-500 tabular-nums">{hint}</span> : null}
       </div>
       {children}
     </div>
@@ -1168,7 +1161,7 @@ function SkillsMappingSection({
 function ReadOnlyMappings({ mappings }: { mappings: DeepSkillMapping[] }) {
   if (!mappings.length) {
     return (
-      <div className="rounded-md border border-dashed border-slate-200 bg-white p-4 text-center text-sm text-slate-500">
+      <div className="rounded-md border border-dashed border-ink-100 bg-card p-4 text-center text-sm text-ink-500">
         No Service Categories Mapped Yet. Please Contact Your CRM To Set Up Your Profile.
       </div>
     );
@@ -1188,17 +1181,17 @@ function ReadOnlyMappings({ mappings }: { mappings: DeepSkillMapping[] }) {
     <div className="space-y-3">
       <div className="space-y-3">
         {Array.from(byCatg.entries()).map(([catgId, catg]) => (
-          <div key={catgId} className="rounded-md border border-slate-200 bg-white p-3">
-            <div className="text-sm font-semibold text-slate-800">{catg.name}</div>
+          <div key={catgId} className="rounded-md border border-ink-100 bg-card p-3">
+            <div className="text-sm font-semibold text-ink-900">{catg.name}</div>
             <div className="mt-2 space-y-2">
               {Array.from(catg.types.entries()).map(([typeId, type]) => (
-                <div key={typeId} className="pl-3 border-l-2 border-slate-200">
-                  <div className="text-xs font-medium text-slate-600">{type.name}</div>
+                <div key={typeId} className="pl-3 border-l-2 border-ink-100">
+                  <div className="text-xs font-medium text-ink-700">{type.name}</div>
                   <div className="mt-1 space-y-1">
                     {Array.from(type.skills.entries()).map(([skillId, skill]) => (
                       <div key={skillId} className="text-xs">
-                        <span className="text-slate-500">{skill.name}:</span>{' '}
-                        <span className="text-slate-700">{skill.options.join(', ')}</span>
+                        <span className="text-ink-500">{skill.name}:</span>{' '}
+                        <span className="text-ink-700">{skill.options.join(', ')}</span>
                       </div>
                     ))}
                   </div>
@@ -1208,7 +1201,7 @@ function ReadOnlyMappings({ mappings }: { mappings: DeepSkillMapping[] }) {
           </div>
         ))}
       </div>
-      <div className="rounded-md bg-sky-50 border border-sky-100 text-sky-800 text-xs px-3 py-2">
+      <div className="rounded-md bg-info-tint border border-info/30 text-info-strong text-xs px-3 py-2">
         To Add Or Remove Skill Mappings, Please Contact Your CRM.
       </div>
     </div>
@@ -1218,12 +1211,12 @@ function ReadOnlyMappings({ mappings }: { mappings: DeepSkillMapping[] }) {
 /* ───────── Deep-skill picker theme + icons (Figma redesign) ─────────
  * Standalone red/blue palette for the public form's Deep Skills flow so it
  * matches the Figma mockup without pulling in the CRM sky/slate theme. */
-const DS_RED = '#DC4B41';
-const DS_RED_TINT = '#FDECEC';
-const DS_BLUE = '#2D9CDB';
-const DS_BLUE_TINT = '#EAF6FD';
-const DS_GREEN = '#16A34A';
-const DS_GREEN_TINT = '#DCFCE7';
+const DS_RED = 'hsl(var(--urgent))';
+const DS_RED_TINT = 'hsl(var(--urgent-tint))';
+const DS_BLUE = 'hsl(var(--info))';
+const DS_BLUE_TINT = 'hsl(var(--info-tint))';
+const DS_GREEN = 'hsl(var(--success))';
+const DS_GREEN_TINT = 'hsl(var(--success-tint))';
 
 /*
  * Category + service-type ICONS are not in the DB. They ship as static assets
@@ -1248,7 +1241,7 @@ function DsIconTile({
     return (
       <div
         style={{ width: size, height: size, backgroundColor: DS_RED_TINT, color: DS_RED }}
-        className={`flex items-center justify-center rounded-lg font-bold shrink-0 ${className}`}
+        className={`flex items-center justify-center rounded-lg font-semibold shrink-0 ${className}`}
         aria-hidden
       >
         {letter}
@@ -1341,7 +1334,7 @@ function SkillsMappingPicker({
           const count = countByCategory.get(c.category_id) || 0;
           const expanded = expandedCatId === c.category_id;
           return (
-            <div key={c.category_id} className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+            <div key={c.category_id} className="rounded-xl border border-ink-100 bg-card overflow-hidden">
               <button
                 type="button"
                 onClick={() => toggleCategory(c.category_id)}
@@ -1349,19 +1342,19 @@ function SkillsMappingPicker({
               >
                 <DsIconTile name={c.category_name} kind="categories" size={36} />
                 <span className="flex-1 min-w-0">
-                  <span className="block font-semibold text-slate-800 truncate">{c.category_name}</span>
-                  <span className="block text-xs text-slate-500">{count} Skill{count === 1 ? '' : 's'} Added</span>
+                  <span className="block font-semibold text-ink-900 truncate">{c.category_name}</span>
+                  <span className="block text-xs text-ink-500">{count} Skill{count === 1 ? '' : 's'} Added</span>
                 </span>
                 {count > 0 && <CheckCircle2 className="h-5 w-5 shrink-0" style={{ color: DS_GREEN }} />}
                 {expanded
-                  ? <ChevronUp className="h-5 w-5 text-slate-400 shrink-0" />
-                  : <ChevronDown className="h-5 w-5 text-slate-400 shrink-0" />}
+                  ? <ChevronUp className="h-5 w-5 text-ink-500 shrink-0" />
+                  : <ChevronDown className="h-5 w-5 text-ink-500 shrink-0" />}
               </button>
 
               {expanded && (
-                <div className="border-t border-slate-200 flex max-h-[70vh]">
+                <div className="border-t border-ink-100 flex max-h-[70vh]">
                   {/* left service-type rail */}
-                  <div className="w-[84px] shrink-0 overflow-y-auto border-r border-slate-200 bg-white">
+                  <div className="w-[84px] shrink-0 overflow-y-auto border-r border-ink-100 bg-card">
                     {c.service_types.map((t) => {
                       const isActive = activeType?.service_type_id === t.service_type_id;
                       const cnt = countByType.get(`${c.category_id}|${t.service_type_id}`) || 0;
@@ -1370,7 +1363,7 @@ function SkillsMappingPicker({
                           key={t.service_type_id}
                           type="button"
                           onClick={() => { setActiveTypeId(t.service_type_id); setSheetSkillId(null); }}
-                          className="w-full flex flex-col items-center gap-1 px-1.5 py-3 text-center border-b border-slate-100"
+                          className="w-full flex flex-col items-center gap-1 px-1.5 py-3 text-center border-b border-ink-100"
                           style={isActive ? { backgroundColor: DS_BLUE_TINT, borderLeft: `3px solid ${DS_BLUE}` } : undefined}
                         >
                           <span className="relative">
@@ -1378,15 +1371,15 @@ function SkillsMappingPicker({
                             {cnt > 0 && (
                               <span
                                 style={{ backgroundColor: DS_BLUE }}
-                                className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full text-[10px] font-bold text-white flex items-center justify-center"
+                                className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full text-xs font-semibold text-white flex items-center justify-center"
                               >
                                 {cnt}
                               </span>
                             )}
                           </span>
                           <span
-                            className="text-[11px] leading-tight"
-                            style={isActive ? { color: DS_BLUE, fontWeight: 600 } : { color: '#475569' }}
+                            className="text-xs leading-tight"
+                            style={isActive ? { color: DS_BLUE, fontWeight: 600 } : { color: 'hsl(var(--ink-700))' }}
                           >
                             {t.service_type_name}
                           </span>
@@ -1396,27 +1389,27 @@ function SkillsMappingPicker({
                   </div>
 
                   {/* right skill card grid — small images, 2 columns */}
-                  <div className="flex-1 min-w-0 overflow-y-auto p-3 bg-slate-50">
-                    <div className="text-sm font-semibold text-slate-800 mb-2">{activeType?.service_type_name}</div>
+                  <div className="flex-1 min-w-0 overflow-y-auto p-3 bg-ink-50">
+                    <div className="text-sm font-semibold text-ink-900 mb-2">{activeType?.service_type_name}</div>
                     {(activeType?.deep_skills.length || 0) === 0 ? (
-                      <div className="text-sm text-slate-500">No Deep Skills.</div>
+                      <div className="text-sm text-ink-500">No Deep Skills.</div>
                     ) : (
                       <div className="grid gap-2.5" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 148px))' }}>
                         {activeType?.deep_skills.map((s) => {
                           const sel = countBySkill.get(`${c.category_id}|${activeType.service_type_id}|${s.deep_skill_id}`) || 0;
                           return (
-                            <div key={s.deep_skill_id} className="rounded-xl border border-slate-200 bg-white p-2 flex flex-col">
+                            <div key={s.deep_skill_id} className="rounded-xl border border-ink-100 bg-card p-2 flex flex-col">
                               <button
                                 type="button"
                                 onClick={() => { if (s.deep_skill_image_url) setLightboxUrl({ url: s.deep_skill_image_url, name: s.deep_skill_name }); }}
-                                className="relative block w-full aspect-square rounded-lg overflow-hidden bg-slate-100 cursor-zoom-in"
+                                className="relative block w-full aspect-square rounded-lg overflow-hidden bg-ink-100 cursor-zoom-in"
                                 title="Click To Enlarge"
                               >
                                 {s.deep_skill_image_url ? (
                                   // eslint-disable-next-line @next/next/no-img-element
                                   <img src={s.deep_skill_image_url} alt={s.deep_skill_name} className="w-full h-full object-cover" loading="lazy" />
                                 ) : (
-                                  <span className="flex items-center justify-center w-full h-full text-slate-300"><Wrench className="h-7 w-7" /></span>
+                                  <span className="flex items-center justify-center w-full h-full text-ink-300"><Wrench className="h-7 w-7" /></span>
                                 )}
                               </button>
                               <button
@@ -1424,15 +1417,15 @@ function SkillsMappingPicker({
                                 onClick={() => setSheetSkillId(s.deep_skill_id)}
                                 className="mt-2 w-full rounded-lg py-1.5 text-xs font-semibold border"
                                 style={sel > 0
-                                  ? { backgroundColor: DS_BLUE, borderColor: DS_BLUE, color: '#fff' }
-                                  : { backgroundColor: '#fff', borderColor: DS_BLUE, color: DS_BLUE }}
+                                  ? { backgroundColor: DS_BLUE, borderColor: DS_BLUE, color: 'hsl(var(--card))' }
+                                  : { backgroundColor: 'hsl(var(--card))', borderColor: DS_BLUE, color: DS_BLUE }}
                               >
                                 {sel > 0 ? `${sel} Selected` : 'ADD'}
-                                <span className="block text-[10px] font-normal opacity-80">
+                                <span className="block text-xs font-normal opacity-80">
                                   {s.options.length} option{s.options.length === 1 ? '' : 's'}
                                 </span>
                               </button>
-                              <span className="mt-1.5 text-xs font-medium text-slate-700 text-center line-clamp-2">{s.deep_skill_name}</span>
+                              <span className="mt-1.5 text-xs font-medium text-ink-700 text-center line-clamp-2">{s.deep_skill_name}</span>
                             </div>
                           );
                         })}
@@ -1455,36 +1448,36 @@ function SkillsMappingPicker({
             className="absolute inset-0 bg-black/40"
             onClick={() => setSheetSkillId(null)}
           />
-          <div className="relative rounded-t-2xl bg-white max-h-[75vh] flex flex-col">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
-              <span className="font-semibold text-slate-800">{sheetSkill.deep_skill_name}</span>
+          <div className="relative rounded-t-2xl bg-card max-h-[75vh] flex flex-col">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-ink-100">
+              <span className="font-semibold text-ink-900">{sheetSkill.deep_skill_name}</span>
               <button
                 type="button"
                 onClick={() => setSheetSkillId(null)}
-                className="rounded-full p-1 bg-slate-100 text-slate-500"
+                className="rounded-full p-1 bg-ink-100 text-ink-500"
                 aria-label="Close"
               >
                 <X className="h-5 w-5" />
               </button>
             </div>
-            <div className="overflow-y-auto divide-y divide-slate-100">
+            <div className="overflow-y-auto divide-y divide-ink-100">
               {sheetSkill.options.length === 0 ? (
-                <div className="px-4 py-4 text-sm text-slate-500">No Options.</div>
+                <div className="px-4 py-4 text-sm text-ink-500">No Options.</div>
               ) : sheetSkill.options.map((o) => {
                 const key = skillKey(activeCat.category_id, activeType.service_type_id, sheetSkill.deep_skill_id, o.option_id);
                 const isSel = selected.has(key);
                 const isOriginal = original.has(key);
                 return (
                   <div key={o.option_id} className="flex items-center justify-between gap-3 px-4 py-3">
-                    <span className={`text-sm ${isSel ? 'text-slate-400' : 'text-slate-800'}`}>
+                    <span className={`text-sm ${isSel ? 'text-ink-500' : 'text-ink-900'}`}>
                       {o.option_name}
-                      {isOriginal && <span className="ml-1.5 text-[10px] font-medium" style={{ color: DS_GREEN }}>• Saved</span>}
+                      {isOriginal && <span className="ml-1.5 text-xs font-medium" style={{ color: DS_GREEN }}>• Saved</span>}
                     </span>
                     <button
                       type="button"
                       onClick={() => onToggleOption(activeCat.category_id, activeType.service_type_id, sheetSkill.deep_skill_id, o.option_id)}
-                      className="inline-flex items-center gap-1 rounded-lg px-4 py-1.5 text-xs font-bold shrink-0"
-                      style={isSel ? { backgroundColor: DS_GREEN_TINT, color: DS_GREEN } : { backgroundColor: DS_BLUE, color: '#fff' }}
+                      className="inline-flex items-center gap-1 rounded-lg px-4 py-1.5 text-xs font-semibold shrink-0"
+                      style={isSel ? { backgroundColor: DS_GREEN_TINT, color: DS_GREEN } : { backgroundColor: DS_BLUE, color: 'hsl(var(--card))' }}
                     >
                       {isSel ? <><Check className="h-3.5 w-3.5" strokeWidth={3} /> Added</> : 'Add'}
                     </button>
@@ -1751,16 +1744,16 @@ function PincodePicker({
           {chips.map((p) => (
             <span
               key={p.pincode_id}
-              className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 border border-emerald-200 px-2.5 py-1 text-xs text-emerald-800"
+              className="inline-flex items-center gap-1.5 rounded-full bg-success-tint border border-success/30 px-2.5 py-1 text-xs text-success-strong"
             >
               <span className="font-semibold tabular-nums">{p.pincode}</span>
               {pincodeLocCity(p) ? (
-                <span className="text-emerald-600">- {pincodeLocCity(p)}</span>
+                <span className="text-success">- {pincodeLocCity(p)}</span>
               ) : null}
               <button
                 type="button"
                 onClick={() => removeChip(p.pincode_id)}
-                className="ml-0.5 rounded hover:bg-emerald-200 p-0.5"
+                className="ml-0.5 rounded hover:bg-success/20 p-0.5"
                 aria-label={`Remove ${p.pincode}`}
               >
                 <X className="h-3 w-3" />
@@ -1769,7 +1762,7 @@ function PincodePicker({
           ))}
         </div>
       ) : (
-        <div className="text-xs text-slate-500">No Pincodes Selected Yet.</div>
+        <div className="text-xs text-ink-500">No Pincodes Selected Yet.</div>
       )}
 
       {/* Search */}
@@ -1789,7 +1782,7 @@ function PincodePicker({
         {/* Heading for the pincode result list (redesign: "Search City" box →
             "Select Your Pincodes" list). The minimum-3 rule is still enforced
             and surfaced by the amber hint above the Save button. */}
-        <div className="text-xs font-semibold text-slate-700 uppercase tracking-wide">
+        <div className="text-xs font-semibold text-ink-700 uppercase tracking-wide">
           Select Your Pincodes
         </div>
 
@@ -1811,7 +1804,7 @@ function PincodePicker({
           * search effect's SWR logic already preserves previous
           * results in state, so no data plumbing change is needed.
           */}
-        <div className="relative rounded-md border border-slate-200 bg-white max-h-72 overflow-y-auto divide-y divide-slate-100">
+        <div className="relative rounded-md border border-ink-100 bg-card max-h-72 overflow-y-auto divide-y divide-ink-100">
           <AnimatedLoadingBar visible={searching} message="Searching…" tone="slate" sticky />
           {/*
             * Body: show existing results even during `searching` so the
@@ -1819,10 +1812,10 @@ function PincodePicker({
             * render when we have NO data to show (cache miss + failure).
             */}
           {!searching && searchError ? (
-            <div className="p-3 text-xs text-rose-600">{searchError}</div>
+            <div className="p-3 text-xs text-urgent">{searchError}</div>
           ) : !searching && displayRows.length === 0 ? (
             <div className="p-3 space-y-2">
-              <div className="text-xs text-slate-500">No Matches.</div>
+              <div className="text-xs text-ink-500">No Matches.</div>
               {/*
                 * On-the-fly create (#6): only when the term is a clean 6-digit
                 * pincode. We add it silently to the catalog + selection. The
@@ -1833,13 +1826,13 @@ function PincodePicker({
                   type="button"
                   onClick={() => ensurePincode(debouncedSearch.trim())}
                   disabled={ensuring}
-                  className="h-9 w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white text-xs"
+                  className="h-9 w-full sm:w-auto bg-success hover:bg-success-strong text-white text-xs"
                 >
                   {ensuring ? 'Adding…' : `Add Pincode ${debouncedSearch.trim()}`}
                 </Button>
               ) : null}
               {ensureError ? (
-                <div className="text-xs text-rose-600">{ensureError}</div>
+                <div className="text-xs text-urgent">{ensureError}</div>
               ) : null}
             </div>
           ) : displayRows.map((row) => {
@@ -1848,18 +1841,18 @@ function PincodePicker({
             return (
               <label
                 key={id}
-                className="flex items-center gap-3 px-3 py-2.5 text-sm cursor-pointer hover:bg-slate-50"
+                className="flex items-center gap-3 px-3 py-2.5 text-sm cursor-pointer hover:bg-ink-50"
               >
                 <input
                   type="checkbox"
-                  className="h-5 w-5 accent-emerald-600 shrink-0"
+                  className="h-5 w-5 accent-success shrink-0"
                   checked={isSelected}
                   onChange={() => toggle(row)}
                 />
                 <span className="flex-1 min-w-0">
-                  <span className="font-semibold text-slate-800 tabular-nums">{row.pincode}</span>
+                  <span className="font-semibold text-ink-900 tabular-nums">{row.pincode}</span>
                   {pincodeLocCity(row) ? (
-                    <span className="text-slate-500 ml-2">- {pincodeLocCity(row)}</span>
+                    <span className="text-ink-500 ml-2">- {pincodeLocCity(row)}</span>
                   ) : null}
                 </span>
               </label>
@@ -1872,7 +1865,7 @@ function PincodePicker({
             * an empty 0px box during the very first network call.
             */}
           {searching && results.length === 0 ? (
-            <div className="p-3 text-xs text-slate-400">Loading initial pincodes…</div>
+            <div className="p-3 text-xs text-ink-500">Loading initial pincodes…</div>
           ) : null}
         </div>
 
@@ -1880,7 +1873,7 @@ function PincodePicker({
           * outside the results box so it persists once the row appears as a
           * real (checked) match. */}
         {ensureHint ? (
-          <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+          <div className="rounded-md border border-success/30 bg-success-tint px-3 py-2 text-xs text-success-strong">
             {ensureHint}
           </div>
         ) : null}

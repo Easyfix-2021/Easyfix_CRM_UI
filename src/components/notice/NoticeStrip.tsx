@@ -66,7 +66,7 @@ function NoticeBanner({
 }) {
   const color = /^#[0-9a-fA-F]{6}$/.test(notice.category_color)
     ? notice.category_color
-    : '#64748b';
+    : 'hsl(var(--neutral))';
   const hasImages = Array.isArray(notice.images) && notice.images.length > 0;
   return (
     <button
@@ -76,7 +76,7 @@ function NoticeBanner({
       style={{ borderLeftColor: color }}
     >
       {notice.is_pinned ? (
-        <Pin className="h-3.5 w-3.5 shrink-0 text-amber-500" aria-label="Pinned" />
+        <Pin className="h-3.5 w-3.5 shrink-0 text-warning" aria-label="Pinned" />
       ) : null}
 
       <NoticeCategoryTag name={notice.category_name} color={notice.category_color} />
@@ -87,7 +87,7 @@ function NoticeBanner({
 
       {hasImages && (
         <span
-          className="inline-flex items-center gap-0.5 text-[11px] text-muted-foreground shrink-0"
+          className="inline-flex items-center gap-0.5 text-xs text-muted-foreground shrink-0"
           title={`${notice.images.length} image${notice.images.length === 1 ? '' : 's'} attached`}
         >
           <ImageIcon className="h-3 w-3" />
@@ -98,11 +98,11 @@ function NoticeBanner({
       {!notice.is_read && (
         <span
           aria-label="Unread"
-          className="inline-block h-2 w-2 rounded-full bg-blue-500 shrink-0"
+          className="inline-block h-2 w-2 rounded-full bg-info shrink-0"
         />
       )}
 
-      <span className="text-[11px] text-muted-foreground tabular-nums shrink-0 min-w-[3.5rem] text-right">
+      <span className="text-xs text-muted-foreground tabular-nums shrink-0 min-w-[3.5rem] text-right">
         {compactDate(notice.publish_at)}
       </span>
     </button>
@@ -153,7 +153,7 @@ export function NoticeStrip() {
           The View All link routes to the management page for users with
           isNoticeManage; everyone else just sees the header. */}
       <div className="flex items-center gap-3 px-4 py-2 border-b bg-muted/20">
-        <Megaphone className="h-4 w-4 text-sky-600 shrink-0" />
+        <Megaphone className="h-4 w-4 text-info shrink-0" />
         <span className="text-sm font-semibold flex-1 min-w-0 truncate">
           Notice Board
           {items.length > 0 && (
@@ -162,7 +162,7 @@ export function NoticeStrip() {
               {unreadCount > 0 && (
                 <>
                   {' '}·{' '}
-                  <span className="text-rose-600 font-medium">{unreadCount} unread</span>
+                  <span className="text-urgent-strong font-medium">{unreadCount} unread</span>
                 </>
               )}
             </span>
@@ -182,7 +182,7 @@ export function NoticeStrip() {
         {canManage && items.length > 0 && (
           <Link
             href="/notice-board"
-            className="text-xs font-medium text-sky-700 hover:text-sky-900 shrink-0"
+            className="text-xs font-medium text-primary hover:text-brand-700 shrink-0"
           >
             View All →
           </Link>
@@ -232,7 +232,7 @@ export function NoticeStrip() {
                     tabIndex={copy === 1 ? -1 : 0}
                     className="flex shrink-0 items-center gap-2 whitespace-nowrap text-sm hover:underline"
                   >
-                    {!n.is_read && <span className="h-2 w-2 shrink-0 rounded-full bg-blue-500" />}
+                    {!n.is_read && <span className="h-2 w-2 shrink-0 rounded-full bg-info" />}
                     <span className="font-medium">{n.title}</span>
                     <span className="text-xs text-muted-foreground">
                       {compactDate(n.publish_at)}
@@ -263,7 +263,7 @@ export function NoticeStrip() {
         <button
           type="button"
           onClick={() => setShowAll(true)}
-          className="w-full px-4 py-2 text-xs font-medium text-sky-700 hover:bg-muted/40 flex items-center justify-center gap-1 border-t"
+          className="w-full px-4 py-2 text-xs font-medium text-primary hover:bg-muted/40 flex items-center justify-center gap-1 border-t"
         >
           Show {hiddenCount} More <ChevronDown className="h-3 w-3" />
         </button>

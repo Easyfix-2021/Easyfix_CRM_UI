@@ -557,7 +557,7 @@ export default function AdminDashboardPage() {
               <Loader2 className="size-5 animate-spin" /> Loading…
             </div>
           ) : org.error ? (
-            <div className="p-8 text-center text-sm text-red-600">{org.error}</div>
+            <div className="p-8 text-center text-sm text-urgent">{org.error}</div>
           ) : !org.data ? (
             <div className="p-8 text-center text-sm text-muted-foreground">
               No Organization Data Found
@@ -655,7 +655,7 @@ function GraphicalView({
 
   return (
     <div className="space-y-4">
-      <h2 className="text-base font-semibold text-slate-800">Graphical View</h2>
+      <h2 className="text-base font-semibold text-ink-900">Graphical View</h2>
 
       {/* ── KPI tile row ── */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -775,7 +775,7 @@ function KraTiles({ kra }: { kra: KraMetrics | null }) {
       {tiles.map((t) => (
         <Card key={t.label}>
           <CardContent className="p-4 text-center">
-            <div className="text-2xl font-bold">{t.value}</div>
+            <div className="text-2xl font-semibold">{t.value}</div>
             <div className="mt-1 text-xs text-muted-foreground">{t.label}</div>
           </CardContent>
         </Card>
@@ -789,10 +789,10 @@ function KraTiles({ kra }: { kra: KraMetrics | null }) {
  * ════════════════════════════════════════════════════════════════════════ */
 const BADGE_CYCLE = [
   'bg-primary/10 text-primary',
-  'bg-amber-100 text-amber-700',
-  'bg-sky-100 text-sky-700',
-  'bg-red-100 text-red-700',
-  'bg-slate-100 text-slate-700',
+  'bg-warning-tint text-warning-strong',
+  'bg-info-tint text-info-strong',
+  'bg-urgent-tint text-urgent-strong',
+  'bg-ink-100 text-ink-700',
 ];
 
 function OpenOrderCards({ tiles }: { tiles: OpenOrderTile[] }) {
@@ -803,7 +803,7 @@ function OpenOrderCards({ tiles }: { tiles: OpenOrderTile[] }) {
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div className="text-sm font-semibold">{tile.title.trim()}</div>
-              <div className="text-lg font-bold">{tile.totalCount}</div>
+              <div className="text-lg font-semibold">{tile.totalCount}</div>
             </div>
             <div className="mt-3 flex flex-wrap gap-1.5">
               {tile.buckets.length === 0 ? (
@@ -832,10 +832,10 @@ function OpenOrderCards({ tiles }: { tiles: OpenOrderTile[] }) {
  * Cancellation stats — horizontal bars + before/after donut.
  * ════════════════════════════════════════════════════════════════════════ */
 const BAR_COLORS: Record<string, string> = {
-  '0-1 days': '#E53935',
-  '2-3 days': '#FB8C00',
-  '4-5 days': '#FDD835',
-  '>5 days': '#43A047',
+  '0-1 days': 'hsl(var(--urgent))',
+  '2-3 days': 'hsl(var(--warning))',
+  '4-5 days': 'hsl(var(--warning))',
+  '>5 days': 'hsl(var(--success))',
 };
 
 function CancellationStats({
@@ -888,7 +888,7 @@ function CancellationStats({
                     className="h-full rounded"
                     style={{
                       width: `${(b.totalJobs / maxVal) * 100}%`,
-                      backgroundColor: BAR_COLORS[b.timeBucket] ?? '#94a3b8',
+                      backgroundColor: BAR_COLORS[b.timeBucket] ?? 'hsl(var(--ink-300))',
                     }}
                   />
                 </div>
@@ -908,8 +908,8 @@ function CancellationStats({
           <div className="flex items-center gap-6">
             <Donut after={after} before={before} total={total} />
             <div className="space-y-2 text-sm">
-              <LegendRow color="#6366f1" label="After Allocation" value={after} total={total} />
-              <LegendRow color="#10b981" label="Before Allocation" value={before} total={total} />
+              <LegendRow color="hsl(var(--info))" label="After Allocation" value={after} total={total} />
+              <LegendRow color="hsl(var(--success))" label="Before Allocation" value={before} total={total} />
             </div>
           </div>
         </CardContent>
@@ -921,11 +921,11 @@ function CancellationStats({
 function Donut({ after, before, total }: { after: number; before: number; total: number }) {
   const sum = after + before;
   const afterPct = sum > 0 ? (after / sum) * 100 : 0;
-  // CSS conic-gradient donut: after (#6366f1) then before (#10b981).
+  // CSS conic-gradient donut: after (hsl(var(--info))) then before (hsl(var(--success))).
   const bg =
     sum > 0
-      ? `conic-gradient(#6366f1 0% ${afterPct}%, #10b981 ${afterPct}% 100%)`
-      : 'conic-gradient(#e2e8f0 0% 100%)';
+      ? `conic-gradient(hsl(var(--info)) 0% ${afterPct}%, hsl(var(--success)) ${afterPct}% 100%)`
+      : 'conic-gradient(hsl(var(--ink-100)) 0% 100%)';
   return (
     <div
       className="relative grid size-28 shrink-0 place-items-center rounded-full"
@@ -933,8 +933,8 @@ function Donut({ after, before, total }: { after: number; before: number; total:
     >
       <div className="grid size-16 place-items-center rounded-full bg-background text-center">
         <div>
-          <div className="text-lg font-bold leading-none">{total}</div>
-          <div className="text-[10px] text-muted-foreground">Total</div>
+          <div className="text-lg font-semibold leading-none">{total}</div>
+          <div className="text-xs text-muted-foreground">Total</div>
         </div>
       </div>
     </div>
@@ -968,10 +968,10 @@ function LegendRow({
  * Employee Productivity table (paginated, cancelled-badge thresholds).
  * ════════════════════════════════════════════════════════════════════════ */
 function cancelledBadgeClass(n: number): string {
-  if (n === 0) return 'bg-slate-100 text-slate-600';
-  if (n <= 1) return 'bg-emerald-100 text-emerald-700';
-  if (n <= 2) return 'bg-amber-100 text-amber-700';
-  return 'bg-red-100 text-red-700';
+  if (n === 0) return 'bg-ink-100 text-ink-700';
+  if (n <= 1) return 'bg-success-tint text-success-strong';
+  if (n <= 2) return 'bg-warning-tint text-warning-strong';
+  return 'bg-urgent-tint text-urgent-strong';
 }
 
 function ProductivityTable({
@@ -1097,7 +1097,7 @@ function OrgTree({ node, depth = 0 }: { node: OrgNode; depth?: number }) {
         <span className="font-medium">{node.name}</span>
         <span className="text-xs text-muted-foreground">· {node.title}</span>
         {node.teamSize > 0 && (
-          <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
+          <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary">
             {node.teamSize}
           </span>
         )}

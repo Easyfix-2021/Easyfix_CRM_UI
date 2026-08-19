@@ -245,20 +245,20 @@ export default function PrematureConfirmationsPage() {
 
       {/* Per-operator roll-up — the "who" the report exists to answer. */}
       {!!data?.byUser?.length && (
-        <div className="rounded-md border bg-white p-3">
+        <div className="rounded-md border bg-card p-3">
           <div className="mb-2 text-sm font-semibold">Moved By</div>
           <div className="flex flex-wrap gap-2">
             {data.byUser.map((u) => (
-              <span key={String(u.moved_by_id)} className="inline-flex items-center gap-1.5 rounded-full border bg-slate-50 px-2.5 py-1 text-xs">
+              <span key={String(u.moved_by_id)} className="inline-flex items-center gap-1.5 rounded-full border bg-ink-50 px-2.5 py-1 text-xs">
                 {u.moved_by}
-                <span className="rounded-full bg-rose-100 px-1.5 py-0.5 font-semibold text-rose-700">{u.jobs}</span>
+                <span className="rounded-full bg-urgent-tint px-1.5 py-0.5 font-semibold text-urgent-strong">{u.jobs}</span>
               </span>
             ))}
           </div>
         </div>
       )}
 
-      <div className="overflow-x-auto rounded-md border bg-white">
+      <div className="overflow-x-auto rounded-md border bg-card">
         <table className="data-table w-full text-sm">
           <thead>
             <tr>
@@ -295,7 +295,7 @@ export default function PrematureConfirmationsPage() {
                       row means the name predates the confirmation and may not be
                       the person who moved it. */}
                   {r.moved_by_confidence === 'creator' && (
-                    <div className="text-[10px] text-amber-700" title="This name is the job's original creator — the confirming operator was not separately recorded.">
+                    <div className="text-xs text-warning-strong" title="This name is the job's original creator — the confirming operator was not separately recorded.">
                       may not be the confirmer
                     </div>
                   )}
@@ -306,7 +306,7 @@ export default function PrematureConfirmationsPage() {
                 <td className="!text-left">
                   <div className="flex flex-wrap gap-1">
                     {r.flags.map((f) => (
-                      <span key={f} className="rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] font-medium text-rose-700">{f}</span>
+                      <span key={f} className="rounded-full bg-urgent-tint px-1.5 py-0.5 text-xs font-medium text-urgent-strong">{f}</span>
                     ))}
                   </div>
                 </td>

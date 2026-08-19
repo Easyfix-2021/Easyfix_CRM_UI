@@ -53,10 +53,10 @@ const ACTION_KEY = 'isQuickSightVerticalOrdersView';
 // Toggle definitions — order + Title-Case labels + flag tokens match spec.
 type ToggleDef = { flag: string; label: string; active: string };
 const TOGGLES: ToggleDef[] = [
-  { flag: 'waitingtx', label: 'Technician Unallocated', active: 'bg-rose-600 hover:bg-rose-700 text-white border-rose-600' },
-  { flag: 'runninglate', label: 'Running Late', active: 'bg-amber-500 hover:bg-amber-600 text-white border-amber-500' },
-  { flag: 'openonapp', label: 'Waiting To Close On App', active: 'bg-sky-600 hover:bg-sky-700 text-white border-sky-600' },
-  { flag: 'underaudit', label: 'Under Audit', active: 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-600' },
+  { flag: 'waitingtx', label: 'Technician Unallocated', active: 'bg-urgent hover:bg-urgent-strong text-white border-urgent' },
+  { flag: 'runninglate', label: 'Running Late', active: 'bg-warning hover:bg-warning-strong text-white border-warning' },
+  { flag: 'openonapp', label: 'Waiting To Close On App', active: 'bg-info hover:bg-info-strong text-white border-info' },
+  { flag: 'underaudit', label: 'Under Audit', active: 'bg-success hover:bg-success-strong text-white border-success' },
 ];
 
 // ── API response types (field names match the legacy DTO 1:1) ──────────
@@ -264,10 +264,10 @@ export default function VerticalOrdersPage() {
 
           {/* KPI badges — always render (mirror legacy). */}
           <div className="flex flex-wrap gap-2">
-            <Badge className="bg-slate-100 text-slate-700 border border-slate-200">
+            <Badge className="bg-ink-100 text-ink-700 border border-ink-100">
               Unconfirmed Orders - {data?.countOfUnconfirmedOrders ?? 0}
             </Badge>
-            <Badge className="bg-rose-50 text-rose-700 border border-rose-200">
+            <Badge className="bg-urgent-tint text-urgent-strong border border-urgent/30">
               Open Escalation - {data?.countOfEscalatedOrders ?? 0} ({data?.escalatedOrderPercentage ?? 0}%)
             </Badge>
           </div>
@@ -356,7 +356,7 @@ export default function VerticalOrdersPage() {
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.verticalCategory} className={cn(r.isTotal && 'font-semibold bg-slate-50')}>
+                <tr key={r.verticalCategory} className={cn(r.isTotal && 'font-semibold bg-ink-50')}>
                   <td className="!text-center">{r.verticalCategory}</td>
                   {AGE_COLUMNS.map((c) => (
                     <td key={c.key} className="!text-center">{r[c.key]}</td>

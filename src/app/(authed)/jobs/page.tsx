@@ -1330,7 +1330,7 @@ export default function JobsPage() {
                         it non-alarming — this is a missing
                         precondition, not a failure. */}
                     {transferAlert && (
-                      <span className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1 max-w-md">
+                      <span className="text-xs text-warning-strong bg-warning-tint border border-warning/30 rounded-md px-2 py-1 max-w-md">
                         {transferAlert}
                       </span>
                     )}
@@ -1339,7 +1339,7 @@ export default function JobsPage() {
                 <button
                   type="button"
                   onClick={() => setShowFilters((s) => !s)}
-                  className="inline-flex items-center gap-1 text-sm text-sky-700 hover:text-sky-900"
+                  className="inline-flex items-center gap-1 text-sm text-primary hover:text-brand-600"
                 >
                   {showFilters
                     ? <><ChevronUp className="h-4 w-4" /> Hide Filters</>
@@ -1476,7 +1476,7 @@ export default function JobsPage() {
                           e.stopPropagation();
                           openJobAction('view', j.job_id, { tab: 'services' });
                         }}
-                        className="ml-1 inline-flex items-center rounded-full bg-amber-100 hover:bg-amber-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800 whitespace-nowrap cursor-pointer transition-colors"
+                        className="ml-1 inline-flex items-center rounded-full bg-warning-tint hover:bg-warning/20 px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-warning-strong whitespace-nowrap cursor-pointer transition-colors"
                         title="Booked but no services attached. Click to open the Services tab and add line items."
                       >
                         No Services

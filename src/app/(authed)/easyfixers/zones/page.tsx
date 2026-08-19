@@ -183,7 +183,7 @@ export default function EasyfixerZonesPage() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="font-medium truncate">{z.zone_name}</div>
-                    <div className="text-[11px] text-muted-foreground">Zone #{z.zone_id}</div>
+                    <div className="text-xs text-muted-foreground">Zone #{z.zone_id}</div>
                   </div>
                 </div>
                 <dl className="text-xs space-y-1">

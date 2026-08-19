@@ -103,10 +103,10 @@ export function CustomerSubmissionPanel({
     .join(', ');
 
   return (
-    <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 px-4 py-3">
+    <div className="rounded-lg border border-success bg-success-tint/70 px-4 py-3">
       <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-sm font-semibold text-emerald-900">
-          <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+        <div className="flex items-center gap-2 text-sm font-semibold text-success-strong">
+          <CheckCircle2 className="h-4 w-4 text-success-strong" />
           Customer Submitted on {formatSubmittedAt(submittedAt)}
         </div>
         {p && (
@@ -114,7 +114,7 @@ export function CustomerSubmissionPanel({
             type="button"
             variant="outline"
             size="sm"
-            className="h-7 border-emerald-300 bg-white text-emerald-800 hover:bg-emerald-100"
+            className="h-7 border-success bg-card text-success-strong hover:bg-success/15"
             onClick={() => setExpanded((v) => !v)}
           >
             {expanded ? <ChevronUp className="h-3.5 w-3.5 mr-1" /> : <ChevronDown className="h-3.5 w-3.5 mr-1" />}
@@ -123,7 +123,7 @@ export function CustomerSubmissionPanel({
         )}
       </div>
       {expanded && p && (
-        <div className="mt-3 space-y-1.5 rounded-md bg-white px-3 py-3 border border-emerald-100">
+        <div className="mt-3 space-y-1.5 rounded-md bg-card px-3 py-3 border border-success-tint">
           <Row label="Customer Name" value={p.customer_name} />
           <Row label="Customer Email" value={p.customer_email} />
           <Row label="Requested Date/Time" value={p.requested_date_time} />

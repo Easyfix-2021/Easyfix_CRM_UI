@@ -88,7 +88,7 @@ export default function MenuAdminPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
+          <h1 className="text-2xl font-semibold flex items-center gap-2">
             <MenuSquare className="size-6" /> Menu Admin
           </h1>
           <p className="text-sm text-muted-foreground">
@@ -104,7 +104,7 @@ export default function MenuAdminPage() {
       </div>
 
       {error && (
-        <Card><CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
+        <Card><CardContent className="p-3 flex items-center gap-2 text-sm text-urgent">
           <AlertTriangle className="size-4" /> {error}
         </CardContent></Card>
       )}
@@ -139,7 +139,7 @@ export default function MenuAdminPage() {
                     <td className="!text-center font-mono text-xs">{r.sequence ?? '—'}</td>
                     <td className="!text-center">
                       {r.menu_status === 1
-                        ? <span className="text-emerald-700 text-xs">Active</span>
+                        ? <span className="text-success-strong text-xs">Active</span>
                         : <span className="text-muted-foreground text-xs">Hidden</span>}
                     </td>
                     <td className="!text-right whitespace-nowrap">
@@ -150,12 +150,12 @@ export default function MenuAdminPage() {
                           </Button>
                           {r.menu_status === 1 && (
                             <Button size="sm" variant="ghost" onClick={() => deactivate(r)}>
-                              <Trash2 className="size-3.5 text-red-600" />
+                              <Trash2 className="size-3.5 text-urgent" />
                             </Button>
                           )}
                         </div>
                       ) : (
-                        <span className="text-[10px] text-muted-foreground">—</span>
+                        <span className="text-xs text-muted-foreground">—</span>
                       )}
                     </td>
                   </tr>
@@ -288,7 +288,7 @@ function MenuFormDialog({ open, onClose, editing, rows, onSaved }: {
               <span>Active</span>
             </label>
           )}
-          {err && <div className="text-sm text-red-600">{err}</div>}
+          {err && <div className="text-sm text-urgent">{err}</div>}
           <div className="flex justify-end gap-2 pt-2">
             <CancelButton onCancel={onClose} disabled={loading} />
             <Button onClick={go} disabled={loading}>{loading ? 'Saving…' : isEdit ? 'Save Changes' : 'Add Menu'}</Button>

@@ -206,21 +206,24 @@ export function RowActionsMenu({ clientId, clientName, isActive, canEdit, onOpen
 
       {open && typeof document !== 'undefined' && createPortal(
         /*
-         * Solid background — `bg-popover` resolves to a CSS variable
-         * that isn't reliably set in this theme, leaving the dropdown
-         * see-through (the row below shows through and the menu reads
-         * as "spaced out"). Explicit `bg-white` (+ shadow) guarantees
-         * opaque rendering.
+         * Solid background via `bg-popover` (+ shadow). This used to be a
+         * hardcoded `bg-white`: the `--popover` CSS variable existed but the
+         * matching Tailwind colour alias was never added to the config, so
+         * `bg-popover` compiled to no rule at all and the dropdown rendered
+         * see-through (the row below showed through and the menu read as
+         * "spaced out"). The alias is now mapped in tailwind.config.ts, so
+         * the token renders opaque AND follows the theme in dark mode —
+         * which the hardcoded white never did.
          */
         <div
           ref={popRef}
           role="menu"
-          className="bg-white border border-slate-200 rounded-md shadow-xl overflow-hidden z-50 min-w-[200px] py-1"
+          className="bg-popover border border-ink-100 rounded-md shadow-xl overflow-hidden z-50 min-w-[200px] py-1"
           style={style}
         >
           {items.map((item, idx) => {
             if (item === 'divider') {
-              return <div key={`d-${idx}`} className="my-1 border-t border-slate-100" />;
+              return <div key={`d-${idx}`} className="my-1 border-t border-ink-100" />;
             }
             const disabled = !item.readOnly && !canEdit;
             return (
@@ -233,7 +236,7 @@ export function RowActionsMenu({ clientId, clientName, isActive, canEdit, onOpen
                   'w-full text-left text-sm px-3 py-1.5 flex items-center gap-2 ' +
                   (disabled
                     ? 'opacity-50 cursor-not-allowed'
-                    : 'hover:bg-slate-50 cursor-pointer')
+                    : 'hover:bg-ink-50 cursor-pointer')
                 }
                 title={disabled ? 'You do not have isClientEdit permission' : undefined}
               >

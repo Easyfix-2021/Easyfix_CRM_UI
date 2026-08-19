@@ -160,8 +160,8 @@ export default function PayoutRequestsPage() {
             )}
           </p>
           {isPay && (
-            <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-left text-sm">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+            <div className="rounded-md border border-ink-100 bg-ink-50 p-3 text-left text-sm">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-500">
                 Immutable payout destination
               </p>
               <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
@@ -220,7 +220,7 @@ export default function PayoutRequestsPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="flex items-center gap-2 text-2xl font-bold">
+        <h1 className="flex items-center gap-2 text-2xl font-semibold">
           <Wallet className="size-6" /> Payout Requests
         </h1>
         <p className="text-sm text-muted-foreground">
@@ -236,7 +236,7 @@ export default function PayoutRequestsPage() {
               <button
                 key={s.value || 'all'}
                 onClick={() => setStatus(s.value)}
-                className={`rounded px-2 py-0.5 text-xs ${status === s.value ? 'bg-primary text-white' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'}`}
+                className={`rounded px-2 py-0.5 text-xs ${status === s.value ? 'bg-primary text-white' : 'bg-ink-100 text-ink-700 hover:bg-ink-300'}`}
               >
                 {s.label}
               </button>
@@ -256,7 +256,7 @@ export default function PayoutRequestsPage() {
 
       {loading && <div className="py-6 text-center text-sm text-muted-foreground">Loading…</div>}
       {error && (
-        <Card><CardContent className="flex items-center gap-2 p-3 text-sm text-red-600">
+        <Card><CardContent className="flex items-center gap-2 p-3 text-sm text-urgent">
           <AlertTriangle className="size-4" /> {error}
         </CardContent></Card>
       )}
@@ -289,7 +289,7 @@ export default function PayoutRequestsPage() {
                   const destinationComplete = hasPayoutDestination(r);
                   const rowBusy = busyId === r.request_id;
                   return (
-                    <tr key={r.request_id} className="hover:bg-slate-50">
+                    <tr key={r.request_id} className="hover:bg-ink-50">
                       <td>
                         {r.efr_name || '—'}
                         <br />
@@ -311,7 +311,7 @@ export default function PayoutRequestsPage() {
                             <span className="font-mono text-muted-foreground">{r.bank_ifsc}</span>
                           </>
                         ) : (
-                          <span className="text-red-600">Missing — cannot pay</span>
+                          <span className="text-urgent">Missing — cannot pay</span>
                         )}
                       </td>
                       <td className="text-xs">{r.requested_on ? formatDate(r.requested_on) : '—'}</td>

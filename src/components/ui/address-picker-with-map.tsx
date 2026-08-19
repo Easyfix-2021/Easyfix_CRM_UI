@@ -708,7 +708,7 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
                 placeholder="Search a place to drop the map pin & capture GPS"
                 disabled={!editable}
               />
-              <p className="text-[10px] text-muted-foreground mt-1">
+              <p className="text-xs text-muted-foreground mt-1">
                 Used only to set the GPS pin — it does not change the Service Address.
               </p>
             </div>
@@ -771,16 +771,16 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
             {/* OPT-IN silent ensure status (autoCreatePincode call sites only).
                 Unobtrusive single-line note; never blocks the form. */}
             {autoCreatePincode && pinEnsureState === 'validating' && (
-              <p className="text-[10px] text-muted-foreground mt-1 flex items-center gap-1">
+              <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
                 <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border border-current border-t-transparent" />
                 Validating pincode…
               </p>
             )}
             {autoCreatePincode && pinEnsureState === 'added' && (
-              <p className="text-[10px] text-emerald-600 mt-1">Pincode added to system</p>
+              <p className="text-xs text-success mt-1">Pincode added to system</p>
             )}
             {autoCreatePincode && pinEnsureState === 'warn' && (
-              <p className="text-[10px] text-amber-600 mt-1">{pinEnsureMsg}</p>
+              <p className="text-xs text-warning mt-1">{pinEnsureMsg}</p>
             )}
           </div>
         </div>
@@ -806,7 +806,7 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
             placeholder="Drag the marker, or paste lat,lng manually"
             className="font-mono"
           />
-          <p className="text-[10px] text-muted-foreground mt-1">
+          <p className="text-xs text-muted-foreground mt-1">
             Auto-fetched from Google Maps. You can also paste a known &ldquo;lat,lng&rdquo; pair to override.
           </p>
         </div>
@@ -818,10 +818,10 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
             rows={3}
             disabled={!editable}
             maxLength={500}
-            className="flex w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 resize-y disabled:opacity-50"
+            className="flex w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-y disabled:opacity-50"
             placeholder="Optional — landing notes for the technician. e.g. &#10;• Visit between 9am–1pm; no Sundays&#10;• Back gate open after 9pm; ring 2nd-floor bell&#10;• Avoid weekends; ground-floor access only"
           />
-          <p className="text-[10px] text-muted-foreground mt-1">
+          <p className="text-xs text-muted-foreground mt-1">
             Mention visit windows, access notes, or day restrictions — anything the technician should know before arriving. Max 500 characters.
           </p>
         </div>
@@ -836,7 +836,7 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
             button on smaller screens, blocking pointer events. A fixed
             height keeps the map well within the section's vertical
             footprint regardless of how many address fields render. */}
-        <div className="relative h-[380px] rounded border overflow-hidden bg-slate-50">
+        <div className="relative h-[380px] rounded border overflow-hidden bg-ink-50">
           {mapsError ? (
             <div className="absolute inset-0 grid place-items-center text-xs text-muted-foreground p-4 text-center">
               <div>
@@ -848,7 +848,7 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
                     completed. The form does NOT require GPS — picking
                     a saved address or typing fields manually is
                     sufficient to enable Next + Book Call. */}
-                <div className="mt-2 text-[10px] leading-snug">
+                <div className="mt-2 text-xs leading-snug">
                   You can still proceed — pick a saved address or hand-edit
                   the fields on the left. GPS is optional; Book Call works
                   without it.
@@ -859,7 +859,7 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
             <div ref={mapRef} className="w-full h-full" />
           )}
         </div>
-        <p className="text-[10px] text-muted-foreground mt-1">
+        <p className="text-xs text-muted-foreground mt-1">
           Drag the marker (or click anywhere on the map) to drop a new pin.
           Address, PIN and City update automatically.
         </p>

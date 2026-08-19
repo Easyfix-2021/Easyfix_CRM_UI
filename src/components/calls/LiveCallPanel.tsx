@@ -340,7 +340,7 @@ function LiveCallCard({
         'fixed z-[9998]',
         !positioned && 'bottom-6 right-6',
         collapsed ? 'w-auto' : 'w-[320px] max-w-[calc(100vw-3rem)]',
-        'rounded-xl border border-slate-200 bg-white shadow-2xl overflow-hidden',
+        'rounded-xl border border-ink-100 bg-card shadow-2xl overflow-hidden',
       )}
     >
       {/* Header band — dark slate, doubles as the drag handle. */}
@@ -349,7 +349,7 @@ function LiveCallCard({
         className="flex items-center gap-2 bg-sidebar text-sidebar-foreground px-3 py-2.5 cursor-grab active:cursor-grabbing select-none"
       >
         <GripVertical className="h-4 w-4 shrink-0 text-sidebar-foreground/40" aria-hidden />
-        <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-500/20 ring-1 ring-emerald-400/40 text-emerald-200">
+        <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-success/20 ring-1 ring-success/40 text-success-tint">
           {connecting && !terminal
             ? <Loader2 className="h-4 w-4 animate-spin" />
             : <Phone className="h-4 w-4" />}
@@ -368,7 +368,7 @@ function LiveCallCard({
             {/* Head-count while minimised — the one thing about a conference
                 the operator must not lose sight of behind a pill. */}
             {conf.activeTotal > 1 && (
-              <span className="inline-flex items-center gap-0.5 rounded bg-white/10 px-1.5 py-px text-[10px] font-semibold text-sidebar-foreground/80">
+              <span className="inline-flex items-center gap-0.5 rounded bg-white/10 px-1.5 py-px text-xs font-semibold text-sidebar-foreground/80">
                 <Users className="h-3 w-3" aria-hidden />
                 {conf.activeTotal}
               </span>
@@ -378,7 +378,7 @@ function LiveCallCard({
           <span className="flex-1 flex items-center gap-2 text-sm font-semibold leading-tight">
             {conf.activeTotal > 1 ? 'Conference Call' : 'Live Call'}
             {conf.activeTotal > 1 && (
-              <span className="inline-flex items-center gap-0.5 rounded bg-white/10 px-1.5 py-px text-[10px] font-semibold text-sidebar-foreground/80">
+              <span className="inline-flex items-center gap-0.5 rounded bg-white/10 px-1.5 py-px text-xs font-semibold text-sidebar-foreground/80">
                 <Users className="h-3 w-3" aria-hidden />
                 {conf.activeTotal}
               </span>
@@ -393,7 +393,7 @@ function LiveCallCard({
             onClick={onHangup}
             disabled={hangupBusy}
             className={cn(
-              'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded bg-rose-600 text-white hover:bg-rose-700 transition-colors',
+              'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded bg-urgent text-white hover:bg-urgent-strong transition-colors',
               hangupBusy && 'opacity-60 cursor-wait',
             )}
             aria-label={endsConference ? 'End call for everyone' : 'Hang up'}
@@ -434,14 +434,14 @@ function LiveCallCard({
 
         {/* Masked from → to */}
         <div className="flex items-center justify-center gap-2 text-sm">
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">
-            <Phone className="h-3.5 w-3.5 text-emerald-600" aria-hidden />
-            <span className="font-mono text-xs font-semibold text-slate-800">{call.fromMasked || '—'}</span>
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-ink-100 bg-ink-50 px-2.5 py-1">
+            <Phone className="h-3.5 w-3.5 text-success-strong" aria-hidden />
+            <span className="font-mono text-xs font-semibold text-ink-900">{call.fromMasked || '—'}</span>
           </span>
-          <ArrowRight className="h-4 w-4 shrink-0 text-slate-400" aria-hidden />
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">
-            <Phone className="h-3.5 w-3.5 text-sky-600" aria-hidden />
-            <span className="font-mono text-xs font-semibold text-slate-800">{call.toMasked || '—'}</span>
+          <ArrowRight className="h-4 w-4 shrink-0 text-ink-500" aria-hidden />
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-ink-100 bg-ink-50 px-2.5 py-1">
+            <Phone className="h-3.5 w-3.5 text-info" aria-hidden />
+            <span className="font-mono text-xs font-semibold text-ink-900">{call.toMasked || '—'}</span>
           </span>
         </div>
 
@@ -450,10 +450,10 @@ function LiveCallCard({
           <StatusChip tone={tone}>{label}</StatusChip>
           <div className="flex items-center gap-1.5 text-sm">
             {!terminal && connecting && (
-              <Loader2 className="h-4 w-4 animate-spin text-slate-400" aria-hidden />
+              <Loader2 className="h-4 w-4 animate-spin text-ink-500" aria-hidden />
             )}
             {showTimer && (
-              <span className="font-mono tabular-nums font-semibold text-slate-700">
+              <span className="font-mono tabular-nums font-semibold text-ink-700">
                 {fmtDuration(shownSeconds)}
               </span>
             )}
@@ -489,14 +489,14 @@ function LiveCallCard({
 
         {/* Hangup error (e.g. 409 — provider can't hang up) */}
         {hangupErr && (
-          <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded px-2 py-1">
+          <div className="text-xs text-urgent-strong bg-urgent-tint border border-urgent rounded px-2 py-1">
             {hangupErr}
           </div>
         )}
 
         {/* Status-fetch error (non-fatal — operator can still close) */}
         {error && !data && (
-          <div className="text-xs text-amber-700">Updating status…</div>
+          <div className="text-xs text-warning-strong">Updating status…</div>
         )}
 
         {/* Hang up / End Call — hidden only when there is nothing left to end. */}
@@ -507,8 +507,8 @@ function LiveCallCard({
             disabled={hangupBusy}
             className={cn(
               'w-full inline-flex items-center justify-center gap-1.5 h-9 rounded-md',
-              'bg-rose-600 text-white text-xs font-semibold shadow-sm',
-              'hover:bg-rose-700 transition-colors',
+              'bg-urgent text-white text-xs font-semibold shadow-sm',
+              'hover:bg-urgent-strong transition-colors',
               hangupBusy && 'opacity-60 cursor-wait',
             )}
           >

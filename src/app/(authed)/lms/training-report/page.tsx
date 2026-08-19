@@ -253,18 +253,18 @@ type ProgressView = {
 
 function progressView(done: number, total: number, pct: number): ProgressView {
   if (total === 0) {
-    return { kind: 'empty', tone: 'slate', barClass: 'bg-slate-300', label: 'Course Has No Videos Yet' };
+    return { kind: 'empty', tone: 'slate', barClass: 'bg-ink-300', label: 'Course Has No Videos Yet' };
   }
   // Mirror the server's own completeness test (videos_done >= videos_total)
   // rather than testing pct >= 100 — the rounded percentage is a display value
   // and could disagree with the count at the boundary.
   if (done >= total) {
-    return { kind: 'done', tone: 'emerald', barClass: 'bg-emerald-500', label: 'Complete' };
+    return { kind: 'done', tone: 'emerald', barClass: 'bg-success', label: 'Complete' };
   }
   if (done <= 0) {
-    return { kind: 'none', tone: 'slate', barClass: 'bg-slate-300', label: 'Not Started' };
+    return { kind: 'none', tone: 'slate', barClass: 'bg-ink-300', label: 'Not Started' };
   }
-  return { kind: 'partial', tone: 'amber', barClass: 'bg-amber-500', label: `In Progress — ${pct}%` };
+  return { kind: 'partial', tone: 'amber', barClass: 'bg-warning', label: `In Progress — ${pct}%` };
 }
 
 export default function TrainingReportPage() {
@@ -392,7 +392,7 @@ export default function TrainingReportPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
+        <h1 className="text-2xl font-semibold flex items-center gap-2">
           <BarChart3 className="size-6" /> Training Report
         </h1>
         <p className="text-sm text-muted-foreground">
@@ -450,14 +450,14 @@ export default function TrainingReportPage() {
           value={grandTotal}
           hint="Complete + Incomplete"
         />
-        <StatCard label="Complete" value={completeTotal} valueClass="text-emerald-700" />
-        <StatCard label="Incomplete" value={incompleteTotal} valueClass="text-amber-700" />
+        <StatCard label="Complete" value={completeTotal} valueClass="text-success-strong" />
+        <StatCard label="Incomplete" value={incompleteTotal} valueClass="text-warning-strong" />
         {/* Explicitly marked as contained by Incomplete rather than sitting
             beside it — the four tiles must not read as a partition. */}
         <StatCard
           label="Overdue"
           value={overdueTotal}
-          valueClass="text-red-700"
+          valueClass="text-urgent-strong"
           hint="Included In Incomplete"
           title={OVERDUE_TITLE}
         />
@@ -465,7 +465,7 @@ export default function TrainingReportPage() {
 
       {listError && (
         <Card>
-          <CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
+          <CardContent className="p-3 flex items-center gap-2 text-sm text-urgent">
             <AlertTriangle className="size-4" /> {listError}
           </CardContent>
         </Card>
@@ -497,7 +497,7 @@ export default function TrainingReportPage() {
               {/*
                 Comments sit on their own lines, never trailing a <col /> after
                 a space. JSX strips whitespace that contains a newline but KEEPS
-                a same-line space between two expressions, so `<col /> {/* x *\/}`
+                a same-line space between two expressions, so `<col />{/* x *\/}`
                 emits a " " text node — and a text node is illegal inside
                 <colgroup>, which React reports as a hydration error.
               */}
@@ -621,7 +621,7 @@ export default function TrainingReportPage() {
                           <StatusChip tone="red" size="sm" title={OVERDUE_TITLE}>
                             {due.dueLabel}
                           </StatusChip>
-                          <div className="text-[10px] font-semibold text-red-700" title={OVERDUE_TITLE}>
+                          <div className="text-xs font-semibold text-urgent-strong" title={OVERDUE_TITLE}>
                             Overdue
                           </div>
                         </div>
@@ -631,7 +631,7 @@ export default function TrainingReportPage() {
                           {/* Subordinate to the date itself: the deadline is the
                               fact, the countdown is only a convenience. */}
                           {due.daysLeft != null && (
-                            <div className="text-[10px] text-muted-foreground">
+                            <div className="text-xs text-muted-foreground">
                               {daysLeftLabel(due.daysLeft)}
                             </div>
                           )}
@@ -682,7 +682,7 @@ function StatCard({ label, value, valueClass, hint, title }: {
           {value == null ? '—' : value.toLocaleString('en-IN')}
         </div>
         <div className="text-xs text-muted-foreground">{label}</div>
-        {hint && <div className="text-[10px] text-muted-foreground/80">{hint}</div>}
+        {hint && <div className="text-xs text-muted-foreground/80">{hint}</div>}
       </CardContent>
     </Card>
   );

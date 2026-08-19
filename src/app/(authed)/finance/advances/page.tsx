@@ -111,7 +111,7 @@ export default function AdvancesPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
+        <h1 className="text-2xl font-semibold flex items-center gap-2">
           <Coins className="size-6" /> Audit Advance
         </h1>
         <p className="text-sm text-muted-foreground">
@@ -125,7 +125,7 @@ export default function AdvancesPage() {
           <button
             key={s || 'all'}
             onClick={() => setStatusFilter(s)}
-            className={`px-2 py-0.5 rounded text-xs ${statusFilter === s ? 'bg-primary text-white' : 'bg-slate-200 text-slate-700'}`}
+            className={`px-2 py-0.5 rounded text-xs ${statusFilter === s ? 'bg-primary text-white' : 'bg-ink-100 text-ink-700'}`}
           >
             {s === '' ? 'All' : STATUS_LABEL[Number(s)]}
           </button>
@@ -134,7 +134,7 @@ export default function AdvancesPage() {
 
       {loading && <div className="text-sm text-muted-foreground py-6 text-center">Loading…</div>}
       {error && (
-        <Card><CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
+        <Card><CardContent className="p-3 flex items-center gap-2 text-sm text-urgent">
           <AlertTriangle className="size-4" /> {error}
         </CardContent></Card>
       )}
@@ -161,7 +161,7 @@ export default function AdvancesPage() {
             </thead>
             <tbody>
               {data.map((a) => (
-                <tr key={a.advance_id} className="hover:bg-slate-50">
+                <tr key={a.advance_id} className="hover:bg-ink-50">
                   <td className="!text-center font-mono text-xs">{a.advance_id}</td>
                   <td>
                     {a.efr_name || '—'}
@@ -195,13 +195,13 @@ export default function AdvancesPage() {
                       <>
                         <button
                           onClick={() => act(a, 'ops-approve')}
-                          className="text-xs text-blue-600 hover:underline px-1.5"
+                          className="text-xs text-primary hover:underline px-1.5"
                         >
                           <CheckCircle2 className="inline size-3 mb-0.5" /> Ops ✓
                         </button>
                         <button
                           onClick={() => act(a, 'reject')}
-                          className="text-xs text-red-600 hover:underline px-1.5"
+                          className="text-xs text-urgent hover:underline px-1.5"
                         >
                           <XCircle className="inline size-3 mb-0.5" /> Reject
                         </button>
@@ -211,13 +211,13 @@ export default function AdvancesPage() {
                       <>
                         <button
                           onClick={() => act(a, 'fin-approve')}
-                          className="text-xs text-emerald-700 hover:underline px-1.5"
+                          className="text-xs text-success-strong hover:underline px-1.5"
                         >
                           <CheckCircle2 className="inline size-3 mb-0.5" /> Fin ✓
                         </button>
                         <button
                           onClick={() => act(a, 'reject')}
-                          className="text-xs text-red-600 hover:underline px-1.5"
+                          className="text-xs text-urgent hover:underline px-1.5"
                         >
                           <XCircle className="inline size-3 mb-0.5" /> Reject
                         </button>

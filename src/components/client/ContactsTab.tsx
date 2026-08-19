@@ -95,7 +95,7 @@ export function ContactsTab({ clientId, canEdit }: Props) {
         </div>
       </div>
       {error && (
-        <div className="text-xs text-red-600 flex items-center gap-1">
+        <div className="text-xs text-urgent-strong flex items-center gap-1">
           <AlertCircle className="size-3.5" /> {error}
         </div>
       )}
@@ -122,7 +122,7 @@ export function ContactsTab({ clientId, canEdit }: Props) {
                 <Button size="sm" variant="ghost" onClick={() => setEditing(c)}>
                   <Pencil className="size-3.5" />
                 </Button>
-                <Button size="sm" variant="ghost" onClick={() => onDelete(c)} className="text-red-600 hover:text-red-700">
+                <Button size="sm" variant="ghost" onClick={() => onDelete(c)} className="text-urgent hover:text-urgent-strong">
                   <Trash2 className="size-3.5" />
                 </Button>
               </div>
@@ -271,11 +271,11 @@ function ContactFormDialog({
                       onChange={(e) => update('contactNo', e.target.value.replace(/\D/g, '').slice(0, 10))}
                       inputMode="numeric"
                       placeholder="10 digits"
-                      className={`tabular-nums ${!isValid ? 'border-red-400 focus-visible:ring-red-300' : ''}`}
+                      className={`tabular-nums ${!isValid ? 'border-urgent focus-visible:ring-urgent' : ''}`}
                       aria-invalid={!isValid}
                       required
                     />
-                    {!isValid && <p className="text-[11px] text-red-600 mt-1">{INDIAN_MOBILE_ERROR}</p>}
+                    {!isValid && <p className="text-xs text-urgent-strong mt-1">{INDIAN_MOBILE_ERROR}</p>}
                   </>
                 );
               })()}
@@ -291,10 +291,10 @@ function ContactFormDialog({
                       onChange={(e) => update('contactAltNo', e.target.value.replace(/\D/g, '').slice(0, 10))}
                       inputMode="numeric"
                       placeholder="10 digits"
-                      className={`tabular-nums ${!isValid ? 'border-red-400 focus-visible:ring-red-300' : ''}`}
+                      className={`tabular-nums ${!isValid ? 'border-urgent focus-visible:ring-urgent' : ''}`}
                       aria-invalid={!isValid}
                     />
-                    {!isValid && <p className="text-[11px] text-red-600 mt-1">{INDIAN_MOBILE_ERROR}</p>}
+                    {!isValid && <p className="text-xs text-urgent-strong mt-1">{INDIAN_MOBILE_ERROR}</p>}
                   </>
                 );
               })()}
@@ -304,7 +304,7 @@ function ContactFormDialog({
             </Field>
           </div>
           {dupWarning && (
-            <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 flex items-center gap-1">
+            <div className="text-xs text-warning-strong bg-warning-tint border border-warning rounded px-2 py-1 flex items-center gap-1">
               <AlertCircle className="size-3.5" /> {dupWarning}
             </div>
           )}
@@ -321,7 +321,7 @@ function ContactFormDialog({
 function Field({ label, required, full, children }: { label: string; required?: boolean; full?: boolean; children: React.ReactNode }) {
   return (
     <div className={full ? 'col-span-2' : ''}>
-      <Label className="text-xs">{label}{required && <span className="text-red-600 ml-0.5">*</span>}</Label>
+      <Label className="text-xs">{label}{required && <span className="text-urgent-strong ml-0.5">*</span>}</Label>
       <div className="mt-0.5">{children}</div>
     </div>
   );
@@ -419,9 +419,9 @@ function BulkUploadDialog({
                   <tbody className="divide-y">
                     {result.results.map((r, i) => (
                       <tr key={i} className={
-                        r.status === 'created' ? 'bg-emerald-50/30'
-                        : r.status === 'skipped' ? 'bg-amber-50/30'
-                        : 'bg-red-50/30'
+                        r.status === 'created' ? 'bg-success-tint/30'
+                        : r.status === 'skipped' ? 'bg-warning-tint/30'
+                        : 'bg-urgent-tint/30'
                       }>
                         <td className="px-2 py-1 font-mono">{r.rowNumber}</td>
                         <td className="px-2 py-1">{r.status}</td>

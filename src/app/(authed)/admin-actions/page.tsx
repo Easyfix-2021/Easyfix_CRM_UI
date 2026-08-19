@@ -16,6 +16,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
   ShieldCheck, Webhook, FileSpreadsheet, ShieldAlert, Workflow, Database, FileText, Trash2, Activity, Sparkles, AudioLines,
+  Timer,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -76,6 +77,13 @@ const ACTIONS = [
     title: 'Webhook Manager',
     blurb: 'Inspect event registry, per-client callback mappings, and delivery audit logs.',
   },
+  {
+    href: '/admin-actions/tat-calculator',
+    icon: Timer,
+    title: 'TAT Calculator',
+    blurb: 'Segment-wise turnaround for a job, a client\u2019s last 90 days, or a technician\u2019s lifetime. Read-only preview \u2014 nothing consumes it yet.',
+    actionKey: 'isTatCalculatorView',
+  },
 ];
 
 export default function AdminActionsPage() {
@@ -128,7 +136,7 @@ export default function AdminActionsPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
+        <h1 className="text-2xl font-semibold flex items-center gap-2">
           <ShieldCheck className="size-6" /> Admin Action
         </h1>
         <p className="text-sm text-muted-foreground">
@@ -222,7 +230,7 @@ export default function AdminActionsPage() {
             >
               <Card className={
                 'hover:border-primary hover:shadow-sm transition-colors h-full '
-                + (wantsInvoice ? 'ring-2 ring-sky-400' : '')
+                + (wantsInvoice ? 'ring-2 ring-primary' : '')
               }>
                 <CardContent className="p-4 space-y-2">
                   <div className="flex items-center gap-2">
@@ -252,7 +260,7 @@ export default function AdminActionsPage() {
             <Card className="hover:border-primary hover:shadow-sm transition-colors h-full">
               <CardContent className="p-4 space-y-2">
                 <div className="flex items-center gap-2">
-                  <div className="h-8 w-8 rounded-md bg-rose-100 text-rose-600 grid place-items-center">
+                  <div className="h-8 w-8 rounded-md bg-urgent-tint text-urgent grid place-items-center">
                     <ShieldAlert className="h-4 w-4" />
                   </div>
                   <h2 className="font-medium flex-1">Delete Easyfixer / User</h2>
@@ -390,11 +398,11 @@ function GenerateInvoiceDialog({ open, onClose }: { open: boolean; onClose: () =
             </div>
           </div>
           {result && (
-            <div className="rounded border bg-emerald-50 border-emerald-200 p-3 text-sm space-y-1">
+            <div className="rounded border bg-success-tint border-success/30 p-3 text-sm space-y-1">
               <div><strong>Invoice #{result.invoiceId}</strong> created.</div>
               <div className="text-xs">{result.jobCount} jobs · ₹{Number(result.totalAmount || 0).toFixed(2)} total.</div>
               <div className="text-xs mt-1">
-                <Link href="/finance" className="text-sky-700 underline">Open Finance section</Link> to download PDF or record payment.
+                <Link href="/finance" className="text-primary underline">Open Finance section</Link> to download PDF or record payment.
               </div>
             </div>
           )}
@@ -452,7 +460,7 @@ function RecordingBackfillDialog({ open, onClose }: { open: boolean; onClose: ()
             (up to 100 per run). Safe to run repeatedly — run again if more than 100 are missing.
           </p>
           {result && (
-            <div className="rounded border bg-emerald-50 border-emerald-200 p-3 text-sm space-y-1">
+            <div className="rounded border bg-success-tint border-success/30 p-3 text-sm space-y-1">
               <div><strong>{result.recovered}</strong> recovered of <strong>{result.scanned}</strong> scanned.</div>
               <div className="text-xs">
                 {result.stillMissing} still missing{result.errors ? ` · ${result.errors} error(s)` : ''}.

@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 315.361" role="presentation" aria-hidden="true">
+<!--
+  Diwali ornament — overlays the tagline lockup (viewBox 0 0 1000 315.361),
+  so every coordinate here is in the lockup's own units and a 1:1 overlay
+  (same box, same scale) lands exactly where it is drawn.
+
+  PALETTE: brand tokens only — gold #C99A2E (clay bowl, filigree, divider) and
+  warning #E0930F (flame). No colour that is not on the brand page (rule 10).
+
+  KEEP-OUT: the house mark occupies x 121.4..341.7, y 2..196.3. Nothing is
+  drawn inside it. The lockup fills its own viewBox edge to edge, so the
+  decoration sits in the three measured free zones: the wedge above the "x"
+  (x 855..1000, y 0..56), the wordmark baseline band (y 196.3..239.6) and the
+  strip below the tagline (y 300.4..315.36).
+
+  Animation is CSS, not SMIL: SMIL cannot be media-queried, and the
+  reduced-motion opt-out has to travel with the asset rather than depend on
+  whatever page happens to embed it.
+-->
+<style>
+.flame{transform-box:fill-box;transform-origin:50% 100%;animation:flicker 2.6s ease-in-out infinite}
+.flame-b{animation-duration:3.3s;animation-delay:-1.2s}
+@keyframes flicker{
+0%,100%{transform:scale(1,1);opacity:.92}
+30%{transform:scale(1.07,1.13);opacity:1}
+55%{transform:scale(.95,1.03);opacity:.82}
+78%{transform:scale(1.04,1.09);opacity:1}
+}
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+
+<!-- Filigree flourish, top right, in the clear wedge above the "x" glyph. -->
+<g fill="none" stroke="#C99A2E" stroke-width="2.2" stroke-linecap="round">
+<path d="M866 41c9-15 30-20 48-11"/>
+<path d="M988 41c-9-15-30-20-48-11"/>
+<circle cx="866" cy="41" r="2.4"/>
+<circle cx="988" cy="41" r="2.4"/>
+</g>
+<path d="M927 15c7 7 7 15 0 21-7-6-7-14 0-21z" fill="#C99A2E"/>
+
+<!-- Hairline divider with a centred motif, below the tagline. -->
+<path d="M250 308H432M568 308H750" stroke="#C99A2E" stroke-width="1.4" stroke-linecap="round"/>
+<path d="M500 302l6 6-6 6-6-6z" fill="#C99A2E"/>
+
+<!-- Two diyas resting on the wordmark baseline. -->
+<path class="flame" d="M60 204c6.5 7.5 9.5 12.5 9.5 16.5a9.5 9.5 0 0 1-19 0c0-4 3-9 9.5-16.5z" fill="#E0930F"/>
+<path d="M42 224h36a18 12 0 0 1-36 0z" fill="#C99A2E"/>
+<path class="flame flame-b" d="M940 204c6.5 7.5 9.5 12.5 9.5 16.5a9.5 9.5 0 0 1-19 0c0-4 3-9 9.5-16.5z" fill="#E0930F"/>
+<path d="M922 224h36a18 12 0 0 1-36 0z" fill="#C99A2E"/>
+</svg>

@@ -98,7 +98,7 @@ export default function HierarchyPage() {
       </div>
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
+          <h1 className="text-2xl font-semibold flex items-center gap-2">
             <Users className="size-6" /> Hierarchy
           </h1>
           <p className="text-sm text-muted-foreground">
@@ -148,7 +148,7 @@ export default function HierarchyPage() {
       </Card>
 
       {error && (
-        <Card><CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
+        <Card><CardContent className="p-3 flex items-center gap-2 text-sm text-urgent">
           <AlertTriangle className="size-4" /> {error}
         </CardContent></Card>
       )}
@@ -204,7 +204,7 @@ function TreeNode({ node, onDrillInto, root }: {
   const [open, setOpen] = useState(root ?? false);
 
   return (
-    <div className={root ? '' : 'ml-5 mt-1 border-l border-slate-200 pl-3'}>
+    <div className={root ? '' : 'ml-5 mt-1 border-l border-ink-100 pl-3'}>
       <div className="flex items-center gap-1.5 group">
         {hasChildren ? (
           <button
@@ -220,7 +220,7 @@ function TreeNode({ node, onDrillInto, root }: {
         <div className="flex-1 flex items-center gap-2 text-sm">
           <span className="font-medium">{node.user_name}</span>
           <span className="text-xs text-muted-foreground font-mono">#{node.user_id}</span>
-          {node.role_name && <span className="text-xs text-blue-700 bg-blue-50 rounded px-1.5">{node.role_name}</span>}
+          {node.role_name && <span className="text-xs text-info-strong bg-info-tint rounded px-1.5">{node.role_name}</span>}
           <span className="text-xs text-muted-foreground">{node.official_email}</span>
           {hasChildren && (
             <span className="text-xs text-muted-foreground">· {node.children.length} report{node.children.length === 1 ? '' : 's'}</span>

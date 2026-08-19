@@ -170,11 +170,11 @@ const STATUS_LABEL: Record<number, string> = {
   4: 'Completed',
 };
 const STATUS_CLASS: Record<number, string> = {
-  0: 'bg-sky-100 text-sky-800',
-  1: 'bg-amber-100 text-amber-800',
-  2: 'bg-indigo-100 text-indigo-800',
-  3: 'bg-rose-100 text-rose-800',
-  4: 'bg-emerald-100 text-emerald-800',
+  0: 'bg-info-tint text-info-strong',
+  1: 'bg-warning-tint text-warning-strong',
+  2: 'bg-neutral-tint text-neutral-strong',
+  3: 'bg-urgent-tint text-urgent-strong',
+  4: 'bg-success-tint text-success-strong',
 };
 
 const STATUS_OPTIONS = [
@@ -438,7 +438,7 @@ export default function SupplyGapPage() {
       {hasChartData && (
         <section className="mb-4 space-y-3">
           <div className="flex items-baseline justify-between gap-3">
-            <h2 className="text-sm font-semibold text-slate-800">Graphical View</h2>
+            <h2 className="text-sm font-semibold text-ink-900">Graphical View</h2>
             <span className="text-xs text-muted-foreground">
               Charts reflect the current page.
             </span>
@@ -630,7 +630,7 @@ export default function SupplyGapPage() {
               <Loader2 className="size-5 animate-spin" /> Loading…
             </div>
           ) : detail.error ? (
-            <div className="p-8 text-center text-sm text-red-600">{detail.error}</div>
+            <div className="p-8 text-center text-sm text-urgent">{detail.error}</div>
           ) : detail.data ? (
             <DetailGrid d={detail.data} />
           ) : null}
@@ -655,7 +655,7 @@ export default function SupplyGapPage() {
               <Loader2 className="size-5 animate-spin" /> Loading…
             </div>
           ) : allocations.error ? (
-            <div className="p-8 text-center text-sm text-red-600">{allocations.error}</div>
+            <div className="p-8 text-center text-sm text-urgent">{allocations.error}</div>
           ) : (allocations.data?.length ?? 0) === 0 ? (
             <div className="p-8 text-center text-sm text-muted-foreground">No Record Found.</div>
           ) : (

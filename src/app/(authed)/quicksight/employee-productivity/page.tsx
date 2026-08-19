@@ -125,9 +125,9 @@ function fmtNum(n: number): string {
 /* Cancelled-count badge tone (legacy: 0 neutral / <=1 success / <=2 warning / else danger). */
 function cancelBadgeClass(n: number): string {
   if (n <= 0) return 'bg-muted text-muted-foreground';
-  if (n <= 1) return 'bg-emerald-100 text-emerald-700';
-  if (n <= 2) return 'bg-amber-100 text-amber-700';
-  return 'bg-red-100 text-red-700';
+  if (n <= 1) return 'bg-success-tint text-success-strong';
+  if (n <= 2) return 'bg-warning-tint text-warning-strong';
+  return 'bg-urgent-tint text-urgent-strong';
 }
 
 /* Build the shared query string (table JSON + xlsx). page/size appended by caller. */
@@ -493,7 +493,7 @@ export default function EmployeeProductivityPage() {
         {hasCharts && (
           <section className="space-y-3">
             <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-slate-800">Graphical View</h2>
+              <h2 className="text-sm font-semibold text-ink-900">Graphical View</h2>
               <span className="text-xs text-muted-foreground">Charts reflect the current page.</span>
             </div>
 
@@ -623,16 +623,16 @@ function SpocRevenueSection({
     <section className="space-y-3">
       {/* Header row */}
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold text-slate-800">Primary SPOC Revenue</h2>
+        <h2 className="text-sm font-semibold text-ink-900">Primary SPOC Revenue</h2>
         <div className="flex items-center gap-4 text-sm font-medium">
           <span>
             Total Revenue{' '}
-            <span className="text-emerald-700">₹{fmtNum(data.totalRevenue)}</span>
+            <span className="text-success-strong">₹{fmtNum(data.totalRevenue)}</span>
           </span>
           <span className="text-muted-foreground">·</span>
           <span>
             Avg{' '}
-            <span className="text-emerald-700">₹{fmtNum(data.avgRevenue)}</span>
+            <span className="text-success-strong">₹{fmtNum(data.avgRevenue)}</span>
           </span>
         </div>
       </div>
@@ -654,7 +654,7 @@ function SpocRevenueSection({
               <div className="text-sm font-medium leading-tight truncate" title={s.userName}>
                 {s.userName || '—'}
               </div>
-              <div className="text-base font-semibold tabular-nums text-emerald-700">
+              <div className="text-base font-semibold tabular-nums text-success-strong">
                 ₹{fmtNum(s.revenue)}
               </div>
               <div className="text-xs text-muted-foreground">

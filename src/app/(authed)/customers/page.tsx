@@ -90,7 +90,7 @@ export default function CustomersPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
+        <h1 className="text-2xl font-semibold flex items-center gap-2">
           <Users className="size-6" /> Customers
         </h1>
         <p className="text-sm text-muted-foreground">
@@ -114,7 +114,7 @@ export default function CustomersPage() {
       </Card>
 
       {error && (
-        <Card><CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
+        <Card><CardContent className="p-3 flex items-center gap-2 text-sm text-urgent">
           <AlertTriangle className="size-4" /> {error}
         </CardContent></Card>
       )}
@@ -152,7 +152,7 @@ export default function CustomersPage() {
                   <td className="!text-center font-mono text-xs">{c.job_count}</td>
                   <td className="!text-center">
                     {c.is_active === 1
-                      ? <span className="text-emerald-700 text-xs">Active</span>
+                      ? <span className="text-success-strong text-xs">Active</span>
                       : <span className="text-muted-foreground text-xs">Inactive</span>}
                   </td>
                   <td className="!text-right">

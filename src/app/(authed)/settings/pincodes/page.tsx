@@ -269,7 +269,7 @@ export default function ManagePincodesPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
+          <h1 className="text-2xl font-semibold flex items-center gap-2">
             <MapPin className="size-6" /> Manage Pincodes
           </h1>
           <p className="text-sm text-muted-foreground">
@@ -320,7 +320,7 @@ export default function ManagePincodesPage() {
             aria-expanded={howOpen}
           >
             {howOpen ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
-            <Info className="size-4 shrink-0 text-blue-600" />
+            <Info className="size-4 shrink-0 text-info" />
             <span className="font-medium">How Pincode Management Works?</span>
             <span className="ml-auto text-xs text-muted-foreground">{howOpen ? 'Hide' : 'Show'}</span>
           </button>
@@ -340,21 +340,21 @@ export default function ManagePincodesPage() {
                 <p>The status badge is computed live on every page load — no stored flag to maintain:</p>
                 <ul className="list-disc pl-5 mt-1 space-y-1">
                   <li>
-                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-700">
+                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium bg-success-tint text-success-strong">
                       <CheckCircle2 className="size-3" /> Local
                     </span>{' — '}
                     at least one active and verified Easyfixer is mapped to a zone covering this pincode&apos;s
                     city. No travel charge applies.
                   </li>
                   <li>
-                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">
+                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium bg-warning-tint text-warning-strong">
                       Travel
                     </span>{' — '}
                     pincode is listed but no active Easyfixer is currently available in the area.
                     Jobs in this pincode get a <strong>travel charge</strong> (rate-card defined).
                   </li>
                   <li>
-                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">
+                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium bg-urgent-tint text-urgent-strong">
                       Unzoned
                     </span>{' — '}
                     a job was created with a pincode <em>not</em> in this list. The system flags the job,
@@ -461,7 +461,7 @@ export default function ManagePincodesPage() {
 
       {error && (
         <Card>
-          <CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
+          <CardContent className="p-3 flex items-center gap-2 text-sm text-urgent">
             <AlertTriangle className="size-4" /> {error}
           </CardContent>
         </Card>
@@ -556,7 +556,7 @@ export default function ManagePincodesPage() {
                   <td className="!text-left whitespace-nowrap truncate">
                     {p.created_by_type ? (
                       <span className="inline-flex items-center gap-1">
-                        <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${p.created_by_type === 'technician' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>
+                        <span className={`inline-block rounded px-1.5 py-0.5 text-xs font-medium ${p.created_by_type === 'technician' ? 'bg-warning-tint text-warning-strong' : 'bg-ink-100 text-ink-700'}`}>
                           {p.created_by_type === 'technician' ? 'Tech' : 'CRM'}
                         </span>
                         {p.created_by_name || <span className="text-muted-foreground">#{p.created_by}</span>}
@@ -567,7 +567,7 @@ export default function ManagePincodesPage() {
                   </td>
                   {/* Status — Serviceable / Non-Serviceable (read-only label). */}
                   <td className="!text-center whitespace-nowrap">
-                    <span className={`text-xs font-medium ${p.is_active ? 'text-emerald-700' : 'text-amber-700'}`}>
+                    <span className={`text-xs font-medium ${p.is_active ? 'text-success-strong' : 'text-warning-strong'}`}>
                       {p.is_active ? 'Serviceable' : 'Non-Serviceable'}
                     </span>
                   </td>
@@ -609,7 +609,7 @@ export default function ManagePincodesPage() {
                         )}
                       </div>
                     ) : (
-                      <span className="text-[10px] text-muted-foreground">—</span>
+                      <span className="text-xs text-muted-foreground">—</span>
                     )}
                   </td>
                 </tr>
@@ -672,7 +672,7 @@ function StatusPill({
         <button
           type="button"
           onClick={onClick}
-          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700 hover:bg-emerald-200 transition-colors cursor-pointer"
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-success-tint text-success-strong hover:bg-success/20 transition-colors cursor-pointer"
           title={`View ${label} servicing this pincode`}
         >
           <CheckCircle2 className="size-3" /> Local · {label}
@@ -680,7 +680,7 @@ function StatusPill({
       );
     }
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-success-tint text-success-strong">
         <CheckCircle2 className="size-3" /> Local · {label}
       </span>
     );
@@ -688,7 +688,7 @@ function StatusPill({
 
   // TRAVEL status — count is 0 so no click handler is expected
   return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-warning-tint text-warning-strong">
       Travel
     </span>
   );
@@ -1119,7 +1119,7 @@ function PincodeFormModal({
         <DialogHeader className="!mx-0 !mt-0 px-6 py-4 mb-0">
           <DialogTitle>{isEdit ? 'Edit Pincode' : 'Add Pincode'}</DialogTitle>
           {openedFromDuplicate && (
-            <div className="text-[12px] text-slate-300/85 mt-0.5">
+            <div className="text-[12px] text-ink-300/85 mt-0.5">
               This pincode already exists — opened for editing.
             </div>
           )}
@@ -1183,7 +1183,7 @@ function PincodeFormModal({
               <div>
                 <Label className="block mb-1">Status</Label>
                 <div className="flex h-9 items-center justify-between gap-2 rounded-md border border-input bg-background px-3">
-                  <span className={`text-sm font-medium ${isActive ? 'text-emerald-700' : 'text-amber-700'}`}>
+                  <span className={`text-sm font-medium ${isActive ? 'text-success-strong' : 'text-warning-strong'}`}>
                     {isActive ? 'Serviceable' : 'Non-Serviceable'}
                   </span>
                   <Switch checked={isActive} onCheckedChange={setIsActive} ariaLabel="Serviceable status" />
@@ -1194,7 +1194,7 @@ function PincodeFormModal({
 
           {/* ── Duplicate warning (Add path) ── */}
           {!isEdit && isDuplicate && geo?.duplicate && (
-            <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded p-2 flex items-start gap-2">
+            <div className="text-sm text-urgent-strong bg-urgent-tint border border-urgent/30 rounded p-2 flex items-start gap-2">
               <AlertTriangle className="size-4 mt-0.5 shrink-0" />
               <span>
                 Pincode already exists in{' '}
@@ -1299,7 +1299,7 @@ function PincodeFormModal({
               {!isEdit && (
                 <div
                   className={`rounded border p-3 space-y-2 ${
-                    stateIsNew ? 'border-amber-200 bg-amber-50' : 'border-input bg-muted/30'
+                    stateIsNew ? 'border-warning/30 bg-warning-tint' : 'border-input bg-muted/30'
                   }`}
                 >
                   <div className="flex items-center gap-2">
@@ -1362,7 +1362,7 @@ function PincodeFormModal({
           )}
 
           {error && (
-            <div className="text-sm text-red-600 flex items-center gap-1">
+            <div className="text-sm text-urgent flex items-center gap-1">
               <AlertTriangle className="size-4" /> {error}
             </div>
           )}
@@ -1424,7 +1424,7 @@ function InfoTooltip({ children, width = 288 }: { children: React.ReactNode; wid
         <span
           role="tooltip"
           style={{ position: 'fixed', top: pos.top, left: pos.left, width }}
-          className="pointer-events-none z-[60] rounded-md border bg-white p-2 text-left text-[11px] font-normal normal-case leading-snug text-foreground shadow-lg"
+          className="pointer-events-none z-[60] rounded-md border bg-popover p-2 text-left text-xs font-normal normal-case leading-snug text-foreground shadow-lg"
         >
           {children}
         </span>,
@@ -1492,13 +1492,13 @@ function ZoneMappingField({
           {selectedIds.map((id) => (
             <span
               key={id}
-              className="inline-flex items-center gap-1 rounded-full border border-blue-300 bg-blue-100 text-blue-800 text-xs font-medium pl-2 pr-1 py-0.5"
+              className="inline-flex items-center gap-1 rounded-full border border-info/30 bg-info-tint text-info-strong text-xs font-medium pl-2 pr-1 py-0.5"
             >
               {zoneNameById.get(id) ?? `Zone #${id}`}
               <button
                 type="button"
                 onClick={() => onRemove(id)}
-                className="rounded-full hover:bg-blue-200 p-0.5"
+                className="rounded-full hover:bg-info/20 p-0.5"
                 aria-label={`Remove ${zoneNameById.get(id) ?? `Zone #${id}`}`}
               >
                 <X className="size-3" />
@@ -1520,7 +1520,7 @@ function ZoneMappingField({
               key={z.zone_id}
               type="button"
               onClick={() => onAdd(z.zone_id)}
-              className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-background text-foreground hover:bg-muted cursor-pointer text-xs px-2 py-1 transition-colors"
+              className="inline-flex items-center gap-1 rounded-full border border-ink-300 bg-background text-foreground hover:bg-muted cursor-pointer text-xs px-2 py-1 transition-colors"
               title="Add this zone"
             >
               <Plus className="size-3 shrink-0" />
@@ -1599,7 +1599,7 @@ function PincodeTechniciansModal({
           <DialogTitle className="flex items-center gap-2">
             <Users className="size-4" /> Serviceable Technicians
           </DialogTitle>
-          <div className="text-[12px] text-slate-300/85 mt-0.5">
+          <div className="text-[12px] text-ink-300/85 mt-0.5">
             {headerSub}{' '}·{' '}
             {loading ? 'Loading…' : `${total} Technician${total === 1 ? '' : 's'}`}
           </div>
@@ -1639,7 +1639,7 @@ function PincodeTechniciansModal({
               )}
               {!loading && error && (
                 <tr>
-                  <td colSpan={5} className="!text-center py-8 text-rose-600">
+                  <td colSpan={5} className="!text-center py-8 text-urgent">
                     <AlertTriangle className="size-4 inline mr-1" />{error}
                   </td>
                 </tr>
@@ -1781,7 +1781,7 @@ function PincodeZonesModal({
           <DialogTitle className="flex items-center gap-2">
             <MapIcon className="size-4" /> Assign Zones
           </DialogTitle>
-          <div className="text-[12px] text-slate-300/85 mt-0.5">
+          <div className="text-[12px] text-ink-300/85 mt-0.5">
             {headerSub}{' '}·{' '}
             {loading ? 'Loading…' : `${selected.size} Selected`}
           </div>
@@ -1810,13 +1810,13 @@ function PincodeZonesModal({
                   {selectedIds.map((id) => (
                     <span
                       key={id}
-                      className="inline-flex items-center gap-1 rounded-full border border-blue-300 bg-blue-100 text-blue-800 text-xs font-medium pl-2 pr-1 py-0.5"
+                      className="inline-flex items-center gap-1 rounded-full border border-info/30 bg-info-tint text-info-strong text-xs font-medium pl-2 pr-1 py-0.5"
                     >
                       {zoneNameById.get(id) ?? `Zone #${id}`}
                       <button
                         type="button"
                         onClick={() => removeZone(id)}
-                        className="rounded-full hover:bg-blue-200 p-0.5"
+                        className="rounded-full hover:bg-info/20 p-0.5"
                         aria-label={`Remove ${zoneNameById.get(id) ?? `Zone #${id}`}`}
                       >
                         <X className="size-3" />
@@ -1832,7 +1832,7 @@ function PincodeZonesModal({
         </div>
 
         {error && (
-          <div className="px-4 text-sm text-red-600 flex items-center gap-1">
+          <div className="px-4 text-sm text-urgent flex items-center gap-1">
             <AlertTriangle className="size-4" /> {error}
           </div>
         )}

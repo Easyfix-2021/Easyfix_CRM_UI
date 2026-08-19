@@ -660,7 +660,7 @@ export default function RegisteredEasyfixersPage() {
                             <span>{e.efr_id}</span>
                             {early && (
                               <Unlock
-                                className="size-3.5 text-amber-500 shrink-0"
+                                className="size-3.5 text-warning shrink-0"
                                 aria-label="Early Activation Eligible"
                               />
                             )}
@@ -680,7 +680,7 @@ export default function RegisteredEasyfixersPage() {
                               </span>
                               {existing && (
                                 <User
-                                  className="size-3.5 text-sky-600 shrink-0"
+                                  className="size-3.5 text-info shrink-0"
                                   aria-label="Existing Easyfixer"
                                 />
                               )}
@@ -701,12 +701,12 @@ export default function RegisteredEasyfixersPage() {
                               <StatusChip tone="violet" size="sm">RE-APPLICATION</StatusChip>
                             )}
                             {showPct && (
-                              <span className="text-[10px] text-muted-foreground tabular-nums">
+                              <span className="text-xs text-muted-foreground tabular-nums">
                                 ({Math.round(Number(e.profile_perc))}%)
                               </span>
                             )}
                             {reapplication.isReapplication && (
-                              <div className="mt-1 flex flex-col text-[10px] leading-4 text-muted-foreground">
+                              <div className="mt-1 flex flex-col text-xs leading-4 text-muted-foreground">
                                 {reapplication.previousTxId != null && <span>Previous Tx: {reapplication.previousTxId}</span>}
                                 {reapplication.previousPerformanceGrade && <span>Previous grade: {reapplication.previousPerformanceGrade}</span>}
                                 {reapplication.lifetimeJobs != null && <span>Completed jobs: {reapplication.lifetimeJobs.toLocaleString('en-IN')}</span>}

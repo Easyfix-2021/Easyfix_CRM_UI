@@ -775,7 +775,7 @@ export default function CallTrackingPage() {
       {totals && (
         <section className="mt-4 space-y-3">
           <div className="flex items-baseline justify-between">
-            <h2 className="text-sm font-semibold text-slate-800">Reach And Call Cost</h2>
+            <h2 className="text-sm font-semibold text-ink-900">Reach And Call Cost</h2>
             <span className="text-xs text-muted-foreground">Counts people and billed seconds — everything above counts calls.</span>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -820,7 +820,7 @@ export default function CallTrackingPage() {
                         ? <span className="text-muted-foreground">—</span>
                         : fmtTalkTime(totals.conferenceBilledSecs)}
                     </span>
-                    <span className={`block text-[11px] font-medium ${confPartial ? 'text-amber-700' : 'text-muted-foreground'}`}>
+                    <span className={`block text-xs font-medium ${confPartial ? 'text-warning-strong' : 'text-muted-foreground'}`}>
                       {confCoverage}
                     </span>
                   </span>
@@ -906,8 +906,8 @@ export default function CallTrackingPage() {
                     />
                   </td>
                   <td className="!text-center">
-                    <span className="text-emerald-700">{j.connected}</span>
-                    <span className="ml-1 text-[10px] text-muted-foreground">({j.connectRate}%)</span>
+                    <span className="text-success-strong">{j.connected}</span>
+                    <span className="ml-1 text-xs text-muted-foreground">({j.connectRate}%)</span>
                   </td>
                   <td className="!text-center tabular-nums">{fmtTalkTime(j.totalDurationSecs)}</td>
                   <td
@@ -961,7 +961,7 @@ export default function CallTrackingPage() {
                   </td>
                   <td className="!text-center">
                     {jobFoot.connected}
-                    <span className="ml-1 text-[10px] font-normal text-muted-foreground">({jobFoot.rate}%)</span>
+                    <span className="ml-1 text-xs font-normal text-muted-foreground">({jobFoot.rate}%)</span>
                   </td>
                   <td className="!text-center tabular-nums">{fmtTalkTime(jobFoot.secs)}</td>
                   {/*
@@ -1068,7 +1068,7 @@ export default function CallTrackingPage() {
                   <td className="!text-left whitespace-nowrap">{fmtDay(r.day)}</td>
                   <td className="!text-left font-medium whitespace-nowrap">
                     {r.userName}
-                    {r.userId != null && <span className="ml-1 text-[10px] text-muted-foreground">#{r.userId}</span>}
+                    {r.userId != null && <span className="ml-1 text-xs text-muted-foreground">#{r.userId}</span>}
                   </td>
                   <td className="!text-center">
                     {/*
@@ -1092,7 +1092,7 @@ export default function CallTrackingPage() {
                     )}
                   </td>
                   <td className="!text-center">{r.uniqueJobs}</td>
-                  <td className="!text-center text-emerald-700">{r.connected}</td>
+                  <td className="!text-center text-success-strong">{r.connected}</td>
                   <td className="!text-center font-medium">{r.connectRate}%</td>
                   <td className="!text-center tabular-nums">{fmtTalkTime(r.totalDurationSecs)}</td>
                   <td className="!text-center tabular-nums">{fmtSecs(r.avgDurationSecs)}</td>
@@ -1117,7 +1117,7 @@ export default function CallTrackingPage() {
                         <StatusChip tone={r.topStatus == null ? 'slate' : statusTone(r.topStatus)}>
                           {r.topStatusLabel}
                         </StatusChip>
-                        <span className="ml-1 text-[10px] text-muted-foreground">({r.topStatusCalls})</span>
+                        <span className="ml-1 text-xs text-muted-foreground">({r.topStatusCalls})</span>
                       </>
                     )}
                   </td>
@@ -1202,7 +1202,7 @@ export default function CallTrackingPage() {
                   <tr key={r.userId ?? r.userName}>
                     <td className="!text-left font-medium whitespace-nowrap">
                       {r.userName}
-                      {r.userId != null && <span className="ml-1 text-[10px] text-muted-foreground">#{r.userId}</span>}
+                      {r.userId != null && <span className="ml-1 text-xs text-muted-foreground">#{r.userId}</span>}
                     </td>
                     <td className="!text-right tabular-nums whitespace-nowrap" title={perDayTitle}>{r.activeDays}</td>
                     <td className="!text-right tabular-nums whitespace-nowrap">
@@ -1226,7 +1226,7 @@ export default function CallTrackingPage() {
                       )}
                     </td>
                     <td className="!text-right tabular-nums whitespace-nowrap">{r.uniqueJobs}</td>
-                    <td className="!text-right tabular-nums whitespace-nowrap text-emerald-700">{r.connected}</td>
+                    <td className="!text-right tabular-nums whitespace-nowrap text-success-strong">{r.connected}</td>
                     <td className="!text-right tabular-nums whitespace-nowrap font-medium">{r.connectRate}%</td>
                     {/* null renders as an em-dash — "cannot divide", never "0". */}
                     <td className="!text-right tabular-nums whitespace-nowrap font-medium" title={perDayTitle}>
@@ -1250,7 +1250,7 @@ export default function CallTrackingPage() {
                           <StatusChip tone={r.topStatus == null ? 'slate' : statusTone(r.topStatus)}>
                             {r.topStatusLabel}
                           </StatusChip>
-                          <span className="ml-1 text-[10px] text-muted-foreground">({r.topStatusCalls})</span>
+                          <span className="ml-1 text-xs text-muted-foreground">({r.topStatusCalls})</span>
                         </>
                       )}
                     </td>
@@ -1372,9 +1372,7 @@ type CallDetail = {
   jobId: number | null;
   callAt: string | null;
   callerUserId: number | null; callerName: string;
-  // Which table resolved the caller. caller_id holds a tbl_user id on rows this
-  // backend writes and an efr_id on rows the legacy CRM writes, so the id alone
-  // cannot say — see CALLER_NAME in quicksight-call-tracking.service.js.
+  // Which table resolved the caller — see CALLER_NAME in the BE service.
   callerKind?: 'user' | 'technician' | 'unresolved';
   receiverName: string | null; partyRole: string;
   /** The SNAPSHOT — job status when the call was placed, not today's status. */
@@ -1511,14 +1509,14 @@ function CallDrilldownBody({ drill, filters, onClose }: {
 
   return (
     <>
-      {detail.error && <p className="text-sm text-rose-700">{String(detail.error)}</p>}
+      {detail.error && <p className="text-sm text-urgent-strong">{String(detail.error)}</p>}
       {!detail.error && items === null && (
         <p className="py-6 text-center text-sm text-muted-foreground">Loading…</p>
       )}
       {!detail.error && items !== null && (
         <>
           {detail.data?.capped && (
-            <p className="mb-2 text-xs text-amber-700">
+            <p className="mb-2 text-xs text-warning-strong">
               Showing the most recent calls only — narrow the filters to see the rest.
             </p>
           )}
@@ -1556,17 +1554,19 @@ function CallDrilldownBody({ drill, filters, onClose }: {
                     <td className="!text-left whitespace-nowrap">
                       {c.callerName}
                       {/*
-                        * The id renders ONLY when the backend resolved it to a real CRM
-                        * user. caller_id holds a tbl_user id on rows this backend writes
-                        * and an efr_id on rows the legacy CRM writes, so an unqualified
-                        * "#352882" asserted a CRM user that does not exist — which is how
-                        * Called By and To Whom read as the same person on job 529116.
+                        * The id renders ONLY when the backend resolved it to a
+                        * real CRM user. caller_id holds a tbl_user id on rows
+                        * this backend writes and an efr_id on rows the legacy
+                        * CRM writes, so an unqualified "#352882" beside a name
+                        * asserted a CRM user that does not exist — which is how
+                        * "Called By" and "To Whom" ended up reading as the same
+                        * person on job 529116.
                         */}
                       {c.callerUserId != null && c.callerKind === 'user' && (
-                        <span className="ml-1 text-[10px] text-muted-foreground">#{c.callerUserId}</span>
+                        <span className="ml-1 text-xs text-muted-foreground">#{c.callerUserId}</span>
                       )}
                       {c.callerKind === 'technician' && (
-                        <span className="ml-1 text-[10px] text-muted-foreground">Technician</span>
+                        <span className="ml-1 text-xs text-muted-foreground">Technician</span>
                       )}
                     </td>
                     {/*
@@ -1588,7 +1588,7 @@ function CallDrilldownBody({ drill, filters, onClose }: {
                           <span className="block whitespace-nowrap">
                             {c.receiverName || <span className="text-muted-foreground">—</span>}
                           </span>
-                          <span className="block whitespace-nowrap text-[10px] text-muted-foreground">{c.partyRole}</span>
+                          <span className="block whitespace-nowrap text-xs text-muted-foreground">{c.partyRole}</span>
                         </>
                       )}
                     </td>
@@ -1612,10 +1612,9 @@ function CallDrilldownBody({ drill, filters, onClose }: {
                       * provider FILTER would place it under, so the cell always names the
                       * tab the row appears in. `providerAssumed` marks rows where the
                       * column named no vendor and "only two vendors have ever existed" was
-                      * used instead — without it, an unattributable row renders a confident
-                      * claim. The tooltip carries whatever WAS stored, including 2021
-                      * telecom-carrier values like 'JIO' which must never be printed here
-                      * as though they were the vendor.
+                      * used instead. The tooltip carries whatever WAS stored, including
+                      * 2021 telecom-carrier values like 'JIO', which must never be printed
+                      * here as though they were the vendor.
                       */}
                     <td
                       className="!text-left whitespace-nowrap"
@@ -1623,7 +1622,7 @@ function CallDrilldownBody({ drill, filters, onClose }: {
                     >
                       {c.provider}
                       {c.providerAssumed && (
-                        <span className="ml-1 text-[10px] text-muted-foreground">(assumed)</span>
+                        <span className="ml-1 text-xs text-muted-foreground">(assumed)</span>
                       )}
                     </td>
                     <td className="!text-center text-xs">

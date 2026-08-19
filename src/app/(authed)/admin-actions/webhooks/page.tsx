@@ -78,7 +78,7 @@ export default function WebhookManagerPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
+        <h1 className="text-2xl font-semibold flex items-center gap-2">
           <Webhook className="size-6" /> Webhook Manager
         </h1>
         <p className="text-sm text-muted-foreground">
@@ -127,8 +127,8 @@ function EventsTab() {
               <td className="text-xs text-muted-foreground">{r.desc || '—'}</td>
               <td className="!text-center text-xs">
                 {r.status === 'active'
-                  ? <span className="badge bg-emerald-50 text-emerald-700">Active</span>
-                  : <span className="badge bg-slate-100 text-slate-600">Inactive</span>}
+                  ? <span className="badge bg-success-tint text-success-strong">Active</span>
+                  : <span className="badge bg-ink-100 text-ink-700">Inactive</span>}
               </td>
             </tr>
           ))}
@@ -192,8 +192,8 @@ function MappingsTab() {
                   <td className="!text-center text-xs">{r.authorization ? '🔑' : '—'}</td>
                   <td className="!text-center text-xs">
                     {r.status === 'active'
-                      ? <span className="badge bg-emerald-50 text-emerald-700">Active</span>
-                      : <span className="badge bg-slate-100 text-slate-600">Off</span>}
+                      ? <span className="badge bg-success-tint text-success-strong">Active</span>
+                      : <span className="badge bg-ink-100 text-ink-700">Off</span>}
                   </td>
                 </tr>
               ))}
@@ -266,11 +266,11 @@ function LogsTab() {
                     <td className="!text-center font-mono text-xs">{r.job_id ?? '—'}</td>
                     <td className="!text-center text-xs">
                       {code == null
-                        ? <span className="badge bg-slate-100 text-slate-600">{meta.error ? 'err' : '—'}</span>
+                        ? <span className="badge bg-ink-100 text-ink-700">{meta.error ? 'err' : '—'}</span>
                         : code >= 200 && code < 300
-                          ? <span className="badge bg-emerald-50 text-emerald-700">{code}</span>
-                          : <span className="badge bg-rose-50 text-rose-700">{code}</span>}
-                      {meta.dlq && <span className="ml-1 badge bg-amber-50 text-amber-700">DLQ</span>}
+                          ? <span className="badge bg-success-tint text-success-strong">{code}</span>
+                          : <span className="badge bg-urgent-tint text-urgent-strong">{code}</span>}
+                      {meta.dlq && <span className="ml-1 badge bg-warning-tint text-warning-strong">DLQ</span>}
                     </td>
                     <td className="font-mono text-xs truncate max-w-[300px]" title={summary || ''}>
                       {summary ? summary.slice(0, 80) : '—'}
@@ -290,7 +290,7 @@ function LogsTab() {
 function Loading() { return <div className="text-sm text-muted-foreground py-6 text-center mt-2">Loading…</div>; }
 function Err({ msg }: { msg: string }) {
   return (
-    <Card className="mt-2"><CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
+    <Card className="mt-2"><CardContent className="p-3 flex items-center gap-2 text-sm text-urgent">
       <AlertTriangle className="size-4" /> {msg}
     </CardContent></Card>
   );

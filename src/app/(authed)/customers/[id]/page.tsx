@@ -102,7 +102,7 @@ export default function CustomerDetailPage() {
         <Link href="/customers" className="text-sm text-primary inline-flex items-center gap-1 hover:underline">
           <ArrowLeft className="size-4" /> Back to customers
         </Link>
-        <Card><CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
+        <Card><CardContent className="p-3 flex items-center gap-2 text-sm text-urgent">
           <AlertTriangle className="size-4" /> {error || 'Customer not found'}
         </CardContent></Card>
       </div>
@@ -120,12 +120,12 @@ export default function CustomerDetailPage() {
         <CardContent className="p-4">
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <div>
-              <h1 className="text-xl font-bold flex items-center gap-2">
+              <h1 className="text-xl font-semibold flex items-center gap-2">
                 <User className="size-5" /> {cust.customer_name || '—'}
               </h1>
               <p className="text-xs text-muted-foreground font-mono mt-0.5">Customer #{cust.customer_id}</p>
             </div>
-            <span className={`badge ${cust.is_active === 1 ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+            <span className={`badge ${cust.is_active === 1 ? 'bg-success-tint text-success-strong' : 'bg-ink-100 text-ink-700'}`}>
               {cust.is_active === 1 ? 'Active' : 'Inactive'}
             </span>
           </div>
@@ -185,7 +185,7 @@ export default function CustomerDetailPage() {
                 </thead>
                 <tbody>
                   {jobs.map((j) => (
-                    <tr key={j.job_id} className="hover:bg-slate-50">
+                    <tr key={j.job_id} className="hover:bg-ink-50">
                       <td>
                         <Link href={`/jobs/${j.job_id}`} className="text-primary hover:underline font-medium">
                           #{j.job_id}
@@ -194,7 +194,7 @@ export default function CustomerDetailPage() {
                       <td className="text-xs whitespace-nowrap tabular-nums" title={jobAgeTitle(j)}>{formatJobAge(j)}</td>
                       <td className="font-mono text-xs">{j.job_reference_id || j.client_ref_id || '—'}</td>
                       <td>
-                        <span className="badge bg-slate-100 text-slate-700">{statusLabel(j.job_status, { assigned: j.fk_easyfixter_id != null })}</span>
+                        <span className="badge bg-ink-100 text-ink-700">{statusLabel(j.job_status, { assigned: j.fk_easyfixter_id != null })}</span>
                         {/* "No Services" pill — same shape as /jobs +
                             /my-orders. Surfaces the legacy data-quality
                             gap where a BOOKED job has zero active
@@ -212,7 +212,7 @@ export default function CustomerDetailPage() {
                            */
                           <Link
                             href={`/jobs?jobId=${j.job_id}&action=view&viewTab=services`}
-                            className="ml-1 inline-flex items-center rounded-full bg-amber-100 hover:bg-amber-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800 whitespace-nowrap cursor-pointer transition-colors"
+                            className="ml-1 inline-flex items-center rounded-full bg-warning-tint hover:bg-warning/20 px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-warning-strong whitespace-nowrap cursor-pointer transition-colors"
                             title="Booked but no services attached. Click to open the Services tab."
                           >
                             No Services

@@ -468,7 +468,7 @@ export default function AutoAllocationPage() {
         </CardContent>
       </Card>
 
-      {toast && <div className="text-xs rounded border border-emerald-200 bg-emerald-50 text-emerald-800 px-3 py-2">{toast}</div>}
+      {toast && <div className="text-xs rounded border border-success/30 bg-success-tint text-success-strong px-3 py-2">{toast}</div>}
       {error && <div className="text-xs rounded border border-destructive/30 bg-destructive/10 text-destructive px-3 py-2">{error}</div>}
 
       {loading && <div className="text-sm text-muted-foreground py-8 text-center">Loading settings…</div>}
@@ -523,7 +523,7 @@ export default function AutoAllocationPage() {
                   <SaveBtn setting={failureEmail} draft={draft} scope={scope} saving={saving} onSave={saveValue} onClear={clearOverride} />
                 </div>
               ) : (
-                <div className="flex items-start gap-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                <div className="flex items-start gap-2 rounded border border-warning/30 bg-warning-tint px-3 py-2 text-xs text-warning-strong">
                   <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                   <div>
                     Settings row <code>auto_assign_failure_email</code> doesn&apos;t exist in the database yet. Run the migration shipped with this feature, then refresh.
@@ -570,7 +570,7 @@ export default function AutoAllocationPage() {
                 {/* Not-yet-consumed notice — the live ranking pipeline
                     (services/candidate-ranking.service.js) currently uses a
                     FIXED weight model, NOT these configurable sliders. */}
-                <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 flex items-start gap-2">
+                <div className="mb-4 rounded-md border border-warning/30 bg-warning-tint px-3 py-2 text-xs text-warning-strong flex items-start gap-2">
                   <AlertCircle className="size-4 shrink-0 mt-0.5" />
                   <div>
                     <strong>Not in use yet.</strong> These weights are saved, but are <strong>not currently consumed by the live ranking engine</strong> — it ranks on a fixed model (see &ldquo;How It Works&rdquo; → Step 4: Performance 70%, Worked-for-Client 10%, Worked-in-Vertical 10%, Attendance 10%). They are kept configurable here so values can be set ahead of a future update that wires them in.
@@ -580,18 +580,18 @@ export default function AutoAllocationPage() {
                 {/* Header strip — live dimension Ws + cross-bucket validation */}
                 <div className={cn(
                   'mb-4 rounded-md border px-3 py-2 text-xs flex flex-wrap items-center gap-x-4 gap-y-1.5',
-                  dimSumOK ? 'bg-blue-50/40 border-blue-200' : 'bg-amber-50 border-amber-300'
+                  dimSumOK ? 'bg-info-tint/40 border-info/30' : 'bg-warning-tint border-warning/30'
                 )}>
                   <div className="flex items-center gap-2">
-                    <span className="rounded bg-white border px-1.5 py-0.5"><strong>W_workload</strong> = {dim.workload.toFixed(2)}</span>
-                    <span className="rounded bg-white border px-1.5 py-0.5"><strong>W_performance</strong> = {dim.performance.toFixed(2)}</span>
+                    <span className="rounded bg-card border px-1.5 py-0.5"><strong>W_workload</strong> = {dim.workload.toFixed(2)}</span>
+                    <span className="rounded bg-card border px-1.5 py-0.5"><strong>W_performance</strong> = {dim.performance.toFixed(2)}</span>
                   </div>
                   <div className="ml-auto flex items-center gap-1.5">
                     <span className="text-muted-foreground">Sum:</span>
-                    <strong className={dimSumOK ? 'text-emerald-700' : 'text-amber-800'}>{dimSum.toFixed(2)}</strong>
+                    <strong className={dimSumOK ? 'text-success-strong' : 'text-warning-strong'}>{dimSum.toFixed(2)}</strong>
                     {dimSumOK
-                      ? <span className="text-emerald-700">✓</span>
-                      : <span className="text-amber-800 font-medium">— must be 1.00</span>}
+                      ? <span className="text-success-strong">✓</span>
+                      : <span className="text-warning-strong font-medium">— must be 1.00</span>}
                   </div>
                 </div>
 
@@ -698,14 +698,14 @@ export default function AutoAllocationPage() {
 function HowItWorks({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   const Chev = open ? ChevronDown : ChevronRight;
   return (
-    <Card className="border-blue-200 bg-blue-50/30">
+    <Card className="border-info/30 bg-info-tint/30">
       <button type="button" onClick={onToggle} className="w-full text-left">
         <CardHeader className="py-3 flex-row items-center justify-between">
           <div className="flex items-center gap-2">
-            <Info className="h-4 w-4 text-blue-700" />
-            <CardTitle className="text-base text-blue-900">How It Works?</CardTitle>
+            <Info className="h-4 w-4 text-info-strong" />
+            <CardTitle className="text-base text-info-deep">How It Works?</CardTitle>
           </div>
-          <Chev className="h-4 w-4 text-blue-700" />
+          <Chev className="h-4 w-4 text-info-strong" />
         </CardHeader>
       </button>
       {open && (
@@ -738,7 +738,7 @@ function HowItWorks({ open, onToggle }: { open: boolean; onToggle: () => void })
             </div>
           </Section>
 
-          <div className="text-[12px] text-blue-900/80 italic">
+          <div className="text-[12px] text-info-deep/80 italic">
             → Everyone who clears the steps above is ranked by the score below, highest first.
           </div>
 
@@ -804,7 +804,7 @@ function HowItWorks({ open, onToggle }: { open: boolean; onToggle: () => void })
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div>
-      <div className="text-sm font-semibold text-blue-950 mb-1">{title}</div>
+      <div className="text-sm font-semibold text-info-deep mb-1">{title}</div>
       <div className="space-y-1 text-foreground/85">{children}</div>
     </div>
   );
@@ -925,10 +925,10 @@ function WeightSubSection({
       <div className="px-3 py-2 border-b flex items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="text-sm font-semibold">{title}</div>
-          <p className="text-[11px] text-muted-foreground mt-0.5 leading-snug">{blurb}</p>
+          <p className="text-xs text-muted-foreground mt-0.5 leading-snug">{blurb}</p>
         </div>
         <span
-          className="text-[10px] uppercase tracking-wide rounded bg-primary/10 text-primary px-2 py-0.5 shrink-0 font-medium"
+          className="text-xs uppercase tracking-wide rounded bg-primary/10 text-primary px-2 py-0.5 shrink-0 font-medium"
           title="The dimension weight (W) for this bucket. Must combine with the other 2 dimensions to sum to 1.0."
         >
           Bucket sum = {dimensionWeight.toFixed(2)}
@@ -941,7 +941,7 @@ function WeightSubSection({
             <Label className="text-xs flex items-center gap-1.5">
               {titleCase(dimensionSetting.key)}
               {dimensionSetting.is_overridden && scope !== 'global' && (
-                <span className="text-[10px] rounded bg-amber-100 text-amber-800 px-1">overridden</span>
+                <span className="text-xs rounded bg-warning-tint text-warning-strong px-1">overridden</span>
               )}
             </Label>
             <div className="flex items-center gap-1.5">
@@ -954,12 +954,12 @@ function WeightSubSection({
             </div>
           </div>
         ) : (
-          <div className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900 space-y-1.5">
+          <div className="rounded border border-warning/30 bg-warning-tint p-2 text-xs text-warning-strong space-y-1.5">
             <div>
               No DB row for <code>{expectedDimKey}</code> yet — the engine uses its built-in default.
               Insert the row to make it editable here:
             </div>
-            <pre className="bg-white border rounded p-1.5 text-[11px] overflow-x-auto whitespace-pre">{insertSnippet}</pre>
+            <pre className="bg-card border rounded p-1.5 text-xs overflow-x-auto whitespace-pre">{insertSnippet}</pre>
           </div>
         )}
 
@@ -967,10 +967,10 @@ function WeightSubSection({
         {subWeightKeysExpected.length > 0 && (
           <div className="border-t pt-3">
             <div className="text-xs font-medium mb-2 text-muted-foreground">
-              Sub-weight proportions <span className="text-[10px] uppercase tracking-wide">(must sum to 1.0)</span>
+              Sub-weight proportions <span className="text-xs uppercase tracking-wide">(must sum to 1.0)</span>
             </div>
             {subSettings.length === 0 ? (
-              <div className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
+              <div className="rounded border border-warning/30 bg-warning-tint p-2 text-xs text-warning-strong">
                 No sub-weight rows yet. Expected keys: {subWeightKeysExpected.map((k) => <code key={k} className="mx-0.5">{k}</code>)}.
                 Insert them via <code>tbl_autoallocation_setting</code> with <code>data_type=&apos;double&apos;</code>; values should sum to 1.0.
               </div>
@@ -986,7 +986,7 @@ function WeightSubSection({
                         <Label className="text-xs flex items-center gap-1.5">
                           {titleCase(w.key)}
                           {w.is_overridden && scope !== 'global' && (
-                            <span className="text-[10px] rounded bg-amber-100 text-amber-800 px-1">overridden</span>
+                            <span className="text-xs rounded bg-warning-tint text-warning-strong px-1">overridden</span>
                           )}
                         </Label>
                         <div className="flex items-center gap-1.5">
@@ -1003,7 +1003,7 @@ function WeightSubSection({
                           * final score?". Showing the multiplication answers
                           * that without making them do arithmetic.
                           */}
-                        <div className="text-[10px] text-muted-foreground tabular-nums">
+                        <div className="text-xs text-muted-foreground tabular-nums">
                           contributes {dimensionWeight.toFixed(2)} × {Number.isFinite(propVal) ? propVal.toFixed(2) : '—'} = <strong>{contribution.toFixed(3)}</strong>
                         </div>
                       </div>
@@ -1013,10 +1013,10 @@ function WeightSubSection({
                 {/* Sub-weight sum validation footer */}
                 {subSumActual !== null && (
                   <div className={cn(
-                    'mt-3 rounded px-2 py-1 text-[11px] flex items-center justify-between',
+                    'mt-3 rounded px-2 py-1 text-xs flex items-center justify-between',
                     subSumOK
-                      ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
-                      : 'bg-amber-50 border border-amber-300 text-amber-900'
+                      ? 'bg-success-tint border border-success/30 text-success-strong'
+                      : 'bg-warning-tint border border-warning/30 text-warning-strong'
                   )}>
                     <span>Sub-weight sum</span>
                     <span className="tabular-nums">
@@ -1158,7 +1158,7 @@ function JsonValueInput({ value, onChange }: { value: string; onChange: (v: stri
         spellCheck={false}
         title="Double-click to auto-fit height to content"
       />
-      <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+      <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span>Double-click the box to auto-fit height. JSON only.</span>
         <button type="button" onClick={format}
           className="text-primary hover:underline disabled:text-muted-foreground"
@@ -1194,7 +1194,7 @@ function SaveBtn({
   const canEdit = hasAction(me, 'isAutoAllocationEdit');
   if (!canEdit) {
     return dirty
-      ? <span className="text-[10px] text-muted-foreground italic shrink-0">read-only</span>
+      ? <span className="text-xs text-muted-foreground italic shrink-0">read-only</span>
       : null;
   }
 

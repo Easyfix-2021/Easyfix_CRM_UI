@@ -245,7 +245,7 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
         <div className="text-xs text-muted-foreground flex items-center gap-2">
           <Calculator className="size-3.5" />
           {loading ? 'Loading…' : `${rows.length} rate card${rows.length === 1 ? '' : 's'}`}
-          {dirty && <span className="text-amber-700 bg-amber-50 border border-amber-200 rounded px-1 py-0.5 text-[10px]">Unsaved changes</span>}
+          {dirty && <span className="text-warning-strong bg-warning-tint border border-warning rounded px-1 py-0.5 text-xs">Unsaved changes</span>}
         </div>
         {canEdit && (
           <div className="flex items-center gap-2">
@@ -278,8 +278,8 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
       </div>
 
       {/* Formula helper — abbreviated; collapsed by default */}
-      <details className="text-[11px] text-muted-foreground bg-purple-50/40 border border-purple-100 rounded px-2 py-1">
-        <summary className="cursor-pointer select-none text-purple-900 font-medium">
+      <details className="text-xs text-muted-foreground bg-gold-tint/40 border border-gold-tint rounded px-2 py-1">
+        <summary className="cursor-pointer select-none text-gold-strong font-medium">
           Per &#8377;100 split formula
         </summary>
         <div className="pt-1 leading-snug">
@@ -290,7 +290,7 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
       </details>
 
       {error && (
-        <div className="text-xs text-red-600 flex items-center gap-1">
+        <div className="text-xs text-urgent-strong flex items-center gap-1">
           <AlertCircle className="size-3.5" /> {error}
         </div>
       )}
@@ -307,22 +307,22 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
             <thead>
               <tr>
                 <th className="!text-left sticky left-0 bg-muted/40 z-10 border-r border-border" rowSpan={2}>Service Type</th>
-                <th className="!text-center bg-sky-50 text-sky-900 text-xs uppercase font-semibold tracking-wide border-b border-sky-200 border-r border-border" colSpan={2}>
+                <th className="!text-center bg-info-tint text-info-deep text-xs uppercase font-semibold tracking-wide border-b border-info border-r border-border" colSpan={2}>
                   <span className="inline-flex items-center gap-1.5 justify-center">
                     <Building2 className="size-3.5" /> Easyfix Direct
                   </span>
                 </th>
-                <th className="!text-center bg-amber-50 text-amber-900 text-xs uppercase font-semibold tracking-wide border-b border-amber-200 border-r border-border" colSpan={2}>
+                <th className="!text-center bg-warning-tint text-warning-strong text-xs uppercase font-semibold tracking-wide border-b border-warning border-r border-border" colSpan={2}>
                   <span className="inline-flex items-center gap-1.5 justify-center">
                     <Layers className="size-3.5" /> Overhead
                   </span>
                 </th>
-                <th className="!text-center bg-emerald-50 text-emerald-900 text-xs uppercase font-semibold tracking-wide border-b border-emerald-200 border-r border-border" colSpan={2}>
+                <th className="!text-center bg-success-tint text-success-strong text-xs uppercase font-semibold tracking-wide border-b border-success border-r border-border" colSpan={2}>
                   <span className="inline-flex items-center gap-1.5 justify-center">
                     <User className="size-3.5" /> Client
                   </span>
                 </th>
-                <th className="!text-center bg-purple-50 text-purple-900 text-xs uppercase font-semibold tracking-wide border-b border-purple-200 border-r border-border" colSpan={4}>
+                <th className="!text-center bg-gold-tint text-gold-strong text-xs uppercase font-semibold tracking-wide border-b border-gold border-r border-border" colSpan={4}>
                   <span className="inline-flex items-center gap-1.5 justify-center">
                     <Calculator className="size-3.5" /> Per &#8377;100 Split (Preview)
                   </span>
@@ -333,22 +333,22 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
                 {COST_LABELS.map((c, i) => {
                   const isGroupEnd = i % 2 === 1;
                   const tint =
-                    c.group === 'easyfix'  ? 'bg-sky-50/40'
-                    : c.group === 'overhead' ? 'bg-amber-50/40'
-                    : 'bg-emerald-50/40';
+                    c.group === 'easyfix'  ? 'bg-info-tint/40'
+                    : c.group === 'overhead' ? 'bg-warning-tint/40'
+                    : 'bg-success-tint/40';
                   return (
                     <th
                       key={c.key as string}
-                      className={`!text-right text-[11px] font-normal text-muted-foreground ${tint} ${isGroupEnd ? 'border-r border-border' : ''}`}
+                      className={`!text-right text-xs font-normal text-muted-foreground ${tint} ${isGroupEnd ? 'border-r border-border' : ''}`}
                     >
                       {c.label}
                     </th>
                   );
                 })}
-                <th className="!text-right text-[11px] font-normal text-purple-900 bg-purple-50/40">EF Direct</th>
-                <th className="!text-right text-[11px] font-normal text-purple-900 bg-purple-50/40">Overhead</th>
-                <th className="!text-right text-[11px] font-normal text-purple-900 bg-purple-50/40">Client</th>
-                <th className="!text-right text-[11px] font-normal text-purple-900 bg-purple-50/40 border-r border-border">Easyfixer</th>
+                <th className="!text-right text-xs font-normal text-gold-strong bg-gold-tint/40">EF Direct</th>
+                <th className="!text-right text-xs font-normal text-gold-strong bg-gold-tint/40">Overhead</th>
+                <th className="!text-right text-xs font-normal text-gold-strong bg-gold-tint/40">Client</th>
+                <th className="!text-right text-xs font-normal text-gold-strong bg-gold-tint/40 border-r border-border">Easyfixer</th>
               </tr>
             </thead>
             <tbody>
@@ -380,21 +380,21 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
                       </td>
                     );
                   })}
-                  <td className="!text-right bg-purple-50/30">
+                  <td className="!text-right bg-gold-tint/30">
                     <span className="font-mono text-xs" title={efTip}>&#8377;{fmt2(split.easyfixDirect)}</span>
                   </td>
-                  <td className="!text-right bg-purple-50/30">
+                  <td className="!text-right bg-gold-tint/30">
                     <span className="font-mono text-xs" title={ohTip}>&#8377;{fmt2(split.overhead)}</span>
                   </td>
-                  <td className="!text-right bg-purple-50/30">
+                  <td className="!text-right bg-gold-tint/30">
                     <span className="font-mono text-xs" title={clTip}>&#8377;{fmt2(split.clientShare)}</span>
                   </td>
-                  <td className="!text-right bg-purple-50/30 border-r border-border">
+                  <td className="!text-right bg-gold-tint/30 border-r border-border">
                     <span className="font-mono text-xs" title={fxrTip}>&#8377;{fmt2(split.easyfixerCut)}</span>
                   </td>
                   {canEdit && (
                     <td className="!text-right">
-                      <Button size="sm" variant="ghost" onClick={() => removeRow(r)} className="text-red-600 hover:text-red-700">
+                      <Button size="sm" variant="ghost" onClick={() => removeRow(r)} className="text-urgent hover:text-urgent-strong">
                         <Trash2 className="size-3.5" />
                       </Button>
                     </td>
@@ -440,7 +440,7 @@ function AddRowsDialog({
             options={options}
             placeholder="Pick service types…"
           />
-          <div className="text-[11px] text-muted-foreground mt-1">
+          <div className="text-xs text-muted-foreground mt-1">
             {options.length} service types still available (already-added ones are filtered out).
           </div>
         </div>

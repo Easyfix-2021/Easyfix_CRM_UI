@@ -165,7 +165,7 @@ export function DeletedRecordsDialog({ open, onClose }: { open: boolean; onClose
             </div>
           )}
           {error && (
-            <div className="rounded border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
+            <div className="rounded border border-urgent/30 bg-urgent-tint p-3 text-sm text-urgent-strong">
               {error}
             </div>
           )}

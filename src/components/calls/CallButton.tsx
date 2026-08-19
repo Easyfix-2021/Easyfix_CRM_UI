@@ -72,22 +72,22 @@ function CallToast({ variant, message, onDismiss }: {
         // and stays legible at the bottom edge of any background. White
         // text + white icon + white close button on a saturated emerald
         // backdrop is the clearest "operation completed" signal we have.
-        variant === 'success' && 'bg-emerald-600 border-emerald-700 text-white',
+        variant === 'success' && 'bg-success border-success-strong text-white',
         // Error keeps the lighter rose tone so it doesn't look like a system
         // crash — but with a stronger ring than the old top-right chip.
-        variant === 'error'   && 'bg-rose-50 border-rose-300 text-rose-800',
+        variant === 'error'   && 'bg-urgent-tint border-urgent text-urgent-strong',
       )}
     >
       {variant === 'success'
         ? <CheckCircle2 className="h-5 w-5 mt-0.5 shrink-0 text-white" />
-        : <AlertTriangle className="h-5 w-5 mt-0.5 shrink-0 text-rose-600" />}
+        : <AlertTriangle className="h-5 w-5 mt-0.5 shrink-0 text-urgent-strong" />}
       <span className="flex-1 break-words font-medium">{message}</span>
       <button
         type="button"
         onClick={onDismiss}
         className={cn(
           'rounded p-0.5 shrink-0',
-          variant === 'success' ? 'hover:bg-emerald-700/40 text-white' : 'hover:bg-rose-100 text-rose-700',
+          variant === 'success' ? 'hover:bg-success-strong/40 text-white' : 'hover:bg-urgent/15 text-urgent-strong',
         )}
         aria-label="Dismiss"
       >
@@ -145,7 +145,7 @@ function ProviderRadioGroup({
               value={p}
               checked={value === p}
               onChange={() => { setValue(p); onChange(p); }}
-              className="h-4 w-4 accent-emerald-600"
+              className="h-4 w-4 accent-success"
             />
             {PROVIDER_LABEL[p]}
           </label>
@@ -627,8 +627,8 @@ export function CallButton({
         disabled={busy}
         className={cn(
           'inline-flex items-center gap-1.5 px-3 h-9 rounded-md',
-          'bg-emerald-600 text-white text-xs font-semibold shadow-sm',
-          'hover:bg-emerald-700 hover:shadow-md transition-all',
+          'bg-success text-white text-xs font-semibold shadow-sm',
+          'hover:bg-success-strong hover:shadow-md transition-all',
           busy && 'opacity-60 cursor-wait',
           className,
         )}
@@ -755,7 +755,7 @@ export function CallableMobile({
         }
         className={cn(
           'inline-flex items-center gap-1',
-          'text-emerald-700 hover:text-emerald-900 hover:underline',
+          'text-success-strong hover:text-success-strong hover:underline',
           busy && 'opacity-60 cursor-wait',
         )}
       >
@@ -771,7 +771,7 @@ export function CallableMobile({
             the same button so the operator's click target remains
             one wide tap zone. */}
         {useAlt && (
-          <span className="bg-amber-100 text-amber-800 border border-amber-200 rounded px-1 py-px text-[9px] font-semibold uppercase tracking-wide leading-none">
+          <span className="bg-warning-tint text-warning-strong border border-warning rounded px-1 py-px text-xs font-semibold uppercase tracking-wide leading-none">
             Alt
           </span>
         )}

@@ -158,7 +158,7 @@ export function LiveLocationPopover({
 
           {/* Empty state — no ping yet (GPS off / no active job). */}
           {!loading && loaded && !error && latest == null && (
-            <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-800">
+            <div className="flex items-start gap-2 rounded-md border border-warning bg-warning-tint px-3 py-3 text-sm text-warning-strong">
               <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
               <span>Location unavailable — technician&apos;s GPS may be off.</span>
             </div>
@@ -189,7 +189,7 @@ export function LiveLocationPopover({
                   href={mapsHref}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 text-sm font-medium text-blue-600 hover:text-blue-700 hover:underline"
+                  className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:text-brand-600 hover:underline"
                 >
                   <ExternalLink className="h-4 w-4" /> Open in Google Maps
                 </a>
@@ -205,7 +205,7 @@ export function LiveLocationPopover({
           )}
 
           <div className="flex items-center justify-between pt-1">
-            <span className="text-[11px] text-muted-foreground">
+            <span className="text-xs text-muted-foreground">
               Auto-refreshing every {POLL_MS / 1000}s while open.
             </span>
             <button

@@ -199,7 +199,7 @@ export function RegionPerformanceBody({ dimension }: { dimension: RegionDimensio
       {/* The overlapping-regions caveat, straight from the API so the wording
           lives with the numbers. USER dimension only. */}
       {data?.note && (
-        <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+        <p className="mt-3 rounded-md border border-warning bg-warning-tint px-3 py-2 text-xs text-warning-strong">
           <span className="font-semibold">How to read this: </span>{data.note}
         </p>
       )}

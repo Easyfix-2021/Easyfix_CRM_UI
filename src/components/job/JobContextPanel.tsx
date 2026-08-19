@@ -191,7 +191,7 @@ export function JobContextPanel({
           type="button"
           onClick={() => setJobDetailsOpen((o) => !o)}
           aria-expanded={jobDetailsOpen}
-          className="flex w-full items-center gap-1.5 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-sky-700"
+          className="flex w-full items-center gap-1.5 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-primary"
         >
           <ChevronDown
             className={`h-3.5 w-3.5 shrink-0 transition-transform ${jobDetailsOpen ? '' : '-rotate-90'}`}
@@ -315,7 +315,7 @@ export function JobContextPanel({
                               </span>
                               {jobSkillIsManual(s) && (
                                 <span
-                                  className="shrink-0 inline-flex items-center rounded-full border border-indigo-200 bg-indigo-50 px-1.5 py-0 text-[9px] font-medium leading-tight text-indigo-600"
+                                  className="shrink-0 inline-flex items-center rounded-full border border-info bg-info-tint px-1.5 py-0 text-xs font-medium leading-tight text-info-strong"
                                   title="This skill mapping was made manually in the Job Skill Matrix"
                                 >
                                   Manual
@@ -461,19 +461,19 @@ export function JobContextPanel({
                 */}
               {!rescheduling && appointmentIsPast(job.requested_date_time) && (
                 pastBlocksAction ? (
-                  <p className="mt-2 text-[11px] font-medium text-red-700">
+                  <p className="mt-2 text-xs font-medium text-urgent-strong">
                     This appointment time has already passed. Reschedule it to a future
                     slot before offering the job to technicians.
                   </p>
                 ) : (
-                  <p className="mt-2 text-[11px] font-medium text-amber-700">
+                  <p className="mt-2 text-xs font-medium text-warning-strong">
                     This appointment time has already passed. You can still reassign,
                     or use Reschedule to move it to a future slot.
                   </p>
                 )
               )}
               {showReschedule && (
-                <p className="mt-2 text-[11px] text-muted-foreground">
+                <p className="mt-2 text-xs text-muted-foreground">
                   Job Date &amp; Time are locked. Use <b>Reschedule</b> to change the
                   appointment — a reason and remarks are mandatory, and technicians
                   are re-ranked against the new schedule.
@@ -499,7 +499,7 @@ function ReadField({ label, value }: { label: string; value: React.ReactNode }) 
   const empty = value == null || value === '';
   return (
     <div className="min-w-0">
-      <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</dt>
+      <dt className="text-xs uppercase tracking-wide text-muted-foreground">{label}</dt>
       <dd className="text-sm text-foreground break-words">
         {empty ? <span className="text-muted-foreground">—</span> : value}
       </dd>

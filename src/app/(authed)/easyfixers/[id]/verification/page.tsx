@@ -231,13 +231,13 @@ export default function EasyfixerVerificationPage() {
     refetch();
   }, [refetch]);
 
-  if (loading) return <div className="p-8 text-sm text-slate-500">Loading…</div>;
+  if (loading) return <div className="p-8 text-sm text-ink-500">Loading…</div>;
   if (error || !data) return (
     <div className="p-8">
       {/* Canonical Back-link — returns to the origin (registrations queue or
           roster) captured in `?from=`; see backHref above. */}
       <BackLink href={backHref} label="Back to Easyfixers" />
-      <div className="mt-4 text-sm text-rose-600">{error || 'Not found'}</div>
+      <div className="mt-4 text-sm text-urgent">{error || 'Not found'}</div>
     </div>
   );
 
@@ -317,18 +317,18 @@ function VerificationView({ data, onReload, backHref }: { data: VerificationPayl
 
       {/* Sub-header: name + city + efr_id + smile/call icons */}
       <div className="flex items-center justify-between border-b pb-3">
-        <div className="text-sm text-slate-700">
+        <div className="text-sm text-ink-700">
           <span className="font-medium">{data.header.full_name || '—'}</span>
-          {data.header.city_name && <span className="text-slate-500"> from {data.header.city_name}</span>}
-          <span className="ml-2 text-slate-500">#{data.header.efr_id}</span>
+          {data.header.city_name && <span className="text-ink-500"> from {data.header.city_name}</span>}
+          <span className="ml-2 text-ink-500">#{data.header.efr_id}</span>
         </div>
         <div className="flex items-center gap-3">
           {data.header.is_technician_verified && (
-            <span className={data.header.is_active ? 'text-emerald-600' : 'text-slate-400'}>
+            <span className={data.header.is_active ? 'text-success' : 'text-ink-500'}>
               {data.header.is_active ? <Check className="h-5 w-5" /> : <X className="h-5 w-5" />}
             </span>
           )}
-          <Smile className="h-5 w-5 text-amber-400" />
+          <Smile className="h-5 w-5 text-warning" />
           {/*
             * Click-to-call, NOT a `tel:` link. A raw tel: href hands the number
             * to the operating system — which on a Mac opens FaceTime and on
@@ -349,7 +349,7 @@ function VerificationView({ data, onReload, backHref }: { data: VerificationPayl
             efrId={data.header.efr_id}
             mobile={data.header.mobile}
             iconOnly
-            className="text-sky-600 hover:text-sky-700"
+            className="text-primary hover:text-brand-600"
           />
         </div>
       </div>
@@ -364,7 +364,7 @@ function VerificationView({ data, onReload, backHref }: { data: VerificationPayl
       >
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-4">
-            <h4 className="text-sm font-semibold text-slate-700 border-b pb-2">Eligibility Check</h4>
+            <h4 className="text-sm font-semibold text-ink-700 border-b pb-2">Eligibility Check</h4>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <ReadField label="Primary Mobile" value={data.lead.eligibility.primary_mobile} />
               <ReadField label="First & Last Name" value={`${data.lead.eligibility.first_name || ''} ${data.lead.eligibility.last_name || ''}`.trim() || data.header.full_name} />
@@ -381,7 +381,7 @@ function VerificationView({ data, onReload, backHref }: { data: VerificationPayl
                 a separate "Send Back to New Lead" flow, not built here). The
                 buttons stay only for sent-back (0) and brand-new (null) leads. */}
             {data.lead.status.personal_details_filled === 2 ? (
-              <div className="mt-4 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+              <div className="mt-4 rounded-md border border-urgent/30 bg-urgent-tint px-3 py-2 text-sm text-urgent-strong">
                 This technician lead was <span className="font-semibold">denied</span>.
                 See the rejection details and comments in the panel on the right.
               </div>
@@ -393,11 +393,11 @@ function VerificationView({ data, onReload, backHref }: { data: VerificationPayl
           {/* Sidebar */}
           <div className="lg:col-span-1 space-y-4 border-l pl-4">
             <div>
-              <h5 className="text-xs font-semibold text-slate-600">GPS Location</h5>
-              <p className="text-xs text-slate-700">{data.lead.gps_location || '—'}</p>
+              <h5 className="text-xs font-semibold text-ink-700">GPS Location</h5>
+              <p className="text-xs text-ink-700">{data.lead.gps_location || '—'}</p>
             </div>
             <div className="border-t pt-3 space-y-1.5">
-              <h5 className="text-xs font-semibold text-slate-600 uppercase">Registration Details</h5>
+              <h5 className="text-xs font-semibold text-ink-700 uppercase">Registration Details</h5>
               <SidebarRow label="TX ID" value={data.lead.registration.tx_id} />
               <SidebarRow label="TX Applied On" value={formatDate(data.lead.registration.tx_applied_on)} />
               <SidebarRow label="State User" value={data.lead.registration.state_user} />
@@ -476,7 +476,7 @@ function VerificationView({ data, onReload, backHref }: { data: VerificationPayl
           {data.registrationVerification.is_verified && (
             <div className="flex justify-center pt-2">
               <Button
-                className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-full px-6"
+                className="bg-success hover:bg-success-strong text-white rounded-full px-6"
                 onClick={async () => {
                   /*
                    * proceed-to-activation is a pure gate-check on the BE
@@ -594,20 +594,20 @@ function LeadActions({ efrId, onReload }: { efrId: number; onReload: () => Promi
         placeholder="Remark (required for Deny / Send Back)"
         value={reason}
         onChange={(e) => setReason(e.target.value)}
-        className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+        className="w-full rounded-md border border-ink-100 px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
       />
       <AnimatedLoadingBar visible={busy} message="Saving Lead Action…" tone="emerald" />
       {canRunTeleprompter && (
         <div className="flex justify-center">
-          <Button onClick={() => setTeleprompterOpen(true)} disabled={busy} className="bg-sky-600 hover:bg-sky-700 text-white">
+          <Button onClick={() => setTeleprompterOpen(true)} disabled={busy} className="bg-primary hover:bg-brand-600 text-white">
             <Phone className="h-4 w-4" /> Start Guided Call
           </Button>
         </div>
       )}
       <div className="flex flex-wrap gap-2 justify-center">
-        <Button onClick={() => call(1)} disabled={!checked || busy} className="bg-emerald-600 hover:bg-emerald-700 text-white">Accept</Button>
-        <Button onClick={() => call(2)} disabled={busy} className="bg-rose-600 hover:bg-rose-700 text-white">Deny</Button>
-        <Button onClick={() => call(0)} disabled={busy} className="bg-rose-600 hover:bg-rose-700 text-white">Send Back To Technician</Button>
+        <Button onClick={() => call(1)} disabled={!checked || busy} className="bg-success hover:bg-success-strong text-white">Accept</Button>
+        <Button onClick={() => call(2)} disabled={busy} className="bg-urgent hover:bg-urgent-strong text-white">Deny</Button>
+        <Button onClick={() => call(0)} disabled={busy} className="bg-urgent hover:bg-urgent-strong text-white">Send Back To Technician</Button>
       </div>
       {canRunTeleprompter && (
         <TeleprompterPanel open={teleprompterOpen} efrId={efrId} onClose={() => setTeleprompterOpen(false)} onApplied={onReload} />
@@ -651,7 +651,7 @@ function ProfessionalSection({ efrId, d, onReload, addComment }: {
           <div className="space-y-1">
             <Label>Total Experience</Label>
             <select
-              className="h-9 w-full rounded-md border border-input bg-white px-3 text-sm"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm"
               value={form.experience_id}
               onChange={(e) => setForm((s) => ({ ...s, experience_id: Number(e.target.value) }))}
             >
@@ -670,7 +670,7 @@ function ProfessionalSection({ efrId, d, onReload, addComment }: {
             <textarea rows={2} placeholder="Comment For Skill Rating"
                       value={form.skill_rating_comment}
                       onChange={(e) => setForm((s) => ({ ...s, skill_rating_comment: e.target.value }))}
-                      className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+                      className="mt-1 w-full rounded-md border border-ink-100 px-3 py-2 text-sm" />
           </div>
           <div className="space-y-1">
             <Label>Tools Rating (0-10)</Label>
@@ -679,7 +679,7 @@ function ProfessionalSection({ efrId, d, onReload, addComment }: {
             <textarea rows={2} placeholder="Comment For Tool Rating"
                       value={form.tool_rating_comment}
                       onChange={(e) => setForm((s) => ({ ...s, tool_rating_comment: e.target.value }))}
-                      className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+                      className="mt-1 w-full rounded-md border border-ink-100 px-3 py-2 text-sm" />
           </div>
         </div>
 
@@ -688,7 +688,7 @@ function ProfessionalSection({ efrId, d, onReload, addComment }: {
           <Button disabled={saving} onClick={save}>{saving ? 'Saving…' : 'Update'}</Button>
         </div>
 
-        <div className="text-xs text-slate-500 border-t pt-2">
+        <div className="text-xs text-ink-500 border-t pt-2">
           Last Updated By {d.updated_by_name || '—'} On {formatDate(d.update_date)}
         </div>
       </div>
@@ -732,7 +732,7 @@ function PersonalSection({ efrId, d, onReload, addComment }: {
         </div>
         <div>
           <Label>Hobbies And Interests</Label>
-          <div className="mt-1 text-sm text-slate-700">{d.hobbies || '—'}</div>
+          <div className="mt-1 text-sm text-ink-700">{d.hobbies || '—'}</div>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t pt-3">
           <ReadField label="Email" value={d.email} verifiedTick={d.is_email_verified} />
@@ -743,17 +743,17 @@ function PersonalSection({ efrId, d, onReload, addComment }: {
           <textarea rows={2}
             value={comment} onChange={(e) => setComment(e.target.value)}
             placeholder="Your remarks and notes"
-            className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+            className="w-full rounded-md border border-ink-100 px-3 py-2 text-sm" />
           <AnimatedLoadingBar visible={saving} message="Saving Personal Details…" tone="emerald" />
           <div className="flex justify-end">
-            <Button disabled={saving || d.is_verified} onClick={markVerified} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+            <Button disabled={saving || d.is_verified} onClick={markVerified} className="bg-success hover:bg-success-strong text-white">
               {saving ? 'Saving…' : 'Yes, I Have Validated All Details'}
             </Button>
           </div>
           {d.verification_comment && (
-            <div className="mt-2 text-xs text-slate-600 bg-slate-50 rounded p-2">
+            <div className="mt-2 text-xs text-ink-700 bg-ink-50 rounded p-2">
               Final Comment: {d.verification_comment}
-              <div className="text-[10px] text-slate-500 mt-1">By {d.updated_by_name || '—'} on {formatDate(d.update_date)}</div>
+              <div className="text-xs text-ink-500 mt-1">By {d.updated_by_name || '—'} on {formatDate(d.update_date)}</div>
             </div>
           )}
         </div>
@@ -816,20 +816,20 @@ function BankingSection({ efrId, d, onReload, addComment }: {
           <textarea rows={2}
             value={invalidReason} onChange={(e) => setInvalidReason(e.target.value)}
             placeholder="Reason (required if marking invalid)"
-            className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+            className="w-full rounded-md border border-ink-100 px-3 py-2 text-sm" />
           <AnimatedLoadingBar visible={busy} message="Saving Banking Details…" tone="emerald" />
           <div className="flex flex-wrap gap-2 justify-end">
-            <Button disabled={busy || d.verification_status === 1} onClick={() => setStatus(1)} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+            <Button disabled={busy || d.verification_status === 1} onClick={() => setStatus(1)} className="bg-success hover:bg-success-strong text-white">
               Valid Banking Details
             </Button>
-            <Button disabled={busy} onClick={() => setStatus(2)} className="bg-rose-600 hover:bg-rose-700 text-white">
+            <Button disabled={busy} onClick={() => setStatus(2)} className="bg-urgent hover:bg-urgent-strong text-white">
               Invalid Banking Details
             </Button>
           </div>
           {d.verification_comment && d.verification_status === 2 && (
-            <div className="mt-2 text-xs text-slate-600 bg-slate-50 rounded p-2">
+            <div className="mt-2 text-xs text-ink-700 bg-ink-50 rounded p-2">
               Invalid Reason: {d.verification_comment}
-              <div className="text-[10px] text-slate-500 mt-1">By {d.updated_by_name || '—'} on {formatDate(d.update_date)}</div>
+              <div className="text-xs text-ink-500 mt-1">By {d.updated_by_name || '—'} on {formatDate(d.update_date)}</div>
             </div>
           )}
         </div>
@@ -910,20 +910,20 @@ function IdentitySection({ efrId, d, onReload, addComment }: {
           <textarea rows={2}
             value={rejectReason} onChange={(e) => setRejectReason(e.target.value)}
             placeholder="Your reasons (required to reject / send back)"
-            className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+            className="w-full rounded-md border border-ink-100 px-3 py-2 text-sm" />
           <AnimatedLoadingBar visible={savingStatus} message="Saving Identity Verification…" tone="emerald" />
           <div className="flex flex-wrap gap-2 justify-end">
-            <Button disabled={savingStatus || d.verification_status === 1} onClick={() => setStatus(1)} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+            <Button disabled={savingStatus || d.verification_status === 1} onClick={() => setStatus(1)} className="bg-success hover:bg-success-strong text-white">
               Send To Finance
             </Button>
-            <Button disabled={savingStatus} onClick={() => setStatus(2)} className="bg-rose-600 hover:bg-rose-700 text-white">
+            <Button disabled={savingStatus} onClick={() => setStatus(2)} className="bg-urgent hover:bg-urgent-strong text-white">
               Reject Profile
             </Button>
           </div>
           {d.rejected_reason && (
-            <div className="mt-2 text-xs text-slate-600 bg-slate-50 rounded p-2">
+            <div className="mt-2 text-xs text-ink-700 bg-ink-50 rounded p-2">
               Rejection: {d.rejected_reason}
-              <div className="text-[10px] text-slate-500 mt-1">By {d.updated_by_name || '—'} on {formatDate(d.update_date)}</div>
+              <div className="text-xs text-ink-500 mt-1">By {d.updated_by_name || '—'} on {formatDate(d.update_date)}</div>
             </div>
           )}
         </div>
@@ -945,14 +945,14 @@ function SkillAndServiceAreaMapping({ efrId, onReload }: { efrId: number; onRelo
    * progress bar in sync without a manual page reload.
    */
   return (
-    <div className="rounded-md border border-slate-200 bg-slate-50/50">
-      <div className="px-4 py-2 border-b border-slate-200 bg-slate-100/60">
-        <h4 className="text-sm font-semibold text-slate-700">Skill & Service Area Mapping</h4>
-        <p className="text-xs text-slate-500">
+    <div className="rounded-md border border-ink-100 bg-ink-50/50">
+      <div className="px-4 py-2 border-b border-ink-100 bg-ink-100/60">
+        <h4 className="text-sm font-semibold text-ink-700">Skill & Service Area Mapping</h4>
+        <p className="text-xs text-ink-500">
           Map This Technician To Deep Skill Options And The Pincodes They Will Service.
         </p>
       </div>
-      <div className="p-4 space-y-2 bg-white">
+      <div className="p-4 space-y-2 bg-card">
         <DeepSkillOptionMapping efrId={efrId} onReload={onReload} />
         <ServiceablePincodes efrId={efrId} onReload={onReload} />
       </div>
@@ -1019,7 +1019,7 @@ function ActivationSection({
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <div className="lg:col-span-2 space-y-4">
-        <h4 className="text-sm font-semibold text-slate-700">Payment & Beneficiary Details</h4>
+        <h4 className="text-sm font-semibold text-ink-700">Payment & Beneficiary Details</h4>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-1">
             <Label>EasyFix Bank Name</Label>
@@ -1046,7 +1046,7 @@ function ActivationSection({
           <div className="space-y-1">
             <Label>Allocate Clients</Label>
             {/* TODO: multi-select w/ already-mapped client list. For now a stubbed read-only hint. */}
-            <div className="text-xs text-slate-500">Use Manage Clients ➜ Easyfixer mapping for now.</div>
+            <div className="text-xs text-ink-500">Use Manage Clients ➜ Easyfixer mapping for now.</div>
           </div>
           <div className="space-y-1">
             <Label>Add Tx Under Master</Label>
@@ -1066,7 +1066,7 @@ function ActivationSection({
           <Label>Upload BGV Report</Label>
           <div className="flex items-center gap-2">
             <Button variant="outline" disabled><Upload className="h-4 w-4 mr-1" /> Choose File</Button>
-            <span className="text-xs text-slate-500">
+            <span className="text-xs text-ink-500">
               {activation.bgv.is_done ? 'BGV uploaded' : 'No file chosen'} — TODO: S3 wiring for technician-scoped uploads
             </span>
           </div>
@@ -1077,7 +1077,7 @@ function ActivationSection({
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div>
                 <Label>Grade</Label>
-                <select className="h-9 w-full rounded-md border border-input bg-white px-3 text-sm"
+                <select className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm"
                         value={grade} onChange={(e) => setGrade(e.target.value as 'Silver' | 'Gold' | 'Diamond')}>
                   <option value="Silver">Silver</option>
                   <option value="Gold">Gold</option>
@@ -1094,17 +1094,17 @@ function ActivationSection({
             <textarea rows={3}
               placeholder="Comment (required)"
               value={activateComment} onChange={(e) => setActivateComment(e.target.value)}
-              className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+              className="w-full rounded-md border border-ink-100 px-3 py-2 text-sm" />
             <AnimatedLoadingBar visible={activating} message="Activating Technician…" tone="emerald" />
             <div className="flex justify-end">
-              <Button onClick={activate} disabled={activating} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+              <Button onClick={activate} disabled={activating} className="bg-success hover:bg-success-strong text-white">
                 Activate Technician
               </Button>
             </div>
           </div>
         ) : (
           <div className="border-t pt-4 flex items-center justify-end">
-            <span className="inline-flex items-center rounded-full bg-emerald-100 text-emerald-700 px-3 py-0.5 text-xs font-medium">Active</span>
+            <span className="inline-flex items-center rounded-full bg-success-tint text-success-strong px-3 py-0.5 text-xs font-medium">Active</span>
           </div>
         )}
       </div>
@@ -1114,11 +1114,11 @@ function ActivationSection({
           {activation.sidebar.profile_img ? (
             <img src={`/easydoc/easyfixer_documents/${activation.sidebar.profile_img}`} alt="Profile" width={70} height={70} className="rounded-full inline-block border" />
           ) : (
-            <div className="w-[70px] h-[70px] rounded-full border bg-slate-100 mx-auto" />
+            <div className="w-[70px] h-[70px] rounded-full border bg-ink-100 mx-auto" />
           )}
         </div>
         <div className="space-y-1 border-t pt-2">
-          <h5 className="text-xs font-semibold text-slate-600 uppercase">Registration Details</h5>
+          <h5 className="text-xs font-semibold text-ink-700 uppercase">Registration Details</h5>
           <SidebarRow label="Registration Age" value={activation.sidebar.registration_age_days != null ? `${activation.sidebar.registration_age_days} days` : '—'} />
           <SidebarRow label="EC" value={formatDate(activation.sidebar.ec_date)} />
           <SidebarRow label="BGV Report" value={activation.sidebar.bgv_report_done ? 'Yes' : 'No'} />
@@ -1170,12 +1170,12 @@ function ActivationSection({
  * named by the slug of the category / service-type name; until an asset lands,
  * DsIconTile falls back to a coloured first-letter tile. Deep-skill THUMBNAILS
  * keep coming from the DB (deep_skill_image_url). */
-const DS_RED = '#DC4B41';
-const DS_RED_TINT = '#FDECEC';
-const DS_BLUE = '#2D9CDB';
-const DS_BLUE_TINT = '#EAF6FD';
-const DS_GREEN = '#16A34A';
-const DS_GREEN_TINT = '#DCFCE7';
+const DS_RED = 'hsl(var(--urgent))';
+const DS_RED_TINT = 'hsl(var(--urgent-tint))';
+const DS_BLUE = 'hsl(var(--info))';
+const DS_BLUE_TINT = 'hsl(var(--info-tint))';
+const DS_GREEN = 'hsl(var(--success))';
+const DS_GREEN_TINT = 'hsl(var(--success-tint))';
 
 function dsSlug(s: string): string {
   return String(s || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
@@ -1191,7 +1191,7 @@ function DsIconTile({
     return (
       <div
         style={{ width: size, height: size, backgroundColor: DS_RED_TINT, color: DS_RED }}
-        className={`flex items-center justify-center rounded-lg font-bold shrink-0 ${className}`}
+        className={`flex items-center justify-center rounded-lg font-semibold shrink-0 ${className}`}
         aria-hidden
       >
         {letter}
@@ -1444,22 +1444,22 @@ function DeepSkillOptionMapping({ efrId, onReload }: { efrId: number; onReload?:
   return (
     <div className="border-t pt-4 space-y-3">
       <div className="flex items-center justify-between">
-        <h4 className="text-sm font-semibold text-slate-700">Deep Skill Option Mapping</h4>
-        <span className="text-xs text-slate-500">
+        <h4 className="text-sm font-semibold text-ink-700">Deep Skill Option Mapping</h4>
+        <span className="text-xs text-ink-500">
           {selected.size} Option{selected.size === 1 ? '' : 's'} Selected
         </span>
       </div>
 
       {loading ? (
-        <div className="text-xs text-slate-500">Loading…</div>
+        <div className="text-xs text-ink-500">Loading…</div>
       ) : error ? (
-        <div className="text-xs text-rose-600">{error}</div>
+        <div className="text-xs text-urgent">{error}</div>
       ) : categories.length === 0 ? (
-        <div className="text-xs text-slate-500">No Service Categories Available.</div>
+        <div className="text-xs text-ink-500">No Service Categories Available.</div>
       ) : (
         <>
           {mappings.length === 0 && selected.size === 0 && (
-            <div className="rounded border border-dashed border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
+            <div className="rounded border border-dashed border-ink-100 bg-ink-50 p-3 text-xs text-ink-500">
               No Options Mapped Yet. Tap A Service Category To Begin.
             </div>
           )}
@@ -1472,7 +1472,7 @@ function DeepSkillOptionMapping({ efrId, onReload }: { efrId: number; onReload?:
               const count = countByCategory.get(c.service_catg_id) || 0;
               const expanded = expandedCatg === c.service_catg_id;
               return (
-                <div key={c.service_catg_id} className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+                <div key={c.service_catg_id} className="rounded-xl border border-ink-100 bg-card overflow-hidden">
                   <button
                     type="button"
                     onClick={() => expandCategory(c.service_catg_id)}
@@ -1480,23 +1480,23 @@ function DeepSkillOptionMapping({ efrId, onReload }: { efrId: number; onReload?:
                   >
                     <DsIconTile name={c.service_catg_name} kind="categories" size={36} />
                     <span className="flex-1 min-w-0">
-                      <span className="block font-semibold text-slate-800 truncate">{c.service_catg_name}</span>
-                      <span className="block text-xs text-slate-500">{count} Skill{count === 1 ? '' : 's'} Added</span>
+                      <span className="block font-semibold text-ink-900 truncate">{c.service_catg_name}</span>
+                      <span className="block text-xs text-ink-500">{count} Skill{count === 1 ? '' : 's'} Added</span>
                     </span>
                     {count > 0 && <CheckCircle2 className="h-5 w-5 shrink-0" style={{ color: DS_GREEN }} />}
                     {expanded
-                      ? <ChevronUp className="h-5 w-5 text-slate-400 shrink-0" />
-                      : <ChevronDown className="h-5 w-5 text-slate-400 shrink-0" />}
+                      ? <ChevronUp className="h-5 w-5 text-ink-500 shrink-0" />
+                      : <ChevronDown className="h-5 w-5 text-ink-500 shrink-0" />}
                   </button>
 
                   {expanded && (
-                    <div className="border-t border-slate-200 flex max-h-[70vh]">
+                    <div className="border-t border-ink-100 flex max-h-[70vh]">
                       {/* left service-type rail */}
-                      <div className="w-[84px] shrink-0 overflow-y-auto border-r border-slate-200 bg-white">
+                      <div className="w-[84px] shrink-0 overflow-y-auto border-r border-ink-100 bg-card">
                         {expandedTypes == null ? (
-                          <div className="px-1.5 py-3 text-center text-[11px] text-slate-500">Loading…</div>
+                          <div className="px-1.5 py-3 text-center text-xs text-ink-500">Loading…</div>
                         ) : expandedTypes.length === 0 ? (
-                          <div className="px-1.5 py-3 text-center text-[11px] text-slate-500">No Service Types.</div>
+                          <div className="px-1.5 py-3 text-center text-xs text-ink-500">No Service Types.</div>
                         ) : expandedTypes.map((t) => {
                           const isActive = activeTypeId === t.service_type_id;
                           const cnt = countByType.get(`${c.service_catg_id}|${t.service_type_id}`) || 0;
@@ -1505,7 +1505,7 @@ function DeepSkillOptionMapping({ efrId, onReload }: { efrId: number; onReload?:
                               key={t.service_type_id}
                               type="button"
                               onClick={() => selectType(c.service_catg_id, t.service_type_id)}
-                              className="w-full flex flex-col items-center gap-1 px-1.5 py-3 text-center border-b border-slate-100"
+                              className="w-full flex flex-col items-center gap-1 px-1.5 py-3 text-center border-b border-ink-100"
                               style={isActive ? { backgroundColor: DS_BLUE_TINT, borderLeft: `3px solid ${DS_BLUE}` } : undefined}
                             >
                               <span className="relative">
@@ -1513,15 +1513,15 @@ function DeepSkillOptionMapping({ efrId, onReload }: { efrId: number; onReload?:
                                 {cnt > 0 && (
                                   <span
                                     style={{ backgroundColor: DS_BLUE }}
-                                    className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full text-[10px] font-bold text-white flex items-center justify-center"
+                                    className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full text-xs font-semibold text-white flex items-center justify-center"
                                   >
                                     {cnt}
                                   </span>
                                 )}
                               </span>
                               <span
-                                className="text-[11px] leading-tight"
-                                style={isActive ? { color: DS_BLUE, fontWeight: 600 } : { color: '#475569' }}
+                                className="text-xs leading-tight"
+                                style={isActive ? { color: DS_BLUE, fontWeight: 600 } : { color: 'hsl(var(--ink-700))' }}
                               >
                                 {t.service_type_name}
                               </span>
@@ -1531,30 +1531,30 @@ function DeepSkillOptionMapping({ efrId, onReload }: { efrId: number; onReload?:
                       </div>
 
                       {/* right skill card grid — small images, 2 columns */}
-                      <div className="flex-1 min-w-0 overflow-y-auto p-3 bg-slate-50">
-                        <div className="text-sm font-semibold text-slate-800 mb-2">{activeType?.service_type_name}</div>
+                      <div className="flex-1 min-w-0 overflow-y-auto p-3 bg-ink-50">
+                        <div className="text-sm font-semibold text-ink-900 mb-2">{activeType?.service_type_name}</div>
                         {activeSkills == null ? (
-                          <div className="text-sm text-slate-500">Loading…</div>
+                          <div className="text-sm text-ink-500">Loading…</div>
                         ) : activeSkills.length === 0 ? (
-                          <div className="text-sm text-slate-500">No Deep Skills.</div>
+                          <div className="text-sm text-ink-500">No Deep Skills.</div>
                         ) : (
                           <div className="grid gap-2.5" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))' }}>
                             {activeSkills.map((s) => {
                               const sel = countBySkill.get(`${c.service_catg_id}|${activeTypeId}|${s.deepskill_id}`) || 0;
                               const optCount = optionsBySkill[s.deepskill_id]?.length ?? s.option_count;
                               return (
-                                <div key={s.deepskill_id} className="rounded-xl border border-slate-200 bg-white p-2 flex flex-col">
+                                <div key={s.deepskill_id} className="rounded-xl border border-ink-100 bg-card p-2 flex flex-col">
                                   <button
                                     type="button"
                                     onClick={() => { if (s.deep_skill_image_url) setLightboxUrl({ url: s.deep_skill_image_url, name: s.deepskill_name }); }}
-                                    className="relative block w-full aspect-square rounded-lg overflow-hidden bg-slate-100 cursor-zoom-in"
+                                    className="relative block w-full aspect-square rounded-lg overflow-hidden bg-ink-100 cursor-zoom-in"
                                     title="Click To Enlarge"
                                   >
                                     {s.deep_skill_image_url ? (
                                       // eslint-disable-next-line @next/next/no-img-element
                                       <img src={s.deep_skill_image_url} alt={s.deepskill_name} className="w-full h-full object-cover" loading="lazy" />
                                     ) : (
-                                      <span className="flex items-center justify-center w-full h-full text-slate-300"><Wrench className="h-7 w-7" /></span>
+                                      <span className="flex items-center justify-center w-full h-full text-ink-300"><Wrench className="h-7 w-7" /></span>
                                     )}
                                   </button>
                                   <button
@@ -1562,17 +1562,17 @@ function DeepSkillOptionMapping({ efrId, onReload }: { efrId: number; onReload?:
                                     onClick={() => openSheet(s.deepskill_id)}
                                     className="mt-2 w-full rounded-lg py-1.5 text-xs font-semibold border"
                                     style={sel > 0
-                                      ? { backgroundColor: DS_BLUE, borderColor: DS_BLUE, color: '#fff' }
-                                      : { backgroundColor: '#fff', borderColor: DS_BLUE, color: DS_BLUE }}
+                                      ? { backgroundColor: DS_BLUE, borderColor: DS_BLUE, color: 'hsl(var(--card))' }
+                                      : { backgroundColor: 'hsl(var(--card))', borderColor: DS_BLUE, color: DS_BLUE }}
                                   >
                                     {sel > 0 ? `${sel} Selected` : 'ADD'}
                                     {optCount != null && (
-                                      <span className="block text-[10px] font-normal opacity-80">
+                                      <span className="block text-xs font-normal opacity-80">
                                         {optCount} Option{optCount === 1 ? '' : 's'}
                                       </span>
                                     )}
                                   </button>
-                                  <span className="mt-1.5 text-xs font-medium text-slate-700 text-center line-clamp-2">{s.deepskill_name}</span>
+                                  <span className="mt-1.5 text-xs font-medium text-ink-700 text-center line-clamp-2">{s.deepskill_name}</span>
                                 </div>
                               );
                             })}
@@ -1587,7 +1587,7 @@ function DeepSkillOptionMapping({ efrId, onReload }: { efrId: number; onReload?:
           </div>
 
           <div className="flex justify-end gap-2 pt-1">
-            <Button disabled={saving || !dirty} onClick={save} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+            <Button disabled={saving || !dirty} onClick={save} className="bg-success hover:bg-success-strong text-white">
               {saving ? 'Saving…' : 'Save Option Mappings'}
             </Button>
           </div>
@@ -1601,38 +1601,38 @@ function DeepSkillOptionMapping({ efrId, onReload }: { efrId: number; onReload?:
                 className="absolute inset-0 bg-black/40"
                 onClick={() => setSheetSkillId(null)}
               />
-              <div className="relative rounded-t-2xl bg-white max-h-[75vh] flex flex-col">
-                <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
-                  <span className="font-semibold text-slate-800">{sheetCtx.skill.deepskill_name}</span>
+              <div className="relative rounded-t-2xl bg-card max-h-[75vh] flex flex-col">
+                <div className="flex items-center justify-between px-4 py-3 border-b border-ink-100">
+                  <span className="font-semibold text-ink-900">{sheetCtx.skill.deepskill_name}</span>
                   <button
                     type="button"
                     onClick={() => setSheetSkillId(null)}
-                    className="rounded-full p-1 bg-slate-100 text-slate-500"
+                    className="rounded-full p-1 bg-ink-100 text-ink-500"
                     aria-label="Close"
                   >
                     <X className="h-5 w-5" />
                   </button>
                 </div>
-                <div className="overflow-y-auto divide-y divide-slate-100">
+                <div className="overflow-y-auto divide-y divide-ink-100">
                   {optionsBySkill[sheetCtx.skill.deepskill_id] == null ? (
-                    <div className="px-4 py-4 text-sm text-slate-500">Loading…</div>
+                    <div className="px-4 py-4 text-sm text-ink-500">Loading…</div>
                   ) : optionsBySkill[sheetCtx.skill.deepskill_id].length === 0 ? (
-                    <div className="px-4 py-4 text-sm text-slate-500">No Options.</div>
+                    <div className="px-4 py-4 text-sm text-ink-500">No Options.</div>
                   ) : optionsBySkill[sheetCtx.skill.deepskill_id].map((o) => {
                     const key = mapKey(sheetCtx.catgId, sheetCtx.typeId, sheetCtx.skill.deepskill_id, o.id);
                     const isSel = selected.has(key);
                     const isOriginal = original.has(key);
                     return (
                       <div key={o.id} className="flex items-center justify-between gap-3 px-4 py-3">
-                        <span className={`text-sm ${isSel ? 'text-slate-400' : 'text-slate-800'}`}>
+                        <span className={`text-sm ${isSel ? 'text-ink-500' : 'text-ink-900'}`}>
                           {o.skill_option}
-                          {isOriginal && <span className="ml-1.5 text-[10px] font-medium" style={{ color: DS_GREEN }}>• Saved</span>}
+                          {isOriginal && <span className="ml-1.5 text-xs font-medium" style={{ color: DS_GREEN }}>• Saved</span>}
                         </span>
                         <button
                           type="button"
                           onClick={() => toggleOption(sheetCtx.catgId, sheetCtx.typeId, sheetCtx.skill.deepskill_id, o.id)}
-                          className="inline-flex items-center gap-1 rounded-lg px-4 py-1.5 text-xs font-bold shrink-0"
-                          style={isSel ? { backgroundColor: DS_GREEN_TINT, color: DS_GREEN } : { backgroundColor: DS_BLUE, color: '#fff' }}
+                          className="inline-flex items-center gap-1 rounded-lg px-4 py-1.5 text-xs font-semibold shrink-0"
+                          style={isSel ? { backgroundColor: DS_GREEN_TINT, color: DS_GREEN } : { backgroundColor: DS_BLUE, color: 'hsl(var(--card))' }}
                         >
                           {isSel ? <><Check className="h-3.5 w-3.5" strokeWidth={3} /> Added</> : 'Add'}
                         </button>
@@ -1985,24 +1985,24 @@ function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: ()
     <div className="border-t pt-4 space-y-3">
       <div className="flex items-center justify-between">
         <div>
-          <h4 className="text-sm font-semibold text-slate-700">Serviceable Pincodes</h4>
-          <p className="text-xs text-slate-500">
+          <h4 className="text-sm font-semibold text-ink-700">Serviceable Pincodes</h4>
+          <p className="text-xs text-ink-500">
             Pincodes Where This Technician Will Accept Jobs. Type To Search, Or Paste A Comma/Space Separated List To Bulk-Add.
           </p>
         </div>
-        <span className="text-xs text-slate-500">
+        <span className="text-xs text-ink-500">
           {selected.size} Pincode{selected.size === 1 ? '' : 's'} Selected
         </span>
       </div>
 
       {loading ? (
-        <div className="text-xs text-slate-500">Loading…</div>
+        <div className="text-xs text-ink-500">Loading…</div>
       ) : (
         <>
           <div ref={containerRef} className="relative">
             <div className="flex items-center gap-2">
               <div className="relative flex-1">
-                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-ink-500 pointer-events-none" />
                 <Input
                   value={search}
                   placeholder="Search By Pincode, Location Or City, Or Paste A List…"
@@ -2017,7 +2017,7 @@ function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: ()
                   type="button"
                   onClick={() => void handleBulkAdd()}
                   disabled={bulkLookupBusy}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white whitespace-nowrap"
+                  className="bg-success hover:bg-success-strong text-white whitespace-nowrap"
                 >
                   {bulkLookupBusy ? (
                     <span className="inline-flex items-center gap-1.5">
@@ -2030,18 +2030,18 @@ function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: ()
               )}
             </div>
             {open && !isBulkInput && (
-              <div className="absolute z-20 mt-1 w-full rounded-md border border-slate-200 bg-white shadow-lg max-h-72 overflow-auto">
+              <div className="absolute z-20 mt-1 w-full rounded-md border border-ink-100 bg-popover shadow-lg max-h-72 overflow-auto">
                 {searchLoading && filteredResults.length === 0 ? (
-                  <div className="px-3 py-3 text-xs text-slate-500 inline-flex items-center gap-2">
+                  <div className="px-3 py-3 text-xs text-ink-500 inline-flex items-center gap-2">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading Pincodes…
                   </div>
                 ) : filteredResults.length === 0 ? (
                   ensuringCode && /^\d{6}$/.test(dq) ? (
-                    <div className="px-3 py-3 text-xs text-slate-500 inline-flex items-center gap-2">
+                    <div className="px-3 py-3 text-xs text-ink-500 inline-flex items-center gap-2">
                       <Loader2 className="h-3.5 w-3.5 animate-spin" /> Adding Pincode {ensuringCode}…
                     </div>
                   ) : (
-                    <div className="px-3 py-2 text-xs text-slate-500">No Pincodes Match.</div>
+                    <div className="px-3 py-2 text-xs text-ink-500">No Pincodes Match.</div>
                   )
                 ) : (
                   <>
@@ -2053,23 +2053,23 @@ function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: ()
                           type="button"
                           key={id}
                           onClick={() => toggle(r)}
-                          className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-slate-50"
+                          className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-ink-50"
                         >
                           <span className="flex items-center gap-2">
                             <input
                               type="checkbox"
                               readOnly
                               checked={isSelected}
-                              className="h-4 w-4 accent-emerald-600 pointer-events-none"
+                              className="h-4 w-4 accent-success pointer-events-none"
                             />
-                            <span className="font-medium text-slate-800">{pincodeLabel(r)}</span>
+                            <span className="font-medium text-ink-900">{pincodeLabel(r)}</span>
                           </span>
-                          {isSelected && <Check className="h-4 w-4 text-emerald-600 shrink-0" />}
+                          {isSelected && <Check className="h-4 w-4 text-success shrink-0" />}
                         </button>
                       );
                     })}
                     {filteredResults.length >= 100 && (
-                      <div className="px-3 py-1.5 text-[11px] text-slate-400 border-t bg-slate-50/60">
+                      <div className="px-3 py-1.5 text-xs text-ink-500 border-t bg-ink-50/60">
                         Showing First 100 Matches — Refine Your Search Or Paste A List To Bulk-Add.
                       </div>
                     )}
@@ -2078,7 +2078,7 @@ function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: ()
               </div>
             )}
             {isBulkInput && (
-              <div className="mt-1 text-[11px] text-slate-500">
+              <div className="mt-1 text-xs text-ink-500">
                 Press Enter Or Click The Button To Resolve And Add All Pincodes.
               </div>
             )}
@@ -2086,7 +2086,7 @@ function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: ()
 
           {/* Selected chips */}
           {chips.length === 0 ? (
-            <div className="rounded border border-dashed border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
+            <div className="rounded border border-dashed border-ink-100 bg-ink-50 p-3 text-xs text-ink-500">
               No Serviceable Pincodes Selected Yet — Type Above To Search Or Paste A List To Bulk-Add.
             </div>
           ) : (
@@ -2094,14 +2094,14 @@ function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: ()
               {chips.map((c) => (
                 <span
                   key={c.pincode_id}
-                  className="inline-flex items-center gap-1.5 rounded-full bg-sky-50 border border-sky-200 text-sky-700 pl-3 pr-1.5 py-0.5 text-xs"
+                  className="inline-flex items-center gap-1.5 rounded-full bg-info-tint border border-info/30 text-info-strong pl-3 pr-1.5 py-0.5 text-xs"
                   title={[c.city_name, c.state_name].filter(Boolean).join(', ') || undefined}
                 >
                   <span className="font-medium">{pincodeLabel(c)}</span>
                   <button
                     type="button"
                     onClick={() => removeChip(c.pincode_id)}
-                    className="rounded-full p-0.5 hover:bg-sky-100"
+                    className="rounded-full p-0.5 hover:bg-info/20"
                     aria-label={`Remove ${c.pincode}`}
                   >
                     <X className="h-3 w-3" />
@@ -2112,14 +2112,14 @@ function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: ()
           )}
 
           {ensuredHint && (
-            <div className="text-xs text-emerald-600 inline-flex items-center gap-1">
+            <div className="text-xs text-success inline-flex items-center gap-1">
               <Check className="h-3.5 w-3.5" /> {ensuredHint}
             </div>
           )}
-          {error && <div className="text-xs text-rose-600">{error}</div>}
+          {error && <div className="text-xs text-urgent">{error}</div>}
 
           <div className="flex justify-end gap-2 pt-1">
-            <Button disabled={saving || !dirty} onClick={save} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+            <Button disabled={saving || !dirty} onClick={save} className="bg-success hover:bg-success-strong text-white">
               {saving ? 'Saving…' : 'Save Serviceable Pincodes'}
             </Button>
           </div>
@@ -2134,10 +2134,10 @@ function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: ()
 function ReadField({ label, value, verifiedTick }: { label: string; value: string | number | null | undefined; verifiedTick?: boolean }) {
   return (
     <div className="space-y-1">
-      <Label className="text-xs text-slate-600">{label}</Label>
+      <Label className="text-xs text-ink-700">{label}</Label>
       <div className="flex items-center gap-2">
-        <Input value={value == null || value === '' ? '' : String(value)} readOnly className="bg-slate-50" />
-        {verifiedTick && <Check className="h-4 w-4 text-emerald-600 shrink-0" />}
+        <Input value={value == null || value === '' ? '' : String(value)} readOnly className="bg-ink-50" />
+        {verifiedTick && <Check className="h-4 w-4 text-success shrink-0" />}
       </div>
     </div>
   );
@@ -2146,8 +2146,8 @@ function ReadField({ label, value, verifiedTick }: { label: string; value: strin
 function SidebarRow({ label, value }: { label: string; value: string | number | null | undefined }) {
   return (
     <div className="grid grid-cols-2 gap-2 text-xs">
-      <span className="text-slate-500 uppercase tracking-wide">{label}</span>
-      <span className="text-slate-800 break-words">{value == null || value === '' ? '—' : String(value)}</span>
+      <span className="text-ink-500 uppercase tracking-wide">{label}</span>
+      <span className="text-ink-900 break-words">{value == null || value === '' ? '—' : String(value)}</span>
     </div>
   );
 }

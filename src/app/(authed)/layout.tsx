@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Navbar } from '@/components/layout/Navbar';
+import { SystemBanners } from '@/components/layout/SystemBanners';
 import { AuthProvider } from '@/lib/auth-context';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog';
 import { ToastHost } from '@/components/ui/toast';
@@ -66,6 +67,7 @@ export default function AuthedLayout({ children }: { children: React.ReactNode }
           <div className="flex h-screen bg-background">
             <Sidebar />
             <div className="flex-1 flex flex-col min-w-0">
+              <SystemBanners />
               <Navbar />
               {/* Horizontal 16px (px-4) gives content breathing room from the sidebar
                   border without looking sparse; vertical 12px (py-3) keeps the page

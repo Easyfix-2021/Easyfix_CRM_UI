@@ -75,13 +75,13 @@ export function JobRemarksView({
           type="button"
           onClick={() => setBodyOpen((o) => !o)}
           aria-expanded={open}
-          className="flex w-full items-center gap-1.5 px-3 py-2 border-b text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-sky-700"
+          className="flex w-full items-center gap-1.5 px-3 py-2 border-b text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-primary"
         >
           <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform ${open ? '' : '-rotate-90'}`} />
           Remarks / Comments
           {count > 0 && <span className="font-normal normal-case">({count})</span>}
           {pendingRequests.length > 0 && (
-            <span className="font-normal normal-case text-amber-700">
+            <span className="font-normal normal-case text-warning-strong">
               · {pendingRequests.length} pending customer request{pendingRequests.length > 1 ? 's' : ''}
             </span>
           )}
@@ -95,7 +95,7 @@ export function JobRemarksView({
         {pendingRequests.map((r) => (
           <div
             key={`req-${r.request_id}`}
-            className="px-3 py-2 border-b bg-amber-50 text-xs text-amber-900"
+            className="px-3 py-2 border-b bg-warning-tint text-xs text-warning-strong"
           >
             <span className="font-semibold capitalize">Customer {r.request_type} request</span>
             {r.reason ? <> · {r.reason}</> : null}

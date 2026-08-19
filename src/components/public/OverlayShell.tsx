@@ -23,11 +23,11 @@ export function OverlayShell({
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-0 sm:p-4"
       onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}
     >
-      <div className="bg-white w-full sm:max-w-md rounded-t-2xl sm:rounded-lg shadow-xl max-h-[90vh] overflow-y-auto overflow-x-hidden">
-        <div className="bg-slate-900 text-white px-5 py-3 flex items-center justify-between rounded-t-2xl sm:rounded-t-lg">
+      <div className="bg-card w-full sm:max-w-md rounded-t-2xl sm:rounded-lg shadow-xl max-h-[90vh] overflow-y-auto overflow-x-hidden">
+        <div className="bg-ink-900 text-white px-5 py-3 flex items-center justify-between rounded-t-2xl sm:rounded-t-lg">
           <h2 className="font-semibold text-base">{title}</h2>
           <button type="button" onClick={onClose} disabled={busy}
-            className="text-slate-300 hover:text-white disabled:opacity-50" aria-label="Close">
+            className="text-ink-300 hover:text-white disabled:opacity-50" aria-label="Close">
             <X className="h-5 w-5" />
           </button>
         </div>

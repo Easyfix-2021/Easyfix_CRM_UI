@@ -64,7 +64,7 @@ export const DialogOverlay = React.forwardRef<
     className={cn(
       // Strong dim (75%) + 4px blur so busy backgrounds (dashboard
       // cards, data tables) clearly recede when a modal opens.
-      'fixed inset-0 z-50 bg-slate-900/75 backdrop-blur-[4px]',
+      'fixed inset-0 z-50 bg-ink-900/75 backdrop-blur-[4px]',
       // Force pointer-events ON regardless of Radix's modal mode.
       // Our Dialog defaults to `modal={false}` (so SearchSelect popovers
       // inside dialogs work — see Dialog wrapper above). Radix would
@@ -176,10 +176,10 @@ export const DialogContent = React.forwardRef<
         // typically doesn't paint when modal=false (its bg + blur classes
         // don't apply reliably). The manual blocker becomes the SOLE
         // reliable surface for both click-capture and visual dim of the
-        // background. Same `bg-slate-900/75 backdrop-blur-[4px]` as the
+        // background. Same `bg-ink-900/75 backdrop-blur-[4px]` as the
         // intended DialogOverlay styling so the look matches what was
         // designed for modal=true dialogs.
-        'bg-slate-900/75 backdrop-blur-[4px]',
+        'bg-ink-900/75 backdrop-blur-[4px]',
         // Match DialogOverlay's open/close fade so the manual blocker
         // animates in tandem with the dialog content instead of popping
         // in/out abruptly.
@@ -268,12 +268,12 @@ export const DialogContent = React.forwardRef<
          *     `ring-1 ring-black/5` creates a subtle high-light edge.
          *     Together they give the modal a "lifted" feel without
          *     the cartoon-y bevel of harder shadows.
-         *   - `border border-slate-200/80` — soft slate border so the
+         *   - `border border-ink-100/80` — soft ink border so the
          *     edge reads in light backgrounds; combines with the ring
          *     for a layered border feel.
          *   - `bg-background` keeps the panel surface neutral.
          */
-        'border border-slate-200/80 bg-background',
+        'border border-ink-100/80 bg-background',
         'shadow-2xl ring-1 ring-black/5',
         /*
          * BOUNDED HEIGHT BY DEFAULT (2026-08-13).
@@ -331,7 +331,7 @@ export const DialogContent = React.forwardRef<
         {children}
       </DialogPaddingContext.Provider>
       {!hideClose && (
-        // Visible-on-slate close: tinted background pill so the X reads
+        // Visible-on-ink close: tinted background pill so the X reads
         // against the dark band (was disappearing as a low-contrast glyph
         // before). Hover bumps to white/15 for clear feedback.
         <DialogPrimitive.Close
@@ -348,8 +348,8 @@ export const DialogContent = React.forwardRef<
 DialogContent.displayName = DialogPrimitive.Content.displayName;
 
 /*
- * Header band — Metronic-style dark slate gradient + thin sky accent
- * underline so the band feels lifted and on-brand rather than flat.
+ * Header band — dark ink gradient + a thin brand-red accent underline so
+ * the band feels lifted and on-brand rather than flat.
  *
  * Layout: negative horizontal/top margins so the coloured band runs
  * edge-to-edge of the modal (DialogContent retains its default p-6 —
@@ -361,11 +361,11 @@ DialogContent.displayName = DialogPrimitive.Content.displayName;
  *   - `bg-gradient-to-r from-sidebar via-sidebar-accent to-sidebar`
  *     gives the band a subtle horizontal sheen so the header reads as
  *     a "lit surface" rather than a flat fill.
- *   - `shadow-[inset_0_-2px_0_0_theme(colors.sky.500/0.55)]` paints a
- *     2px sky-500 accent line at the bottom of the band — the
- *     EasyFix-blue tie-in without using an extra DOM node.
+ *   - an inset box-shadow paints a 3px brand-red accent line at the
+ *     bottom of the band — the identity's action colour, without
+ *     using an extra DOM node.
  *   - `text-white` for the title region; `DialogDescription` softens to
- *     a slate-200/75 sub-tone for hierarchy.
+ *     an ink-300/85 sub-tone for hierarchy.
  *
  * If a call site uses `DialogContent` with `!p-0`, the call site MUST
  * override the negative margins (`!mx-0 !mt-0`) — see [JobModal.tsx]
@@ -385,13 +385,14 @@ export const DialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLD
         // inside the modal frame.
         '-mx-6 -mt-6 px-6 py-4 mb-5',
         noPadding && '!mx-0 !mt-0 !mb-0',
-        // Pronounced slate gradient (slate-900 → slate-700 → slate-900)
+        // Pronounced ink gradient (ink-900 → ink-700 → ink-900)
         // gives the band visible depth instead of a flat fill.
-        'bg-gradient-to-r from-slate-900 via-slate-700 to-slate-900 text-white',
-        // 3px sky-500 underline drawn with a literal rgba inset shadow —
-        // Tailwind's `theme()`-with-opacity syntax doesn't reliably
-        // resolve in arbitrary values, so we spell the colour out.
-        'shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]',
+        'bg-gradient-to-r from-ink-900 via-ink-700 to-ink-900 text-white',
+        // 3px brand-red underline drawn as an inset shadow. Tailwind's
+        // `theme()`-with-opacity syntax doesn't reliably resolve inside an
+        // arbitrary value, so the token's CSS custom property is read
+        // directly — still a token, never a colour literal.
+        'shadow-[inset_0_-3px_0_0_hsl(var(--primary)_/_0.85)]',
         className,
       )}
       {...props}
@@ -442,8 +443,8 @@ export const DialogDescription = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Description>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Description>
 >(({ className, ...props }, ref) => (
-  // Soft slate-tint sub-line under the title for context (date range,
+  // Soft ink-tint sub-line under the title for context (date range,
   // job reference, etc.). Readable but clearly secondary.
-  <DialogPrimitive.Description ref={ref} className={cn('text-[12px] text-slate-300/85', className)} {...props} />
+  <DialogPrimitive.Description ref={ref} className={cn('text-[12px] text-ink-300/85', className)} {...props} />
 ));
 DialogDescription.displayName = DialogPrimitive.Description.displayName;

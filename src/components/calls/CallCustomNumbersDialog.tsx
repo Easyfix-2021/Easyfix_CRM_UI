@@ -118,7 +118,7 @@ export function CallCustomNumbersDialog({
       <DialogContent className="sm:max-w-md !p-0 !gap-0 overflow-x-hidden overflow-y-auto">
         <DialogHeader className="!mx-0 !mt-0 !mb-0 !py-4">
           <div className="flex items-center gap-3">
-            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-500/20 ring-1 ring-emerald-400/40 text-emerald-200">
+            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-success/20 ring-1 ring-success/40 text-success-tint">
               <Phone className="h-4 w-4" />
             </span>
             <DialogTitle className="flex-1 leading-tight">Place Call</DialogTitle>
@@ -148,7 +148,7 @@ export function CallCustomNumbersDialog({
                       value={p}
                       checked={provider === p}
                       onChange={() => changeProvider(p)}
-                      className="h-4 w-4 accent-emerald-600"
+                      className="h-4 w-4 accent-success"
                     />
                     Via {label(p)}
                   </label>
@@ -173,7 +173,7 @@ export function CallCustomNumbersDialog({
                 aria-invalid={touched && !fromOk}
               />
               {touched && callFrom && !fromOk && (
-                <p className="text-xs text-rose-600">Enter 10 to 12 digits (optionally 91-prefixed).</p>
+                <p className="text-xs text-urgent-strong">Enter 10 to 12 digits (optionally 91-prefixed).</p>
               )}
             </div>
           )}
@@ -192,10 +192,10 @@ export function CallCustomNumbersDialog({
               aria-invalid={touched && !toOk}
             />
             {touched && callTo && !toOk && (
-              <p className="text-xs text-rose-600">Enter 10 to 12 digits (optionally 91-prefixed).</p>
+              <p className="text-xs text-urgent-strong">Enter 10 to 12 digits (optionally 91-prefixed).</p>
             )}
             {sameNumber && (
-              <p className="text-xs text-amber-700">
+              <p className="text-xs text-warning-strong">
                 Call From and Call To must be different — {label(provider)} cannot bridge a line to itself.
               </p>
             )}

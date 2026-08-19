@@ -1731,13 +1731,13 @@ const EfRow = memo(function EfRow({
             <span className="inline-flex items-center gap-1.5" title={formatDate(e.profile_update_sent_at)}>
               <span className="truncate">{formatDate(e.profile_update_sent_at)}</span>
               {e.profile_update_send_count > 1 && (
-                <span className="text-[10px] font-medium rounded bg-slate-100 px-1.5 py-0.5 text-slate-600 shrink-0">
+                <span className="text-xs font-medium rounded bg-ink-100 px-1.5 py-0.5 text-ink-700 shrink-0">
                   {e.profile_update_send_count}×
                 </span>
               )}
             </span>
           ) : (
-            <span className="text-slate-400">—</span>
+            <span className="text-ink-500">—</span>
           )
         ) : (
           <span className="text-muted-foreground">…</span>
@@ -1837,7 +1837,7 @@ function CsvCellButton({ items, onOpen }: { items: CsvCellItem[]; onOpen: () => 
         {first.name} <span className="text-muted-foreground">(Id: {first.id})</span>
       </span>
       {more > 0 && (
-        <span className="text-[10px] font-medium rounded bg-muted px-1.5 py-0.5 text-muted-foreground shrink-0">
+        <span className="text-xs font-medium rounded bg-muted px-1.5 py-0.5 text-muted-foreground shrink-0">
           +{more}
         </span>
       )}
@@ -1880,7 +1880,7 @@ function PincodesCell({
     >
       <span className="truncate">{preview}</span>
       {more > 0 && (
-        <span className="text-[10px] font-medium rounded bg-muted px-1.5 py-0.5 text-muted-foreground shrink-0">
+        <span className="text-xs font-medium rounded bg-muted px-1.5 py-0.5 text-muted-foreground shrink-0">
           +{more}
         </span>
       )}
@@ -1943,12 +1943,12 @@ function StatusCountsStrip({
     ring: string;
   };
   const allItems: StripItem[] = [
-    { key: 'active',          label: 'Active',                   status: '1', lifecycleStatus: '', dot: 'bg-emerald-500', ring: 'ring-emerald-500/30' },
-    { key: 'inactive',        label: 'Inactive',                 status: '2', lifecycleStatus: '', dot: 'bg-slate-500',   ring: 'ring-slate-500/30' },
-    { key: 'idle',            label: 'Idle',                     status: '3', lifecycleStatus: '', dot: 'bg-slate-400',   ring: 'ring-slate-400/30' },
-    { key: 'not_eligible',    label: 'Not Eligible',             status: '4', lifecycleStatus: '', dot: 'bg-red-500',     ring: 'ring-red-500/30' },
-    { key: 'not_suitable',    label: 'Not Suitable',             status: '5', lifecycleStatus: '', dot: 'bg-amber-500',   ring: 'ring-amber-500/30' },
-    { key: 'reg_in_progress', label: 'Registration In Progress', status: '6', lifecycleStatus: '', dot: 'bg-sky-500',     ring: 'ring-sky-500/30' },
+    { key: 'active',          label: 'Active',                   status: '1', lifecycleStatus: '', dot: 'bg-success', ring: 'ring-success/30' },
+    { key: 'inactive',        label: 'Inactive',                 status: '2', lifecycleStatus: '', dot: 'bg-ink-500',   ring: 'ring-ink-500/30' },
+    { key: 'idle',            label: 'Idle',                     status: '3', lifecycleStatus: '', dot: 'bg-ink-300',   ring: 'ring-ink-300/30' },
+    { key: 'not_eligible',    label: 'Not Eligible',             status: '4', lifecycleStatus: '', dot: 'bg-urgent',     ring: 'ring-urgent/30' },
+    { key: 'not_suitable',    label: 'Not Suitable',             status: '5', lifecycleStatus: '', dot: 'bg-warning',   ring: 'ring-warning/30' },
+    { key: 'reg_in_progress', label: 'Registration In Progress', status: '6', lifecycleStatus: '', dot: 'bg-info',        ring: 'ring-info/30' },
     /*
      * Training Pending (2026-08-13). Earns a place here because the LMS made
      * it actionable: completing the assigned videos now advances a technician
@@ -1961,7 +1961,7 @@ function StatusCountsStrip({
      * two identical dots would defeat the one-line scannability this strip
      * exists for. The chip inside the table keeps the canonical tone.
      */
-    { key: 'training_pending', label: 'Training Pending', status: '', lifecycleStatus: 'TRAINING_PENDING', dot: 'bg-violet-500', ring: 'ring-violet-500/30' },
+    { key: 'training_pending', label: 'Training Pending', status: '', lifecycleStatus: 'TRAINING_PENDING', dot: 'bg-gold', ring: 'ring-gold/30' },
   ];
 
   /*

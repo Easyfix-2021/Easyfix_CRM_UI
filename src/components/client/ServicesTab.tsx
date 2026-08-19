@@ -200,7 +200,7 @@ export function ServicesTab({ clientId, canEdit }: Props) {
         )}
       </div>
       {error && (
-        <div className="text-xs text-red-600 flex items-center gap-1">
+        <div className="text-xs text-urgent-strong flex items-center gap-1">
           <AlertCircle className="size-3.5" /> {error}
         </div>
       )}
@@ -280,9 +280,9 @@ export function ServicesTab({ clientId, canEdit }: Props) {
                       </td>
                       <td className="!text-center">
                         {r.service_status === 0 ? (
-                          <span className="text-[11px] bg-gray-100 text-gray-700 border border-gray-200 rounded px-1.5 py-0.5">Inactive</span>
+                          <span className="text-xs bg-ink-100 text-ink-700 border border-ink-100 rounded px-1.5 py-0.5">Inactive</span>
                         ) : (
-                          <span className="text-[11px] bg-green-50 text-green-700 border border-green-200 rounded px-1.5 py-0.5">Active</span>
+                          <span className="text-xs bg-success-tint text-success-strong border border-success rounded px-1.5 py-0.5">Active</span>
                         )}
                       </td>
                       <td className="!text-right">
@@ -300,8 +300,8 @@ export function ServicesTab({ clientId, canEdit }: Props) {
                             className={
                               'inline-flex items-center justify-center w-7 h-7 rounded border ' +
                               (isOpen
-                                ? 'bg-sky-50 border-sky-300 text-sky-700'
-                                : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50')
+                                ? 'bg-brand-50 border-primary text-primary'
+                                : 'bg-card border-ink-100 text-ink-700 hover:bg-ink-50')
                             }
                             onClick={() => setOpenBreakdownId(isOpen ? null : r.client_service_id)}
                           >
@@ -319,7 +319,7 @@ export function ServicesTab({ clientId, canEdit }: Props) {
                                 type="button"
                                 title="Edit Service"
                                 aria-label="Edit Service"
-                                className="inline-flex items-center justify-center w-7 h-7 rounded border bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                                className="inline-flex items-center justify-center w-7 h-7 rounded border bg-card border-ink-100 text-ink-700 hover:bg-ink-50"
                                 onClick={() => setEditingId(r.client_service_id)}
                               >
                                 <Pencil className="h-3.5 w-3.5" />
@@ -328,7 +328,7 @@ export function ServicesTab({ clientId, canEdit }: Props) {
                                 type="button"
                                 title="Remove Service"
                                 aria-label="Remove Service"
-                                className="inline-flex items-center justify-center w-7 h-7 rounded border bg-white border-rose-200 text-rose-600 hover:bg-rose-50"
+                                className="inline-flex items-center justify-center w-7 h-7 rounded border bg-card border-urgent text-urgent-strong hover:bg-urgent/15"
                                 onClick={() => onDelete(r)}
                               >
                                 <Trash2 className="h-3.5 w-3.5" />
@@ -342,7 +342,7 @@ export function ServicesTab({ clientId, canEdit }: Props) {
                       <tr>
                         {/* colSpan = 7 (Service ID + Name + Category
                             + EF Charges + Cl Charges + Status + Actions). */}
-                        <td colSpan={7} className="bg-slate-50 p-3">
+                        <td colSpan={7} className="bg-ink-50 p-3">
                           <BreakdownPanel row={r} breakdown={bd} />
                         </td>
                       </tr>
@@ -423,7 +423,7 @@ function BreakdownPanel({
 
   return (
     <div className="space-y-2">
-      <div className="text-xs font-medium text-slate-700">
+      <div className="text-xs font-medium text-ink-700">
         Per-unit cascade cuts for{' '}
         <span className="font-mono">
           ₹{Number(row.total_charge ?? row.charges?.total_charge ?? 0).toLocaleString('en-IN')}
@@ -469,8 +469,8 @@ function BreakdownPanel({
           </tr>
         </tbody>
       </table>
-      <div className="flex flex-wrap items-center gap-2 text-[11px]">
-        <span className="inline-flex items-center gap-1 bg-sky-50 text-sky-800 border border-sky-200 rounded px-1.5 py-0.5 font-mono">
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className="inline-flex items-center gap-1 bg-info-tint text-info-strong border border-info rounded px-1.5 py-0.5 font-mono">
           L1 + L2 = easyfix_charge: {fmt(easyfixBundle)}
         </span>
         <span className="text-muted-foreground">
@@ -524,7 +524,7 @@ function CostPairRow({
           className="h-8 text-xs"
         />
         {suffix && (
-          <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[11px] text-muted-foreground pointer-events-none">
+          <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">
             {suffix}
           </span>
         )}
@@ -732,7 +732,7 @@ function ServiceFormDialog({
         <form onSubmit={onSubmit} className="space-y-3 pt-1">
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label className="text-xs">Service Category <span className="text-red-600">*</span></Label>
+              <Label className="text-xs">Service Category <span className="text-urgent-strong">*</span></Label>
               <SearchSelect
                 value={categoryId || ''}
                 onChange={(val) => {
@@ -750,7 +750,7 @@ function ServiceFormDialog({
             </div>
             <div>
               <Label className="text-xs">
-                Service <span className="text-red-600">*</span>
+                Service <span className="text-urgent-strong">*</span>
               </Label>
               {/* Renamed from "Service Type(s)" to "Service" to match
                   legacy nomenclature (the legacy modal's third dropdown
@@ -775,7 +775,7 @@ function ServiceFormDialog({
                     : 'Select service(s) from the master list (pick a category to narrow this list)'
                 }
               />
-              <div className="text-[11px] text-muted-foreground mt-1">
+              <div className="text-xs text-muted-foreground mt-1">
                 {typeIds.length} selected · {typeOptions.length} available
                 {categoryId ? ' (filtered by category)' : ' (showing full master list)'}
               </div>
@@ -874,21 +874,21 @@ function ServiceFormDialog({
           {/* Live preview pills */}
           <div className="flex flex-wrap items-center gap-2 text-xs border rounded bg-muted/30 px-3 py-2">
             <span className="text-muted-foreground">Computed split:</span>
-            <span className="inline-flex items-center gap-1 bg-sky-50 text-sky-800 border border-sky-200 rounded px-2 py-0.5 font-mono">
+            <span className="inline-flex items-center gap-1 bg-info-tint text-info-strong border border-info rounded px-2 py-0.5 font-mono">
               Easyfix: {formatRupee(split.easyfix)}
             </span>
-            <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-800 border border-amber-200 rounded px-2 py-0.5 font-mono">
+            <span className="inline-flex items-center gap-1 bg-warning-tint text-warning-strong border border-warning rounded px-2 py-0.5 font-mono">
               Client: {formatRupee(split.client)}
             </span>
             <span className={`inline-flex items-center gap-1 rounded px-2 py-0.5 font-mono border ${
               split.easyfixer < 0
-                ? 'bg-red-50 text-red-700 border-red-200'
-                : 'bg-green-50 text-green-700 border-green-200'
+                ? 'bg-urgent-tint text-urgent-strong border-urgent'
+                : 'bg-success-tint text-success-strong border-success'
             }`}>
               Easyfixer: {formatRupee(split.easyfixer)}
             </span>
             {split.easyfixer < 0 && (
-              <span className="text-[11px] text-red-600">
+              <span className="text-xs text-urgent-strong">
                 Costs exceed Total Charge — Easyfixer would receive a negative residual.
               </span>
             )}

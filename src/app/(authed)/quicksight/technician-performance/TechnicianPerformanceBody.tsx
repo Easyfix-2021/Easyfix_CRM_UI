@@ -105,7 +105,7 @@ function periodHeader(p: PeriodDateWise, flag: Flag): string {
 function pctCell(v: number | null) {
   if (v == null) return <span className="text-muted-foreground">-</span>;
   const ok = v >= 85;
-  return <span className={ok ? 'text-emerald-600 font-medium' : 'text-rose-600 font-medium'}>{v}%</span>;
+  return <span className={ok ? 'text-success font-medium' : 'text-urgent font-medium'}>{v}%</span>;
 }
 
 /* One attendance chip — green when present ('P'), neutral/red otherwise. */
@@ -115,8 +115,8 @@ function AttChip({ label, status }: { label: string; status: string }) {
     <span
       title={`${label}: ${status}`}
       className={cn(
-        'inline-flex h-5 min-w-5 items-center justify-center rounded px-1 text-[11px] font-semibold',
-        present ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700',
+        'inline-flex h-5 min-w-5 items-center justify-center rounded px-1 text-xs font-semibold',
+        present ? 'bg-success-tint text-success-strong' : 'bg-urgent-tint text-urgent-strong',
       )}
     >
       {status}
@@ -370,7 +370,7 @@ export function TechnicianPerformanceBody() {
       </div>
 
       {showClientWarning && (
-        <p className="text-xs text-amber-600">
+        <p className="text-xs text-warning">
           Client filter is disabled while a Reporting Manager is selected. Clear the Reporting
           Manager to filter by Client.
         </p>
@@ -434,8 +434,8 @@ export function TechnicianPerformanceBody() {
                         className={cn(
                           'rounded px-1.5 py-0.5 text-left font-medium underline-offset-2 hover:underline',
                           row.txStatus === '1'
-                            ? 'text-emerald-700 bg-emerald-50'
-                            : 'text-rose-700 bg-rose-50',
+                            ? 'text-success-strong bg-success-tint'
+                            : 'text-urgent-strong bg-urgent-tint',
                         )}
                       >
                         {row.txName} - {row.txId}
@@ -502,7 +502,7 @@ function PeriodCells({ p, firstOfBlock }: { p: PeriodDateWise; firstOfBlock?: bo
       <td className={`${cls} ${firstOfBlock ? 'border-l' : ''}`}>{p.txTktCreated}</td>
       <td className={cls}>{pctCell(p.txSdaPercentage)}</td>
       <td className={cls}>{pctCell(p.txTatPercentage)}</td>
-      <td className={`${cls} bg-amber-100 font-semibold`}>{p.txOpenOrder}</td>
+      <td className={`${cls} bg-warning-tint font-semibold`}>{p.txOpenOrder}</td>
     </>
   );
 }

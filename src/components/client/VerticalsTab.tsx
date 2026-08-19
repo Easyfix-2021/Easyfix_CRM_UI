@@ -166,7 +166,7 @@ export function VerticalsTab({ clientId, canEdit }: Props) {
         )}
       </div>
       {error && (
-        <div className="text-xs text-red-600 flex items-center gap-1">
+        <div className="text-xs text-urgent-strong flex items-center gap-1">
           <AlertCircle className="size-3.5" /> {error}
         </div>
       )}
@@ -179,7 +179,7 @@ export function VerticalsTab({ clientId, canEdit }: Props) {
         {rows.map((r, idx) => (
           <div key={idx} className="p-2 grid grid-cols-12 gap-2 items-center">
             <div className="col-span-4">
-              <Label className="text-[10px] uppercase tracking-wide text-muted-foreground flex items-center gap-1">
+              <Label className="text-xs uppercase tracking-wide text-muted-foreground flex items-center gap-1">
                 <Layers className="size-3" /> Vertical
               </Label>
               {canEdit ? (
@@ -197,7 +197,7 @@ export function VerticalsTab({ clientId, canEdit }: Props) {
               )}
             </div>
             <div className="col-span-5">
-              <Label className="text-[10px] uppercase tracking-wide text-muted-foreground flex items-center gap-1">
+              <Label className="text-xs uppercase tracking-wide text-muted-foreground flex items-center gap-1">
                 <Users className="size-3" /> User
               </Label>
               {canEdit ? (
@@ -219,7 +219,7 @@ export function VerticalsTab({ clientId, canEdit }: Props) {
               )}
             </div>
             <div className="col-span-2">
-              <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">Role</Label>
+              <Label className="text-xs uppercase tracking-wide text-muted-foreground">Role</Label>
               {canEdit ? (
                 <select
                   className="border rounded h-9 px-2 text-sm w-full bg-background"
@@ -236,7 +236,7 @@ export function VerticalsTab({ clientId, canEdit }: Props) {
             </div>
             <div className="col-span-1 flex justify-end">
               {canEdit && (
-                <Button size="sm" variant="ghost" onClick={() => removeRow(idx)} className="text-red-600 hover:text-red-700">
+                <Button size="sm" variant="ghost" onClick={() => removeRow(idx)} className="text-urgent hover:text-urgent-strong">
                   <Trash2 className="size-3.5" />
                 </Button>
               )}
@@ -245,7 +245,7 @@ export function VerticalsTab({ clientId, canEdit }: Props) {
         ))}
       </div>
       {canEdit && dirty && (
-        <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+        <div className="text-xs text-warning-strong bg-warning-tint border border-warning rounded px-2 py-1">
           You have unsaved changes. Click "Save Changes" to commit, or "Revert" to discard.
         </div>
       )}

@@ -81,10 +81,10 @@ export default function NotificationsInboxPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
+          <h1 className="text-2xl font-semibold flex items-center gap-2">
             <Bell className="size-6" /> Notifications
             {unread > 0 && (
-              <span className="text-xs font-medium rounded bg-red-100 text-red-700 px-2 py-0.5">
+              <span className="text-xs font-medium rounded bg-urgent-tint text-urgent-strong px-2 py-0.5">
                 {unread} unread
               </span>
             )}
@@ -101,7 +101,7 @@ export default function NotificationsInboxPage() {
       </div>
 
       {error && (
-        <Card><CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
+        <Card><CardContent className="p-3 flex items-center gap-2 text-sm text-urgent">
           <AlertTriangle className="size-4" /> {error}
         </CardContent></Card>
       )}
@@ -131,7 +131,7 @@ export default function NotificationsInboxPage() {
                     </div>
                     {it.n_desc && <div className="text-sm text-muted-foreground whitespace-pre-wrap">{it.n_desc}</div>}
                     {it.job_id && (
-                      <a href={`/jobs?view=${it.job_id}`} className="text-xs text-blue-700 hover:underline mt-1 inline-block">
+                      <a href={`/jobs?view=${it.job_id}`} className="text-xs text-primary hover:underline mt-1 inline-block">
                         View job #{it.job_id} →
                       </a>
                     )}

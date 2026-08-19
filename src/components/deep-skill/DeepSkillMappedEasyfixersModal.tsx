@@ -127,7 +127,7 @@ export function DeepSkillMappedEasyfixersModal({
       <DialogContent className="max-w-5xl w-[min(96vw,1100px)] h-[80vh] overflow-hidden p-0 flex flex-col">
         <DialogHeader className="!mx-0 !mt-0 px-6 py-4 mb-0">
           <DialogTitle>{headerTitle}</DialogTitle>
-          <div className="text-[12px] text-slate-300/85 mt-0.5">
+          <div className="text-[12px] text-ink-300/85 mt-0.5">
             {loading
               ? 'Loading…'
               : `${total} Easyfixer${total === 1 ? '' : 's'} Mapped`}
@@ -156,7 +156,7 @@ export function DeepSkillMappedEasyfixersModal({
               )}
               {!loading && error && (
                 <tr>
-                  <td colSpan={6} className="text-center py-8 text-rose-600">
+                  <td colSpan={6} className="text-center py-8 text-urgent-strong">
                     {error}
                   </td>
                 </tr>

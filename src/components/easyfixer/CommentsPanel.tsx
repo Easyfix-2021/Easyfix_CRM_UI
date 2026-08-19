@@ -44,19 +44,19 @@ export function CommentsPanel({
 
   return (
     <div className="space-y-2">
-      <label className="text-xs font-semibold text-slate-700">{addLabel}</label>
+      <label className="text-xs font-semibold text-ink-700">{addLabel}</label>
       <textarea
         rows={rows}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
-        className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+        className="w-full rounded-md border border-ink-100 px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
         placeholder="Your Notes"
       />
       <div className="flex justify-end">
         <Button
           type="button"
           size="sm"
-          className="bg-emerald-600 hover:bg-emerald-700 text-white"
+          className="bg-success hover:bg-success-strong text-white"
           onClick={submit}
           disabled={saving || draft.trim().length === 0}
         >
@@ -65,13 +65,13 @@ export function CommentsPanel({
       </div>
       <div className="mt-2 max-h-64 overflow-y-auto space-y-2 pr-1">
         {entries.length === 0 ? (
-          <div className="text-xs text-slate-400 italic">{emptyHint}</div>
+          <div className="text-xs text-ink-500 italic">{emptyHint}</div>
         ) : entries.map((c, idx) => (
-          <div key={c.id ?? idx} className="rounded-md border border-slate-100 bg-slate-50 px-3 py-2">
+          <div key={c.id ?? idx} className="rounded-md border border-ink-100 bg-ink-50 px-3 py-2">
             {/* Legacy stamped status into the comment using <br>; render as HTML safely-ish */}
-            <p className="text-xs text-slate-800 whitespace-pre-line"
+            <p className="text-xs text-ink-900 whitespace-pre-line"
                dangerouslySetInnerHTML={{ __html: sanitize(c.text) }} />
-            <div className="mt-1 text-[10px] text-slate-500 flex items-center justify-between">
+            <div className="mt-1 text-xs text-ink-500 flex items-center justify-between">
               <span>{c.author || '—'}</span>
               <span>{c.createdAt ? formatDate(c.createdAt as string) : ''}</span>
             </div>

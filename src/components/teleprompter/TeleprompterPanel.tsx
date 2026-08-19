@@ -341,10 +341,10 @@ export function TeleprompterPanel({ open, efrId, onClose, onApplied }: {
       <DialogContent className="max-w-3xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Sparkles className="h-4 w-4 text-sky-600" /> Guided Verification Call
-            <span className="ml-2 rounded-full bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700">{callChip}</span>
-            {micOn && <span className="inline-flex items-center gap-1 text-xs text-emerald-600"><Mic className="h-3 w-3" /> Listening</span>}
-            {webCall.status === 'in_progress' && !micOn && <span className="inline-flex items-center gap-1 text-xs text-slate-400"><MicOff className="h-3 w-3" /> Manual</span>}
+            <Sparkles className="h-4 w-4 text-info" /> Guided Verification Call
+            <span className="ml-2 rounded-full bg-info-tint px-2 py-0.5 text-xs font-medium text-info-strong">{callChip}</span>
+            {micOn && <span className="inline-flex items-center gap-1 text-xs text-success-strong"><Mic className="h-3 w-3" /> Listening</span>}
+            {webCall.status === 'in_progress' && !micOn && <span className="inline-flex items-center gap-1 text-xs text-ink-500"><MicOff className="h-3 w-3" /> Manual</span>}
           </DialogTitle>
         </DialogHeader>
 
@@ -353,11 +353,11 @@ export function TeleprompterPanel({ open, efrId, onClose, onApplied }: {
           {!sessionId && (
             <>
               {startError && !starting && (
-                <div className="rounded border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{startError}</div>
+                <div className="rounded border border-urgent bg-urgent-tint p-3 text-sm text-urgent-strong">{startError}</div>
               )}
               {cfgFailed && !starting && (
                 <div className="space-y-2">
-                  <div className="rounded border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+                  <div className="rounded border border-urgent bg-urgent-tint p-3 text-sm text-urgent-strong">
                     Could not load call settings — you may not have calling permission. Please close and try again.
                   </div>
                   <div className="flex justify-end"><Button variant="outline" size="sm" onClick={onClose}>Close</Button></div>
@@ -382,7 +382,7 @@ export function TeleprompterPanel({ open, efrId, onClose, onApplied }: {
                       size="sm"
                       disabled={callTo.length !== 10}
                       onClick={() => { startedRef.current = true; void start(); }}
-                      className="bg-sky-600 hover:bg-sky-700 text-white"
+                      className="bg-primary hover:bg-brand-600 text-white"
                     >
                       <Phone className="mr-2 h-4 w-4" /> Start Guided Call
                     </Button>
@@ -394,7 +394,7 @@ export function TeleprompterPanel({ open, efrId, onClose, onApplied }: {
               {!starting && startError && !needsNumber && (
                 <div className="flex items-center justify-end gap-2">
                   <Button variant="outline" size="sm" onClick={onClose}>Close</Button>
-                  <Button size="sm" onClick={retryStart} className="bg-sky-600 hover:bg-sky-700 text-white">
+                  <Button size="sm" onClick={retryStart} className="bg-primary hover:bg-brand-600 text-white">
                     <Phone className="mr-2 h-4 w-4" /> Retry
                   </Button>
                 </div>
@@ -403,7 +403,7 @@ export function TeleprompterPanel({ open, efrId, onClose, onApplied }: {
               {/* Spinner: config load + non-QA auto-start (covers the one-frame gap).
                   Stops on cfgFailed (error OR 5s timeout) so it can never spin forever. */}
               {(starting || (!needsNumber && !startError && !cfgFailed)) && (
-                <div className="flex items-center gap-2 text-sm text-slate-500"><Loader2 className="h-4 w-4 animate-spin" /> Starting the guided call…</div>
+                <div className="flex items-center gap-2 text-sm text-ink-500"><Loader2 className="h-4 w-4 animate-spin" /> Starting the guided call…</div>
               )}
             </>
           )}
@@ -411,7 +411,7 @@ export function TeleprompterPanel({ open, efrId, onClose, onApplied }: {
           {/* ── Failed session (STT drop / reaper) — banner + Close, NEVER the live view ── */}
           {sessionId && isFailed && (
             <div className="space-y-2">
-              <div className="rounded border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{session?.error || 'The guided call could not be completed.'}</div>
+              <div className="rounded border border-urgent bg-urgent-tint p-3 text-sm text-urgent-strong">{session?.error || 'The guided call could not be completed.'}</div>
               <div className="flex justify-end"><Button variant="outline" size="sm" onClick={onClose}>Close</Button></div>
             </div>
           )}
@@ -420,12 +420,12 @@ export function TeleprompterPanel({ open, efrId, onClose, onApplied }: {
           {sessionId && !isDone && !isFailed && !starting && (
             <>
               {callProblem && (
-                <div className="rounded border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+                <div className="rounded border border-urgent bg-urgent-tint p-3 text-sm text-urgent-strong">
                   {webCall.error || webCall.active?.endedReason || 'The call could not be connected. You can retry.'}
                 </div>
               )}
               {callLive && !streamConnected && noStreamWarn && (
-                <div className="rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                <div className="rounded border border-warning bg-warning-tint p-3 text-sm text-warning-strong">
                   STT hasn&apos;t connected — this call won&apos;t be transcribed or analyzed. It&apos;s usually a
                   connectivity issue (the media stream can&apos;t reach the server), not a bad call. You can end and retry.
                 </div>
@@ -433,7 +433,7 @@ export function TeleprompterPanel({ open, efrId, onClose, onApplied }: {
               <p className="text-xs text-muted-foreground">
                 Read the highlighted question. As the technician answers, the next question lights up automatically.
               </p>
-              <div className="max-h-[46vh] space-y-1.5 overflow-y-auto rounded-md border border-slate-100 p-2">
+              <div className="max-h-[46vh] space-y-1.5 overflow-y-auto rounded-md border border-ink-100 p-2">
                 {questions.map((q) => {
                   const isCurrent = q.id === currentId;
                   const isNext = q.id === nextId && !isCurrent;
@@ -443,16 +443,16 @@ export function TeleprompterPanel({ open, efrId, onClose, onApplied }: {
                       key={q.id}
                       className={
                         'rounded-md px-3 py-2 text-sm transition-colors '
-                        + (isCurrent ? 'bg-sky-600 text-white shadow-sm'
-                          : isNext ? 'bg-amber-50 text-amber-900 ring-1 ring-amber-300'
-                          : wasAsked ? 'bg-slate-50 text-slate-400'
-                          : 'text-slate-600')
+                        + (isCurrent ? 'bg-info text-white shadow-sm'
+                          : isNext ? 'bg-warning-tint text-warning-strong ring-1 ring-warning'
+                          : wasAsked ? 'bg-ink-50 text-ink-500'
+                          : 'text-ink-700')
                       }
                     >
                       <div className="flex items-start gap-2">
-                        {wasAsked && <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />}
-                        {isCurrent && <span className="mt-0.5 shrink-0 text-[10px] font-bold uppercase tracking-wide">Ask now</span>}
-                        {isNext && <span className="mt-0.5 shrink-0 text-[10px] font-bold uppercase tracking-wide text-amber-600">Up next</span>}
+                        {wasAsked && <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" />}
+                        {isCurrent && <span className="mt-0.5 shrink-0 text-xs font-semibold uppercase tracking-wide">Ask now</span>}
+                        {isNext && <span className="mt-0.5 shrink-0 text-xs font-semibold uppercase tracking-wide text-warning-strong">Up next</span>}
                         <span className={isCurrent ? 'font-medium' : ''}>{q.text}</span>
                       </div>
                     </div>
@@ -461,7 +461,7 @@ export function TeleprompterPanel({ open, efrId, onClose, onApplied }: {
               </div>
 
               {session?.transcript && (
-                <div className="max-h-24 overflow-y-auto rounded-md border border-slate-100 bg-slate-50 p-2 text-xs text-slate-500 whitespace-pre-wrap">
+                <div className="max-h-24 overflow-y-auto rounded-md border border-ink-100 bg-ink-50 p-2 text-xs text-ink-500 whitespace-pre-wrap">
                   {session.transcript.split('\n').slice(-6).join('\n')}
                 </div>
               )}
@@ -471,20 +471,20 @@ export function TeleprompterPanel({ open, efrId, onClose, onApplied }: {
                   <Button variant="outline" size="sm" onClick={() => doPromote(nextId)} disabled={!nextId}>
                     Next <ChevronRight className="ml-2 h-4 w-4" />
                   </Button>
-                  <Button variant="outline" size="sm" onClick={handleClose} className="text-rose-600">
+                  <Button variant="outline" size="sm" onClick={handleClose} className="text-urgent-strong">
                     <PhoneOff className="mr-2 h-4 w-4" /> End Call
                   </Button>
                 </div>
               ) : callProblem ? (
                 <div className="flex items-center justify-end gap-2">
                   <Button variant="outline" size="sm" onClick={onClose}>Close</Button>
-                  <Button size="sm" onClick={retryCall} className="bg-sky-600 hover:bg-sky-700 text-white">
+                  <Button size="sm" onClick={retryCall} className="bg-primary hover:bg-brand-600 text-white">
                     <Phone className="mr-2 h-4 w-4" /> Retry Call
                   </Button>
                 </div>
               ) : streamConnected ? (
                 <div className="flex items-center justify-between gap-2">
-                  <span className="inline-flex items-center gap-1 text-xs text-slate-500">
+                  <span className="inline-flex items-center gap-1 text-xs text-ink-500">
                     <Loader2 className="h-3 w-3 animate-spin" /> Wrapping Up The Call…
                   </span>
                   <Button variant="outline" size="sm" onClick={onClose}>Close</Button>
@@ -493,14 +493,14 @@ export function TeleprompterPanel({ open, efrId, onClose, onApplied }: {
                 // Call ended but STT never attached → nothing was captured, so don't sit
                 // on the backend connect-reaper for minutes. Fail fast with a retry.
                 <div className="space-y-2">
-                  <div className="rounded border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+                  <div className="rounded border border-urgent bg-urgent-tint p-3 text-sm text-urgent-strong">
                     The call ended but STT never connected, so nothing was captured. This is a
                     connectivity issue (the media stream couldn&apos;t reach the server) — check the
                     teleprompter stream config, then retry.
                   </div>
                   <div className="flex items-center justify-end gap-2">
                     <Button variant="outline" size="sm" onClick={onClose}>Close</Button>
-                    <Button size="sm" onClick={retryCall} className="bg-sky-600 hover:bg-sky-700 text-white">
+                    <Button size="sm" onClick={retryCall} className="bg-primary hover:bg-brand-600 text-white">
                       <Phone className="mr-2 h-4 w-4" /> Retry Call
                     </Button>
                   </div>
@@ -513,18 +513,18 @@ export function TeleprompterPanel({ open, efrId, onClose, onApplied }: {
           {isDone && (
             <div className="space-y-3">
               {session?.coverage?.coverage_pct != null && (
-                <div className="rounded-md border border-slate-100 bg-slate-50 p-2 text-sm">
+                <div className="rounded-md border border-ink-100 bg-ink-50 p-2 text-sm">
                   Coverage: <span className="font-semibold">{session.coverage.coverage_pct}%</span>
-                  <span className="text-slate-500"> ({session.coverage.covered}/{session.coverage.required_total} key questions asked)</span>
+                  <span className="text-ink-500"> ({session.coverage.covered}/{session.coverage.required_total} key questions asked)</span>
                 </div>
               )}
 
               <div>
                 <div className="mb-1 text-sm font-medium">Captured Deep Skills</div>
-                {(session?.result?.deep_skill_items || []).length === 0 && <div className="text-xs text-slate-400">None captured.</div>}
+                {(session?.result?.deep_skill_items || []).length === 0 && <div className="text-xs text-ink-500">None captured.</div>}
                 <div className="flex flex-wrap gap-1.5">
                   {(session?.result?.deep_skill_items || []).map((it, i) => (
-                    <label key={i} className={'flex items-center gap-1 rounded-full border px-2 py-1 text-xs cursor-pointer ' + (pickedSkills.has(i) ? 'border-sky-300 bg-sky-50 text-sky-800' : 'border-slate-200 text-slate-500')}>
+                    <label key={i} className={'flex items-center gap-1 rounded-full border px-2 py-1 text-xs cursor-pointer ' + (pickedSkills.has(i) ? 'border-primary bg-brand-50 text-brand-600' : 'border-ink-100 text-ink-500')}>
                       <input
                         type="checkbox"
                         checked={pickedSkills.has(i)}
@@ -538,10 +538,10 @@ export function TeleprompterPanel({ open, efrId, onClose, onApplied }: {
 
               <div>
                 <div className="mb-1 text-sm font-medium">Serviceable Pincodes</div>
-                {(session?.result?.serviceable_pincodes || []).length === 0 && <div className="text-xs text-slate-400">None captured.</div>}
+                {(session?.result?.serviceable_pincodes || []).length === 0 && <div className="text-xs text-ink-500">None captured.</div>}
                 <div className="flex flex-wrap gap-1.5">
                   {(session?.result?.serviceable_pincodes || []).map((p) => (
-                    <label key={p.pincode_id} className={'flex items-center gap-1 rounded-full border px-2 py-1 text-xs cursor-pointer ' + (pickedPins.has(p.pincode_id) ? 'border-sky-300 bg-sky-50 text-sky-800' : 'border-slate-200 text-slate-500')}>
+                    <label key={p.pincode_id} className={'flex items-center gap-1 rounded-full border px-2 py-1 text-xs cursor-pointer ' + (pickedPins.has(p.pincode_id) ? 'border-primary bg-brand-50 text-brand-600' : 'border-ink-100 text-ink-500')}>
                       <input
                         type="checkbox"
                         checked={pickedPins.has(p.pincode_id)}
@@ -554,14 +554,14 @@ export function TeleprompterPanel({ open, efrId, onClose, onApplied }: {
               </div>
 
               {(session?.result?.unmapped?.skills?.length || session?.result?.unmapped?.areas?.length) ? (
-                <div className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+                <div className="rounded-md border border-warning bg-warning-tint p-2 text-xs text-warning-strong">
                   Could not auto-map: {[...(session?.result?.unmapped?.skills || []), ...(session?.result?.unmapped?.areas || [])].join(', ')}
                 </div>
               ) : null}
 
               <div className="flex items-center justify-end gap-2 border-t pt-3">
                 <Button variant="outline" size="sm" onClick={onClose}>Close</Button>
-                <Button size="sm" onClick={apply} disabled={applying} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+                <Button size="sm" onClick={apply} disabled={applying} className="bg-success hover:bg-success-strong text-white">
                   {applying ? 'Applying…' : 'Apply To Profile'}
                 </Button>
               </div>

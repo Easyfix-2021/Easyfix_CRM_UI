@@ -61,7 +61,7 @@ export function JobRefLink({
 }) {
   // Hook is called unconditionally (rules of hooks); unused in the newTab branch.
   const { openJobAction } = useJobActionNav();
-  const cls = className ?? 'text-sky-700 hover:underline';
+  const cls = className ?? 'text-primary hover:underline';
 
   if (newTab) {
     return (

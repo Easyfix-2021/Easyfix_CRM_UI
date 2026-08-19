@@ -258,7 +258,7 @@ export default function ScheduledJobsPage() {
       return (
         <Card>
           <CardContent className="py-8 text-center text-sm">
-            <AlertTriangle className="h-6 w-6 mx-auto text-amber-600 mb-2" />
+            <AlertTriangle className="h-6 w-6 mx-auto text-warning mb-2" />
             <p className="font-medium">You don&apos;t have access to this page.</p>
             <p className="text-muted-foreground mt-1">
               Scheduled Jobs is restricted to specific operator emails. Ask
@@ -268,7 +268,7 @@ export default function ScheduledJobsPage() {
             </p>
             <Link
               href="/dashboard"
-              className="inline-block mt-3 text-sm text-sky-700 hover:underline"
+              className="inline-block mt-3 text-sm text-primary hover:underline"
             >
               Back to Dashboard
             </Link>
@@ -345,7 +345,7 @@ export default function ScheduledJobsPage() {
                       </div>
                       <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-3 flex-wrap">
                         <span>
-                          <code className="font-mono text-[11px]">{job.cron}</code>
+                          <code className="font-mono text-xs">{job.cron}</code>
                           <span className="ml-1.5">({job.timezone})</span>
                         </span>
                         {job.lastRunAt && (
@@ -401,16 +401,16 @@ export default function ScheduledJobsPage() {
                   * not anyone is watching.
                   */}
                 {job.running && (
-                  <div className="border-t bg-sky-50 px-4 py-2.5 flex items-center gap-3 flex-wrap">
+                  <div className="border-t bg-info-tint px-4 py-2.5 flex items-center gap-3 flex-wrap">
                     <span className="relative flex h-2.5 w-2.5 shrink-0">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sky-400 opacity-75" />
-                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-sky-600" />
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-info opacity-75" />
+                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-info" />
                     </span>
                     <div className="min-w-0 flex-1">
-                      <div className="text-sm font-medium text-sky-900">
+                      <div className="text-sm font-medium text-info-deep">
                         {job.progressText || 'Running…'}
                       </div>
-                      <div className="text-xs text-sky-800/80 tabular-nums">
+                      <div className="text-xs text-info-strong/80 tabular-nums">
                         Started {formatDateTime(job.runningSince ?? null)}
                         {job.runningMs != null && ` · ${formatDuration(job.runningMs)} elapsed`}
                         {job.cancelRequested && ' · stop requested'}
@@ -425,7 +425,7 @@ export default function ScheduledJobsPage() {
                         variant="outline"
                         disabled={stopping.has(job.id) || job.cancelRequested}
                         onClick={() => void stopJob(job)}
-                        className="shrink-0 border-rose-300 text-rose-700 hover:bg-rose-50"
+                        className="shrink-0 border-urgent/30 text-urgent-strong hover:bg-urgent-tint"
                       >
                         {job.cancelRequested || stopping.has(job.id) ? 'Stopping…' : 'Stop'}
                       </Button>
@@ -480,7 +480,7 @@ export default function ScheduledJobsPage() {
                         <>
                           <dt className="font-semibold text-muted-foreground text-xs">Last Result</dt>
                           <dd className="text-xs whitespace-pre-wrap break-words">
-                            <pre className="bg-background border rounded p-2 text-[11px] overflow-x-auto">
+                            <pre className="bg-background border rounded p-2 text-xs overflow-x-auto">
                               {JSON.stringify(job.lastResult, null, 2)}
                             </pre>
                           </dd>
@@ -514,7 +514,7 @@ export default function ScheduledJobsPage() {
                             <>
                               <dt className="font-semibold text-muted-foreground text-xs">Last Test Result</dt>
                               <dd className="text-xs whitespace-pre-wrap break-words">
-                                <pre className="bg-background border rounded p-2 text-[11px] overflow-x-auto">
+                                <pre className="bg-background border rounded p-2 text-xs overflow-x-auto">
                                   {JSON.stringify(job.lastTestResult, null, 2)}
                                 </pre>
                               </dd>
@@ -689,7 +689,7 @@ function TestJobModal({
             * of this dialog is "real recipient is NEVER contacted",
             * surface that visibly.
             */}
-          <div className="rounded-md border border-amber-300 bg-amber-50 text-amber-900 px-3 py-2 text-xs leading-relaxed">
+          <div className="rounded-md border border-warning/30 bg-warning-tint text-warning-strong px-3 py-2 text-xs leading-relaxed">
             <strong>Safety rule:</strong> the test WhatsApp is sent to the
             mobile number you enter below — and <strong>only</strong> to that
             number. Even if you provide an existing {target.testSourceLabel || 'source ID'}{' '}
@@ -699,7 +699,7 @@ function TestJobModal({
 
           <div>
             <label className="text-sm font-medium block mb-1">
-              Mobile Number <span className="text-red-600">*</span>
+              Mobile Number <span className="text-urgent">*</span>
             </label>
             <Input
               type="tel"
@@ -709,12 +709,12 @@ function TestJobModal({
               placeholder="10-digit Indian mobile (e.g. 9876543210)"
               autoFocus
             />
-            <p className="text-[11px] text-muted-foreground mt-1">
+            <p className="text-xs text-muted-foreground mt-1">
               Where the test WhatsApp will land. 10 digits, India (or 12
               digits including the 91 prefix).
             </p>
             {!mobileValid && trimmedMobile.length > 0 && (
-              <p className="text-[11px] text-destructive mt-1">
+              <p className="text-xs text-destructive mt-1">
                 Enter a valid 10-digit Indian mobile number.
               </p>
             )}
@@ -733,12 +733,12 @@ function TestJobModal({
               placeholder="Leave blank to use dummy details"
             />
             {target.testSourceHelp && (
-              <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
+              <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
                 {target.testSourceHelp}
               </p>
             )}
             {!sourceIdLooksValid && (
-              <p className="text-[11px] text-destructive mt-1">
+              <p className="text-xs text-destructive mt-1">
                 ID must be a positive integer.
               </p>
             )}

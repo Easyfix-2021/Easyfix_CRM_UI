@@ -312,7 +312,7 @@ export function SearchSelect({
            * max-height alone doesn't actually clip content — it
            * advisory-caps but lets overflow paint past).
            */
-          className="flex flex-col overflow-hidden rounded-md border bg-white shadow-lg"
+          className="flex flex-col overflow-hidden rounded-md border bg-popover shadow-lg"
         >
           <div className="flex items-center gap-2 px-3 py-2 border-b shrink-0">
             <Search className="h-4 w-4 text-muted-foreground" />
@@ -348,7 +348,7 @@ export function SearchSelect({
                   out.push(
                     <li
                       key={`__group:${opt.group}`}
-                      className="px-3 pt-2 pb-1 text-[11px] uppercase tracking-wide font-semibold text-muted-foreground bg-slate-50 border-b sticky top-0"
+                      className="px-3 pt-2 pb-1 text-xs uppercase tracking-wide font-semibold text-muted-foreground bg-ink-50 border-b sticky top-0"
                       aria-hidden="true"
                     >
                       {groupLabelPrefix ? `${groupLabelPrefix}${opt.group}` : opt.group}
@@ -373,7 +373,7 @@ export function SearchSelect({
                       // "active" row gets the lighter muted fill. Selected wins
                       // over active so it stays highlighted even while hovered.
                       isSel
-                        ? 'bg-slate-200 text-foreground font-semibold'
+                        ? 'bg-ink-100 text-foreground font-semibold'
                         : isActive
                           ? 'bg-muted text-foreground/90'
                           : 'text-foreground/90'
@@ -388,7 +388,7 @@ export function SearchSelect({
                 out.push(
                   <li
                     key="__more"
-                    className="px-3 py-2 text-[11px] text-muted-foreground bg-slate-50 border-t sticky bottom-0"
+                    className="px-3 py-2 text-xs text-muted-foreground bg-ink-50 border-t sticky bottom-0"
                     aria-hidden="true"
                   >
                     Showing first {visible.length} of {filtered.length} — type to narrow…

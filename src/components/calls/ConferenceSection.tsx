@@ -294,7 +294,7 @@ export function ConferenceSection({
    */
   if (conferenceId == null) {
     return (
-      <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+      <div className="text-xs text-warning-strong bg-warning-tint border border-warning rounded px-2 py-1.5">
         This call can&apos;t add participants — it&apos;s connected on the direct bridge.
         Start a new call to conference someone in.
       </div>
@@ -308,9 +308,9 @@ export function ConferenceSection({
   if (participants.length === 0 && roster.length === 0) return null;
 
   return (
-    <div className="space-y-1.5 border-t border-slate-200 pt-3">
+    <div className="space-y-1.5 border-t border-ink-100 pt-3">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+        <span className="text-xs font-semibold uppercase tracking-wide text-ink-500">
           On This Call
         </span>
         {/*
@@ -319,7 +319,7 @@ export function ConferenceSection({
           * not a number this product sets — so there is nothing to count
           * towards, and a denominator here would invent one.
           */}
-        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-500">
+        <span className="inline-flex items-center gap-1 text-xs font-semibold text-ink-500">
           <Users className="h-3.5 w-3.5" aria-hidden />
           {activeCount}
         </span>
@@ -334,16 +334,16 @@ export function ConferenceSection({
               key={p.id}
               className={cn(
                 'flex items-center gap-2 rounded-md border px-2 py-1.5',
-                p.active ? 'border-slate-200 bg-slate-50' : 'border-slate-200/70 bg-white opacity-70',
+                p.active ? 'border-ink-100 bg-ink-50' : 'border-ink-100/70 bg-card opacity-70',
               )}
             >
-              <Icon className="h-3.5 w-3.5 shrink-0 text-slate-500" aria-hidden />
+              <Icon className="h-3.5 w-3.5 shrink-0 text-ink-500" aria-hidden />
               <div className="min-w-0 flex-1">
-                <div className="truncate text-xs font-medium text-slate-800">
+                <div className="truncate text-xs font-medium text-ink-900">
                   {p.display_name || targetKindLabel(p.target_kind)}
                 </div>
                 {/* Masked, always. There is no unmasked form on this wire. */}
-                <div className="truncate font-mono text-[10px] text-slate-500">
+                <div className="truncate font-mono text-xs text-ink-500">
                   {p.masked_number || '—'}
                 </div>
               </div>
@@ -357,7 +357,7 @@ export function ConferenceSection({
                   disabled={busy || removingId != null}
                   className={cn(
                     'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded',
-                    'text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition-colors',
+                    'text-ink-500 hover:bg-urgent/15 hover:text-urgent-strong transition-colors',
                     (busy || removingId != null) && 'opacity-50 cursor-not-allowed',
                   )}
                   aria-label={`Remove ${p.display_name || targetKindLabel(p.target_kind)} from the call`}
@@ -392,8 +392,8 @@ export function ConferenceSection({
               'mt-1 w-full inline-flex items-center justify-center gap-1.5 h-8 rounded-md',
               'border text-xs font-semibold transition-colors',
               operatorPresent
-                ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-                : 'border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed',
+                ? 'border-success bg-success-tint text-success-strong hover:bg-success/15'
+                : 'border-ink-100 bg-ink-100 text-ink-500 cursor-not-allowed',
             )}
             title={operatorPresent ? 'Add To Call' : 'You are not connected to this call'}
           >
@@ -401,7 +401,7 @@ export function ConferenceSection({
             Add To Call
           </button>
           {!operatorPresent && (
-            <p className="text-[11px] text-amber-800">
+            <p className="text-xs text-warning-strong">
               You&apos;re not connected to this call, so anyone you added would be alone on it.
               End it and call again to add someone.
             </p>

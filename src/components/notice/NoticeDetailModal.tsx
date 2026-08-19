@@ -156,7 +156,7 @@ export function NoticeDetailModal({
     : 'Draft — not published';
 
   const categoryChipDark = (
-    <span className="inline-flex items-center gap-1.5 rounded-full bg-white/15 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-white ring-1 ring-inset ring-white/25">
+    <span className="inline-flex items-center gap-1.5 rounded-full bg-white/15 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-white ring-1 ring-inset ring-white/25">
       {notice.category_color && (
         <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: notice.category_color }} />
       )}
@@ -209,13 +209,13 @@ export function NoticeDetailModal({
             <NoticeCelebration kind={theme.celebration} />
 
             <div className="relative mx-auto mb-3.5 flex h-14 w-14 items-center justify-center rounded-full bg-white/15 ring-1 ring-white/30 backdrop-blur-sm">
-              <Medallion className={`h-7 w-7 ${isPinned ? 'text-amber-200' : theme.iconClass}`} />
+              <Medallion className={`h-7 w-7 ${isPinned ? 'text-warning-tint' : theme.iconClass}`} />
             </div>
 
             {/* Pinned notices get the shimmer sweep — the one piece of "glow
                 type" we borrow, reserved so it stays special. */}
             <DialogTitle
-              className={`relative text-xl font-bold leading-snug tracking-tight ${isPinned ? 'nb-shimmer' : 'text-white'}`}
+              className={`relative text-xl font-semibold leading-snug tracking-tight ${isPinned ? 'nb-shimmer' : 'text-white'}`}
             >
               {notice.title}
             </DialogTitle>
@@ -233,12 +233,12 @@ export function NoticeDetailModal({
           <div className="flex shrink-0 gap-4 px-6 pt-6">
             <div className={`w-1.5 shrink-0 rounded-full ${theme.railClass}`} />
             <div className="min-w-0">
-              <DialogTitle className="text-left text-lg font-bold leading-snug text-slate-900">
+              <DialogTitle className="text-left text-lg font-semibold leading-snug text-ink-900">
                 {notice.title}
               </DialogTitle>
               <DialogDescription asChild>
-                <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2 py-0.5 font-semibold uppercase tracking-wide text-slate-600">
+                <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-ink-500">
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-ink-100 px-2 py-0.5 font-semibold uppercase tracking-wide text-ink-700">
                     {notice.category_color && (
                       <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: notice.category_color }} />
                     )}
@@ -257,7 +257,7 @@ export function NoticeDetailModal({
         {/* The ONLY scrolling region. Hero above and footer below are shrink-0,
             so however long the body runs, the dismiss button stays on screen. */}
         <div className={`min-h-0 flex-1 overflow-y-auto ${theme.heroClass ? 'px-7 py-6' : 'px-6 py-5 pl-[3.4rem]'}`}>
-          <div className="whitespace-pre-line text-left text-[15px] leading-7 text-slate-700">
+          <div className="whitespace-pre-line text-left text-[15px] leading-7 text-ink-700">
             {body}
           </div>
 
@@ -278,8 +278,8 @@ export function NoticeDetailModal({
                   className="flex aspect-square flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed bg-muted/40 px-2 text-center"
                   title="This attachment could not be loaded"
                 >
-                  <ImageOff className="h-5 w-5 text-slate-400" aria-hidden />
-                  <span className="text-[11px] font-medium leading-tight text-slate-500">
+                  <ImageOff className="h-5 w-5 text-ink-500" aria-hidden />
+                  <span className="text-xs font-medium leading-tight text-ink-500">
                     Image unavailable
                   </span>
                 </div>
@@ -308,7 +308,7 @@ export function NoticeDetailModal({
               <Link
                 href={notice.action_url}
                 target={notice.action_url.startsWith('http') ? '_blank' : undefined}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-sky-200 bg-sky-50 px-3 py-1.5 text-sm font-medium text-sky-700 hover:bg-sky-100 hover:text-sky-900 transition-colors"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-brand-100 bg-brand-50 px-3 py-1.5 text-sm font-medium text-primary hover:bg-brand-100 hover:text-brand-700 transition-colors"
               >
                 Open Link <ExternalLink className="h-3.5 w-3.5" />
               </Link>
@@ -351,7 +351,7 @@ export function NoticeDetailModal({
             deck footer from NoticeFlash — so neither can be squeezed to nothing
             by a long body. A dismiss control that is present but 0px tall is the
             same bug wearing a different hat. */}
-        <div className="shrink-0 bg-white">
+        <div className="shrink-0 bg-card">
           {footer
             ? footer({ buttonClass: theme.buttonClass })
             : (

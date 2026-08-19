@@ -376,7 +376,7 @@ export default function OpenOrdersPage() {
       {hasCharts && (
         <section className="mb-6 space-y-4">
           <div>
-            <h2 className="text-base font-semibold text-slate-800">Graphical View</h2>
+            <h2 className="text-base font-semibold text-ink-900">Graphical View</h2>
             <p className="text-xs text-muted-foreground">
               Charts Reflect The Currently Filtered Owners.
             </p>
@@ -520,7 +520,7 @@ export default function OpenOrdersPage() {
               <Loader2 className="size-5 animate-spin" /> Loading…
             </div>
           ) : drillData.error ? (
-            <div className="p-8 text-center text-sm text-red-600">{drillData.error}</div>
+            <div className="p-8 text-center text-sm text-urgent">{drillData.error}</div>
           ) : (drillData.data?.length ?? 0) === 0 ? (
             <div className="p-8 text-center text-sm text-muted-foreground">No Jobs Found</div>
           ) : (
@@ -547,7 +547,7 @@ export default function OpenOrdersPage() {
                           className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
                         >
                           {j.isEscalated === 1 && (
-                            <Flame className="size-4 text-orange-500" aria-label="Escalated" />
+                            <Flame className="size-4 text-warning" aria-label="Escalated" />
                           )}
                           {j.jobID}
                           <ExternalLink className="size-3 opacity-60" />

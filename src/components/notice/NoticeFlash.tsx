@@ -147,7 +147,7 @@ export function NoticeFlash() {
                 {queue.slice(0, 5).map((n, i) => (
                   <span
                     key={n.notice_id}
-                    className={`h-2 w-2 rounded-full ${i === 0 ? 'bg-sky-600' : 'bg-slate-300'}`}
+                    className={`h-2 w-2 rounded-full ${i === 0 ? 'bg-info' : 'bg-ink-300'}`}
                   />
                 ))}
               </div>

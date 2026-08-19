@@ -100,7 +100,7 @@ export function CallLegList({
             key={leg.id}
             className={cn(
               'flex flex-wrap items-center gap-x-2 gap-y-1',
-              dense ? 'text-[11px]' : 'text-xs',
+              dense ? 'text-xs' : 'text-xs',
             )}
           >
             <Icon className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden />
@@ -115,7 +115,7 @@ export function CallLegList({
                 "Customer Customer". */}
             {name !== roleLabel && <span className="font-medium">{name}</span>}
             {leg.masked_number && (
-              <span className="font-mono text-[10px] text-muted-foreground">{leg.masked_number}</span>
+              <span className="font-mono text-xs text-muted-foreground">{leg.masked_number}</span>
             )}
             <StatusChip tone={callLegStatusTone(leg.status)} size="sm" title={leg.hangup_cause ?? undefined}>
               {callLegStatusLabel(leg.status)}
@@ -155,8 +155,8 @@ export function CallLegsRow({
   return (
     <tr className="border-b border-border/60 bg-muted/20">
       <td colSpan={colSpan} className="py-1.5 pl-6 pr-3">
-        <div className="border-l-2 border-violet-200 pl-3">
-          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <div className="border-l-2 border-gold pl-3">
+          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             {label}
           </div>
           {/* Deduped to one entry per PERSON, not per leg. A participant

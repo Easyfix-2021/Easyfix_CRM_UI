@@ -33,12 +33,12 @@ type OptionChipItem = string | { label: string; key?: string | number };
 export type OptionChipTone = 'teal' | 'sky' | 'slate' | 'emerald' | 'amber' | 'red';
 
 const TONE_CLASSES: Record<OptionChipTone, string> = {
-  teal:    'bg-teal-50 border-teal-200 text-teal-800',
-  sky:     'bg-sky-50 border-sky-200 text-sky-800',
-  slate:   'bg-slate-100 border-slate-200 text-slate-700',
-  emerald: 'bg-emerald-50 border-emerald-200 text-emerald-800',
-  amber:   'bg-amber-50 border-amber-200 text-amber-800',
-  red:     'bg-red-50 border-red-200 text-red-800',
+  teal:    'bg-success-tint border-success/30 text-success-strong',
+  sky:     'bg-info-tint border-info/30 text-info-strong',
+  slate:   'bg-neutral-tint border-neutral/30 text-neutral-strong',
+  emerald: 'bg-success-tint border-success/30 text-success-strong',
+  amber:   'bg-warning-tint border-warning/30 text-warning-strong',
+  red:     'bg-urgent-tint border-urgent/30 text-urgent-strong',
 };
 
 export type OptionChipListProps = {
@@ -100,7 +100,7 @@ export function OptionChipList({
         <span
           key={toKey(item, idx)}
           className={cn(
-            'inline-flex items-center rounded border px-1.5 py-0.5 text-[11px] leading-none whitespace-nowrap',
+            'inline-flex items-center rounded border px-1.5 py-0.5 text-xs leading-none whitespace-nowrap',
             TONE_CLASSES[tone],
           )}
         >
@@ -112,13 +112,13 @@ export function OptionChipList({
           <button
             type="button"
             onClick={onOverflow}
-            className="text-[11px] text-muted-foreground hover:text-foreground hover:underline whitespace-nowrap"
+            className="text-xs text-muted-foreground hover:text-foreground hover:underline whitespace-nowrap"
             title={fullText}
           >
             +{overflow} more
           </button>
         ) : (
-          <span className="text-[11px] text-muted-foreground whitespace-nowrap">
+          <span className="text-xs text-muted-foreground whitespace-nowrap">
             +{overflow} more
           </span>
         )
@@ -132,7 +132,7 @@ export function OptionChipList({
         */}
       {overflow === 0 && typeof count === 'number' && count > list.length && (
         <span
-          className="text-[11px] text-muted-foreground whitespace-nowrap"
+          className="text-xs text-muted-foreground whitespace-nowrap"
           title={`${count} mappings reported by server`}
         >
           ({count})

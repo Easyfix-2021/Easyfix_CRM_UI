@@ -590,7 +590,7 @@ export function CityPerformanceBody() {
 
 /* The 4 numeric cells for one period block. SDA%/TAT% render '-' when null,
  * green when >= 85, red when < 85. Open Orders cell forced amber + bold
- * (legacy #f2bd5d). `firstOfBlock` adds the left border so the blocks read
+ * (legacy hsl(var(--gold))). `firstOfBlock` adds the left border so the blocks read
  * apart. Field order matches the on-screen header: Ticket Created, SDA%, TAT%,
  * Open Orders. */
 function PeriodCells({ p, firstOfBlock }: { p: CityPeriod; firstOfBlock?: boolean }) {
@@ -600,7 +600,7 @@ function PeriodCells({ p, firstOfBlock }: { p: CityPeriod; firstOfBlock?: boolea
       <td className={`${base} ${firstOfBlock ? 'border-l' : ''}`}>{p.cityTktCreated}</td>
       <td className={`${base} ${pctClass(p.citySdaPercentage)}`}>{pctText(p.citySdaPercentage)}</td>
       <td className={`${base} ${pctClass(p.cityTatPercentage)}`}>{pctText(p.cityTatPercentage)}</td>
-      <td className={`${base} font-bold`} style={{ backgroundColor: '#f2bd5d' }}>{p.cityOpenOrders}</td>
+      <td className={`${base} font-semibold`} style={{ backgroundColor: 'hsl(var(--gold))' }}>{p.cityOpenOrders}</td>
     </>
   );
 }
@@ -610,7 +610,7 @@ function pctText(v: number | null): string {
 }
 function pctClass(v: number | null): string {
   if (v == null) return '';
-  return v >= 85 ? 'text-green-700 font-medium' : 'text-red-700 font-medium';
+  return v >= 85 ? 'text-success-strong font-medium' : 'text-urgent-strong font-medium';
 }
 
 /* The State filter is not part of QuickSightFilterBar (which only DRYs the
@@ -684,12 +684,12 @@ function TatHighlights({
           <div className="text-sm font-semibold">TAT — {header}</div>
           <div className="mt-2 flex flex-wrap gap-x-8 gap-y-2 text-sm">
             <span className="inline-flex items-center gap-2">
-              <span className="size-2.5 rounded-full bg-green-600" />
+              <span className="size-2.5 rounded-full bg-success" />
               <span className="font-medium">{s.tatMoreThan85Percentage ?? 0}%</span>
               <span className="text-muted-foreground">({s.tatMoreThan85}) TAT &gt;= 85</span>
             </span>
             <span className="inline-flex items-center gap-2">
-              <span className="size-2.5 rounded-full bg-red-600" />
+              <span className="size-2.5 rounded-full bg-urgent" />
               <span className="font-medium">{s.tatLessThan85Percentage ?? 0}%</span>
               <span className="text-muted-foreground">({s.tatLessThan85}) TAT &lt; 85</span>
             </span>

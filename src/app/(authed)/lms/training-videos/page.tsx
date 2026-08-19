@@ -191,7 +191,7 @@ export default function TrainingVideosPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
+          <h1 className="text-2xl font-semibold flex items-center gap-2">
             <Video className="size-6" /> Training Videos
           </h1>
           <p className="text-sm text-muted-foreground">
@@ -231,7 +231,7 @@ export default function TrainingVideosPage() {
 
       {fetchError && (
         <Card>
-          <CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
+          <CardContent className="p-3 flex items-center gap-2 text-sm text-urgent">
             <AlertTriangle className="size-4" /> {fetchError}
           </CardContent>
         </Card>
@@ -381,7 +381,7 @@ export default function TrainingVideosPage() {
                           />
                         )}
                         {!can.isLmsManage && (
-                          <span className="text-[10px] text-muted-foreground">view-only</span>
+                          <span className="text-xs text-muted-foreground">view-only</span>
                         )}
                       </div>
                     </td>
@@ -560,7 +560,7 @@ function TrainingVideoFormModal({
               field saves through its own backend path rather than with the
               text columns beside it.
             */}
-            <p className="text-[10px] text-muted-foreground mt-0.5">
+            <p className="text-xs text-muted-foreground mt-0.5">
               YouTube links only. Leave blank to remove the current link.
             </p>
             {videoUrl.trim() && isYouTubeUrl(videoUrl.trim()) && (
@@ -568,7 +568,7 @@ function TrainingVideoFormModal({
                 href={videoUrl.trim()}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-[11px] text-primary hover:underline mt-1 inline-block"
+                className="text-xs text-primary hover:underline mt-1 inline-block"
               >
                 Open Link In New Tab
               </a>
@@ -595,7 +595,7 @@ function TrainingVideoFormModal({
               placeholder="Optional — what the technician will learn"
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus-visible:border-foreground/40"
             />
-            <div className="text-[10px] text-muted-foreground mt-0.5 text-right">
+            <div className="text-xs text-muted-foreground mt-0.5 text-right">
               {description.length} / {MAX_DESCRIPTION}
             </div>
           </div>
@@ -610,13 +610,13 @@ function TrainingVideoFormModal({
               placeholder="Optional — secondary detail"
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus-visible:border-foreground/40"
             />
-            <div className="text-[10px] text-muted-foreground mt-0.5 text-right">
+            <div className="text-xs text-muted-foreground mt-0.5 text-right">
               {subDescription.length} / {MAX_DESCRIPTION}
             </div>
           </div>
 
           {error && (
-            <div className="text-sm text-red-600 flex items-center gap-1">
+            <div className="text-sm text-urgent flex items-center gap-1">
               <AlertTriangle className="size-4" /> {error}
             </div>
           )}

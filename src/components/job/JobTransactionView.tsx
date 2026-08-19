@@ -99,7 +99,7 @@ function fmt(v: unknown): string {
  */
 function SectionHeading({ children }: { children: React.ReactNode }) {
   return (
-    <div className="px-4 py-2 bg-slate-50 border-b border-slate-200 text-sm font-semibold text-slate-700">
+    <div className="px-4 py-2 bg-ink-50 border-b border-ink-100 text-sm font-semibold text-ink-700">
       {children}
     </div>
   );
@@ -113,7 +113,7 @@ function DLRow({ label, children }: { label: string; children: React.ReactNode }
   return (
     <div className="grid grid-cols-[170px_1fr] items-baseline py-1.5 text-sm">
       <div className="text-muted-foreground">{label}</div>
-      <div className="text-slate-800">{children}</div>
+      <div className="text-ink-900">{children}</div>
     </div>
   );
 }
@@ -124,7 +124,7 @@ function DLRow({ label, children }: { label: string; children: React.ReactNode }
  */
 function Card({ children, dense = false }: { children: React.ReactNode; dense?: boolean }) {
   return (
-    <div className="rounded-md border border-slate-200 bg-white">
+    <div className="rounded-md border border-ink-100 bg-card">
       <div className={dense ? '' : 'p-4'}>{children}</div>
     </div>
   );
@@ -171,9 +171,9 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
   const jobTotal = (j.services || []).reduce((s, r) => s + Number(r.total_charge || 0), 0);
 
   return (
-    <div className="space-y-4 text-sm text-slate-800">
+    <div className="space-y-4 text-sm text-ink-900">
       {/* ─── Job Info ─────────────────────────────────────────────── */}
-      <div className="text-base font-semibold text-slate-700">Job Info</div>
+      <div className="text-base font-semibold text-ink-700">Job Info</div>
 
       <div className="grid md:grid-cols-2 gap-4">
         {/* LEFT — Job + Customer */}
@@ -194,7 +194,7 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
           <DLRow label="Technician">{fmt(j.easyfixer_name)}</DLRow>
           <DLRow label="Profiled As">{fmt((j as Record<string, unknown>).profiled_as) /* derived field — usually "Master" */}</DLRow>
 
-          <div className="mt-3 pt-3 border-t border-slate-200">
+          <div className="mt-3 pt-3 border-t border-ink-100">
             <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Customer Details</div>
             <DLRow label="Name:">{fmt(j.job_customer_name || j.customer_name)}</DLRow>
             <DLRow label="Contact No.:">
@@ -222,10 +222,10 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
           {/* Custom Property table — pulled from the job/client custom
               properties join when available. Empty array yields a
               header-only table (matches legacy). */}
-          <div className="mt-3 rounded-md border border-slate-200 overflow-hidden">
+          <div className="mt-3 rounded-md border border-ink-100 overflow-hidden">
             <SectionHeading>Custom Property</SectionHeading>
             <table className="w-full text-sm">
-              <thead className="bg-slate-50/60">
+              <thead className="bg-ink-50/60">
                 <tr className="text-left text-xs text-muted-foreground">
                   <th className="px-3 py-2">Property Name</th>
                   <th className="px-3 py-2">Property Value</th>
@@ -235,7 +235,7 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
                 {customProperties.length === 0 ? (
                   <tr><td colSpan={2} className="px-3 py-3 text-center text-muted-foreground">No custom properties</td></tr>
                 ) : customProperties.map((p, i) => (
-                  <tr key={i} className="border-t border-slate-100">
+                  <tr key={i} className="border-t border-ink-100">
                     <td className="px-3 py-2">{fmt(p.label || p.name)}</td>
                     <td className="px-3 py-2">{fmt(p.value)}</td>
                   </tr>
@@ -281,7 +281,7 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
         <Card dense>
           <SectionHeading>Job Total</SectionHeading>
           <table className="w-full text-sm">
-            <thead className="bg-slate-50/60">
+            <thead className="bg-ink-50/60">
               <tr className="text-left text-xs text-muted-foreground">
                 <th className="px-3 py-2">Services</th>
                 <th className="px-3 py-2">Service Charge</th>
@@ -293,14 +293,14 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
               {(j.services || []).length === 0 ? (
                 <tr><td colSpan={4} className="px-3 py-3 text-center text-muted-foreground">No services</td></tr>
               ) : (j.services || []).map((s, i) => (
-                <tr key={s.job_service_id ?? i} className="border-t border-slate-100">
+                <tr key={s.job_service_id ?? i} className="border-t border-ink-100">
                   <td className="px-3 py-2">{fmt(s.service_type_name)}</td>
                   <td className="px-3 py-2 tabular-nums">{Number(s.easyfix_charge || 0).toLocaleString('en-IN')}</td>
                   <td className="px-3 py-2 tabular-nums">{Number(s.material_charge || 0).toLocaleString('en-IN')}</td>
                   <td className="px-3 py-2 text-xs text-muted-foreground">{fmt(s.service_charge_description)}</td>
                 </tr>
               ))}
-              <tr className="border-t border-slate-200 bg-slate-50/40">
+              <tr className="border-t border-ink-100 bg-ink-50/40">
                 <td className="px-3 py-2 font-semibold">Total:</td>
                 <td colSpan={3} className="px-3 py-2 tabular-nums font-semibold">{jobTotal.toLocaleString('en-IN')}</td>
               </tr>
@@ -314,7 +314,7 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
         <Card dense>
           <SectionHeading>Quotation</SectionHeading>
           <table className="w-full text-sm">
-            <thead className="bg-slate-50/60">
+            <thead className="bg-ink-50/60">
               <tr className="text-left text-xs text-muted-foreground">
                 <th className="px-3 py-2">Attachment</th>
                 <th className="px-3 py-2">Date</th>
@@ -329,7 +329,7 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
                   <td className="px-3 py-2 text-muted-foreground">—</td>
                 </tr>
               ) : data.quotations.map((q) => (
-                <tr key={q.id} className="border-t border-slate-100">
+                <tr key={q.id} className="border-t border-ink-100">
                   <td className="px-3 py-2">{fmt(q.attachment)}</td>
                   <td className="px-3 py-2 text-xs">{q.date ? formatDate(q.date) : '—'}</td>
                   <td className="px-3 py-2">{fmt(q.status)}</td>
@@ -341,7 +341,7 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
 
         <Card>
           <div className="flex items-center justify-between mb-2">
-            <div className="text-sm font-semibold text-slate-700">Customer Details</div>
+            <div className="text-sm font-semibold text-ink-700">Customer Details</div>
             {/* Edit Address — gated by isJobEdit. Available on the
                 Unconfirmed view too (status=9) so admins can fix the
                 address before promoting to BOOKED. */}
@@ -411,7 +411,7 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
       <Card dense>
         <SectionHeading>Remarks History</SectionHeading>
         <table className="w-full text-sm">
-          <thead className="bg-slate-50/60">
+          <thead className="bg-ink-50/60">
             {/* Width strategy mirrors JobCommentsTab — Date/Time,
                 Remarks By, Reason are short content-shaped strings:
                 collapse each with `w-1 whitespace-nowrap` so the
@@ -432,7 +432,7 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
                 <td colSpan={4} className="px-3 py-4 text-center text-muted-foreground text-xs">No remarks yet</td>
               </tr>
             ) : data.comments.map((c) => (
-              <tr key={c.id} className="border-t border-slate-100 align-top">
+              <tr key={c.id} className="border-t border-ink-100 align-top">
                 <td className="px-3 py-2 text-xs whitespace-nowrap">{c.created_on ? formatDate(c.created_on) : '—'}</td>
                 {/* Remarks cell: free-text wraps naturally; max-w cap
                     removed so it absorbs remaining row space (the three
@@ -454,7 +454,7 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
         <Card dense>
           <SectionHeading>Scheduling History</SectionHeading>
           <table className="w-full text-sm">
-            <thead className="bg-slate-50/60">
+            <thead className="bg-ink-50/60">
               <tr className="text-left text-xs text-muted-foreground">
                 <th className="px-3 py-2">Scheduled For</th>
                 <th className="px-3 py-2">Easyfixer</th>
@@ -463,7 +463,7 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
             </thead>
             <tbody>
               {data.scheduling_history.map((h) => (
-                <tr key={h.table_id} className="border-t border-slate-100">
+                <tr key={h.table_id} className="border-t border-ink-100">
                   <td className="px-3 py-2 text-xs">{h.scheduled_date_time ? formatDate(h.scheduled_date_time) : '—'}</td>
                   <td className="px-3 py-2 text-xs">{fmt(h.easyfixer_name)}</td>
                   <td className="px-3 py-2 text-xs">{fmt(h.reschedule_reason)}</td>

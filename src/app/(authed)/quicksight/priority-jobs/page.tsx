@@ -391,7 +391,7 @@ export default function PriorityJobsPage() {
       {hasChartData && (
         <section className="space-y-3">
           <div className="flex items-baseline justify-between gap-3">
-            <h2 className="text-sm font-semibold text-slate-800">Graphical View</h2>
+            <h2 className="text-sm font-semibold text-ink-900">Graphical View</h2>
             <span className="text-xs text-muted-foreground">
               Charts reflect the current page.
             </span>
@@ -512,7 +512,7 @@ export default function PriorityJobsPage() {
                 <td className="!text-center">{r.todayCount}</td>
                 <td className="!text-center">{r.yesterdayCount}</td>
                 <td className="!text-center">{r.days2To7Count}</td>
-                <td className="!text-center text-red-600">{r.greaterThan7Count}</td>
+                <td className="!text-center text-urgent">{r.greaterThan7Count}</td>
                 <td className="!text-center">
                   {r.totalCount > 0 ? (
                     <button
@@ -536,7 +536,7 @@ export default function PriorityJobsPage() {
               <td className="!text-center">{totals.todayCount}</td>
               <td className="!text-center">{totals.yesterdayCount}</td>
               <td className="!text-center">{totals.days2To7Count}</td>
-              <td className="!text-center text-red-600">{totals.greaterThan7Count}</td>
+              <td className="!text-center text-urgent">{totals.greaterThan7Count}</td>
               <td className="!text-center">{totals.totalCount}</td>
             </tr>
           </tfoot>
@@ -571,7 +571,7 @@ export default function PriorityJobsPage() {
               <Loader2 className="size-5 animate-spin" /> Loading…
             </div>
           ) : drillData.error ? (
-            <div className="p-8 text-center text-sm text-red-600">{drillData.error}</div>
+            <div className="p-8 text-center text-sm text-urgent">{drillData.error}</div>
           ) : (drillData.data?.length ?? 0) === 0 ? (
             <div className="p-8 text-center text-sm text-muted-foreground">No Jobs Found</div>
           ) : (
@@ -642,7 +642,7 @@ function KpiChip({
 }) {
   const toneClass =
     tone === 'orange'
-      ? 'border-orange-200 bg-orange-50 text-orange-700'
+      ? 'border-warning/30 bg-warning-tint text-warning-strong'
       : 'border-border bg-muted text-foreground';
   return (
     <span

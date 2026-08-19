@@ -358,17 +358,17 @@ function DurationFields({
  */
 function DurationErrors({ check, emptyMessage }: { check: DurationCheck; emptyMessage: string }) {
   if (check.formatInvalid) {
-    return <p className="mt-1 text-[11px] text-red-600">Enter whole numbers only.</p>;
+    return <p className="mt-1 text-xs text-urgent">Enter whole numbers only.</p>;
   }
   if (check.overBounds) {
     return (
-      <p className="mt-1 text-[11px] text-red-600">
+      <p className="mt-1 text-xs text-urgent">
         Maximum {MAX_DURATION_MONTHS} months and {MAX_DURATION_DAYS} days.
       </p>
     );
   }
   if (check.empty) {
-    return <p className="mt-1 text-[11px] text-red-600">{emptyMessage}</p>;
+    return <p className="mt-1 text-xs text-urgent">{emptyMessage}</p>;
   }
   return null;
 }
@@ -587,7 +587,7 @@ export default function AssignTrainingPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
+        <h1 className="text-2xl font-semibold flex items-center gap-2">
           <UserPlus className="size-6" /> Assign Training
         </h1>
         <p className="text-sm text-muted-foreground">
@@ -662,7 +662,7 @@ export default function AssignTrainingPage() {
                   * the stored value still comes from the API response.
                   */}
                 {durationValid && previewDue && (
-                  <p className="mt-1 text-[11px] text-muted-foreground">
+                  <p className="mt-1 text-xs text-muted-foreground">
                     Due <span className="font-medium text-foreground">{formatDay(previewDue)}</span>
                     {' '}({durationLabel(monthsNum ?? 0, daysNum ?? 0)})
                   </p>
@@ -686,7 +686,7 @@ export default function AssignTrainingPage() {
                       <button
                         type="button"
                         onClick={() => setSelectedIds((prev) => prev.filter((x) => x !== id))}
-                        className="rounded-full hover:bg-sky-200 p-0.5"
+                        className="rounded-full hover:bg-info/20 p-0.5"
                         aria-label={`Remove ${name}`}
                       >
                         <X className="size-3" />
@@ -709,7 +709,7 @@ export default function AssignTrainingPage() {
                  * the first thing the operator hears.
                  */}
                 {courseHasNoVideos && selectedCourse && (
-                  <div className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-700">
+                  <div className="flex items-start gap-2 rounded-md border border-urgent/30 bg-urgent-tint p-2 text-xs text-urgent-strong">
                     <AlertTriangle className="size-4 shrink-0 mt-px" />
                     <span>
                       <strong>{selectedCourse.name}</strong> has no videos yet and cannot be
@@ -720,7 +720,7 @@ export default function AssignTrainingPage() {
                   </div>
                 )}
                 {overCap && (
-                  <div className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 p-2 text-xs text-red-700">
+                  <div className="flex items-start gap-2 rounded-md border border-urgent/30 bg-urgent-tint p-2 text-xs text-urgent-strong">
                     <AlertTriangle className="size-4 shrink-0 mt-px" />
                     <span>
                       {selectedIds.length} technicians selected — the maximum per assignment is{' '}
@@ -730,7 +730,7 @@ export default function AssignTrainingPage() {
                   </div>
                 )}
                 {techFetch.error && (
-                  <div className="flex items-center gap-2 text-xs text-red-600">
+                  <div className="flex items-center gap-2 text-xs text-urgent">
                     <AlertTriangle className="size-4" /> {techFetch.error}
                   </div>
                 )}
@@ -768,7 +768,7 @@ export default function AssignTrainingPage() {
 
       {listFetch.error && (
         <Card>
-          <CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
+          <CardContent className="p-3 flex items-center gap-2 text-sm text-urgent">
             <AlertTriangle className="size-4" /> {listFetch.error}
           </CardContent>
         </Card>
@@ -823,7 +823,7 @@ export default function AssignTrainingPage() {
                   <td className="!text-left whitespace-nowrap text-xs">
                     {a.due_date
                       ? (
-                        <span className={st.label === 'Overdue' ? 'font-medium text-red-700' : ''}>
+                        <span className={st.label === 'Overdue' ? 'font-medium text-urgent-strong' : ''}>
                           {formatDay(a.due_date)}
                         </span>
                       )
@@ -832,7 +832,7 @@ export default function AssignTrainingPage() {
                   <td className="!text-left whitespace-nowrap">
                     <StatusChip tone={st.tone} size="sm">{st.label}</StatusChip>
                     {a.completion_date && (
-                      <span className="block text-[10px] text-muted-foreground mt-0.5">
+                      <span className="block text-xs text-muted-foreground mt-0.5">
                         {formatDay(a.completion_date)}
                       </span>
                     )}
@@ -870,7 +870,7 @@ export default function AssignTrainingPage() {
                             />
                           </>
                         )
-                        : <span className="text-[10px] text-muted-foreground">view-only</span>}
+                        : <span className="text-xs text-muted-foreground">view-only</span>}
                     </div>
                   </td>
                 </tr>
@@ -1018,7 +1018,7 @@ function ExtendDeadlineDialog({
 
           <div className="flex items-center gap-2 rounded-md border bg-muted/40 p-2 text-xs">
             <span className="text-muted-foreground">Current Deadline</span>
-            <span className={isOverdue ? 'font-medium text-red-700' : 'font-medium'}>
+            <span className={isOverdue ? 'font-medium text-urgent-strong' : 'font-medium'}>
               {currentDue ? formatDay(currentDue) : 'None Set'}
             </span>
             {isOverdue && <StatusChip tone="red" size="sm">Overdue</StatusChip>}
@@ -1038,7 +1038,7 @@ function ExtendDeadlineDialog({
             {/* Live preview — states the anchor as well as the result, so the
                 operator can see WHICH date is being counted from. */}
             {duration.valid && preview && (
-              <p className="mt-1 text-[11px] text-muted-foreground">
+              <p className="mt-1 text-xs text-muted-foreground">
                 {isOverdue
                   ? 'Overdue — extending from today'
                   : currentDue
@@ -1050,7 +1050,7 @@ function ExtendDeadlineDialog({
               </p>
             )}
             {duration.valid && preview && (
-              <p className="mt-0.5 text-[11px] text-muted-foreground">
+              <p className="mt-0.5 text-xs text-muted-foreground">
                 {isOverdue || !currentDue
                   ? 'Counted from today, so the technician gets the full window and is unblocked immediately.'
                   : 'Counted from the existing deadline, so this adds to it rather than shortening it.'}

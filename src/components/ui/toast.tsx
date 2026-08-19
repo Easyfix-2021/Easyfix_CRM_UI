@@ -289,7 +289,7 @@ export function ToastHost() {
              * extra safety on browsers that interpret motion-safe
              * differently.
              */
-            className={`pointer-events-none rounded-full bg-slate-800/85 text-white text-[11px] font-medium px-2.5 py-0.5 shadow-md motion-safe:transition-transform motion-safe:duration-300 motion-safe:ease-out motion-reduce:scale-100 ${pulse ? 'motion-safe:scale-110' : 'scale-100'}`}
+            className={`pointer-events-none rounded-full bg-ink-900/85 text-white text-xs font-medium px-2.5 py-0.5 shadow-md motion-safe:transition-transform motion-safe:duration-300 motion-safe:ease-out motion-reduce:scale-100 ${pulse ? 'motion-safe:scale-110' : 'scale-100'}`}
             role="status"
             aria-label={`${hiddenCount} earlier toast${hiddenCount === 1 ? '' : 's'} hidden by stack cap`}
             title="Older toasts were hidden to keep the stack readable. Stack resets when current toasts clear."
@@ -324,18 +324,18 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
       className={cn(
         'pointer-events-auto max-w-md min-w-[280px] shadow-xl rounded-lg px-4 py-3',
         'flex items-start gap-2 text-sm border',
-        toast.variant === 'success' && 'bg-emerald-600 border-emerald-700 text-white',
-        toast.variant === 'error'   && 'bg-rose-50 border-rose-300 text-rose-800',
+        toast.variant === 'success' && 'bg-success border-success-strong text-white',
+        toast.variant === 'error'   && 'bg-urgent-tint border-urgent/30 text-urgent-strong',
         // Tinted surface (like `error`) rather than a solid fill (like
         // `success`): a solid amber block reads as an alarm, and amber-on-white
         // keeps the message legible at the contrast the tinted style gives.
-        toast.variant === 'warning' && 'bg-amber-50 border-amber-300 text-amber-800',
-        toast.variant === 'loading' && 'bg-slate-900 border-slate-700 text-white',
+        toast.variant === 'warning' && 'bg-warning-tint border-warning/30 text-warning-strong',
+        toast.variant === 'loading' && 'bg-ink-900 border-ink-700 text-white',
       )}
     >
       {toast.variant === 'success' && <CheckCircle2 className="h-5 w-5 mt-0.5 shrink-0 text-white" />}
-      {toast.variant === 'error'   && <AlertTriangle className="h-5 w-5 mt-0.5 shrink-0 text-rose-600" />}
-      {toast.variant === 'warning' && <AlertTriangle className="h-5 w-5 mt-0.5 shrink-0 text-amber-600" />}
+      {toast.variant === 'error'   && <AlertTriangle className="h-5 w-5 mt-0.5 shrink-0 text-urgent" />}
+      {toast.variant === 'warning' && <AlertTriangle className="h-5 w-5 mt-0.5 shrink-0 text-warning" />}
       {toast.variant === 'loading' && <Loader2 className="h-5 w-5 mt-0.5 shrink-0 text-white animate-spin" />}
       <span className="flex-1 break-words font-medium">{toast.message}</span>
       {/* Loading variant intentionally has no dismiss button — caller
@@ -350,9 +350,9 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
             // success-or-else-rose ternary — under that shape a new variant
             // silently inherited the rose hover. `loading` never reaches here
             // (it renders no dismiss button).
-            toast.variant === 'success' && 'hover:bg-emerald-700/40 text-white',
-            toast.variant === 'warning' && 'hover:bg-amber-100 text-amber-700',
-            toast.variant === 'error'   && 'hover:bg-rose-100 text-rose-700',
+            toast.variant === 'success' && 'hover:bg-success-strong/40 text-white',
+            toast.variant === 'warning' && 'hover:bg-warning-tint text-warning-strong',
+            toast.variant === 'error'   && 'hover:bg-urgent-tint text-urgent-strong',
           )}
           aria-label="Dismiss"
         >

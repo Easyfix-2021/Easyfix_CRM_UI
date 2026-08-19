@@ -95,11 +95,11 @@ export function OfferHoverCard({
          * space. min-w keeps a one-word name from collapsing into a sliver, and
          * max-w stops a long name stretching it across the table.
          */
-        <div className="absolute left-0 top-full z-50 mt-1 w-max min-w-[13rem] max-w-[20rem] whitespace-normal rounded-md border border-slate-200 bg-white p-2.5 text-left text-xs font-normal leading-relaxed text-slate-700 shadow-xl">
-          <div className="mb-1.5 font-semibold text-slate-900">Offered To</div>
+        <div className="absolute left-0 top-full z-50 mt-1 w-max min-w-[13rem] max-w-[20rem] whitespace-normal rounded-md border border-ink-100 bg-popover p-2.5 text-left text-xs font-normal leading-relaxed text-ink-700 shadow-xl">
+          <div className="mb-1.5 font-semibold text-ink-900">Offered To</div>
 
           {loading && <div className="py-1 text-muted-foreground">Loading…</div>}
-          {error && <div className="py-1 text-rose-600">Could not load offers</div>}
+          {error && <div className="py-1 text-urgent-strong">Could not load offers</div>}
           {!loading && !error && items && items.length === 0 && (
             <div className="py-1 text-muted-foreground">No offers on this job.</div>
           )}
@@ -125,15 +125,15 @@ export function OfferHoverCard({
                     </span>
                   )}
                   <div className="min-w-0 flex-1">
-                    <div className="truncate font-medium text-slate-900">{o.efr_name}</div>
-                    <div className="flex items-center gap-1.5 text-[10px]">
+                    <div className="truncate font-medium text-ink-900">{o.efr_name}</div>
+                    <div className="flex items-center gap-1.5 text-xs">
                       {o.offer_status_label && (
                         <span
                           className={
                             'font-medium '
-                            + (o.offer_status === 2 ? 'text-rose-600'
-                              : o.offer_status === 3 ? 'text-slate-500'
-                                : 'text-amber-600')
+                            + (o.offer_status === 2 ? 'text-urgent-strong'
+                              : o.offer_status === 3 ? 'text-ink-500'
+                                : 'text-warning-strong')
                           }
                         >
                           {o.offer_status_label}

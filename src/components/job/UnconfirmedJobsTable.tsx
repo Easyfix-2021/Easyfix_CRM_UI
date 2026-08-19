@@ -267,7 +267,7 @@ export function UnconfirmedJobsTable({
               </td>
               <td className="text-xs whitespace-nowrap">
                 <div className="font-medium">{j.client_name ?? '—'}</div>
-                {j.client_ref_id && <div className="text-[10px] text-muted-foreground">{j.client_ref_id}</div>}
+                {j.client_ref_id && <div className="text-xs text-muted-foreground">{j.client_ref_id}</div>}
               </td>
               <td className="text-xs">{j.city_name ?? '—'}</td>
               {/* Appointment · Slot — moved here (between City and Status) so the
@@ -282,7 +282,7 @@ export function UnconfirmedJobsTable({
                 <div>{formatDate(j.requested_date_time)}</div>
                 {(() => {
                   const slot = displaySlot(j.requested_date_time, j.time_slot);
-                  return slot ? <div className="text-[10px] text-muted-foreground">{slot}</div> : null;
+                  return slot ? <div className="text-xs text-muted-foreground">{slot}</div> : null;
                 })()}
               </td>
               {/*
@@ -374,7 +374,7 @@ export function UnconfirmedJobsTable({
                           Cancel Requested
                         </StatusChip>
                         {j.pending_request_reason && (
-                          <div className="text-[10px] text-muted-foreground max-w-[160px] truncate" title={j.pending_request_reason}>
+                          <div className="text-xs text-muted-foreground max-w-[160px] truncate" title={j.pending_request_reason}>
                             {j.pending_request_reason}
                           </div>
                         )}
@@ -386,14 +386,14 @@ export function UnconfirmedJobsTable({
                           Reschedule Requested
                         </StatusChip>
                         {j.pending_request_reason && (
-                          <div className="text-[10px] text-muted-foreground max-w-[160px] truncate" title={j.pending_request_reason}>
+                          <div className="text-xs text-muted-foreground max-w-[160px] truncate" title={j.pending_request_reason}>
                             {j.pending_request_reason}
                           </div>
                         )}
                         {/* The date the customer asked to move TO (pending Ops). */}
                         {j.pending_request_preferred_datetime && (
                           <div
-                            className="text-[10px] font-medium text-amber-700 dark:text-amber-500 whitespace-nowrap"
+                            className="text-xs font-medium text-warning-strong dark:text-warning whitespace-nowrap"
                             title="Requested new date/time (pending Ops action)"
                           >
                             New: {formatDate(j.pending_request_preferred_datetime)}
@@ -414,7 +414,7 @@ export function UnconfirmedJobsTable({
                         </StatusChip>
                         {j.original_appointment_date_time && (
                           <div
-                            className="text-[10px] font-medium text-sky-700 dark:text-sky-400 whitespace-nowrap"
+                            className="text-xs font-medium text-info-strong dark:text-info whitespace-nowrap"
                             title="Original appointment (before the after-3pm auto-reschedule)"
                           >
                             Original: {formatDate(j.original_appointment_date_time)}
@@ -444,7 +444,7 @@ export function UnconfirmedJobsTable({
                           where both columns carry the same text, and we must not
                           render a "call" affordance on a name. */}
                       {j.client_spoc && j.client_spoc !== j.client_spoc_name && (
-                        <div className="text-[10px] text-muted-foreground">
+                        <div className="text-xs text-muted-foreground">
                           <CallableMobile spocJobId={j.job_id} mobile={j.client_spoc} />
                         </div>
                       )}

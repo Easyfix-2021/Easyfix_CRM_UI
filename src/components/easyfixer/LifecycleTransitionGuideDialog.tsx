@@ -84,8 +84,8 @@ export function LifecycleTransitionGuideDialog({
               <h3 className="mb-2 text-sm font-semibold">How Transitions Work</h3>
               <ul className="space-y-1.5">
                 {LIFECYCLE_GUIDE_RULES.map((rule) => (
-                  <li key={rule} className="flex gap-2 text-xs text-slate-700">
-                    <span className="mt-1 size-1.5 shrink-0 rounded-full bg-sky-500" aria-hidden />
+                  <li key={rule} className="flex gap-2 text-xs text-ink-700">
+                    <span className="mt-1 size-1.5 shrink-0 rounded-full bg-info" aria-hidden />
                     <span>{rule}</span>
                   </li>
                 ))}
@@ -112,23 +112,23 @@ export function LifecycleTransitionGuideDialog({
                         className={cn(
                           'rounded-lg border p-3',
                           isCurrent
-                            ? 'border-sky-300 bg-sky-50/70 ring-1 ring-sky-200'
-                            : 'bg-slate-50/60',
+                            ? 'border-info bg-info-tint/70 ring-1 ring-info'
+                            : 'bg-ink-50/60',
                         )}
                       >
                         <div className="flex flex-wrap items-center gap-2">
                           <EasyfixerLifecycleChip value={entry.status} size="md" />
                           {isCurrent && (
-                            <span className="rounded-full bg-sky-600 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+                            <span className="rounded-full bg-info px-2 py-0.5 text-xs font-semibold uppercase tracking-wide text-white">
                               Current
                             </span>
                           )}
                         </div>
-                        <p className="mt-1.5 text-xs text-slate-600">{entry.summary}</p>
+                        <p className="mt-1.5 text-xs text-ink-700">{entry.summary}</p>
 
                         {showActual && (
-                          <div className="mt-2 rounded-md border border-emerald-200 bg-emerald-50/70 p-2">
-                            <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700">
+                          <div className="mt-2 rounded-md border border-success bg-success-tint/70 p-2">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-success-strong">
                               Available For This Technician Now
                             </p>
                             {availableTransitions && availableTransitions.length ? (
@@ -138,18 +138,18 @@ export function LifecycleTransitionGuideDialog({
                                 ))}
                               </div>
                             ) : (
-                              <p className="mt-1 text-xs italic text-emerald-800/80">
+                              <p className="mt-1 text-xs italic text-success-strong/80">
                                 No status changes are available for this technician right now.
                               </p>
                             )}
-                            <p className="mt-1 text-[11px] text-emerald-800/70">
+                            <p className="mt-1 text-xs text-success-strong/70">
                               Reflects this technician&apos;s verification, manager mapping and your permissions.
                             </p>
                           </div>
                         )}
 
                         <div className="mt-2">
-                          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                             {showActual ? 'General Rule' : 'Can Move To'}
                           </p>
                           {targets.length ? (
@@ -166,10 +166,10 @@ export function LifecycleTransitionGuideDialog({
                         </div>
 
                         <div className="mt-2">
-                          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                             Why
                           </p>
-                          <p className="mt-0.5 text-xs text-slate-700">{entry.why}</p>
+                          <p className="mt-0.5 text-xs text-ink-700">{entry.why}</p>
                         </div>
                       </article>
                     );

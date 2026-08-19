@@ -263,7 +263,7 @@ export default function ManageCoursesPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
+          <h1 className="text-2xl font-semibold flex items-center gap-2">
             <GraduationCap className="size-6" /> Manage Courses
           </h1>
           <p className="text-sm text-muted-foreground">
@@ -304,7 +304,7 @@ export default function ManageCoursesPage() {
 
       {listFetch.error && (
         <Card>
-          <CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
+          <CardContent className="p-3 flex items-center gap-2 text-sm text-urgent">
             <AlertTriangle className="size-4" /> {listFetch.error}
           </CardContent>
         </Card>
@@ -365,7 +365,7 @@ export default function ManageCoursesPage() {
                   <td className="!text-right tabular-nums">
                     {c.video_count === 0 ? (
                       <span
-                        className="text-amber-700 font-semibold"
+                        className="text-warning-strong font-semibold"
                         title="No videos — technicians cannot complete this course"
                       >
                         0
@@ -420,7 +420,7 @@ export default function ManageCoursesPage() {
                         />
                       )}
                       {!canManage && (
-                        <span className="text-[10px] text-muted-foreground">View Only</span>
+                        <span className="text-xs text-muted-foreground">View Only</span>
                       )}
                     </div>
                   </td>
@@ -751,7 +751,7 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
               placeholder="What this course covers and who should take it (optional)"
               className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus:outline-none focus-visible:border-foreground/40 disabled:opacity-60"
             />
-            <div className="mt-1 text-[11px] text-muted-foreground text-right tabular-nums">
+            <div className="mt-1 text-xs text-muted-foreground text-right tabular-nums">
               {description.length} / {DESC_MAX}
             </div>
           </div>
@@ -862,7 +862,7 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
           </div>
 
           {(error || videosFetch.error) && (
-            <div className="text-sm text-red-600 flex items-start gap-1">
+            <div className="text-sm text-urgent flex items-start gap-1">
               <AlertTriangle className="size-4 shrink-0 mt-0.5" /> {error ?? videosFetch.error}
             </div>
           )}

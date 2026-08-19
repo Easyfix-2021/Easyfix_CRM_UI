@@ -546,7 +546,7 @@ export default function ManageUsersPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
+          <h1 className="text-2xl font-semibold flex items-center gap-2">
             <UserCog className="size-6" /> Manage Users
           </h1>
           <p className="text-sm text-muted-foreground">
@@ -596,7 +596,7 @@ export default function ManageUsersPage() {
             aria-expanded={howOpen}
           >
             {howOpen ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
-            <Info className="size-4 shrink-0 text-blue-600" />
+            <Info className="size-4 shrink-0 text-info" />
             <span className="font-medium">How User management works</span>
             <span className="ml-auto text-xs text-muted-foreground">{howOpen ? 'Hide' : 'Show'}</span>
           </button>
@@ -642,7 +642,7 @@ export default function ManageUsersPage() {
 
       {error && (
         <Card>
-          <CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
+          <CardContent className="p-3 flex items-center gap-2 text-sm text-urgent">
             <AlertTriangle className="size-4" /> {error}
           </CardContent>
         </Card>
@@ -805,7 +805,7 @@ export default function ManageUsersPage() {
                   </td>
                   <td className="!text-center whitespace-nowrap">
                     {u.user_status === 1
-                      ? <span className="text-emerald-700 text-xs">Active</span>
+                      ? <span className="text-success-strong text-xs">Active</span>
                       : <span className="text-muted-foreground text-xs">Inactive</span>}
                   </td>
                   <td className="!text-right whitespace-nowrap">
@@ -888,7 +888,7 @@ export default function ManageUsersPage() {
                         />
                       )}
                       {!can.isUserEdit && (
-                        <span className="text-[10px] text-muted-foreground">view-only</span>
+                        <span className="text-xs text-muted-foreground">view-only</span>
                       )}
                     </div>
                   </td>
@@ -971,7 +971,7 @@ function ManageRegionsCell({ csv, nameById }: { csv: string | null | undefined; 
   // have unrestricted scope.
   if (String(csv ?? '').trim() === '0') {
     return (
-      <span className="inline-flex items-center rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5 text-[11px] font-medium">
+      <span className="inline-flex items-center rounded-full bg-success-tint text-success-strong px-2 py-0.5 text-xs font-medium">
         All
       </span>
     );
@@ -1007,7 +1007,7 @@ function ManageRegionsCell({ csv, nameById }: { csv: string | null | undefined; 
 function JobStagesCell({ stages }: { stages?: string[] | null }) {
   if (stages == null) {
     return (
-      <span className="inline-flex items-center rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5 text-[11px] font-medium">
+      <span className="inline-flex items-center rounded-full bg-success-tint text-success-strong px-2 py-0.5 text-xs font-medium">
         All
       </span>
     );
@@ -1016,7 +1016,7 @@ function JobStagesCell({ stages }: { stages?: string[] | null }) {
     return (
       <span
         title="This user has been granted no lifecycle stages — they cannot see or act on any job."
-        className="inline-flex items-center rounded-full bg-red-100 text-red-800 px-2 py-0.5 text-[11px] font-medium"
+        className="inline-flex items-center rounded-full bg-urgent-tint text-urgent-strong px-2 py-0.5 text-xs font-medium"
       >
         No Access
       </span>
@@ -1868,7 +1868,7 @@ function UserFormModal({
                 <Switch checked={active} onCheckedChange={setActive} ariaLabel="Toggle user active" />
                 <span
                   className={`text-xs w-16 inline-block text-left ${
-                    active ? 'text-emerald-700' : 'text-muted-foreground'
+                    active ? 'text-success-strong' : 'text-muted-foreground'
                   }`}
                 >
                   {active ? 'Active' : 'Inactive'}
@@ -1933,17 +1933,17 @@ function UserFormModal({
                 <p className="text-xs text-muted-foreground mt-1">Checking availability…</p>
               )}
               {!isEdit && emailCheck.state === 'available' && (
-                <p className="text-xs text-emerald-700 mt-1">✓ Available</p>
+                <p className="text-xs text-success-strong mt-1">✓ Available</p>
               )}
               {!isEdit && emailCheck.state === 'taken' && (
                 <div className="mt-1 space-y-1">
-                  <p className="text-xs text-rose-700">
+                  <p className="text-xs text-urgent-strong">
                     ✗ Already in use
                   </p>
                   {emailCheck.suggestion && (
                     <button
                       type="button"
-                      className="text-xs text-sky-700 hover:text-sky-900 underline underline-offset-2"
+                      className="text-xs text-primary hover:text-brand-600 underline underline-offset-2"
                       onClick={() => setEmail(emailCheck.suggestion!)}
                     >
                       Use suggestion: <span className="font-mono">{emailCheck.suggestion}</span>
@@ -1980,7 +1980,7 @@ function UserFormModal({
                   handleSubmit so every validation message surfaces in one
                   place (the footer), where it can't scroll out of view. */}
               {personalEmail.trim() && !EMAIL_RE.test(personalEmail.trim()) && (
-                <p className="text-xs text-amber-700 mt-1">That doesn&apos;t look like a valid email address.</p>
+                <p className="text-xs text-warning-strong mt-1">That doesn&apos;t look like a valid email address.</p>
               )}
               <p className="text-xs text-muted-foreground mt-1">
                 {isEdit
@@ -2011,7 +2011,7 @@ function UserFormModal({
                 className="font-mono"
               />
               {mobile && mobile.length !== 10 && (
-                <p className="text-xs text-amber-700 mt-1">Mobile must be exactly 10 digits ({mobile.length}/10).</p>
+                <p className="text-xs text-warning-strong mt-1">Mobile must be exactly 10 digits ({mobile.length}/10).</p>
               )}
               {/* Real-time DB uniqueness check — only renders for a complete
                   10-digit number that actually differs from the user being
@@ -2022,10 +2022,10 @@ function UserFormModal({
                 <p className="text-xs text-muted-foreground mt-1">Checking availability…</p>
               )}
               {mobile.length === 10 && mobileCheck.state === 'available' && (
-                <p className="text-xs text-emerald-700 mt-1">✓ Available</p>
+                <p className="text-xs text-success-strong mt-1">✓ Available</p>
               )}
               {mobile.length === 10 && mobileCheck.state === 'taken' && (
-                <p className="text-xs text-rose-700 mt-1">
+                <p className="text-xs text-urgent-strong mt-1">
                   ✗ Already in use{mobileCheck.takenByName ? ` by ${mobileCheck.takenByName}` : ' by another active user'}.
                 </p>
               )}
@@ -2039,7 +2039,7 @@ function UserFormModal({
                 className="font-mono"
               />
               {altMob && altMob.length !== 10 && (
-                <p className="text-xs text-amber-700 mt-1">If supplied, alt mobile must be 10 digits.</p>
+                <p className="text-xs text-warning-strong mt-1">If supplied, alt mobile must be 10 digits.</p>
               )}
             </div>
           </div>
@@ -2264,7 +2264,7 @@ function UserFormModal({
           */}
         <DialogFooter>
           {error && (
-            <div className="flex-1 text-left text-sm text-red-600 flex items-center gap-1">
+            <div className="flex-1 text-left text-sm text-urgent flex items-center gap-1">
               <AlertTriangle className="size-4 shrink-0" /> {error}
             </div>
           )}
@@ -2290,10 +2290,10 @@ function UserFormModal({
  */
 type ChipColor = 'blue' | 'emerald' | 'violet' | 'amber';
 const CHIP_CLASSES: Record<ChipColor, { bg: string; text: string; closeHover: string }> = {
-  blue:    { bg: 'bg-blue-50',    text: 'text-blue-700',    closeHover: 'hover:text-blue-900' },
-  emerald: { bg: 'bg-emerald-50', text: 'text-emerald-700', closeHover: 'hover:text-emerald-900' },
-  violet:  { bg: 'bg-violet-50',  text: 'text-violet-700',  closeHover: 'hover:text-violet-900' },
-  amber:   { bg: 'bg-amber-50',   text: 'text-amber-700',   closeHover: 'hover:text-amber-900' },
+  blue:    { bg: 'bg-info-tint',    text: 'text-info-strong',    closeHover: 'hover:text-info-deep' },
+  emerald: { bg: 'bg-success-tint', text: 'text-success-strong', closeHover: 'hover:text-ink-900' },
+  violet:  { bg: 'bg-gold-tint',  text: 'text-gold-strong',  closeHover: 'hover:text-ink-900' },
+  amber:   { bg: 'bg-warning-tint',   text: 'text-warning-strong',   closeHover: 'hover:text-ink-900' },
 };
 
 function ScopeMultiSelect<V extends string | number>({

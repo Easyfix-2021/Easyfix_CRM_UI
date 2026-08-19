@@ -179,7 +179,7 @@ export function CallTrackingCharts({
   return (
     <section className="space-y-4">
       <div className="flex items-baseline justify-between">
-        <h2 className="text-sm font-semibold text-slate-800">Graphical View</h2>
+        <h2 className="text-sm font-semibold text-ink-900">Graphical View</h2>
         <span className="text-xs text-muted-foreground">Charts reflect the current filters.</span>
       </div>
 
@@ -234,10 +234,10 @@ export function CallTrackingCharts({
               * Only roles PRESENT in the current window are listed, so the key
               * never describes a colour that isn't on the chart.
               */}
-            <dl className="mt-3 space-y-1 border-t border-border pt-2 text-[11px] leading-snug text-muted-foreground">
+            <dl className="mt-3 space-y-1 border-t border-border pt-2 text-xs leading-snug text-muted-foreground">
               {charts.parties.map((p) => (
                 <div key={p.name} className="flex gap-1.5">
-                  <dt className="shrink-0 font-medium text-slate-700">{p.name}:</dt>
+                  <dt className="shrink-0 font-medium text-ink-700">{p.name}:</dt>
                   <dd>{PARTY_ROLE_HELP[p.name] ?? 'A number on this job.'}</dd>
                 </div>
               ))}

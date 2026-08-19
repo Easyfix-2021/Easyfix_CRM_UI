@@ -52,9 +52,9 @@ function DatePill({ date }: { date: string }) {
   const weekday = d.toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase();
   const dayMonth = d.toLocaleDateString('en-US', { day: '2-digit', month: 'short' });
   return (
-    <div className="h-14 w-14 shrink-0 rounded-full bg-sky-500 text-white flex flex-col items-center justify-center text-[10px] font-semibold leading-tight">
+    <div className="h-14 w-14 shrink-0 rounded-full bg-info text-white flex flex-col items-center justify-center text-xs font-semibold leading-tight">
       <span>{weekday}</span>
-      <span className="text-[11px] font-bold">{dayMonth}</span>
+      <span className="text-xs font-semibold">{dayMonth}</span>
     </div>
   );
 }
@@ -171,7 +171,7 @@ export function UpcomingEvents({ days = 7 }: { days?: number }) {
                         key={e.key}
                         type="button"
                         onClick={() => setOpenNotice(e.notice)}
-                        className="w-full rounded-md bg-sky-600 hover:bg-sky-700 text-white px-3 py-2 text-[13px] font-medium shadow-sm flex items-center gap-2 text-left transition-colors"
+                        className="w-full rounded-md bg-primary hover:bg-brand-600 text-white px-3 py-2 text-[13px] font-medium shadow-sm flex items-center gap-2 text-left transition-colors"
                         title={e.title}
                       >
                         <Megaphone className="h-3.5 w-3.5 shrink-0 opacity-80" />
@@ -180,7 +180,7 @@ export function UpcomingEvents({ days = 7 }: { days?: number }) {
                     ) : (
                       <div
                         key={e.key}
-                        className="rounded-md bg-emerald-600 text-white px-3 py-2 text-[13px] font-medium shadow-sm flex items-center gap-2"
+                        className="rounded-md bg-success text-white px-3 py-2 text-[13px] font-medium shadow-sm flex items-center gap-2"
                         title={e.title}
                       >
                         <Calendar className="h-3.5 w-3.5 shrink-0 opacity-80" />

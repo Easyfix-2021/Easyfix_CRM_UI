@@ -34,9 +34,9 @@ import { cn } from '@/lib/utils';
 
 const INTENT_CLASSES: Record<NonNullable<IconButtonProps['intent']>, string> = {
   default: 'text-muted-foreground hover:text-foreground',
-  primary: 'text-blue-600 hover:text-blue-700',
-  danger: 'text-red-600 hover:text-red-700',
-  success: 'text-emerald-600 hover:text-emerald-700',
+  primary: 'text-primary hover:text-brand-600',
+  danger: 'text-urgent hover:text-urgent-strong',
+  success: 'text-success hover:text-success-strong',
 };
 
 export interface IconButtonProps {

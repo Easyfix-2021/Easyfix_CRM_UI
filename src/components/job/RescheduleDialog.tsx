@@ -161,7 +161,7 @@ export function RescheduleDialog({ open, jobId, onClose, onDone, initialDateTime
               maxLength={500}
             />
           </div>
-          {err && <div className="text-sm text-red-600">{err}</div>}
+          {err && <div className="text-sm text-urgent-strong">{err}</div>}
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="outline" onClick={onClose} disabled={loading}>Back</Button>
             <Button onClick={go} disabled={!canSubmit}>

@@ -1,46 +1,20 @@
+/*
+ * Brand tokens are imported FIRST so the :root / .dark blocks they define are
+ * in place before anything below can reference them. brand.css is generated
+ * from src/brand/tokens.ts — edit that, not this, and run `npm run brand:gen`.
+ */
+@import './brand.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * The :root / .dark token blocks that used to open this layer now live in
+ * brand.css, generated from src/brand/tokens.ts. The layer wrapper stays,
+ * because the rules below still belong in Tailwind's base layer.
+ */
 @layer base {
-  :root {
-    --background: 210 20% 97%;
-    --foreground: 222 47% 11%;
-
-    --card: 0 0% 100%;
-    --card-foreground: 222 47% 11%;
-
-    --popover: 0 0% 100%;
-    --popover-foreground: 222 47% 11%;
-
-    /* Metronic blue — primary action color, used on buttons and active states */
-    --primary: 204 70% 53%;
-    --primary-foreground: 0 0% 100%;
-
-    --secondary: 210 16% 93%;
-    --secondary-foreground: 222 47% 11%;
-
-    --muted: 210 16% 93%;
-    --muted-foreground: 215 16% 47%;
-
-    --accent: 28 80% 52%;
-    --accent-foreground: 0 0% 100%;
-
-    --destructive: 354 70% 54%;
-    --destructive-foreground: 0 0% 100%;
-
-    --border: 214 22% 85%;
-    --input: 214 22% 85%;
-    --ring: 204 70% 53%;
-
-    --radius: 0.5rem;
-
-    /* Legacy Metronic sidebar — dark slate with off-white text */
-    --sidebar: 215 19% 22%;
-    --sidebar-foreground: 210 16% 80%;
-    --sidebar-accent: 215 25% 29%;
-  }
-
   * {
     @apply border-border;
   }
@@ -167,33 +141,33 @@
      sticky column. Explicit colour values sidestep the whole alpha pipeline. */
   .data-table .stick-col {
     position: sticky;
-    background-color: #ffffff;
+    background-color: hsl(var(--card));
     z-index: 2;
   }
   .data-table .stick-col-head {
     position: sticky;
-    background-color: #eef0f3;          /* same shade as our bg-muted */
+    background-color: hsl(var(--muted));
     z-index: 3;
   }
   .data-table tr:hover .stick-col {
-    background-color: #f5f6f8;          /* matches tr:hover > td */
+    background-color: hsl(var(--ink-50));
   }
   /* Frozen header cells that are ALSO sortable (SortHeader) get a translucent
      `hover:bg-muted/40` from the shared component. At 40% alpha that hover layer
      lets horizontally-scrolled header cells bleed through the otherwise-opaque
-     #eef0f3. Re-assert an opaque hover bg so the frozen header stays solid. */
+     the muted token. Re-assert an opaque hover bg so the frozen header stays solid. */
   .data-table th.stick-col-head:hover {
-    background-color: #eef0f3;          /* same opaque shade as the idle state */
+    background-color: hsl(var(--muted));
   }
   .data-table .stick-left  { left: 0; }
   .data-table .stick-right { right: 0; }
   .data-table .stick-left.stick-col,
   .data-table .stick-left.stick-col-head {
-    box-shadow: 2px 0 4px -2px rgba(0, 0, 0, 0.08);
+    box-shadow: 2px 0 4px -2px hsl(var(--ink-900) / 0.08);
   }
   .data-table .stick-right.stick-col,
   .data-table .stick-right.stick-col-head {
-    box-shadow: -2px 0 4px -2px rgba(0, 0, 0, 0.08);
+    box-shadow: -2px 0 4px -2px hsl(var(--ink-900) / 0.08);
   }
 
   /* Native datetime-local + date inputs: make the calendar-picker icon obey
@@ -280,7 +254,7 @@
  */
 .thin-scroll {
   scrollbar-width: thin;
-  scrollbar-color: rgba(100, 116, 139, 0.25) transparent;
+  scrollbar-color: hsl(var(--ink-500) / 0.25) transparent;
 }
 .thin-scroll::-webkit-scrollbar {
   width: 6px;
@@ -290,11 +264,11 @@
   background: transparent;
 }
 .thin-scroll::-webkit-scrollbar-thumb {
-  background-color: rgba(100, 116, 139, 0.25);
+  background-color: hsl(var(--ink-500) / 0.25);
   border-radius: 9999px;
 }
 .thin-scroll:hover::-webkit-scrollbar-thumb {
-  background-color: rgba(100, 116, 139, 0.55);
+  background-color: hsl(var(--ink-500) / 0.55);
 }
 
 /* ─── Notice Board theme motion ──────────────────────────────────────────
@@ -343,9 +317,9 @@
   opacity: 0.55;
   animation: nb-aurora 14s linear infinite;
 }
-.nb-aurora::before { background: radial-gradient(circle at 30% 30%, #38bdf8, transparent 60%); }
+.nb-aurora::before { background: radial-gradient(circle at 30% 30%, hsl(var(--info)), transparent 60%); }
 .nb-aurora::after  {
-  background: radial-gradient(circle at 70% 60%, #a855f7, transparent 60%);
+  background: radial-gradient(circle at 70% 60%, hsl(var(--gold)), transparent 60%);
   animation-duration: 19s;
   animation-direction: reverse;
 }
@@ -355,13 +329,13 @@
   content: '';
   position: absolute;
   inset: -60%;
-  background: conic-gradient(from 0deg, transparent 0 70%, rgba(255, 255, 255, 0.22) 85%, transparent 100%);
+  background: conic-gradient(from 0deg, transparent 0 70%, hsl(var(--card) / 0.22) 85%, transparent 100%);
   animation: nb-sweep 6s linear infinite;
 }
 
 /* Shimmer — the glow-swept headline, reserved for PINNED notices. */
 .nb-shimmer {
-  background: linear-gradient(90deg, #fff 25%, #bae6fd 50%, #fff 75%);
+  background: linear-gradient(90deg, hsl(var(--card)) 25%, hsl(var(--info-tint)) 50%, hsl(var(--card)) 75%);
   background-size: 200% 100%;
   -webkit-background-clip: text;
   background-clip: text;
@@ -380,5 +354,5 @@
   .nb-sweep::before,
   .nb-shimmer,
   .nb-ticker { animation: none !important; }
-  .nb-shimmer { color: #fff; background: none; -webkit-background-clip: initial; background-clip: initial; }
+  .nb-shimmer { color: hsl(var(--card)); background: none; -webkit-background-clip: initial; background-clip: initial; }
 }

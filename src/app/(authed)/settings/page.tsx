@@ -3,8 +3,7 @@
 import Link from 'next/link';
 import {
   Brain, Building, Hash, Tag, Package, UserCog, FileText, ClipboardList,
-  Sparkles, Wrench, ShieldCheck, Zap, PhoneCall, type LucideIcon,
-} from 'lucide-react';
+  Sparkles, Wrench, ShieldCheck, Zap, PhoneCall, type LucideIcon, Palette } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
@@ -34,6 +33,9 @@ const wip = (title: string, legacyPath: string) =>
 type Tile = { href: string; icon: LucideIcon; title: string; blurb: string; shipped?: boolean; actionKey?: string };
 
 const AREAS: Tile[] = [
+  { href: '/settings/theme', icon: Palette, title: 'Theme And Branding',
+    blurb: 'Brand colours, environment and maintenance banners, and the festival logo schedule.',
+    shipped: true, actionKey: 'isBrandingEdit' },
   { href: '/settings/auto-allocation', icon: Zap, title: 'Manage Auto Allocations',
     blurb: 'Toggle instant vs batch auto-assignment per client, failure email, and L3 scoring weights.',
     shipped: true, actionKey: 'isAutoAllocationEdit' },
@@ -120,7 +122,7 @@ export default function SettingsLandingPage() {
                     </div>
                     <h2 className="font-medium flex-1">{a.title}</h2>
                     {!a.shipped && (
-                      <span className="text-[10px] font-medium rounded bg-amber-100 text-amber-800 px-1.5 py-0.5">WIP</span>
+                      <span className="text-xs font-medium rounded bg-warning-tint text-warning-strong px-1.5 py-0.5">WIP</span>
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground">{a.blurb}</p>

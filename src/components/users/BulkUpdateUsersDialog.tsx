@@ -119,7 +119,7 @@ export function BulkUpdateUsersDialog({
       <DialogContent className="!max-w-none w-[calc(100vw-48px)] h-[calc(100vh-48px)] overflow-hidden p-0 flex flex-col">
         <DialogHeader className="!mx-0 !mt-0 px-6 py-3.5 !mb-0">
           <DialogTitle className="flex items-center gap-2">
-            <Layers className="h-4 w-4 text-sky-300" /> Bulk Update Users
+            <Layers className="h-4 w-4 text-info-tint" /> Bulk Update Users
           </DialogTitle>
         </DialogHeader>
 
@@ -412,7 +412,7 @@ function ApplyTab({
               disableAll={!verticalsAll && !verticals}
               hint={
                 verticalsTouched && !clientsTouched
-                  ? <span className="text-amber-700">Required — you changed Verticals.</span>
+                  ? <span className="text-warning-strong">Required — you changed Verticals.</span>
                   : verticalsAll || !verticals
                     ? 'Showing all active clients.'
                     : `Filtered to ${clientOptions.length} client(s) in the picked verticals.`
@@ -514,7 +514,7 @@ function MultiWithAllToggle({
         placeholder={allOn ? 'All — every active record' : '— No change —'}
         options={options}
       />
-      {hint && <div className="text-[11px] mt-1">{hint}</div>}
+      {hint && <div className="text-xs mt-1">{hint}</div>}
     </div>
   );
 }
@@ -676,11 +676,11 @@ function UploadTab({
             <div className="font-medium mb-2">
               {report.summary.dryRun ? 'Dry Run Report' : 'Upload Complete'}
               {' · '}
-              <span className="text-emerald-700">{report.summary.updated} Updated</span>
+              <span className="text-success-strong">{report.summary.updated} Updated</span>
               {' · '}
-              <span className="text-sky-700">{report.summary.unchanged ?? 0} Unchanged</span>
+              <span className="text-primary">{report.summary.unchanged ?? 0} Unchanged</span>
               {' · '}
-              <span className="text-red-700">{report.summary.failed} Failed</span>
+              <span className="text-urgent-strong">{report.summary.failed} Failed</span>
               {' · '}
               <span className="text-muted-foreground">{report.summary.skipCount} Skipped</span>
             </div>

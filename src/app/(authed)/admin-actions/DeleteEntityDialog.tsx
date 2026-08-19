@@ -208,16 +208,16 @@ export function DeleteEntityDialog({ open, onClose }: { open: boolean; onClose: 
               </div>
             )}
             {!impactLoading && impact && eligible && (
-              <div className="rounded border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+              <div className="rounded border border-success/30 bg-success-tint p-3 text-sm text-success-strong">
                 No operational history — safe to delete.
               </div>
             )}
             {!impactLoading && impact && !eligible && (
-              <div className="rounded border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800 space-y-1">
+              <div className="rounded border border-urgent/30 bg-urgent-tint p-3 text-sm text-urgent-strong space-y-1">
                 <div className="font-medium">
                   Blocked: {impact.blockedBy.map((b) => `${b.count} ${b.label}`).join(', ')} — deactivate instead.
                 </div>
-                <div className="text-xs text-rose-700">
+                <div className="text-xs text-urgent-strong">
                   This record has linked operational data and cannot be hard-deleted.
                 </div>
               </div>
@@ -230,7 +230,7 @@ export function DeleteEntityDialog({ open, onClose }: { open: boolean; onClose: 
                 onChange={(e) => setReason(e.target.value)}
                 rows={3}
                 placeholder="Why is this record being deleted?"
-                className="flex w-full rounded-md border border-input bg-white px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus:outline-none focus-visible:outline-none focus-visible:border-foreground/40"
+                className="flex w-full rounded-md border border-input bg-card px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus:outline-none focus-visible:outline-none focus-visible:border-foreground/40"
               />
             </div>
 

@@ -73,7 +73,7 @@ const ACCOUNT_MAX = 18;
 /* Matches DeleteEntityDialog's reason textarea — there is no shared
  * Textarea primitive in this repo and Input is single-line. */
 const TEXTAREA_CLASS =
-  'flex w-full rounded-md border border-input bg-white px-3 py-2 text-sm shadow-sm '
+  'flex w-full rounded-md border border-input bg-card px-3 py-2 text-sm shadow-sm '
   + 'transition-colors placeholder:text-muted-foreground focus:outline-none '
   + 'focus-visible:outline-none focus-visible:border-foreground/40';
 
@@ -329,7 +329,7 @@ export function EasyfixerBankDialog({
               * Where the code went. Operators have tried to read this OTP off
               * their own phone; say plainly that it is not theirs.
               */}
-            <div className="rounded border border-sky-200 bg-sky-50 p-3 text-xs text-sky-900">
+            <div className="rounded border border-info bg-info-tint p-3 text-xs text-info-deep">
               A one-time code was sent to {formatEasyfixerName(easyfixer.efr_name)} on their
               registered WhatsApp number. The code is on the technician&apos;s phone, not yours —
               ask them to read it out.
@@ -359,7 +359,7 @@ export function EasyfixerBankDialog({
 
             {/* ─── The three distinct failure states ─────────────────────── */}
             {bankError?.kind === 'otp' && (
-              <div className="rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 space-y-1">
+              <div className="rounded border border-warning bg-warning-tint p-3 text-sm text-warning-strong space-y-1">
                 <div className="flex items-center gap-2 font-medium">
                   <ShieldAlert className="h-4 w-4 shrink-0" />
                   OTP Invalid Or Expired
@@ -372,7 +372,7 @@ export function EasyfixerBankDialog({
               </div>
             )}
             {bankError?.kind === 'verification' && (
-              <div className="rounded border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800 space-y-1">
+              <div className="rounded border border-urgent bg-urgent-tint p-3 text-sm text-urgent-strong space-y-1">
                 <div className="flex items-center gap-2 font-medium">
                   <AlertTriangle className="h-4 w-4 shrink-0" />
                   Bank Verification Failed
@@ -385,7 +385,7 @@ export function EasyfixerBankDialog({
               </div>
             )}
             {bankError?.kind === 'unavailable' && (
-              <div className="rounded border border-slate-300 bg-slate-50 p-3 text-sm text-slate-700 space-y-1">
+              <div className="rounded border border-ink-300 bg-ink-50 p-3 text-sm text-ink-700 space-y-1">
                 <div className="flex items-center gap-2 font-medium">
                   <WifiOff className="h-4 w-4 shrink-0" />
                   Verification Service Unavailable

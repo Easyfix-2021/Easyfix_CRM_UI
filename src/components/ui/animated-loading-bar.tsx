@@ -6,10 +6,10 @@ import { Loader2 } from 'lucide-react';
 type Tone = 'sky' | 'emerald' | 'rose' | 'slate';
 
 const TONE_CLASS: Record<Tone, { text: string; border: string; bg: string }> = {
-  sky:     { text: 'text-sky-700',     border: 'border-sky-200',     bg: 'bg-sky-50/60' },
-  emerald: { text: 'text-emerald-700', border: 'border-emerald-200', bg: 'bg-emerald-50/60' },
-  rose:    { text: 'text-rose-700',    border: 'border-rose-200',    bg: 'bg-rose-50/60' },
-  slate:   { text: 'text-slate-600',   border: 'border-slate-200',   bg: 'bg-white/95' },
+  sky:     { text: 'text-info-strong',    border: 'border-info/30',    bg: 'bg-info-tint/60' },
+  emerald: { text: 'text-success-strong', border: 'border-success/30', bg: 'bg-success-tint/60' },
+  rose:    { text: 'text-urgent-strong',  border: 'border-urgent/30',  bg: 'bg-urgent-tint/60' },
+  slate:   { text: 'text-ink-700',        border: 'border-ink-100',    bg: 'bg-white/95' },
 };
 
 /*
@@ -54,7 +54,7 @@ export function AnimatedLoadingBar({
     <div
       aria-hidden={!visible}
       className={
-        `flex items-center gap-1.5 text-[11px] ${t.text} ` +
+        `flex items-center gap-1.5 text-xs ${t.text} ` +
         `overflow-hidden transition-all duration-200 ease-out border ` +
         (sticky
           ? 'sticky top-0 z-10 backdrop-blur-[1px] rounded-none '

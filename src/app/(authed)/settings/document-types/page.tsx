@@ -101,7 +101,7 @@ export default function ManageDocumentTypesPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
+          <h1 className="text-2xl font-semibold flex items-center gap-2">
             <FileText className="size-6" /> Manage Document Type
           </h1>
           <p className="text-sm text-muted-foreground">Document types required from technicians for verification (Aadhaar, PAN, …).</p>
@@ -129,7 +129,7 @@ export default function ManageDocumentTypesPage() {
       </Card>
 
       {error && (
-        <Card><CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
+        <Card><CardContent className="p-3 flex items-center gap-2 text-sm text-urgent">
           <AlertTriangle className="size-4" /> {error}
         </CardContent></Card>
       )}
@@ -162,12 +162,12 @@ export default function ManageDocumentTypesPage() {
                   <td className="!text-left font-medium truncate" title={d.document_name}>{d.document_name}</td>
                   <td className="!text-center whitespace-nowrap text-xs">
                     {d.document_mandatory === 'Yes'
-                      ? <span className="text-emerald-700">Yes</span>
+                      ? <span className="text-success-strong">Yes</span>
                       : <span className="text-muted-foreground">No</span>}
                   </td>
                   <td className="!text-center whitespace-nowrap">
                     {d.document_type_status === 1
-                      ? <span className="text-emerald-700 text-xs">Active</span>
+                      ? <span className="text-success-strong text-xs">Active</span>
                       : <span className="text-muted-foreground text-xs">Inactive</span>}
                   </td>
                   <td className="!text-right whitespace-nowrap">
@@ -179,10 +179,10 @@ export default function ManageDocumentTypesPage() {
                       )}
                       {can.isDocumentTypeEdit && d.document_type_status === 1 && (
                         <Button size="sm" variant="ghost" onClick={() => handleDeactivate(d)}>
-                          <Trash2 className="size-3.5 text-red-600" />
+                          <Trash2 className="size-3.5 text-urgent" />
                         </Button>
                       )}
-                      {!can.isDocumentTypeEdit && <span className="text-[10px] text-muted-foreground">view-only</span>}
+                      {!can.isDocumentTypeEdit && <span className="text-xs text-muted-foreground">view-only</span>}
                     </div>
                   </td>
                 </tr>
@@ -304,7 +304,7 @@ function DocTypeFormModal({ open, onClose, editing, onSaved }: {
               <span>Active</span>
             </label>
           )}
-          {error && <div className="text-sm text-red-600 flex items-center gap-1"><AlertTriangle className="size-4" /> {error}</div>}
+          {error && <div className="text-sm text-urgent flex items-center gap-1"><AlertTriangle className="size-4" /> {error}</div>}
           <div className="flex justify-end gap-2 pt-2">
             <CancelButton onCancel={onClose} disabled={submitting} />
             <Button onClick={handleSubmit} disabled={submitting}>

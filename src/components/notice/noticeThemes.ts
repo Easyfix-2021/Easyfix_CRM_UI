@@ -45,38 +45,38 @@ export type NoticeTheme = {
 
 const AURORA: Omit<NoticeTheme, 'celebration'> = {
   key: 'aurora',
-  heroClass: 'nb-aurora bg-slate-950',
+  heroClass: 'nb-aurora bg-ink-900',
   icon: Megaphone,
   iconClass: 'text-white',
-  buttonClass: 'bg-sky-600 hover:bg-sky-700 text-white',
-  railClass: 'bg-sky-500',
+  buttonClass: 'bg-primary hover:bg-brand-600 text-white',
+  railClass: 'bg-info',
 };
 
 const SPOTLIGHT: Omit<NoticeTheme, 'celebration'> = {
   key: 'spotlight',
-  heroClass: 'nb-sweep bg-gradient-to-br from-rose-600 to-orange-600',
+  heroClass: 'nb-sweep bg-gradient-to-br from-urgent to-warning',
   icon: AlertTriangle,
   iconClass: 'text-white',
-  buttonClass: 'bg-rose-600 hover:bg-rose-700 text-white',
-  railClass: 'bg-rose-500',
+  buttonClass: 'bg-urgent hover:bg-urgent-strong text-white',
+  railClass: 'bg-urgent',
 };
 
 const CELEBRATION: Omit<NoticeTheme, 'celebration'> = {
   key: 'celebration',
-  heroClass: 'bg-gradient-to-br from-fuchsia-500 via-pink-600 to-violet-700',
+  heroClass: 'bg-gradient-to-br from-gold via-urgent to-gold-strong',
   icon: PartyPopper,
-  iconClass: 'text-amber-200',
-  buttonClass: 'bg-fuchsia-600 hover:bg-fuchsia-700 text-white',
-  railClass: 'bg-fuchsia-500',
+  iconClass: 'text-warning-tint',
+  buttonClass: 'bg-gold hover:bg-gold-strong text-white',
+  railClass: 'bg-gold',
 };
 
 const QUIET: Omit<NoticeTheme, 'celebration'> = {
   key: 'quiet',
   heroClass: null,
   icon: Info,
-  iconClass: 'text-slate-500',
-  buttonClass: 'bg-slate-900 hover:bg-slate-800 text-white',
-  railClass: 'bg-sky-500',
+  iconClass: 'text-ink-500',
+  buttonClass: 'bg-ink-900 hover:bg-ink-700 text-white',
+  railClass: 'bg-info',
 };
 
 /*

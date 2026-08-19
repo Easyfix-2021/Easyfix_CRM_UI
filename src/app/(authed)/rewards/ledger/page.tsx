@@ -211,18 +211,18 @@ function PointsCell({ delta }: { delta: number }) {
   if (!delta) {
     return (
       <span className="text-muted-foreground tabular-nums">
-        0<span className="ml-1 text-[10px] uppercase tracking-wide">pts</span>
+        0<span className="ml-1 text-xs uppercase tracking-wide">pts</span>
       </span>
     );
   }
   const credit = delta > 0;
   return (
-    <span className={credit ? 'text-emerald-700' : 'text-rose-700'}>
+    <span className={credit ? 'text-success-strong' : 'text-urgent-strong'}>
       <span className="font-semibold tabular-nums">
         {credit ? '+' : '−'}
         {Math.abs(delta).toLocaleString('en-IN')}
       </span>
-      <span className="ml-1 text-[10px] uppercase tracking-wide opacity-70">pts</span>
+      <span className="ml-1 text-xs uppercase tracking-wide opacity-70">pts</span>
     </span>
   );
 }
@@ -288,7 +288,7 @@ export default function PointsLedgerPage() {
       <RewardsPausedNotice />
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
+          <h1 className="text-2xl font-semibold flex items-center gap-2">
             <Coins className="size-6" /> Points Ledger
           </h1>
           <p className="text-sm text-muted-foreground">
@@ -335,7 +335,7 @@ export default function PointsLedgerPage() {
 
       {listFetch.error && (
         <Card>
-          <CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
+          <CardContent className="p-3 flex items-center gap-2 text-sm text-urgent">
             <AlertTriangle className="size-4" /> {listFetch.error}
           </CardContent>
         </Card>
@@ -393,7 +393,7 @@ export default function PointsLedgerPage() {
                        * masking middleware. Rendered verbatim — any reformatting
                        * here would mangle the bullets.
                        */}
-                      <div className="font-mono text-[11px] text-muted-foreground">
+                      <div className="font-mono text-xs text-muted-foreground">
                         {r.technician_mobile || '—'}
                       </div>
                     </td>
@@ -405,7 +405,7 @@ export default function PointsLedgerPage() {
                     </td>
                     <td className="!text-left">
                       {r.note && <div className="text-xs">{r.note}</div>}
-                      {ref && <div className="text-[11px] text-muted-foreground">{ref}</div>}
+                      {ref && <div className="text-xs text-muted-foreground">{ref}</div>}
                       {!r.note && !ref && <span className="text-muted-foreground">—</span>}
                     </td>
                     <td className="!text-left text-xs">{formatCreatedBy(r.created_by)}</td>
@@ -586,12 +586,12 @@ function AdjustPointsDialog({
               <span className="text-muted-foreground">Current Balance</span>
               {balanceFetch.loading && <span className="text-muted-foreground">Loading…</span>}
               {!balanceFetch.loading && balanceFetch.error && (
-                <span className="text-red-600">{balanceFetch.error}</span>
+                <span className="text-urgent">{balanceFetch.error}</span>
               )}
               {!balanceFetch.loading && !balanceFetch.error && current !== null && (
                 <span className="font-semibold tabular-nums">
                   {current.toLocaleString('en-IN')}
-                  <span className="ml-1 text-[10px] uppercase tracking-wide text-muted-foreground">pts</span>
+                  <span className="ml-1 text-xs uppercase tracking-wide text-muted-foreground">pts</span>
                 </span>
               )}
             </div>
@@ -608,20 +608,20 @@ function AdjustPointsDialog({
               disabled={submitting}
             />
             {deltaFormatInvalid && (
-              <p className="mt-1 text-[11px] text-red-600">Enter a whole number — use a leading minus to deduct.</p>
+              <p className="mt-1 text-xs text-urgent">Enter a whole number — use a leading minus to deduct.</p>
             )}
             {!deltaFormatInvalid && deltaIsZero && (
-              <p className="mt-1 text-[11px] text-red-600">Enter a non-zero number — a zero adjustment changes nothing.</p>
+              <p className="mt-1 text-xs text-urgent">Enter a non-zero number — a zero adjustment changes nothing.</p>
             )}
             {!deltaFormatInvalid && deltaOverBounds && (
-              <p className="mt-1 text-[11px] text-red-600">
+              <p className="mt-1 text-xs text-urgent">
                 Maximum {MAX_ABS_DELTA.toLocaleString('en-IN')} points in a single adjustment.
               </p>
             )}
             {/* Resulting balance — the number the operator is actually
                 committing to, stated before they can commit to it. */}
             {resulting !== null && (
-              <p className={`mt-1 text-[11px] ${wouldGoNegative ? 'text-red-600' : 'text-muted-foreground'}`}>
+              <p className={`mt-1 text-xs ${wouldGoNegative ? 'text-urgent' : 'text-muted-foreground'}`}>
                 New Balance{' '}
                 <span className={wouldGoNegative ? 'font-medium' : 'font-medium text-foreground'}>
                   {resulting.toLocaleString('en-IN')} pts
@@ -629,7 +629,7 @@ function AdjustPointsDialog({
               </p>
             )}
             {wouldGoNegative && (
-              <p className="mt-0.5 text-[11px] text-red-600">
+              <p className="mt-0.5 text-xs text-urgent">
                 A balance cannot go below zero. Deduct at most {(current ?? 0).toLocaleString('en-IN')} points.
               </p>
             )}
@@ -646,16 +646,16 @@ function AdjustPointsDialog({
               disabled={submitting}
             />
             {trimmedNote.length > 0 && trimmedNote.length < NOTE_MIN && (
-              <p className="mt-1 text-[11px] text-red-600">Give at least {NOTE_MIN} characters.</p>
+              <p className="mt-1 text-xs text-urgent">Give at least {NOTE_MIN} characters.</p>
             )}
-            <p className="mt-1 text-[11px] text-muted-foreground">
+            <p className="mt-1 text-xs text-muted-foreground">
               This note is the only explanation the ledger will carry for this entry.
             </p>
           </div>
 
           {/* The boundary, stated where it matters most — at the moment
               someone is typing a number into a balance. */}
-          <div className="flex items-start gap-2 rounded-md border bg-muted/40 p-2 text-[11px] text-muted-foreground">
+          <div className="flex items-start gap-2 rounded-md border bg-muted/40 p-2 text-xs text-muted-foreground">
             <AlertTriangle className="size-3.5 shrink-0 mt-px" />
             <span>
               Points are not money. An adjustment changes the technician&apos;s rewards balance only —

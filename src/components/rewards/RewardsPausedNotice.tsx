@@ -31,11 +31,11 @@ export function RewardsPausedNotice() {
   if (!data?.earningPaused) return null;
 
   return (
-    <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+    <div className="flex items-start gap-2 rounded-md border border-warning bg-warning-tint px-3 py-2 text-sm text-warning-strong">
       <PauseCircle className="size-4 shrink-0 mt-0.5" />
       <div>
         <span className="font-semibold">Rewards Programme Is Paused For Now. Stay Tuned!</span>{' '}
-        <span className="text-amber-800">
+        <span className="text-warning-strong">
           No new points are being earned from ratings, same-day appointments or referrals.
           Existing balances are unchanged and technicians can still claim rewards.
         </span>
@@ -76,7 +76,7 @@ export function RewardsEarnRates() {
           .sort((a, b) => b.points - a.points)
           .map((rule) => (
             <li key={rule.code} className="text-xs flex items-baseline gap-1.5">
-              <span className="font-semibold text-amber-600 tabular-nums w-10 shrink-0">
+              <span className="font-semibold text-warning-strong tabular-nums w-10 shrink-0">
                 +{rule.points}
               </span>
               <span className="font-medium shrink-0">{rule.label}</span>
@@ -84,7 +84,7 @@ export function RewardsEarnRates() {
             </li>
           ))}
       </ul>
-      <div className="mt-1 text-[11px] text-muted-foreground">
+      <div className="mt-1 text-xs text-muted-foreground">
         These rates are fixed and cannot be changed from the CRM — they are the terms technicians
         are told, so changing one is a deliberate release.
       </div>

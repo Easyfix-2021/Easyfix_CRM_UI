@@ -201,13 +201,13 @@ export function SlotAdvisory({
   }
   if (!candidatePool) {
     return (
-      <p className="mt-1.5 text-xs text-amber-700">
+      <p className="mt-1.5 text-xs text-warning-strong">
         No eligible technician found for this job&apos;s area on this date.
       </p>
     );
   }
   if (!best) {
-    return <p className="mt-1.5 text-xs text-amber-700">No window has a free technician on this date.</p>;
+    return <p className="mt-1.5 text-xs text-warning-strong">No window has a free technician on this date.</p>;
   }
   const hint = attendanceKnown
     ? 'Shows the window with the most eligible technicians who have no clash there, based on today’s attendance.'
@@ -217,7 +217,7 @@ export function SlotAdvisory({
       {/* Native title = the "on hover" info text the row no longer prints. The
           dotted underline is the affordance that there's more on hover. */}
       <span
-        className="text-emerald-700 font-medium cursor-help underline decoration-dotted underline-offset-2"
+        className="text-success-strong font-medium cursor-help underline decoration-dotted underline-offset-2"
         title={hint}
       >
         <Sparkles className="inline h-3 w-3 mb-0.5" /> Best: {best.slot}

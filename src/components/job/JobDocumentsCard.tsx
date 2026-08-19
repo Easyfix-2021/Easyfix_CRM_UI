@@ -102,7 +102,7 @@ export function AuthImage({
   }
   if (status === 'error' || !objUrl) {
     return (
-      <div className={`flex flex-col items-center justify-center gap-0.5 bg-muted/40 text-[10px] text-muted-foreground ${className ?? ''}`}>
+      <div className={`flex flex-col items-center justify-center gap-0.5 bg-muted/40 text-xs text-muted-foreground ${className ?? ''}`}>
         <FileText className="size-4" />
         <span>Unavailable</span>
       </div>
@@ -176,7 +176,7 @@ function DocumentWidget({
   return (
     <div className="rounded-lg border bg-card">
       <div className="flex items-center justify-between border-b px-4 py-2">
-        <div className="text-sm font-semibold text-slate-700">{title}</div>
+        <div className="text-sm font-semibold text-ink-700">{title}</div>
         {canManage && (
           <>
             <input
@@ -219,7 +219,7 @@ function DocumentWidget({
                     aria-label={`Delete ${title}`}
                     disabled={deletingId === d.image_id}
                     onClick={() => void handleDelete(d.image_id)}
-                    className="absolute -right-2 -top-2 flex size-6 items-center justify-center rounded-full border border-rose-200 bg-white text-rose-600 shadow-sm hover:bg-rose-50 disabled:opacity-50"
+                    className="absolute -right-2 -top-2 flex size-6 items-center justify-center rounded-full border border-urgent bg-card text-urgent-strong shadow-sm hover:bg-urgent/15 disabled:opacity-50"
                   >
                     {deletingId === d.image_id
                       ? <Loader2 className="size-3 animate-spin" />

@@ -196,7 +196,7 @@ function RecordingCell({ row }: { row: CallRow }) {
         : 'Play call recording'}
       className={unavailable
         ? 'inline-flex items-center gap-1 text-xs italic text-muted-foreground hover:underline disabled:opacity-50'
-        : 'inline-flex items-center gap-1 text-emerald-700 hover:underline disabled:opacity-50'}
+        : 'inline-flex items-center gap-1 text-success-strong hover:underline disabled:opacity-50'}
     >
       {loading
         ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -239,7 +239,7 @@ export function CallHistoryTable({
   }
   if (error) {
     return (
-      <div className="py-10 text-center text-sm text-red-700">
+      <div className="py-10 text-center text-sm text-urgent-strong">
         Failed to load call history.
       </div>
     );
@@ -292,9 +292,9 @@ export function CallHistoryTable({
                 <td className="py-1.5 pr-3 whitespace-nowrap">
                   <span className="inline-flex items-center gap-1">
                     {out ? (
-                      <PhoneOutgoing className="h-3 w-3 text-emerald-600" />
+                      <PhoneOutgoing className="h-3 w-3 text-success-strong" />
                     ) : (
-                      <PhoneIncoming className="h-3 w-3 text-sky-600" />
+                      <PhoneIncoming className="h-3 w-3 text-info" />
                     )}
                     {out ? 'Outgoing' : 'Incoming'}
                   </span>
@@ -343,7 +343,7 @@ export function CallHistoryButton({
         title="View call history for this job"
         aria-label="View call history for this job"
         className={cn(
-          'inline-flex items-center align-middle text-sky-600 hover:text-sky-800',
+          'inline-flex items-center align-middle text-primary hover:text-brand-600',
           className,
         )}
       >

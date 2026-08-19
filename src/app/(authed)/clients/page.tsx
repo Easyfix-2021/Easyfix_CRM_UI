@@ -150,7 +150,7 @@ export default function ClientsPage() {
           flex-wrap on mid-width viewports. */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
+          <h1 className="text-2xl font-semibold flex items-center gap-2">
             <Building2 className="size-6" /> Manage Clients
           </h1>
           <p className="text-sm text-muted-foreground">
@@ -201,7 +201,7 @@ export default function ClientsPage() {
       </Card>
 
       {error && (
-        <Card><CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
+        <Card><CardContent className="p-3 flex items-center gap-2 text-sm text-urgent">
           <AlertTriangle className="size-4" /> {error}
         </CardContent></Card>
       )}
@@ -252,7 +252,7 @@ export default function ClientsPage() {
                   </td>
                   <td className="!text-center">
                     {c.client_status === 1
-                      ? <span className="text-emerald-700 text-xs">Active</span>
+                      ? <span className="text-success-strong text-xs">Active</span>
                       : <span className="text-muted-foreground text-xs">Inactive</span>}
                   </td>
                   <td className="!text-center">
@@ -344,19 +344,19 @@ function ClientDetailDialog({
          * the band inline with the same gradient + sky underline.
          * pr-12 keeps the Edit button from sliding under the X close.
          */}
-        <DialogHeader className="px-5 py-3 bg-gradient-to-r from-slate-900 via-slate-700 to-slate-900 text-white shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)] !mx-0 !mt-0 !mb-0">
+        <DialogHeader className="px-5 py-3 bg-gradient-to-r from-ink-900 via-ink-700 to-ink-900 text-white shadow-[inset_0_-3px_0_0_hsl(var(--primary)/0.85)] !mx-0 !mt-0 !mb-0">
           <div className="flex items-center justify-between pr-12">
             <DialogTitle className="text-white text-base font-semibold">
               {String(client?.client_name ?? `Client #${clientId}`)}
               {client?.client_status === 0 && (
-                <span className="ml-2 text-xs font-normal text-slate-200/80 bg-slate-700/60 px-2 py-0.5 rounded">Inactive</span>
+                <span className="ml-2 text-xs font-normal text-ink-100/80 bg-ink-700/60 px-2 py-0.5 rounded">Inactive</span>
               )}
             </DialogTitle>
             {canEdit && client && (
               <Button
                 size="sm"
                 onClick={() => setEditing(true)}
-                className="bg-white text-slate-900 hover:bg-slate-100"
+                className="bg-card text-ink-900 hover:bg-ink-100"
               >
                 <Pencil className="size-3.5 mr-1" /> Edit Basic Info
               </Button>
@@ -366,7 +366,7 @@ function ClientDetailDialog({
 
         <div className="flex-1 overflow-y-auto px-5 pb-4">
           {loading && <div className="text-sm text-muted-foreground pt-3">Loading…</div>}
-          {error && <div className="text-sm text-red-600 pt-3">{error}</div>}
+          {error && <div className="text-sm text-urgent pt-3">{error}</div>}
           {!loading && !error && client && (
             <Tabs
               value={tab}
@@ -458,7 +458,7 @@ function OverviewPanel({ client }: { client: ClientDetail }) {
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 pt-3">
       {rows.map((r) => (
         <div key={r.label} className="rounded border bg-card px-3 py-2">
-          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{r.label}</div>
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">{r.label}</div>
           <div className={`text-sm mt-0.5 ${r.mono ? 'font-mono' : ''}`}>
             {r.value == null || r.value === '' ? <span className="text-muted-foreground">—</span> : String(r.value)}
           </div>

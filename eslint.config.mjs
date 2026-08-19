@@ -725,6 +725,111 @@ const config = [
     rules: { 'react-hooks/exhaustive-deps': 'error' },
   },
 
+  /*
+   * BRAND GUARD — brand/no-raw-palette-utility (WARNING, editor feedback only)
+   *
+   * Flags a raw Tailwind palette class inside a JSX `className` — `bg-slate-100`,
+   * `hover:text-red-600`, `border-gray-200`, `from-sky-50`. A raw palette class is
+   * exactly as hard-coded as `#f1f5f9`; it just doesn't look like one, which is why
+   * ~1500 of them accumulated before anything checked. `src/brand/palette.ts` is the
+   * rebrand seam and every raw class is a colour that seam cannot reach — Tailwind's
+   * `slate` grey is a BLUE grey while the brand ink ramp is warm, so a rebrand that
+   * edits palette.ts leaves those call sites rendering the old identity. Semantic
+   * classes (`bg-primary`, `text-muted-foreground`, `border-border`) resolve through
+   * the generated tokens in src/app/brand.css and are the migration target.
+   *
+   * WHY THIS IS A SEPARATE RULE KEY AND NOT ANOTHER `no-restricted-syntax` ENTRY
+   *
+   * `no-restricted-syntax` already carries three entries at ERROR (the Dialog
+   * onOpenChange guard and the two useEffect-fetch guards), plus per-file carve-outs
+   * below that switch it off or narrow it. Flat config does NOT merge rule options:
+   * the last config object matching a file replaces that rule key outright, and one
+   * key carries exactly one severity. So appending a fourth entry at the end would
+   * have to either
+   *   (a) restate the rule for every `src/**` file — silently discarding the
+   *       per-file carve-outs below, which exist precisely because those files
+   *       legitimately trip the Dialog rule; or
+   *   (b) share the existing ERROR severity — turning ~1500 pre-existing call sites
+   *       into hard lint errors and red-walling the repo mid-sweep; or
+   *   (c) drop to WARN for all four — quietly downgrading three guards that are
+   *       meant to fail a build.
+   * A distinct rule key has its own severity and clobbers nothing. This is the same
+   * reasoning that made local/no-unscrollable-dialog-content its own rule.
+   *
+   * WHY WARN. The sweep replacing these classes with tokens is in flight; an ERROR
+   * would block every unrelated change until it finishes. The rule's job here is the
+   * squiggle under the class as you type it, so no NEW ones land while the existing
+   * ones are being retired. Note that `npm run lint:flat` runs with
+   * `--max-warnings=0`, so these warnings do fail that script (and CI) until the
+   * sweep reaches zero — if the sweep won't land in the same change, set this to
+   * 'off' rather than deleting the block.
+   *
+   * THE REAL GATE IS THE CLI. `npm run check:brand` (scripts/check-brand-tokens.js)
+   * is broader and authoritative: hex/rgb/hsl literals, the 12px type floor, weights
+   * above 600, logo assets outside <Logo>, and src/app/globals.css — none of which
+   * an ESQuery selector over className literals can see. This rule is the editor
+   * half of that checker, not a second source of truth.
+   *
+   * The pattern below is a copy of RAW_PALETTE in scripts/check-brand-tokens.js
+   * (a lint config can't import it without adding a module-level require). It
+   * enumerates stock Tailwind hues and shades — a fixed upstream list, not a moving
+   * target. Keep the two in sync; the checker's copy is the one under test
+   * (tests/brand-tokens.test.js) and the one that decides a build.
+   */
+  {
+    files: ['src/**/*.{ts,tsx}'],
+    plugins: {
+      brand: {
+        rules: {
+          'no-raw-palette-utility': {
+            meta: {
+              type: 'problem',
+              docs: {
+                description:
+                  'Disallow raw Tailwind palette utilities in className — use the brand tokens.',
+              },
+              schema: [],
+              messages: {
+                raw:
+                  '`{{cls}}` is a raw Tailwind palette colour, not a brand token, so a rebrand '
+                  + 'cannot reach it (src/brand/palette.ts is the only seam). Use the semantic '
+                  + 'class that carries the same meaning — bg-primary / bg-card / bg-muted, '
+                  + 'text-foreground / text-muted-foreground, border-border, ring-ring — or add '
+                  + 'the token in src/brand/tokens.ts and re-run `npm run brand:gen`. '
+                  + '`npm run check:brand` lists every remaining site.',
+              },
+            },
+            create(context) {
+              const RAW_PALETTE =
+                /\b(bg|text|border|ring|from|via|to|fill|stroke|divide|outline|placeholder|decoration|shadow|accent|caret)-(slate|gray|zinc|neutral|stone|sky|blue|indigo|violet|purple|fuchsia|pink|rose|red|orange|amber|yellow|lime|green|emerald|teal|cyan)-(50|100|200|300|400|500|600|700|800|900|950)\b/;
+
+              // Report once per offending string chunk, naming the first hit so the
+              // message is actionable without re-reading the line.
+              const check = (node, value) => {
+                if (typeof value !== 'string') return;
+                const hit = RAW_PALETTE.exec(value);
+                if (hit) context.report({ node, messageId: 'raw', data: { cls: hit[0] } });
+              };
+
+              return {
+                // Covers `className="…"`, `className={'…'}`, and string arms inside
+                // cn()/clsx() calls and ternaries — anywhere a literal sits beneath
+                // the attribute.
+                'JSXAttribute[name.name="className"] Literal': (node) => check(node, node.value),
+                // …and the static chunks of `className={`… ${x} …`}`.
+                'JSXAttribute[name.name="className"] TemplateElement': (node) =>
+                  check(node, node.value.raw),
+              };
+            },
+          },
+        },
+      },
+    },
+    rules: {
+      'brand/no-raw-palette-utility': 'warn',
+    },
+  },
+
   // Exclusions — never lint these.
   {
     ignores: [

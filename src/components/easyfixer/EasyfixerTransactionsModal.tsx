@@ -119,7 +119,7 @@ export function EasyfixerTransactionsModal({
         <DialogHeader className="!mx-0 !mt-0 px-6 py-4 mb-0">
           <DialogTitle>{headerTitle}</DialogTitle>
           {easyfixerMobile && (
-            <div className="text-[12px] text-slate-300/85 mt-0.5">
+            <div className="text-[12px] text-ink-300/85 mt-0.5">
               Mobile: {maskMobile(easyfixerMobile)}
             </div>
           )}
@@ -152,7 +152,7 @@ export function EasyfixerTransactionsModal({
               )}
               {!loading && error && (
                 <tr>
-                  <td colSpan={11} className="text-center py-8 text-rose-600">
+                  <td colSpan={11} className="text-center py-8 text-urgent-strong">
                     {error}
                   </td>
                 </tr>

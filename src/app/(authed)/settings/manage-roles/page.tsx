@@ -294,7 +294,7 @@ export default function ManageRolesPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
+          <h1 className="text-2xl font-semibold flex items-center gap-2">
             <ShieldCheck className="size-6" /> Manage Roles
           </h1>
           <p className="text-sm text-muted-foreground">
@@ -319,7 +319,7 @@ export default function ManageRolesPage() {
             aria-expanded={howOpen}
           >
             {howOpen ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
-            <Info className="size-4 shrink-0 text-blue-600" />
+            <Info className="size-4 shrink-0 text-info" />
             <span className="font-medium">How Role Management Works?</span>
             <span className="ml-auto text-xs text-muted-foreground">{howOpen ? 'Hide' : 'Show'}</span>
           </button>
@@ -347,7 +347,7 @@ export default function ManageRolesPage() {
 
       {error && (
         <Card>
-          <CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
+          <CardContent className="p-3 flex items-center gap-2 text-sm text-urgent">
             <AlertTriangle className="size-4" /> {error}
           </CardContent>
         </Card>
@@ -475,7 +475,7 @@ export default function ManageRolesPage() {
                       <td className="!text-center font-mono text-xs">{r.user_count}</td>
                       <td className="!text-center whitespace-nowrap">
                         {r.role_status === 1
-                          ? <span className="text-emerald-700 text-xs">Active</span>
+                          ? <span className="text-success-strong text-xs">Active</span>
                           : <span className="text-muted-foreground text-xs">Inactive</span>}
                       </td>
                       <td className="!text-right whitespace-nowrap">
@@ -507,7 +507,7 @@ export default function ManageRolesPage() {
                             />
                           )}
                           {!can.isRollEdit && (
-                            <span className="text-[10px] text-muted-foreground">view-only</span>
+                            <span className="text-xs text-muted-foreground">view-only</span>
                           )}
                         </div>
                       </td>
@@ -519,7 +519,7 @@ export default function ManageRolesPage() {
                       * the column layout stays stable.
                       */}
                     {expanded && (
-                      <tr className="bg-slate-50">
+                      <tr className="bg-ink-50">
                         <td colSpan={7} className="!text-left p-3">
                           <RoleDataDetail
                             role={r}
@@ -640,8 +640,8 @@ function RoleDataDetail({
                   <span className="text-muted-foreground italic">none granted</span>
                 ) : (
                   grantedHere.map((a) => (
-                    <span key={a.id} className="inline-block bg-blue-50 text-blue-700 rounded px-1.5 py-0.5 mr-1 mb-0.5">
-                      {a.name} <span className="font-mono text-[10px] opacity-70">({a.action_name})</span>
+                    <span key={a.id} className="inline-block bg-info-tint text-info-strong rounded px-1.5 py-0.5 mr-1 mb-0.5">
+                      {a.name} <span className="font-mono text-xs opacity-70">({a.action_name})</span>
                     </span>
                   ))
                 )}
@@ -1020,7 +1020,7 @@ function RoleFormModal({
                   />
                   <span
                     className={`text-xs w-16 inline-block text-left ${
-                      active ? 'text-emerald-700' : 'text-muted-foreground'
+                      active ? 'text-success-strong' : 'text-muted-foreground'
                     }`}
                   >
                     {active ? 'Active' : 'Inactive'}
@@ -1104,7 +1104,7 @@ function RoleFormModal({
                 const hybridState = parentChecked && allKidsChecked;
                 return (
                   <div key={parent.menu_id} className="bg-background">
-                    <div className="px-3 py-2 flex items-center gap-2 bg-slate-50">
+                    <div className="px-3 py-2 flex items-center gap-2 bg-ink-50">
                       <input
                         type="checkbox"
                         checked={hybridState}
@@ -1115,7 +1115,7 @@ function RoleFormModal({
                       <span className="font-medium text-sm flex-1">{parent.menu_name}</span>
                       {filterEnabled && hiddenMenuIds.has(parent.menu_id) && (
                         <span
-                          className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 font-medium whitespace-nowrap"
+                          className="text-xs px-1.5 py-0.5 rounded bg-warning-tint text-warning-strong border border-warning/30 font-medium whitespace-nowrap"
                           title="This menu is currently hidden from the new CRM sidebar by the NEW_CRM_VISIBLE_MENU_IDS env filter. Role access is still relevant for the legacy Java CRM, which reads tbl_menu directly."
                         >
                           Hidden in new CRM
@@ -1123,7 +1123,7 @@ function RoleFormModal({
                       )}
                       <button
                         type="button"
-                        className="text-xs text-blue-600 hover:underline"
+                        className="text-xs text-primary hover:underline"
                         onClick={() => toggleMenu(parent.menu_id)}
                       >
                         {parentChecked ? 'Hide parent' : 'Show parent only'}
@@ -1149,7 +1149,7 @@ function RoleFormModal({
                       .map((child) => {
                       const childChecked = selectedMenus.has(child.menu_id);
                       return (
-                        <div key={child.menu_id} className="border-t border-slate-100">
+                        <div key={child.menu_id} className="border-t border-ink-100">
                           <div className="px-3 py-1.5 pl-8 flex items-center gap-2 text-sm">
                             <input
                               type="checkbox"
@@ -1159,13 +1159,13 @@ function RoleFormModal({
                             <span className="flex-1">{child.menu_name}</span>
                             {filterEnabled && hiddenMenuIds.has(child.menu_id) && (
                               <span
-                                className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 font-medium whitespace-nowrap"
+                                className="text-xs px-1.5 py-0.5 rounded bg-warning-tint text-warning-strong border border-warning/30 font-medium whitespace-nowrap"
                                 title="This menu is currently hidden from the new CRM sidebar by the NEW_CRM_VISIBLE_MENU_IDS env filter. Role access is still relevant for the legacy Java CRM, which reads tbl_menu directly."
                               >
                                 Hidden in new CRM
                               </span>
                             )}
-                            <span className="text-[10px] text-muted-foreground font-mono">#{child.menu_id}</span>
+                            <span className="text-xs text-muted-foreground font-mono">#{child.menu_id}</span>
                           </div>
                           <MenuActionRows
                             actions={actionsByMenu.get(child.menu_id) ?? []}
@@ -1183,7 +1183,7 @@ function RoleFormModal({
           </section>
 
           {error && (
-            <div className="text-sm text-red-600 flex items-center gap-1">
+            <div className="text-sm text-urgent flex items-center gap-1">
               <AlertTriangle className="size-4" /> {error}
             </div>
           )}
@@ -1232,7 +1232,7 @@ function MenuActionRows({
             onChange={() => onToggle(a.id)}
           />
           <span>{a.name}</span>
-          <span className="text-[10px] font-mono text-muted-foreground">({a.action_name})</span>
+          <span className="text-xs font-mono text-muted-foreground">({a.action_name})</span>
         </label>
         </li>
       ))}

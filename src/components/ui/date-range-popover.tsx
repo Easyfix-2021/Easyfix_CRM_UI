@@ -126,7 +126,7 @@ export function DateRangePopover({
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="w-full h-9 px-3 rounded-md border border-input bg-white text-left text-sm flex items-center gap-2 hover:bg-muted/40"
+        className="w-full h-9 px-3 rounded-md border border-input bg-card text-left text-sm flex items-center gap-2 hover:bg-muted/40"
       >
         <Calendar className="h-4 w-4 text-muted-foreground shrink-0" />
         <span className="truncate">
@@ -137,7 +137,7 @@ export function DateRangePopover({
       </button>
       {open && (
         <div
-          className="absolute z-50 mt-1 bg-white border rounded-md shadow-lg p-3 w-[280px] select-none touch-pan-y"
+          className="absolute z-50 mt-1 bg-popover border rounded-md shadow-lg p-3 w-[280px] select-none touch-pan-y"
           /*
            * Swipe-to-navigate. Records the first touch's X on
            * touchstart, computes delta on touchend; ≥40 px triggers a
@@ -182,7 +182,7 @@ export function DateRangePopover({
               aria-label="Next month"
             >›</button>
           </div>
-          <div className="grid grid-cols-7 gap-1 text-center text-[10px] text-muted-foreground mb-1">
+          <div className="grid grid-cols-7 gap-1 text-center text-xs text-muted-foreground mb-1">
             {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => <div key={i}>{d}</div>)}
           </div>
           <div className="grid grid-cols-7 gap-1">
@@ -203,9 +203,9 @@ export function DateRangePopover({
                   className={[
                     'h-7 text-xs rounded transition-colors',
                     disabled ? 'text-muted-foreground/30 cursor-not-allowed' : 'hover:bg-muted',
-                    inRange && !disabled && !isEdge ? 'bg-sky-100' : '',
-                    isEdge && !disabled ? 'bg-sky-600 text-white hover:bg-sky-700' : '',
-                    isToday && !isEdge && !disabled ? 'ring-1 ring-sky-400' : '',
+                    inRange && !disabled && !isEdge ? 'bg-brand-100' : '',
+                    isEdge && !disabled ? 'bg-primary text-primary-foreground hover:bg-brand-600' : '',
+                    isToday && !isEdge && !disabled ? 'ring-1 ring-primary' : '',
                   ].join(' ')}
                 >
                   {d.getDate()}
@@ -214,7 +214,7 @@ export function DateRangePopover({
             })}
           </div>
           {pendingStart && (
-            <div className="text-[11px] text-muted-foreground mt-2 text-center">
+            <div className="text-xs text-muted-foreground mt-2 text-center">
               Now pick the end date.
             </div>
           )}

@@ -136,7 +136,7 @@ export function EasyfixerActionMenu({
           type="button"
           className={cn(
             'inline-flex h-7 w-7 items-center justify-center rounded',
-            'text-muted-foreground hover:bg-slate-100 hover:text-primary',
+            'text-muted-foreground hover:bg-ink-100 hover:text-primary',
             'transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
           )}
           aria-label={`Actions for ${easyfixer.efr_name}`}
@@ -195,19 +195,19 @@ export function EasyfixerActionMenu({
         )}
         {canManageLifecycle && onLifecycle && (
           <DropdownMenuItem onClick={onLifecycle}>
-            <History className="mr-2 h-4 w-4 text-violet-600" />
+            <History className="mr-2 h-4 w-4 text-gold-strong" />
             Status &amp; History
           </DropdownMenuItem>
         )}
         {canUpdateMobile && onUpdateMobile && (
           <DropdownMenuItem onClick={onUpdateMobile}>
-            <Smartphone className="mr-2 h-4 w-4 text-sky-600" />
+            <Smartphone className="mr-2 h-4 w-4 text-primary" />
             Update Mobile Number
           </DropdownMenuItem>
         )}
         {canUpdateBank && onUpdateBank && (
           <DropdownMenuItem onClick={onUpdateBank}>
-            <Landmark className="mr-2 h-4 w-4 text-emerald-600" />
+            <Landmark className="mr-2 h-4 w-4 text-success-strong" />
             Update Bank Details
           </DropdownMenuItem>
         )}

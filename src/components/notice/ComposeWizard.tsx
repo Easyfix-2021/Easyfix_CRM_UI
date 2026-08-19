@@ -450,11 +450,11 @@ export function ComposeWizard({
           </DialogTitle>
           <DialogDescription asChild>
             <div className="flex items-center gap-2 pt-1 text-xs">
-              <span className={`px-2 py-0.5 rounded-full ${step === 1 ? 'bg-sky-600 text-white' : 'bg-emerald-100 text-emerald-800'}`}>
+              <span className={`px-2 py-0.5 rounded-full ${step === 1 ? 'bg-info text-white' : 'bg-success-tint text-success-strong'}`}>
                 1. Compose
               </span>
-              <span className="h-px w-6 bg-slate-400/40" />
-              <span className={`px-2 py-0.5 rounded-full ${step === 2 ? 'bg-sky-600 text-white' : 'bg-slate-600/40 text-slate-200/80'}`}>
+              <span className="h-px w-6 bg-ink-500/40" />
+              <span className={`px-2 py-0.5 rounded-full ${step === 2 ? 'bg-info text-white' : 'bg-ink-700/40 text-ink-100/80'}`}>
                 2. Review &amp; Send
               </span>
             </div>
@@ -462,7 +462,7 @@ export function ComposeWizard({
         </DialogHeader>
 
         {locked && (
-          <div className="mx-6 mt-3 rounded-md p-3 flex items-center gap-2 text-sm text-amber-700 bg-amber-50 border border-amber-200">
+          <div className="mx-6 mt-3 rounded-md p-3 flex items-center gap-2 text-sm text-warning-strong bg-warning-tint border border-warning">
             <AlertTriangle className="size-4" />
             This notice is {existing!.status}. Published or archived notices cannot be edited — archive and recreate to make changes.
           </div>
@@ -476,7 +476,7 @@ export function ComposeWizard({
                 and needs far less width than a full-bleed row gave it. */}
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
               <div className="min-w-0 flex-1">
-                <Label htmlFor="title">Title <span className="text-red-500">*</span></Label>
+                <Label htmlFor="title">Title <span className="text-urgent">*</span></Label>
                 <Input
                   id="title"
                   value={form.title}
@@ -493,7 +493,7 @@ export function ComposeWizard({
                   same height as the input beside it. */}
               <div className="flex h-9 shrink-0 items-center justify-between gap-3 rounded-md bg-muted/30 px-3 sm:mt-[1.625rem]">
                 <div className="flex items-center gap-2 whitespace-nowrap">
-                  <Pin className="h-4 w-4 shrink-0 text-amber-500" />
+                  <Pin className="h-4 w-4 shrink-0 text-warning" />
                   <Label htmlFor="is_pinned" className="cursor-pointer">Pin to Top</Label>
                   <span className="text-xs text-muted-foreground">Keeps it above others</span>
                 </div>
@@ -507,7 +507,7 @@ export function ComposeWizard({
             </div>
 
             <div>
-              <Label htmlFor="body">Message <span className="text-red-500">*</span></Label>
+              <Label htmlFor="body">Message <span className="text-urgent">*</span></Label>
               <textarea
                 id="body"
                 value={form.body}
@@ -526,11 +526,11 @@ export function ComposeWizard({
                   below the Action Link input. */}
               <div>
                 <div className="flex h-6 items-center justify-between">
-                  <Label htmlFor="category_id">Category <span className="text-red-500">*</span></Label>
+                  <Label htmlFor="category_id">Category <span className="text-urgent">*</span></Label>
                   <button
                     type="button"
                     onClick={() => setShowCatAdd(true)}
-                    className="text-xs text-sky-700 hover:underline flex items-center gap-1"
+                    className="text-xs text-primary hover:underline flex items-center gap-1"
                     disabled={!!locked}
                   >
                     <Plus className="h-3 w-3" /> Add Category
@@ -582,7 +582,7 @@ export function ComposeWizard({
                       type="button"
                       onClick={() => toggleSurface(s.key)}
                       disabled={!!locked}
-                      className={`rounded-full border px-3 py-1 text-sm transition-colors disabled:opacity-50 ${active ? 'bg-sky-600 border-sky-700 text-white' : 'bg-background border-input hover:bg-muted'}`}
+                      className={`rounded-full border px-3 py-1 text-sm transition-colors disabled:opacity-50 ${active ? 'bg-primary border-brand-600 text-white' : 'bg-background border-input hover:bg-muted'}`}
                     >
                       {s.label}
                     </button>
@@ -610,7 +610,7 @@ export function ComposeWizard({
                         checked={form.push_technician}
                         disabled={!!locked}
                         onChange={(e) => setForm((f) => ({ ...f, push_technician: e.target.checked }))}
-                        className="mt-0.5 h-4 w-4 rounded border-input accent-sky-600 disabled:opacity-50"
+                        className="mt-0.5 h-4 w-4 rounded border-input accent-primary disabled:opacity-50"
                       />
                       <span>
                         Technician App
@@ -633,7 +633,7 @@ export function ComposeWizard({
                     */}
                   {form.target_surfaces.includes('client') && (
                     <span
-                      className="inline-flex w-fit cursor-not-allowed items-center gap-1.5 rounded-full border border-dashed border-amber-300 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-800"
+                      className="inline-flex w-fit cursor-not-allowed items-center gap-1.5 rounded-full border border-dashed border-warning bg-warning-tint px-3 py-1 text-xs font-medium text-warning-strong"
                       title={
                         'Client App push is not available yet — the Client App does not register '
                         + 'push tokens, so nothing can be delivered to it. The notice still reaches '
@@ -660,7 +660,7 @@ export function ComposeWizard({
               <div className="flex items-center justify-between">
                 <Label>Images <span className="text-muted-foreground text-xs">(up to {MAX_IMAGES})</span></Label>
                 {uploadingCount > 0 && (
-                  <span className="text-xs text-sky-700 flex items-center gap-1">
+                  <span className="text-xs text-info-strong flex items-center gap-1">
                     <Loader2 className="h-3 w-3 animate-spin" /> Uploading {uploadingCount}…
                   </span>
                 )}
@@ -694,7 +694,7 @@ export function ComposeWizard({
                     className="h-20 w-20 rounded border-2 border-dashed border-input flex flex-col items-center justify-center text-muted-foreground hover:border-foreground/40 hover:text-foreground transition-colors disabled:opacity-50"
                   >
                     <ImagePlus className="h-5 w-5" />
-                    <span className="text-[10px] mt-0.5">Add</span>
+                    <span className="text-xs mt-0.5">Add</span>
                   </button>
                 )}
                 <input
@@ -809,7 +809,7 @@ export function ComposeWizard({
                   {form.body || '(Message preview)'}
                 </div>
                 {form.action_url && (
-                  <div className="text-xs text-sky-700 truncate">{form.action_url}</div>
+                  <div className="text-xs text-info-strong truncate">{form.action_url}</div>
                 )}
               </div>
             </div>
@@ -829,8 +829,8 @@ export function ComposeWizard({
         {step === 2 && (
           <div className="px-6 pb-4 -mt-1">
             {showSchedulePanel && (
-              <div className="rounded-md border border-sky-200 bg-sky-50 p-3 mb-3 space-y-2">
-                <div className="flex items-center gap-2 text-sm font-medium text-sky-800">
+              <div className="rounded-md border border-info bg-info-tint p-3 mb-3 space-y-2">
+                <div className="flex items-center gap-2 text-sm font-medium text-info-strong">
                   <CalendarClock className="h-4 w-4" /> Schedule For Future Publish
                 </div>
                 <Input

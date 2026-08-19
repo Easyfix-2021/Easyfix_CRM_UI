@@ -39,9 +39,9 @@ async function resolveCode(code: string): Promise<ResolveResult> {
 
 function Card({ title, message }: { title: string; message: string }) {
   return (
-    <div className="rounded-xl border bg-white shadow-sm px-7 py-8 text-center mt-12">
-      <h1 className="text-lg font-semibold text-slate-900">{title}</h1>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">{message}</p>
+    <div className="rounded-xl border bg-card shadow-sm px-7 py-8 text-center mt-12">
+      <h1 className="text-lg font-semibold text-ink-900">{title}</h1>
+      <p className="mt-2 text-sm leading-relaxed text-ink-700">{message}</p>
     </div>
   );
 }

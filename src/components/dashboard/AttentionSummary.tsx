@@ -87,8 +87,8 @@ const TILES: Tile[] = [
     title: 'Running Late',
     sub: 'Past Scheduled Time',
     icon: Clock,
-    iconBg: 'bg-rose-100',
-    iconFg: 'text-rose-700',
+    iconBg: 'bg-urgent-tint',
+    iconFg: 'text-urgent-strong',
     href: '/jobs?tab=running-late',
   },
   {
@@ -96,8 +96,8 @@ const TILES: Tile[] = [
     title: 'Estimate Approved',
     sub: 'Align A Transaction',
     icon: CheckCircle2,
-    iconBg: 'bg-emerald-100',
-    iconFg: 'text-emerald-700',
+    iconBg: 'bg-success-tint',
+    iconFg: 'text-success-strong',
     href: '/jobs?tab=estimate-approved',
   },
   {
@@ -105,8 +105,8 @@ const TILES: Tile[] = [
     title: 'Estimate Rejected',
     sub: 'Immediate Follow-up',
     icon: XCircle,
-    iconBg: 'bg-amber-100',
-    iconFg: 'text-amber-700',
+    iconBg: 'bg-warning-tint',
+    iconFg: 'text-warning-strong',
     href: '/jobs?tab=estimate-rejected',
   },
   {
@@ -114,8 +114,8 @@ const TILES: Tile[] = [
     title: 'Pending Tech Acceptance',
     sub: 'Awaiting App Ack',
     icon: BellRing,
-    iconBg: 'bg-sky-100',
-    iconFg: 'text-sky-700',
+    iconBg: 'bg-info-tint',
+    iconFg: 'text-info-strong',
     href: '/my-orders?tab=pending-app-ack',
   },
   {
@@ -123,8 +123,8 @@ const TILES: Tile[] = [
     title: 'Customer Unreachable',
     sub: 'Retry Queue',
     icon: PhoneOff,
-    iconBg: 'bg-violet-100',
-    iconFg: 'text-violet-700',
+    iconBg: 'bg-gold-tint',
+    iconFg: 'text-gold-strong',
     href: '/jobs?tab=call-later',
   },
   /*
@@ -144,8 +144,8 @@ const TILES: Tile[] = [
     title: 'Booked With No Services',
     sub: 'Add Line Items',
     icon: PackageX,
-    iconBg: 'bg-amber-100',
-    iconFg: 'text-amber-700',
+    iconBg: 'bg-warning-tint',
+    iconFg: 'text-warning-strong',
     // `noServices=true` is the BE list filter (2026-05-28) that pins
     // status=0 + anti-joins tbl_job_services on job_service_status=1.
     // The list page narrows to the exact rows this tile counted.
@@ -267,7 +267,7 @@ function AttentionTile({ tile, value, loading }: {
             {tile.title}
           </MarqueeOnHover>
           <MarqueeOnHover
-            className="text-[11px] text-muted-foreground leading-snug"
+            className="text-xs text-muted-foreground leading-snug"
             animateOverride={animateBoth}
             durationOverride={sharedDurationMs}
             onMeasure={(ov, dist) => { setSubOverflows(ov); setSubExit(dist); }}

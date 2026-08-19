@@ -78,7 +78,7 @@ export default function FinanceLandingPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
+        <h1 className="text-2xl font-semibold flex items-center gap-2">
           <Coins className="size-6" /> Finance
         </h1>
         <p className="text-sm text-muted-foreground">
@@ -162,7 +162,7 @@ function InvoicesTab({ clientId }: { clientId: string }) {
         </thead>
         <tbody>
           {data.map((inv) => (
-            <tr key={inv.id} className="hover:bg-slate-50">
+            <tr key={inv.id} className="hover:bg-ink-50">
               <td className="!text-center font-mono text-xs">{inv.id}</td>
               <td className="font-mono text-xs">{inv.invoice_number ?? '—'}</td>
               <td className="text-xs">
@@ -171,11 +171,11 @@ function InvoicesTab({ clientId }: { clientId: string }) {
               <td className="!text-right font-mono">{inv.total_invoice_amount != null ? Number(inv.total_invoice_amount).toFixed(2) : '—'}</td>
               <td className="!text-right font-mono">{inv.total_paid_amount != null ? Number(inv.total_paid_amount).toFixed(2) : '—'}</td>
               <td className="!text-center text-xs">
-                {inv.is_paid ? <span className="badge bg-emerald-50 text-emerald-700">Paid</span> : <span className="badge bg-amber-50 text-amber-700">Unpaid</span>}
+                {inv.is_paid ? <span className="badge bg-success-tint text-success-strong">Paid</span> : <span className="badge bg-warning-tint text-warning-strong">Unpaid</span>}
               </td>
               <td className="!text-right whitespace-nowrap">
                 {can.isInvoicePay && !inv.is_paid && (
-                  <button onClick={() => setPaying(inv)} className="inline-flex items-center gap-1 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50 rounded">
+                  <button onClick={() => setPaying(inv)} className="inline-flex items-center gap-1 px-2 py-1 text-xs text-success-strong hover:bg-success-tint rounded">
                     <CheckCircle2 className="size-3.5" /> Record Payment
                   </button>
                 )}
@@ -342,7 +342,7 @@ function EmailButton({ invoiceId }: { invoiceId: number }) {
       <button onClick={send} disabled={busy} className="inline-flex items-center gap-1 px-2 py-1 text-xs text-primary hover:bg-primary/10 rounded disabled:opacity-50">
         <Mail className="size-3.5" /> {busy ? 'Sending…' : 'Email'}
       </button>
-      {msg && <span className="text-[10px] text-slate-500 ml-1">{msg}</span>}
+      {msg && <span className="text-xs text-ink-500 ml-1">{msg}</span>}
     </span>
   );
 }
@@ -636,7 +636,7 @@ function PayoutsTab() {
           {['', '0', '1', '2', '3'].map((s) => (
             <button key={s || 'all'}
               onClick={() => setStatusFilter(s)}
-              className={`px-2 py-0.5 rounded text-xs ${statusFilter === s ? 'bg-primary text-white' : 'bg-slate-200 text-slate-700'}`}>
+              className={`px-2 py-0.5 rounded text-xs ${statusFilter === s ? 'bg-primary text-white' : 'bg-ink-100 text-ink-700'}`}>
               {s === '' ? 'All' : STATUS_LABEL[Number(s)]}
             </button>
           ))}
@@ -671,7 +671,7 @@ function PayoutsTab() {
             </thead>
             <tbody>
               {data.map((p) => (
-                <tr key={p.payout_id} className="hover:bg-slate-50">
+                <tr key={p.payout_id} className="hover:bg-ink-50">
                   {can.isPayoutBulkApprove && (
                     <td className="!text-center">
                       {p.is_approved_by_fin === 0 && (
@@ -696,12 +696,12 @@ function PayoutsTab() {
                   <td className="!text-center text-xs">{STATUS_LABEL[p.is_approved_by_fin] ?? p.is_approved_by_fin}</td>
                   <td className="!text-right whitespace-nowrap">
                     {p.is_approved_by_fin === 0 && (
-                      <button onClick={() => act(p, 'ops-approve')} className="text-xs text-blue-600 hover:underline px-1.5">Ops ✓</button>
+                      <button onClick={() => act(p, 'ops-approve')} className="text-xs text-primary hover:underline px-1.5">Ops ✓</button>
                     )}
                     {p.is_approved_by_fin === 1 && (
                       <>
-                        <button onClick={() => act(p, 'fin-approve')} className="text-xs text-emerald-700 hover:underline px-1.5">Fin ✓</button>
-                        <button onClick={() => act(p, 'fin-reject')} className="text-xs text-red-600 hover:underline px-1.5">Fin ✗</button>
+                        <button onClick={() => act(p, 'fin-approve')} className="text-xs text-success-strong hover:underline px-1.5">Fin ✓</button>
+                        <button onClick={() => act(p, 'fin-reject')} className="text-xs text-urgent hover:underline px-1.5">Fin ✗</button>
                       </>
                     )}
                   </td>
@@ -807,8 +807,8 @@ function NdmCollectionTab() {
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground">Filter:</span>
-          <button onClick={() => setFlag('4')} className={`px-2 py-0.5 rounded text-xs ${flag === '4' ? 'bg-primary text-white' : 'bg-slate-200'}`}>Pending Approval</button>
-          <button onClick={() => setFlag('2')} className={`px-2 py-0.5 rounded text-xs ${flag === '2' ? 'bg-primary text-white' : 'bg-slate-200'}`}>By NDM</button>
+          <button onClick={() => setFlag('4')} className={`px-2 py-0.5 rounded text-xs ${flag === '4' ? 'bg-primary text-white' : 'bg-ink-100'}`}>Pending Approval</button>
+          <button onClick={() => setFlag('2')} className={`px-2 py-0.5 rounded text-xs ${flag === '2' ? 'bg-primary text-white' : 'bg-ink-100'}`}>By NDM</button>
         </div>
         {can.isNdmRechargeAdd && (
           <Button size="sm" onClick={() => setShowCreate(true)}>
@@ -831,7 +831,7 @@ function NdmCollectionTab() {
             </thead>
             <tbody>
               {data.map((r) => (
-                <tr key={r.recharge_id} className="hover:bg-slate-50">
+                <tr key={r.recharge_id} className="hover:bg-ink-50">
                   <td className="!text-center font-mono text-xs">{r.recharge_id}</td>
                   <td className="text-xs">{r.efr_name || '—'}<br/><span className="text-muted-foreground">#{r.efr_id}</span></td>
                   <td className="text-xs">{r.user_name || '—'}</td>
@@ -840,13 +840,13 @@ function NdmCollectionTab() {
                   <td className="font-mono text-xs">{r.reference_id || '—'}</td>
                   <td className="text-xs">{formatDate(r.recharge_date)}</td>
                   <td className="!text-center text-xs">
-                    {r.approved_by_finance === 1 ? <span className="badge bg-emerald-50 text-emerald-700">Approved</span> : <span className="badge bg-amber-50 text-amber-700">Pending</span>}
+                    {r.approved_by_finance === 1 ? <span className="badge bg-success-tint text-success-strong">Approved</span> : <span className="badge bg-warning-tint text-warning-strong">Pending</span>}
                   </td>
                   <td className="!text-right whitespace-nowrap">
                     {r.approved_by_finance === 0 && (
                       <>
-                        <button onClick={() => approve(r)} className="text-xs text-emerald-700 hover:underline px-1.5"><CheckCircle2 className="inline size-3 mb-0.5" /> Approve</button>
-                        <button onClick={() => reject(r)} className="text-xs text-red-600 hover:underline px-1.5"><XCircle className="inline size-3 mb-0.5" /> Reject</button>
+                        <button onClick={() => approve(r)} className="text-xs text-success-strong hover:underline px-1.5"><CheckCircle2 className="inline size-3 mb-0.5" /> Approve</button>
+                        <button onClick={() => reject(r)} className="text-xs text-urgent hover:underline px-1.5"><XCircle className="inline size-3 mb-0.5" /> Reject</button>
                       </>
                     )}
                   </td>
@@ -971,7 +971,7 @@ function EfrLedgerTab() {
         {[['', 'All'], ['1', 'Debit'], ['2', 'Credit']].map(([v, label]) => (
           <button key={v}
             onClick={() => setType(v)}
-            className={`px-2 py-0.5 rounded text-xs ${type === v ? 'bg-primary text-white' : 'bg-slate-200 text-slate-700'}`}>
+            className={`px-2 py-0.5 rounded text-xs ${type === v ? 'bg-primary text-white' : 'bg-ink-100 text-ink-700'}`}>
             {label}
           </button>
         ))}
@@ -998,14 +998,14 @@ function EfrLedgerTab() {
             </thead>
             <tbody>
               {data.map((t) => (
-                <tr key={t.transaction_id} className="hover:bg-slate-50">
+                <tr key={t.transaction_id} className="hover:bg-ink-50">
                   <td className="!text-center font-mono text-xs">{t.transaction_id}</td>
                   <td className="text-xs">{t.efr_name || '—'}<br/><span className="text-muted-foreground font-mono">#{t.easyfixer_id} · {t.efr_no || ''}</span></td>
                   <td className="!text-center text-xs">
                     {t.transaction_type === 1
-                      ? <span className="badge bg-rose-50 text-rose-700">Debit</span>
+                      ? <span className="badge bg-urgent-tint text-urgent-strong">Debit</span>
                       : t.transaction_type === 2
-                        ? <span className="badge bg-emerald-50 text-emerald-700">Credit</span>
+                        ? <span className="badge bg-success-tint text-success-strong">Credit</span>
                         : t.transaction_type}
                   </td>
                   <td className="!text-right font-mono">{t.amount != null ? Number(t.amount).toFixed(2) : '—'}</td>
@@ -1027,7 +1027,7 @@ function EfrLedgerTab() {
 function Loading() { return <div className="text-sm text-muted-foreground py-6 text-center mt-2">Loading…</div>; }
 function Err({ msg }: { msg: string }) {
   return (
-    <Card className="mt-2"><CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
+    <Card className="mt-2"><CardContent className="p-3 flex items-center gap-2 text-sm text-urgent">
       <AlertTriangle className="size-4" /> {msg}
     </CardContent></Card>
   );

@@ -36,8 +36,8 @@ export function detectCelebration(title?: string | null): CelebrationKind {
   return null;
 }
 
-const CONFETTI_COLORS = ['#fbbf24', '#f472b6', '#34d399', '#60a5fa', '#f87171', '#c084fc', '#fde047'];
-const BALLOON_COLORS = ['#f472b6', '#fbbf24', '#60a5fa', '#34d399', '#c084fc'];
+const CONFETTI_COLORS = ['hsl(var(--gold))', 'hsl(var(--urgent))', 'hsl(var(--success))', 'hsl(var(--info))', 'hsl(var(--urgent))', 'hsl(var(--gold))', 'hsl(var(--warning))'];
+const BALLOON_COLORS = ['hsl(var(--urgent))', 'hsl(var(--gold))', 'hsl(var(--info))', 'hsl(var(--success))', 'hsl(var(--gold))'];
 
 /*
  * Deterministic pseudo-random. Math.random() would give every render a new

@@ -118,7 +118,7 @@ export function ReportPageScaffold({
             <ArrowLeft className="size-4" />
             QuickSight Reports
           </Link>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
+          <h1 className="text-2xl font-semibold flex items-center gap-2">
             {Icon && <Icon className="size-6 shrink-0" />}
             <span className="truncate">{title}</span>
           </h1>
@@ -187,7 +187,7 @@ function AccessDeniedPanel() {
   return (
     <Card>
       <CardContent className="flex flex-col items-center gap-3 p-10 text-center">
-        <span className="flex size-12 items-center justify-center rounded-full bg-amber-100 text-amber-700">
+        <span className="flex size-12 items-center justify-center rounded-full bg-warning-tint text-warning-strong">
           <Lock className="size-6" />
         </span>
         <div className="space-y-1">
@@ -220,7 +220,7 @@ function StatePanel({
   title: string;
   message?: string;
 }) {
-  const iconColor = tone === 'error' ? 'text-red-600' : 'text-muted-foreground';
+  const iconColor = tone === 'error' ? 'text-urgent-strong' : 'text-muted-foreground';
   return (
     <Card>
       <CardContent className="flex flex-col items-center gap-3 p-10 text-center">

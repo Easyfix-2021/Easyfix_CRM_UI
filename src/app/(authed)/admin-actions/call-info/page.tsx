@@ -24,7 +24,7 @@ export default function CallInfoPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
+        <h1 className="text-2xl font-semibold flex items-center gap-2">
           <Phone className="size-6" /> Call Info
         </h1>
         <p className="text-sm text-muted-foreground">

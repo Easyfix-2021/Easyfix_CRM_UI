@@ -76,8 +76,8 @@ export function InfoTooltip({
           onMouseEnter={show}
           onMouseLeave={() => hideSoon()}
           className={cn(
-            'absolute z-50 w-80 max-w-[22rem] max-h-[60vh] overflow-y-auto rounded-md border border-slate-200 bg-white p-3',
-            'text-left text-xs font-normal leading-relaxed text-slate-700 shadow-xl',
+            'absolute z-50 w-80 max-w-[22rem] max-h-[60vh] overflow-y-auto rounded-md border border-ink-100 bg-popover p-3',
+            'text-left text-xs font-normal leading-relaxed text-ink-700 shadow-xl',
             sideCls,
             alignCls,
             panelClassName,

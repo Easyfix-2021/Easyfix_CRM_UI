@@ -386,7 +386,7 @@ export function WebCallPanel() {
         'fixed z-[9998]',
         !positioned && 'bottom-6 right-6',
         collapsed ? 'w-auto' : 'w-[320px] max-w-[calc(100vw-3rem)]',
-        'rounded-xl border border-slate-200 bg-white shadow-2xl overflow-hidden',
+        'rounded-xl border border-ink-100 bg-card shadow-2xl overflow-hidden',
       )}
     >
       {/* Header band — dark slate, doubles as the drag handle. */}
@@ -395,7 +395,7 @@ export function WebCallPanel() {
         className="flex items-center gap-2 bg-sidebar text-sidebar-foreground px-3 py-2.5 cursor-grab active:cursor-grabbing select-none"
       >
         <GripVertical className="h-4 w-4 shrink-0 text-sidebar-foreground/40" aria-hidden />
-        <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-500/20 ring-1 ring-emerald-400/40 text-emerald-200">
+        <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-success/20 ring-1 ring-success/40 text-success-tint">
           {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Globe className="h-4 w-4" />}
         </span>
 
@@ -414,7 +414,7 @@ export function WebCallPanel() {
                 operator's own leg once that leg is no longer up (see
                 `headCount`), so a dead leg can never pad the number. */}
             {showHeadCount && (
-              <span className="inline-flex items-center gap-0.5 rounded bg-white/10 px-1.5 py-px text-[10px] font-semibold text-sidebar-foreground/80">
+              <span className="inline-flex items-center gap-0.5 rounded bg-white/10 px-1.5 py-px text-xs font-semibold text-sidebar-foreground/80">
                 <Users className="h-3 w-3" aria-hidden />
                 {headCount}
               </span>
@@ -422,9 +422,9 @@ export function WebCallPanel() {
           </span>
         ) : (
           <span className="flex-1 flex items-center gap-2 text-sm font-semibold leading-tight">
-            <span className={cn(strandedRoom && 'text-amber-300')}>{headerTitle}</span>
+            <span className={cn(strandedRoom && 'text-warning-tint')}>{headerTitle}</span>
             {showHeadCount && (
-              <span className="inline-flex items-center gap-0.5 rounded bg-white/10 px-1.5 py-px text-[10px] font-semibold text-sidebar-foreground/80">
+              <span className="inline-flex items-center gap-0.5 rounded bg-white/10 px-1.5 py-px text-xs font-semibold text-sidebar-foreground/80">
                 <Users className="h-3 w-3" aria-hidden />
                 {headCount}
               </span>
@@ -441,7 +441,7 @@ export function WebCallPanel() {
             onClick={controlMode === 'end-room' ? () => void endRoom() : hangup}
             disabled={endingRoom}
             className={cn(
-              'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded bg-rose-600 text-white hover:bg-rose-700 transition-colors',
+              'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded bg-urgent text-white hover:bg-urgent-strong transition-colors',
               endingRoom && 'opacity-60 cursor-wait',
             )}
             aria-label={controlMode === 'end-room' || othersOnCall ? 'End call for everyone' : 'Hang up'}
@@ -478,7 +478,7 @@ export function WebCallPanel() {
       <div className="px-4 py-3 space-y-3">
         {/* Pre-call error (e.g. web-credentials 409 / web-start failure) */}
         {error && !active && (
-          <div className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded px-2 py-1.5">
+          <div className="text-sm text-urgent-strong bg-urgent-tint border border-urgent rounded px-2 py-1.5">
             {error}
           </div>
         )}
@@ -499,7 +499,7 @@ export function WebCallPanel() {
           into something support can't act on.
         */}
         {configWarnings.length > 0 && (
-          <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1.5 space-y-1">
+          <div className="text-xs text-warning-strong bg-warning-tint border border-warning rounded px-2 py-1.5 space-y-1">
             <div className="flex items-center gap-1.5 font-semibold">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
               Web Calling Is Not Set Up On This Server
@@ -508,7 +508,7 @@ export function WebCallPanel() {
               Calls from this browser will keep failing until IT fixes the setup — retrying
               won&apos;t help. Please report it with the details below.
             </p>
-            <ul className="list-disc pl-4 space-y-0.5 text-amber-900/90">
+            <ul className="list-disc pl-4 space-y-0.5 text-warning-strong/90">
               {configWarnings.map((w) => <li key={w}>{w}</li>)}
             </ul>
           </div>
@@ -522,9 +522,9 @@ export function WebCallPanel() {
 
             {/* Masked customer number */}
             <div className="flex items-center justify-center gap-2 text-sm">
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">
-                <Phone className="h-3.5 w-3.5 text-sky-600" aria-hidden />
-                <span className="font-mono text-xs font-semibold text-slate-800">{active.toMasked || '—'}</span>
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-ink-100 bg-ink-50 px-2.5 py-1">
+                <Phone className="h-3.5 w-3.5 text-info" aria-hidden />
+                <span className="font-mono text-xs font-semibold text-ink-900">{active.toMasked || '—'}</span>
               </span>
             </div>
 
@@ -536,9 +536,9 @@ export function WebCallPanel() {
                 {statusLabel}
               </StatusChip>
               <div className="flex items-center gap-1.5 text-sm">
-                {connecting && <Loader2 className="h-4 w-4 animate-spin text-slate-400" aria-hidden />}
+                {connecting && <Loader2 className="h-4 w-4 animate-spin text-ink-500" aria-hidden />}
                 {active.startedAt != null && (
-                  <span className="font-mono tabular-nums font-semibold text-slate-700">{fmtDuration(elapsed)}</span>
+                  <span className="font-mono tabular-nums font-semibold text-ink-700">{fmtDuration(elapsed)}</span>
                 )}
               </div>
             </div>
@@ -574,15 +574,15 @@ export function WebCallPanel() {
               disarms it on its own, because activeOthers stops being zero.
             */}
             {aloneSecsLeft != null && (
-              <div className="text-xs rounded border border-amber-300 bg-amber-50 px-2 py-1.5 space-y-1.5">
-                <p className="text-amber-900">
+              <div className="text-xs rounded border border-warning bg-warning-tint px-2 py-1.5 space-y-1.5">
+                <p className="text-warning-strong">
                   Everyone else has left — you&apos;re alone on this call. Ending in{' '}
                   <span className="font-semibold tabular-nums">{aloneSecsLeft}s</span>.
                 </p>
                 <button
                   type="button"
                   onClick={() => setAutoEndOff(true)}
-                  className="text-amber-900 font-medium underline underline-offset-2 hover:text-amber-950"
+                  className="text-warning-strong font-medium underline underline-offset-2 hover:text-warning-strong"
                 >
                   Stay On Call
                 </button>
@@ -599,7 +599,7 @@ export function WebCallPanel() {
                 the root and never remounts per call, so an unbound error would
                 still be sitting there during the operator's NEXT call. */}
             {endRoomErr && controlMode === 'end-room' && (
-              <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded px-2 py-1">
+              <div className="text-xs text-urgent-strong bg-urgent-tint border border-urgent rounded px-2 py-1">
                 {endRoomErr}
               </div>
             )}
@@ -614,8 +614,8 @@ export function WebCallPanel() {
                   className={cn(
                     'inline-flex items-center justify-center gap-1.5 h-9 px-3 rounded-md text-xs font-semibold border transition-colors',
                     muted
-                      ? 'bg-amber-50 border-amber-300 text-amber-800 hover:bg-amber-100'
-                      : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50',
+                      ? 'bg-warning-tint border-warning text-warning-strong hover:bg-warning/15'
+                      : 'bg-card border-ink-300 text-ink-700 hover:bg-ink-50',
                     status !== 'in_progress' && 'opacity-50 cursor-not-allowed',
                   )}
                 >
@@ -632,7 +632,7 @@ export function WebCallPanel() {
                 <button
                   type="button"
                   onClick={hangup}
-                  className="flex-1 inline-flex items-center justify-center gap-1.5 h-9 rounded-md bg-rose-600 text-white text-xs font-semibold shadow-sm hover:bg-rose-700 transition-colors"
+                  className="flex-1 inline-flex items-center justify-center gap-1.5 h-9 rounded-md bg-urgent text-white text-xs font-semibold shadow-sm hover:bg-urgent-strong transition-colors"
                 >
                   <PhoneOff className="h-3.5 w-3.5" />
                   {othersOnCall ? 'End Call For Everyone' : 'Hangup'}
@@ -655,8 +655,8 @@ export function WebCallPanel() {
                 disabled={endingRoom}
                 className={cn(
                   'w-full inline-flex items-center justify-center gap-1.5 h-9 rounded-md',
-                  'bg-rose-600 text-white text-xs font-semibold shadow-sm',
-                  'hover:bg-rose-700 transition-colors',
+                  'bg-urgent text-white text-xs font-semibold shadow-sm',
+                  'hover:bg-urgent-strong transition-colors',
                   endingRoom && 'opacity-60 cursor-wait',
                 )}
               >

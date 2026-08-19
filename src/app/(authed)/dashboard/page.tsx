@@ -62,7 +62,7 @@ type FlowCard = {
   title: string;
   sub: string;
   icon: LucideIcon;
-  tint: string;       // Tailwind gradient + text for the whole card
+  tint: string;       // card surface + on-tint text; see the adjacency rule below
   statKey: keyof Stats;
   href: string;       // deep-link into jobs list
 };
@@ -98,15 +98,31 @@ type Stats = {
  * left-to-right and click any card to land on the matching sidebar sub-item.
  * All hrefs point to /my-orders (user-scoped flow), not /jobs.
  */
+/*
+ * COLOUR ADJACENCY RULE — the grid is 4 columns x 2 rows, so card N sits beside
+ * N±1 and directly above N+4. No card may share a tint with either.
+ *
+ * This is not fussiness. An earlier pass mapped each stage to its "meaning"
+ * colour and produced green beside green and amber above amber, because eight
+ * funnel stages do not have eight distinct meanings to draw on. Reading down
+ * the column below, the sequence is:
+ *
+ *   row 1   urgent   warning  info     neutral
+ *   row 2   info     success  warning  urgent
+ *
+ * Every horizontal pair differs; every vertical pair differs. Gold is absent by
+ * rule 3 (grade and rewards only). If a ninth card is added, re-check both axes
+ * rather than appending whichever colour looks free.
+ */
 const FLOW: FlowCard[] = [
-  { title: 'Unconfirmed Orders',      sub: 'Booked from web / API',     icon: ShoppingCart,  tint: 'from-red-500 to-red-600',          statKey: 'unconfirmed',       href: '/my-orders?tab=unconfirmed' },
-  { title: 'Pending for Scheduling',  sub: 'Confirmed, no tech yet',    icon: CalendarClock, tint: 'from-orange-500 to-orange-600',    statKey: 'pendingScheduling', href: '/my-orders?tab=pending-scheduling' },
-  { title: 'Pending to Start',        sub: 'Accepted, pre check-in',    icon: Play,          tint: 'from-sky-500 to-sky-600',          statKey: 'pendingToStart',    href: '/my-orders?tab=pending-start' },
-  { title: 'Pending App Ack',         sub: 'Assigned, awaiting tech',   icon: BellRing,      tint: 'from-amber-500 to-amber-600',      statKey: 'pendingAppAck',     href: '/my-orders?tab=pending-app-ack' },
-  { title: 'Pending to Close',        sub: 'Technician on-site',        icon: CheckCircle2,  tint: 'from-blue-500 to-blue-600',        statKey: 'pendingToClose',    href: '/my-orders?tab=pending-close' },
-  { title: 'Audit & Complete',        sub: 'Closed — QA review',        icon: ShieldCheck,   tint: 'from-emerald-500 to-emerald-600',  statKey: 'auditComplete',     href: '/my-orders?tab=audit-complete' },
-  { title: 'Pending for Feedback',    sub: 'Closed from app',           icon: MessageSquare, tint: 'from-teal-500 to-teal-600',        statKey: 'pendingFeedback',   href: '/my-orders?tab=pending-feedback' },
-  { title: 'Orders in Followup',      sub: 'Fulfilment on hold',        icon: PhoneCall,     tint: 'from-fuchsia-500 to-fuchsia-600',  statKey: 'followup',          href: '/my-orders?tab=onhold' },
+  { title: 'Unconfirmed Orders',      sub: 'Booked from web / API',     icon: ShoppingCart,  tint: 'bg-urgent-tint text-urgent-strong',          statKey: 'unconfirmed',       href: '/my-orders?tab=unconfirmed' },
+  { title: 'Pending for Scheduling',  sub: 'Confirmed, no tech yet',    icon: CalendarClock, tint: 'bg-warning-tint text-warning-strong',    statKey: 'pendingScheduling', href: '/my-orders?tab=pending-scheduling' },
+  { title: 'Pending to Start',        sub: 'Accepted, pre check-in',    icon: Play,          tint: 'bg-info-tint text-info-strong',          statKey: 'pendingToStart',    href: '/my-orders?tab=pending-start' },
+  { title: 'Pending App Ack',         sub: 'Assigned, awaiting tech',   icon: BellRing,      tint: 'bg-neutral-tint text-neutral-strong',      statKey: 'pendingAppAck',     href: '/my-orders?tab=pending-app-ack' },
+  { title: 'Pending to Close',        sub: 'Technician on-site',        icon: CheckCircle2,  tint: 'bg-info-tint text-info-strong',        statKey: 'pendingToClose',    href: '/my-orders?tab=pending-close' },
+  { title: 'Audit & Complete',        sub: 'Closed — QA review',        icon: ShieldCheck,   tint: 'bg-success-tint text-success-strong',  statKey: 'auditComplete',     href: '/my-orders?tab=audit-complete' },
+  { title: 'Pending for Feedback',    sub: 'Closed from app',           icon: MessageSquare, tint: 'bg-warning-tint text-warning-strong',        statKey: 'pendingFeedback',   href: '/my-orders?tab=pending-feedback' },
+  { title: 'Orders in Followup',      sub: 'Fulfilment on hold',        icon: PhoneCall,     tint: 'bg-urgent-tint text-urgent-strong',  statKey: 'followup',          href: '/my-orders?tab=onhold' },
 ];
 
 /*
@@ -162,15 +178,15 @@ function FlowCardTile({ card, value, loading }: { card: FlowCard; value: number;
   // Hover lift / shadow stay so the cards still feel alive, just non-interactive.
   return (
     <div className="block h-full group/card cursor-default">
-      <div className={`rounded-lg bg-gradient-to-br ${card.tint} text-white shadow-sm p-3 h-32 flex flex-col gap-2 overflow-hidden`}>
+      <div className={`rounded-lg ${card.tint} shadow-sm p-3 h-32 flex flex-col gap-2 overflow-hidden`}>
         <div className="flex items-center justify-between">
-          <div className="h-7 w-7 rounded-md bg-white/15 grid place-items-center shrink-0">
+          <div className="h-7 w-7 rounded-md bg-card/60 grid place-items-center shrink-0">
             <Icon className="h-4 w-4" />
           </div>
           {/* Large count lives on the same row as the icon — balances the card
               and guarantees the number never wraps/clips, regardless of title length. */}
           <div className="text-2xl font-semibold tabular-nums leading-none text-right">
-            {loading ? <span className="inline-block h-6 w-10 rounded bg-white/20 animate-pulse" /> : value.toLocaleString('en-IN')}
+            {loading ? <span className="inline-block h-6 w-10 rounded bg-card/40 animate-pulse" /> : value.toLocaleString('en-IN')}
           </div>
         </div>
         <div className="mt-auto min-w-0">
@@ -183,7 +199,7 @@ function FlowCardTile({ card, value, loading }: { card: FlowCard; value: number;
             {card.title}
           </MarqueeOnHover>
           <MarqueeOnHover
-            className="text-[11px] opacity-80 leading-snug"
+            className="text-xs opacity-80 leading-snug"
             animateOverride={animateBoth}
             durationOverride={sharedDurationMs}
             onMeasure={(ov, dist) => { setSubOverflows(ov); setSubExit(dist); }}

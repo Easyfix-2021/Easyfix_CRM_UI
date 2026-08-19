@@ -95,8 +95,8 @@ export function OtpChannelToggle() {
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-sm font-semibold">
               {channel === 'sms'
-                ? <MessageSquare className="size-4 text-sky-600" />
-                : <MessageCircle className="size-4 text-emerald-600" />}
+                ? <MessageSquare className="size-4 text-info" />
+                : <MessageCircle className="size-4 text-success" />}
               Login OTP Channel
             </div>
             <p className="text-xs text-muted-foreground mt-0.5">
@@ -105,14 +105,14 @@ export function OtpChannelToggle() {
               way in. Email sign-ins are unaffected.
             </p>
             {dualChannel && (
-              <p className="text-xs text-amber-700 mt-1">
+              <p className="text-xs text-warning-strong mt-1">
                 Send Both Channels is on, so WhatsApp and SMS go out together — this order has no
                 effect until that is switched off.
               </p>
             )}
           </div>
 
-          <div className="inline-flex rounded-md border border-slate-300 overflow-hidden shrink-0">
+          <div className="inline-flex rounded-md border border-ink-300 overflow-hidden shrink-0">
             {(['whatsapp', 'sms'] as const).map((c) => {
               const selected = channel === c;
               const disabled = saving || channel === null;
@@ -124,7 +124,7 @@ export function OtpChannelToggle() {
                   onClick={() => void choose(c)}
                   className={[
                     'px-4 h-9 text-sm font-medium inline-flex items-center gap-1.5 transition-colors',
-                    selected ? 'bg-sidebar text-sidebar-foreground' : 'bg-white text-slate-700 hover:bg-slate-50',
+                    selected ? 'bg-sidebar text-sidebar-foreground' : 'bg-card text-ink-700 hover:bg-ink-50',
                     disabled && !selected ? 'opacity-50 cursor-not-allowed' : '',
                   ].join(' ')}
                 >
@@ -141,7 +141,7 @@ export function OtpChannelToggle() {
         <div className="flex items-center justify-between gap-4 flex-wrap border-t pt-4">
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-sm font-semibold">
-              <Layers className={`size-4 ${dualChannel ? 'text-amber-600' : 'text-slate-400'}`} />
+              <Layers className={`size-4 ${dualChannel ? 'text-warning' : 'text-ink-500'}`} />
               Send Both Channels
             </div>
             <p className="text-xs text-muted-foreground mt-0.5">
@@ -158,7 +158,7 @@ export function OtpChannelToggle() {
             )}
           </div>
 
-          <div className="inline-flex rounded-md border border-slate-300 overflow-hidden shrink-0">
+          <div className="inline-flex rounded-md border border-ink-300 overflow-hidden shrink-0">
             {([false, true] as const).map((v) => {
               const selected = dualChannel === v;
               const disabled = savingDual || channel === null;
@@ -170,7 +170,7 @@ export function OtpChannelToggle() {
                   onClick={() => void chooseDual(v)}
                   className={[
                     'px-4 h-9 text-sm font-medium inline-flex items-center gap-1.5 transition-colors',
-                    selected ? 'bg-sidebar text-sidebar-foreground' : 'bg-white text-slate-700 hover:bg-slate-50',
+                    selected ? 'bg-sidebar text-sidebar-foreground' : 'bg-card text-ink-700 hover:bg-ink-50',
                     disabled && !selected ? 'opacity-50 cursor-not-allowed' : '',
                   ].join(' ')}
                 >

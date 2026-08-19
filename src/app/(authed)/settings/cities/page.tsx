@@ -156,7 +156,7 @@ export default function ManageCitiesPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
+          <h1 className="text-2xl font-semibold flex items-center gap-2">
             <Building2 className="size-6" /> Manage Cities
           </h1>
           <p className="text-sm text-muted-foreground">
@@ -182,7 +182,7 @@ export default function ManageCitiesPage() {
             aria-expanded={howOpen}
           >
             {howOpen ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
-            <Info className="size-4 shrink-0 text-blue-600" />
+            <Info className="size-4 shrink-0 text-info" />
             <span className="font-medium">How City Management Works?</span>
             <span className="ml-auto text-xs text-muted-foreground">{howOpen ? 'Hide' : 'Show'}</span>
           </button>
@@ -261,7 +261,7 @@ export default function ManageCitiesPage() {
 
       {(fetchError || mutationError) && (
         <Card>
-          <CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
+          <CardContent className="p-3 flex items-center gap-2 text-sm text-urgent">
             <AlertTriangle className="size-4" /> {fetchError || mutationError}
           </CardContent>
         </Card>
@@ -283,17 +283,17 @@ export default function ManageCitiesPage() {
             */}
           <table className="data-table w-full" style={{ tableLayout: 'fixed' }}>
             <colgroup>
-              <col style={{ width: '7%'  }} /> {/* City ID */}
-              <col style={{ width: '14%' }} /> {/* City Name */}
-              <col style={{ width: '12%' }} /> {/* State */}
-              <col style={{ width: '17%' }} /> {/* District */}
-              <col style={{ width: '6%'  }} /> {/* Tier */}
-              <col style={{ width: '7%'  }} /> {/* Zones */}
-              <col style={{ width: '8%'  }} /> {/* Pincodes */}
-              <col style={{ width: '10%' }} /> {/* Technicians */}
-              <col style={{ width: '12%' }} /> {/* Created By */}
-              <col style={{ width: '8%'  }} /> {/* Status */}
-              <col style={{ width: '11%' }} /> {/* Actions */}
+              <col style={{ width: '7%'  }} />{/* City ID */}
+              <col style={{ width: '14%' }} />{/* City Name */}
+              <col style={{ width: '12%' }} />{/* State */}
+              <col style={{ width: '17%' }} />{/* District */}
+              <col style={{ width: '6%'  }} />{/* Tier */}
+              <col style={{ width: '7%'  }} />{/* Zones */}
+              <col style={{ width: '8%'  }} />{/* Pincodes */}
+              <col style={{ width: '10%' }} />{/* Technicians */}
+              <col style={{ width: '12%' }} />{/* Created By */}
+              <col style={{ width: '8%'  }} />{/* Status */}
+              <col style={{ width: '11%' }} />{/* Actions */}
             </colgroup>
             <thead>
               <tr>
@@ -336,7 +336,7 @@ export default function ManageCitiesPage() {
                   <td className="!text-left whitespace-nowrap truncate">
                     {c.created_by_type ? (
                       <span className="inline-flex items-center gap-1" title={c.created_date ? String(c.created_date).replace('T', ' ').slice(0, 16) : undefined}>
-                        <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${c.created_by_type === 'technician' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>
+                        <span className={`inline-block rounded px-1.5 py-0.5 text-xs font-medium ${c.created_by_type === 'technician' ? 'bg-warning-tint text-warning-strong' : 'bg-ink-100 text-ink-700'}`}>
                           {c.created_by_type === 'technician' ? 'Tech' : 'CRM'}
                         </span>
                         {c.created_by_name || <span className="text-muted-foreground">#{c.created_by}</span>}
@@ -347,7 +347,7 @@ export default function ManageCitiesPage() {
                   </td>
                   <td className="!text-center whitespace-nowrap">
                     {c.city_status === 1
-                      ? <span className="text-emerald-700 text-xs">Active</span>
+                      ? <span className="text-success-strong text-xs">Active</span>
                       : <span className="text-muted-foreground text-xs">Inactive</span>}
                   </td>
                   <td className="!text-right whitespace-nowrap">
@@ -375,7 +375,7 @@ export default function ManageCitiesPage() {
                         />
                       )}
                       {!can.isCityEdit && (
-                        <span className="text-[10px] text-muted-foreground">view-only</span>
+                        <span className="text-xs text-muted-foreground">view-only</span>
                       )}
                     </div>
                   </td>
@@ -530,7 +530,7 @@ function CityFormModal({
                     role="option"
                     aria-selected={selected}
                     onClick={() => setStateId(s.state_id)}
-                    className={`w-full text-left px-3 py-1.5 text-sm hover:bg-muted/60 ${selected ? 'bg-blue-50 text-blue-700 font-medium' : ''}`}
+                    className={`w-full text-left px-3 py-1.5 text-sm hover:bg-muted/60 ${selected ? 'bg-primary/10 text-primary font-medium' : ''}`}
                   >
                     {s.state_name}
                   </button>
@@ -576,7 +576,7 @@ function CityFormModal({
           )}
 
           {error && (
-            <div className="text-sm text-red-600 flex items-center gap-1">
+            <div className="text-sm text-urgent flex items-center gap-1">
               <AlertTriangle className="size-4" /> {error}
             </div>
           )}

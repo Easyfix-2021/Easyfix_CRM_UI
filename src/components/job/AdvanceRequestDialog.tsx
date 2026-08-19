@@ -98,7 +98,7 @@ export function AdvanceRequestDialog({
 
         <div className="space-y-3">
           {blockedReason && (
-            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            <div className="rounded-md border border-warning bg-warning-tint px-3 py-2 text-xs text-warning-strong">
               {blockedReason}
             </div>
           )}
@@ -125,7 +125,7 @@ export function AdvanceRequestDialog({
               disabled={!!blockedReason}
             />
           </div>
-          {err && <div className="text-sm text-red-600">{err}</div>}
+          {err && <div className="text-sm text-urgent-strong">{err}</div>}
         </div>
 
         <div className="mt-2 flex justify-end gap-2">

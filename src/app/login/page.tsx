@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import Image from 'next/image';
 import { useRouter } from 'next/navigation';
+import { Logo } from '@/components/brand/Logo';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -80,20 +80,15 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen grid place-items-center bg-gradient-to-br from-slate-100 to-slate-200 p-4">
+    <div className="min-h-screen grid place-items-center bg-gradient-to-br from-ink-50 to-ink-100 p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
-          {/* Logo is cyan on transparent. The dark-slate pill gives it contrast on
-              the otherwise-white card, mirroring how it sits on the app's dark
-              sidebar. PNG was cropped to its content box (no transparent padding),
-              so h-10 renders the logo at its actual visible size. */}
-          <div className="mx-auto mb-3 inline-flex items-center justify-center rounded-lg bg-slate-900 px-4 py-2">
-            <Image
-              src="/logo-full.png" alt="EasyFix"
-              width={139} height={34} priority
-              unoptimized
-              className="h-10 w-auto"
-            />
+          {/* The dark contrast pill that used to sit behind this is gone: it only
+              existed because the old asset was cyan and vanished on the white
+              card. The tagline lockup is ink + red and reads on a light surface
+              unaided, so it sits directly on the card. */}
+          <div className="mx-auto mb-3 flex items-center justify-center">
+            <Logo variant="tagline" surface="auto" height={44} priority />
           </div>
           <CardTitle className="text-xl">Internal CRM</CardTitle>
           <CardDescription>Sign in with your registered email or mobile</CardDescription>

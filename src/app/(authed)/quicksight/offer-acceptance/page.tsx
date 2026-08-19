@@ -427,20 +427,20 @@ export default function OfferAcceptancePage() {
             {rows.map((r) => (
               <tr key={r.efrId}>
                 <td className="!text-left font-medium whitespace-nowrap">
-                  {r.efrName} <span className="text-[10px] text-muted-foreground">#{r.efrId}</span>
+                  {r.efrName} <span className="text-xs text-muted-foreground">#{r.efrId}</span>
                 </td>
                 <td className="!text-center">
                   <CountLink n={r.offered} onClick={() => setDrill({ efrId: r.efrId, label: r.efrName, status: 'all' })} />
                 </td>
                 <td className="!text-center">{r.reoffers}</td>
                 <td className="!text-center">
-                  <CountLink n={r.accepted} tone="text-emerald-700" onClick={() => setDrill({ efrId: r.efrId, label: r.efrName, status: 'accepted' })} />
+                  <CountLink n={r.accepted} tone="text-success-strong" onClick={() => setDrill({ efrId: r.efrId, label: r.efrName, status: 'accepted' })} />
                 </td>
                 <td className="!text-center">
-                  <CountLink n={r.rejected} tone="text-rose-700" onClick={() => setDrill({ efrId: r.efrId, label: r.efrName, status: 'rejected' })} />
+                  <CountLink n={r.rejected} tone="text-urgent-strong" onClick={() => setDrill({ efrId: r.efrId, label: r.efrName, status: 'rejected' })} />
                 </td>
                 <td className="!text-center">
-                  <CountLink n={r.expired} tone="text-amber-700" onClick={() => setDrill({ efrId: r.efrId, label: r.efrName, status: 'expired' })} />
+                  <CountLink n={r.expired} tone="text-warning-strong" onClick={() => setDrill({ efrId: r.efrId, label: r.efrName, status: 'expired' })} />
                 </td>
                 <td className="!text-center">
                   <CountLink n={r.open} onClick={() => setDrill({ efrId: r.efrId, label: r.efrName, status: 'open' })} />
@@ -496,13 +496,13 @@ export default function OfferAcceptancePage() {
                   </td>
                   <td className="!text-center">{o.reoffers}</td>
                   <td className="!text-center">
-                    <CountLink n={o.accepted} tone="text-emerald-700" onClick={() => setDrill({ offererId: o.ownerId, label: o.ownerName, status: 'accepted' })} />
+                    <CountLink n={o.accepted} tone="text-success-strong" onClick={() => setDrill({ offererId: o.ownerId, label: o.ownerName, status: 'accepted' })} />
                   </td>
                   <td className="!text-center">
-                    <CountLink n={o.rejected} tone="text-rose-700" onClick={() => setDrill({ offererId: o.ownerId, label: o.ownerName, status: 'rejected' })} />
+                    <CountLink n={o.rejected} tone="text-urgent-strong" onClick={() => setDrill({ offererId: o.ownerId, label: o.ownerName, status: 'rejected' })} />
                   </td>
                   <td className="!text-center">
-                    <CountLink n={o.expired} tone="text-amber-700" onClick={() => setDrill({ offererId: o.ownerId, label: o.ownerName, status: 'expired' })} />
+                    <CountLink n={o.expired} tone="text-warning-strong" onClick={() => setDrill({ offererId: o.ownerId, label: o.ownerName, status: 'expired' })} />
                   </td>
                   <td className="!text-center">
                     <CountLink n={o.open} onClick={() => setDrill({ offererId: o.ownerId, label: o.ownerName, status: 'open' })} />
@@ -580,13 +580,13 @@ export default function OfferAcceptancePage() {
                   </td>
                   <td className="!text-center font-medium">{j.waves}</td>
                   <td className="!text-center">
-                    <CountLink n={j.accepted} tone="text-emerald-700" onClick={() => setDrill({ jobId: j.jobId, label: `Job #${j.jobId}`, status: 'accepted' })} />
+                    <CountLink n={j.accepted} tone="text-success-strong" onClick={() => setDrill({ jobId: j.jobId, label: `Job #${j.jobId}`, status: 'accepted' })} />
                   </td>
                   <td className="!text-center">
-                    <CountLink n={j.rejected} tone="text-rose-700" onClick={() => setDrill({ jobId: j.jobId, label: `Job #${j.jobId}`, status: 'rejected' })} />
+                    <CountLink n={j.rejected} tone="text-urgent-strong" onClick={() => setDrill({ jobId: j.jobId, label: `Job #${j.jobId}`, status: 'rejected' })} />
                   </td>
                   <td className="!text-center">
-                    <CountLink n={j.expired} tone="text-amber-700" onClick={() => setDrill({ jobId: j.jobId, label: `Job #${j.jobId}`, status: 'expired' })} />
+                    <CountLink n={j.expired} tone="text-warning-strong" onClick={() => setDrill({ jobId: j.jobId, label: `Job #${j.jobId}`, status: 'expired' })} />
                   </td>
                   <td className="!text-center">
                     <CountLink n={j.open} onClick={() => setDrill({ jobId: j.jobId, label: `Job #${j.jobId}`, status: 'open' })} />
@@ -731,14 +731,14 @@ function OfferDrilldownDialog({ drill, filters, onClose }: {
         <DialogHeader>
           <DialogTitle>{drill ? `${DRILL_TITLE[drill.status]} · ${drill.label}` : ''}</DialogTitle>
         </DialogHeader>
-        {detail.error && <p className="text-sm text-rose-700">{String(detail.error)}</p>}
+        {detail.error && <p className="text-sm text-urgent-strong">{String(detail.error)}</p>}
         {!detail.error && items === null && (
           <p className="py-6 text-center text-sm text-muted-foreground">Loading…</p>
         )}
         {!detail.error && items !== null && (
           <>
             {detail.data?.capped && (
-              <p className="mb-2 text-xs text-amber-700">
+              <p className="mb-2 text-xs text-warning-strong">
                 Showing the 500 most recent offers — narrow the filters to see the rest.
               </p>
             )}
@@ -779,7 +779,7 @@ function OfferDrilldownDialog({ drill, filters, onClose }: {
                       </td>
                       <td className="!text-left whitespace-nowrap">
                         {o.efrName || `Efr #${o.efrId}`}{' '}
-                        <span className="text-[10px] text-muted-foreground">#{o.efrId}</span>
+                        <span className="text-xs text-muted-foreground">#{o.efrId}</span>
                       </td>
                       <td className="!text-left whitespace-nowrap">{o.offererName}</td>
                       <td className="!text-center">{OFFER_STATUS_LABEL[o.offerStatus] ?? o.offerStatus}</td>

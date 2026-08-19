@@ -7,12 +7,15 @@ export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttribute
       type={type}
       ref={ref}
       className={cn(
-        // Background defaults to PURE WHITE for editable inputs. With
+        // Background is the CARD surface for editable inputs. With
         // `bg-background` operators reported the field looked greyed
         // out (same hue as the page background), making them think
-        // the input was disabled. `bg-white` gives a clean canvas
-        // that visually says "click me".
-        'flex h-9 w-full rounded-md border border-input bg-white px-3 py-1 text-sm shadow-sm transition-colors',
+        // the input was disabled. `bg-card` gives a clean canvas that
+        // visually says "click me" — white in light mode, ink-700 in
+        // dark — where the old hardcoded `bg-white` stayed white on a
+        // dark page. Note `bg-input` is NOT the fill: `--input` is the
+        // BORDER colour in this theme (see `border-input` below).
+        'flex h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-sm shadow-sm transition-colors',
         // No focus ring on click — user explicitly asked us to remove
         // the blue outline. We still darken the border via
         // `focus-visible:border-foreground/40` so keyboard-Tab users can
@@ -26,7 +29,7 @@ export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttribute
         // attach this without callers having to repeat the class.
         // Opacity stays at 60% so the prefilled value is still
         // legible (50% was too washed out).
-        'disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-700 disabled:opacity-90',
+        'disabled:cursor-not-allowed disabled:bg-ink-100 disabled:text-ink-700 disabled:opacity-90',
         className
       )}
       {...props}

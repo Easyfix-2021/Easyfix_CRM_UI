@@ -235,7 +235,7 @@ export function CustomPropsTab({ clientId, canEdit, client }: Props) {
         )}
       </div>
       {error && (
-        <div className="text-xs text-red-600 flex items-center gap-1">
+        <div className="text-xs text-urgent-strong flex items-center gap-1">
           <AlertCircle className="size-3.5" /> {error}
         </div>
       )}
@@ -258,13 +258,13 @@ export function CustomPropsTab({ clientId, canEdit, client }: Props) {
                   <Tag className="size-3" /> {titleCaseLabel(p.name)}
                 </span>
                 {p.label && <span className="text-sm font-medium">{p.label}</span>}
-                {p.mandatory && <span className="text-[10px] uppercase tracking-wide text-amber-700 bg-amber-50 border border-amber-200 px-1 rounded">Required</span>}
+                {p.mandatory && <span className="text-xs uppercase tracking-wide text-warning-strong bg-warning-tint border border-warning px-1 rounded">Required</span>}
                 {/*
                   Control/config property — hidden from booking forms + bulk
                   templates (is_config discriminator). Data-entry rows have no chip.
                 */}
                 {p.is_config && (
-                  <Badge className="text-[10px] uppercase tracking-wide text-sky-700 bg-sky-50 border border-sky-200 px-1.5 py-0">Setting</Badge>
+                  <Badge className="text-xs uppercase tracking-wide text-info-strong bg-info-tint border border-info px-1.5 py-0">Setting</Badge>
                 )}
               </div>
               <div className="text-xs text-muted-foreground mt-0.5">
@@ -276,7 +276,7 @@ export function CustomPropsTab({ clientId, canEdit, client }: Props) {
                 <Button size="sm" variant="ghost" onClick={() => setEditing(p)}>
                   <Pencil className="size-3.5" />
                 </Button>
-                <Button size="sm" variant="ghost" onClick={() => onDelete(p)} className="text-red-600 hover:text-red-700">
+                <Button size="sm" variant="ghost" onClick={() => onDelete(p)} className="text-urgent hover:text-urgent-strong">
                   <Trash2 className="size-3.5" />
                 </Button>
               </div>
@@ -474,7 +474,7 @@ function CustomPropFormDialog({
                 placeholder="branch_name"
                 disabled
               />
-              <div className="text-[11px] text-muted-foreground mt-1">
+              <div className="text-xs text-muted-foreground mt-1">
                 Key is immutable after creation (Book-New-Call binds to it).
               </div>
             </Field>
@@ -506,8 +506,8 @@ function CustomPropFormDialog({
                 cross-client telemetry on this page.
               */}
               {activeDiscovered && (
-                <div className="mt-2 rounded-md bg-slate-50 border border-slate-200 text-slate-700 px-3 py-2 text-xs">
-                  <div className="font-mono text-[11px] text-slate-600">{activeDiscovered.key}</div>
+                <div className="mt-2 rounded-md bg-ink-50 border border-ink-100 text-ink-700 px-3 py-2 text-xs">
+                  <div className="font-mono text-xs text-ink-700">{activeDiscovered.key}</div>
                 </div>
               )}
               {selectedPreset === OTHER_PRESET_VALUE && (
@@ -519,7 +519,7 @@ function CustomPropFormDialog({
                     required
                     placeholder="Bill Number"
                   />
-                  <div className="text-[11px] text-muted-foreground mt-1">
+                  <div className="text-xs text-muted-foreground mt-1">
                     New property name. Stored verbatim — pick Title Case for consistency (e.g. &ldquo;Bill Number&rdquo;).
                   </div>
                 </div>
@@ -564,7 +564,7 @@ function CustomPropFormDialog({
             />
             <span>
               Client Setting
-              <span className="block text-[11px] text-muted-foreground">Hide From Booking Forms &amp; Bulk Template</span>
+              <span className="block text-xs text-muted-foreground">Hide From Booking Forms &amp; Bulk Template</span>
             </span>
           </label>
           <DialogFooter className="pt-2">
@@ -580,7 +580,7 @@ function CustomPropFormDialog({
 function Field({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) {
   return (
     <div>
-      <Label className="text-xs">{label}{required && <span className="text-red-600 ml-0.5">*</span>}</Label>
+      <Label className="text-xs">{label}{required && <span className="text-urgent-strong ml-0.5">*</span>}</Label>
       <div className="mt-0.5">{children}</div>
     </div>
   );

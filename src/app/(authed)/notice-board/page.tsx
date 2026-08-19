@@ -52,11 +52,11 @@ const NOTICE_PAGE_SIZES: ReadonlyArray<{ value: TablePageSize; label: string }> 
 ];
 
 const STATUS_PILL: Record<string, string> = {
-  draft:     'bg-slate-100 text-slate-700 border-slate-300',
-  scheduled: 'bg-amber-100 text-amber-800 border-amber-300',
-  published: 'bg-emerald-100 text-emerald-800 border-emerald-300',
-  archived:  'bg-zinc-100 text-zinc-600 border-zinc-300',
-  expired:   'bg-rose-100 text-rose-700 border-rose-300',
+  draft:     'bg-ink-100 text-ink-700 border-ink-300',
+  scheduled: 'bg-warning-tint text-warning-strong border-warning/30',
+  published: 'bg-success-tint text-success-strong border-success/30',
+  archived:  'bg-ink-100 text-ink-700 border-ink-300',
+  expired:   'bg-urgent-tint text-urgent-strong border-urgent/30',
 };
 
 function formatPublishedAt(value: string | null): string {
@@ -73,7 +73,7 @@ function surfaceBadges(csv: string) {
   return (
     <div className="flex flex-wrap gap-1">
       {surfaces.map((s) => (
-        <span key={s} className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase bg-slate-100 text-slate-700 border border-slate-300">
+        <span key={s} className="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-semibold uppercase bg-ink-100 text-ink-700 border border-ink-300">
           {labels[s]}
         </span>
       ))}
@@ -224,7 +224,7 @@ export default function NoticeBoardListPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
+          <h1 className="text-2xl font-semibold flex items-center gap-2">
             <Megaphone className="size-6" /> Notice Board
           </h1>
           <p className="text-sm text-muted-foreground">
@@ -292,7 +292,7 @@ export default function NoticeBoardListPage() {
 
       {listFetch.error && (
         <Card>
-          <CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
+          <CardContent className="p-3 flex items-center gap-2 text-sm text-urgent">
             <AlertTriangle className="size-4" /> {listFetch.error}
           </CardContent>
         </Card>
@@ -329,7 +329,7 @@ export default function NoticeBoardListPage() {
                     <button
                       type="button"
                       onClick={() => setComposeMode('new')}
-                      className="text-sky-700 hover:underline"
+                      className="text-primary hover:underline"
                     >
                       Create your first notice →
                     </button>
@@ -342,7 +342,7 @@ export default function NoticeBoardListPage() {
                   <tr key={n.notice_id}>
                     <td className="font-medium max-w-[280px]">
                       <div className="flex items-center gap-1.5">
-                        {n.is_pinned ? <span title="Pinned" className="text-amber-500">📌</span> : null}
+                        {n.is_pinned ? <span title="Pinned" className="text-warning">📌</span> : null}
                         <span className="truncate">{n.title}</span>
                       </div>
                     </td>

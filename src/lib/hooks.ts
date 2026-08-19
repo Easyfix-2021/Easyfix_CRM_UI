@@ -62,9 +62,28 @@ function dedupedGet<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
  *   invalidateFetch((k) => k.startsWith('/admin/users'));
  */
 export function invalidateFetch(predicate: (key: string) => boolean) {
-  for (const k of Array.from(cache.keys())) if (predicate(k)) cache.delete(k);
+  const evicted: string[] = [];
+  for (const k of Array.from(cache.keys())) if (predicate(k)) { cache.delete(k); evicted.push(k); }
   for (const k of Array.from(inflight.keys())) if (predicate(k)) inflight.delete(k);
+  // Evicting is not enough for a component that never unmounts — see below.
+  for (const k of evicted) for (const fn of Array.from(invalidationListeners)) fn(k);
 }
+
+/*
+ * Invalidation SUBSCRIBERS.
+ *
+ * Eviction alone only helps components that mount again later: the next mount
+ * misses the cache and refetches. A component mounted in a layout — the system
+ * banners, a nav badge, anything persistent — never remounts, so it kept
+ * serving the first response it ever received for the life of the tab. Saving
+ * a setting appeared to do nothing until a full page reload, which is exactly
+ * how the environment/maintenance banners behaved.
+ *
+ * So invalidateFetch now NOTIFIES as well as evicts, and useFetchOnce listens.
+ * Callers are unchanged; this closes the gap underneath them rather than asking
+ * every long-lived consumer to remember a manual refresh.
+ */
+const invalidationListeners = new Set<(key: string) => void>();
 
 /*
  * Drop EVERY cached entry — useful on logout / global state resets.
@@ -170,7 +189,8 @@ export function useFetchOnce<T>(key: string): FetchState<T> {
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
-    dedupedGet<T>(key, () => api.get<T>(key))
+
+    const load = () => dedupedGet<T>(key, () => api.get<T>(key))
       .then((data) => { if (mounted.current) setState({ data, loading: false, error: null }); })
       .catch((e) => {
         if (mounted.current) setState({
@@ -178,7 +198,22 @@ export function useFetchOnce<T>(key: string): FetchState<T> {
           error: e instanceof ApiError ? e.message : 'Failed to load',
         });
       });
-    return () => { mounted.current = false; };
+
+    load();
+
+    /*
+     * Refetch when this key is invalidated. Without this a component that
+     * never unmounts — anything rendered by a layout — shows the first
+     * response forever, and a save elsewhere in the app only appears after a
+     * full reload.
+     */
+    const onInvalidate = (k: string) => { if (k === key) load(); };
+    invalidationListeners.add(onInvalidate);
+
+    return () => {
+      mounted.current = false;
+      invalidationListeners.delete(onInvalidate);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
   return state;

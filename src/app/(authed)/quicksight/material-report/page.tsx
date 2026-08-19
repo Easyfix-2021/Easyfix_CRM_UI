@@ -330,7 +330,7 @@ export default function MaterialReportPage() {
           </div>
 
           {validationError && (
-            <p className="text-sm font-medium text-red-600">{validationError}</p>
+            <p className="text-sm font-medium text-urgent">{validationError}</p>
           )}
 
           <div className="flex gap-2">
@@ -350,7 +350,7 @@ export default function MaterialReportPage() {
         <div className="space-y-2">
           <h2 className="text-base font-semibold">Client Element Deployed</h2>
           {imageError && (
-            <p className="text-sm font-medium text-red-600">{imageError}</p>
+            <p className="text-sm font-medium text-urgent">{imageError}</p>
           )}
           <div className="overflow-x-auto rounded-md border border-border">
             <table className="data-table">

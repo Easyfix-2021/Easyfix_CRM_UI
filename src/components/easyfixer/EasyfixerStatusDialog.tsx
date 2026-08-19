@@ -356,7 +356,7 @@ export function EasyfixerStatusDialog({
                   <LifecycleTransitionGuideDialog currentStatus={snapshot.status} />
                 )}
               </div>
-              <div className="rounded-lg border bg-slate-50 p-3">
+              <div className="rounded-lg border bg-ink-50 p-3">
                 {statusLoading && !snapshot ? (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <Loader2 className="size-4 animate-spin" /> Loading current status…
@@ -369,20 +369,20 @@ export function EasyfixerStatusDialog({
                       <dl className="space-y-1 text-xs">
                         <div className="flex gap-1.5">
                           <dt className="text-muted-foreground">Last Updated:</dt>
-                          <dd className="text-slate-700">{formatDateTime(snapshot.changedAt)}</dd>
+                          <dd className="text-ink-700">{formatDateTime(snapshot.changedAt)}</dd>
                         </div>
                         <div className="flex gap-1.5">
                           <dt className="text-muted-foreground">Source:</dt>
-                          <dd className="text-slate-700">{snapshot.source ?? '—'}</dd>
+                          <dd className="text-ink-700">{snapshot.source ?? '—'}</dd>
                         </div>
                         <div className="flex gap-1.5">
                           <dt className="text-muted-foreground">Reason:</dt>
-                          <dd className="text-slate-700">{snapshot.reason ?? '—'}</dd>
+                          <dd className="text-ink-700">{snapshot.reason ?? '—'}</dd>
                         </div>
                         {snapshot.until && (
                           <div className="flex gap-1.5">
                             <dt className="text-muted-foreground">Until:</dt>
-                            <dd className="text-slate-700">{formatLifecycleDate(snapshot.until)}</dd>
+                            <dd className="text-ink-700">{formatLifecycleDate(snapshot.until)}</dd>
                           </div>
                         )}
                       </dl>
@@ -393,7 +393,7 @@ export function EasyfixerStatusDialog({
                   </div>
                 ) : statusError ? (
                   <div className="space-y-2">
-                    <p className="text-sm text-red-600">{statusError}</p>
+                    <p className="text-sm text-urgent-strong">{statusError}</p>
                     <Button size="sm" variant="outline" onClick={() => easyfixerId != null && void loadStatus(easyfixerId)}>
                       Retry
                     </Button>
@@ -466,7 +466,7 @@ export function EasyfixerStatusDialog({
                         disabled={saving}
                         className="min-h-[84px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                       />
-                      <p className="mt-1 text-[11px] text-muted-foreground">
+                      <p className="mt-1 text-xs text-muted-foreground">
                         This reason is stored in the audit log and may be shown in the technician app.
                       </p>
                     </div>
@@ -491,7 +491,7 @@ export function EasyfixerStatusDialog({
                   </>
                 )}
 
-                {submitError && <p className="text-sm text-red-600">{submitError}</p>}
+                {submitError && <p className="text-sm text-urgent-strong">{submitError}</p>}
                 {targets.length > 0 && (
                   <Button
                     onClick={() => void submit()}
@@ -531,8 +531,8 @@ export function EasyfixerStatusDialog({
                   <Loader2 className="size-4 animate-spin" /> Loading history…
                 </div>
               ) : historyError ? (
-                <div className="space-y-2 rounded-md border border-red-200 bg-red-50 p-3">
-                  <p className="text-sm text-red-700">{historyError}</p>
+                <div className="space-y-2 rounded-md border border-urgent bg-urgent-tint p-3">
+                  <p className="text-sm text-urgent-strong">{historyError}</p>
                   <Button size="sm" variant="outline" onClick={() => easyfixerId != null && void loadHistory(easyfixerId)}>
                     Retry
                   </Button>
@@ -548,13 +548,13 @@ export function EasyfixerStatusDialog({
                     <span className="text-xs text-muted-foreground">→</span>
                     <EasyfixerLifecycleChip value={item.toStatus} />
                   </div>
-                  <p className="mt-1.5 text-xs text-slate-700">{item.reason ?? 'No reason recorded.'}</p>
+                  <p className="mt-1.5 text-xs text-ink-700">{item.reason ?? 'No reason recorded.'}</p>
                   {item.until && (
-                    <p className="mt-1 text-[11px] text-slate-700">
+                    <p className="mt-1 text-xs text-ink-700">
                       Scheduled until {formatLifecycleDate(item.until)}
                     </p>
                   )}
-                  <div className="mt-1 text-[11px] text-muted-foreground">
+                  <div className="mt-1 text-xs text-muted-foreground">
                     {formatDateTime(item.createdAt)} · {item.actorName ?? (item.actorUserId != null ? `User #${item.actorUserId}` : 'System')}
                     {item.source ? ` · ${item.source}` : ''}
                   </div>

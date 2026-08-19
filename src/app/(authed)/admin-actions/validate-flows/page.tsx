@@ -64,7 +64,7 @@ export default function ValidateFlowsPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
+        <h1 className="text-2xl font-semibold flex items-center gap-2">
           <Activity className="size-6" /> Validate Flows
         </h1>
         <p className="text-sm text-muted-foreground">
@@ -330,7 +330,7 @@ function VerifyDeliveryModal({ open, onClose }: { open: boolean; onClose: () => 
           )}
 
           {error && (
-            <div className="rounded border bg-rose-50 border-rose-200 p-3 text-sm text-rose-700 flex gap-2">
+            <div className="rounded border bg-urgent-tint border-urgent/30 p-3 text-sm text-urgent-strong flex gap-2">
               <XCircle className="h-4 w-4 mt-0.5 shrink-0" />
               <div className="break-words">{error}</div>
             </div>
@@ -353,12 +353,12 @@ function ResultView({ data, message }: { data: AnyData; message: string | null }
   return (
     <div className={
       'rounded border p-3 text-sm space-y-2 '
-      + (data.ok ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200')
+      + (data.ok ? 'bg-success-tint border-success/30' : 'bg-warning-tint border-warning/30')
     }>
       <div className="flex items-center gap-2 font-medium">
         {data.ok
-          ? <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
-          : <XCircle className="h-4 w-4 text-amber-600 shrink-0" />}
+          ? <CheckCircle2 className="h-4 w-4 text-success shrink-0" />
+          : <XCircle className="h-4 w-4 text-warning shrink-0" />}
         <span>{message ?? (data.ok ? 'Delivered' : 'Not delivered')}</span>
       </div>
       {data.resolvedTech && (
@@ -378,14 +378,14 @@ function ResultView({ data, message }: { data: AnyData; message: string | null }
             {(data as PushData).results.map((r, i) => (
               <div key={i} className="text-xs bg-white/70 rounded px-2 py-1 space-y-0.5">
                 <div>
-                  <span className={r.delivered ? 'text-emerald-700 font-medium' : 'text-rose-700 font-medium'}>
+                  <span className={r.delivered ? 'text-success-strong font-medium' : 'text-urgent-strong font-medium'}>
                     {r.delivered ? '✓ delivered' : '✗ failed'}
                   </span>
                   {' · '}<span className="font-mono">{r.tokenPreview}</span> (len {r.tokenLength})
                   {r.httpStatus ? ` · HTTP ${r.httpStatus}` : ''}
                   {r.deadToken ? ' · DEAD TOKEN' : ''}
                 </div>
-                {r.reason ? <div className="text-rose-600 break-all">{r.reason}</div> : null}
+                {r.reason ? <div className="text-urgent break-all">{r.reason}</div> : null}
               </div>
             ))}
           </div>
@@ -393,14 +393,14 @@ function ResultView({ data, message }: { data: AnyData; message: string | null }
       ) : (
         <div className="text-xs bg-white/70 rounded px-2 py-1 space-y-0.5">
           <div>
-            <span className={(data as MessageData).result.delivered ? 'text-emerald-700 font-medium' : 'text-rose-700 font-medium'}>
+            <span className={(data as MessageData).result.delivered ? 'text-success-strong font-medium' : 'text-urgent-strong font-medium'}>
               {(data as MessageData).result.delivered ? '✓ sent' : '✗ failed'}
             </span>
             {' · to '}<span className="font-mono">{(data as MessageData).to}</span>
             {(data as MessageData).result.httpStatus ? ` · HTTP ${(data as MessageData).result.httpStatus}` : ''}
           </div>
           {(data as MessageData).result.reason
-            ? <div className="text-rose-600 break-all">{(data as MessageData).result.reason}</div>
+            ? <div className="text-urgent break-all">{(data as MessageData).result.reason}</div>
             : null}
         </div>
       )}
@@ -693,20 +693,20 @@ function AiCallingModal({ open, onClose }: { open: boolean; onClose: () => void 
           {session && (
             <div className={
               'rounded border p-3 text-sm space-y-3 '
-              + (isDone ? 'bg-emerald-50 border-emerald-200' : isFailed ? 'bg-rose-50 border-rose-200' : 'bg-sky-50 border-sky-200')
+              + (isDone ? 'bg-success-tint border-success/30' : isFailed ? 'bg-urgent-tint border-urgent/30' : 'bg-info-tint border-info/30')
             }>
               <div className="flex items-center gap-2 font-medium">
-                {polling && <Loader2 className="h-4 w-4 animate-spin text-sky-600 shrink-0" />}
-                {isDone && <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />}
-                {isFailed && <XCircle className="h-4 w-4 text-rose-600 shrink-0" />}
+                {polling && <Loader2 className="h-4 w-4 animate-spin text-info shrink-0" />}
+                {isDone && <CheckCircle2 className="h-4 w-4 text-success shrink-0" />}
+                {isFailed && <XCircle className="h-4 w-4 text-urgent shrink-0" />}
                 <span>{AI_STATUS_LABEL[session.status] ?? session.status}</span>
               </div>
-              {startMsg && polling && <div className="text-xs text-sky-800">{startMsg}</div>}
-              {isFailed && session.error && <div className="text-xs text-rose-700 break-words">{session.error}</div>}
+              {startMsg && polling && <div className="text-xs text-info-strong">{startMsg}</div>}
+              {isFailed && session.error && <div className="text-xs text-urgent-strong break-words">{session.error}</div>}
 
               {isDone && result && <AiResultView result={result} />}
               {isDone && !result && (
-                <div className="text-xs text-amber-700">The call ended but no result was produced.</div>
+                <div className="text-xs text-warning-strong">The call ended but no result was produced.</div>
               )}
 
               {isDone && session.recordingAvailable && (
@@ -786,18 +786,18 @@ function AiResultView({ result }: { result: AiResult }) {
   return (
     <div className="space-y-3">
       {result.note && !nothing && (
-        <div className="text-xs text-amber-700">{result.note}</div>
+        <div className="text-xs text-warning-strong">{result.note}</div>
       )}
       {/* Deep-Skill options */}
       <div className="space-y-1">
-        <div className="flex items-center gap-1.5 text-xs font-medium text-emerald-800">
+        <div className="flex items-center gap-1.5 text-xs font-medium text-success-strong">
           <Wrench className="h-3.5 w-3.5" /> Mapped Deep-Skill Options ({skills.length})
         </div>
         {skills.length ? (
           <div className="flex flex-wrap gap-1.5">
             {skills.map((s) => (
               <span key={`${s.category_id}-${s.service_type_id}-${s.deep_skill_id}-${s.option_id}`}
-                className="inline-flex items-center rounded-full border border-emerald-300 bg-white/70 px-2 py-0.5 text-xs text-emerald-900">
+                className="inline-flex items-center rounded-full border border-success/30 bg-white/70 px-2 py-0.5 text-xs text-success-strong">
                 {s.label ?? `#${s.deep_skill_id}/${s.option_id}`}
               </span>
             ))}
@@ -807,14 +807,14 @@ function AiResultView({ result }: { result: AiResult }) {
 
       {/* Serviceable pincodes */}
       <div className="space-y-1">
-        <div className="flex items-center gap-1.5 text-xs font-medium text-sky-800">
+        <div className="flex items-center gap-1.5 text-xs font-medium text-info-strong">
           <MapPin className="h-3.5 w-3.5" /> Serviceable Pincodes ({pincodes.length})
         </div>
         {pincodes.length ? (
           <div className="flex flex-wrap gap-1.5 max-h-40 overflow-auto">
             {pincodes.map((p) => (
               <span key={p.pincode_id}
-                className="inline-flex items-center rounded-full border border-sky-300 bg-white/70 px-2 py-0.5 text-xs text-sky-900">
+                className="inline-flex items-center rounded-full border border-info/30 bg-white/70 px-2 py-0.5 text-xs text-info-deep">
                 {p.pincode ?? p.pincode_id}{p.city_name ? ` · ${p.city_name}` : ''}
               </span>
             ))}
@@ -825,18 +825,18 @@ function AiResultView({ result }: { result: AiResult }) {
       {/* Unmapped (flagged) */}
       {(unmappedSkills.length > 0 || unmappedAreas.length > 0) && (
         <div className="space-y-1">
-          <div className="text-xs font-medium text-amber-800">Mentioned but not matched — review manually</div>
+          <div className="text-xs font-medium text-warning-strong">Mentioned but not matched — review manually</div>
           {unmappedSkills.length > 0 && (
-            <div className="text-xs text-amber-800">Skills: {unmappedSkills.join(', ')}</div>
+            <div className="text-xs text-warning-strong">Skills: {unmappedSkills.join(', ')}</div>
           )}
           {unmappedAreas.length > 0 && (
-            <div className="text-xs text-amber-800">Areas: {unmappedAreas.join(', ')}</div>
+            <div className="text-xs text-warning-strong">Areas: {unmappedAreas.join(', ')}</div>
           )}
         </div>
       )}
 
       {nothing && (
-        <div className="text-xs text-amber-700">
+        <div className="text-xs text-warning-strong">
           {result.note ? `Nothing mapped — ${result.note}.` : 'Nothing could be extracted from the conversation.'}
         </div>
       )}

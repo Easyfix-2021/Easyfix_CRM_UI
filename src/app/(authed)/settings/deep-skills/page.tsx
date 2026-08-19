@@ -640,7 +640,7 @@ export default function DeepSkillsSettingsPage() {
                           <button
                             type="button"
                             onClick={() => retryImageGen(s.deepskill_id)}
-                            className="text-muted-foreground hover:text-primary inline-flex items-center gap-1 text-[11px]"
+                            className="text-muted-foreground hover:text-primary inline-flex items-center gap-1 text-xs"
                             title="Retry Image Generation"
                           >
                             <RefreshCw className="h-3 w-3" />
@@ -714,7 +714,7 @@ export default function DeepSkillsSettingsPage() {
                           ) : null}
                         </>
                       ) : (
-                        <span className="text-[10px] text-muted-foreground">view-only</span>
+                        <span className="text-xs text-muted-foreground">view-only</span>
                       )}
                     </div>
                   </td>
@@ -1186,7 +1186,7 @@ function DeepSkillEditor({
             </span>
             <div className="min-w-0">
               <DialogTitle className="text-base leading-tight">Technician Deep Skill</DialogTitle>
-              <div className="text-xs text-slate-200/80 mt-0.5">Define specialized skills and expertise</div>
+              <div className="text-xs text-ink-100/80 mt-0.5">Define specialized skills and expertise</div>
             </div>
           </div>
         </DialogHeader>
@@ -1235,7 +1235,7 @@ function DeepSkillEditor({
                   />
                   <span className={cn(
                     'text-xs font-medium tabular-nums select-none',
-                    f.status === 1 ? 'text-emerald-700' : 'text-slate-500',
+                    f.status === 1 ? 'text-success-strong' : 'text-ink-500',
                   )}>
                     {f.status === 1 ? 'Active' : 'Inactive'}
                   </span>
@@ -1327,7 +1327,7 @@ function DeepSkillEditor({
                     type="button"
                     onClick={removeImage}
                     title="Remove Image"
-                    className="absolute -top-1 -right-1 inline-flex items-center justify-center h-5 w-5 rounded-full bg-rose-600 hover:bg-rose-700 text-white shadow"
+                    className="absolute -top-1 -right-1 inline-flex items-center justify-center h-5 w-5 rounded-full bg-urgent hover:bg-urgent-strong text-white shadow"
                   >
                     <XIcon className="h-3 w-3" />
                   </button>
@@ -1364,7 +1364,7 @@ function DeepSkillEditor({
 
           {/* Skill Options — chip presets + custom add */}
           <div>
-            <div className="flex items-center gap-1.5 text-sm font-medium mb-2 text-teal-700">
+            <div className="flex items-center gap-1.5 text-sm font-medium mb-2 text-success-strong">
               <span>★</span> Skill Options
             </div>
             <div className="flex flex-wrap gap-2 items-center">
@@ -1378,8 +1378,8 @@ function DeepSkillEditor({
                     className={cn(
                       'px-3 py-1.5 rounded-md border text-sm transition-colors',
                       active
-                        ? 'bg-teal-50 border-teal-400 text-teal-800'
-                        : 'bg-background hover:border-teal-300'
+                        ? 'bg-success-tint border-success text-success-strong'
+                        : 'bg-background hover:border-success/30'
                     )}
                   >
                     {opt}
@@ -1403,9 +1403,9 @@ function DeepSkillEditor({
             {options.filter((o) => !PRESET_OPTIONS.includes(o as typeof PRESET_OPTIONS[number])).length > 0 && (
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {options.filter((o) => !PRESET_OPTIONS.includes(o as typeof PRESET_OPTIONS[number])).map((opt) => (
-                  <span key={opt} className="inline-flex items-center gap-1 rounded bg-teal-50 border border-teal-300 text-teal-800 px-2 py-0.5 text-xs">
+                  <span key={opt} className="inline-flex items-center gap-1 rounded bg-success-tint border border-success/30 text-success-strong px-2 py-0.5 text-xs">
                     {opt}
-                    <button type="button" onClick={() => removeOption(opt)} className="hover:bg-teal-100 rounded">
+                    <button type="button" onClick={() => removeOption(opt)} className="hover:bg-success-tint rounded">
                       <XIcon className="h-3 w-3" />
                     </button>
                   </span>
@@ -1489,7 +1489,7 @@ function DeepSkillEditor({
           <button
             type="button"
             onClick={() => setZoomedImage(null)}
-            className="absolute top-2 right-2 z-10 rounded-full bg-white/90 hover:bg-white text-slate-700 hover:text-slate-900 shadow-md p-1.5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+            className="absolute top-2 right-2 z-10 rounded-full bg-white/90 hover:bg-white text-ink-700 hover:text-ink-900 shadow-md p-1.5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             title="Close preview"
             aria-label="Close preview"
           >

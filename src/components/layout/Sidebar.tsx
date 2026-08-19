@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import {
@@ -18,6 +17,7 @@ import { useFetchOnce } from '@/lib/hooks';
 import { jobHrefAllowedForStages } from '@/lib/job-tabs';
 import { api, ApiError } from '@/lib/api';
 import { showToast } from '@/components/ui/toast';
+import { Logo } from '@/components/brand/Logo';
 // URL_MAP lives in a shared module so middleware.ts (server-side route
 // guard) can reverse-map hidden legacy URLs → Next.js paths without
 // duplicating the table. See src/lib/legacy-url-map.ts for the full mapping
@@ -441,23 +441,42 @@ export function Sidebar() {
 
   return (
     <aside className="relative hidden md:flex w-60 shrink-0 flex-col bg-sidebar text-sidebar-foreground">
-      <div className="px-5 h-16 border-b border-sidebar-accent flex items-center justify-center relative">
+      {/*
+        * The logo sits on the sidebar's OWN ground, not a white panel.
+        *
+        * A white strip was tried and looked like a sticker: the sidebar is a
+        * dark column, and punching a light rectangle into its top corner reads
+        * as a foreign element pasted on rather than part of the chrome — worse,
+        * it merged with the equally-white Navbar into one band, so the sidebar
+        * appeared to have no top-left corner at all.
+        *
+        * The brand kit already solves this: `-ondark` is the lockup's designed
+        * dark treatment, knocking the wordmark out to white while keeping the
+        * house and "Fix" in brand red. It is the same mark, drawn for this
+        * surface, instead of the light-surface mark forced onto one.
+        *
+        * h-14 MATCHES THE NAVBAR and must keep matching — the two sit side by
+        * side across the top edge, and any difference shows as a visible step.
+        *
+        * The breathing room is set by `py-2.5` and enforced by `object-contain`,
+        * NOT by choosing a width whose derived height happens to leave a gap.
+        * Sized purely by width, the tagline aspect (1000/315.361 = 3.171) makes
+        * a 176px lockup exactly 55.5px tall — flush against a 56px strip, with
+        * the fit depending on a number nobody would think to re-check after
+        * changing the sidebar width or the padding. Constraining the box and
+        * letting the image letterbox inside it keeps the gap explicit and makes
+        * it survive both.
+        */}
+      <div className="px-8 py-1.5 h-14 bg-sidebar border-b border-sidebar-accent flex items-center justify-center relative">
         <Link
           href="/dashboard"
-          className="flex items-center justify-center"
+          className="flex w-full h-full items-center justify-center"
           // 10-quick-clicks → POST /admin/properties/reload while still
           // letting the link navigate normally. See handleLogoClick
           // docblock at the top of the component for the gesture spec.
           onClick={handleLogoClick}
         >
-          <Image
-            src="/logo.png"
-            alt="EasyFix"
-            width={139} height={34}
-            priority
-            unoptimized
-            className="h-9 w-auto object-contain"
-          />
+          <Logo variant="tagline" surface="dark" height={38} className="w-full h-full object-contain" priority />
         </Link>
         {/* Click counter affordance — visible only from click 5 onward
             (kept quiet during normal navigation). Pinned to the bottom
@@ -467,8 +486,8 @@ export function Sidebar() {
         {clickCount >= COUNTER_VISIBLE_AT && clickCount < FLUSH_THRESHOLD && (
           <div
             className="absolute bottom-1 left-1/2 -translate-x-1/2 pointer-events-none
-                       text-[10px] font-semibold uppercase tracking-wide
-                       bg-amber-100 text-amber-900 border border-amber-200
+                       text-xs font-semibold uppercase tracking-wide
+                       bg-warning-tint text-warning-strong border border-warning
                        rounded px-1.5 py-px shadow-sm select-none
                        transition-opacity"
             aria-live="polite"
@@ -645,7 +664,7 @@ export function Sidebar() {
         <div className="absolute inset-x-0 bottom-0 border-t border-sidebar-accent/40 bg-sidebar p-3">
           <Link
             href="/quicksight"
-            className="flex items-center justify-center gap-1.5 rounded-md bg-gradient-to-br from-indigo-500 to-blue-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition-all hover:shadow-md"
+            className="flex items-center justify-center gap-1.5 rounded-md bg-gradient-to-br from-primary to-brand-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition-all hover:shadow-md"
           >
             <BarChart3 className="h-4 w-4" />
             QuickSight

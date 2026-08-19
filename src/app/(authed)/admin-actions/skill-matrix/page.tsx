@@ -277,7 +277,7 @@ export default function SkillMatrixPage() {
       </Card>
 
       {schemaDrifted && (
-        <div className="flex items-start gap-2 rounded-md border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800">
+        <div className="flex items-start gap-2 rounded-md border border-urgent/30 bg-urgent-tint p-3 text-xs text-urgent-strong">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
             The Job Skill Matrix table on this environment has an outdated schema, so it can&apos;t be
@@ -289,7 +289,7 @@ export default function SkillMatrixPage() {
       )}
 
       {llmOff && !schemaDrifted && (
-        <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+        <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning-tint p-3 text-xs text-warning-strong">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
             The AI provider is not configured on this environment
@@ -326,7 +326,7 @@ export default function SkillMatrixPage() {
                 <input type="checkbox" className="mt-0.5" checked={includeHistory} onChange={(e) => setIncludeHistory(e.target.checked)} />
                 <span>
                   Include Completed Job Details
-                  <span className="block text-[11px] text-muted-foreground">
+                  <span className="block text-xs text-muted-foreground">
                     Fold in which technicians completed similar jobs &amp; the skills they hold. Keep OFF until ops&apos; assignment process is reliable.
                   </span>
                 </span>
@@ -346,10 +346,10 @@ export default function SkillMatrixPage() {
             )}
           </Button>
 
-          {err && <div className="text-sm text-red-700">{err}</div>}
+          {err && <div className="text-sm text-urgent-strong">{err}</div>}
           {result && (
             <div className="space-y-1 rounded-md border bg-muted/20 p-3 text-sm">
-              <div className="flex items-center gap-1 font-medium text-emerald-700">
+              <div className="flex items-center gap-1 font-medium text-success-strong">
                 <CheckCircle2 className="h-4 w-4" /> {result.dryRun ? 'Dry run complete' : 'Matrix built'}
               </div>
               <div className="text-xs text-muted-foreground">
@@ -368,7 +368,7 @@ export default function SkillMatrixPage() {
                   recover them, distinct from the "No skill" count which mostly
                   reflects visit/charge line items the model skips by design. */}
               {result.llmFailedBatches != null && result.llmFailedBatches > 0 && (
-                <div className="text-xs text-amber-700">
+                <div className="text-xs text-warning-strong">
                   {result.llmFailedBatches} batch(es) failed even after a retry — some services are
                   temporarily unmapped. Re-run the build to recover them.
                 </div>
@@ -411,7 +411,7 @@ export default function SkillMatrixPage() {
               className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
                 gapsOnly
                   ? 'border-primary bg-primary/10 text-primary'
-                  : 'border-slate-300 bg-background text-muted-foreground hover:bg-muted'
+                  : 'border-ink-300 bg-background text-muted-foreground hover:bg-muted'
               }`}
               title="Show only services that have no mapping"
             >
@@ -430,7 +430,7 @@ export default function SkillMatrixPage() {
           </div>
 
           {listQ.error && (
-            <div className="mb-2 flex items-center gap-1 text-xs text-red-700">
+            <div className="mb-2 flex items-center gap-1 text-xs text-urgent-strong">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" /> {listQ.error}
             </div>
           )}
@@ -502,7 +502,7 @@ export default function SkillMatrixPage() {
                             onClick={() => removeRow(r)}
                             title="Remove mapping"
                             aria-label="Remove mapping"
-                            className="text-muted-foreground transition-colors hover:text-rose-600"
+                            className="text-muted-foreground transition-colors hover:text-urgent"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                           </button>
@@ -557,7 +557,7 @@ export default function SkillMatrixPage() {
               <div className="flex items-center justify-between">
                 <Label className="text-xs">Service</Label>
                 {mCatg && (
-                  <label className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                  <label className="flex items-center gap-1 text-xs text-muted-foreground">
                     <input type="checkbox" checked={showMapped} onChange={(e) => setShowMapped(e.target.checked)} />
                     Show already-mapped
                   </label>
@@ -571,7 +571,7 @@ export default function SkillMatrixPage() {
                 disabled={!mCatg || dlgSvcQ.loading}
               />
               {mCatg && !dlgSvcQ.loading && dlgServices.length === 0 && (
-                <p className="text-[11px] text-muted-foreground">
+                <p className="text-xs text-muted-foreground">
                   {showMapped
                     ? 'No active services in this category.'
                     : 'Every service here is already mapped — tick “Show already-mapped” to add another skill.'}
@@ -589,7 +589,7 @@ export default function SkillMatrixPage() {
                 disabled={!mCatg || dlgSkillsQ.loading}
               />
               {mCatg && !dlgSkillsQ.loading && (dlgSkillsQ.data ?? []).length === 0 && (
-                <p className="text-[11px] text-amber-700">This category has no active deep skills to map to.</p>
+                <p className="text-xs text-warning-strong">This category has no active deep skills to map to.</p>
               )}
             </div>
           </div>
@@ -612,7 +612,7 @@ function Stat({ label, value }: { label: string; value: number | undefined }) {
   return (
     <div className="rounded-md border p-2">
       <div className="text-lg font-semibold">{value ?? '—'}</div>
-      <div className="text-[11px] text-muted-foreground">{label}</div>
+      <div className="text-xs text-muted-foreground">{label}</div>
     </div>
   );
 }

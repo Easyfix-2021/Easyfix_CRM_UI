@@ -259,7 +259,7 @@ export default function RewardClaimsPage() {
     <div className="space-y-4">
       <RewardsPausedNotice />
       <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
+        <h1 className="text-2xl font-semibold flex items-center gap-2">
           <Package className="size-6" /> Reward Claims
         </h1>
         <p className="text-sm text-muted-foreground">
@@ -292,7 +292,7 @@ export default function RewardClaimsPage() {
 
       {listFetch.error && (
         <Card>
-          <CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
+          <CardContent className="p-3 flex items-center gap-2 text-sm text-urgent">
             <AlertTriangle className="size-4" /> {listFetch.error}
           </CardContent>
         </Card>
@@ -356,7 +356,7 @@ export default function RewardClaimsPage() {
                         * masking middleware. Rendered verbatim — any reformatting
                         * here would mangle the bullets.
                         */}
-                      <div className="font-mono text-[11px] text-muted-foreground">
+                      <div className="font-mono text-xs text-muted-foreground">
                         {c.technician_mobile || '—'}
                       </div>
                     </td>
@@ -367,9 +367,9 @@ export default function RewardClaimsPage() {
                       * pointedly NOT the rupee columns elsewhere in the CRM.
                       * The "pts" suffix removes the last of the ambiguity.
                       */}
-                    <td className="!text-right whitespace-nowrap tabular-nums font-semibold text-amber-600">
+                    <td className="!text-right whitespace-nowrap tabular-nums font-semibold text-warning">
                       {formatPoints(c.points_spent)}
-                      <span className="ml-0.5 text-[10px] font-normal text-amber-700/70">pts</span>
+                      <span className="ml-0.5 text-xs font-normal text-warning-strong/70">pts</span>
                     </td>
                     {/* The shipping label, wrapped over its own lines — this is
                         the cell someone reads while writing on a box. */}
@@ -380,7 +380,7 @@ export default function RewardClaimsPage() {
                             {c.address_line && <div className="break-words">{c.address_line}</div>}
                             {place && <div className="text-muted-foreground">{place}</div>}
                             {c.address_phone && (
-                              <div className="font-mono text-[11px] text-muted-foreground">{c.address_phone}</div>
+                              <div className="font-mono text-xs text-muted-foreground">{c.address_phone}</div>
                             )}
                           </>
                         )
@@ -394,14 +394,14 @@ export default function RewardClaimsPage() {
                           a detail view nobody opens. */}
                       {c.status === 'REJECTED' && c.reject_reason && (
                         <span
-                          className="block text-[10px] text-muted-foreground mt-0.5 truncate"
+                          className="block text-xs text-muted-foreground mt-0.5 truncate"
                           title={c.reject_reason}
                         >
                           {c.reject_reason}
                         </span>
                       )}
                     </td>
-                    <td className="!text-left font-mono text-[11px] break-words">
+                    <td className="!text-left font-mono text-xs break-words">
                       {c.tracking_ref || <Dash />}
                     </td>
                     <td className="!text-right whitespace-nowrap">
@@ -433,14 +433,14 @@ export default function RewardClaimsPage() {
                                 />
                               )}
                               {!next && c.status === 'DELIVERED' && (
-                                <span className="text-[10px] text-muted-foreground">done</span>
+                                <span className="text-xs text-muted-foreground">done</span>
                               )}
                               {c.status === 'REJECTED' && (
-                                <span className="text-[10px] text-muted-foreground">closed</span>
+                                <span className="text-xs text-muted-foreground">closed</span>
                               )}
                             </>
                           )
-                          : <span className="text-[10px] text-muted-foreground">view-only</span>}
+                          : <span className="text-xs text-muted-foreground">view-only</span>}
                       </div>
                     </td>
                   </tr>
@@ -594,13 +594,13 @@ function AdvanceClaimDialog({
                 placeholder="Courier AWB or tracking number"
                 maxLength={120}
               />
-              <p className="mt-1 text-[11px] text-muted-foreground">
+              <p className="mt-1 text-xs text-muted-foreground">
                 {trackingRequired
                   ? 'The technician sees this in the app to follow the parcel, so a dispatched claim needs one.'
                   : 'Already dispatched — correct the reference here if the courier issued a new one.'}
               </p>
               {trackingMissing && (
-                <p className="mt-1 text-[11px] text-red-600">
+                <p className="mt-1 text-xs text-urgent">
                   Enter the tracking reference before marking this claim as sent.
                 </p>
               )}
@@ -709,7 +709,7 @@ function RejectClaimDialog({
             </div>
           </div>
 
-          <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800">
+          <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning-tint p-2 text-xs text-warning-strong">
             <AlertTriangle className="size-4 shrink-0 mt-px" />
             <span>
               Rejecting refunds{' '}
@@ -728,7 +728,7 @@ function RejectClaimDialog({
               className="w-full border rounded px-2 py-1 text-sm bg-background min-h-[80px]"
               maxLength={255}
             />
-            <p className="mt-1 text-[11px] text-muted-foreground">
+            <p className="mt-1 text-xs text-muted-foreground">
               Required. This is the only explanation the technician gets, so write it for them.
             </p>
           </div>

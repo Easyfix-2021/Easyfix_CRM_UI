@@ -104,7 +104,7 @@ function InlineActionPicker({
     <select
       value={value ?? ''}
       onChange={(e) => onChange(Number(e.target.value) || 0)}
-      className="border rounded h-7 px-1.5 text-[11px] bg-background min-w-[120px] focus:outline-none"
+      className="border rounded h-7 px-1.5 text-xs bg-background min-w-[120px] focus:outline-none"
     >
       <option value="">— Not set —</option>
       {options.map((o) => (
@@ -314,7 +314,7 @@ export function EscalatedJobsModal({
         <DialogHeader className="!mx-0 !mt-0 px-6 pt-6 pb-3 border-b">
           <div className="flex items-start justify-between gap-3">
             <DialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-rose-600" />
+              <AlertTriangle className="h-5 w-5 text-urgent-strong" />
               Escalated Jobs
               {data && (
                 <span className="text-sm font-normal text-muted-foreground">
@@ -372,7 +372,7 @@ export function EscalatedJobsModal({
             horizontal scroll is meaningful. */}
         <div className="flex-1 overflow-auto px-6 py-3">
           {error && (
-            <div className="rounded border border-rose-200 bg-rose-50 text-rose-800 px-3 py-2 text-sm">
+            <div className="rounded border border-urgent bg-urgent-tint text-urgent-strong px-3 py-2 text-sm">
               {error}
             </div>
           )}
@@ -444,7 +444,7 @@ export function EscalatedJobsModal({
                         date + time parts using the browser locale. */}
                     <td className="!text-left whitespace-nowrap text-xs">
                       <div>{formatDateOnly(r.escalated_time)}</div>
-                      <div className="text-[10px] text-muted-foreground">{formatTimeOnly(r.escalated_time)}</div>
+                      <div className="text-xs text-muted-foreground">{formatTimeOnly(r.escalated_time)}</div>
                     </td>
                     <td className="!text-center font-mono text-xs whitespace-nowrap">
                       {r.job_id}
@@ -530,14 +530,14 @@ export function EscalatedJobsModal({
                       {r.requested_date_time ? (
                         <>
                           <div>{formatDateOnly(r.requested_date_time)}</div>
-                          <div className="text-[10px] text-muted-foreground">{formatTimeOnly(r.requested_date_time)}</div>
+                          <div className="text-xs text-muted-foreground">{formatTimeOnly(r.requested_date_time)}</div>
                         </>
                       ) : '—'}
                     </td>
                     {/* Reopened — derives from no_of_escalations > 1.
                         Legacy showed a checkmark for re-escalated rows. */}
                     <td className="!text-center text-xs">
-                      {(r.no_of_escalations ?? 0) > 1 ? <span className="text-amber-600">✓</span> : '—'}
+                      {(r.no_of_escalations ?? 0) > 1 ? <span className="text-warning-strong">✓</span> : '—'}
                     </td>
                   </tr>
                 ))}

@@ -76,7 +76,7 @@ export function ChartCard({
     <Card className={className}>
       <CardContent className="p-4">
         <div className="mb-3">
-          <h3 className="text-sm font-semibold text-slate-800">{title}</h3>
+          <h3 className="text-sm font-semibold text-ink-900">{title}</h3>
           {subtitle && <p className="text-xs text-muted-foreground">{subtitle}</p>}
         </div>
         {children}
@@ -239,7 +239,7 @@ export function QsKpiTile({
           {icon}
         </div>
         <div className="min-w-0">
-          <div className="text-2xl font-bold text-slate-900 tabular-nums truncate">{value}</div>
+          <div className="text-2xl font-semibold text-ink-900 tabular-nums truncate">{value}</div>
           <div className="text-xs text-muted-foreground truncate">{label}</div>
         </div>
       </CardContent>

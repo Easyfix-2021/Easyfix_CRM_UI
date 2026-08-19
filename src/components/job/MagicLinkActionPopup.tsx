@@ -234,17 +234,17 @@ export function MagicLinkActionPopup({
             read of "where this order stands" before deciding to act. */}
         <div>
           {submitted ? (
-            <p className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-3 py-2">
+            <p className="text-sm text-success-strong bg-success-tint border border-success rounded px-3 py-2">
               ✓ Customer submitted on {formatDate(customerSubmittedAt!)} — no further sends needed.
             </p>
           ) : hasBeenSent ? (
-            <p className="text-sm text-sky-700 bg-sky-50 border border-sky-200 rounded px-3 py-2">
+            <p className="text-sm text-info-strong bg-info-tint border border-info rounded px-3 py-2">
               Last sent {relativeTime(magicLinkSentAt!)} via{' '}
               <strong>{magicLinkLastAction ?? '—'}</strong>. Sent {magicLinkSendCount}{' '}
               time{magicLinkSendCount === 1 ? '' : 's'} total.
             </p>
           ) : (
-            <p className="text-sm text-slate-600 bg-slate-50 border border-slate-200 rounded px-3 py-2">
+            <p className="text-sm text-ink-700 bg-ink-50 border border-ink-100 rounded px-3 py-2">
               No magic link has been sent for this order yet.
             </p>
           )}
@@ -258,7 +258,7 @@ export function MagicLinkActionPopup({
           legible at a glance.
         */}
         {disableReason && !submitted && (
-          <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+          <p className="text-sm text-warning-strong bg-warning-tint border border-warning rounded px-3 py-2">
             {disableReason}
           </p>
         )}
@@ -285,7 +285,7 @@ export function MagicLinkActionPopup({
                   onClick={() => send('reminder')}
                   disabled={actionsDisabled}
                   title={disableReason ?? undefined}
-                  className="bg-amber-500 hover:bg-amber-600 text-white"
+                  className="bg-warning hover:bg-warning-strong text-white"
                 >
                   {busy && pendingAction === 'reminder' ? 'Sending…' : 'Send Reminder'}
                 </Button>
@@ -322,7 +322,7 @@ export function MagicLinkActionPopup({
                 type="button"
                 onClick={handleOverride}
                 disabled={busy}
-                className="bg-red-600 hover:bg-red-700 text-white"
+                className="bg-urgent hover:bg-urgent-strong text-white"
                 title={`Bypass the ${magicLinkMaxSendCount}-send cap (Admin only)`}
               >
                 {busy ? 'Sending…' : 'Force Send (Override)'}

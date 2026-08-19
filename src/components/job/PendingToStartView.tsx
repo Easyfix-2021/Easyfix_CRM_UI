@@ -652,7 +652,7 @@ function PendingSection({
                         <button
                           type="button"
                           onClick={() => onShowLocation(j)}
-                          className="inline-flex items-center gap-1 text-sky-700 text-xs hover:underline"
+                          className="inline-flex items-center gap-1 text-primary text-xs hover:underline"
                           title="Live technician location"
                           aria-label="Live technician location"
                         >
@@ -670,7 +670,7 @@ function PendingSection({
                         <button
                           type="button"
                           onClick={() => onCheckin(j.job_id)}
-                          className="inline-flex items-center gap-1 text-amber-700 text-xs hover:underline"
+                          className="inline-flex items-center gap-1 text-warning-strong text-xs hover:underline"
                           title="Check-In — open the job workspace to review and check in"
                         >
                           <PlayCircle className="h-3.5 w-3.5" />
@@ -680,7 +680,7 @@ function PendingSection({
                         <button
                           type="button"
                           onClick={() => onReassign(j.job_id)}
-                          className="inline-flex items-center gap-1 text-indigo-700 text-xs hover:underline"
+                          className="inline-flex items-center gap-1 text-primary text-xs hover:underline"
                           title="Reassign Technician — pick a different tech from the ranked list"
                         >
                           <RefreshCw className="h-3.5 w-3.5" />

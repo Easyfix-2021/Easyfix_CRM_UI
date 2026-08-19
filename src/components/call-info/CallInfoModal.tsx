@@ -361,7 +361,7 @@ export function CallInfoModal({ open, onClose }: { open: boolean; onClose: () =>
               className={
                 'px-3 py-1.5 text-xs font-medium rounded-t-md border border-b-0 transition-colors ' +
                 (tab === t.key
-                  ? 'bg-white border-slate-300 text-foreground'
+                  ? 'bg-card border-ink-300 text-foreground'
                   : 'bg-transparent border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/40')
               }
             >
@@ -459,12 +459,12 @@ export function CallInfoModal({ open, onClose }: { open: boolean; onClose: () =>
         {(err || note || (rows !== null && rows.length > 0)) && (
           <div className="px-6 pt-2 pb-2 shrink-0">
             {err && (
-              <div className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded px-2 py-1 mb-2">
+              <div className="text-sm text-urgent-strong bg-urgent-tint border border-urgent rounded px-2 py-1 mb-2">
                 {err}
               </div>
             )}
             {note && (
-              <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-2">
+              <div className="text-xs text-warning-strong bg-warning-tint border border-warning rounded px-2 py-1 mb-2">
                 {note}
               </div>
             )}
@@ -532,7 +532,7 @@ export function CallInfoModal({ open, onClose }: { open: boolean; onClose: () =>
                         underneath. Cells (not just `<thead>`) carry
                         the sticky + bg classes because not every
                         browser respects sticky on `<thead>`. Solid
-                        `bg-slate-100` so the rows don't show through
+                        `bg-ink-100` so the rows don't show through
                         (semi-transparent `bg-muted/50` would let the
                         white row underneath bleed). z-10 keeps
                         headers above the row content during scroll. */}
@@ -552,7 +552,7 @@ export function CallInfoModal({ open, onClose }: { open: boolean; onClose: () =>
                           <th
                             key={c.key}
                             scope="col"
-                            className="sticky top-0 z-10 bg-slate-100 text-left px-3 py-2 font-medium border-b"
+                            className="sticky top-0 z-10 bg-ink-100 text-left px-3 py-2 font-medium border-b"
                           >
                             {/* Whole header is a button so the entire
                                 cell area is the click target — easier
@@ -567,8 +567,8 @@ export function CallInfoModal({ open, onClose }: { open: boolean; onClose: () =>
                               <span>{c.label}</span>
                               {isActive ? (
                                 sortDir === 'asc'
-                                  ? <ChevronUp className="h-3 w-3 text-sky-700" />
-                                  : <ChevronDown className="h-3 w-3 text-sky-700" />
+                                  ? <ChevronUp className="h-3 w-3 text-primary" />
+                                  : <ChevronDown className="h-3 w-3 text-primary" />
                               ) : (
                                 <ChevronsUpDown className="h-3 w-3 opacity-30" />
                               )}
@@ -598,7 +598,7 @@ export function CallInfoModal({ open, onClose }: { open: boolean; onClose: () =>
                               <button
                                 type="button"
                                 onClick={() => setViewJobId(Number(r.job_id))}
-                                className="text-sky-700 hover:underline"
+                                className="text-primary hover:underline"
                                 title="View job details"
                               >
                                 {String(r.job_id)}

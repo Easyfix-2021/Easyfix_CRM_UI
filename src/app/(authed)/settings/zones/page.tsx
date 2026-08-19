@@ -283,7 +283,7 @@ export default function ManageZonesPage() {
                           disabled={!can.isZoneEdit || (!!z.zone_status && (z.pincode_count ?? 0) > 0)}
                           ariaLabel={z.zone_status ? 'Deactivate Zone' : 'Activate Zone'}
                         />
-                        <span className={`text-xs ${z.zone_status ? 'text-emerald-700' : 'text-muted-foreground'}`}>
+                        <span className={`text-xs ${z.zone_status ? 'text-success-strong' : 'text-muted-foreground'}`}>
                           {z.zone_status ? 'Active' : 'Inactive'}
                         </span>
                       </div>
@@ -294,7 +294,7 @@ export default function ManageZonesPage() {
                           href={`/settings/zones/${z.zone_id}`}
                           title="Manage Pincodes"
                           aria-label="Manage Pincodes"
-                          className="inline-flex size-7 shrink-0 items-center justify-center rounded text-blue-600 transition-colors hover:bg-muted/60 hover:text-blue-700"
+                          className="inline-flex size-7 shrink-0 items-center justify-center rounded text-primary transition-colors hover:bg-muted/60 hover:text-brand-600"
                         >
                           <MapPinned className="size-4" aria-hidden="true" />
                         </Link>
@@ -375,8 +375,8 @@ function ZoneCard({ zone, canEdit, onEdit, onToggleStatus }: { zone: Zone; canEd
           )}
         </div>
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-          <span><MapPin className="inline h-3.5 w-3.5 mr-1 text-violet-700" />{zone.pincode_count} pincodes</span>
-          <span><Users  className="inline h-3.5 w-3.5 mr-1 text-emerald-700" />{zone.technician_count} technicians</span>
+          <span><MapPin className="inline h-3.5 w-3.5 mr-1 text-gold-strong" />{zone.pincode_count} pincodes</span>
+          <span><Users  className="inline h-3.5 w-3.5 mr-1 text-success-strong" />{zone.technician_count} technicians</span>
         </div>
         <div className="flex items-center justify-between text-xs">
           <div
@@ -389,7 +389,7 @@ function ZoneCard({ zone, canEdit, onEdit, onToggleStatus }: { zone: Zone; canEd
               disabled={!canEdit || (!!zone.zone_status && (zone.pincode_count ?? 0) > 0)}
               ariaLabel={zone.zone_status ? 'Deactivate Zone' : 'Activate Zone'}
             />
-            <span className={zone.zone_status ? 'text-emerald-700' : 'text-muted-foreground'}>
+            <span className={zone.zone_status ? 'text-success-strong' : 'text-muted-foreground'}>
               {zone.zone_status ? 'Active' : 'Inactive'}
             </span>
           </div>
@@ -503,7 +503,7 @@ function ZoneAddEditDialog({ open, zone, onClose, onSaved }: {
                         role="option"
                         aria-selected={selected}
                         onClick={() => setCityId(c.city_id)}
-                        className={`w-full text-left px-3 py-1.5 text-sm hover:bg-muted/60 ${selected ? 'bg-blue-50 text-blue-700 font-medium' : ''}`}
+                        className={`w-full text-left px-3 py-1.5 text-sm hover:bg-muted/60 ${selected ? 'bg-primary/10 text-primary font-medium' : ''}`}
                       >
                         {c.city_name}
                       </button>
@@ -528,12 +528,12 @@ function ZoneAddEditDialog({ open, zone, onClose, onSaved }: {
                 className="flex items-center gap-2 text-sm disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {active
-                  ? <ToggleRight className="h-5 w-5 text-emerald-600" />
+                  ? <ToggleRight className="h-5 w-5 text-success" />
                   : <ToggleLeft  className="h-5 w-5 text-muted-foreground" />}
                 {active ? 'Active' : 'Inactive'} — toggle to {active ? 'deactivate' : 'reactivate'}
               </button>
               {active && (zone.pincode_count ?? 0) > 0 && (
-                <p className="text-[11px] text-amber-700">
+                <p className="text-xs text-warning-strong">
                   Remove its {zone.pincode_count} mapped pincode{zone.pincode_count === 1 ? '' : 's'} before deactivating.
                 </p>
               )}
@@ -634,8 +634,8 @@ function ZoneUploadDialog({ open, onClose, onApplied }: {
             <div className="rounded-md border p-3 space-y-2">
               <div className="flex items-center gap-2 text-sm">
                 {result.summary.failedCount === 0
-                  ? <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                  : <AlertTriangle className="h-4 w-4 text-amber-600" />}
+                  ? <CheckCircle2 className="h-4 w-4 text-success" />
+                  : <AlertTriangle className="h-4 w-4 text-warning" />}
                 <span>
                   <strong>{result.summary.totalRows}</strong> rows ·
                   zones created <strong>{result.summary.createdZones}</strong> ·

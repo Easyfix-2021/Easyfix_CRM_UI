@@ -223,7 +223,7 @@ export default function RewardItemsPage() {
       <RewardsEarnRates />
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
+          <h1 className="text-2xl font-semibold flex items-center gap-2">
             <Gift className="size-6" /> Reward Items
           </h1>
           <p className="text-sm text-muted-foreground">
@@ -264,7 +264,7 @@ export default function RewardItemsPage() {
 
       {listFetch.error && (
         <Card>
-          <CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
+          <CardContent className="p-3 flex items-center gap-2 text-sm text-urgent">
             <AlertTriangle className="size-4" /> {listFetch.error}
           </CardContent>
         </Card>
@@ -394,7 +394,7 @@ export default function RewardItemsPage() {
                         />
                       )}
                       {!canManage && (
-                        <span className="text-[10px] text-muted-foreground">View Only</span>
+                        <span className="text-xs text-muted-foreground">View Only</span>
                       )}
                     </div>
                   </td>
@@ -590,7 +590,7 @@ function ItemModal({ item, onClose, onSaved }: {
               placeholder="What the technician receives — material, colour, anything worth knowing before spending points (optional)"
               className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus:outline-none focus-visible:border-foreground/40 disabled:opacity-60"
             />
-            <div className="mt-1 text-[11px] text-muted-foreground text-right tabular-nums">
+            <div className="mt-1 text-xs text-muted-foreground text-right tabular-nums">
               {form.description.length} / {DESC_MAX}
             </div>
           </div>
@@ -605,7 +605,7 @@ function ItemModal({ item, onClose, onSaved }: {
                 className="tabular-nums"
                 placeholder="e.g. 1200"
               />
-              <p className="mt-1 text-[11px] text-muted-foreground">
+              <p className="mt-1 text-xs text-muted-foreground">
                 What a technician spends to claim this. Points, not rupees.
               </p>
             </div>
@@ -619,7 +619,7 @@ function ItemModal({ item, onClose, onSaved }: {
                 className="tabular-nums"
                 placeholder="e.g. 25"
               />
-              <p className="mt-1 text-[11px] text-muted-foreground">
+              <p className="mt-1 text-xs text-muted-foreground">
                 Units on hand. At 0 the item stays visible but every claim is refused.
               </p>
             </div>
@@ -633,7 +633,7 @@ function ItemModal({ item, onClose, onSaved }: {
               maxLength={SIZES_MAX}
               placeholder="e.g. S,M,L,XL"
             />
-            <p className="mt-1 text-[11px] text-muted-foreground">
+            <p className="mt-1 text-xs text-muted-foreground">
               Comma-separated — <code>S,M,L,XL</code> for apparel, <code>7,8,9,10</code> for
               footwear. Leave blank for an item that has no size (a bag, a water bottle); the
               technician is then never asked to pick one.
@@ -643,7 +643,7 @@ function ItemModal({ item, onClose, onSaved }: {
                 sizes and the operator can see that before saving. */}
             {sizePreview.length > 0 && (
               <div className="mt-2 flex flex-wrap items-center gap-1">
-                <span className="text-[11px] text-muted-foreground mr-1">Will be saved as:</span>
+                <span className="text-xs text-muted-foreground mr-1">Will be saved as:</span>
                 {sizePreview.map((s) => (
                   <StatusChip key={s} tone="slate" size="sm">{s}</StatusChip>
                 ))}
@@ -652,7 +652,7 @@ function ItemModal({ item, onClose, onSaved }: {
           </div>
 
           {error && (
-            <div className="text-sm text-red-600 flex items-start gap-1">
+            <div className="text-sm text-urgent flex items-start gap-1">
               <AlertTriangle className="size-4 shrink-0 mt-0.5" /> {error}
             </div>
           )}

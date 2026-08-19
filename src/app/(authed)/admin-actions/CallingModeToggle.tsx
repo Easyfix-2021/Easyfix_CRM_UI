@@ -95,8 +95,8 @@ export function CallingModeToggle() {
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-sm font-semibold">
               {mode === 'web'
-                ? <Globe className="size-4 text-sky-600" />
-                : <Smartphone className="size-4 text-emerald-600" />}
+                ? <Globe className="size-4 text-info" />
+                : <Smartphone className="size-4 text-success" />}
               Click-to-Call Mode
             </div>
             <p className="text-xs text-muted-foreground mt-0.5">
@@ -104,11 +104,11 @@ export function CallingModeToggle() {
               <strong>Web</strong>: talk from this browser (WebRTC) — Plivo only.
             </p>
             {!plivoOn && (
-              <p className="text-xs text-amber-700 mt-1">Enable Plivo before switching to Web Call.</p>
+              <p className="text-xs text-warning-strong mt-1">Enable Plivo before switching to Web Call.</p>
             )}
           </div>
 
-          <div className="inline-flex rounded-md border border-slate-300 overflow-hidden shrink-0">
+          <div className="inline-flex rounded-md border border-ink-300 overflow-hidden shrink-0">
             {(['mobile', 'web'] as const).map((m) => {
               const selected = mode === m;
               const disabled = saving || mode === null || (m === 'web' && !plivoOn);
@@ -120,7 +120,7 @@ export function CallingModeToggle() {
                   onClick={() => chooseMode(m)}
                   className={[
                     'px-4 h-9 text-sm font-medium inline-flex items-center gap-1.5 transition-colors',
-                    selected ? 'bg-sidebar text-sidebar-foreground' : 'bg-white text-slate-700 hover:bg-slate-50',
+                    selected ? 'bg-sidebar text-sidebar-foreground' : 'bg-card text-ink-700 hover:bg-ink-50',
                     disabled && !selected ? 'opacity-50 cursor-not-allowed' : '',
                   ].join(' ')}
                 >
@@ -150,7 +150,7 @@ export function CallingModeToggle() {
                 <Globe className="size-3.5" /> Plivo
               </span>
             ) : (
-              <div className="inline-flex rounded-md border border-slate-300 overflow-hidden shrink-0">
+              <div className="inline-flex rounded-md border border-ink-300 overflow-hidden shrink-0">
                 {PROVIDER_CHOICES.map((p) => {
                   const selected = defaultProvider === p.value;
                   const disabled = saving || (p.value === 'plivo' && !plivoOn);
@@ -162,7 +162,7 @@ export function CallingModeToggle() {
                       onClick={() => chooseProvider(p.value)}
                       className={[
                         'px-4 h-9 text-sm font-medium inline-flex items-center gap-1.5 transition-colors',
-                        selected ? 'bg-sidebar text-sidebar-foreground' : 'bg-white text-slate-700 hover:bg-slate-50',
+                        selected ? 'bg-sidebar text-sidebar-foreground' : 'bg-card text-ink-700 hover:bg-ink-50',
                         disabled && !selected ? 'opacity-50 cursor-not-allowed' : '',
                       ].join(' ')}
                     >

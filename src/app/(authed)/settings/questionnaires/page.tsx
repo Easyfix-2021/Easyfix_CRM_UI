@@ -93,7 +93,7 @@ export default function ManageQuestionnairesPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
+          <h1 className="text-2xl font-semibold flex items-center gap-2">
             <ClipboardList className="size-6" /> Manage Questionnaires
           </h1>
           <p className="text-sm text-muted-foreground">
@@ -109,7 +109,7 @@ export default function ManageQuestionnairesPage() {
       </div>
 
       {error && (
-        <Card><CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
+        <Card><CardContent className="p-3 flex items-center gap-2 text-sm text-urgent">
           <AlertTriangle className="size-4" /> {error}
         </CardContent></Card>
       )}
@@ -140,7 +140,7 @@ export default function ManageQuestionnairesPage() {
                   >
                     <Chev className="size-4 text-muted-foreground shrink-0" />
                     <span className="font-medium flex-1 truncate">{nameOf(r)}</span>
-                    <span className="text-[10px] font-mono text-muted-foreground">#{r.id}</span>
+                    <span className="text-xs font-mono text-muted-foreground">#{r.id}</span>
                   </button>
                   {open && (
                     <div className="border-t px-4 py-3 text-sm">
@@ -151,7 +151,7 @@ export default function ManageQuestionnairesPage() {
                           {d.map((q) => (
                             <li key={q.id}>
                               <span>{textOf(q)}</span>
-                              {q.type && <span className="ml-2 text-[10px] uppercase rounded bg-blue-50 text-blue-700 px-1.5 py-0.5">{String(q.type)}</span>}
+                              {q.type && <span className="ml-2 text-xs uppercase rounded bg-info-tint text-info-strong px-1.5 py-0.5">{String(q.type)}</span>}
                             </li>
                           ))}
                         </ol>
@@ -203,7 +203,7 @@ function AddQuestionnaireDialog({ open, onClose, onSubmit }: {
             onChange={(e) => setName(e.target.value)}
             placeholder='e.g. "Standard installation QC"'
           />
-          {err && <div className="text-sm text-red-600">{err}</div>}
+          {err && <div className="text-sm text-urgent">{err}</div>}
           <div className="flex justify-end gap-2 pt-2">
             <CancelButton onCancel={onClose} disabled={loading} />
             <Button onClick={go} disabled={loading}>{loading ? 'Saving…' : 'Create'}</Button>

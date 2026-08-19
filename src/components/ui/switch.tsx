@@ -41,7 +41,7 @@ export function Switch({
       className={cn(
         'relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1',
-        checked ? 'bg-primary' : 'bg-slate-300',
+        checked ? 'bg-primary' : 'bg-ink-300',
         disabled && 'cursor-not-allowed opacity-50',
         className,
       )}

@@ -822,7 +822,7 @@ export default function MyOrdersPage() {
                     <div className="text-xs">{j.requested_date_time ? formatDate(j.requested_date_time) : '—'}</div>
                     {(() => {
                       const slot = displaySlot(j.requested_date_time, j.time_slot);
-                      return slot ? <div className="text-[10px] text-muted-foreground">· {slot}</div> : null;
+                      return slot ? <div className="text-xs text-muted-foreground">· {slot}</div> : null;
                     })()}
                   </td>
                   <td>
@@ -875,7 +875,7 @@ export default function MyOrdersPage() {
                         <button
                           type="button"
                           onClick={() => openSchedule(j.job_id)}
-                          className="inline-flex items-center gap-1 text-indigo-700 text-xs hover:underline"
+                          className="inline-flex items-center gap-1 text-primary text-xs hover:underline"
                           title="Schedule & Assign — set the date/slot and pick a technician"
                         >
                           <CalendarClock className="h-3.5 w-3.5" />
@@ -962,7 +962,7 @@ export default function MyOrdersPage() {
                           e.stopPropagation();
                           openJobAction('view', j.job_id, { tab: 'services' });
                         }}
-                        className="ml-1 inline-flex items-center rounded-full bg-amber-100 hover:bg-amber-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800 whitespace-nowrap cursor-pointer transition-colors"
+                        className="ml-1 inline-flex items-center rounded-full bg-warning-tint hover:bg-warning/20 px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-warning-strong whitespace-nowrap cursor-pointer transition-colors"
                         title="Booked but no services attached. Click to open the Services tab."
                       >
                         No Services
@@ -1005,7 +1005,7 @@ export default function MyOrdersPage() {
                         <button
                           type="button"
                           onClick={() => setLocationJob(j)}
-                          className="inline-flex items-center gap-1 text-sky-700 text-xs hover:underline"
+                          className="inline-flex items-center gap-1 text-primary text-xs hover:underline"
                           title="Live technician location"
                           aria-label="Live technician location"
                         >
@@ -1024,7 +1024,7 @@ export default function MyOrdersPage() {
                         <button
                           type="button"
                           onClick={() => openConfirm(j.job_id)}
-                          className="inline-flex items-center gap-1 text-purple-700 text-xs hover:underline"
+                          className="inline-flex items-center gap-1 text-gold-strong text-xs hover:underline"
                           title="Confirm — fill details, pick services, and move to Scheduled"
                         >
                           <CalendarCheck className="h-3.5 w-3.5" />
@@ -1044,7 +1044,7 @@ export default function MyOrdersPage() {
                         <button
                           type="button"
                           onClick={() => openSchedule(j.job_id)}
-                          className="inline-flex items-center gap-1 text-indigo-700 text-xs hover:underline"
+                          className="inline-flex items-center gap-1 text-primary text-xs hover:underline"
                           title="Schedule & Assign — set the date/slot and pick a technician"
                         >
                           <CalendarClock className="h-3.5 w-3.5" />
@@ -1057,7 +1057,7 @@ export default function MyOrdersPage() {
                               type="button"
                               disabled={rowBusy === j.job_id}
                               onClick={() => quickStatusChange(j.job_id, 2, 'Check in')}
-                              className="inline-flex items-center gap-1 text-amber-700 text-xs hover:underline disabled:opacity-50"
+                              className="inline-flex items-center gap-1 text-warning-strong text-xs hover:underline disabled:opacity-50"
                               title="Check-In — technician on-site, move to In Progress"
                             >
                               <PlayCircle className="h-3.5 w-3.5" />
@@ -1072,7 +1072,7 @@ export default function MyOrdersPage() {
                             <button
                               type="button"
                               onClick={() => openReassign(j.job_id)}
-                              className="inline-flex items-center gap-1 text-indigo-700 text-xs hover:underline"
+                              className="inline-flex items-center gap-1 text-primary text-xs hover:underline"
                               title="Reassign Technician — pick a different tech from the ranked list"
                             >
                               <RefreshCw className="h-3.5 w-3.5" />
@@ -1085,7 +1085,7 @@ export default function MyOrdersPage() {
                           type="button"
                           disabled={rowBusy === j.job_id}
                           onClick={() => quickStatusChange(j.job_id, 3, 'Check out & complete')}
-                          className="inline-flex items-center gap-1 text-emerald-700 text-xs hover:underline disabled:opacity-50"
+                          className="inline-flex items-center gap-1 text-success-strong text-xs hover:underline disabled:opacity-50"
                           title="Check-Out — close the job"
                         >
                           <CheckCircle2 className="h-3.5 w-3.5" />
@@ -1201,7 +1201,7 @@ function PendingAppAckRetired() {
     <Card>
       <CardContent className="p-6 space-y-4">
         <div className="flex items-center gap-2">
-          <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
             Retired
           </span>
           <h2 className="text-lg font-semibold">Pending App Ack — not applicable in the new CRM</h2>
@@ -1239,7 +1239,7 @@ function PendingAppAckRetired() {
         <p className="text-sm text-muted-foreground">
           The &ldquo;awaiting acceptance&rdquo; state now lives on the{' '}
           <strong>Pending for Scheduling</strong> page, shown as the{' '}
-          <span className="rounded bg-orange-100 px-1.5 py-0.5 text-xs font-medium text-orange-800">
+          <span className="rounded bg-warning-tint px-1.5 py-0.5 text-xs font-medium text-warning-strong">
             Offered to Tx
           </span>{' '}
           chip while offers are open. Any surviving legacy jobs in the old

@@ -135,7 +135,7 @@ export function GlidingTabs({
           >
             {t.label}
             {t.count !== undefined && (
-              <span className="rounded-full bg-muted-foreground/15 px-1.5 text-[10px] font-semibold tabular-nums">
+              <span className="rounded-full bg-muted-foreground/15 px-1.5 text-xs font-semibold tabular-nums">
                 {t.count}
               </span>
             )}

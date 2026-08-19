@@ -117,18 +117,18 @@ export function DocumentsTab({ clientId, canEdit }: Props) {
   return (
     <div className="pt-2 space-y-3">
       {notProvisioned && (
-        <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-2 flex items-start gap-2">
+        <div className="text-xs text-warning-strong bg-warning-tint border border-warning rounded px-2 py-2 flex items-start gap-2">
           <AlertCircle className="size-4 mt-0.5 shrink-0" />
           <div>
             Documents storage isn&apos;t provisioned on this environment. Run:
-            <pre className="font-mono mt-1 text-[11px]">
+            <pre className="font-mono mt-1 text-xs">
               mysql … &lt; migrations/2026-05-25-create-client-documents.sql
             </pre>
           </div>
         </div>
       )}
       {!notProvisioned && error && (
-        <div className="text-xs text-red-600 flex items-center gap-1">
+        <div className="text-xs text-urgent-strong flex items-center gap-1">
           <AlertCircle className="size-3.5" /> {error}
         </div>
       )}
@@ -163,7 +163,7 @@ export function DocumentsTab({ clientId, canEdit }: Props) {
               </Button>
             </div>
           </div>
-          <div className="text-[11px] text-muted-foreground">
+          <div className="text-xs text-muted-foreground">
             PNG / JPEG / WEBP / GIF / PDF · max 10 MB.
           </div>
         </div>
@@ -188,14 +188,14 @@ export function DocumentsTab({ clientId, canEdit }: Props) {
                 <div className="text-xs text-muted-foreground flex items-center gap-2 mt-0.5">
                   {d.original_filename && <span>{d.original_filename}</span>}
                   {d.url && (
-                    <a href={d.url} target="_blank" rel="noopener noreferrer" className="text-sky-600 hover:underline inline-flex items-center gap-0.5">
+                    <a href={d.url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline inline-flex items-center gap-0.5">
                       <ExternalLink className="size-3" /> Open
                     </a>
                   )}
                 </div>
               </div>
               {canEdit && (
-                <Button size="sm" variant="ghost" onClick={() => onDelete(d)} className="text-red-600 hover:text-red-700">
+                <Button size="sm" variant="ghost" onClick={() => onDelete(d)} className="text-urgent hover:text-urgent-strong">
                   <Trash2 className="size-3.5" />
                 </Button>
               )}

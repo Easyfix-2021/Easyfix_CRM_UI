@@ -75,7 +75,7 @@ export default function PincodesBulkUploadPage() {
             </p>
             <Link
               href="/settings/pincodes"
-              className="mt-3 inline-flex items-center gap-1 text-sm text-sky-700 hover:underline"
+              className="mt-3 inline-flex items-center gap-1 text-sm text-primary hover:underline"
             >
               <ArrowLeft className="h-4 w-4" /> Back to Pincodes
             </Link>
@@ -158,7 +158,7 @@ export default function PincodesBulkUploadPage() {
           <ArrowLeft className="size-4" /> Back to Pincodes
         </Button>
         <div>
-          <h1 className="text-xl font-bold">Upload Pincodes</h1>
+          <h1 className="text-xl font-semibold">Upload Pincodes</h1>
           <p className="text-xs text-muted-foreground">
             Download the starter template, fill the Pincodes sheet, then pick the file —
             it validates rows automatically without inserting anything. Commit once the
@@ -202,7 +202,7 @@ export default function PincodesBulkUploadPage() {
             }`}
           >
             {file ? (
-              <FileSpreadsheet className="size-8 text-emerald-600" />
+              <FileSpreadsheet className="size-8 text-success" />
             ) : (
               <UploadCloud className="size-8 text-muted-foreground" />
             )}
@@ -233,7 +233,7 @@ export default function PincodesBulkUploadPage() {
           )}
 
           {error && (
-            <div className="text-sm text-red-600 flex items-center gap-1">
+            <div className="text-sm text-urgent flex items-center gap-1">
               <AlertTriangle className="size-4" /> {error}
             </div>
           )}
@@ -270,7 +270,7 @@ export default function PincodesBulkUploadPage() {
                 </div>
               )}
               {phase === 'dry-run' && (report.summary.createdCount ?? 0) < 1 && (
-                <div className="text-xs text-amber-700 flex items-center gap-1">
+                <div className="text-xs text-warning-strong flex items-center gap-1">
                   <AlertTriangle className="size-3.5" />
                   No rows would be created — check that the sheet headers match the
                   template (pincode / location / city_name / district).
@@ -308,9 +308,9 @@ export default function PincodesBulkUploadPage() {
 // Summary stat tile — identical to the helper in settings/pincodes/page.tsx.
 function Stat({ label, value, tone }: { label: string; value: number; tone?: 'ok' | 'warn' | 'err' }) {
   const color =
-    tone === 'ok' ? 'text-emerald-700'
-      : tone === 'warn' ? 'text-amber-700'
-      : tone === 'err' ? 'text-red-700'
+    tone === 'ok' ? 'text-success-strong'
+      : tone === 'warn' ? 'text-warning-strong'
+      : tone === 'err' ? 'text-urgent-strong'
       : '';
   return (
     <div className="border rounded p-2 bg-background">

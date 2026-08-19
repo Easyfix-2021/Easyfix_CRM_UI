@@ -53,7 +53,7 @@ export default function JobTrackingPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
+        <h1 className="text-2xl font-semibold flex items-center gap-2">
           <MapPin className="size-6" /> Job Tracking
         </h1>
         <p className="text-sm text-muted-foreground">
@@ -80,7 +80,7 @@ export default function JobTrackingPage() {
       </Card>
 
       {error && (
-        <Card><CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
+        <Card><CardContent className="p-3 flex items-center gap-2 text-sm text-urgent">
           <AlertTriangle className="size-4" /> {error}
         </CardContent></Card>
       )}
@@ -113,7 +113,7 @@ export default function JobTrackingPage() {
                         <User2 className="size-3.5 text-muted-foreground" />
                         {h.efr_name ?? <span className="text-muted-foreground">— unassigned —</span>}
                         {h.easyfixer_id != null && (
-                          <span className="text-[10px] text-muted-foreground font-mono">#{h.easyfixer_id}</span>
+                          <span className="text-xs text-muted-foreground font-mono">#{h.easyfixer_id}</span>
                         )}
                       </span>
                     </td>
@@ -128,7 +128,7 @@ export default function JobTrackingPage() {
                     </td>
                     <td className="!text-left text-xs">
                       {h.reschedule_reason
-                        ? <span className="bg-amber-50 text-amber-900 rounded px-1.5 py-0.5">{h.reschedule_reason}</span>
+                        ? <span className="bg-warning-tint text-warning-strong rounded px-1.5 py-0.5">{h.reschedule_reason}</span>
                         : <span className="text-muted-foreground italic">initial assignment</span>}
                     </td>
                   </tr>

@@ -57,7 +57,7 @@ const fmtDayLabel = (iso: string) => {
 };
 const fmtDt = (dt: string | null) => (dt ? String(dt).replace('T', ' ').replace('Z', '').slice(0, 16) : '—');
 const titleCase = (s: string | null) => (s ? s.replace(/\b\w/g, (m) => m.toUpperCase()) : '—');
-const STATUS_TONE: Record<string, string> = { Submitted: 'text-emerald-700', Pending: 'text-amber-700', Expired: 'text-rose-700' };
+const STATUS_TONE: Record<string, string> = { Submitted: 'text-success-strong', Pending: 'text-warning-strong', Expired: 'text-urgent-strong' };
 const emptyFilter: FilterBody = { zonalManagerId: [] };
 
 function toNums(v: Array<string | number>): number[] {
@@ -275,7 +275,7 @@ export default function ProfileUpdateRequestsPage() {
             {rows.map((r) => (
               <tr key={r.efrId}>
                 <td className="!text-left font-medium">
-                  {r.efrName} <span className="text-[10px] text-muted-foreground">#{r.efrId}</span>
+                  {r.efrName} <span className="text-xs text-muted-foreground">#{r.efrId}</span>
                 </td>
                 <td className="!text-left">{r.cityName || '—'}</td>
                 <td className="!text-left whitespace-nowrap">{fmtDt(r.sentAt)}</td>

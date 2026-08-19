@@ -415,7 +415,7 @@ export function ClientPerformanceBody() {
       {hasCharts && (
         <section className="mb-6 space-y-4">
           <div className="flex items-baseline justify-between gap-3">
-            <h2 className="text-base font-semibold text-slate-800">Graphical View</h2>
+            <h2 className="text-base font-semibold text-ink-900">Graphical View</h2>
             <span className="text-xs text-muted-foreground">
               Current Period: {periodHeaders[currentIdx] ?? '—'}
             </span>

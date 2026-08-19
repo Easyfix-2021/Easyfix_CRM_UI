@@ -9,7 +9,7 @@ import { cn } from '@/lib/utils';
  * styling (emerald-600 bg, white text, disabled-tinted background).
  *
  * Replaces the dozens of:
- *   <Button className="bg-emerald-600 hover:bg-emerald-700 text-white ...">
+ *   <Button className="bg-success hover:bg-success-strong text-white ...">
  *     <Download className="h-4 w-4" /> Download
  *   </Button>
  * sites across the CRM with:
@@ -75,10 +75,10 @@ export function DownloadButton({
         // orphaned, fixed-width on desktop where the toolbar has room.
         'md:w-auto w-full h-9 inline-flex items-center gap-1.5',
         // Canonical Easyfix green CTA palette.
-        'bg-emerald-600 hover:bg-emerald-700 text-white',
+        'bg-success hover:bg-success-strong text-white',
         // Disabled state — keep the brand colour but visibly muted so
         // it doesn't read as a primary CTA when there's nothing to do.
-        'disabled:bg-emerald-600/40 disabled:hover:bg-emerald-600/40 disabled:cursor-not-allowed',
+        'disabled:bg-success/40 disabled:hover:bg-success/40 disabled:cursor-not-allowed',
         className,
       )}
     >

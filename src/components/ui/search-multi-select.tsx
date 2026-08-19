@@ -245,7 +245,7 @@ export function SearchMultiSelect({
            * `shrink-0`; the ul gets `flex-1 min-h-0` to fill the
            * remaining height and scroll within it.
            */
-          className="flex flex-col overflow-hidden rounded-md border bg-white shadow-lg"
+          className="flex flex-col overflow-hidden rounded-md border bg-popover shadow-lg"
         >
           <div className="flex items-center gap-2 px-3 py-2 border-b shrink-0">
             <Search className="h-4 w-4 text-muted-foreground" />
@@ -271,15 +271,15 @@ export function SearchMultiSelect({
               scrolling. "Select filtered" reads "Select all" when the
               query box is empty — matches operator intent without an
               extra prop. */}
-          <div className="flex items-center justify-between px-3 py-1.5 border-b bg-slate-50 shrink-0">
-            <span className="text-[11px] text-muted-foreground">
+          <div className="flex items-center justify-between px-3 py-1.5 border-b bg-ink-50 shrink-0">
+            <span className="text-xs text-muted-foreground">
               {filtered.length} option{filtered.length === 1 ? '' : 's'} · {count} selected
             </span>
             <div className="flex items-center gap-3">
               <button
                 type="button"
                 onClick={selectAllFiltered}
-                className="text-[11px] text-primary hover:underline"
+                className="text-xs text-primary hover:underline"
               >
                 Select {query.trim() ? 'filtered' : 'all'}
               </button>
@@ -287,7 +287,7 @@ export function SearchMultiSelect({
                 <button
                   type="button"
                   onClick={clearAll}
-                  className="text-[11px] text-muted-foreground hover:underline"
+                  className="text-xs text-muted-foreground hover:underline"
                 >
                   Clear
                 </button>
@@ -310,7 +310,7 @@ export function SearchMultiSelect({
                   out.push(
                     <li
                       key={`__group:${opt.group}`}
-                      className="px-3 pt-2 pb-1 text-[11px] uppercase tracking-wide font-semibold text-muted-foreground bg-slate-50 border-b sticky top-0"
+                      className="px-3 pt-2 pb-1 text-xs uppercase tracking-wide font-semibold text-muted-foreground bg-ink-50 border-b sticky top-0"
                       aria-hidden="true"
                     >
                       Service Category — {opt.group}
@@ -352,7 +352,7 @@ export function SearchMultiSelect({
                           // unmistakably reads as "click to drop". Unselected:
                           // a quiet outlined + "add".
                           isSel
-                            ? 'bg-red-600 text-white'
+                            ? 'bg-urgent text-white'
                             : 'border border-muted-foreground/40 text-muted-foreground',
                         )}
                       >
@@ -376,7 +376,7 @@ export function SearchMultiSelect({
                 out.push(
                   <li
                     key="__more"
-                    className="px-3 py-2 text-[11px] text-muted-foreground bg-slate-50 border-t sticky bottom-0"
+                    className="px-3 py-2 text-xs text-muted-foreground bg-ink-50 border-t sticky bottom-0"
                     aria-hidden="true"
                   >
                     Showing first {visible.length} of {filtered.length} — type to narrow…

@@ -151,7 +151,7 @@ export function EasyfixerDeepSkillModal({
                 <tr><td colSpan={5} className="!text-center py-8 text-muted-foreground">Loading…</td></tr>
               )}
               {!loading && error && (
-                <tr><td colSpan={5} className="!text-center py-8 text-rose-600">{error}</td></tr>
+                <tr><td colSpan={5} className="!text-center py-8 text-urgent-strong">{error}</td></tr>
               )}
               {!loading && !error && filtered.length === 0 && (
                 <tr>
@@ -173,7 +173,7 @@ export function EasyfixerDeepSkillModal({
                       disabled={deleting.has(m.mapping_id)}
                       title="Unmap this deep skill"
                       aria-label={`Unmap ${m.deep_skill_name ?? 'deep skill'}`}
-                      className="inline-flex items-center justify-center size-7 rounded-full text-red-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                      className="inline-flex items-center justify-center size-7 rounded-full text-urgent hover:bg-urgent/15 hover:text-urgent-strong disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       {deleting.has(m.mapping_id)
                         ? <Loader2 className="size-3.5 animate-spin" />

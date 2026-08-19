@@ -139,11 +139,11 @@ export function TechMappingTab({ clientId, canEdit }: Props) {
   return (
     <div className="pt-2 space-y-3">
       {/* Intro banner — operators kept asking what this tab does */}
-      <div className="rounded border border-sky-200 bg-sky-50 p-2.5 text-xs text-sky-900 flex gap-2">
-        <Info className="size-4 shrink-0 mt-0.5 text-sky-700" />
+      <div className="rounded border border-info bg-info-tint p-2.5 text-xs text-info-deep flex gap-2">
+        <Info className="size-4 shrink-0 mt-0.5 text-info" />
         <div className="space-y-0.5">
           <div className="font-medium">What is Tech Mapping?</div>
-          <div className="text-sky-800/90">
+          <div className="text-info-strong/90">
             This list controls which Easyfixer technicians are approved to take jobs
             for each service type this client has subscribed to. The auto-allocation
             engine uses this list as the eligibility pool when assigning a tech to a
@@ -178,7 +178,7 @@ export function TechMappingTab({ clientId, canEdit }: Props) {
       </div>
 
       {error && (
-        <div className="text-xs text-red-600 flex items-center gap-1">
+        <div className="text-xs text-urgent-strong flex items-center gap-1">
           <AlertCircle className="size-3.5" /> {error}
         </div>
       )}
@@ -272,7 +272,7 @@ function SummaryRowCard({
           <span className="font-medium truncate">
             {row.service_type_name ?? `Service Type #${row.service_type_id}`}
           </span>
-          <span className="text-[10px] font-mono shrink-0 px-1.5 py-0.5 rounded bg-muted/50 text-muted-foreground">
+          <span className="text-xs font-mono shrink-0 px-1.5 py-0.5 rounded bg-muted/50 text-muted-foreground">
             #{row.service_type_id}
           </span>
           <span className="text-muted-foreground text-xs shrink-0">
@@ -283,13 +283,13 @@ function SummaryRowCard({
           {row.city_breakdown.slice(0, 4).map((c) => (
             <span
               key={c.city_name}
-              className="text-[10px] bg-slate-100 text-slate-700 border border-slate-200 rounded px-1.5 py-0.5"
+              className="text-xs bg-ink-100 text-ink-700 border border-ink-100 rounded px-1.5 py-0.5"
             >
-              {c.city_name} <span className="text-slate-500">· {c.count}</span>
+              {c.city_name} <span className="text-ink-500">· {c.count}</span>
             </span>
           ))}
           {(row.city_breakdown.length > 4 || row.other_cities_count > 0) && (
-            <span className="text-[10px] text-muted-foreground">
+            <span className="text-xs text-muted-foreground">
               +{(row.city_breakdown.length - 4 > 0 ? row.city_breakdown.length - 4 : 0) + row.other_cities_count} more
             </span>
           )}
@@ -345,7 +345,7 @@ function ExpandedChips({
   }
   if (error) {
     return (
-      <div className="border-t px-3 py-2 text-xs text-red-600 flex items-center gap-1">
+      <div className="border-t px-3 py-2 text-xs text-urgent-strong flex items-center gap-1">
         <AlertCircle className="size-3.5" /> {error}
       </div>
     );
@@ -361,19 +361,19 @@ function ExpandedChips({
     <div className="border-t px-3 py-2 space-y-2">
       {byCity.map(([city, rows]) => (
         <div key={city}>
-          <div className="text-[11px] font-medium text-muted-foreground mb-1">
+          <div className="text-xs font-medium text-muted-foreground mb-1">
             {city} <span className="text-muted-foreground/70">· {rows.length}</span>
           </div>
           <div className="flex flex-wrap gap-1">
             {rows.map((m) => (
               <span
                 key={m.mapping_id}
-                className="text-[11px] bg-sky-50 text-sky-800 border border-sky-200 rounded px-1.5 py-0.5 inline-flex items-center gap-1"
+                className="text-xs bg-info-tint text-info-strong border border-info rounded px-1.5 py-0.5 inline-flex items-center gap-1"
                 title={`${m.efr_no ?? ''} · ${m.city_name ?? '—'}`}
               >
                 {m.is_technician_verified
-                  ? <CheckCircle2 className="size-2.5 text-emerald-600" />
-                  : <ShieldQuestion className="size-2.5 text-amber-600" />}
+                  ? <CheckCircle2 className="size-2.5 text-success-strong" />
+                  : <ShieldQuestion className="size-2.5 text-warning-strong" />}
                 {m.efr_name ?? `#${m.efr_id}`}
               </span>
             ))}
@@ -473,7 +473,7 @@ function TechPickerDialog({
               Include Unverified
             </label>
           </div>
-          <div className="text-[11px] text-muted-foreground">
+          <div className="text-xs text-muted-foreground">
             {selected.size} selected · {eligible?.length ?? 0} eligible
           </div>
           <div className="border rounded max-h-72 overflow-auto">
@@ -487,7 +487,7 @@ function TechPickerDialog({
               {(eligible ?? []).map((t) => {
                 const checked = selected.has(t.efr_id);
                 return (
-                  <li key={t.efr_id} className={`px-2 py-1.5 flex items-center justify-between gap-2 ${checked ? 'bg-sky-50/50' : ''}`}>
+                  <li key={t.efr_id} className={`px-2 py-1.5 flex items-center justify-between gap-2 ${checked ? 'bg-brand-50/50' : ''}`}>
                     <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
                       <input
                         type="checkbox"
@@ -496,10 +496,10 @@ function TechPickerDialog({
                       />
                       <span className="text-sm truncate">{t.efr_name ?? `#${t.efr_id}`}</span>
                       {t.is_technician_verified
-                        ? <CheckCircle2 className="size-3 text-emerald-600 shrink-0" />
-                        : <ShieldQuestion className="size-3 text-amber-600 shrink-0" />}
+                        ? <CheckCircle2 className="size-3 text-success-strong shrink-0" />
+                        : <ShieldQuestion className="size-3 text-warning-strong shrink-0" />}
                     </label>
-                    <span className="text-[11px] text-muted-foreground shrink-0">
+                    <span className="text-xs text-muted-foreground shrink-0">
                       {t.efr_no ?? ''}{t.city_name ? ` · ${t.city_name}` : ''}
                     </span>
                   </li>
@@ -552,7 +552,7 @@ function AddMappingDialog({
           <DialogTitle>Add Service-Type Mapping</DialogTitle>
         </DialogHeader>
         <div className="pt-1 space-y-2">
-          <Label className="text-xs">Service Type <span className="text-red-600">*</span></Label>
+          <Label className="text-xs">Service Type <span className="text-urgent-strong">*</span></Label>
           <SearchSelect
             value={serviceTypeId || ''}
             onChange={(v) => setServiceTypeId(Number(v))}
@@ -560,7 +560,7 @@ function AddMappingDialog({
             placeholder="Pick a service type…"
             required
           />
-          <div className="text-[11px] text-muted-foreground">
+          <div className="text-xs text-muted-foreground">
             Once selected, the eligible-tech picker opens.
           </div>
         </div>

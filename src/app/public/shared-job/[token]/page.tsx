@@ -16,7 +16,7 @@
 
 import * as React from 'react';
 import { useParams } from 'next/navigation';
-import Image from 'next/image';
+import { Logo } from '@/components/brand/Logo';
 import { Wrench, MapPin, CalendarClock, Phone, FileText, Navigation, CheckCircle2 } from 'lucide-react';
 
 import { publicFetch } from '@/lib/public-fetch';
@@ -178,58 +178,58 @@ export default function SharedJobPage() {
       {/* Ephemeral toast */}
       {toast && (
         <div role="status" className={`rounded-md px-4 py-3 text-sm border ${
-          toast.tone === 'ok' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-red-50 border-red-200 text-red-700'
+          toast.tone === 'ok' ? 'bg-success-tint border-success/30 text-success-strong' : 'bg-urgent-tint border-urgent/30 text-urgent-strong'
         }`}>
           {toast.text}
         </div>
       )}
 
       {/* Header band — client/brand + Fulfilled by EasyFix. Same treatment as
-          the job-completion page: dark slate gradient + 3px sky underline. */}
-      <div className="rounded-lg bg-gradient-to-r from-slate-900 via-slate-700 to-slate-900 px-5 py-4 text-white shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]">
-        <div className="text-[11px] font-semibold uppercase tracking-wider text-white/70">Job For</div>
+          the job-completion page: dark ink gradient + a 3px accent underline. */}
+      <div className="rounded-lg bg-gradient-to-r from-ink-900 via-ink-700 to-ink-900 px-5 py-4 text-white shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]">
+        <div className="text-xs font-semibold uppercase tracking-wider text-white/70">Job For</div>
         <div className="mt-1 flex items-end justify-between gap-3 sm:items-center">
-          <div className="min-w-0 truncate text-2xl font-bold leading-tight">{clientName}</div>
+          <div className="min-w-0 truncate text-2xl font-semibold leading-tight">{clientName}</div>
           <span className="flex shrink-0 flex-col items-end gap-0.5 text-xs font-medium text-white/80 sm:flex-row sm:items-center sm:gap-2">
             <span>Fulfilled by</span>
-            <Image src="/logo-full.png" alt="EasyFix" width={139} height={34} className="h-5 w-auto" priority />
+            <Logo variant="horizontal" surface="dark" height={20} />
           </span>
         </div>
       </div>
 
-      <div className="px-1 text-sm text-slate-500">Job ID #{data.job_id}</div>
+      <div className="px-1 text-sm text-ink-500">Job ID #{data.job_id}</div>
 
       {/* Service Requested */}
       <InfoCard icon={<Wrench className="h-4 w-4" />} title="Service Requested">
-        <div className="text-base font-medium text-slate-800">{serviceLabel}</div>
+        <div className="text-base font-medium text-ink-900">{serviceLabel}</div>
       </InfoCard>
 
       {/* Issue / description */}
       {data.job_desc && (
         <InfoCard icon={<FileText className="h-4 w-4" />} title="Issue">
-          <div className="text-sm text-slate-700 whitespace-pre-wrap">{data.job_desc}</div>
+          <div className="text-sm text-ink-700 whitespace-pre-wrap">{data.job_desc}</div>
         </InfoCard>
       )}
 
       {/* Appointment */}
       {apptLabel && (
         <InfoCard icon={<CalendarClock className="h-4 w-4" />} title="Appointment">
-          <div className="text-base font-semibold text-slate-900">{apptLabel}</div>
+          <div className="text-base font-semibold text-ink-900">{apptLabel}</div>
         </InfoCard>
       )}
 
       {/* Service Address + Navigate */}
       <InfoCard icon={<MapPin className="h-4 w-4" />} title="Service Address">
-        <div className="flex w-full rounded-md border border-slate-300 bg-slate-100 px-3 py-2 text-base text-slate-600">
+        <div className="flex w-full rounded-md border border-ink-300 bg-ink-100 px-3 py-2 text-base text-ink-700">
           {assembledAddress || '—'}
         </div>
         {addr.address_instruction && (
-          <p className="text-xs text-slate-500">Landmark / instructions: {addr.address_instruction}</p>
+          <p className="text-xs text-ink-500">Landmark / instructions: {addr.address_instruction}</p>
         )}
         {directionsUrl && (
           <div className="flex justify-center">
             <a href={directionsUrl} target="_blank" rel="noopener noreferrer"
-              className="inline-flex items-center justify-center gap-2 rounded-md border border-sky-300 bg-white px-4 py-2 text-sm font-medium text-sky-700 hover:bg-sky-50">
+              className="inline-flex items-center justify-center gap-2 rounded-md border border-primary/40 bg-card px-4 py-2 text-sm font-medium text-primary hover:bg-brand-50">
               <Navigation className="h-4 w-4" />
               Navigate
             </a>
@@ -240,9 +240,9 @@ export default function SharedJobPage() {
       {/* Call Customer */}
       <InfoCard icon={<Phone className="h-4 w-4" />} title="Contact">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="text-sm text-slate-600">Connect to the customer — your number stays private.</div>
+          <div className="text-sm text-ink-700">Connect to the customer — your number stays private.</div>
           <Button type="button" onClick={openCallDialog}
-            className="w-full shrink-0 gap-1.5 bg-emerald-600 text-white hover:bg-emerald-700 sm:w-auto">
+            className="w-full shrink-0 gap-1.5 bg-success text-white hover:bg-success-strong sm:w-auto">
             <Phone className="h-4 w-4" />
             Call Customer
           </Button>
@@ -254,28 +254,28 @@ export default function SharedJobPage() {
         <OverlayShell title="Call Customer" busy={busy} onClose={() => { if (!busy) setDialogOpen(false); }}>
           {callStep === 'number' ? (
             <>
-              <p className="text-sm text-slate-600">
+              <p className="text-sm text-ink-700">
                 Enter your mobile number so we can connect you to the customer. The customer&apos;s number stays hidden.
               </p>
               <input
                 type="tel" inputMode="numeric" autoComplete="tel" placeholder="10-digit mobile"
                 value={callerMobile}
                 onChange={(e) => setCallerMobile(e.target.value.replace(/\D/g, '').slice(0, 10))}
-                className="flex w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-base focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
+                className="flex w-full rounded-md border border-ink-300 bg-card px-3 py-2 text-base focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary"
               />
               <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end">
                 <Button type="button" size="lg" variant="outline" onClick={() => setDialogOpen(false)} className="w-full sm:w-auto">
                   Cancel
                 </Button>
                 <Button type="button" size="lg" disabled={preview === 'loading'} onClick={loadPreview}
-                  className="w-full sm:w-auto bg-sky-600 hover:bg-sky-700 text-white">
+                  className="w-full sm:w-auto bg-primary hover:bg-brand-600 text-primary-foreground">
                   {preview === 'loading' ? 'Checking…' : 'Continue'}
                 </Button>
               </div>
             </>
           ) : (
             <>
-              <p className="text-sm text-slate-600">Connect this call? We&apos;ll ring your phone, then the customer.</p>
+              <p className="text-sm text-ink-700">Connect this call? We&apos;ll ring your phone, then the customer.</p>
               <CallLegsPreview
                 loading={preview === 'loading'}
                 from={preview && preview !== 'loading' ? preview.from : null}
@@ -287,7 +287,7 @@ export default function SharedJobPage() {
                   Back
                 </Button>
                 <Button type="button" size="lg" disabled={busy} onClick={placeCall}
-                  className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white gap-2">
+                  className="w-full sm:w-auto bg-success hover:bg-success-strong text-white gap-2">
                   <CheckCircle2 className="h-5 w-5" />
                   {busy ? 'Connecting…' : 'Call Now'}
                 </Button>

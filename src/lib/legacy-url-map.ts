@@ -120,6 +120,12 @@ export const URL_MAP: Record<string, string> = {
   // 2026-07-06-add-call-analysis.sql; page lives at /settings/call-analytics.
   // Without this entry the sidebar link fell through to /coming-soon.
   'callAnalytics':         '/settings/call-analytics',
+  // Theme & Branding (Settings): environment/maintenance banner copy, login
+  // tagline, and the festival ornament calendar. tbl_menu row seeded with
+  // url='branding' by 2026-08-18-settings-branding.sql; page lives at
+  // /settings/theme. Without this entry the sidebar link falls through to
+  // /coming-soon.
+  'branding':              '/settings/theme',
   // Reports + Tracking + Admin landing pages.
   // Every Report/Tracking sub-menu lands on the same /reports or /tracking
   // page, but each gets a unique `?focus=` so isRouteActive can identify
@@ -201,6 +207,7 @@ export const URL_MAP: Record<string, string> = {
   'generateClientInvoice':  '/admin-actions',
   'webhook':                '/admin-actions/webhooks',
   'webhookManager':         '/admin-actions/webhooks',
+  'tatCalculator':          '/admin-actions/tat-calculator',
   // Finance sub-resources — Finance landing page links to these
   'clientInvoice':          '/finance?tab=invoices',
   'servicemenPayout':       '/finance?tab=payouts',

@@ -43,10 +43,10 @@ function statusLabel(s: MappedClient['status']): { label: string; tone: string }
   const n = Number(s);
   if (Number.isFinite(n)) {
     return n
-      ? { label: 'Active', tone: 'bg-emerald-100 text-emerald-700' }
-      : { label: 'Inactive', tone: 'bg-slate-100 text-slate-600' };
+      ? { label: 'Active', tone: 'bg-success-tint text-success-strong' }
+      : { label: 'Inactive', tone: 'bg-ink-100 text-ink-700' };
   }
-  return { label: String(s), tone: 'bg-slate-100 text-slate-600' };
+  return { label: String(s), tone: 'bg-ink-100 text-ink-700' };
 }
 
 export function EasyfixerClientMappingModal({
@@ -115,7 +115,7 @@ export function EasyfixerClientMappingModal({
               )}
               {!loading && error && (
                 <tr>
-                  <td colSpan={4} className="text-center py-8 text-rose-600">
+                  <td colSpan={4} className="text-center py-8 text-urgent-strong">
                     {error}
                   </td>
                 </tr>

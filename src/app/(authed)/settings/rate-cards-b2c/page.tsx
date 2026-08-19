@@ -126,7 +126,7 @@ export default function ManageRateCardsB2CPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
+          <h1 className="text-2xl font-semibold flex items-center gap-2">
             <ScrollText className="size-6" /> Manage B2C Rate Cards
           </h1>
           <p className="text-sm text-muted-foreground">
@@ -176,7 +176,7 @@ export default function ManageRateCardsB2CPage() {
       </Card>
 
       {error && (
-        <Card><CardContent className="p-3 flex items-center gap-2 text-sm text-red-600">
+        <Card><CardContent className="p-3 flex items-center gap-2 text-sm text-urgent">
           <AlertTriangle className="size-4" /> {error}
         </CardContent></Card>
       )}
@@ -224,7 +224,7 @@ export default function ManageRateCardsB2CPage() {
                   </td>
                   <td className="!text-center whitespace-nowrap">
                     {(r.status ?? 1) === 1
-                      ? <span className="text-emerald-700 text-xs">Active</span>
+                      ? <span className="text-success-strong text-xs">Active</span>
                       : <span className="text-muted-foreground text-xs">Inactive</span>}
                   </td>
                   <td className="!text-right whitespace-nowrap">
@@ -236,11 +236,11 @@ export default function ManageRateCardsB2CPage() {
                       )}
                       {can.isRetailServiceDelete && (r.status ?? 1) === 1 && (
                         <Button size="sm" variant="ghost" onClick={() => handleDeactivate(r)}>
-                          <Trash2 className="size-3.5 text-red-600" />
+                          <Trash2 className="size-3.5 text-urgent" />
                         </Button>
                       )}
                       {!can.isRetailServiceEdit && !can.isRetailServiceDelete && (
-                        <span className="text-[10px] text-muted-foreground">view-only</span>
+                        <span className="text-xs text-muted-foreground">view-only</span>
                       )}
                     </div>
                   </td>
@@ -412,7 +412,7 @@ function RateCardFormModal({ open, onClose, editing, categories, serviceTypes, o
               <span>Active</span>
             </label>
           )}
-          {error && <div className="text-sm text-red-600 flex items-center gap-1"><AlertTriangle className="size-4" /> {error}</div>}
+          {error && <div className="text-sm text-urgent flex items-center gap-1"><AlertTriangle className="size-4" /> {error}</div>}
           <div className="flex justify-end gap-2 pt-2">
             <CancelButton onCancel={onClose} disabled={submitting} />
             <Button onClick={handleSubmit} disabled={submitting}>
