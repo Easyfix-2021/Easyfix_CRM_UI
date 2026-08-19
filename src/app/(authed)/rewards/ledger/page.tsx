@@ -51,6 +51,7 @@ import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { formatEasyfixerName } from '@/lib/utils';
+import { TechnicianPicker, techOption, type EasyfixerLite } from '@/components/ui/technician-picker';
 import { RewardsPausedNotice } from '@/components/rewards/RewardsPausedNotice';
 
 /* ── Types ──────────────────────────────────────────────────────────────── */
@@ -81,13 +82,6 @@ type LedgerRow = {
 type LedgerResp = { rows: LedgerRow[]; total: number; limit: number; offset: number };
 
 /* Bare ARRAY (not {rows,total}) — /shared/lookup/* returns the list directly. */
-type EasyfixerLite = {
-  efr_id: number;
-  efr_name: string;
-  efr_no: string;
-  city_name: string | null;
-};
-
 type BalanceResp = { easyfixer_id: number; balance: number };
 type AdjustResp = { balance: number };
 
@@ -188,14 +182,6 @@ function formatStamp(raw: string | null | undefined): string {
   return `${day} ${MONTHS[Number(month) - 1] ?? month} ${year}, ${String(hour12).padStart(2, '0')}:${mi} ${hour24 >= 12 ? 'PM' : 'AM'}`;
 }
 
-function techLabel(t: EasyfixerLite): string {
-  return `${formatEasyfixerName(t.efr_name)} · ${t.efr_no}${t.city_name ? ` · ${t.city_name}` : ''}`;
-}
-
-function techOption(t: EasyfixerLite): SearchOption {
-  return { value: t.efr_id, label: techLabel(t) };
-}
-
 /*
  * Whole numbers only, sign allowed. '' and anything non-integer return null so
  * the form can say what is wrong instead of silently coercing to NaN (or, far
@@ -242,86 +228,6 @@ function PointsCell({ delta }: { delta: number }) {
 }
 
 /* ── Technician picker ──────────────────────────────────────────────────── */
-
-/*
- * Server-side typeahead over /shared/lookup/easyfixers, shared by the list
- * filter and the Adjust dialog so both search the same way.
- *
- * THE PIN: in async mode SearchSelect renders exactly the options it is given
- * and does no client filtering, so a selection made under one query would lose
- * its label the moment the query changed (the trigger would fall back to the
- * placeholder and the operator would think their choice was dropped). The
- * picked option is therefore kept in local state and merged back into the list
- * — the same trick CitySelect uses for the 11k-row city master.
- */
-function TechnicianPicker({
-  value,
-  onPick,
-  placeholder,
-  allLabel,
-  className,
-  disabled,
-}: {
-  value: number | '';
-  /* Reports the whole row, not just the id, so callers can name the
-     technician in confirms and toasts without a second lookup. */
-  onPick: (t: EasyfixerLite | null) => void;
-  placeholder: string;
-  /* When set, prepends a clear-the-filter option with this label. */
-  allLabel?: string;
-  className?: string;
-  disabled?: boolean;
-}) {
-  const [query, setQuery] = React.useState('');
-  const dq = useDebouncedValue(query, 300);
-  const [picked, setPicked] = React.useState<SearchOption | null>(null);
-
-  const key = dq.trim()
-    ? `/shared/lookup/easyfixers?q=${encodeURIComponent(dq.trim())}`
-    : '/shared/lookup/easyfixers';
-  const lookup = useFetch<EasyfixerLite[]>(key);
-  const rows = React.useMemo(() => lookup.data ?? [], [lookup.data]);
-
-  const options = React.useMemo<SearchOption[]>(() => {
-    const out: SearchOption[] = rows.map(techOption);
-    if (picked && !out.some((o) => String(o.value) === String(picked.value))) {
-      out.unshift(picked);
-    }
-    return allLabel ? [{ value: '', label: allLabel }, ...out] : out;
-  }, [rows, picked, allLabel]);
-
-  function handleChange(v: string) {
-    if (!v) {
-      setPicked(null);
-      onPick(null);
-      return;
-    }
-    const row = rows.find((r) => String(r.efr_id) === String(v)) ?? null;
-    if (row) {
-      setPicked(techOption(row));
-      onPick(row);
-      return;
-    }
-    // Re-selecting the PINNED option: it is not in the current server page, so
-    // `rows.find` misses it. Keep the existing selection rather than clearing
-    // a choice the operator just re-affirmed.
-    if (picked && String(picked.value) === String(v)) return;
-    onPick(null);
-  }
-
-  return (
-    <SearchSelect
-      value={value}
-      onChange={handleChange}
-      options={options}
-      onQueryChange={setQuery}
-      placeholder={lookup.loading ? 'Loading Technicians…' : placeholder}
-      emptyText={lookup.error ? 'Technician Lookup Failed' : 'No Technicians Match'}
-      className={className}
-      disabled={disabled}
-    />
-  );
-}
 
 /* ── Page ───────────────────────────────────────────────────────────────── */
 
