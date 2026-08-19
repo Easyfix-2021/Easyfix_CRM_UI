@@ -505,6 +505,37 @@ export default function CallTrackingPage() {
     () => [...byUserCombinedRaw].sort((a, b) => cmpCombined(a, b, combinedSort.key, combinedSort.dir)),
     [byUserCombinedRaw, combinedSort],
   );
+  /*
+   * ── User search (2026-08-19) ──────────────────────────────────────────
+   *
+   * A window can hold 1,300+ (day × user) rows, and following ONE caller across
+   * dates meant browser-find plus scrolling: the operator's own rows are spread
+   * down the table, one per day, ranked by volume rather than grouped by person.
+   *
+   * Filtered in the BROWSER, not the server: every row is already here. The
+   * server caps this grain at ROW_CAP = 5,000 and a typical window returns far
+   * fewer, so there is nothing to fetch and the filter is instant as you type.
+   * (If a window ever DID hit that cap the search would only see the rows that
+   * arrived — the same limitation the table already has, not one this adds.)
+   *
+   * Matches on NAME or ID because the table shows both and the operator may
+   * have either: an id typed in full or in part matches by prefix, anything
+   * else is a case-insensitive substring of the name. `User #0` — the
+   * no-caller-recorded bucket — is reachable by typing 0.
+   */
+  const [userQuery, setUserQuery] = useState('');
+  const userMatch = useCallback((row: { userId: number | null; userName: string }) => {
+    const q = userQuery.trim().toLowerCase();
+    if (!q) return true;
+    if (String(row.userId ?? '').startsWith(q)) return true;
+    return (row.userName || '').toLowerCase().includes(q);
+  }, [userQuery]);
+
+  // Both grains filter through the SAME predicate, so switching sub-tab keeps
+  // the operator on the person they were following.
+  const byUserShown = useMemo(() => byUser.filter(userMatch), [byUser, userMatch]);
+  const byUserCombinedShown = useMemo(() => byUserCombined.filter(userMatch), [byUserCombined, userMatch]);
+
   const byDay = data?.byDay ?? [];
   const totals = data?.totals;
 
@@ -975,6 +1006,37 @@ export default function CallTrackingPage() {
             </div>
           )}
 
+      {/*
+        * Deliberately OUTSIDE the multiDay guard above: the sub-tab strip only
+        * renders for a multi-day window, but a single day can still carry
+        * hundreds of callers, and that is exactly when someone is hunting one.
+        */}
+      <div className="mt-4 flex items-center gap-2">
+        <Input
+          value={userQuery}
+          onChange={(e) => setUserQuery(e.target.value)}
+          placeholder="Search user by name or ID…"
+          aria-label="Search user by name or ID"
+          className="h-8 max-w-xs text-sm"
+        />
+        {userQuery.trim() && (
+          <>
+            <span className="text-xs text-muted-foreground">
+              {effectiveUserGrain === 'combined'
+                ? `${byUserCombinedShown.length} of ${byUserCombined.length}`
+                : `${byUserShown.length} of ${byUser.length}`} rows
+            </span>
+            <button
+              type="button"
+              onClick={() => setUserQuery('')}
+              className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+            >
+              Clear
+            </button>
+          </>
+        )}
+      </div>
+
       {/* ── Sub-tab 1: Date Wise (one row per day × user) ─────────────── */}
       {effectiveUserGrain === 'date' && (
         <div className="overflow-x-auto rounded-md border border-border mt-4">
@@ -1000,7 +1062,7 @@ export default function CallTrackingPage() {
               </tr>
             </thead>
             <tbody>
-              {byUser.map((r) => (
+              {byUserShown.map((r) => (
                 <tr key={`${r.day}-${r.userId ?? r.userName}`}>
                   {/* Date on ONE line — it is an identifier, not prose. */}
                   <td className="!text-left whitespace-nowrap">{fmtDay(r.day)}</td>
@@ -1066,11 +1128,11 @@ export default function CallTrackingPage() {
                   <td className="!text-center text-xs"><DateTimeCell value={r.lastCallAt} /></td>
                 </tr>
               ))}
-              {byUser.length === 0 && (
+              {byUserShown.length === 0 && (
                 <tr><td colSpan={12} className="!text-center text-muted-foreground py-6">No Calls In This Window.</td></tr>
               )}
             </tbody>
-            {byUser.length > 0 && (
+            {byUserShown.length > 0 && (
               <tfoot>
                 <tr className="bg-muted/60 font-semibold">
                   <td className="!text-left" colSpan={2}>Total</td>
@@ -1132,7 +1194,7 @@ export default function CallTrackingPage() {
               </tr>
             </thead>
             <tbody>
-              {byUserCombined.map((r) => {
+              {byUserCombinedShown.map((r) => {
                 // Spelled out per row so the number on screen carries its own
                 // denominator, not just the column header's general caveat.
                 const perDayTitle = `${PER_DAY_HELP} This user placed calls on ${r.activeDays} of the ${byDay.length} days in the range.`;
@@ -1198,11 +1260,11 @@ export default function CallTrackingPage() {
                   </tr>
                 );
               })}
-              {byUserCombined.length === 0 && (
+              {byUserCombinedShown.length === 0 && (
                 <tr><td colSpan={12} className="!text-center text-muted-foreground py-6">No Calls In This Window.</td></tr>
               )}
             </tbody>
-            {byUserCombined.length > 0 && (
+            {byUserCombinedShown.length > 0 && (
               <tfoot>
                 <tr className="bg-muted/60 font-semibold">
                   <td className="!text-left">Total</td>
