@@ -979,7 +979,6 @@ export default function TatCalculatorPage() {
                 </p>
               </div>
             </TabsContent>
-          </Tabs>
 
             {DIMENSION_MODES.map((m) => (
               <TabsContent key={m} value={m} className="pt-4">
@@ -1039,6 +1038,7 @@ export default function TatCalculatorPage() {
                 </div>
               </TabsContent>
             ))}
+          </Tabs>
 
           <div className="pt-4 flex flex-wrap items-center gap-2">
             <Button onClick={compute} disabled={!canCompute || result.loading}>
