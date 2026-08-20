@@ -80,6 +80,8 @@ type ScoredJob = {
   projectManager: string | null; verticalName: string | null;
   jobType: 'Local' | 'Travel';
   isEstimateSent: boolean; stopClockAvailable: boolean;
+  appointmentAt: string | null; appointmentIsDateOnly: boolean;
+  bookingLeadHours: number | null; punctualityHours: number | null;
   segments: Segment[];
   efScore: string; efMet: number; efTotal: number; efPct: number | null;
   clientScore: string; performance: Performance;
@@ -103,6 +105,8 @@ type Summary = {
   jobsAnalysed: number;
   efScorePct: number | null; efMet: number; efTotal: number;
   clientScorePct: number | null; clientMet: number; clientEvaluated: number;
+  avgBookingLeadHours: number | null; avgPunctualityHours: number | null;
+  arrivedOnTimePct: number | null; punctualityMeasurable: number;
   labels: Record<Performance, number>;
   segments: SegmentTally[];
   rollups: Record<string, RollupRow[]>;
@@ -141,11 +145,21 @@ type Policy = {
 
 // ─── Presentation ────────────────────────────────────────────────────
 
-const STATUS_META: Record<Status, { cls: string; Icon: typeof CheckCircle2 }> = {
-  YES: { cls: 'bg-success-tint text-success-strong border-success/30', Icon: CheckCircle2 },
-  NO: { cls: 'bg-urgent-tint text-urgent-strong border-urgent/30', Icon: XCircle },
-  Pending: { cls: 'bg-muted text-muted-foreground border-border', Icon: HelpCircle },
-  'N/A': { cls: 'bg-muted/50 text-muted-foreground/60 border-border', Icon: Minus },
+/*
+ * The engine speaks the spec's vocabulary (YES / NO / N/A / Pending) because the
+ * workbook does. The UI must not: "NO" reads as "the visit never happened", when
+ * it means "it happened, but past the target". Every one of these segments is a
+ * CLOCK, so the honest labels are On Time / Delayed.
+ *
+ * Not Recorded (rather than "Pending") for a missing anchor — "pending" implies
+ * we are still waiting for the work, when in fact the work is done and it is the
+ * TIMESTAMP that is absent.
+ */
+const STATUS_META: Record<Status, { label: string; cls: string; Icon: typeof CheckCircle2 }> = {
+  YES: { label: 'On Time', cls: 'bg-success-tint text-success-strong border-success/30', Icon: CheckCircle2 },
+  NO: { label: 'Delayed', cls: 'bg-urgent-tint text-urgent-strong border-urgent/30', Icon: XCircle },
+  Pending: { label: 'Not Recorded', cls: 'bg-muted text-muted-foreground border-border', Icon: HelpCircle },
+  'N/A': { label: 'N/A', cls: 'bg-muted/50 text-muted-foreground/60 border-border', Icon: Minus },
 };
 
 function StatusChip({ status }: { status: Status }) {
@@ -153,7 +167,7 @@ function StatusChip({ status }: { status: Status }) {
   return (
     <Badge className={`border ${m.cls} gap-1 font-medium`}>
       <m.Icon className="h-3 w-3" />
-      {status}
+      {m.label}
     </Badge>
   );
 }
@@ -497,6 +511,19 @@ function SegmentStrip({ job }: { job: ScoredJob }) {
               </div>
             )}
             {s.note && <p className="text-xs text-muted-foreground pl-7">{s.note}</p>}
+            {s.no === 1 && job.bookingLeadHours != null && (
+              <p className="text-xs text-muted-foreground pl-7">
+                Of that, <strong>{hrs(job.bookingLeadHours)}</strong> was the wait the customer chose; we
+                arrived <strong>{(job.punctualityHours ?? 0) > 0
+                  ? `${job.punctualityHours}h late`
+                  : `${Math.abs(job.punctualityHours ?? 0)}h early`}</strong> against the appointment.
+              </p>
+            )}
+            {s.no === 1 && job.appointmentIsDateOnly && (
+              <p className="text-xs text-muted-foreground pl-7">
+                Booked for a date with no time, so punctuality cannot be measured.
+              </p>
+            )}
           </div>
         );
       })}
@@ -520,7 +547,7 @@ function SummaryCharts({ summary }: { summary: Summary }) {
       <ChartCard
         className="lg:col-span-2"
         title="Segment Outcomes"
-        subtitle="Each clock scored independently. Pending means an anchor timestamp is missing — it is not a pass, and never enters a rate."
+        subtitle="Each clock scored independently. Delayed means it happened past the target — not that it never happened. Not Recorded means the timestamp is missing; it is never counted as on time."
       >
         <QsBarChart
           data={segData}
@@ -529,9 +556,9 @@ function SummaryCharts({ summary }: { summary: Summary }) {
           stacked
           height={240}
           series={[
-            { key: 'YES', color: QS_SEMANTIC.good },
-            { key: 'NO', color: QS_SEMANTIC.bad },
-            { key: 'Pending', color: QS_SEMANTIC.neutral },
+            { key: 'On Time', color: QS_SEMANTIC.good },
+            { key: 'Delayed', color: QS_SEMANTIC.bad },
+            { key: 'Not Recorded', color: QS_SEMANTIC.neutral },
           ]}
         />
       </ChartCard>
@@ -555,6 +582,53 @@ function SummaryCharts({ summary }: { summary: Summary }) {
   );
 }
 
+/*
+ * The Visit breakdown. A "Delayed" Visit is unactionable on its own: the clock
+ * runs from ticket creation to check-in, and most of that gap is usually the
+ * date the CUSTOMER asked for. These two figures separate their wait from our
+ * punctuality, so the Visit rate can be read honestly.
+ */
+function VisitBreakdown({ summary }: { summary: Summary }) {
+  if (summary.punctualityMeasurable === 0) return null;
+  const p = summary.avgPunctualityHours;
+  return (
+    <Card>
+      <CardContent className="p-4 space-y-2">
+        <h3 className="text-sm font-semibold">What The Visit Clock Is Made Of</h3>
+        <p className="text-sm text-muted-foreground">
+          Visit runs from ticket created to check-in &mdash; so it contains the wait the customer asked for
+          as well as our own responsiveness. Splitting it is the only way to tell those apart.
+        </p>
+        <div className="grid gap-3 grid-cols-1 sm:grid-cols-3 pt-1">
+          <div className="rounded-md border p-3">
+            <div className="text-2xl font-semibold tabular-nums">{hrs(summary.avgBookingLeadHours)}</div>
+            <div className="text-xs font-medium">Booking Lead Time</div>
+            <p className="text-xs text-muted-foreground">
+              Ticket created &rarr; the appointment the customer chose. Entirely theirs &mdash; not scored.
+            </p>
+          </div>
+          <div className="rounded-md border p-3">
+            <div className="text-2xl font-semibold tabular-nums">
+              {p == null ? '\u2014' : `${p > 0 ? '+' : ''}${p}h`}
+            </div>
+            <div className="text-xs font-medium">Punctuality</div>
+            <p className="text-xs text-muted-foreground">
+              Appointment &rarr; check-in. Ours. A negative number means we arrived early.
+            </p>
+          </div>
+          <div className="rounded-md border p-3">
+            <div className="text-2xl font-semibold tabular-nums">{pct(summary.arrivedOnTimePct)}</div>
+            <div className="text-xs font-medium">Arrived On Time</div>
+            <p className="text-xs text-muted-foreground">
+              Of {summary.punctualityMeasurable} job(s) with a usable appointment time.
+            </p>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function SegmentTable({ segments }: { segments: SegmentTally[] }) {
   return (
     <Card>
@@ -564,11 +638,11 @@ function SegmentTable({ segments }: { segments: SegmentTally[] }) {
             <tr>
               <th className="text-left p-3 font-medium">Segment</th>
               <th className="text-left p-3 font-medium">Owner</th>
-              <th className="text-right p-3 font-medium">YES</th>
-              <th className="text-right p-3 font-medium">NO</th>
-              <th className="text-right p-3 font-medium">Pending</th>
+              <th className="text-right p-3 font-medium">On Time</th>
+              <th className="text-right p-3 font-medium">Delayed</th>
+              <th className="text-right p-3 font-medium">Not Recorded</th>
               <th className="text-right p-3 font-medium">N/A</th>
-              <th className="text-right p-3 font-medium">MET %</th>
+              <th className="text-right p-3 font-medium">On Time %</th>
               <th className="text-right p-3 font-medium">Coverage</th>
               <th className="text-right p-3 font-medium">Avg Hrs</th>
               <th className="text-right p-3 font-medium">Avg Overrun</th>
@@ -794,6 +868,7 @@ function Results({ result, dimensions }: { result: TatResult; dimensions: Array<
         <>
           <SummaryCharts summary={s} />
           <SegmentTable segments={s.segments} />
+          <VisitBreakdown summary={s} />
           <Rollups summary={s} dimensions={dimensions} />
           <JobsTable jobs={result.jobs ?? []} />
         </>
