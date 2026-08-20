@@ -231,6 +231,21 @@ function PointsCell({ delta }: { delta: number }) {
 
 /* ── Page ───────────────────────────────────────────────────────────────── */
 
+/*
+ * Both in the browser's LOCAL calendar, which is what an operator in IST means
+ * by "this month". toISOString() would answer in UTC and hand back the previous
+ * day for the first 5h30m of every IST day — the ledger would open missing its
+ * newest rows, which is the one thing an operator checks first.
+ */
+function todayISO(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function monthStartISO(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+}
+
 export default function PointsLedgerPage() {
   const { me } = useMe();
   const can = actionFlags(me, ['isRewardsManage']);
@@ -238,6 +253,25 @@ export default function PointsLedgerPage() {
   const [search, setSearch] = React.useState('');
   const [reasonCode, setReasonCode] = React.useState<string>('');
   const [easyfixerId, setEasyfixerId] = React.useState<number | ''>('');
+  /*
+   * ── THE LEDGER OPENS ON THIS MONTH, NOT ON ALL OF HISTORY ─────────────────
+   *
+   * reward_points_ledger is append-only and gains ~441 rows a day, so "show
+   * everything" is a query that gets slower every day and never recovers. The
+   * page opens on the current month and the operator widens it from there.
+   *
+   * The window is state, not a constant, so the default is computed ONCE at
+   * mount rather than re-derived on every render — a page left open across
+   * midnight on the 1st must not silently re-scope itself under the operator.
+   *
+   * ⚠ The DEFAULT lives here, in the page. The API applies only the dates it is
+   * given and still returns the whole ledger to a caller that sends none. A
+   * server-side "helpful" default is what took Manage Jobs Export down on
+   * 2026-08-20: asking for everything and quietly receiving a subset, with
+   * nothing on screen to say so.
+   */
+  const [from, setFrom] = React.useState<string>(() => monthStartISO());
+  const [to, setTo] = React.useState<string>(() => todayISO());
   const [page, setPage] = React.useState(0);
   const [pageSize, setPageSize] = React.useState<TablePageSize>(20);
   const [adjustOpen, setAdjustOpen] = React.useState(false);
@@ -249,6 +283,10 @@ export default function PointsLedgerPage() {
   if (dq.trim()) qs.set('q', dq.trim());
   if (reasonCode) qs.set('reasonCode', reasonCode);
   if (easyfixerId !== '') qs.set('easyfixerId', String(easyfixerId));
+  // Either end may be cleared on its own — the API treats a half-open window as
+  // a real request ("everything since the 1st"), so send only what is set.
+  if (from) qs.set('from', from);
+  if (to) qs.set('to', to);
   qs.set('limit', String(limit));
   qs.set('offset', String(page * limit));
   const listFetch = useFetch<LedgerResp>(`/admin/rewards/ledger?${qs.toString()}`);
@@ -258,7 +296,7 @@ export default function PointsLedgerPage() {
    * while on page 4 asks for an offset the smaller result set no longer has
    * and the table renders empty with no visible cause.
    */
-  React.useEffect(() => { setPage(0); }, [dq, reasonCode, easyfixerId]);
+  React.useEffect(() => { setPage(0); }, [dq, reasonCode, easyfixerId, from, to]);
 
   const reasonOptions = React.useMemo<SearchOption[]>(
     () => [
@@ -330,6 +368,45 @@ export default function PointsLedgerPage() {
             allLabel="All Technicians"
             className="w-72"
           />
+          {/*
+            * The window the page opened on, and the operator's way out of it.
+            * Shown as real inputs rather than hidden behind "Advanced" because
+            * the table is ALREADY scoped when they arrive — a filter that is
+            * silently on is the thing that makes a short table inexplicable.
+            * Clearing either end is allowed: the API treats a half-open window
+            * as a real request, and clearing both returns the whole ledger.
+            */}
+          <div className="flex items-center gap-2">
+            <label htmlFor="ledger-from" className="text-sm text-muted-foreground shrink-0">From</label>
+            <Input
+              id="ledger-from"
+              type="date"
+              value={from}
+              max={to || undefined}
+              onChange={(e) => setFrom(e.target.value)}
+              className="w-40"
+              aria-label="Ledger From Date"
+            />
+            <label htmlFor="ledger-to" className="text-sm text-muted-foreground shrink-0">To</label>
+            <Input
+              id="ledger-to"
+              type="date"
+              value={to}
+              min={from || undefined}
+              onChange={(e) => setTo(e.target.value)}
+              className="w-40"
+              aria-label="Ledger To Date"
+            />
+            {(from !== monthStartISO() || to !== todayISO()) && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => { setFrom(monthStartISO()); setTo(todayISO()); }}
+              >
+                This Month
+              </Button>
+            )}
+          </div>
         </CardContent>
       </Card>
 
