@@ -71,6 +71,10 @@ export const URL_MAP: Record<string, string> = {
   // because URL_MAP didn't include these legacy `tbl_menu.url` keys.
   'customer':              '/customers',
   'client':                '/clients',
+  // Client Role Access — what each client-SPOC role grants by default.
+  // Net-new (no legacy equivalent); seeded under the Clients parent by
+  // EasyFix_Backend/migrations/2026-08-21-client-role-access-menu.sql.
+  'clientRoleAccess':      '/clients/access-roles',
   'easyfixer':             '/easyfixers',
   // Search-by-mobile / efr_no / name. Used by call-flow staff.
   'checkBalance':          '/search',

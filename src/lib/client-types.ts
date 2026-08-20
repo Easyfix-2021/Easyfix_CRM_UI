@@ -83,6 +83,49 @@ export type ClientContact = {
   contact_desgn?: string | null;
   manager_id?: number | null;
   status: number;
+  /*
+   * Portal access, LEFT JOINed from easyfix_client_spoc_access. All optional:
+   * a SPOC with no access row is still a valid contact, and on an environment
+   * where the 2026-08-20 migration has not run the API omits them entirely.
+   *
+   * The override flags are TRI-STATE — null means "inherit the role", which is
+   * different from false ("revoked from this person specifically").
+   */
+  spoc_role?: number | null;
+  can_view_performance?: number | null;
+  can_view_invoicing?: number | null;
+  can_approve_estimates?: number | null;
+  can_view_all_stores?: number | null;
+};
+
+/** One role from GET /admin/clients/contacts/access-roles. */
+export type SpocAccessRole = {
+  id: number;
+  key: string;
+  name: string;
+  grants: string[];
+  allStores: boolean;
+  /*
+   * True when a row exists in easyfix_client_role_access — i.e. somebody has
+   * saved this role from Client Role Access. False means it is still on the
+   * default that ships in services/client-access.service.js. The endpoint
+   * always sends it; it is optional here only so the local fallback objects
+   * the Contacts dialog builds when the catalogue has not loaded stay valid.
+   */
+  configured?: boolean;
+};
+
+/*
+ * The whole catalogue response. `surfaces` is the AUTHORITATIVE screen
+ * vocabulary (SURFACES in the service) — render it, never a local copy —
+ * and `overrides` maps each per-SPOC override column to the surface it
+ * controls, so a screen can say which surfaces a single SPOC can be given
+ * or denied on top of their role.
+ */
+export type SpocAccessCatalogue = {
+  roles: SpocAccessRole[];
+  surfaces: string[];
+  overrides: { flag: string; surface: string }[];
 };
 
 export type ClientBilling = {
