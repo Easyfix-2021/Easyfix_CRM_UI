@@ -44,6 +44,14 @@ export const URL_MAP: Record<string, string> = {
   'lmsVideos':             '/lms/training-videos',
   'lmsAssign':             '/lms/assign-training',
   'lmsReport':             '/lms/training-report',
+  // The action tool, added 2026-08-21. Two more siblings under the same
+  // parent — the sidebar is a hard 2-level tree, so a "Chase" sub-menu is
+  // not available. 'lmsAction' is the training team's morning screen and
+  // gates on isLmsAction; 'lmsField' is the state manager's own city and
+  // gates on the same key, narrowed by the caller's geographic scope rather
+  // than by a second permission.
+  'lmsAction':             '/lms/action',
+  'lmsField':              '/lms/my-city',
   // Rewards — points, shop, claims and referral qualification. Four leaves
   // under a top-level "Rewards" parent (tbl_menu seq 15). Writes gate on
   // isRewardsManage; Referrals is deliberately read-only.
