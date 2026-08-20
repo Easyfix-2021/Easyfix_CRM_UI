@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { buildStatusParams, jobStageOptionsFor } from '@/lib/job-buckets';
 import Link from 'next/link';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
@@ -22,7 +22,10 @@ import { DownloadButton } from '@/components/ui/download-button';
 import { downloadXlsx } from '@/lib/download-xlsx';
 import { api } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
-import { formatDate, formatEasyfixerName, statusLabel, statusTone } from '@/lib/utils';
+import {
+  formatDate, formatEasyfixerName, statusLabel, statusTone,
+  isTerminalJobStatus, BULK_TRANSFER_MAX_JOBS,
+} from '@/lib/utils';
 import {
   formatJobAge, jobAgeTitle, JOB_AGE_SORT_KEY, type JobAgeFields,
 } from '@/lib/job-age';
@@ -44,6 +47,7 @@ import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
+import { Checkbox } from '@/components/ui/checkbox';
 import { RefreshBar } from '@/components/ui/refresh-bar';
 import { LiveLocationPopover } from '@/components/location/LiveLocationPopover';
 
@@ -758,6 +762,23 @@ export default function JobsPage() {
    */
   const [transferAlert, setTransferAlert] = useState<string | null>(null);
   const transferAlertTimerRef = useRef<number | null>(null);
+
+  /*
+   * ── Row selection (Transfer Job Ownership) ────────────────────────
+   *
+   * Replaces the old "paste Job IDs into a textarea" flow: the operator now
+   * ticks the rows they are looking at. Typed ids were unverifiable — a
+   * transposed digit targeted a real, unrelated job and the operator only
+   * found out from the results table afterwards.
+   *
+   * A Set keyed by job_id. It PERSISTS across pagination on purpose (pick two
+   * on page 1, three on page 2, transfer all five), and is cleared whenever
+   * the meaning of the result set changes — tab, filters, or search — because
+   * a selection made against one filter set is not a selection the operator
+   * would recognise under another.
+   */
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(() => new Set());
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
   async function exportXlsx() {
     if (downloading) return;
     setDownloading(true);
@@ -869,6 +890,69 @@ export default function JobsPage() {
   // Server already returns the page in sort order; keep the name `sorted` for the
   // render. filteredItems = the instant client q-filter over the current page.
   const sorted = filteredItems;
+
+  /*
+   * ── Selection derivations ─────────────────────────────────────────
+   *
+   * `selectableOnPage` is the subset of the CURRENT PAGE that may be ticked:
+   * non-terminal rows only. The header checkbox is scoped to it (and the UI
+   * says "This Page" out loud) — a "select all 12,000 matching rows" control
+   * would be a different, far more dangerous feature than the one asked for,
+   * and the filters mode already covers that intent with its own ceiling.
+   */
+  const selectableOnPage = useMemo(
+    () => sorted.filter((j) => !isTerminalJobStatus(j.job_status)).map((j) => j.job_id),
+    [sorted],
+  );
+  const selectedCount = selectedIds.size;
+  const atSelectionCap = selectedCount >= BULK_TRANSFER_MAX_JOBS;
+  const pageSelectedCount = useMemo(
+    () => selectableOnPage.filter((id) => selectedIds.has(id)).length,
+    [selectableOnPage, selectedIds],
+  );
+  const pageAllSelected = selectableOnPage.length > 0 && pageSelectedCount === selectableOnPage.length;
+
+  const toggleRow = useCallback((jobId: number, next: boolean) => {
+    setSelectedIds((prev) => {
+      const s = new Set(prev);
+      if (next) {
+        // Re-check the cap inside the updater: the disabled state on the
+        // checkbox is a render-time guard, and a fast double-click can fire a
+        // second change before the re-render lands. A 501st id would 400 the
+        // whole request server-side, so the cap has to hold here too.
+        if (s.size >= BULK_TRANSFER_MAX_JOBS) return prev;
+        s.add(jobId);
+      } else {
+        s.delete(jobId);
+      }
+      return s;
+    });
+  }, []);
+
+  const togglePage = useCallback((next: boolean) => {
+    setSelectedIds((prev) => {
+      const s = new Set(prev);
+      if (!next) {
+        selectableOnPage.forEach((id) => s.delete(id));
+        return s;
+      }
+      // Fill up to the cap and stop — silently dropping the overflow would be
+      // worse than a short selection the operator can see the count of.
+      for (const id of selectableOnPage) {
+        if (s.size >= BULK_TRANSFER_MAX_JOBS && !s.has(id)) break;
+        s.add(id);
+      }
+      return s;
+    });
+  }, [selectableOnPage]);
+
+  /*
+   * Drop the selection whenever the result set is redefined. Paging is
+   * deliberately NOT in here (see the state declaration) — only the tab, the
+   * filter card, and the search box, each of which changes what the ticked
+   * rows even mean.
+   */
+  useEffect(() => { clearSelection(); }, [tab, filters, serverQ, clearSelection]);
   // Refetch when the sort changes (skip the initial mount — the tab effect
   // already loads). Resets to page 1 so the operator sees the top of the new
   // ordering.
@@ -1322,8 +1406,34 @@ export default function JobsPage() {
                         setTransferOpen(true);
                       }}
                     >
-                      <Repeat className="h-4 w-4 mr-1" /> Transfer Job Ownership
+                      <Repeat className="h-4 w-4 mr-1" />
+                      Transfer Job Ownership
+                      {selectedCount > 0 && ` (${selectedCount})`}
                     </Button>
+                    {/*
+                      * Selection readout. Sits beside the button, not above
+                      * the table, so the count is in the same glance as the
+                      * action it feeds. "Clear" is always one click away —
+                      * a selection you cannot see the size of, or drop, is
+                      * how the wrong rows get transferred.
+                      */}
+                    {selectedCount > 0 && (
+                      <span className="inline-flex items-center gap-2 text-xs text-info-strong bg-info-tint border border-info/30 rounded-md px-2 py-1">
+                        <span className="font-medium">{selectedCount} Selected</span>
+                        {atSelectionCap && (
+                          <span className="text-warning-strong">
+                            Limit Reached ({BULK_TRANSFER_MAX_JOBS} Max)
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={clearSelection}
+                          className="underline hover:no-underline"
+                        >
+                          Clear
+                        </button>
+                      </span>
+                    )}
                     {/* Inline alert sits right next to the button so
                         the eye lands on the cue without a viewport
                         scan. Amber (warning-ish, not error-red) keeps
@@ -1393,6 +1503,23 @@ export default function JobsPage() {
               <table className="data-table">
                 <thead>
                   <tr>
+                    {/* Selection column — only rendered for operators who can
+                        actually bulk-transfer, so nobody else pays a column of
+                        horizontal space on an already 19-wide table. */}
+                    {canJob.isTransferJobOwnership && (
+                      <th className="w-8">
+                        <Checkbox
+                          checked={pageAllSelected}
+                          indeterminate={pageSelectedCount > 0}
+                          disabled={selectableOnPage.length === 0}
+                          onChange={togglePage}
+                          label="Select all transferable jobs on this page"
+                          title={selectableOnPage.length === 0
+                            ? 'No transferable jobs on this page'
+                            : `Select the ${selectableOnPage.length} transferable job(s) on THIS PAGE only`}
+                        />
+                      </th>
+                    )}
                     <SortHeader col="job_id"             sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="stick-col-head stick-left">Job #</SortHeader>
                     {/* Age — ticket-created → terminal event (or now, while open).
                         Server-computed + server-sorted; the header sends the
@@ -1421,9 +1548,36 @@ export default function JobsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {loading && <tr><td colSpan={19} className="text-center py-8 text-muted-foreground">Loading…</td></tr>}
+                  {loading && <tr><td colSpan={canJob.isTransferJobOwnership ? 20 : 19} className="text-center py-8 text-muted-foreground">Loading…</td></tr>}
                   {!loading && sorted.map((j) => (
                 <tr key={j.job_id}>
+                  {canJob.isTransferJobOwnership && (
+                    <td>
+                      {/*
+                        * Terminal rows are un-tickable, with the reason on
+                        * hover. The backend refuses them anyway; showing the
+                        * rule at the checkbox means the operator learns it
+                        * here rather than from a "skipped" line in the result
+                        * summary after they have already submitted.
+                        */}
+                      <Checkbox
+                        checked={selectedIds.has(j.job_id)}
+                        disabled={
+                          isTerminalJobStatus(j.job_status)
+                          || (atSelectionCap && !selectedIds.has(j.job_id))
+                        }
+                        onChange={(next) => toggleRow(j.job_id, next)}
+                        label={`Select job ${j.job_id}`}
+                        title={
+                          isTerminalJobStatus(j.job_status)
+                            ? `Completed/cancelled jobs cannot be transferred (${statusLabel(j.job_status)}).`
+                            : (atSelectionCap && !selectedIds.has(j.job_id))
+                              ? `Selection limit reached (${BULK_TRANSFER_MAX_JOBS} jobs per transfer). Clear some rows first.`
+                              : `Select job #${j.job_id} for ownership transfer`
+                        }
+                      />
+                    </td>
+                  )}
                   <td className="font-medium whitespace-nowrap stick-col stick-left">#{j.job_id}</td>
                   <td className="text-xs whitespace-nowrap tabular-nums" title={jobAgeTitle(j)}>{formatJobAge(j)}</td>
                   <td className="text-xs">{j.job_reference_id ?? '—'}</td>
@@ -1604,6 +1758,9 @@ export default function JobsPage() {
           // being set, so this is guaranteed non-empty when the
           // dialog is showing. Dialog locks From Owner to this value.
           lockedFromOwnerId={filters.ownerId || null}
+          // Ticked rows. Sorted so the dialog's read-back list is in a
+          // stable, scannable order rather than click order.
+          selectedJobIds={[...selectedIds].sort((a, b) => a - b)}
           currentFilters={{
             // Mirrors load()'s param shape so the BE filters mode
             // sees exactly what the operator sees on screen. Bucket
@@ -1642,7 +1799,10 @@ export default function JobsPage() {
             zonalId: filters.zonalId,
             zonalManagerId: filters.zonalManagerId,
           }}
-          onApplied={() => { cacheRef.current.clear(); load(true); refreshCounts(); }}
+          // Drop the ticks after a successful transfer — those jobs no longer
+          // belong to the source owner, so leaving them ticked would let a
+          // second click re-submit a set the BE would now skip wholesale.
+          onApplied={() => { clearSelection(); cacheRef.current.clear(); load(true); refreshCounts(); }}
         />
       )}
 

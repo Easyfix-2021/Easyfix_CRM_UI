@@ -193,6 +193,34 @@ export function statusLabel(code: number, opts?: { assigned?: boolean | null }):
 }
 
 /*
+ * TERMINAL (finished) job statuses — 3/5 completed, 6 cancelled, 7 enquiry.
+ *
+ * Same set the backend refuses to bulk-transfer
+ * (NON_TRANSFERABLE_JOB_STATUSES in routes/admin/jobs.js) and the same set the
+ * export treats as "closed". A finished job is never worked again, so handing
+ * it to a new owner only rewrites history.
+ *
+ * The UI copy of this list exists so the operator learns the rule at the
+ * checkbox rather than from a row in the skipped tally after submitting. The
+ * BACKEND remains the enforcement point — this is an affordance, not a guard,
+ * and it must never be the only thing standing between a terminal job and a
+ * transfer.
+ */
+export const TERMINAL_JOB_STATUSES: readonly number[] = [3, 5, 6, 7];
+
+export function isTerminalJobStatus(code: number | null | undefined): boolean {
+  return code != null && TERMINAL_JOB_STATUSES.includes(Number(code));
+}
+
+/*
+ * Max Job IDs the bulk-owner-transfer endpoint accepts in one call — its Joi
+ * schema caps `jobIds` at 500 and rejects the whole request past that. Mirrored
+ * here so the UI stops the operator at the boundary instead of letting them
+ * build a 700-row selection and discover the limit from a 400.
+ */
+export const BULK_TRANSFER_MAX_JOBS = 500;
+
+/*
  * Expands legacy `(T)` prefix in tbl_easyfixer.efr_name → "Trainee …".
  * Legacy CRM used this naming convention to mark technicians in training
  * (all T-prefixed rows have is_technician_verified=NULL and incomplete

@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label';
 import { SearchSelect } from '@/components/ui/search-select';
 import { api, ApiError } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
+import { BULK_TRANSFER_MAX_JOBS as MAX_JOB_IDS } from '@/lib/utils';
 
 /*
  * TransferJobOwnershipDialog — admin-only bulk-transfer of job_owner.
@@ -20,10 +21,27 @@ import { useLookup } from '@/lib/use-lookup';
  *           BE with `{ fromOwnerId, toOwnerId, filters }` and the
  *           backend reuses service.list() with the same RBAC scope
  *           the list endpoint uses (up to a 1000-row safety ceiling).
- *       (b) "Apply to specific Job IDs" — operator pastes comma-or
- *           newline-separated IDs, max 500.
+ *       (b) "Selected Jobs" — the rows the operator ticked on the
+ *           Manage Jobs table, sent as `jobIds` (BE cap: 500).
  *   - Reason is mandatory (audit trail on every per-row changeOwner
  *     call).
+ *
+ * THE FREE-TEXT JOB-IDS BOX IS GONE (replaced 2026-08-20 by the table
+ * checkboxes). It let an operator type ids for jobs they were not
+ * looking at, so a transposed digit silently targeted a real,
+ * unrelated job — and because the source-owner filter usually matched,
+ * the BE happily transferred it. Nothing in it survives that the
+ * checkbox flow does not do better: the ids now come from rows the
+ * operator can see, terminal jobs are un-tickable at source, and the
+ * confirmed set is echoed back below before submit. An operator working
+ * from an external list narrows with the page's search/filter card and
+ * ticks, which is one step longer and verifiable.
+ *
+ * TERMINAL JOBS: the table refuses to tick them and the BE refuses to
+ * transfer them (NON_TRANSFERABLE_JOB_STATUSES in routes/admin/jobs.js).
+ * Filters mode can still resolve terminal rows server-side; those come
+ * back in the results table as "skipped" with the reason, which is why
+ * the report view below renders reasons verbatim.
  *
  * The dialog shows a per-row results table on success — "transferred"
  * / "failed" / "skipped" with the BE's reason for each non-success.
@@ -67,37 +85,53 @@ export function TransferJobOwnershipDialog({
    * transferred". Always == currentFilters.ownerId when set.
    */
   lockedFromOwnerId,
+  /*
+   * Job IDs the operator ticked on the Manage Jobs table. Already
+   * filtered to non-terminal rows and capped at MAX_JOB_IDS by the
+   * table's own selection logic — this dialog re-checks both anyway,
+   * because a dialog that trusts its caller's invariants is one
+   * refactor away from sending a 700-id request.
+   */
+  selectedJobIds = [],
   onApplied,
 }: {
   open: boolean;
   onClose: () => void;
   currentFilters: Record<string, string | number | undefined>;
   lockedFromOwnerId?: number | string | null;
+  selectedJobIds?: number[];
   onApplied?: () => void;
 }) {
   const lk = useLookup();
   const [fromOwner, setFromOwner] = useState<string>('');
   const [toOwner,   setToOwner]   = useState<string>('');
   const [reason,    setReason]    = useState<string>('');
-  const [mode,      setMode]      = useState<'filters' | 'ids'>('filters');
-  const [jobIdsText, setJobIdsText] = useState<string>('');
+  const [mode,      setMode]      = useState<'filters' | 'selected'>('filters');
   const [submitting, setSubmitting] = useState(false);
   const [error,    setError]    = useState<string | null>(null);
   const [report,   setReport]   = useState<Report | null>(null);
+
+  const selectedCount = selectedJobIds.length;
 
   // Reset everything when the dialog reopens — operators expect a
   // fresh form, not stale state from the previous transfer.
   // `fromOwner` is rehydrated from `lockedFromOwnerId` when present
   // so the locked-source flow doesn't require the operator to
   // re-pick the source they already chose upstream.
+  //
+  // The mode DEFAULTS to whichever one the operator's actions already
+  // implied: they ticked rows, so start on Selected Jobs; they ticked
+  // nothing, so start on the filter set. Defaulting to 'filters' with a
+  // live selection was the sharp edge — the operator sees "12 Selected"
+  // on the button and transfers 900 filtered rows instead.
   useEffect(() => {
     if (open) {
       setFromOwner(lockedFromOwnerId != null ? String(lockedFromOwnerId) : '');
       setToOwner(''); setReason('');
-      setMode('filters'); setJobIdsText('');
+      setMode(selectedCount > 0 ? 'selected' : 'filters');
       setError(null); setReport(null); setSubmitting(false);
     }
-  }, [open, lockedFromOwnerId]);
+  }, [open, lockedFromOwnerId, selectedCount]);
 
   async function submit() {
     setError(null);
@@ -110,14 +144,19 @@ export function TransferJobOwnershipDialog({
       toOwnerId:   Number(toOwner),
       reason:      reason.trim(),
     };
-    if (mode === 'ids') {
-      // Accept commas, newlines, spaces — anything non-digit splits.
-      const parsed = Array.from(new Set(
-        jobIdsText.split(/[^0-9]+/).map((s) => Number(s.trim())).filter((n) => Number.isInteger(n) && n > 0)
+    if (mode === 'selected') {
+      // De-dupe + re-validate rather than forwarding the prop blind: the BE's
+      // Joi schema rejects the ENTIRE request on a bad id or an over-cap array,
+      // so a single stray value would cost the operator all of their selection.
+      const ids = Array.from(new Set(
+        selectedJobIds.map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0)
       ));
-      if (parsed.length === 0) { setError('Paste at least one valid Job ID.'); return; }
-      if (parsed.length > 500) { setError(`Too many Job IDs (${parsed.length}). Max 500 per transfer.`); return; }
-      body.jobIds = parsed;
+      if (ids.length === 0) { setError('Select at least one job on the Manage Jobs table.'); return; }
+      if (ids.length > MAX_JOB_IDS) {
+        setError(`Too many jobs selected (${ids.length}). Max ${MAX_JOB_IDS} per transfer.`);
+        return;
+      }
+      body.jobIds = ids;
     } else {
       // Filters mode — strip undefined and trivially-empty values.
       const clean: Record<string, unknown> = {};
@@ -185,10 +224,9 @@ export function TransferJobOwnershipDialog({
               />
             </div>
 
-            {/* Mode picker — radio with two options. Default to
-                "filters" because that's the legacy CRM default and
-                matches the most common ops workflow (filter, then
-                transfer). */}
+            {/* Mode picker — radio with two options. Which one starts
+                selected is decided by the operator's own actions (see
+                the reset effect), not by a fixed default. */}
             <div className="border rounded-md p-3 space-y-2">
               <Label className="!mb-1">Apply To</Label>
               <label className="flex items-center gap-2 text-sm">
@@ -199,28 +237,43 @@ export function TransferJobOwnershipDialog({
                 />
                 <span>All Jobs Matching Current Filters (up to 1,000 rows; pinned to From Owner)</span>
               </label>
-              <label className="flex items-center gap-2 text-sm">
+              <label className={`flex items-center gap-2 text-sm ${selectedCount === 0 ? 'opacity-50' : ''}`}>
                 <input
                   type="radio"
-                  checked={mode === 'ids'}
-                  onChange={() => setMode('ids')}
+                  checked={mode === 'selected'}
+                  onChange={() => setMode('selected')}
+                  // Un-pickable with nothing ticked — choosing it would
+                  // guarantee a validation error the operator can't fix
+                  // from inside the dialog.
+                  disabled={selectedCount === 0}
                 />
-                <span>Specific Job IDs</span>
+                <span>
+                  Selected Jobs ({selectedCount})
+                  {selectedCount === 0 && (
+                    <span className="ml-1 text-xs text-muted-foreground">
+                      — tick rows on the Manage Jobs table first
+                    </span>
+                  )}
+                </span>
               </label>
-              {/* Textarea is always rendered (even when mode='filters')
-                  so the dialog's vertical size doesn't jump when the
-                  operator toggles the radio. The control is disabled
-                  + visually de-emphasised when not in ids mode — same
-                  affordance, no layout shift. */}
-              <textarea
-                className={`w-full h-24 mt-1 border border-input rounded-md px-3 py-2 text-sm font-mono transition-opacity ${
-                  mode === 'ids' ? '' : 'opacity-50 cursor-not-allowed bg-muted/40'
-                }`}
-                placeholder="Paste comma- or newline-separated Job IDs (max 500)"
-                value={jobIdsText}
-                onChange={(e) => setJobIdsText(e.target.value)}
-                disabled={mode !== 'ids'}
-              />
+
+              {/*
+                * Echo the exact ids back before submit. This is the whole
+                * point of moving off the typed box: the operator confirms
+                * the set they are about to mutate, in the same dialog,
+                * instead of finding out from the results table.
+                */}
+              {mode === 'selected' && selectedCount > 0 && (
+                <div className="mt-1 max-h-24 overflow-y-auto rounded-md border border-input bg-muted/40 px-3 py-2 text-xs font-mono leading-5">
+                  {selectedJobIds.map((id) => `#${id}`).join(', ')}
+                </div>
+              )}
+              {mode === 'filters' && (
+                <div className="mt-1 rounded-md border border-warning/30 bg-warning-tint px-3 py-2 text-xs text-warning-strong">
+                  Completed, cancelled and enquiry jobs in the filter set are
+                  refused by the server and will appear below as Skipped.
+                </div>
+              )}
             </div>
 
             {error && <div className="text-sm text-destructive">{error}</div>}
