@@ -42,6 +42,7 @@ import {
 import { TransferJobOwnershipDialog } from '@/components/job/TransferJobOwnershipDialog';
 import { UnconfirmedJobsTable } from '@/components/job/UnconfirmedJobsTable';
 import { CallableMobile } from '@/components/calls/CallButton';
+import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
 import { cycleSort, SortHeader, type SortDir } from '@/lib/use-sort';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
@@ -1578,7 +1579,14 @@ export default function JobsPage() {
                       />
                     </td>
                   )}
-                  <td className="font-medium whitespace-nowrap stick-col stick-left">#{j.job_id}</td>
+                  {/* Same shape as the Unconfirmed bucket: id, then the call-history
+                      popover. Reuses CallHistoryButton — no new component. */}
+                  <td className="font-medium whitespace-nowrap stick-col stick-left">
+                    <span className="inline-flex items-center gap-1">
+                      #{j.job_id}
+                      <CallHistoryButton jobId={j.job_id} />
+                    </span>
+                  </td>
                   <td className="text-xs whitespace-nowrap tabular-nums" title={jobAgeTitle(j)}>{formatJobAge(j)}</td>
                   <td className="text-xs">{j.job_reference_id ?? '—'}</td>
                   <td className="text-xs">{j.client_ref_id ?? '—'}</td>

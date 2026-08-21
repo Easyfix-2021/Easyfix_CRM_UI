@@ -131,7 +131,16 @@ export function TransferJobOwnershipDialog({
       setMode(selectedCount > 0 ? 'selected' : 'filters');
       setError(null); setReport(null); setSubmitting(false);
     }
-  }, [open, lockedFromOwnerId, selectedCount]);
+    // ⚠ DEPS ARE [open] ALONE, DELIBERATELY. This effect seeds the form when
+    // the dialog opens; it must not re-run while it is already open.
+    //
+    // With selectedCount in the deps it did: a successful transfer calls
+    // onApplied(), the page clears the ticked rows, selectedCount drops N→0,
+    // this effect re-fired and setReport(null) DESTROYED the result table the
+    // operator was meant to read. The transfer had worked, but the dialog
+    // snapped back to a blank form — indistinguishable from nothing happening.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   async function submit() {
     setError(null);
