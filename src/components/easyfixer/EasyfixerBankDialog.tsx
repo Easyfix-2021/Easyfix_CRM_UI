@@ -2,43 +2,57 @@
 
 /*
  * EasyfixerBankDialog — operator-driven change of a technician's bank
- * account, from the Manage Easyfixers row action menu. Two steps inside one
- * dialog so the operator never loses what they typed.
+ * account, from the Manage Easyfixers row action menu.
+ *
+ * DEFAULT FLOW IS ONE STEP: fill the details, hit Verify & Update. The OTP
+ * step still exists (see OTP_REQUIRED_DEFAULT below) but is off by default.
  *
  * Backend contract:
  *   POST  /admin/easyfixers/:id/bank/otp   200 → { sent: true }
  *         (the OTP goes to the TECHNICIAN's registered WhatsApp — not to
  *          the operator; the copy in step 2 says so explicitly)
  *   PATCH /admin/easyfixers/:id/bank
- *         body { otp, accountNumber, ifsc, bankName, accountHolderName, reason }
- *         200 → updated
- *         400 → OTP invalid / expired          (nothing was changed)
- *         422 → bank verification failed        (nothing was changed; the
+ *         body { accountNumber, ifsc, bankName, accountHolderName, reason,
+ *                otp? }                    ← otp is OPTIONAL server-side now
+ *         200 → { account_number_masked, ifsc, bank_id, account_holder_name,
+ *                 verified, changed, name_match, name_score, otp_verified }
+ *         400 → OTP invalid / expired          (nothing was changed; only
+ *                                                reachable when the OTP
+ *                                                property is ON)
+ *         422 → bank verification failed / account does not exist
+ *                                               (nothing was changed; the
  *                                                message carries the vendor's
- *                                                reason)
- *         503 → verification service unavailable
+ *                                                own reason)
+ *         503 → vendor key unconfigured         (nothing was changed)
+ *         504 → vendor timed out                (nothing was changed)
  *
- * The three failure codes are rendered as THREE DISTINCT states because the
+ * The four failure codes are rendered as FOUR DISTINCT states because the
  * operator's next move differs in each:
  *   400 → the code is wrong/stale. Re-enter or resend the OTP; details stay.
  *   422 → the account details are wrong. Go back and fix them; a resend
- *         won't help, so the primary button becomes "Edit Details".
- *   503 → nothing is wrong with the input. Retry in a moment; the primary
+ *         won't help, so the primary button becomes "Correct Bank Details".
+ *   503 → misconfiguration on our side. Nothing the operator can fix by
+ *         retyping; raise it rather than loop.
+ *   504 → nothing is wrong with the input. Retry in a moment; the primary
  *         button becomes "Retry Verification".
  * Collapsing them into one "something went wrong" would send the operator
- * down the wrong path two times out of three.
+ * down the wrong path three times out of four.
+ *
+ * name_match is ADVISORY, never a failure: a 200 means the change is already
+ * committed. A 'mismatch' holds the dialog open on a warning panel so the
+ * operator knows the row needs review; a 'match' just closes with a toast.
  *
  * After a successful save the account number is never echoed back in full —
  * the confirmation toast shows the last 4 digits only.
  *
  * Conventions honoured: shared Dialog / Input / Label / Button primitives,
- * showToast (never native alert/confirm), Title Case labels, and the close
- * paths routed through useFormDirtyGuard (an inline onOpenChange arrow is a
- * hard eslint error in this repo).
+ * showToast (never native alert/confirm), Title Case labels, invalidateFetch
+ * after the mutation, and the close paths routed through useFormDirtyGuard
+ * (an inline onOpenChange arrow is a hard eslint error in this repo).
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Landmark, ShieldAlert, WifiOff } from 'lucide-react';
+import { AlertTriangle, Landmark, ShieldAlert, Timer, WifiOff } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -51,6 +65,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { showToast } from '@/components/ui/toast';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
+import { invalidateFetch, useUiFlags } from '@/lib/hooks';
 import { api, ApiError } from '@/lib/api';
 import { formatEasyfixerName } from '@/lib/utils';
 
@@ -58,6 +73,27 @@ export type EasyfixerBankTarget = {
   efr_id: number;
   efr_name: string;
 };
+
+/*
+ * Does this dialog collect an OTP?
+ *
+ * The SERVER owns the answer — easyfix_properties `bank.change.crm.otp.required`,
+ * seeded 'false' — and it is surfaced to the CRM through
+ * GET /admin/config/ui-flags as `bankChangeOtpRequired`, read via useUiFlags()
+ * below. So flipping the property in the DB changes this dialog with no
+ * deploy, which is the whole point of it being a property.
+ *
+ * The constant below is only the value used BEFORE that flag has loaded (and
+ * if the config fetch fails outright). It matches the server's own `?? 'false'`
+ * default deliberately: a UI that disagreed with the server on a missing
+ * property would be worse than either posture.
+ *
+ * The flag is a RENDER HINT, never the gate. The server enforces regardless,
+ * so a stale or unloaded hint costs at most one 400 — and the catch in
+ * verifyAndUpdate() turns `otpRequired` on for the rest of this dialog's life,
+ * so the operator sees the OTP step appear rather than a dead end.
+ */
+const OTP_REQUIRED_DEFAULT = false;
 
 /*
  * IFSC: 4 alpha bank code + a literal '0' + 6 alphanumeric branch code.
@@ -77,8 +113,20 @@ const TEXTAREA_CLASS =
   + 'transition-colors placeholder:text-muted-foreground focus:outline-none '
   + 'focus-visible:outline-none focus-visible:border-foreground/40';
 
-/* The three actionable failure modes, kept apart on purpose (see header). */
-type BankErrorKind = 'otp' | 'verification' | 'unavailable';
+/* The four actionable failure modes, kept apart on purpose (see header). */
+type BankErrorKind = 'otp' | 'verification' | 'unavailable' | 'timeout';
+
+/*
+ * The 200 body. Only the fields this dialog renders are typed — the rest
+ * (ifsc, bank_id, verified, changed) round-trips unread.
+ */
+type BankChangeResult = {
+  account_number_masked: string;
+  account_holder_name: string;
+  name_match: 'match' | 'mismatch';
+  name_score: number;
+  otp_verified: boolean;
+};
 
 export function EasyfixerBankDialog({
   open,
@@ -101,6 +149,24 @@ export function EasyfixerBankDialog({
   const [otp, setOtp] = useState('');
   const [busy, setBusy] = useState(false);
   const [bankError, setBankError] = useState<{ kind: BankErrorKind; message: string } | null>(null);
+  const [otpRequired, setOtpRequired] = useState(OTP_REQUIRED_DEFAULT);
+  // Set ONLY on a name mismatch — a committed change the operator must see.
+  const [mismatch, setMismatch] = useState<BankChangeResult | null>(null);
+  // Server-owned policy; see OTP_REQUIRED_DEFAULT above. One cached fetch per
+  // session — useUiFlags is useFetchOnce-backed, so mounting this dialog
+  // repeatedly does not re-request it.
+  const { bankChangeOtpRequired } = useUiFlags();
+  /*
+   * Held in a ref, NOT read directly by the reset effect below.
+   *
+   * The reset effect keys on [open, efr_id] and clears every field. If the
+   * flag were one of its dependencies, the config fetch resolving while the
+   * dialog is open would re-run it and wipe whatever the operator had already
+   * typed. The ref lets the reset read the current value without being
+   * triggered by it.
+   */
+  const otpFlagRef = useRef(OTP_REQUIRED_DEFAULT);
+  useEffect(() => { otpFlagRef.current = bankChangeOtpRequired; }, [bankChangeOtpRequired]);
 
   // Full reset on each open so a previous attempt never bleeds through.
   useEffect(() => {
@@ -114,6 +180,9 @@ export function EasyfixerBankDialog({
     setOtp('');
     setBusy(false);
     setBankError(null);
+    // Server-owned policy as of this open; see otpFlagRef above.
+    setOtpRequired(otpFlagRef.current);
+    setMismatch(null);
   }, [open, easyfixer?.efr_id]);
 
   // Timestamp of the last open — drives the phantom-close swallow below.
@@ -130,7 +199,9 @@ export function EasyfixerBankDialog({
       || accountNumber.length > 0 || ifsc.length > 0
       || bankName.trim().length > 0 || accountHolderName.trim().length > 0
       || reason.trim().length > 0,
-    when: () => !busy,
+    // `mismatch` means the save already landed — the fields are still filled
+    // but there is nothing left to discard, so skip the prompt.
+    when: () => !busy && !mismatch,
   });
 
   /*
@@ -176,38 +247,60 @@ export function EasyfixerBankDialog({
   }
 
   async function verifyAndUpdate() {
-    if (!easyfixer || !detailsValid || !otpValid) return;
+    if (!easyfixer || !detailsValid) return;
+    if (otpRequired && !otpValid) return;
     setBusy(true);
     setBankError(null);
     try {
-      await api.patch(`/admin/easyfixers/${easyfixer.efr_id}/bank`, {
-        otp,
+      const result = await api.patch<BankChangeResult>(`/admin/easyfixers/${easyfixer.efr_id}/bank`, {
+        // `otp` is optional server-side. Omit the key entirely on the default
+        // (no-OTP) path rather than sending an empty string.
+        ...(otp ? { otp } : {}),
         accountNumber,
         ifsc,
         bankName: bankName.trim(),
         accountHolderName: accountHolderName.trim(),
         reason: reason.trim(),
       });
-      // Never echo the full account number back — last 4 only.
-      showToast({
-        variant: 'success',
-        message: `Bank details updated for ${formatEasyfixerName(easyfixer.efr_name)} — account ending ${accountNumber.slice(-4)}.`,
-      });
+      // The change is committed at this point, whatever name_match says — bust
+      // any cached easyfixer read before the branch below.
+      invalidateFetch((k) => k.startsWith('/admin/easyfixers'));
       onUpdated(easyfixer.efr_id);
-      onClose();
+
+      if (result?.name_match === 'mismatch') {
+        // ADVISORY, not a failure. Hold the dialog open on the warning panel
+        // so this cannot be missed the way an auto-dismissing toast can.
+        setMismatch(result);
+      } else {
+        // Never echo the full account number back — last 4 only.
+        showToast({
+          variant: 'success',
+          message: `Bank details updated for ${formatEasyfixerName(easyfixer.efr_name)} — account ending ${accountNumber.slice(-4)}.`,
+        });
+        onClose();
+      }
     } catch (e) {
       const status = e instanceof ApiError ? e.status : 0;
       const message = e instanceof Error ? e.message : '';
       if (status === 400) {
-        // Wrong or expired code. Everything they typed survives; only the OTP
-        // is cleared so the field is ready for the next attempt.
+        // Wrong, expired — or missing — code. Everything they typed survives;
+        // only the OTP is cleared so the field is ready for the next attempt.
         setOtp('');
         setBankError({ kind: 'otp', message: message || 'That OTP is invalid or has expired.' });
+        // A 400 on the OTP is only reachable when `bank.change.crm.otp.required`
+        // is ON server-side. If we submitted without one (flag believed off,
+        // ops flipped it on), switch the OTP step back on — the operator stays
+        // on the details they already typed and the primary button becomes
+        // "Send OTP To Technician".
+        if (!otpRequired) setOtpRequired(true);
       } else if (status === 422) {
-        // The vendor rejected the account. Resending an OTP cannot fix this.
+        // The vendor rejected the account (bad details, or no such account).
+        // Resending an OTP cannot fix this.
         setBankError({ kind: 'verification', message: message || 'Bank verification failed for these details.' });
       } else if (status === 503) {
         setBankError({ kind: 'unavailable', message: message || 'The bank verification service is unavailable right now.' });
+      } else if (status === 504) {
+        setBankError({ kind: 'timeout', message: message || 'The bank verification service did not respond in time.' });
       } else if (status === 403) {
         showToast({ variant: 'error', message: "You don't have permission to change a technician's bank details." });
       } else {
@@ -234,14 +327,48 @@ export function EasyfixerBankDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Landmark className="h-4 w-4" />
-            {step === 1 ? 'Update Bank Details' : 'Verify & Update Bank Details'}
+            {mismatch
+              ? 'Bank Details Updated — Name Needs Review'
+              : step === 1 ? 'Update Bank Details' : 'Verify & Update Bank Details'}
           </DialogTitle>
           <DialogDescription>
             {formatEasyfixerName(easyfixer.efr_name)} · Easyfixer #{easyfixer.efr_id}
           </DialogDescription>
         </DialogHeader>
 
-        {step === 1 ? (
+        {mismatch ? (
+          /*
+           * Post-save advisory. Warning tokens, NOT the urgent/destructive
+           * ones — the change is saved and this must not read as a failure.
+           */
+          <div className="space-y-3 p-4 pt-2">
+            <div className="rounded border border-warning bg-warning-tint p-3 text-sm text-warning-strong space-y-2">
+              <div className="flex items-center gap-2 font-medium">
+                <AlertTriangle className="h-4 w-4 shrink-0" />
+                Account Holder Name Does Not Match
+              </div>
+              <p className="text-xs">
+                The bank holds this account under a name that does not match
+                {' '}{formatEasyfixerName(easyfixer.efr_name)}. This is a warning, not a failure.
+              </p>
+              <p className="text-xs font-medium">
+                The change WAS saved (account ending {accountNumber.slice(-4)}) and needs review
+                before the next payout run.
+              </p>
+            </div>
+
+            <div className="rounded border bg-muted/40 p-3 text-xs space-y-1">
+              <RecapRow label="Name At The Bank" value={mismatch.account_holder_name} />
+              <RecapRow label="Name On File" value={formatEasyfixerName(easyfixer.efr_name)} />
+              <RecapRow label="Account Number" value={mismatch.account_number_masked} mono />
+              <RecapRow label="Name Match Score" value={`${Math.round((mismatch.name_score ?? 0) * 100)}%`} />
+            </div>
+
+            <div className="flex justify-end pt-1">
+              <Button onClick={onClose}>Close</Button>
+            </div>
+          </div>
+        ) : step === 1 ? (
           <div className="space-y-3 p-4 pt-2">
             <div className="space-y-1">
               <Label htmlFor="ef-bank-account" required>Bank Account Number</Label>
@@ -311,15 +438,32 @@ export function EasyfixerBankDialog({
               />
             </div>
 
-            <div className="rounded border bg-muted/40 p-3 text-xs text-muted-foreground">
-              The next step sends a one-time code to the technician&apos;s registered WhatsApp
-              number. They receive it, not you — ask them to read it back before you continue.
-            </div>
+            {otpRequired ? (
+              <div className="rounded border bg-muted/40 p-3 text-xs text-muted-foreground">
+                The next step sends a one-time code to the technician&apos;s registered WhatsApp
+                number. They receive it, not you — ask them to read it back before you continue.
+              </div>
+            ) : (
+              <div className="rounded border bg-muted/40 p-3 text-xs text-muted-foreground">
+                The account is checked against the bank before it is saved, and the account
+                holder&apos;s name is compared with the technician&apos;s. No code is needed from
+                the technician.
+              </div>
+            )}
+
+            {/* Failures land here too on the one-step flow. */}
+            <BankErrorPanel error={bankError} step={step} />
 
             <div className="flex justify-end gap-2 pt-1">
               <Button variant="outline" onClick={handleClose} disabled={busy}>Cancel</Button>
-              <Button onClick={sendOtp} disabled={!detailsValid || busy}>
-                {busy ? 'Sending…' : 'Send OTP To Technician'}
+              <Button onClick={otpRequired ? sendOtp : verifyAndUpdate} disabled={!detailsValid || busy}>
+                {busy
+                  ? (otpRequired ? 'Sending…' : 'Verifying…')
+                  : otpRequired
+                    ? 'Send OTP To Technician'
+                    : bankError?.kind === 'unavailable' || bankError?.kind === 'timeout'
+                      ? 'Retry Verification'
+                      : 'Verify & Update'}
               </Button>
             </div>
           </div>
@@ -357,45 +501,7 @@ export function EasyfixerBankDialog({
               />
             </div>
 
-            {/* ─── The three distinct failure states ─────────────────────── */}
-            {bankError?.kind === 'otp' && (
-              <div className="rounded border border-warning bg-warning-tint p-3 text-sm text-warning-strong space-y-1">
-                <div className="flex items-center gap-2 font-medium">
-                  <ShieldAlert className="h-4 w-4 shrink-0" />
-                  OTP Invalid Or Expired
-                </div>
-                <p className="text-xs">{bankError.message}</p>
-                <p className="text-xs">
-                  Nothing was changed. Re-enter the code, or send a fresh one — the bank details
-                  above are kept.
-                </p>
-              </div>
-            )}
-            {bankError?.kind === 'verification' && (
-              <div className="rounded border border-urgent bg-urgent-tint p-3 text-sm text-urgent-strong space-y-1">
-                <div className="flex items-center gap-2 font-medium">
-                  <AlertTriangle className="h-4 w-4 shrink-0" />
-                  Bank Verification Failed
-                </div>
-                <p className="text-xs">{bankError.message}</p>
-                <p className="text-xs">
-                  The account was NOT changed. A new OTP will not help — correct the account
-                  details and try again.
-                </p>
-              </div>
-            )}
-            {bankError?.kind === 'unavailable' && (
-              <div className="rounded border border-ink-300 bg-ink-50 p-3 text-sm text-ink-700 space-y-1">
-                <div className="flex items-center gap-2 font-medium">
-                  <WifiOff className="h-4 w-4 shrink-0" />
-                  Verification Service Unavailable
-                </div>
-                <p className="text-xs">{bankError.message}</p>
-                <p className="text-xs">
-                  Nothing was changed and the details you entered are intact. Retry in a minute.
-                </p>
-              </div>
-            )}
+            <BankErrorPanel error={bankError} step={step} />
 
             <div className="flex items-center justify-between gap-2 pt-1">
               <div className="flex gap-2">
@@ -418,7 +524,9 @@ export function EasyfixerBankDialog({
                 <Button onClick={verifyAndUpdate} disabled={busy || !otpValid}>
                   {busy
                     ? 'Verifying…'
-                    : bankError?.kind === 'unavailable' ? 'Retry Verification' : 'Verify & Update'}
+                    : bankError?.kind === 'unavailable' || bankError?.kind === 'timeout'
+                      ? 'Retry Verification'
+                      : 'Verify & Update'}
                 </Button>
               )}
             </div>
@@ -429,7 +537,86 @@ export function EasyfixerBankDialog({
   );
 }
 
-/* One line of the step-2 read-only recap. */
+/*
+ * The four failure states, kept apart on purpose (see the file header). Shared
+ * by both steps because the one-step flow can hit 422/503/504 without ever
+ * reaching the OTP screen — and a 400 can push the OTP step back on from here.
+ */
+function BankErrorPanel({
+  error,
+  step,
+}: {
+  error: { kind: BankErrorKind; message: string } | null;
+  step: 1 | 2;
+}) {
+  if (!error) return null;
+
+  if (error.kind === 'otp') {
+    return (
+      <div className="rounded border border-warning bg-warning-tint p-3 text-sm text-warning-strong space-y-1">
+        <div className="flex items-center gap-2 font-medium">
+          <ShieldAlert className="h-4 w-4 shrink-0" />
+          OTP Required
+        </div>
+        <p className="text-xs">{error.message}</p>
+        <p className="text-xs">
+          {step === 2
+            ? 'Nothing was changed. Re-enter the code, or send a fresh one — the bank details above are kept.'
+            : 'Nothing was changed. This change now needs a one-time code from the technician — send it to continue. The details you entered are kept.'}
+        </p>
+      </div>
+    );
+  }
+
+  if (error.kind === 'verification') {
+    return (
+      <div className="rounded border border-urgent bg-urgent-tint p-3 text-sm text-urgent-strong space-y-1">
+        <div className="flex items-center gap-2 font-medium">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          Bank Verification Failed
+        </div>
+        <p className="text-xs">{error.message}</p>
+        <p className="text-xs">
+          The account was NOT changed. Retrying with the same details will not help — correct the
+          account number and IFSC, then try again.
+        </p>
+      </div>
+    );
+  }
+
+  if (error.kind === 'unavailable') {
+    return (
+      <div className="rounded border border-ink-300 bg-ink-50 p-3 text-sm text-ink-700 space-y-1">
+        <div className="flex items-center gap-2 font-medium">
+          <WifiOff className="h-4 w-4 shrink-0" />
+          Verification Service Unavailable
+        </div>
+        <p className="text-xs">{error.message}</p>
+        <p className="text-xs">
+          Nothing was changed and the details you entered are intact. This is a configuration
+          problem on our side, not a problem with the account — raise it if it persists.
+        </p>
+      </div>
+    );
+  }
+
+  /* timeout (504) — split from 503 because a retry IS the right next move. */
+  return (
+    <div className="rounded border border-ink-300 bg-ink-50 p-3 text-sm text-ink-700 space-y-1">
+      <div className="flex items-center gap-2 font-medium">
+        <Timer className="h-4 w-4 shrink-0" />
+        Verification Timed Out
+      </div>
+      <p className="text-xs">{error.message}</p>
+      <p className="text-xs">
+        Nothing was changed and the details you entered are intact. The bank did not answer in
+        time — retry in a minute.
+      </p>
+    </div>
+  );
+}
+
+/* One line of the read-only recap. */
 function RecapRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
     <div className="flex items-start justify-between gap-3">

@@ -1554,9 +1554,11 @@ export default function EasyfixersPage() {
       />
 
       {/*
-        * Change-bank — two-step, OTP-gated (the code goes to the TECHNICIAN's
-        * WhatsApp, not the operator's). No bank column exists on this table, so
-        * the reload is purely for consistency with the other mutations.
+        * Change-bank — ONE step by default. The OTP gate is a server property
+        * (`bank.change.crm.otp.required`, seeded 'false'); the dialog still
+        * carries the OTP step and reveals it if the server demands one. No bank
+        * column exists on this table, so the reload is purely for consistency
+        * with the other mutations.
         */}
       <EasyfixerBankDialog
         open={bankDialogFor !== null}

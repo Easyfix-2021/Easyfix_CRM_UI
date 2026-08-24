@@ -230,11 +230,14 @@ export function useFetchOnce<T>(key: string): FetchState<T> {
 export function useUiFlags(): {
   customerNumberVisible: boolean;
   mapClickable: boolean;
+  bankChangeOtpRequired: boolean;
   loaded: boolean;
 } {
-  const { data, loading } = useFetchOnce<{ customerNumberVisible: boolean; mapClickable: boolean }>(
-    '/admin/config/ui-flags',
-  );
+  const { data, loading } = useFetchOnce<{
+    customerNumberVisible: boolean;
+    mapClickable: boolean;
+    bankChangeOtpRequired: boolean;
+  }>('/admin/config/ui-flags');
   // Defensive: useFetchOnce has no request timeout, so a HUNG endpoint (socket
   // open, no response) would leave `loading` true forever — and any consumer
   // that gates rendering on `loaded` (the address-picker map) would never
@@ -249,6 +252,13 @@ export function useUiFlags(): {
   return {
     customerNumberVisible: data?.customerNumberVisible === true,
     mapClickable: data?.mapClickable !== false, // default clickable until known
+    /*
+     * Default FALSE until known, matching the server's own `?? 'false'` in
+     * crmOtpRequired(). This is a render hint only — the server enforces the
+     * gate either way, so an unloaded flag costs at most one 400 that the
+     * bank dialog already recovers from by revealing the OTP step.
+     */
+    bankChangeOtpRequired: data?.bankChangeOtpRequired === true,
     // "Settled" = success, error, OR the 5s timeout above. Consumers gating on
     // this must NOT block forever — on error/timeout `data` is null so the safe
     // defaults apply (numbers masked, map clickable).
