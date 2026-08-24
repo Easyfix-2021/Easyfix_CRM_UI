@@ -207,3 +207,12 @@ export function formatServiceAddress(
   const addr = p.address == null ? '' : String(p.address).trim();
   return addr !== '' ? addr : (opts?.fallback ?? '—');
 }
+
+/*
+ * "1 person" / "3 people". Interpolating a bare count next to a hard-coded
+ * plural noun reads wrong at exactly 1 — which, on a two-leg ops call, is the
+ * commonest case, not an edge one.
+ */
+export function pluralize(n: number, singular: string, plural = `${singular}s`): string {
+  return `${n} ${n === 1 ? singular : plural}`;
+}

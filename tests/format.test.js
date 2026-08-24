@@ -241,3 +241,23 @@ test('formatServiceAddress honours a custom fallback', () => {
   assert.equal(F.formatServiceAddress({}, { fallback: 'No address on file' }), 'No address on file');
   assert.equal(F.formatServiceAddress({ address: 'x' }, { fallback: 'unused' }), 'x');
 });
+
+/* ─── pluralize ───────────────────────────────────────────────────────────
+ *
+ * Exists because the call panels interpolated a count next to a hard-coded
+ * plural and rendered "1 other people on it" — on the two-leg call that is the
+ * commonest shape in ops, not an edge case. n === 1 is the whole point of the
+ * function, so that is what is pinned here.
+ */
+test('pluralize picks the singular at exactly 1', () => {
+  assert.equal(F.pluralize(1, 'person', 'people'), '1 person');
+  assert.equal(F.pluralize(2, 'person', 'people'), '2 people');
+  assert.equal(F.pluralize(0, 'person', 'people'), '0 people');
+  // The panels also pass a two-word noun for the stranded-room copy.
+  assert.equal(F.pluralize(1, 'other person', 'other people'), '1 other person');
+});
+
+test('pluralize defaults the plural to a trailing s', () => {
+  assert.equal(F.pluralize(1, 'leg'), '1 leg');
+  assert.equal(F.pluralize(3, 'leg'), '3 legs');
+});

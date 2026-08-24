@@ -41,7 +41,7 @@ import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { formatApiError } from '@/lib/api-errors';
 import { invalidateFetch } from '@/lib/hooks';
-import { fmtDuration } from '@/lib/format';
+import { fmtDuration, pluralize } from '@/lib/format';
 import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
 import { showToast } from '@/components/ui/toast';
@@ -244,6 +244,17 @@ export function WebCallPanel() {
     useDraggablePanel({ sessionKey: 'web', resetKey: active?.jobCallerInfoId ?? null });
 
   /*
+   * "Keep It Open" has to actually keep it open.
+   *
+   * Auto-dismiss is suppressed while `strandedRoom` holds — but the instant it
+   * clears, a 10s hide arms. An operator who had just been asked and had
+   * explicitly answered "keep it open" watched the panel vanish anyway. An
+   * explicit decline outranks the timer for the rest of this call.
+   */
+  const [pinned, setPinned] = React.useState(false);
+  React.useEffect(() => { setPinned(false); }, [active?.jobCallerInfoId]);
+
+  /*
    * Auto-dismiss 10s after the call ends (terminal) OR on a pre-call error (no
    * active call). A live/connecting call is NOT auto-hidden — only the X closes
    * it (handleClose hangs up first if still connected).
@@ -264,9 +275,12 @@ export function WebCallPanel() {
     const shouldAutoHide = (active && terminal) || (!active && !!error);
     if (!shouldAutoHide) return;
     if (active && strandedRoom) return;
+    // An operator who was asked and answered "Keep It Open" has overruled the
+    // timer for this call.
+    if (pinned) return;
     const t = setTimeout(dismiss, AUTO_DISMISS_MS);
     return () => clearTimeout(t);
-  }, [active, terminal, error, dismiss, strandedRoom]);
+  }, [active, terminal, error, dismiss, strandedRoom, pinned]);
 
   /*
    * ── Closing the panel ──
@@ -288,17 +302,57 @@ export function WebCallPanel() {
    * would open a second confirm and strand the first promise.
    */
   const closingRef = React.useRef(false);
+
+  /*
+   * ── Why the live state is mirrored into a ref ─────────────────────────
+   *
+   * Everything below runs ACROSS an await. `handleClose` closes over the
+   * render that produced it, so `nonTerminal` and friends are frozen at the
+   * instant of the click, while the room keeps polling every 2s underneath the
+   * prompt. Acting on the frozen copy is how the final line came to call
+   * `hangup()` on a call that had already ended while the operator was reading
+   * the dialog. Read the ref AFTER the await, never the closure.
+   */
+  const liveRef = React.useRef({ nonTerminal, othersOnCall, strandedRoom });
+  liveRef.current = { nonTerminal, othersOnCall, strandedRoom };
+
+  /*
+   * The open prompt's premise, as an abort handle. Both prompts below assert
+   * something about a room that is still moving: "the call is running with N
+   * people", "your line has dropped but the call is still running". When that
+   * stops being true the question is no longer answerable, so it is withdrawn
+   * rather than left on screen contradicting the panel behind it.
+   */
+  const promptAbort = React.useRef<{ ac: AbortController; premise: 'end-call' | 'stranded' } | null>(null);
+  React.useEffect(() => {
+    const p = promptAbort.current;
+    if (!p) return;
+    // Each prompt is retracted by the collapse of its OWN premise. abort() is
+    // idempotent, so a premise that stays false costs nothing on later ticks.
+    const stillTrue = p.premise === 'end-call' ? (nonTerminal && othersOnCall) : strandedRoom;
+    if (!stillTrue) p.ac.abort();
+  }, [nonTerminal, othersOnCall, strandedRoom]);
+
   const handleClose = React.useCallback(async () => {
     if (closingRef.current) return;
+
+    // Records which premise this prompt rests on, so the effect above knows
+    // which collapse should retract it.
+    const arm = (premise: 'end-call' | 'stranded') => {
+      const ac = new AbortController();
+      promptAbort.current = { ac, premise };
+      return ac.signal;
+    };
+
     if (nonTerminal && othersOnCall) {
       closingRef.current = true;
       const ok = await confirm({
         title: 'End This Call?',
         description: (
           <p className="text-foreground/85">
-            The call is running with {headCount} people on it. Closing this panel
-            hangs you up, which <span className="font-semibold">ends the call for
-            everyone</span> on it.
+            The call is running with {pluralize(headCount, 'person', 'people')} on it.
+            Closing this panel hangs you up, which <span className="font-semibold">ends
+            the call for everyone</span> on it.
           </p>
         ),
         confirmLabel: 'End Call For Everyone',
@@ -306,9 +360,11 @@ export function WebCallPanel() {
         variant: 'destructive',
         icon: <Users className="h-4 w-4" />,
         iconAccent: 'amber',
+        signal: arm('end-call'),
       });
       closingRef.current = false;
-      if (!ok) return;
+      promptAbort.current = null;
+      if (!ok) { setPinned(true); return; }
     } else if (strandedRoom) {
       closingRef.current = true;
       const ok = await confirm({
@@ -316,9 +372,9 @@ export function WebCallPanel() {
         description: (
           <p className="text-foreground/85">
             Your line has dropped, but the call is still running
-            {headCount > 0 ? ` with ${headCount} other people on it` : ''}. Closing only
-            hides this panel — it does <span className="font-semibold">not</span> end the
-            call, and you will not be able to reopen it. Use End Call For Everyone to
+            {headCount > 0 ? ` with ${pluralize(headCount, 'other person', 'other people')} on it` : ''}.
+            Closing only hides this panel — it does <span className="font-semibold">not</span> end
+            the call, and you will not be able to reopen it. Use End Call For Everyone to
             hang up for everyone.
           </p>
         ),
@@ -327,11 +383,15 @@ export function WebCallPanel() {
         variant: 'destructive',
         icon: <Users className="h-4 w-4" />,
         iconAccent: 'amber',
+        signal: arm('stranded'),
       });
       closingRef.current = false;
-      if (!ok) return;
+      promptAbort.current = null;
+      if (!ok) { setPinned(true); return; }
     }
-    if (nonTerminal) hangup(); else dismiss();
+    // Post-await, so this must read the ref: the call may have ended, or the
+    // room emptied, while the prompt was on screen.
+    if (liveRef.current.nonTerminal) hangup(); else dismiss();
   }, [nonTerminal, othersOnCall, headCount, strandedRoom, confirm, hangup, dismiss]);
 
   /*

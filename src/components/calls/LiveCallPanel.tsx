@@ -37,7 +37,7 @@ import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { formatApiError } from '@/lib/api-errors';
 import { useFetch, invalidateFetch } from '@/lib/hooks';
-import { fmtDuration } from '@/lib/format';
+import { fmtDuration, pluralize } from '@/lib/format';
 import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
 import { showToast } from '@/components/ui/toast';
@@ -238,17 +238,37 @@ function LiveCallCard({
   // stays clickable while the prompt is open. Without this guard a second
   // click would open a second confirm and strand the first promise.
   const closingRef = React.useRef(false);
+
+  /*
+   * Retract the prompt if the room empties while it is on screen.
+   *
+   * `description` is a ReactNode captured at call time, so `activeTotal` in it
+   * is a snapshot while the conference keeps polling every 2s behind the
+   * backdrop. Left alone, the dialog goes on insisting the call is "still
+   * running with N people" over a panel that has already flipped every
+   * participant to Left — and points at an End Call control that is hidden
+   * once the call is terminal. Same defect as WebCallPanel's stranded-room
+   * prompt; same handle.
+   */
+  const promptAbort = React.useRef<AbortController | null>(null);
+  const premiseHolds = conferenceLive && conf.activeOthers > 0;
+  React.useEffect(() => {
+    if (!premiseHolds) promptAbort.current?.abort();
+  }, [premiseHolds]);
+
   const handleClose = React.useCallback(async () => {
     if (closingRef.current) return;
     if (conferenceLive && conf.activeOthers > 0) {
       closingRef.current = true;
+      const ac = new AbortController();
+      promptAbort.current = ac;
       const ok = await confirm({
         title: 'Close This Panel?',
         description: (
           <p className="text-foreground/85">
-            The call is still running with {conf.activeTotal} people on it. Closing only
-            hides this panel — it does <span className="font-semibold">not</span> end the
-            call, and you will not be able to reopen it. Use End Call to hang up for
+            The call is still running with {pluralize(conf.activeTotal, 'person', 'people')} on
+            it. Closing only hides this panel — it does <span className="font-semibold">not</span> end
+            the call, and you will not be able to reopen it. Use End Call to hang up for
             everyone.
           </p>
         ),
@@ -257,8 +277,10 @@ function LiveCallCard({
         variant: 'destructive',
         icon: <Users className="h-4 w-4" />,
         iconAccent: 'amber',
+        signal: ac.signal,
       });
       closingRef.current = false;
+      promptAbort.current = null;
       if (!ok) return;
     }
     onClose();

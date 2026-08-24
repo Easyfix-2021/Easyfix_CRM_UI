@@ -42,11 +42,33 @@ export type ConfirmOptions = {
    * portal's sidebar accent line). Pass 'emerald' for positive-action
    * confirms (place call, send notification), 'rose' for destructive. */
   iconAccent?: 'sky' | 'emerald' | 'rose' | 'amber';
+  /*
+   * Retracts the prompt when the thing it is asking about stops being true.
+   *
+   * `description` is a ReactNode built ONCE at call time and stored as a
+   * value — it is a snapshot, not a subscription, so anything interpolated
+   * into it (a head-count, a status) freezes at the instant of the call while
+   * the surface behind the dialog keeps polling. That is how the live-call
+   * panel came to show "Call Ended · 0 on this call" underneath a dialog
+   * insisting the call was "still running with 1", and pointing at an End Call
+   * control the panel had already removed.
+   *
+   * A caller whose prompt has a premise passes a signal and aborts it when the
+   * premise clears; the dialog closes and the promise resolves FALSE — the
+   * safe answer, since a retracted question was never answered. An
+   * AbortSignal rather than an exposed close() because it is scoped to the
+   * caller by construction: there is no way to spell "cancel somebody else's
+   * dialog".
+   */
+  signal?: AbortSignal;
 };
 
 type ConfirmState = ConfirmOptions & {
   open: boolean;
   resolve?: (result: boolean) => void;
+  /* Identifies WHICH prompt is on screen, so a late abort from a prompt that
+   * has already been superseded cannot close the one that replaced it. */
+  id?: number;
 };
 
 const DEFAULTS: Required<Pick<ConfirmOptions, 'title' | 'confirmLabel' | 'cancelLabel' | 'variant'>> = {
@@ -85,14 +107,31 @@ function accentPlateClass(accent?: 'sky' | 'emerald' | 'rose' | 'amber'): string
 export function ConfirmDialogProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = React.useState<ConfirmState>({ open: false });
 
+  const idRef = React.useRef(0);
+
   const confirm: ConfirmFn = React.useCallback((opts?: ConfirmOptions) => {
     return new Promise<boolean>((resolve) => {
+      const signal = opts?.signal;
+      // Already stale before it opened — never show it at all.
+      if (signal?.aborted) { resolve(false); return; }
+
+      const id = ++idRef.current;
       setState((prev) => {
         // Resolve any outstanding confirmation to false so callers that race
         // don't deadlock waiting on a promise whose dialog just got replaced.
         if (prev.open && prev.resolve) prev.resolve(false);
-        return { ...opts, open: true, resolve };
+        return { ...opts, open: true, resolve, id };
       });
+
+      signal?.addEventListener('abort', () => {
+        setState((prev) => {
+          // Ours only. A prompt that has since been replaced must not have its
+          // abort tear down the replacement.
+          if (prev.id !== id) return prev;
+          if (prev.resolve) prev.resolve(false);
+          return { ...prev, open: false, resolve: undefined };
+        });
+      }, { once: true });
     });
   }, []);
 
