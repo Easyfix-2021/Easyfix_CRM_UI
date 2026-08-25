@@ -255,8 +255,20 @@ jobs:
             exit 1
           fi
           # Prove it is a real export and not an empty/short-write archive.
-          if ! tar -tzf "$bundle" | grep -qx './index.html'; then
+          #
+          # The listing is captured to a variable FIRST, deliberately. Piping
+          # `tar` into `grep -q` fails under `set -o pipefail`: grep exits at the
+          # first match, tar keeps writing into the closed pipe, takes EPIPE, and
+          # exits non-zero — so the pipeline reports failure precisely when the
+          # match SUCCEEDED. That inverted this check and failed a QA deploy on a
+          # bundle that was perfectly good ("tar: stdout: write error", then this
+          # error). macOS tar tolerates it, GNU tar on the runner does not, so it
+          # could not be reproduced locally. Command substitution lets tar run to
+          # completion, and grep then reads a string.
+          listing="$(tar -tzf "$bundle")"
+          if ! printf '%s\n' "$listing" | grep -qx './index.html'; then
             echo "::error::'$bundle' has no ./index.html at its root — not a usable Expo web export."
+            echo "::error::Top of the archive listing:"; printf '%s\n' "$listing" | head -20
             exit 1
           fi
           echo "✓ mirror bundle $bundle (version $version, $(du -h "$bundle" | cut -f1))"
