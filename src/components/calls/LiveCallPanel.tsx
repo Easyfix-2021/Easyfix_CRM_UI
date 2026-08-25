@@ -44,6 +44,7 @@ import { showToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { StatusChip, type StatusChipTone } from '@/components/ui/StatusChip';
 import { CALL_PANEL_ATTR } from '@/lib/portal-markers';
+import { parseIstDateTime } from '@/lib/format';
 import { useLiveCall, type LiveCall } from './LiveCallContext';
 import { useDraggablePanel } from './useDraggablePanel';
 import { useConference, ConferenceSection } from './ConferenceSection';
@@ -108,7 +109,11 @@ function useElapsedTimer(startedAt: string | null, running: boolean): number {
 
   React.useEffect(() => {
     if (!startedAt) { setElapsed(0); return; }
-    const startMs = new Date(startedAt).getTime();
+    // parseIstDateTime: answered_at is a zone-less IST DATETIME (tbl_job_caller_
+    // info.start_time, written NOW()). Subtracted from Date.now(), a real
+    // instant, so nothing cancels — west of IST the diff is negative and the
+    // Math.max(0, …) below pins the live timer at 0:00 for the whole call.
+    const startMs = parseIstDateTime(startedAt).getTime();
     if (Number.isNaN(startMs)) { setElapsed(0); return; }
 
     const compute = () => setElapsed(Math.max(0, Math.floor((Date.now() - startMs) / 1000)));

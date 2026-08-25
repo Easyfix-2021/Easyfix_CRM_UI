@@ -12,6 +12,7 @@ import { IconButton } from '@/components/ui/icon-button';
 import { SortHeader, type SortDir } from '@/lib/use-sort';
 import { formatJobAge, jobAgeTitle, JOB_AGE_SORT_KEY, type JobAgeFields } from '@/lib/job-age';
 import { displaySlot } from '@/lib/job-slots';
+import { parseIstDateTime } from '@/lib/format';
 
 /*
  * UnconfirmedJobsTable — the focused column set ops requested for the
@@ -592,7 +593,11 @@ export function UnconfirmedJobsTable({
  * sibling `jobAge` helper for the same kind of inline read).
  */
 function relativeAge(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime();
+  // parseIstDateTime: a zone-less IST DATETIME minus Date.now() (a REAL
+  // instant) does not cancel. West of IST the diff goes negative and the
+  // clamp below prints "just now" for a link sent hours ago — hiding exactly
+  // the staleness this tooltip exists to show.
+  const ms = Date.now() - parseIstDateTime(iso).getTime();
   if (!Number.isFinite(ms) || ms < 0) return 'just now';
   const mins = Math.floor(ms / 60_000);
   if (mins < 1) return 'just now';

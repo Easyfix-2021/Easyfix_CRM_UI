@@ -42,6 +42,7 @@ import { Button } from '@/components/ui/button';
 import { api, ApiError } from '@/lib/api';
 import { showToast } from '@/components/ui/toast';
 import { formatDate } from '@/lib/utils';
+import { parseIstDateTime } from '@/lib/format';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 
 export function MagicLinkActionPopup({
@@ -348,7 +349,11 @@ export function MagicLinkActionPopup({
  * closed-out order.
  */
 function relativeTime(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime();
+  // parseIstDateTime: a zone-less IST DATETIME minus Date.now() (a REAL
+  // instant) does not cancel. West of IST the diff goes negative and the
+  // clamp below prints "just now" for a link sent hours ago — hiding exactly
+  // the staleness this tooltip exists to show.
+  const ms = Date.now() - parseIstDateTime(iso).getTime();
   const mins = Math.floor(ms / 60000);
   if (mins < 1) return 'just now';
   if (mins < 60) return `${mins} min ago`;

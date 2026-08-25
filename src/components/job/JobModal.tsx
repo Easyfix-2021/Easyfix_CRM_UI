@@ -69,6 +69,7 @@ import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { transitionAllowed } from '@/lib/job-stages';
 import { candidateJobOfferEligibility } from '@/lib/easyfixer-lifecycle';
+import { parseIstDateTime } from '@/lib/format';
 
 /*
  * Unified Job modal — create | view | edit in one component.
@@ -5235,7 +5236,20 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
         if (!isOutcomeOnly) {
           setIf('job_type', f.job_type);
           setIf('source_type', f.source_type);
-          setIf('requested_date_time', f.requested_date_time ? new Date(f.requested_date_time).toISOString() : null);
+/*
+           * parseIstDateTime: f.requested_date_time is a NAIVE IST wall clock
+           * ('YYYY-MM-DDTHH:mm') from the date picker and the IST hour-frame
+           * TimeSelect — never zoned. `new Date()` reads it as browser-local
+           * before .toISOString() applies the offset, so a New York operator
+           * booking 14:00 IST stored 18:00Z = 23:30 IST. Nothing on screen
+           * says so; it is wrong in the row, not in the render.
+           *
+           * The block already disagreed with itself: the sibling
+           * original_appointment_time goes through toIstClockTime under a
+           * comment asserting this value is naive IST. One row, two columns,
+           * two readings. On an IST browser the emitted string is unchanged.
+           */
+          setIf('requested_date_time', f.requested_date_time ? parseIstDateTime(f.requested_date_time).toISOString() : null);
           setIf('time_slot', f.time_slot);
           setIf('job_desc', f.job_desc);
           setIf('client_ref_id', f.client_ref_id);
@@ -5285,7 +5299,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
            */
           if (f.requested_date_time) {
             setIf('original_appointment_date_time',
-              new Date(f.requested_date_time).toISOString());
+              parseIstDateTime(f.requested_date_time).toISOString());
             // The legacy companion time column stores "HH:MM". Send the
             // already-derived IST clock time rather than a full ISO datetime:
             // it's exactly what the column persists (no server projection
@@ -5678,7 +5692,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
               // create() — date is required — and caught non-fatally below,
               // same as any other sibling failure.)
               requested_date_time: f.requested_date_time
-                ? new Date(f.requested_date_time).toISOString()
+                ? parseIstDateTime(f.requested_date_time).toISOString()
                 : undefined,
               time_slot: f.time_slot || undefined,
               client_ref_id: clientRefId,
@@ -5973,7 +5987,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
           // fits naturally. The picker is intentionally hidden — operators
           // shouldn't override the source.
           source_type: f.source_type || 'CRM - New',
-          requested_date_time: new Date(f.requested_date_time).toISOString(),
+          requested_date_time: parseIstDateTime(f.requested_date_time).toISOString(),
           time_slot: f.time_slot || undefined,
           job_desc: f.job_desc || undefined,
           client_ref_id: f.client_ref_id || undefined,

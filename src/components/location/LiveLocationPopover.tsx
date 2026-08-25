@@ -10,7 +10,8 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { api, ApiError, type JobLocationResponse, type LiveLocationPing } from '@/lib/api';
-import { formatDate } from '@/lib/utils';
+import { formatDate, relativeTime } from '@/lib/utils';
+import { parseIstDateTime } from '@/lib/format';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useUiFlags } from '@/lib/hooks';
 import { darkMapStyles, loadGoogleMaps, type GMaps } from '@/lib/google-maps';
@@ -68,7 +69,18 @@ function classify(ping: LiveLocationPing | null): Freshness {
   if (ping == null) return 'none';
   // Legacy rows carry no timestamp — the age is unknowable, not merely old.
   if (!ping.captured_at) return 'unknown-age';
-  const t = new Date(ping.captured_at).getTime();
+  /*
+   * parseIstDateTime, not `new Date(...)`. captured_at is a zone-less MySQL
+   * DATETIME meaning IST, so `new Date()` reads it as browser-local. From any
+   * zone BEHIND IST the instant lands in the FUTURE, `Date.now() - t` goes
+   * NEGATIVE, and negative <= LIVE_WINDOW_MS is TRUE — a ping hours old
+   * classified as 'live', painting the green pin, the pulse and the
+   * "Live · updated…" banner.
+   *
+   * That is precisely the failure this function's docblock above says it
+   * exists to prevent, arriving through the parse rather than the policy.
+   */
+  const t = parseIstDateTime(ping.captured_at).getTime();
   if (Number.isNaN(t)) return 'unknown-age';
   return Date.now() - t <= LIVE_WINDOW_MS ? 'live' : 'stale';
 }
@@ -678,26 +690,14 @@ export function LiveLocationPopover({
 }
 
 /*
- * relativeTime(iso) → "just now" / "3 min ago" / "2 hr ago" / "5 days ago".
+ * relativeTime now comes from '@/lib/utils'.
  *
- * Small, dependency-free formatter (the repo has no Intl.RelativeTimeFormat
- * helper). Falls back to the absolute formatDate() for anything older than a
- * day-ish so very stale pings stay legible. Invalid / future dates clamp to
- * "just now".
+ * This file used to carry a PRIVATE COPY of it — identical body, identical
+ * clamps — which was left behind when the shared one was converted to
+ * parseIstDateTime. So the shared helper was fixed and this panel kept the
+ * bug: west of IST the diff went negative and the `diffSec < 0` clamp turned
+ * a three-hour-old technician position into "just now".
+ *
+ * Deleted rather than patched. Two copies of a formatter is how the first one
+ * got fixed alone, and the panel's whole purpose is to be honest about age.
  */
-function relativeTime(iso: string | null | undefined): string {
-  if (!iso) return '—';
-  const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return '—';
-  const diffSec = Math.floor((Date.now() - t) / 1000);
-  if (diffSec < 0) return 'just now';
-  if (diffSec < 45) return 'just now';
-  if (diffSec < 90) return '1 min ago';
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin} min ago`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr} hr ago`;
-  const diffDay = Math.floor(diffHr / 24);
-  if (diffDay < 7) return `${diffDay} day${diffDay === 1 ? '' : 's'} ago`;
-  return formatDate(iso);
-}

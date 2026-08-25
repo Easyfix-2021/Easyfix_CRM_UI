@@ -28,6 +28,7 @@ import { statusLabel, statusTone } from '@/lib/utils';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { useSort, SortHeader } from '@/lib/use-sort';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
+import { parseIstDateTime } from '@/lib/format';
 
 /*
  * formatDateOnly / formatTimeOnly — split a single ISO/MySQL DATETIME
@@ -66,9 +67,19 @@ function escalationDurationLabel(
   resolvedAt: string | null
 ): string {
   if (!escalatedAt) return '—';
-  const start = new Date(escalatedAt);
+  /*
+   * Both operands move together — this is one edit, not two.
+   *
+   * The resolved branch currently cancels because start and end share a
+   * source; converting `start` alone would break it. The OPEN branch is the
+   * broken one today: `end` falls back to a real `new Date()`, so west of IST
+   * the diff goes negative, Math.max(0, …) floors it, and a week-old open
+   * escalation renders "0 mins" — the exact case this helper's comment cites.
+   */
+  const start = parseIstDateTime(escalatedAt);
   if (isNaN(+start)) return '—';
-  const end = resolvedAt ? new Date(resolvedAt) : new Date();
+  // The bare new Date() fallback is a real instant and stays as-is.
+  const end = resolvedAt ? parseIstDateTime(resolvedAt) : new Date();
   const diffMs = Math.max(0, +end - +start);
   const totalMins = Math.floor(diffMs / 60000);
   const days = Math.floor(totalMins / (60 * 24));
