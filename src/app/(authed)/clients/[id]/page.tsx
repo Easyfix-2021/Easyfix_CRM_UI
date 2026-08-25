@@ -484,7 +484,7 @@ function ClientSection({
     case 'account':       return <AccountPaymentSection client={client} canEdit={canEdit} onSaved={onSaved} />;
     case 'services':      return <ServicesSection clientId={clientId} canEdit={canEdit} />;
     case 'rate-cards':    return <SectionShell title="Rate Cards" note="Per-service pricing applied to this client's jobs."><RateCardsTab clientId={clientId} canEdit={canEdit} /></SectionShell>;
-    case 'sla':           return <SlaTargetsSection clientId={clientId} />;
+    case 'sla':           return <SlaTargetsSection clientId={clientId} canEdit={canEdit} />;
     case 'notifications': return <NotificationsSection client={client} clientId={clientId} />;
     case 'reports':       return <ReportsSection clientId={clientId} clientName={String(client.client_name ?? '')} />;
     case 'props':         return <SectionShell title="Custom Properties" note="Per-client feature switches and booking-form fields."><CustomPropsTab clientId={clientId} canEdit={canEdit} /></SectionShell>;

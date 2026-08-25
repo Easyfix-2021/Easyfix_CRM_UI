@@ -3,42 +3,149 @@
 /*
  * Client Profile → SLA & Priorities.
  *
- * The contracted performance targets this client is judged against, read from
- * GET /admin/clients/:clientId/targets — a passthrough of the SAME service
- * (services/client-target.service.js) the client portal's Performance book
- * compares its numbers to. Operator and client therefore read one set of
- * figures; a second copy in the CRM would drift the first time a contract
- * changed.
+ * The contracted performance targets this client is judged against, backed by
+ * easyfix_client_target through GET/PUT/DELETE /admin/clients/:clientId/targets.
+ * The GET is a passthrough of services/client-target.service.js — the SAME
+ * module the client portal's Performance book compares its numbers to — so an
+ * operator and a client read one set of figures rather than two that drift.
  *
  * ─── 'source' IS THE MOST IMPORTANT FIELD ON THE SCREEN ─────────────────────
- * A missing easyfix_client_target row is NORMAL — most clients have never had
- * one configured, and the service falls back to platform defaults so the
- * Performance book stays renderable. Rendering those defaults as if they were
- * contracted would turn "what we hold ourselves to" into "what we promised
- * them", which is exactly the sentence nobody wants to discover in a QBR. So
- * the banner states which it is, every time.
+ * A missing easyfix_client_target row is NORMAL: the service falls back to the
+ * platform defaults so Performance stays renderable. Rendering those defaults
+ * as if they were contracted would turn "what we hold ourselves to" into "what
+ * we promised them" — the sentence nobody wants read back to them in a QBR. So
+ * the banner states which it is, every time, and the Reset action exists
+ * precisely so a client can go BACK to platform-default.
  *
- * READ-ONLY. Nothing in the platform writes easyfix_client_target yet, so this
- * section shows and explains rather than offering an edit that has no writer.
+ * ─── WHY RESET IS A DELETE, NOT "TYPE THE DEFAULTS BACK IN" ─────────────────
+ * Saving the default VALUES leaves the row in place, and `source` keeps
+ * reporting 'contracted'. Only removing the row restores 'platform-default'.
+ * Without that, the first accidental save would mark a client as contracted
+ * forever — which is why Reset is offered whenever a contracted row exists.
  */
 
-import { ShieldCheck, Info } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Info, Loader2, RotateCcw, Save, ShieldCheck, Undo2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { StatusChip } from '@/components/ui/StatusChip';
-import { useFetch } from '@/lib/hooks';
+import { showToast } from '@/components/ui/toast';
+import { useConfirm } from '@/components/ui/confirm-dialog';
+import { api, ApiError } from '@/lib/api';
+import { useFetch, invalidateFetch } from '@/lib/hooks';
 import type { ClientTargets } from '@/lib/client-types';
 import { SectionShell } from '@/components/client/SectionShell';
 
-const METRICS: Array<{ key: keyof ClientTargets; label: string; unit: string; note: string }> = [
-  { key: 'sla_pct',  label: 'SLA Met', unit: '%', note: 'Share of jobs meeting every EasyFix-owned TAT segment.' },
-  { key: 'ftfr_pct', label: 'First-Time Fix Rate', unit: '%', note: 'Closed on the first visit, no revisit raised.' },
-  { key: 'revisit_pct', label: 'Revisit Rate', unit: '%', note: 'Lower is better.' },
-  { key: 'avg_age_days', label: 'Average Age At Close', unit: ' days', note: 'Lower is better.' },
-  { key: 'approval_response_hours', label: 'Approval Response', unit: ' hrs', note: 'The CLIENT-owned clock — how fast they approve an estimate.' },
+type MetricKey = 'sla_pct' | 'ftfr_pct' | 'revisit_pct' | 'avg_age_days' | 'approval_response_hours';
+
+const METRICS: Array<{
+  key: MetricKey; label: string; unit: string; note: string; min: number; max: number; step: string;
+}> = [
+  { key: 'sla_pct',  label: 'SLA Met', unit: '%', min: 0, max: 100, step: '0.01',
+    note: 'Share of jobs meeting every EasyFix-owned TAT segment.' },
+  { key: 'ftfr_pct', label: 'First-Time Fix Rate', unit: '%', min: 0, max: 100, step: '0.01',
+    note: 'Closed on the first visit, no revisit raised.' },
+  { key: 'revisit_pct', label: 'Revisit Rate', unit: '%', min: 0, max: 100, step: '0.01',
+    note: 'Lower is better.' },
+  { key: 'avg_age_days', label: 'Average Age At Close', unit: ' days', min: 0, max: 365, step: '0.01',
+    note: 'Lower is better.' },
+  { key: 'approval_response_hours', label: 'Approval Response', unit: ' hrs', min: 1, max: 720, step: '1',
+    note: 'The CLIENT-owned clock — how fast they approve an estimate.' },
 ];
 
-export function SlaTargetsSection({ clientId }: { clientId: number }) {
-  const { data, loading, error } = useFetch<ClientTargets>(`/admin/clients/${clientId}/targets`);
+type FormState = Record<MetricKey, string>;
+
+/* Strings, not numbers: a controlled <input type="number"> round-trips strings,
+   and coercing per keystroke makes "9" unrepresentable while you delete the 5
+   from "95". Coercion happens once, on submit. */
+function seed(t: ClientTargets): FormState {
+  return {
+    sla_pct: String(t.sla_pct),
+    ftfr_pct: String(t.ftfr_pct),
+    revisit_pct: String(t.revisit_pct),
+    avg_age_days: String(t.avg_age_days),
+    approval_response_hours: String(t.approval_response_hours),
+  };
+}
+
+export function SlaTargetsSection({ clientId, canEdit }: { clientId: number; canEdit: boolean }) {
+  const key = `/admin/clients/${clientId}/targets`;
+  const { data, loading, error, refetch } = useFetch<ClientTargets>(key);
+  const [form, setForm] = useState<FormState | null>(null);
+  const [snapshot, setSnapshot] = useState<FormState | null>(null);
+  const [saving, setSaving] = useState(false);
+  const confirm = useConfirm();
+
+  useEffect(() => {
+    if (!data) return;
+    const next = seed(data);
+    setForm(next);
+    setSnapshot(next);
+  }, [data]);
+
   const contracted = data?.source === 'contracted';
+  const dirty = useMemo(
+    () => !!form && !!snapshot && JSON.stringify(form) !== JSON.stringify(snapshot),
+    [form, snapshot],
+  );
+
+  function set(k: MetricKey, v: string) {
+    setForm((f) => (f ? { ...f, [k]: v } : f));
+  }
+
+  async function save() {
+    if (!form || !canEdit || saving) return;
+    /*
+     * Validate locally against the same bounds the Joi schema enforces, so a
+     * typo is a message beside the field rather than a round trip and a 400.
+     */
+    for (const m of METRICS) {
+      const n = Number(form[m.key]);
+      if (form[m.key].trim() === '' || !Number.isFinite(n) || n < m.min || n > m.max) {
+        showToast({ variant: 'error', message: `${m.label} must be between ${m.min} and ${m.max}.` });
+        return;
+      }
+    }
+    setSaving(true);
+    try {
+      // The WHOLE set every time — easyfix_client_target's columns are NOT NULL
+      // with defaults, so a partial upsert would silently reset the untouched
+      // fields to the platform values.
+      await api.put(key, {
+        sla_pct: Number(form.sla_pct),
+        ftfr_pct: Number(form.ftfr_pct),
+        revisit_pct: Number(form.revisit_pct),
+        avg_age_days: Number(form.avg_age_days),
+        approval_response_hours: Number(form.approval_response_hours),
+      } as never);
+      invalidateFetch((k) => k === key);
+      refetch();
+      showToast({ variant: 'success', message: 'Targets saved. This client is now on contracted targets.' });
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Could not save targets.' });
+    } finally { setSaving(false); }
+  }
+
+  async function reset() {
+    if (!canEdit || saving) return;
+    const ok = await confirm({
+      title: 'Reset To Platform Defaults',
+      description: 'Remove this client’s contracted targets? Their Performance book will be judged against the EasyFix platform defaults again. This does not change any historical numbers.',
+      confirmLabel: 'Reset',
+      variant: 'destructive',
+    });
+    if (!ok) return;
+    setSaving(true);
+    try {
+      await api.delete(key);
+      invalidateFetch((k) => k === key);
+      refetch();
+      showToast({ variant: 'success', message: 'Back on platform defaults.' });
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Could not reset targets.' });
+    } finally { setSaving(false); }
+  }
 
   return (
     <SectionShell
@@ -48,7 +155,7 @@ export function SlaTargetsSection({ clientId }: { clientId: number }) {
       {error && <p className="text-sm text-urgent-strong">{error}</p>}
       {loading && <p className="text-sm text-muted-foreground">Loading…</p>}
 
-      {data && (
+      {data && form && (
         <>
           <div
             className={`text-xs rounded px-3 py-2 flex items-start gap-2 border ${
@@ -61,34 +168,68 @@ export function SlaTargetsSection({ clientId }: { clientId: number }) {
             <span>
               {contracted
                 ? 'These are CONTRACTED targets — a row exists for this client in easyfix_client_target.'
-                : 'No contracted targets are configured for this client, so the PLATFORM DEFAULTS are shown. They are what EasyFix holds itself to, not a commitment made to this client.'}
+                : 'No contracted targets are configured, so the PLATFORM DEFAULTS are shown. They are what EasyFix holds itself to, not a commitment made to this client. Edit and save to make them contracted.'}
             </span>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {METRICS.map((m) => {
-              const dir = data.directions?.[m.key as string];
+              const dir = data.directions?.[m.key];
               return (
-                <div key={String(m.key)} className="rounded border bg-card px-3 py-2">
-                  <div className="text-xs uppercase tracking-wide text-muted-foreground flex items-center gap-1 flex-wrap">
+                <div key={m.key} className="rounded border bg-card px-3 py-2 space-y-1">
+                  <Label className="text-xs uppercase tracking-wide text-muted-foreground flex items-center gap-1 flex-wrap">
                     {m.label}
                     <StatusChip tone="neutral" size="sm">
                       {dir === 'lower' ? 'Lower Is Better' : 'Higher Is Better'}
                     </StatusChip>
-                  </div>
-                  <div className="text-lg font-semibold tabular-nums mt-0.5">
-                    {String(data[m.key])}{m.unit}
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-0.5">{m.note}</p>
+                  </Label>
+                  {canEdit ? (
+                    <div className="flex items-center gap-1">
+                      <Input
+                        type="number"
+                        min={m.min}
+                        max={m.max}
+                        step={m.step}
+                        value={form[m.key]}
+                        onChange={(e) => set(m.key, e.target.value)}
+                        className="tabular-nums"
+                      />
+                      <span className="text-sm text-muted-foreground shrink-0">{m.unit.trim() || '%'}</span>
+                    </div>
+                  ) : (
+                    <div className="text-lg font-semibold tabular-nums">
+                      {String(data[m.key])}{m.unit}
+                    </div>
+                  )}
+                  <p className="text-xs text-muted-foreground">{m.note}</p>
                 </div>
               );
             })}
           </div>
 
+          {canEdit && (
+            <div className="flex items-center gap-2 flex-wrap border-t pt-3">
+              <Button onClick={save} disabled={!dirty || saving}>
+                {saving ? <Loader2 className="size-4 mr-1 animate-spin" /> : <Save className="size-4 mr-1" />}
+                {saving ? 'Saving…' : 'Save Targets'}
+              </Button>
+              <Button variant="outline" onClick={() => snapshot && setForm(snapshot)} disabled={!dirty || saving}>
+                <RotateCcw className="size-4 mr-1" /> Discard
+              </Button>
+              {contracted && (
+                <Button variant="ghost" onClick={reset} disabled={saving}
+                  className="text-urgent hover:text-urgent-strong ml-auto">
+                  <Undo2 className="size-4 mr-1" /> Reset To Platform Defaults
+                </Button>
+              )}
+              {dirty && <span className="text-xs text-warning-strong">Unsaved changes</span>}
+            </div>
+          )}
+
           <p className="text-xs text-muted-foreground border-t pt-3">
-            Targets are configured directly in <span className="font-mono">easyfix_client_target</span>;
-            no screen writes them yet. The signed SLA document belongs in the
-            Overview document checklist.
+            These targets drive the client portal&apos;s Performance book and the
+            On Track / Watch / At Risk verdicts on it. The signed SLA document
+            belongs in the Overview document checklist.
           </p>
         </>
       )}
