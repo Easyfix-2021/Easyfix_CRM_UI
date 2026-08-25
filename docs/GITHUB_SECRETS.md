@@ -160,6 +160,20 @@ tar -czf ../Easyfix_CRM_UI/mirror-app/technician-mirror-<version>.tar.gz -C dist
 Delete the old tarball in the same commit — two of them is a hard failure, because
 the Dockerfile takes the first match and would otherwise silently pick one.
 
+**Refresh it on app RELEASES, not on every app change.** A gzipped tarball is
+opaque to git: it cannot be delta-compressed or deduplicated, so every refresh
+adds a permanent ~4.1 MB to history, and the 3 MB of fonts and sounds inside it
+are re-stored in full each time even though they never change. That cost is fine
+once per release and expensive once per commit. It is also the right behaviour
+for the feature: the mirror should render the version technicians are actually
+running, not whatever is on the app repo's HEAD — which is why the version is
+pinned and the CRM banner compares it against what each technician reports.
+
+(An unpacked tree would cost ~1.1 MB per release instead, since Expo puts the
+content hash in each asset filename and git would store unchanged assets once.
+Weighed against a single self-describing file and kept as-is deliberately —
+2026-08-25.)
+
 ---
 
 ## Not GitHub secrets at all
