@@ -321,6 +321,18 @@ export type ClientTargets = {
      distinguish them; a default rendered as a commitment is a lie. */
   source: 'contracted' | 'platform-default';
   directions: Record<string, 'higher' | 'lower'>;
+  /*
+   * Audit, present ONLY on the admin endpoints. getTargets() takes
+   * `{ withAudit }` and defaults to OFF because the client portal shares that
+   * function and spreads its result into the tenant-facing /performance
+   * response — updated_by is an EasyFix staff id and must not travel there.
+   * Optional here for exactly that reason: the portal's shape has no such keys.
+   *
+   * updatedAt is an IST wall-clock string ("YYYY-MM-DD HH:mm:ss"), passed
+   * through verbatim by the service.
+   */
+  updatedAt?: string | null;
+  updatedBy?: { id: number; name: string | null } | null;
 };
 
 /*

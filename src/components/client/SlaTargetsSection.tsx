@@ -25,7 +25,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { Info, Loader2, RotateCcw, Save, ShieldCheck, Undo2 } from 'lucide-react';
+import { History, Info, Loader2, RotateCcw, Save, ShieldCheck, Undo2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -34,6 +34,7 @@ import { showToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { api, ApiError } from '@/lib/api';
 import { useFetch, invalidateFetch } from '@/lib/hooks';
+import { formatDate } from '@/lib/utils';
 import type { ClientTargets } from '@/lib/client-types';
 import { SectionShell } from '@/components/client/SectionShell';
 
@@ -171,6 +172,30 @@ export function SlaTargetsSection({ clientId, canEdit }: { clientId: number; can
                 : 'No contracted targets are configured, so the PLATFORM DEFAULTS are shown. They are what EasyFix holds itself to, not a commitment made to this client. Edit and save to make them contracted.'}
             </span>
           </div>
+
+          {/*
+            * WHO AGREED THIS, AND WHEN. The columns were always written and
+            * never shown, which made the contracted banner an assertion nobody
+            * could check — the first question in any QBR dispute is "who set
+            * this?". Only rendered when a contracted row exists: platform
+            * defaults have no author.
+            *
+            * A null name with a live id means the operator's tbl_user row is
+            * gone (the service LEFT JOINs rather than dropping the target), so
+            * say that plainly instead of printing "by null".
+            */}
+          {contracted && (data.updatedAt || data.updatedBy) && (
+            <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+              <History className="size-3.5 shrink-0" />
+              Last set
+              {data.updatedBy
+                ? <> by <span className="font-medium text-foreground">
+                    {data.updatedBy.name ?? `user #${data.updatedBy.id} (no longer in the CRM)`}
+                  </span></>
+                : ' by an unrecorded user'}
+              {data.updatedAt && <> on {formatDate(data.updatedAt)}</>}
+            </p>
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {METRICS.map((m) => {
