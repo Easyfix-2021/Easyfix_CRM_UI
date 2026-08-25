@@ -1,6 +1,10 @@
 # Easyfix_CRM_UI — multi-stage production image
 #
 # Stage 1 (deps):    Install ALL deps (incl. devDeps — Tailwind, TS, Next).
+# Stage 1b (mirror): Unpack the technician-app web export into a
+#                    version-pinned public/technician-mirror/<version>/.
+#                    Degrades to a placeholder page when the export is
+#                    not in the build context — never fails the build.
 # Stage 2 (builder): Run `next build` with NEXT_PUBLIC_API_URL baked in.
 #                    Produces .next/standalone/ thanks to output: 'standalone'
 #                    in next.config.mjs.
@@ -24,6 +28,66 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
+# ── Stage 1b: Technician-app mirror bundle ───────────────────────────
+# Unpacks the technician app's static web export into a version-pinned
+# directory that the builder folds into public/. The CRM serves it
+# same-origin at /technician-mirror/<version>/ and frames it on
+# /easyfixers/:id/app-view.
+#
+# The bundle is NOT committed — the repo has a size check, and a ~40 MB
+# export in git history is exactly what it exists to prevent. CI drops the
+# tarball into ./mirror-app/ before `docker build`, so it arrives through
+# the build context and is never a git object.
+#
+# When it is absent the build MUST still succeed: an operator seeing
+# "mirror bundle not installed" inside the phone frame is a working image
+# with one feature dark, whereas a failed build takes every other CRM
+# change down with it. That is why the fallback writes a placeholder
+# index.html instead of exiting non-zero.
+FROM node:20-alpine AS mirror
+ARG MIRROR_APP_VERSION=3.0.0
+WORKDIR /mirror
+
+# Optional-source trick: `COPY mirror-app*/ …` on its own fails the build
+# with "no source files were specified" when nothing matches. Pairing the
+# glob with a path that always exists makes it genuinely optional.
+COPY package.json mirror-app*/ ./incoming/
+
+# Two hand-over shapes are accepted, because both are obvious ways for CI
+# to publish a static export and picking only one turns the other into a
+# silent placeholder — a bundle that IS present but renders "not
+# installed" is the single most confusing outcome this stage can produce:
+#   - a tarball (*.tar.gz / *.tgz), packed flat OR under one wrapper dir;
+#   - the already-unpacked export tree, dropped in as-is.
+# Both are normalised to "index.html sits at $dest/index.html", so the URL
+# the page requests never depends on how the export happened to be rolled.
+RUN set -eu; \
+    dest="/mirror/technician-mirror/${MIRROR_APP_VERSION}"; \
+    mkdir -p "$dest"; \
+    tarball="$(find /mirror/incoming -maxdepth 1 \( -name '*.tar.gz' -o -name '*.tgz' \) | head -n1)"; \
+    if [ -n "$tarball" ]; then \
+      echo "-> unpacking mirror bundle: $tarball"; \
+      tar -xzf "$tarball" -C "$dest"; \
+    else \
+      src="$(find /mirror/incoming -maxdepth 3 -name index.html | head -n1)"; \
+      if [ -n "$src" ]; then \
+        echo "-> copying unpacked mirror export: $(dirname "$src")"; \
+        cp -R "$(dirname "$src")"/. "$dest"/; \
+      fi; \
+    fi; \
+    idx="$(find "$dest" -maxdepth 3 -name index.html | head -n1)"; \
+    if [ -n "$idx" ] && [ "$(dirname "$idx")" != "$dest" ]; then \
+      wrapper="$(dirname "$idx")"; \
+      mv "$wrapper"/* "$dest"/; \
+      rm -rf "$wrapper"; \
+    fi; \
+    if [ ! -f "$dest/index.html" ]; then \
+      echo "!! no mirror bundle in the build context - installing the placeholder"; \
+      printf '%s' '<!doctype html><meta charset="utf-8"><title>Mirror bundle not installed</title><body style="margin:0;display:grid;place-items:center;height:100vh;font:14px system-ui,sans-serif;text-align:center;padding:24px"><p>Mirror bundle not installed.<br><small>No technician-app web export was present when this image was built.</small></p></body>' > "$dest/index.html"; \
+    fi; \
+    rm -rf /mirror/incoming; \
+    ls -la "$dest" | head -n 20
+
 # ── Stage 2: Builder ─────────────────────────────────────────────────
 FROM node:20-alpine AS builder
 WORKDIR /app
@@ -36,8 +100,36 @@ WORKDIR /app
 ARG NEXT_PUBLIC_API_URL=
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 
+# Same value the mirror stage unpacked under. ONE arg names both the
+# directory on disk and the path the page requests, so the two cannot
+# drift; the page reads it as NEXT_PUBLIC_MIRROR_APP_VERSION and it must
+# therefore be set before `npm run build` inlines it into the bundle.
+ARG MIRROR_APP_VERSION=3.0.0
+ENV NEXT_PUBLIC_MIRROR_APP_VERSION=${MIRROR_APP_VERSION}
+
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+
+# Fold the mirror bundle into public/ — stage 3 already does
+# `COPY --from=builder /app/public ./public`, so anything landing here
+# ships without touching the runner stage.
+COPY --from=mirror /mirror/technician-mirror ./public/technician-mirror
+
+# Drop every mirror directory that is not the pinned version. Two things
+# this catches: an older bundle left behind by a cached layer, and a
+# bundle someone committed to the repo (which `COPY . .` above would have
+# just copied in). Without it the image accumulates a full app export per
+# release and nothing ever removes them.
+RUN set -eu; \
+    for dir in ./public/technician-mirror/*/; do \
+      [ -d "$dir" ] || continue; \
+      name="$(basename "$dir")"; \
+      if [ "$name" != "${MIRROR_APP_VERSION}" ]; then \
+        echo "→ removing stale mirror bundle: $name"; \
+        rm -rf "$dir"; \
+      fi; \
+    done; \
+    echo "✓ mirror bundles kept:"; ls -1 ./public/technician-mirror
 
 # Sanity-check the bake BEFORE building so we don't waste 30s+ on a
 # Next.js build that produces an unusable image. Three guarantees:

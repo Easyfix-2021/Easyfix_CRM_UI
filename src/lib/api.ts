@@ -341,7 +341,24 @@ export type LiveLocationPing = {
   latitude: number;
   longitude: number;
   accuracy: number | null;
-  captured_at: string;
+  /*
+   * NULLABLE since the legacy fallback landed.
+   *
+   * A ping from tbl_job_location_track (source 'job_track') always carries a
+   * real timestamp. A row recovered from the legacy `location` table has no
+   * timestamp column at all — only an auto-increment id — so its age is
+   * genuinely unknown and this is null.
+   *
+   * Do NOT substitute Date.now() for a missing value. That would make a
+   * position of unknown age render as "just now", which is the one failure
+   * worse than showing nothing.
+   */
+  captured_at: string | null;
+  /*
+   * Which store the position came from. The CRM branches its freshness
+   * messaging on this rather than inferring it from the shape of the payload.
+   */
+  source?: 'job_track' | 'legacy' | null;
 };
 
 /* GET /admin/jobs/:id/location → latest ping + recent breadcrumb track. */

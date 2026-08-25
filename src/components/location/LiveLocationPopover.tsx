@@ -42,6 +42,34 @@ import { useUiFlags } from '@/lib/hooks';
 
 const POLL_MS = 15_000;
 
+/*
+ * A position is only called "live" if it arrived within this window.
+ *
+ * Two minutes, not the 15s poll interval: a technician's device reports on its
+ * own schedule, so a 30s-old fix is still genuinely where he is. Anything older
+ * is a last-known position, and saying so is the whole point of this block.
+ */
+const LIVE_WINDOW_MS = 120_000;
+
+type Freshness = 'live' | 'stale' | 'unknown-age' | 'none';
+
+/*
+ * Which of the four states a ping is in.
+ *
+ * This exists because the popover used to imply everything it showed was live —
+ * it polled every 15s and said so in the footer. Once the legacy fallback
+ * landed, most rows are hours old and some have NO KNOWN AGE, and refreshing a
+ * stale row every 15s is the worst case: it looks live and is not.
+ */
+function classify(ping: LiveLocationPing | null): Freshness {
+  if (ping == null) return 'none';
+  // Legacy rows carry no timestamp — the age is unknowable, not merely old.
+  if (!ping.captured_at) return 'unknown-age';
+  const t = new Date(ping.captured_at).getTime();
+  if (Number.isNaN(t)) return 'unknown-age';
+  return Date.now() - t <= LIVE_WINDOW_MS ? 'live' : 'stale';
+}
+
 export type LiveLocationSource = 'job' | 'easyfixer';
 
 export function LiveLocationPopover({
@@ -112,9 +140,23 @@ export function LiveLocationPopover({
     setLoaded(false);
     setError(null);
     fetchOnce('initial');
+    return undefined;
+  }, [open, id, fetchOnce]);
+
+  /*
+   * Poll ONLY while the position is live.
+   *
+   * Polling a row nobody is updating burns a query every 15s to redraw an
+   * identical dot, and — worse — it teaches the operator that the dot means
+   * "now". A stale or unknown-age position gets a Refresh button instead, so
+   * checking again is a deliberate act.
+   */
+  const freshness = classify(latest);
+  useEffect(() => {
+    if (!open || id == null || freshness !== 'live') return undefined;
     const t = setInterval(() => fetchOnce('poll'), POLL_MS);
     return () => clearInterval(t);
-  }, [open, id, fetchOnce]);
+  }, [open, id, freshness, fetchOnce]);
 
   // Global map-clickability toggle. When off, the "Open in Google Maps" link
   // is rendered as a disabled, non-navigable span.
@@ -167,6 +209,41 @@ export function LiveLocationPopover({
           {/* Loaded with a ping — coordinates + accuracy + last-updated + map. */}
           {!loading && loaded && !error && latest != null && (
             <>
+              {/*
+                * Say which KIND of position this is, before the numbers.
+                *
+                * The coordinates look identical whether they arrived 10 seconds
+                * or 10 hours ago, so without this an operator reads a stale
+                * position as the technician's current one and guides him from it.
+                */}
+              {freshness === 'live' && (
+                <div className="flex items-center gap-2 rounded-md border border-success bg-success-tint px-3 py-2 text-sm text-success-strong">
+                  <span className="relative flex h-2 w-2 shrink-0">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-75" />
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-success" />
+                  </span>
+                  <span><strong className="font-semibold">Live</strong> · updated {relativeTime(latest.captured_at)}</span>
+                </div>
+              )}
+              {freshness === 'stale' && (
+                <div className="flex items-start gap-2 rounded-md border border-warning bg-warning-tint px-3 py-2 text-sm text-warning-strong">
+                  <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                  <span>
+                    <strong className="font-semibold">Last known position</strong> · {relativeTime(latest.captured_at)}.
+                    {' '}This is not live — use Refresh to check again.
+                  </span>
+                </div>
+              )}
+              {freshness === 'unknown-age' && (
+                <div className="flex items-start gap-2 rounded-md border border-border bg-muted px-3 py-2 text-sm text-muted-foreground">
+                  <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                  <span>
+                    <strong className="font-semibold text-foreground">Last known position — age unknown.</strong>
+                    {' '}Recorded by the older app, which did not store a timestamp.
+                  </span>
+                </div>
+              )}
+
               <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
                 <dt className="text-muted-foreground">Latitude</dt>
                 <dd className="font-mono tabular-nums">{latest.latitude}</dd>
@@ -178,9 +255,14 @@ export function LiveLocationPopover({
                 </dd>
                 <dt className="text-muted-foreground">Last updated</dt>
                 <dd>
-                  <span title={formatDate(latest.captured_at)}>
-                    {relativeTime(latest.captured_at)}
-                  </span>
+                  {latest.captured_at ? (
+                    <span title={formatDate(latest.captured_at)}>
+                      {relativeTime(latest.captured_at)}
+                    </span>
+                  ) : (
+                    /* A bare em-dash here reads as a rendering bug. Name the reason. */
+                    <span className="text-muted-foreground">Not recorded</span>
+                  )}
                 </dd>
               </dl>
 
@@ -206,7 +288,9 @@ export function LiveLocationPopover({
 
           <div className="flex items-center justify-between pt-1">
             <span className="text-xs text-muted-foreground">
-              Auto-refreshing every {POLL_MS / 1000}s while open.
+              {freshness === 'live'
+                ? `Auto-refreshing every ${POLL_MS / 1000}s while open.`
+                : 'Not auto-refreshing — this position is not live.'}
             </span>
             <button
               type="button"

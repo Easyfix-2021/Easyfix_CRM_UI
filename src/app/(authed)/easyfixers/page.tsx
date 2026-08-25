@@ -2,7 +2,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Search, MapPin } from 'lucide-react';
+import { Search, MapPin, Smartphone } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
 import { Input } from '@/components/ui/input';
@@ -699,6 +699,18 @@ export default function EasyfixersPage() {
   }, [router]);
   const onRowAssessment = useCallback(() => {
     router.push('/coming-soon');
+  }, [router]);
+  /*
+   * App View — opens the read-only technician-app mirror
+   * (/easyfixers/:id/app-view). A plain sibling IconButton in the action
+   * cell rather than a DropdownMenuItem, matching the Live Location button
+   * beside it: the setTimeout(0) deferral the menu items need exists to let
+   * the dropdown's close pointer-up finish before a Dialog mounts, and this
+   * is a route navigation with no dialog to race. Same router.push shape as
+   * onRowEdit above, which is how the verification page is opened.
+   */
+  const onRowAppView = useCallback((e: Ef) => {
+    router.push(`/easyfixers/${e.efr_id}/app-view`);
   }, [router]);
 
   /*
@@ -1451,6 +1463,7 @@ export default function EasyfixersPage() {
                   onTransactions={openTransactions}
                   onAssessment={onRowAssessment}
                   onLiveLocation={openLiveLocation}
+                  onAppView={onRowAppView}
                   onSendProfileUpdateLink={openSendDialog}
                   onCopyDevUrl={copyDevUrl}
                   onUpdateMobile={openMobileDialog}
@@ -1622,7 +1635,7 @@ type DisplayRow = {
 const EfRow = memo(function EfRow({
   row, canEdit, canSend, canManageLifecycle, canUpdateMobile, canUpdateBank,
   isProd, isSending, isCopyingDevUrl,
-  onEdit, onClientMapping, onTransactions, onAssessment, onLiveLocation,
+  onEdit, onClientMapping, onTransactions, onAssessment, onLiveLocation, onAppView,
   onSendProfileUpdateLink, onCopyDevUrl, onLifecycle, onUpdateMobile, onUpdateBank,
   onOpenCsvModal, onOpenDeepSkillModal,
 }: {
@@ -1640,6 +1653,7 @@ const EfRow = memo(function EfRow({
   onTransactions: (e: Ef) => void;
   onAssessment: () => void;
   onLiveLocation: (e: Ef) => void;
+  onAppView: (e: Ef) => void;
   onSendProfileUpdateLink: (e: Ef) => void;
   onCopyDevUrl: (e: Ef) => void;
   onLifecycle: (e: Ef) => void;
@@ -1774,6 +1788,13 @@ const EfRow = memo(function EfRow({
             intent="primary"
             label="Live technician location"
             onClick={() => onLiveLocation(e)}
+          />
+          {/* Read-only mirror of what this technician sees in the app. */}
+          <IconButton
+            icon={Smartphone}
+            intent="default"
+            label="View technician app (read-only)"
+            onClick={() => onAppView(e)}
           />
           <EasyfixerActionMenu
             easyfixer={{ efr_id: e.efr_id, efr_name: e.efr_name }}
