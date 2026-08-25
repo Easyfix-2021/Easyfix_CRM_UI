@@ -146,15 +146,25 @@ export function relativeTime(iso: string | null | undefined): string {
  */
 export function toIstClockTime(d: string | Date | null | undefined): string {
   if (!d) return '';
-  if (typeof d === 'string') {
-    const hasExplicitZone = /[Zz]$|[+-]\d{2}:?\d{2}$/.test(d.trim());
-    const naive = d.match(/T(\d{2}):(\d{2})/);
-    if (!hasExplicitZone && naive) return `${naive[1]}:${naive[2]}`;
-  }
-  const date = typeof d === 'string' ? new Date(d) : d;
+  /*
+   * This used to fast-path a naive string by SLICING the clock out of it —
+   * but the pattern it matched was /T(\d{2}):(\d{2})/, which requires the
+   * ISO 'T'. A space-separated MySQL DATETIME ("2026-08-25 16:56:17") never
+   * matched, fell through to `new Date(d)` (browser-local) and was then
+   * rendered in Asia/Kolkata — the same compounding error formatDate had, on
+   * exactly the values this function exists to read.
+   *
+   * parseIstDateTime handles BOTH separators, so the slice is gone: parsing as
+   * IST and formatting as IST returns the same clock the slice did, without a
+   * second pattern that can fall out of step with the first.
+   */
+  const date = parseIstDateTime(d);
   if (isNaN(date.getTime())) return '';
   return new Intl.DateTimeFormat('en-GB', {
-    hour: '2-digit', minute: '2-digit', hour12: false,
+    hour: '2-digit', minute: '2-digit',
+    // hourCycle, not `hour12: false` — the latter renders midnight as "24" in
+    // some engines, which is not a time anybody writes.
+    hourCycle: 'h23',
     timeZone: 'Asia/Kolkata',
   }).format(date);
 }
