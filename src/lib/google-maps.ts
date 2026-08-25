@@ -13,6 +13,7 @@
  */
 
 import { api } from '@/lib/api';
+import { palette } from '@/brand/palette';
 
 /*
  * Module-level loader for the Google Maps JS API. Multiple instances
@@ -43,6 +44,16 @@ export type GMaps = {
     setRadius: (metres: number) => void;
     setOptions: (opts: Record<string, unknown>) => void;
     setMap: (map: unknown) => void;
+  };
+  /* Breadcrumb trail for a job (LiveLocationPopover). Same minimal surface. */
+  Polyline: new (opts: Record<string, unknown>) => {
+    setPath: (path: Array<{ lat: number; lng: number }>) => void;
+    setOptions: (opts: Record<string, unknown>) => void;
+    setMap: (map: unknown) => void;
+  };
+  /* Needed to frame a whole trail — see fitToTrail in LiveLocationPopover. */
+  LatLngBounds: new () => {
+    extend: (latLng: { lat: number; lng: number }) => unknown;
   };
 };
 type GMapsWindow = { google?: { maps: GMaps } };
@@ -97,3 +108,39 @@ export function loadGoogleMaps(): Promise<GMaps> {
   });
   return mapsLoader;
 }
+
+/*
+ * Dark-mode map styling.
+ *
+ * Google's default tiles are near-white. Dropped into the CRM's dark theme
+ * they are a lit rectangle in a dark page — the single brightest thing on
+ * screen, and the operator is looking at it during a phone call.
+ *
+ * Every colour is a palette token rather than one of Google's published dark
+ * presets. A preset would be a second palette nobody reviewed, living outside
+ * the rebrand seam; `npm run check:brand` would reject the hex literals it
+ * needs, and it would be right to. The map is a surface of the product, so it
+ * uses the product's surfaces: ink900 for ground, ink700 for roads, blue900
+ * for water (already the identity's deep-blue block), ink300 for label text.
+ *
+ * Light mode gets NO styles array — Google's default light tiles already sit
+ * correctly in the light theme, and restyling them would mean maintaining two
+ * bespoke map skins to fix a problem that only exists in one of them.
+ */
+export const darkMapStyles: Array<Record<string, unknown>> = [
+  { elementType: 'geometry', stylers: [{ color: palette.ink900 }] },
+  { elementType: 'labels.text.fill', stylers: [{ color: palette.ink300 }] },
+  // A stroke in the ground colour, so labels stay legible over roads and water
+  // without a halo that reads as a second colour.
+  { elementType: 'labels.text.stroke', stylers: [{ color: palette.ink900 }] },
+  { featureType: 'administrative', elementType: 'geometry.stroke', stylers: [{ color: palette.ink500 }] },
+  { featureType: 'poi', elementType: 'geometry', stylers: [{ color: palette.ink700 }] },
+  { featureType: 'road', elementType: 'geometry', stylers: [{ color: palette.ink700 }] },
+  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: palette.ink900 }] },
+  // Highways one step lighter than surface roads — the only hierarchy cue left
+  // once every road is a neutral.
+  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: palette.ink500 }] },
+  { featureType: 'transit', elementType: 'geometry', stylers: [{ color: palette.ink700 }] },
+  { featureType: 'water', elementType: 'geometry', stylers: [{ color: palette.blue900 }] },
+  { featureType: 'water', elementType: 'labels.text.fill', stylers: [{ color: palette.blue500 }] },
+];

@@ -354,7 +354,12 @@ function AppViewPanel({ target, onClose }: { target: AppViewTarget; onClose: () 
               */}
             <iframe
               ref={frameRef}
-              src={`/technician-mirror/${MIRROR_VERSION}/index.html?m=${nonce}`}
+              /*
+               * The export ROOT, not index.html — Expo Router matches on the
+               * pathname it is given, and "/index.html" matches no route. A
+               * next.config rewrite maps this path to the real file.
+               */
+              src={`/technician-mirror/${MIRROR_VERSION}?m=${nonce}`}
               title="Read-only mirror of the technician app"
               width={FRAME_W}
               height={FRAME_H}

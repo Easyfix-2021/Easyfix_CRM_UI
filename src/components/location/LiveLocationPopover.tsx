@@ -9,11 +9,12 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog';
-import { api, ApiError, type LiveLocationPing } from '@/lib/api';
+import { api, ApiError, type JobLocationResponse, type LiveLocationPing } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useUiFlags } from '@/lib/hooks';
-import { loadGoogleMaps } from '@/lib/google-maps';
+import { darkMapStyles, loadGoogleMaps, type GMaps } from '@/lib/google-maps';
+import { useTheme } from '@/lib/use-theme';
 import { palette } from '@/brand/palette';
 
 /*
@@ -109,6 +110,28 @@ function bikePinDataUri(body: string, ink: string): string {
   return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
 }
 
+/** One breadcrumb from GET /admin/jobs/:id/location. */
+type TrackPoint = JobLocationResponse['track'][number];
+
+/** A drawable point. Google wants numbers; MySQL DECIMALs arrive as strings. */
+type LatLng = { lat: number; lng: number };
+
+/*
+ * Frame the whole trail plus the current fix.
+ *
+ * Called on every path change, not just at build. A trail that grows past the
+ * edge of a once-fitted viewport is worse than no trail — the operator sees a
+ * line running off the map with no way to follow it, because this map cannot
+ * be panned or zoomed. Re-fitting keeps the entire journey visible for the
+ * whole call, which is the only reason to draw it.
+ */
+function fitToTrail(maps: GMaps, map: { fitBounds: (b: unknown, pad?: number) => void }, path: LatLng[], fix: LatLng): void {
+  const bounds = new maps.LatLngBounds();
+  for (const point of path) bounds.extend(point);
+  bounds.extend(fix);
+  map.fitBounds(bounds, 24);
+}
+
 /*
  * No accuracy reported → draw a nominal ring so the live state still reads as
  * live on the map. It is a presence indicator at that point, not a claimed
@@ -135,6 +158,13 @@ export function LiveLocationPopover({
   title?: string;
 }) {
   const [latest, setLatest] = useState<LiveLocationPing | null>(null);
+  /*
+   * The breadcrumb trail, job source only. /admin/jobs/:id/location has always
+   * returned it and the popover has always thrown it away; /admin/easyfixers/
+   * :id/location has no equivalent, because the legacy `location` table keeps
+   * one row per technician and there is no history to draw.
+   */
+  const [track, setTrack] = useState<TrackPoint[]>([]);
   // `loading` is true only on the FIRST fetch for a given open/id; subsequent
   // poll cycles refresh silently so the coordinates don't flicker every 15s.
   const [loading, setLoading] = useState(false);
@@ -155,12 +185,20 @@ export function LiveLocationPopover({
       if (mode === 'initial') setLoading(true);
       if (mode === 'manual') setRefreshing(true);
       try {
-        const data =
-          source === 'job'
-            ? await api.getJobLocation(id)
-            : await api.getEasyfixerLocation(id);
-        if (seq !== reqSeqRef.current) return; // superseded — discard
-        setLatest(data.latest);
+        // Split rather than a union + `in` narrowing: only the job endpoint
+        // has a track, and the easyfixer branch must clear it explicitly so a
+        // job's trail cannot survive into a technician-scoped open.
+        if (source === 'job') {
+          const data = await api.getJobLocation(id);
+          if (seq !== reqSeqRef.current) return; // superseded — discard
+          setLatest(data.latest);
+          setTrack(data.track ?? []);
+        } else {
+          const data = await api.getEasyfixerLocation(id);
+          if (seq !== reqSeqRef.current) return; // superseded — discard
+          setLatest(data.latest);
+          setTrack([]);
+        }
         setError(null);
         setLoaded(true);
       } catch (e) {
@@ -183,6 +221,7 @@ export function LiveLocationPopover({
     if (!open || id == null) return;
     // Reset per-open so reopening a different row starts clean.
     setLatest(null);
+    setTrack([]);
     setLoaded(false);
     setError(null);
     fetchOnce('initial');
@@ -226,6 +265,12 @@ export function LiveLocationPopover({
   const markerRef = useRef<any>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const circleRef = useRef<any>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const trailRef = useRef<any>(null);
+  // The resolved google.maps namespace, kept so the sync effect can construct
+  // a Polyline that did not exist at build time (a trail can reach two points
+  // on a later poll) without re-entering the loader.
+  const mapsRef = useRef<GMaps | null>(null);
   // Guards the async build against a double-fire (Strict Mode, or a re-render
   // landing before loadGoogleMaps() resolves) minting two Maps into one div.
   const buildStartedRef = useRef(false);
@@ -259,6 +304,38 @@ export function LiveLocationPopover({
     [freshness],
   );
 
+  /*
+   * Oldest → newest. The endpoint returns newest-first (so a `LIMIT` keeps the
+   * RECENT pings, not the first ones ever recorded), but a line has to be
+   * drawn in travel order or it reads backwards.
+   */
+  const path = useMemo<LatLng[]>(
+    () =>
+      track
+        .map((point) => ({ lat: Number(point.latitude), lng: Number(point.longitude) }))
+        .filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng))
+        .reverse(),
+    [track],
+  );
+  const hasTrail = path.length >= 2;
+
+  /*
+   * Blue, not red: the trail is information, the technician is the action, and
+   * a red line running to a red pin merges into one shape at a glance.
+   */
+  const trailStyle = useMemo(
+    () => ({ strokeColor: palette.blue500, strokeOpacity: 0.85, strokeWeight: 3 }),
+    [],
+  );
+
+  /*
+   * Restyle the tiles in dark mode. `resolved` (not `theme`) because a user on
+   * 'system' must follow the OS, and it updates live — hence the setOptions in
+   * the sync effect rather than a build-time-only read.
+   */
+  const { resolved } = useTheme();
+  const mapStyles = useMemo(() => (resolved === 'dark' ? darkMapStyles : null), [resolved]);
+
   // Build once per open, as soon as there is a fix to centre on.
   useEffect(() => {
     if (!open || !hasFix || buildStartedRef.current || !mapNodeRef.current) return undefined;
@@ -284,9 +361,14 @@ export function LiveLocationPopover({
          * who genuinely needs an interactive map has "Open in Google Maps"
          * below — a plain URL, no key, no editing pretence.
          */
+        mapsRef.current = maps;
         mapRef.current = new maps.Map(node, {
           center,
           zoom: 15,
+          // null, not undefined: passing null explicitly clears any styles on
+          // a later setOptions, which is how a dark→light switch gets its
+          // default tiles back.
+          styles: mapStyles,
           disableDefaultUI: true,
           gestureHandling: 'none',
           draggable: false,
@@ -311,14 +393,24 @@ export function LiveLocationPopover({
           clickable: false,
           ...ringStyle,
         });
+        if (path.length >= 2) {
+          trailRef.current = new maps.Polyline({
+            map: mapRef.current,
+            path,
+            clickable: false,
+            ...trailStyle,
+          });
+          fitToTrail(maps, mapRef.current, path, center);
+        }
       })
       .catch((e) => {
         if (cancelled) return;
         setMapsError(e instanceof Error ? e.message : 'Map unavailable');
       });
     return () => { cancelled = true; };
-    // pinUrl / ringStyle / accuracyM are read for the INITIAL paint only; the
-    // sync effect below owns every subsequent change, so they are not deps.
+    // pinUrl / ringStyle / accuracyM / path / mapStyles are read for the
+    // INITIAL paint only; the sync effect below owns every subsequent change,
+    // so they are not deps.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, hasFix]);
 
@@ -334,13 +426,38 @@ export function LiveLocationPopover({
     const pos = { lat, lng };
     markerRef.current.setPosition(pos);
     markerRef.current.setIcon({ url: pinUrl });
-    mapRef.current.panTo(pos);
     if (circleRef.current) {
       circleRef.current.setCenter(pos);
       circleRef.current.setRadius(accuracyM);
       circleRef.current.setOptions(ringStyle);
     }
-  }, [open, hasFix, lat, lng, accuracyM, pinUrl, ringStyle]);
+    // Theme can flip while the modal is open (settings toggle, or the OS
+    // switching under a 'system' preference).
+    mapRef.current.setOptions({ styles: mapStyles });
+
+    const maps = mapsRef.current;
+    if (hasTrail && maps) {
+      // The trail may cross the two-point threshold on a later poll, so the
+      // Polyline is created here as readily as it is in the build effect.
+      if (!trailRef.current) {
+        trailRef.current = new maps.Polyline({
+          map: mapRef.current,
+          path,
+          clickable: false,
+          ...trailStyle,
+        });
+      } else {
+        trailRef.current.setPath(path);
+      }
+      /*
+       * Re-frame instead of panning. panTo would centre the technician and
+       * push the older half of the trail off a map nobody can drag back.
+       */
+      fitToTrail(maps, mapRef.current, path, pos);
+    } else {
+      mapRef.current.panTo(pos);
+    }
+  }, [open, hasFix, lat, lng, accuracyM, pinUrl, ringStyle, mapStyles, hasTrail, path, trailStyle]);
 
   /*
    * Teardown, keyed on the two conditions that render the container div.
@@ -362,6 +479,8 @@ export function LiveLocationPopover({
       mapRef.current = null;
       markerRef.current = null;
       circleRef.current = null;
+      trailRef.current = null;
+      mapsRef.current = null;
       buildStartedRef.current = false;
       setMapsError(null);
     };
@@ -472,11 +591,19 @@ export function LiveLocationPopover({
                   {/*
                     * Live pulse. Rendered over the canvas rather than animated
                     * through the Maps API because the map cannot be panned or
-                    * zoomed — so the reported position is always at the exact
-                    * centre of this box, and a CSS ring there needs no timer,
-                    * no overlay class and no cleanup of its own.
+                    * zoomed — so the reported position is at the exact centre
+                    * of this box, and a CSS ring there needs no timer, no
+                    * overlay class and no cleanup of its own.
+                    *
+                    * That centring assumption is the whole reason it is also
+                    * gated on `!hasTrail`: once a breadcrumb trail is drawn the
+                    * view is fitted to the whole journey, the technician sits
+                    * at one END of it rather than the middle, and a pulse in
+                    * the centre would be marking empty road. The red pin and
+                    * the green accuracy ring — both anchored to the real
+                    * position — carry liveness on their own in that case.
                     */}
-                  {freshness === 'live' && (
+                  {freshness === 'live' && !hasTrail && (
                     <span
                       aria-hidden
                       className="pointer-events-none absolute left-1/2 top-1/2 -ml-4 -mt-4 inline-flex h-8 w-8 animate-ping rounded-full bg-success opacity-40"

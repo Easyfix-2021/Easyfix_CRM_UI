@@ -23,3 +23,12 @@ npm-debug.log*
 .idea/
 
 next-env.d.ts
+
+# Technician-app mirror bundle (public/technician-mirror/<version>/).
+# A ~14 MB Expo static web export, rebuilt per app release — deliberately NOT
+# a git object. The Dockerfile's `mirror` stage takes it through the build
+# context from ./mirror-app/ and actively deletes any committed copy, so a
+# bundle in here would be carried in history for nothing. Build it locally
+# with `npm run export:mirror` in Easyfix_Technician_Mobile_Application.
+/public/technician-mirror/
+/mirror-app/

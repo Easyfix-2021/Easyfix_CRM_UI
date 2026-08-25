@@ -13,6 +13,30 @@ const nextConfig = {
   outputFileTracingRoot: dirname(fileURLToPath(import.meta.url)),
   async rewrites() {
     /*
+     * Read-only technician-app mirror → its static entry point.
+     *
+     * public/technician-mirror/<version>/ holds an Expo static web export.
+     * Expo Router resolves its route from location.pathname minus the export's
+     * baseUrl, so the frame has to sit at the export ROOT: ask for
+     * .../index.html and the router is handed "/index.html", which matches no
+     * route and renders "Unmatched Route" — the app never boots.
+     *
+     * Next serves files out of public/ but does not do directory indexes, and
+     * with the default trailingSlash:false the ".../3.0.0/" form is 308'd away
+     * before it reaches one. This rewrite is what closes that gap: the URL the
+     * iframe holds stays at the export root while the bytes come from
+     * index.html.
+     *
+     * Declared OUTSIDE the /api/* block on purpose — that block returns early
+     * when NEXT_PUBLIC_API_URL is unset, and the mirror must not disappear
+     * from a build just because the API proxy was skipped.
+     */
+    const mirrorRewrite = {
+      source: '/technician-mirror/:version',
+      destination: '/technician-mirror/:version/index.html',
+    };
+
+    /*
      * /api/:path* → backend proxy.
      *
      * Skipped entirely when `NEXT_PUBLIC_API_URL` is unset OR doesn't
@@ -32,7 +56,7 @@ const nextConfig = {
     const apiUrl = process.env.NEXT_PUBLIC_API_URL;
     if (!apiUrl) {
       console.warn('[next.config] NEXT_PUBLIC_API_URL is unset — /api/* rewrite is disabled in this build.');
-      return [];
+      return [mirrorRewrite];
     }
     const trimmed = String(apiUrl).trim();
     const validDest = trimmed.startsWith('/') || /^https?:\/\//.test(trimmed);
@@ -41,9 +65,10 @@ const nextConfig = {
         `[next.config] NEXT_PUBLIC_API_URL=${JSON.stringify(trimmed)} is not a valid rewrite destination ` +
         '(must start with "/", "http://", or "https://"). /api/* rewrite disabled.',
       );
-      return [];
+      return [mirrorRewrite];
     }
     return [
+      mirrorRewrite,
       {
         source: '/api/:path*',
         destination: `${trimmed}/:path*`,
