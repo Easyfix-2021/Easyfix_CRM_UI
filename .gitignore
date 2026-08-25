@@ -24,11 +24,15 @@ npm-debug.log*
 
 next-env.d.ts
 
-# Technician-app mirror bundle (public/technician-mirror/<version>/).
-# A ~14 MB Expo static web export, rebuilt per app release — deliberately NOT
-# a git object. The Dockerfile's `mirror` stage takes it through the build
-# context from ./mirror-app/ and actively deletes any committed copy, so a
-# bundle in here would be carried in history for nothing. Build it locally
-# with `npm run export:mirror` in Easyfix_Technician_Mobile_Application.
+# Technician-app mirror — the UNPACKED copy only.
+#
+# public/technician-mirror/<version>/ is a 14 MB working directory produced by
+# `npm run export:mirror` for local dev. The Dockerfile builds its own copy from
+# the tarball and deletes any committed one, so a checked-in unpacked tree would
+# sit in history for nothing.
+#
+# mirror-app/technician-mirror-<version>.tar.gz IS committed — 4.2 MB gzipped,
+# one file per app release. It is what CI feeds the Docker build context, and
+# committing it is what lets a deploy produce a working mirror with no
+# cross-repo token. See the `mirror` stage in Dockerfile.
 /public/technician-mirror/
-/mirror-app/

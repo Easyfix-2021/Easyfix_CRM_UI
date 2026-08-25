@@ -1000,7 +1000,14 @@ export default function MyOrdersPage() {
                         * endpoint every 15s while open). Read-only — no
                         * permission gate beyond screen access.
                         */}
+                      {/*
+                        * Status 1 (SCHEDULED) is the accept→check-in window —
+                        * the technician is travelling. It was missing here, so
+                        * the one period an operator is most likely to be on the
+                        * phone asking "where is he" had no button at all.
+                        */}
                       {((j.job_status === 0 && j.fk_easyfixter_id != null) ||
+                        j.job_status === 1 ||
                         j.job_status === 2 || j.job_status === 20) && (
                         <button
                           type="button"

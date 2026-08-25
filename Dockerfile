@@ -34,10 +34,18 @@ RUN npm ci
 # same-origin at /technician-mirror/<version>/ and frames it on
 # /easyfixers/:id/app-view.
 #
-# The bundle is NOT committed — the repo has a size check, and a ~40 MB
-# export in git history is exactly what it exists to prevent. CI drops the
-# tarball into ./mirror-app/ before `docker build`, so it arrives through
-# the build context and is never a git object.
+# The bundle arrives as a COMMITTED tarball at
+# mirror-app/technician-mirror-<version>.tar.gz. An earlier version of this
+# comment said it must never be committed, on two grounds that turned out not
+# to hold: this repo has no size check, and the export is 4.2 MB gzipped rather
+# than the ~40 MB assumed. Weighed against that, committing it is what lets a
+# deploy build a working mirror with no cross-repo token, no PAT for an org
+# owner to approve, and no CI in a repo that has never had any.
+#
+# deploy.yml asserts the tarball is present and derives MIRROR_APP_VERSION from
+# its filename before `docker build` — necessary because this stage is
+# deliberately fail-soft (below) and would otherwise ship a placeholder with a
+# green check.
 #
 # When it is absent the build MUST still succeed: an operator seeing
 # "mirror bundle not installed" inside the phone frame is a working image

@@ -205,6 +205,58 @@ jobs:
           echo "image_uri=${REGISTRY}/${REPO}:${SHA_TAG}"          >> "$GITHUB_OUTPUT"
           echo "moving_uri=${REGISTRY}/${REPO}:${ENV_NAME}-latest" >> "$GITHUB_OUTPUT"
 
+      # ── Technician-app mirror bundle ──────────────────────────────
+      # The Dockerfile's `mirror` stage unpacks a static web export of the
+      # technician app so Ops can watch a read-only replica of the technician's
+      # screens from the CRM. It takes the bundle from ./mirror-app/ in the
+      # build context, which is where the committed tarball lives.
+      #
+      # THIS STEP EXISTS BECAUSE THE DOCKERFILE STAGE IS FAIL-SOFT. When no
+      # bundle is present it writes a "Mirror bundle not installed" placeholder
+      # and the build stays green — deliberately, so an unrelated CRM change is
+      # never blocked by a missing bundle. The cost is that a bundle which
+      # silently stops being shipped is invisible: every image builds fine and
+      # the feature is simply dark. Asserting here converts that into a loud
+      # failure at the one moment somebody is watching.
+      #
+      # The version is read from the FILENAME rather than hardcoded, so the
+      # tarball is self-describing and the two consumers of MIRROR_APP_VERSION
+      # (the unpack directory, and NEXT_PUBLIC_MIRROR_APP_VERSION which the
+      # browser uses to build the iframe URL) cannot drift from the file that
+      # is actually present.
+      - name: Resolve technician-app mirror bundle
+        id: mirror
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          bundles=(mirror-app/technician-mirror-*.tar.gz)
+          if [ ${#bundles[@]} -eq 0 ]; then
+            echo "::error::No mirror bundle found at mirror-app/technician-mirror-<version>.tar.gz."
+            echo "::error::Rebuild it with 'npm run export:mirror' in Easyfix_Technician_Mobile_Application,"
+            echo "::error::then 'tar -czf mirror-app/technician-mirror-<version>.tar.gz -C dist-mirror .'"
+            exit 1
+          fi
+          if [ ${#bundles[@]} -gt 1 ]; then
+            # The Dockerfile takes `head -n1` of the glob, so two tarballs mean
+            # it silently picks one. Refuse rather than ship a coin flip.
+            echo "::error::Expected exactly one mirror bundle, found ${#bundles[@]}: ${bundles[*]}"
+            exit 1
+          fi
+          bundle="${bundles[0]}"
+          version="$(basename "$bundle" .tar.gz)"
+          version="${version#technician-mirror-}"
+          if [ -z "$version" ]; then
+            echo "::error::Could not read a version out of '$bundle'."
+            exit 1
+          fi
+          # Prove it is a real export and not an empty/short-write archive.
+          if ! tar -tzf "$bundle" | grep -qx './index.html'; then
+            echo "::error::'$bundle' has no ./index.html at its root — not a usable Expo web export."
+            exit 1
+          fi
+          echo "✓ mirror bundle $bundle (version $version, $(du -h "$bundle" | cut -f1))"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
       # No QEMU needed — runs-on: ubuntu-24.04-arm gives us a native
       # arm64 runner, so buildx produces arm64 binaries directly. QEMU
       # emulation crashed Node's V8 during `npm ci` with SIGILL.
@@ -223,6 +275,7 @@ jobs:
           # secret again here — single source of truth.
           build-args: |
             NEXT_PUBLIC_API_URL=${{ steps.api.outputs.url }}
+            MIRROR_APP_VERSION=${{ steps.mirror.outputs.version }}
           tags: |
             ${{ steps.meta.outputs.image_uri }}
             ${{ steps.meta.outputs.moving_uri }}
