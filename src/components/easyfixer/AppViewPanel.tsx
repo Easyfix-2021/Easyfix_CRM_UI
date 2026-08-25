@@ -51,6 +51,26 @@ const MIRROR_VERSION = process.env.NEXT_PUBLIC_MIRROR_APP_VERSION || '3.0.0';
 
 const OPEN_EVENT = 'ef:app-view:open';
 
+/* The app's design viewport. Not arbitrary — every breakpoint inside the
+ * bundle is written against it, which is why we scale rather than stretch. */
+const FRAME_W = 390;
+const FRAME_H = 844;
+
+/* Panel chrome above and below the frame (header, version banner, footer). */
+const CHROME_H = 190;
+
+const MIN_SCALE = 0.45;
+const MAX_SCALE = 1;
+
+/* Largest scale that still leaves the whole panel on screen, with a margin.
+ * Guarded for SSR, where there is no window to measure. */
+function fitScale(): number {
+  if (typeof window === 'undefined') return 0.8;
+  const usableH = window.innerHeight - CHROME_H - 32;
+  const usableW = window.innerWidth - 32;
+  return Math.min(MAX_SCALE, Math.max(MIN_SCALE, Math.min(usableH / FRAME_H, usableW / FRAME_W)));
+}
+
 export type AppViewTarget = { efrId: number; name?: string | null };
 
 /** Open the floating App View for a technician. Safe to call from anywhere. */
@@ -106,6 +126,58 @@ function AppViewPanel({ target, onClose }: { target: AppViewTarget; onClose: () 
   const [missingKeys, setMissingKeys] = useState<string[]>([]);
   const frameRef = useRef<HTMLIFrameElement>(null);
 
+  /*
+   * ── Size ────────────────────────────────────────────────────────────────
+   *
+   * The app is drawn for a 390x844 phone. Rendering that at 1:1 plus the
+   * panel's own header and banner needs ~950px of height, which is taller
+   * than a 900px laptop screen — so the panel hung off the bottom and its
+   * controls were unreachable.
+   *
+   * The fix is SCALE, not stretch. Stretching a fixed-viewport RN app to an
+   * arbitrary box makes it lay out for a phone it is not on; scaling keeps
+   * every breakpoint and safe-area inset honest and just draws it smaller.
+   * transform: scale also leaves the iframe's internal coordinate space
+   * untouched, so taps still land where they look.
+   *
+   * The initial value fits the current viewport, so the panel is never born
+   * off-screen; the handle then lets the operator trade size for screen room.
+   */
+  const [scale, setScale] = useState(() => fitScale());
+  const resizing = useRef<{ startY: number; startScale: number } | null>(null);
+
+  // Recompute the ceiling when the window changes — a panel sized for a big
+  // screen must not be left hanging off a smaller one after a resize.
+  useEffect(() => {
+    const onResize = () => setScale((s) => Math.min(s, fitScale()));
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  const onResizePointerDown = useCallback((e: React.PointerEvent) => {
+    (e.target as Element).setPointerCapture?.(e.pointerId);
+    resizing.current = { startY: e.clientY, startScale: scale };
+    e.preventDefault();
+    e.stopPropagation();   // never let the resize gesture start a drag
+  }, [scale]);
+
+  const onResizePointerMove = useCallback((e: React.PointerEvent) => {
+    const r = resizing.current;
+    if (!r) return;
+    // Dragging DOWN grows the panel. FRAME_H converts pixels of pointer
+    // travel into scale so the corner tracks the cursor at 1:1.
+    const next = r.startScale + (e.clientY - r.startY) / FRAME_H;
+    // Ceiling is fitScale(), not MAX_SCALE: the operator can shrink freely but
+    // cannot enlarge the panel past the screen. Letting them would recreate the
+    // exact bug this resize was added to fix — controls off the bottom edge.
+    setScale(Math.min(fitScale(), Math.max(MIN_SCALE, next)));
+  }, []);
+
+  const onResizePointerUp = useCallback((e: React.PointerEvent) => {
+    (e.target as Element).releasePointerCapture?.(e.pointerId);
+    resizing.current = null;
+  }, []);
+
   useEffect(() => {
     if (!data) return;
     // Clear on open as well as close: an operator moving from one technician
@@ -149,15 +221,22 @@ function AppViewPanel({ target, onClose }: { target: AppViewTarget; onClose: () 
       style={style}
       {...APP_VIEW_PANEL_ATTR}
       className={cn(
-        'fixed z-50 rounded-xl border border-border bg-card shadow-2xl',
+        'fixed z-50 flex flex-col rounded-xl border border-border bg-card shadow-2xl',
+        // Hard ceiling. `scale` already fits the panel to the viewport on open
+        // and on resize, so this should never engage — it is here because the
+        // failure mode it prevents is the panel's own controls ending up off
+        // the top of the screen, i.e. unreachable, which leaves the operator
+        // with no way to close or shrink it. A scrollbar is a much better worst
+        // case than a trapped panel.
+        'max-h-[calc(100vh-1rem)]',
         !positioned && 'bottom-4 right-4',
-        collapsed ? 'w-auto' : 'w-[422px] max-w-[calc(100vw-2rem)]',
+        collapsed && 'w-auto',
       )}
     >
       {/* Header doubles as the drag handle. */}
       <div
         {...headerHandlers}
-        className="flex items-center gap-2 rounded-t-xl border-b border-border bg-muted px-3 py-2"
+        className="flex shrink-0 items-center gap-2 rounded-t-xl border-b border-border bg-muted px-3 py-2"
       >
         <GripVertical className="size-4 shrink-0 text-muted-foreground" />
         <Smartphone className="size-4 shrink-0 text-muted-foreground" />
@@ -200,7 +279,7 @@ function AppViewPanel({ target, onClose }: { target: AppViewTarget; onClose: () 
         * Tearing down the iframe would cold-boot the technician's app and lose
         * whatever screen the operator had reached, mid-call.
         */}
-      <div className={cn('p-3', collapsed && 'hidden')}>
+      <div className={cn('min-h-0 flex-1 overflow-y-auto p-3', collapsed && 'hidden')}>
         {/* Version honesty. Roughly three technicians in four report no
             version at all today, so "unknown" is the common case and gets its
             own wording rather than being folded in with "matches". */}
@@ -240,7 +319,21 @@ function AppViewPanel({ target, onClose }: { target: AppViewTarget; onClose: () 
         )}
 
         {ready && (
-          <div className="overflow-hidden rounded-[1.75rem] border-[10px] border-foreground bg-background">
+          /*
+           * The scaled stage. The OUTER box takes the post-scale dimensions so
+           * the panel's own layout reserves the right amount of room —
+           * transform does not affect layout size, so without this the panel
+           * would still reserve the full 844px and hang off the screen exactly
+           * as it did before.
+           */
+          <div
+            style={{ width: FRAME_W * scale, height: FRAME_H * scale }}
+            className="relative overflow-hidden"
+          >
+          <div
+            style={{ transform: `scale(${scale})`, transformOrigin: 'top left' }}
+            className="absolute left-0 top-0 overflow-hidden rounded-[1.75rem] border-[10px] border-foreground bg-background"
+          >
             {/*
               * NO `sandbox` — deliberate, and it reads as an omission
               * otherwise. Sandboxing without `allow-same-origin` gives the
@@ -263,18 +356,52 @@ function AppViewPanel({ target, onClose }: { target: AppViewTarget; onClose: () 
               ref={frameRef}
               src={`/technician-mirror/${MIRROR_VERSION}/index.html?m=${nonce}`}
               title="Read-only mirror of the technician app"
-              width={390}
-              height={720}
+              width={FRAME_W}
+              height={FRAME_H}
               allow=""
               referrerPolicy="same-origin"
               className="block border-0"
             />
           </div>
+          </div>
         )}
 
-        <p className="mt-2 text-center text-xs leading-snug text-muted-foreground">
-          Read-only — replayed through a GET-only proxy with an invalid session token.
-        </p>
+        <div className="mt-2 flex items-end justify-between gap-2">
+          <p className="text-xs leading-snug text-muted-foreground">
+            Read-only — replayed through a GET-only proxy with an invalid session token.
+          </p>
+          {/*
+            * Resize grip. Drag DOWN to grow.
+            *
+            * A custom handle rather than CSS `resize`, because CSS resize would
+            * stretch the box and leave the 390px app laid out for a width it is
+            * not on. This drives `scale`, so the phone gets bigger or smaller
+            * and stays a phone.
+            *
+            * touch-none stops the browser treating the drag as a scroll
+            * gesture, which otherwise eats every pointermove on a trackpad.
+            */}
+          <div
+            role="slider"
+            aria-label="Resize app view"
+            aria-valuemin={Math.round(MIN_SCALE * 100)}
+            aria-valuemax={Math.round(fitScale() * 100)}
+            aria-valuenow={Math.round(scale * 100)}
+            tabIndex={0}
+            onPointerDown={onResizePointerDown}
+            onPointerMove={onResizePointerMove}
+            onPointerUp={onResizePointerUp}
+            onKeyDown={(e) => {
+              // Keyboard parity — a pointer-only control is unreachable.
+              if (e.key === 'ArrowUp') setScale((v) => Math.max(MIN_SCALE, v - 0.05));
+              if (e.key === 'ArrowDown') setScale((v) => Math.min(fitScale(), v + 0.05));
+            }}
+            title={`${Math.round(scale * 100)}% — drag to resize`}
+            className="flex size-5 shrink-0 cursor-nwse-resize touch-none items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <GripVertical className="size-3.5 rotate-45" />
+          </div>
+        </div>
       </div>
     </div>,
     document.body,

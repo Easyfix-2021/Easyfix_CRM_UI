@@ -161,13 +161,32 @@
   }
   .data-table .stick-left  { left: 0; }
   .data-table .stick-right { right: 0; }
+  /* The edge where scrolled content disappears under the frozen column.
+     
+     This needs to be VISIBLE, not tasteful. The previous 8%-alpha shadow was
+     effectively invisible, so a long value in the neighbouring column (the
+     serviceable-pincode list on Manage Easyfixers is the worst case) looked
+     like it was touching the action icons rather than sliding beneath them —
+     the text and the buttons read as one smeared control.
+
+     A hairline border does the real work: it draws a hard edge exactly where
+     the content is clipped, which is the thing a reader needs to understand
+     "there is more, it is underneath". The shadow behind it only adds depth,
+     so it stays subtle — doubled to 0.14 because at 0.08 over a `muted` header
+     it rendered as nothing at all.
+
+     Applied to BOTH the body cell and the header cell: a border on only one of
+     them draws a line that stops at the header boundary, which reads as a
+     rendering artefact rather than a column edge. */
   .data-table .stick-left.stick-col,
   .data-table .stick-left.stick-col-head {
-    box-shadow: 2px 0 4px -2px hsl(var(--ink-900) / 0.08);
+    border-left: 1px solid hsl(var(--border));
+    box-shadow: 3px 0 6px -2px hsl(var(--ink-900) / 0.14);
   }
   .data-table .stick-right.stick-col,
   .data-table .stick-right.stick-col-head {
-    box-shadow: -2px 0 4px -2px hsl(var(--ink-900) / 0.08);
+    border-left: 1px solid hsl(var(--border));
+    box-shadow: -3px 0 6px -2px hsl(var(--ink-900) / 0.14);
   }
 
   /* Native datetime-local + date inputs: make the calendar-picker icon obey
