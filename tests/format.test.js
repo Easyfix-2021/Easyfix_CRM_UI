@@ -327,3 +327,63 @@ test('hasExplicitZone does not mistake the date separators for an offset', () =>
     'the hyphens in the DATE must not read as a negative UTC offset');
   assert.equal(F.hasExplicitZone('2026-08-25T16:56:17-05:00'), true);
 });
+
+// ─── The COMPOUND bug, as the components actually hit it ──────────────────
+/*
+ * These pin the exact shape found in the CRM on 2026-08-26 and fixed in the
+ * same pass: a zone-less DB datetime parsed with `new Date(...)` and then
+ * RENDERED with timeZone:'Asia/Kolkata'. The two errors do not cancel — they
+ * compound — and the result is the wrong time AND, near a day boundary, the
+ * wrong day.
+ *
+ * The property that matters is not "parseIstDateTime is correct" (covered
+ * above) but "the rendered STRING an operator reads is the same in Kolkata,
+ * New York and London". That is what these assert, because it is what the
+ * duplicated DateTimeCell in the QuickSight pages got wrong.
+ *
+ * Run under several zones — `TZ=America/New_York node --test tests/...`. A
+ * timezone test that only runs in IST is testing nothing, and this whole class
+ * of bug is invisible from India.
+ */
+const IST_RENDER = {
+  day: '2-digit', month: 'short', year: 'numeric',
+  hour: '2-digit', minute: '2-digit', hour12: false,
+  timeZone: 'Asia/Kolkata',
+};
+const DB_VALUE = '2026-08-25 16:56:17'; // zone-less, means IST
+
+test('rendering a zone-less DB datetime is zone-independent through parseIstDateTime', () => {
+  const rendered = new Intl.DateTimeFormat('en-GB', IST_RENDER)
+    .format(F.parseIstDateTime(DB_VALUE));
+  // 16:56 IST is 16:56 IST wherever the browser happens to be.
+  assert.match(rendered, /25 Aug 2026/, `wrong day in TZ=${process.env.TZ || 'system'}: ${rendered}`);
+  assert.match(rendered, /16:56/, `wrong time in TZ=${process.env.TZ || 'system'}: ${rendered}`);
+});
+
+test('the OLD code only agreed with it when the browser was already in IST', () => {
+  /*
+   * Byte-identical in IST — which is why this shipped and nobody noticed — and
+   * divergent outside it. If this assertion ever flips to "always equal", the
+   * fix has been reverted.
+   */
+  const oldWay = new Intl.DateTimeFormat('en-GB', IST_RENDER)
+    .format(new Date(DB_VALUE.replace(' ', 'T')));
+  const newWay = new Intl.DateTimeFormat('en-GB', IST_RENDER)
+    .format(F.parseIstDateTime(DB_VALUE));
+
+  const offsetMinutes = -new Date('2026-08-25T12:00:00Z').getTimezoneOffset();
+  if (offsetMinutes === 330) {
+    assert.equal(oldWay, newWay, 'in IST the fix must change nothing an operator reads');
+  } else {
+    assert.notEqual(oldWay, newWay,
+      `outside IST the old parse must differ — it did not, in TZ=${process.env.TZ || 'system'}`);
+  }
+});
+
+test('a date-only value renders as that calendar date, not the day before', () => {
+  // The trap for anyone west of Greenwich: midnight IST parsed as midnight UTC
+  // reads as the right day in London and the WRONG day in New York.
+  const rendered = new Intl.DateTimeFormat('en-GB', { ...IST_RENDER, hour: undefined, minute: undefined })
+    .format(F.parseIstDateTime('2026-08-25'));
+  assert.match(rendered, /25 Aug 2026/, `date-only slipped a day in TZ=${process.env.TZ || 'system'}`);
+});

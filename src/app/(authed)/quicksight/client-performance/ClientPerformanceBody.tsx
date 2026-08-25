@@ -41,6 +41,7 @@ import { useFetch } from '@/lib/hooks';
 import { downloadXlsx } from '@/lib/download-xlsx';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
+import { parseIstDateTime } from '@/lib/format';
 import type { SearchOption } from '@/components/ui/search-select';
 
 const ACTION_KEY = 'isQuickSightClientPerformanceView';
@@ -75,7 +76,9 @@ type ManagerLite = { user_id: number; user_name: string };
  * returns weekly labels as "YYYY-MM-DD - YYYY-MM-DD". Monthly labels are the
  * month name and pass through untouched. */
 function fmtDateOnly(iso: string): string {
-  const d = new Date(`${iso}T00:00:00+05:30`);
+  // parseIstDateTime does exactly this for a date-only value, so the output is
+  // byte-identical — this is de-duplication, not a behaviour change.
+  const d = parseIstDateTime(iso);
   if (isNaN(d.getTime())) return iso;
   return d.toLocaleDateString('en-IN', {
     day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata',

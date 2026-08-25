@@ -111,6 +111,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { statusLabel, statusTone } from '@/lib/utils';
+import { parseIstDateTime } from '@/lib/format';
 import { JobRefLink } from '@/components/job/JobRefLink';
 import { JobModalHost } from '@/components/job/JobModalHost';
 
@@ -289,7 +290,16 @@ function toNums(v: Array<string | number>): number[] {
  */
 function DateTimeCell({ value, seconds }: { value: string | null; seconds?: boolean }) {
   if (!value) return <span className="text-muted-foreground">—</span>;
-  const d = new Date(String(value).replace(' ', 'T'));
+  /*
+   * parseIstDateTime, not `new Date(...replace(' ', 'T'))`.
+   *
+   * The replace only swaps the separator; the string stays ZONE-LESS, so it was
+   * parsed as browser-local and then rendered with timeZone:'Asia/Kolkata'
+   * below. Those two errors COMPOUND rather than cancel: under
+   * TZ=America/New_York a 16:56 IST call rendered as 26 Aug 02:26 — wrong time
+   * and wrong day. In IST the output is unchanged, which is why nobody saw it.
+   */
+  const d = parseIstDateTime(String(value));
   if (Number.isNaN(d.getTime())) return <span className="whitespace-nowrap">{String(value)}</span>;
   const opts = { timeZone: 'Asia/Kolkata' } as const;
   const date = d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', ...opts });

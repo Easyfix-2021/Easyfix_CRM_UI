@@ -17,6 +17,7 @@ import { SearchSelect } from '@/components/ui/search-select';
 import { EasyfixerLifecycleChip } from '@/components/easyfixer/EasyfixerLifecycleChip';
 import { LifecycleTransitionGuideDialog } from '@/components/easyfixer/LifecycleTransitionGuideDialog';
 import { api, ApiError } from '@/lib/api';
+import { parseIstDateTime } from '@/lib/format';
 import {
   lifecycleLabel,
   lifecycleTargets,
@@ -47,7 +48,16 @@ function istDate(daysFromToday = 0): string {
 
 function formatDateTime(value: string | null): string {
   if (!value) return '—';
-  const date = new Date(value);
+  /*
+   * Zone-less DB datetime + timeZone:'Asia/Kolkata' below = the two errors
+   * COMPOUND. parseIstDateTime reads it as the IST it actually is.
+   *
+   * Note formatLifecycleDate() further down is deliberately NOT changed: it
+   * pairs `T00:00:00Z` with timeZone:'UTC', which is internally consistent and
+   * renders the calendar date verbatim. Converting that one to +05:30 while it
+   * still formats in UTC would shift it back and show the PREVIOUS day.
+   */
+  const date = parseIstDateTime(value);
   if (Number.isNaN(date.getTime())) return value;
   return new Intl.DateTimeFormat('en-IN', {
     dateStyle: 'medium',

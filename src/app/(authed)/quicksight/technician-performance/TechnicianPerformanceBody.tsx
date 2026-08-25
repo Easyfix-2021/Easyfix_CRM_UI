@@ -37,6 +37,7 @@ import { downloadXlsx } from '@/lib/download-xlsx';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { cn } from '@/lib/utils';
+import { parseIstDateTime } from '@/lib/format';
 import { TechnicianCategoryModal } from './TechnicianCategoryModal';
 import { TechnicianPerformanceCharts } from './TechnicianPerformanceCharts';
 
@@ -89,7 +90,9 @@ const METRIC_HEADERS = ['Tickets Assigned', 'SDA%', 'TAT%', 'Open Order In App']
 
 /* Date-only formatter for weekly period headers; monthly labels pass through. */
 function fmtDateOnly(iso: string): string {
-  const d = new Date(`${iso}T00:00:00+05:30`);
+  // parseIstDateTime does exactly this for a date-only value, so the output is
+  // byte-identical — this is de-duplication, not a behaviour change.
+  const d = parseIstDateTime(iso);
   if (isNaN(d.getTime())) return iso;
   return d.toLocaleDateString('en-IN', {
     day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata',
