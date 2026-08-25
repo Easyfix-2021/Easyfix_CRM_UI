@@ -27,36 +27,23 @@
 
 import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Building2, Search, AlertTriangle, Pencil, Plus, Upload } from 'lucide-react';
+import { Building2, Search, AlertTriangle, Plus, Upload } from 'lucide-react';
 import { RowActionsMenu } from '@/components/client/RowActionsMenu';
-type ClientTab = 'overview' | 'contacts' | 'billing' | 'props' | 'services' | 'rate-cards' | 'tech-mapping' | 'verticals' | 'documents';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { DownloadButton } from '@/components/ui/download-button';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { useFetch, useDebouncedValue, invalidateFetch } from '@/lib/hooks';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
-import { formatDate } from '@/lib/utils';
 import { cycleSort, SortHeader, type SortDir } from '@/lib/use-sort';
 import { downloadXlsx } from '@/lib/download-xlsx';
 import { showToast } from '@/components/ui/toast';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { RefreshBar } from '@/components/ui/refresh-bar';
-import type { ClientRow, ClientDetail, ClientListResponse } from '@/lib/client-types';
+import type { ClientRow, ClientListResponse, ClientTab } from '@/lib/client-types';
 import { ClientFormDialog } from '@/components/client/ClientFormDialog';
-import { ContactsTab } from '@/components/client/ContactsTab';
-import { BillingTab } from '@/components/client/BillingTab';
-import { CustomPropsTab } from '@/components/client/CustomPropsTab';
-import { VerticalsTab } from '@/components/client/VerticalsTab';
-import { DocumentsTab } from '@/components/client/DocumentsTab';
-import { ServicesTab } from '@/components/client/ServicesTab';
-import { RateCardsTab } from '@/components/client/RateCardsTab';
-import { TechMappingTab } from '@/components/client/TechMappingTab';
-import { COLLECTED_BY_OPTIONS } from '@/lib/client-types';
 
 type SortKey = keyof ClientRow;
 
@@ -113,17 +100,17 @@ export default function ClientsPage() {
 
   const total = list?.total ?? 0;
 
-  const [editingId, setEditingId] = useState<number | null>(null);
-  // Deep-link target tab — set by the kebab menu so we can open the
-  // manage modal directly on (say) "Rate Cards" instead of forcing
-  // the operator to click Edit → tab. 'overview' is the default.
-  const [editingTab, setEditingTab] = useState<ClientTab>('overview');
   const [creating, setCreating] = useState(false);
   const [downloading, setDownloading] = useState(false);
 
+  /*
+   * Opening a client is now a NAVIGATION, not a modal. The tab rides in the
+   * query string, so the kebab menu's deep links (Services, Rate Cards, …) are
+   * shareable URLs and the browser Back button returns to this list — neither
+   * of which the old ClientDetailDialog could do.
+   */
   function openClient(id: number, tab: ClientTab = 'overview') {
-    setEditingTab(tab);
-    setEditingId(id);
+    router.push(tab === 'overview' ? `/clients/${id}` : `/clients/${id}?tab=${tab}`);
   }
 
   async function onExport() {
@@ -292,15 +279,6 @@ export default function ClientsPage() {
         </CardContent>
       </Card>
 
-      {editingId != null && (
-        <ClientDetailDialog
-          clientId={editingId}
-          canEdit={!!can.isClientEdit}
-          initialTab={editingTab}
-          onClose={() => setEditingId(null)}
-        />
-      )}
-
       {creating && (
         <ClientFormDialog
           open={creating}
@@ -308,162 +286,13 @@ export default function ClientsPage() {
           onClose={() => setCreating(false)}
           onSaved={(id) => {
             setCreating(false);
-            setEditingId(id);
             invalidateFetch((k) => k.startsWith('/admin/clients'));
+            // Straight into the new client's profile — creating one is always
+            // followed by filling in contacts, services and rate cards.
+            openClient(id);
           }}
         />
       )}
-    </div>
-  );
-}
-
-/* ─── Detail dialog (full-screen-ish, matches Book Call) ──────────── */
-
-function ClientDetailDialog({
-  clientId, canEdit, initialTab, onClose,
-}: {
-  clientId: number;
-  canEdit: boolean;
-  initialTab?: ClientTab;
-  onClose: () => void;
-}) {
-  const { data: client, loading, error, refetch } = useFetch<ClientDetail>(`/admin/clients/${clientId}`);
-  const [editing, setEditing] = useState(false);
-  // Controlled tab so the kebab menu's deep-link works; operator can
-  // still switch tabs by clicking the trigger, hence the onValueChange.
-  const [tab, setTab] = useState<ClientTab>(initialTab ?? 'overview');
-
-  return (
-    <Dialog open={true} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="!max-w-none w-[calc(100vw-48px)] h-[calc(100vh-48px)] overflow-hidden flex flex-col p-0 gap-0">
-        {/*
-         * Dark slate band — matches the global DialogHeader convention
-         * (memory `feedback_easyfix_modal_header_color`). The default
-         * shadcn DialogHeader applies this via negative margins; our
-         * DialogContent uses `p-0` which disables that, so we recreate
-         * the band inline with the same gradient + sky underline.
-         * pr-12 keeps the Edit button from sliding under the X close.
-         */}
-        <DialogHeader className="px-5 py-3 bg-gradient-to-r from-ink-900 via-ink-700 to-ink-900 text-white shadow-[inset_0_-3px_0_0_hsl(var(--primary)/0.85)] !mx-0 !mt-0 !mb-0">
-          <div className="flex items-center justify-between pr-12">
-            <DialogTitle className="text-white text-base font-semibold">
-              {String(client?.client_name ?? `Client #${clientId}`)}
-              {client?.client_status === 0 && (
-                <span className="ml-2 text-xs font-normal text-ink-100/80 bg-ink-700/60 px-2 py-0.5 rounded">Inactive</span>
-              )}
-            </DialogTitle>
-            {canEdit && client && (
-              <Button
-                size="sm"
-                onClick={() => setEditing(true)}
-                className="bg-card text-ink-900 hover:bg-ink-100"
-              >
-                <Pencil className="size-3.5 mr-1" /> Edit Basic Info
-              </Button>
-            )}
-          </div>
-        </DialogHeader>
-
-        <div className="flex-1 overflow-y-auto px-5 pb-4">
-          {loading && <div className="text-sm text-muted-foreground pt-3">Loading…</div>}
-          {error && <div className="text-sm text-urgent pt-3">{error}</div>}
-          {!loading && !error && client && (
-            <Tabs
-              value={tab}
-              onValueChange={(v) => setTab(v as ClientTab)}
-              className="pt-3"
-            >
-              <div className="overflow-x-auto pb-1 -mx-1 px-1">
-                <TabsList className="!w-max">
-                  <TabsTrigger value="overview">Overview</TabsTrigger>
-                  <TabsTrigger value="contacts">Contacts</TabsTrigger>
-                  <TabsTrigger value="billing">Billing</TabsTrigger>
-                  <TabsTrigger value="props">Custom Properties</TabsTrigger>
-                  <TabsTrigger value="services">Services</TabsTrigger>
-                  <TabsTrigger value="rate-cards">Rate Cards</TabsTrigger>
-                  <TabsTrigger value="tech-mapping">Tech Mapping</TabsTrigger>
-                  <TabsTrigger value="verticals">Verticals</TabsTrigger>
-                  <TabsTrigger value="documents">Documents</TabsTrigger>
-                </TabsList>
-              </div>
-
-              <TabsContent value="overview">
-                <OverviewPanel client={client} />
-              </TabsContent>
-              <TabsContent value="contacts">
-                <ContactsTab clientId={clientId} canEdit={canEdit} />
-              </TabsContent>
-              <TabsContent value="billing">
-                <BillingTab clientId={clientId} canEdit={canEdit} />
-              </TabsContent>
-              <TabsContent value="props">
-                <CustomPropsTab clientId={clientId} canEdit={canEdit} />
-              </TabsContent>
-              <TabsContent value="services">
-                <ServicesTab clientId={clientId} canEdit={canEdit} />
-              </TabsContent>
-              <TabsContent value="rate-cards">
-                <RateCardsTab clientId={clientId} canEdit={canEdit} />
-              </TabsContent>
-              <TabsContent value="tech-mapping">
-                <TechMappingTab clientId={clientId} canEdit={canEdit} />
-              </TabsContent>
-              <TabsContent value="verticals">
-                <VerticalsTab clientId={clientId} canEdit={canEdit} />
-              </TabsContent>
-              <TabsContent value="documents">
-                <DocumentsTab clientId={clientId} canEdit={canEdit} />
-              </TabsContent>
-            </Tabs>
-          )}
-        </div>
-
-        {editing && client && (
-          <ClientFormDialog
-            open={editing}
-            mode="edit"
-            initial={client}
-            onClose={() => setEditing(false)}
-            onSaved={() => { setEditing(false); refetch(); }}
-          />
-        )}
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function OverviewPanel({ client }: { client: ClientDetail }) {
-  const collectedByLabel = (() => {
-    if (client.collected_by == null) return '—';
-    const opt = COLLECTED_BY_OPTIONS.find((o) => o.value === Number(client.collected_by));
-    return opt?.label ?? '—';
-  })();
-
-  const rows: { label: string; value: unknown; mono?: boolean }[] = [
-    { label: 'Client ID',         value: client.client_id, mono: true },
-    { label: 'Name',              value: client.client_name },
-    { label: 'Type',              value: client.client_type },
-    { label: 'Email',             value: client.client_email },
-    { label: 'Reference',         value: client.reference_code, mono: true },
-    { label: 'Status',            value: client.client_status === 1 ? 'Active' : 'Inactive' },
-    { label: 'Address',           value: client.client_address },
-    { label: 'Booking Cut-off',   value: client.booking_cut_off != null ? `${client.booking_cut_off} hr` : null },
-    { label: 'Max Orders',        value: client.max_orders },
-    { label: 'Travel Distance',   value: client.travel_distance != null ? `${client.travel_distance} km` : null },
-    { label: 'Collected By',      value: collectedByLabel },
-    { label: 'Created',           value: client.insert_date ? formatDate(String(client.insert_date)) : null },
-  ];
-
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 pt-3">
-      {rows.map((r) => (
-        <div key={r.label} className="rounded border bg-card px-3 py-2">
-          <div className="text-xs uppercase tracking-wide text-muted-foreground">{r.label}</div>
-          <div className={`text-sm mt-0.5 ${r.mono ? 'font-mono' : ''}`}>
-            {r.value == null || r.value === '' ? <span className="text-muted-foreground">—</span> : String(r.value)}
-          </div>
-        </div>
-      ))}
     </div>
   );
 }

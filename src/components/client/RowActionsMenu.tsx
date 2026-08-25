@@ -9,9 +9,9 @@
  * actions without crowding the table.
  *
  * Menu items split into two kinds:
- *   - **Open at a Specific Tab**: opens the manage modal directly to
- *     the named tab (Services / Rate Cards / Tech Mapping / Billing /
- *     Contacts). Saves an extra click vs. Edit → click tab.
+ *   - **Open at a Specific Section**: navigates to the client's profile
+ *     page at the named section (Services / Rate Cards / Billing /
+ *     Contacts) via `?tab=`. Saves an extra click vs. open → click rail.
  *   - **Direct action**: bypasses the modal entirely — currently just
  *     Download Rate Card (Xlsx export). Fired inline.
  *
@@ -39,7 +39,7 @@ import { downloadXlsx } from '@/lib/download-xlsx';
 import { invalidateFetch } from '@/lib/hooks';
 import { usePopoverPosition } from '@/lib/use-popover-position';
 
-type ClientTab = 'overview' | 'contacts' | 'billing' | 'props' | 'services' | 'rate-cards' | 'tech-mapping' | 'verticals' | 'documents';
+import type { ClientTab } from '@/lib/client-types';
 
 type Props = {
   clientId: number;
@@ -154,7 +154,9 @@ export function RowActionsMenu({ clientId, clientName, isActive, canEdit, onOpen
   const items: (MenuItem | 'divider')[] = [
     { icon: <Layers     className="size-3.5" />, label: 'Client Services',   tab: 'services' },
     { icon: <Calculator className="size-3.5" />, label: 'Rate Cards',        tab: 'rate-cards' },
-    { icon: <Users      className="size-3.5" />, label: 'Easyfixer Mapping', tab: 'tech-mapping' },
+    // Technician mapping is a sub-tab of Services on the profile page, so this
+    // opens Services; the mapping is one click in from there.
+    { icon: <Users      className="size-3.5" />, label: 'Easyfixer Mapping', tab: 'services' },
     { icon: <MapPin     className="size-3.5" />, label: 'Billing',           tab: 'billing' },
     { icon: <Phone      className="size-3.5" />, label: 'Contacts',          tab: 'contacts' },
     'divider',
