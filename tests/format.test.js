@@ -261,3 +261,69 @@ test('pluralize defaults the plural to a trailing s', () => {
   assert.equal(F.pluralize(1, 'leg'), '1 leg');
   assert.equal(F.pluralize(3, 'leg'), '3 legs');
 });
+
+// ─── parseIstDateTime ─────────────────────────────────────────────────────
+/*
+ * THE FAILURE THIS PREVENTS IS INVISIBLE ON AN IST MACHINE. MySQL DATETIMEs
+ * arrive zone-less ("2026-08-25 16:56:17") and mean IST, but the plain Date
+ * constructor reads them as BROWSER-LOCAL. Every developer here is in IST, so
+ * the bug tests clean locally and only shows up for a user abroad — as a
+ * timestamp off by the offset, or a job stamped just after midnight rendering
+ * on the previous day.
+ *
+ * These assertions compare against a FIXED absolute instant, so they hold no
+ * matter what TZ the test process runs in. Run the file under
+ * `TZ=America/New_York node --test` and it must still pass; that is the whole
+ * point.
+ */
+const IST = (iso) => new Date(iso).getTime();
+
+test('a zone-less MySQL DATETIME is read as IST, not as browser-local time', () => {
+  assert.equal(
+    F.parseIstDateTime('2026-08-25 16:56:17').getTime(),
+    IST('2026-08-25T16:56:17+05:30'),
+  );
+});
+
+test('the T-separated form is treated identically', () => {
+  assert.equal(
+    F.parseIstDateTime('2026-08-25T16:56:17').getTime(),
+    IST('2026-08-25T16:56:17+05:30'),
+  );
+});
+
+test('a date with no time is MIDNIGHT IST, not midnight UTC', () => {
+  // The default parse makes a bare date midnight UTC = 05:30 IST, which reads
+  // as the right day but the wrong time — and the WRONG DAY west of Greenwich.
+  assert.equal(F.parseIstDateTime('2026-08-25').getTime(), IST('2026-08-25T00:00:00+05:30'));
+});
+
+test('a value that STATES its zone is left alone', () => {
+  // Re-stamping this would corrupt a correct timestamp in order to fix an
+  // incorrect one.
+  assert.equal(F.parseIstDateTime('2026-08-25T11:26:17Z').getTime(), IST('2026-08-25T11:26:17Z'));
+  assert.equal(F.parseIstDateTime('2026-08-25T16:56:17+05:30').getTime(), IST('2026-08-25T16:56:17+05:30'));
+  assert.equal(F.parseIstDateTime('2026-08-25T06:56:17-05:00').getTime(), IST('2026-08-25T06:56:17-05:00'));
+});
+
+test('a Date passes through untouched', () => {
+  const d = new Date('2026-08-25T11:26:17Z');
+  assert.equal(F.parseIstDateTime(d), d, 'same object — nothing to re-interpret');
+});
+
+test('fractional seconds still count as zone-less', () => {
+  assert.equal(
+    F.parseIstDateTime('2026-08-25T16:56:17.250').getTime(),
+    IST('2026-08-25T16:56:17.250+05:30'),
+  );
+});
+
+test('junk returns an Invalid Date rather than throwing — callers guard on isNaN', () => {
+  assert.ok(Number.isNaN(F.parseIstDateTime('not a date').getTime()));
+});
+
+test('hasExplicitZone does not mistake the date separators for an offset', () => {
+  assert.equal(F.hasExplicitZone('2026-08-25 16:56:17'), false,
+    'the hyphens in the DATE must not read as a negative UTC offset');
+  assert.equal(F.hasExplicitZone('2026-08-25T16:56:17-05:00'), true);
+});

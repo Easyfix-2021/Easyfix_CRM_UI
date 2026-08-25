@@ -1,6 +1,7 @@
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { TONE_SURFACE_CLASSES, type StatusChipTone } from '@/components/ui/StatusChip';
+import { parseIstDateTime } from '@/lib/format';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -8,7 +9,16 @@ export function cn(...inputs: ClassValue[]) {
 
 export function formatDate(d: string | Date | null | undefined): string {
   if (!d) return '—';
-  const date = typeof d === 'string' ? new Date(d) : d;
+  /*
+   * parseIstDateTime, not `new Date(d)`. Almost every value reaching this
+   * function is a MySQL DATETIME — a ZONE-LESS IST wall clock like
+   * "2026-08-25 16:56:17" — and the plain constructor reads that as BROWSER
+   * local time. On an IST machine it was right by accident; anywhere else it
+   * was wrong by the offset and then shifted again by the Asia/Kolkata format
+   * below. Values that do state a zone are still parsed as the instants they
+   * are. See lib/format.ts for the full note.
+   */
+  const date = parseIstDateTime(d);
   if (isNaN(date.getTime())) return '—';
   return date.toLocaleString('en-IN', {
     day: '2-digit', month: 'short', year: 'numeric',
