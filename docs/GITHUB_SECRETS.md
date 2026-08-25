@@ -1,111 +1,172 @@
 # GitHub Actions Secrets — Easyfix_CRM_UI
 
-This document lists every secret the **CRM frontend** GitHub Actions workflow ([`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml)) needs, along with **what each value is** and **where to fetch it from**.
+Every secret [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) reads,
+what each value is, and where to fetch it.
 
-> **Reach this UI:** GitHub repo → **Settings** (top tab) → **Secrets and variables** → **Actions** → **New repository secret**.
-
----
-
-## Required secrets
-
-| Secret name | Purpose | Where to get the value |
-|---|---|---|
-| `QA_HOST` | Public IP (Elastic IP) of the **QA** EC2 frontend instance — the workflow SSHes here on push to `QA` branch. | AWS Console → **EC2** → **Elastic IPs** → row `easyfix-crm-ui-qa` → copy the **Allocated IPv4 address** (e.g. `13.234.56.78`). |
-| `QA_USER` | Linux user the deploy SSH session connects as. | Always `ubuntu` for the Ubuntu 22.04 AMI used in the deployment guide. |
-| `QA_SSH_KEY` | Private deploy SSH key whose **public** half is in `~/.ssh/authorized_keys` on the QA EC2. Lets GitHub Actions log in without a password. | Generated locally per the [AWS Deployment Guide §4.1](AWS_DEPLOYMENT_GUIDE.md#41--create-the-deploy-ssh-key-ui-github-settings) — the file `easyfix-crm-ui-deploy` (NOT the `.pub` version). Open the file in any text editor and paste the **entire** contents including the `-----BEGIN OPENSSH PRIVATE KEY-----` and `-----END OPENSSH PRIVATE KEY-----` lines. |
-| `PROD_HOST` | Public IP (Elastic IP) of the **Production** EC2 frontend instance. | AWS Console → **EC2** → **Elastic IPs** → row `easyfix-crm-ui-prod` → copy the **Allocated IPv4 address**. |
-| `PROD_USER` | Linux user for SSH on Prod. | `ubuntu`. |
-| `PROD_SSH_KEY` | Same deploy private key — the **public** half was added to BOTH instances' `authorized_keys`, so one key authenticates both. (You can use a separate key per environment if you prefer stricter blast-radius — just generate two key pairs and add the matching public key on each instance.) | Same file as `QA_SSH_KEY`. |
-| `MAIL_USERNAME` | Gmail address that **sends** the failure-notification email. | Use the existing ops mailbox `ithelpdesk@easyfix.in` (matches the backend's `GMAIL_USER` already used by the email service). Or any Gmail account you control. |
-| `MAIL_PASSWORD` | App password for that Gmail account (NOT the regular login password). | [Google Account → Security → 2-Step Verification → App passwords](https://myaccount.google.com/apppasswords). Generate one named `github-actions-easyfix` → copy the 16-char password (no spaces) → paste here. Requires 2-Step Verification enabled on the account. |
+> **Rewritten 2026-08-25.** The previous version of this file described an
+> `ssh -i deploy_key USER@HOST 'git pull && npm ci && npm run build && pm2 reload'`
+> deploy, and stated that *"the deploy uses SSH, not the AWS API, so no AWS creds
+> needed in GitHub."* None of that has been true for some time — the pipeline
+> builds a Docker image in CI, pushes it to **ECR**, and restarts the container
+> over **SSM**. It needs AWS credentials and no SSH key at all. `QA_HOST`,
+> `QA_USER`, `QA_SSH_KEY`, `PROD_HOST`, `PROD_USER` and `PROD_SSH_KEY` are read
+> by nothing; if they still exist in repo settings you can delete them.
 
 ---
 
-## How each secret is consumed
+## ⚠️ Read this before adding anything
+
+**Every job that reads these declares `environment: 'Organisation Level Secrets'`.**
+The secrets live on a GitHub **Environment** of that exact name — spaces
+included — not on the repository. A secret added as a plain repository secret is
+invisible to those jobs, and the failure is not an error: the workflow falls
+through to a hardcoded fallback (below) or deploys with an empty value.
+
+**Reach the right UI:** GitHub repo → **Settings** → **Environments** →
+**Organisation Level Secrets** → **Environment secrets** → **Add secret**.
+
+---
+
+## The secrets
+
+| Secret | Purpose | Missing ⇒ | Where to get it |
+|---|---|---|---|
+| `AWS_ACCESS_KEY_ID` | IAM user for ECR push + SSM send-command. | **Hard fail** — every AWS step errors. | AWS Console → **IAM** → Users → the CI user → **Security credentials** → *Create access key*. Needs ECR push and `ssm:SendCommand` on the two instances. |
+| `AWS_SECRET_ACCESS_KEY` | Pairs with the above. | **Hard fail.** | Shown once at key creation. Not retrievable later — rotate if lost. |
+| `AWS_REGION` | Region for ECR and SSM. | Silent fallback → `ap-south-1`. | `ap-south-1`. Both ECR and the EC2 hosts live there. |
+| `ECR_REGISTRY` | Registry host the image is pushed to. | Silent fallback → `902810393464.dkr.ecr.ap-south-1.amazonaws.com`. | AWS Console → **ECR** → **Repositories** → the *URI* column, up to the first `/`. |
+| `ECR_REPOSITORY_CRM_UI` | Repository name inside that registry. | Silent fallback → `easyfix/crm-ui`. | Same screen, the part after the `/`. |
+| `QA_API_URL` | Backend base URL **baked into the JS bundle** for QA. | Warning + fallback → `http://10.30.2.30:5100/api`. | `https://qa.backend.easyfix.in/api`. **Must end in `/api`** — see below. |
+| `PROD_API_URL` | Same, for Production. | Warning + fallback → `http://10.30.2.40:5100/api`. | The production backend origin + `/api`. **Must end in `/api`.** |
+| `QA_INSTANCE_ID` | EC2 instance SSM restarts the QA container on. | Silent fallback → `i-032aa9d2942305364`. | AWS Console → **EC2** → **Instances** → the shared QA box → **Instance ID**. |
+| `PROD_FRONTEND_INSTANCE_ID` | EC2 instance for Production. **Note the `FRONTEND`** — the UI and backend split onto separate prod hosts on 2026-06-03, and the backend repo reads `PROD_BACKEND_INSTANCE_ID`. | **Deploy fails** — no fallback, by design. An empty value is refused rather than guessed. | AWS Console → **EC2** → **Instances** → the UI-only prod host (runs `crm-ui`, `client-ui`, `dozzle`) → **Instance ID**. |
+| `MAIL_USERNAME` | *Optional.* Gmail address that sends the failure alert to `harshit@channelplay.in`. | Alert step is skipped; the deploy still fails normally. | The ops mailbox `ithelpdesk@easyfix.in`, or any Gmail you control. |
+| `MAIL_PASSWORD` | *Optional.* Gmail **App Password** (not the login password). | SMTP auth fails; nothing else breaks. | [Google Account → Security → App passwords](https://myaccount.google.com/apppasswords). Requires 2-Step Verification. |
+
+### The fallbacks are the thing to understand
+
+Most values above have a hardcoded default, because an account id or a region is
+public knowledge and a transient secret-access misconfiguration should not block
+a deploy. The consequence is that **a missing secret usually looks like a
+successful deploy**, not an error — it just quietly uses the default.
+
+Only two things behave differently, and both on purpose:
+
+- `PROD_FRONTEND_INSTANCE_ID` has **no** fallback. A wrong instance id on a live
+  host is a much bigger blast radius than a failed deploy.
+- `QA_API_URL` / `PROD_API_URL` emit a `::warning::` when they fall back, so the
+  run is annotated rather than silent.
+
+### Why `*_API_URL` must end with `/api`
+
+`src/lib/api.ts` builds request URLs as `${NEXT_PUBLIC_API_URL}${path}` where
+`path` is `/admin/…` with no `/api` prefix, and the backend serves at
+`/api/admin/…`. Drop the suffix and every request 404s. The Dockerfile checks
+this and fails the build, so a bad value is caught in CI rather than in the
+browser — but it means a typo here breaks the build, not just the app.
+
+The value is read at **build** time and baked into the static JS chunks. Changing
+it requires a rebuild; editing anything on the server has no effect.
+
+---
+
+## What the pipeline actually does
 
 ```
-┌─────────────────────────────────┐
-│   push to QA / Production       │
-└───────────────┬─────────────────┘
-                ▼
-   ┌─────────── deploy job ───────────┐
-   │                                  │
-   │  Resolve target host             │
-   │  ├─ branch=QA   → QA_HOST/USER/KEY
-   │  └─ branch=Prod → PROD_HOST/USER/KEY
-   │                                  │
-   │  Set up SSH key                  │
-   │  └─ writes <KEY> to ~/.ssh/deploy_key
-   │                                  │
-   │  Deploy via SSH                  │
-   │  └─ ssh -i deploy_key  USER@HOST 'git pull && npm ci && npm run build && pm2 reload'
-   │                                  │
-   │  Verify health                   │
-   │  └─ curl http://HOST:5180/       │  ← EIP, not domain
-   │                                  │
-   │  On failure: Email step          │
-   │  └─ MAIL_USERNAME + MAIL_PASSWORD → smtp.gmail.com:465 → harshit@channelplay.in
-   └──────────────────────────────────┘
+push to QA / Production   (or Actions → Run workflow)
+      │
+      ├─ precheck            typecheck + lint on a github-hosted runner
+      │
+      ├─ build-and-push      runs-on: ubuntu-24.04-arm  (native arm64;
+      │                      QEMU emulation crashed V8 during npm ci)
+      │   ├─ resolve API URL for the branch
+      │   ├─ log in to ECR                      AWS_ACCESS_KEY_ID / SECRET
+      │   ├─ resolve the technician-app mirror bundle   ← no secret, see below
+      │   └─ docker build --build-arg NEXT_PUBLIC_API_URL=…
+      │                   --build-arg MIRROR_APP_VERSION=…
+      │      push  <env>-<sha7>  and  <env>-latest      ECR_REGISTRY / _CRM_UI
+      │
+      └─ deploy
+          ├─ resolve instance id for the branch    QA_INSTANCE_ID |
+          │                                        PROD_FRONTEND_INSTANCE_ID
+          ├─ (prod only) ship deploy/docker-compose.prod-frontend.yml
+          ├─ SSM send-command on the instance:
+          │     update CRM_UI_IMAGE in /opt/easyfix/.env
+          │     docker compose pull crm-ui
+          │     docker compose up -d --no-deps --force-recreate crm-ui
+          │     wait for HEALTHY
+          ├─ smoke-test  curl http://127.0.0.1:5180/login   (~70s budget)
+          └─ on failure: email          MAIL_USERNAME / MAIL_PASSWORD
 ```
 
----
-
-## Step-by-step: add the secrets in the UI
-
-1. Open the repo on GitHub → **Settings** → **Secrets and variables** → **Actions**.
-2. Click **New repository secret** (top right, green button).
-3. **Name** field: type the secret name from the table above (e.g. `QA_HOST`).
-4. **Secret** field: paste the value.
-5. Click **Add secret**.
-6. Repeat for each row in the table. Once added, GitHub shows them as `••• Updated N seconds ago` — values are write-only after creation (you can rotate but not view).
+No SSH anywhere. The runner never opens a shell on the host — SSM runs the
+commands through the AWS API, which is why the AWS credentials are the only
+access the pipeline needs.
 
 ---
 
-## Rotating a secret
+## Adding or rotating a secret
 
-GitHub UI:
-- Same place: **Settings** → **Secrets and variables** → **Actions** → click the secret name → **Update**.
-- Paste the new value → **Update secret**.
-- Next workflow run picks up the new value automatically; in-flight runs keep using the old one.
+1. Repo → **Settings** → **Environments** → **Organisation Level Secrets**.
+2. **Environment secrets** → **Add secret** (or click an existing name to update).
+3. Name it **exactly** as in the table. `PROD_FRONTEND_INSTANCE_ID` is the one
+   people get wrong — the header comment in `deploy.yml` said `PROD_INSTANCE_ID`
+   until 2026-08-25, and that name is read by nothing.
+4. Paste the value → **Add secret**.
 
-When to rotate:
-- **`*_SSH_KEY`**: if the private key file leaks, or annually as policy. Generate a new key pair, replace the public key in `~/.ssh/authorized_keys` on both EC2s, then update this secret.
-- **`MAIL_PASSWORD`**: if the Gmail App Password is revoked, or if the sending account changes. Re-generate via the Google App Passwords page.
-- **`*_HOST`**: only if you reallocate the Elastic IP (rare — EIPs are sticky).
+Values are write-only after creation. The next run picks up a rotated value; runs
+already in flight keep the old one.
 
----
-
-## Optional: environment-scoped secrets
-
-For stricter prod control, you can scope `PROD_*` secrets to a [GitHub Environment](https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment) named `production` and require manual approval before the deploy job runs. UI walkthrough:
-
-1. Repo → **Settings** → **Environments** → **New environment** → name `production` → **Configure environment**.
-2. ☑ Required reviewers → add yourself + one teammate.
-3. Move `PROD_HOST`, `PROD_USER`, `PROD_SSH_KEY` from repo-level secrets into this environment.
-4. In `deploy.yml`, the deploy job for the `Production` branch needs `environment: production` added at the job level (current workflow doesn't gate; add if you want approvals).
-
-The current workflow is intentionally simpler — push to `Production` → auto-deploys. Add the environment gate when team grows or compliance demands review trail.
+**When to rotate:** the AWS keys if they leak or on policy schedule (rotate in IAM
+first, then here — the pipeline breaks in between). `MAIL_PASSWORD` if the App
+Password is revoked. The instance ids only if an instance is replaced.
 
 ---
 
-## Verifying the secrets work end-to-end
+## Verifying end to end
 
-After adding all secrets:
-1. GitHub UI → **Actions** tab → pick `Deploy to AWS EC2` → **Run workflow** → choose `qa` from the dropdown → **Run workflow**.
-2. Watch the run — `build` job runs first (~3 min), then `deploy` (~5 min).
-3. If `Set up SSH key` step succeeds but `Deploy via SSH` fails with `Permission denied (publickey)`: the `*_SSH_KEY` value has stray whitespace or the matching public key isn't on the EC2. Re-paste the secret carefully (preserve the trailing newline).
-4. If `Notify by email on failure` errors with `535 Authentication failed`: the `MAIL_PASSWORD` is wrong or 2-Step Verification isn't enabled on the Gmail account.
+1. **Actions** tab → **Deploy CRM_UI (CI build → ECR → SSM pull)** → **Run
+   workflow** → target `QA` → **Run workflow**.
+2. `precheck` (~2 min) → `build-and-push` (~5 min) → `deploy` (~3 min).
 
----
+Reading a failure:
 
-## What is NOT in this list
-
-These are **not** GitHub secrets — they live elsewhere:
-
-| Variable | Where it lives |
+| Symptom | Cause |
 |---|---|
-| `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_APP_ENV`, `PORT` | `~/Easyfix_CRM_UI/.env.local` on each EC2 (see [AWS Deployment Guide §2](AWS_DEPLOYMENT_GUIDE.md#phase-2--configure-the-ec2-instance-one-time-bootstrap)). The build is triggered on the EC2 itself, so the build picks up `.env.local` automatically. |
-| AWS account / IAM credentials | The deploy uses **SSH**, not the AWS API, so no AWS creds needed in GitHub. The EC2 instance is the only thing the workflow touches. |
-| TLS certificate / private key | Managed by **Let's Encrypt + Certbot** on the EC2 itself; auto-renewal cron. Never pulled through GitHub. |
+| AWS steps fail immediately | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` missing, or the job lost `environment: 'Organisation Level Secrets'`. |
+| `::warning:: Secret for qa API URL is empty` | `QA_API_URL` is not set on the environment. The build continues on the fallback — the bundle points at an internal IP. |
+| Build fails on the API URL sanity check | The value does not end in `/api`. |
+| `No mirror bundle found at mirror-app/…` | The committed tarball is missing. See below. |
+| Deploy fails with an empty instance id | `PROD_FRONTEND_INSTANCE_ID` is missing, or was added under the old `PROD_INSTANCE_ID` name. |
+| Smoke test 000 for ~70s | The container came up unhealthy. Check `dozzle` on the host, or the SSM command output in the run log. |
 
-If you ever migrate to ECS Fargate / S3 / CloudFront, you'll add `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (or — better — OIDC role ARN) to this table.
+---
+
+## Not a secret: the technician-app mirror bundle
+
+The App View feature serves a static web export of the technician app from
+`public/technician-mirror/<version>/`. It reaches the image as a **committed
+tarball** at `mirror-app/technician-mirror-<version>.tar.gz`, so it needs **no
+secret and no cross-repo access**.
+
+`deploy.yml` asserts the tarball is present and derives `MIRROR_APP_VERSION` from
+its filename. To refresh it after an app release:
+
+```bash
+cd ../Easyfix_Technician_Mobile_Application && npm run export:mirror
+tar -czf ../Easyfix_CRM_UI/mirror-app/technician-mirror-<version>.tar.gz -C dist-mirror .
+```
+
+Delete the old tarball in the same commit — two of them is a hard failure, because
+the Dockerfile takes the first match and would otherwise silently pick one.
+
+---
+
+## Not GitHub secrets at all
+
+| Value | Where it lives |
+|---|---|
+| Runtime container env (`CRM_UI_IMAGE`, ports) | `/opt/easyfix/.env` on the EC2 host, rewritten by the SSM step each deploy. |
+| `NEXT_PUBLIC_API_URL` | Baked into the bundle at build time from `QA_API_URL` / `PROD_API_URL`. Not read at runtime — editing it on the host does nothing. |
+| Backend secrets (DB, JWT, S3, SMTP…) | The `EasyFix_Backend` repo's own environment. This repo holds none. |
+| TLS certificates | Managed on the host. Never passed through GitHub. |

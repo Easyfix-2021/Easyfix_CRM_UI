@@ -1,5 +1,25 @@
 # AWS Deployment Guide — Easyfix_CRM_UI (Next.js Frontend)
 
+> ## ⚠️ SUPERSEDED — this describes a pipeline that no longer runs
+>
+> **Do not follow this to provision or debug a deploy.** It documents an
+> **EC2 + Nginx + PM2** setup where GitHub Actions SSHes to the host and runs
+> `git pull && npm ci && npm run build && pm2 reload`. The live pipeline does
+> none of that: CI builds a **Docker image**, pushes it to **ECR**, and restarts
+> the container over **AWS SSM**. There is no SSH key, no PM2, and no build on
+> the host.
+>
+> For anything deploy-related, use
+> **[GITHUB_SECRETS.md](GITHUB_SECRETS.md)** — it documents the real pipeline,
+> the real secret names, and how each failure reads — and
+> [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) itself.
+>
+> Kept only for the one-time EC2/VPC/Elastic-IP groundwork in the early phases,
+> which is still broadly accurate. Every SSH, PM2, Nginx-reload and
+> GitHub-secret instruction below is dead. Flagged 2026-08-25; a rewrite of the
+> surviving parts has not been done.
+
+
 This guide walks through deploying the **CRM frontend** (`Easyfix_CRM_UI`, Next.js 15 App Router) to AWS using **EC2 + Nginx + PM2**, with **GitHub Actions** auto-deploying on `QA` and `Production` branch merges.
 
 > **Companion guide:** the backend (`EasyFix_Backend`, Node.js/Express) has its own [AWS_DEPLOYMENT_GUIDE.md](../../EasyFix_Backend/docs/AWS_DEPLOYMENT_GUIDE.md) — set up in parallel; this frontend proxies `/api/*` to it via Nginx.

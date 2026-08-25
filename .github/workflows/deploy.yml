@@ -32,7 +32,12 @@
 #
 # Required GitHub Environment (org-level, name "Organisation Level Secrets") secrets:
 #   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
-#   QA_INSTANCE_ID, PROD_INSTANCE_ID
+#   QA_INSTANCE_ID, PROD_FRONTEND_INSTANCE_ID
+#     ^ FRONTEND, not PROD_INSTANCE_ID. This header said the latter until
+#       2026-08-25; nothing reads that name, and because the prod branch
+#       has no fallback a secret provisioned under it fails the deploy
+#       with an empty instance id. The UI and backend split onto separate
+#       prod hosts on 2026-06-03 — the backend reads PROD_BACKEND_INSTANCE_ID.
 #   QA_API_URL                https://qa.backend.easyfix.in/api  (must end with /api)
 #   PROD_API_URL              (when prod is ready — must end with /api)
 #   ECR_REGISTRY              902810393464.dkr.ecr.ap-south-1.amazonaws.com
