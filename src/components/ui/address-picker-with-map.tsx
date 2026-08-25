@@ -39,6 +39,10 @@ import { Label } from './label';
 import { CitySelect } from './city-select';
 import { AddressAutocomplete } from './address-autocomplete';
 import { api, ApiError } from '@/lib/api';
+// Maps script loader + API-key resolution moved to a shared module (2026-08-25)
+// so LiveLocationPopover reuses the SAME script load and key lookup rather
+// than duplicating them. See the docblocks in src/lib/google-maps.ts.
+import { loadGoogleMaps } from '@/lib/google-maps';
 import { showToast } from './toast';
 
 export type AddressValue = {
@@ -100,81 +104,10 @@ type Props = {
 };
 
 /*
- * Module-level loader for the Google Maps JS API. Multiple instances
- * of this component share one script tag (matches Google's "load
- * once per page" rule); we resolve to the loaded `google.maps`
- * namespace whichever instance hits the load first.
- *
- * The Maps types are deliberately `unknown` here because we don't
- * bundle `@types/google.maps` — we cast at call sites to keep the
- * tsconfig lean and avoid pulling in a 200kb d.ts file just for one
- * component.
- */
-type GMaps = {
-  Map: new (el: HTMLElement, opts: Record<string, unknown>) => unknown;
-  Marker: new (opts: Record<string, unknown>) => {
-    setPosition: (latLng: { lat: number; lng: number } | unknown) => void;
-    getPosition: () => { lat: () => number; lng: () => number } | null;
-    addListener: (event: string, cb: () => void) => unknown;
-  };
-};
-type GMapsWindow = { google?: { maps: GMaps } };
-let mapsLoader: Promise<GMaps> | null = null;
-/*
- * Resolve the Google Maps JS API key. Next.js bakes
- * NEXT_PUBLIC_* env vars at BUILD time — so a QA deploy that shipped
- * before the key was provisioned can't pick it up via a runtime env
- * change. Fall back to `/admin/maps/config` (BE-owned) which reads
- * GOOGLE_MAPS_API_KEY_PUBLIC || GOOGLE_MAPS_API_KEY at request time.
- * This lets ops fix QA without a FE rebuild.
- *
- * Cache the resolved key on the module so the API call only happens
- * once per page load even if multiple AddressPickerWithMap instances
- * mount (Book New Call + Confirm & Schedule on the same operator
- * session).
- */
-let _cachedRuntimeKey: string | null | undefined = undefined;
-async function resolveApiKey(): Promise<string | null> {
-  const baked = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
-  if (baked) return baked;
-  if (_cachedRuntimeKey !== undefined) return _cachedRuntimeKey;
-  try {
-    const r = await api.get<{ apiKey: string | null }>('/admin/maps/config');
-    _cachedRuntimeKey = r.apiKey || null;
-  } catch {
-    _cachedRuntimeKey = null;
-  }
-  return _cachedRuntimeKey;
-}
-function loadGoogleMaps(): Promise<GMaps> {
-  if (mapsLoader) return mapsLoader;
-  mapsLoader = new Promise((resolve, reject) => {
-    if (typeof window === 'undefined') { reject(new Error('No window')); return; }
-    const w = window as unknown as GMapsWindow;
-    if (w.google?.maps) { resolve(w.google.maps); return; }
-    resolveApiKey().then((key) => {
-      if (!key) { reject(new Error('Google Maps API key not configured (set NEXT_PUBLIC_GOOGLE_MAPS_API_KEY at build, or GOOGLE_MAPS_API_KEY on the backend for the /admin/maps/config fallback)')); return; }
-      const script = document.createElement('script');
-      // No &libraries=places — autocomplete is backend-proxied (see AddressAutocomplete), so the client never needs the Places JS library.
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${key}&v=weekly`;
-      script.async = true;
-      script.defer = true;
-      script.onerror = () => reject(new Error('Failed to load Google Maps JS API'));
-      script.onload = () => {
-        const ww = window as unknown as GMapsWindow;
-        if (ww.google?.maps) resolve(ww.google.maps);
-        else reject(new Error('Maps loaded but namespace missing'));
-      };
-      document.head.appendChild(script);
-    });
-  });
-  return mapsLoader;
-}
-
-/*
  * Module-level singleton for the MAP INSTANCE itself — a sibling to
- * `mapsLoader` above, which only singleton-izes the *script*. Google bills
- * Dynamic Maps per `new google.maps.Map()` call, and every mount of this
+ * the `mapsLoader` in src/lib/google-maps.ts, which only singleton-izes the
+ * *script*. Google bills Dynamic Maps per `new google.maps.Map()` call, and
+ * every mount of this
  * component used to pay that cost again. That's expensive here specifically
  * because AddressPickerWithMap mounts inside JobModal's Radix <Dialog>
  * (unmounts its content on close) and inside a collapsible <Section>

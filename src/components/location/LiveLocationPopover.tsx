@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MapPin, ExternalLink, RefreshCw, AlertTriangle } from 'lucide-react';
 import {
   Dialog,
@@ -13,6 +13,8 @@ import { api, ApiError, type LiveLocationPing } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useUiFlags } from '@/lib/hooks';
+import { loadGoogleMaps } from '@/lib/google-maps';
+import { palette } from '@/brand/palette';
 
 /*
  * LiveLocationPopover — shared live-technician-location viewer.
@@ -69,6 +71,50 @@ function classify(ping: LiveLocationPing | null): Freshness {
   if (Number.isNaN(t)) return 'unknown-age';
   return Date.now() - t <= LIVE_WINDOW_MS ? 'live' : 'stale';
 }
+
+/*
+ * Technician-on-a-two-wheeler marker, as an inline SVG data URI.
+ *
+ * A data URI rather than a file under /public: no second network request, no
+ * new asset to deploy, and — the part that actually matters here — the fill is
+ * chosen at RUNTIME, so `live` and `stale` are the same mark in two colours
+ * instead of two hand-drawn files.
+ *
+ * The colours are INTERPOLATED from src/brand/palette.ts and never written as
+ * literals. `npm run check:brand` rejects a hex code in any file but the
+ * palette, and it is right to: a pin hard-coded to the brand red is a colour
+ * the rebrand seam cannot reach, and this one would silently keep the old
+ * identity through a rebrand.
+ *
+ * Drawn in a 44x52 viewBox and rendered at 40x47. No `scaledSize` / `anchor`
+ * is passed at the call site because we don't need one — Google anchors an
+ * icon at the bottom-centre of its image by default, which is exactly the
+ * teardrop's tip, so the tip sits on the reported coordinate.
+ */
+function bikePinDataUri(body: string, ink: string): string {
+  const svg = [
+    '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="47" viewBox="0 0 44 52">',
+    `<path d="M22 51c0 0 18-18.6 18-31a18 18 0 1 0-36 0c0 12.4 18 31 18 31z" fill="${body}" stroke="${ink}" stroke-width="2.5" stroke-linejoin="round"/>`,
+    `<g fill="none" stroke="${ink}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">`,
+    '<circle cx="13" cy="26.5" r="3.6"/>',
+    '<circle cx="31" cy="26.5" r="3.6"/>',
+    '<path d="M13 26.5l6.5-6.5H26l5 6.5"/>',
+    '<path d="M26 20l3-4.5h3.5"/>',
+    '<path d="M22.5 19.5l1.5-6"/>',
+    '<path d="M24 15l5 1"/>',
+    '</g>',
+    `<circle cx="24.5" cy="10.5" r="3.4" fill="${ink}"/>`,
+    '</svg>',
+  ].join('');
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
+/*
+ * No accuracy reported → draw a nominal ring so the live state still reads as
+ * live on the map. It is a presence indicator at that point, not a claimed
+ * precision, which is why it is deliberately small.
+ */
+const NOMINAL_ACCURACY_M = 40;
 
 export type LiveLocationSource = 'job' | 'easyfixer';
 
@@ -158,6 +204,169 @@ export function LiveLocationPopover({
     return () => clearInterval(t);
   }, [open, id, freshness, fetchOnce]);
 
+  /* ── The map ─────────────────────────────────────────────────────────────
+   *
+   * A PICTURE of where he is, not a tool. The position is a database record
+   * that Ops cannot correct from here, so the map offers no affordance that
+   * suggests otherwise — see the options block in the build effect below.
+   *
+   * One `new maps.Map()` per open. AddressPickerWithMap goes further and
+   * re-parents a single module-level Map across mounts because Google bills
+   * per construction; that machinery is worth it for a picker that remounts on
+   * every Section collapse, and not worth it for a modal an operator opens a
+   * handful of times a shift. If this popover ever ends up on a hot path, copy
+   * the `sharedMapCore` pattern from that file rather than inventing a second.
+   */
+  const mapNodeRef = useRef<HTMLDivElement | null>(null);
+  // Minimal call-site surface (.panTo / .setPosition / .setIcon / .setCenter),
+  // same reason the loader's GMaps stub is hand-written: no @types/google.maps.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mapRef = useRef<any>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const markerRef = useRef<any>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const circleRef = useRef<any>(null);
+  // Guards the async build against a double-fire (Strict Mode, or a re-render
+  // landing before loadGoogleMaps() resolves) minting two Maps into one div.
+  const buildStartedRef = useRef(false);
+  const [mapsError, setMapsError] = useState<string | null>(null);
+
+  // Coordinates arrive as MySQL DECIMALs and can surface as strings — coerce
+  // once here so every consumer below is dealing in real numbers.
+  const lat = latest != null ? Number(latest.latitude) : Number.NaN;
+  const lng = latest != null ? Number(latest.longitude) : Number.NaN;
+  const hasFix = Number.isFinite(lat) && Number.isFinite(lng);
+  const accuracyM =
+    latest?.accuracy != null && Number(latest.accuracy) > 0
+      ? Number(latest.accuracy)
+      : NOMINAL_ACCURACY_M;
+
+  /*
+   * Differentiate live from not-live ON THE MAP, not only in the caption —
+   * ops glance at the picture. Live: brand-red rider, green accuracy ring
+   * (plus the CSS pulse rendered over the canvas). Otherwise: an ink rider
+   * and a faint grey ring, so a last-known position reads as inert.
+   */
+  const pinUrl = useMemo(
+    () => bikePinDataUri(freshness === 'live' ? palette.red500 : palette.ink500, palette.white),
+    [freshness],
+  );
+  const ringStyle = useMemo(
+    () =>
+      freshness === 'live'
+        ? { strokeColor: palette.success, strokeOpacity: 0.9, strokeWeight: 2, fillColor: palette.success, fillOpacity: 0.18 }
+        : { strokeColor: palette.ink500, strokeOpacity: 0.5, strokeWeight: 1, fillColor: palette.ink500, fillOpacity: 0.1 },
+    [freshness],
+  );
+
+  // Build once per open, as soon as there is a fix to centre on.
+  useEffect(() => {
+    if (!open || !hasFix || buildStartedRef.current || !mapNodeRef.current) return undefined;
+    buildStartedRef.current = true;
+    const node = mapNodeRef.current;
+    let cancelled = false;
+    loadGoogleMaps()
+      .then((maps) => {
+        if (cancelled || mapRef.current) return;
+        const center = { lat, lng };
+        /*
+         * EVERY interaction is off ON PURPOSE. Do not re-enable one.
+         *
+         * What this map shows is a row in the database — the last GPS ping the
+         * technician's device sent. Ops cannot change where he is, and a map
+         * you can pan, zoom and drop a pin on says the opposite: it reads as an
+         * editor, like the one in Book New Call, and invites someone to
+         * "correct" a position that is a record of fact. The read-only surface
+         * is the honesty of the feature, not over-configuration.
+         *
+         * The two things that still move are ours, not the operator's: we
+         * reposition the marker and pan to follow a fresh `live` fix. Anyone
+         * who genuinely needs an interactive map has "Open in Google Maps"
+         * below — a plain URL, no key, no editing pretence.
+         */
+        mapRef.current = new maps.Map(node, {
+          center,
+          zoom: 15,
+          disableDefaultUI: true,
+          gestureHandling: 'none',
+          draggable: false,
+          scrollwheel: false,
+          disableDoubleClickZoom: true,
+          keyboardShortcuts: false,
+          clickableIcons: false,
+        });
+        markerRef.current = new maps.Marker({
+          position: center,
+          map: mapRef.current,
+          // Both default to false. Stated anyway so the next reader sees the
+          // read-only intent here too and doesn't "helpfully" turn one on.
+          draggable: false,
+          clickable: false,
+          icon: { url: pinUrl },
+        });
+        circleRef.current = new maps.Circle({
+          map: mapRef.current,
+          center,
+          radius: accuracyM,
+          clickable: false,
+          ...ringStyle,
+        });
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setMapsError(e instanceof Error ? e.message : 'Map unavailable');
+      });
+    return () => { cancelled = true; };
+    // pinUrl / ringStyle / accuracyM are read for the INITIAL paint only; the
+    // sync effect below owns every subsequent change, so they are not deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, hasFix]);
+
+  /*
+   * MOVE the pin, never recreate it.
+   *
+   * Recreating the marker on each 15s poll makes it blink out and back, and
+   * throws away the map's animation state mid-pan. setPosition + panTo is both
+   * cheaper and the only thing that looks like a technician riding.
+   */
+  useEffect(() => {
+    if (!open || !hasFix || !mapRef.current || !markerRef.current) return;
+    const pos = { lat, lng };
+    markerRef.current.setPosition(pos);
+    markerRef.current.setIcon({ url: pinUrl });
+    mapRef.current.panTo(pos);
+    if (circleRef.current) {
+      circleRef.current.setCenter(pos);
+      circleRef.current.setRadius(accuracyM);
+      circleRef.current.setOptions(ringStyle);
+    }
+  }, [open, hasFix, lat, lng, accuracyM, pinUrl, ringStyle]);
+
+  /*
+   * Teardown, keyed on the two conditions that render the container div.
+   *
+   * `open` false is the obvious one (Radix unmounts DialogContent). `hasFix`
+   * false is the one that bites: the fetch effect blanks `latest` whenever the
+   * popover is pointed at a different row, and the map lives inside the
+   * `latest != null` branch — so the div goes away mid-open too. Either way the
+   * Map is left attached to nothing, so drop the refs and let the next fix
+   * build against the fresh node rather than writing into a detached tree.
+   * The error clears with them, giving a transient script failure one more try.
+   *
+   * Nothing to unsubscribe: this map registers no listeners at all, which is
+   * the other quiet benefit of making it read-only.
+   */
+  useEffect(() => {
+    if (!open || !hasFix) return undefined;
+    return () => {
+      mapRef.current = null;
+      markerRef.current = null;
+      circleRef.current = null;
+      buildStartedRef.current = false;
+      setMapsError(null);
+    };
+  }, [open, hasFix]);
+
   // Global map-clickability toggle. When off, the "Open in Google Maps" link
   // is rendered as a disabled, non-navigable span.
   const { mapClickable } = useUiFlags();
@@ -241,6 +450,38 @@ export function LiveLocationPopover({
                     <strong className="font-semibold text-foreground">Last known position — age unknown.</strong>
                     {' '}Recorded by the older app, which did not store a timestamp.
                   </span>
+                </div>
+              )}
+
+              {/*
+                * The map itself. Honest no-key fallback: if the loader can't
+                * resolve an API key there is nothing to draw, so say so in one
+                * line and let the coordinates and the Google Maps link below
+                * carry the feature, rather than parking a broken grey box here.
+                */}
+              {mapsError ? (
+                <p className="text-xs text-muted-foreground">
+                  {mapsError.includes('API key not configured')
+                    ? 'Map preview unavailable — no Google Maps key is configured for this environment.'
+                    : `Map preview unavailable — ${mapsError}.`}
+                  {' '}The coordinates below and the Google Maps link still work.
+                </p>
+              ) : (
+                <div className="relative h-[200px] w-full overflow-hidden rounded-md border bg-muted">
+                  <div ref={mapNodeRef} className="h-full w-full" />
+                  {/*
+                    * Live pulse. Rendered over the canvas rather than animated
+                    * through the Maps API because the map cannot be panned or
+                    * zoomed — so the reported position is always at the exact
+                    * centre of this box, and a CSS ring there needs no timer,
+                    * no overlay class and no cleanup of its own.
+                    */}
+                  {freshness === 'live' && (
+                    <span
+                      aria-hidden
+                      className="pointer-events-none absolute left-1/2 top-1/2 -ml-4 -mt-4 inline-flex h-8 w-8 animate-ping rounded-full bg-success opacity-40"
+                    />
+                  )}
                 </div>
               )}
 
