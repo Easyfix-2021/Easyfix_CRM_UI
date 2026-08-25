@@ -40,6 +40,7 @@ import { useFetch, invalidateFetch } from '@/lib/hooks';
 import { APP_VIEW_PANEL_ATTR } from '@/lib/portal-markers';
 import { useDraggablePanel } from '@/components/calls/useDraggablePanel';
 import { clearMirrorStorage, seedMirrorStorage } from '@/lib/mirror-storage';
+import { showToast } from '@/components/ui/toast';
 
 /*
  * Which bundle this image ships. Set by the Dockerfile from the single
@@ -58,6 +59,18 @@ const FRAME_H = 844;
 
 /* Panel chrome above and below the frame (header, version banner, footer). */
 const CHROME_H = 190;
+/*
+ * Horizontal padding of the panel body (`p-3` => 12px each side). The panel's
+ * width is derived from the phone, so this has to travel with it.
+ */
+const BODY_PAD_X = 24;
+/*
+ * Floor for the panel width, set by the HEADER rather than the phone: the grip,
+ * the device icon, a truncating name and three 28px buttons. At MIN_SCALE the
+ * phone is only 175px wide, and sizing the panel to that would clip the close
+ * button — the one control an operator must always be able to reach.
+ */
+const MIN_PANEL_W = 260;
 
 const MIN_SCALE = 0.45;
 const MAX_SCALE = 1;
@@ -212,13 +225,54 @@ function AppViewPanel({ target, onClose }: { target: AppViewTarget; onClose: () 
     setNonce(Date.now());
   }, []);
 
+  /*
+   * Say out loud when the mirror refuses an action.
+   *
+   * The buttons inside the frame are deliberately still live — disabling ~100
+   * of them would drift on the next feature, and an invisible click-blocker
+   * would kill the scrolling and tab-bar taps that are how an operator
+   * navigates. So a press reaches the app, the transport refuses it, and the
+   * app shows its own error INSIDE the frame — which reads as "his app is
+   * broken" rather than "this view is read-only".
+   *
+   * The bundle posts here instead, so the correction appears outside the phone,
+   * in the CRM's voice. Origin-checked: the frame is same-origin, and a message
+   * from anywhere else is ignored rather than trusted.
+   */
+  useEffect(() => {
+    function onMessage(e: MessageEvent) {
+      if (e.origin !== window.location.origin) return;
+      const data = e.data as { type?: string; method?: string } | null;
+      if (!data || data.type !== 'easyfix.mirror.blocked') return;
+      showToast({
+        variant: 'warning',
+        message: 'Read-only app view — that action was not sent to the technician\u2019s account.',
+      });
+    }
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
+
+  // Below ~0.6 scale the header floor wins, so the phone is centred rather
+  // than pinned left — see MIN_PANEL_W.
+  const panelW = Math.max(FRAME_W * scale + BODY_PAD_X, MIN_PANEL_W);
+
   const technicianVersion = (data?.technicianAppVersion || '').trim();
   const versionMatches = technicianVersion !== '' && technicianVersion === MIRROR_VERSION;
 
   return createPortal(
     <div
       ref={containerRef}
-      style={style}
+      /*
+       * WIDTH IS DERIVED FROM THE PHONE, not from the text.
+       *
+       * A `fixed` flex box with no width sizes to fit-content, and text resolves
+       * at max-content — so the version banner and the read-only footer, both
+       * long single sentences, were setting the panel's width and leaving a
+       * band of empty card to the right of the phone. Pinning the width to the
+       * scaled frame makes those two lines wrap into it instead.
+       */
+      style={collapsed ? style : { ...style, width: panelW }}
       {...APP_VIEW_PANEL_ATTR}
       className={cn(
         'fixed z-50 flex flex-col rounded-xl border border-border bg-card shadow-2xl',
@@ -328,7 +382,7 @@ function AppViewPanel({ target, onClose }: { target: AppViewTarget; onClose: () 
            */
           <div
             style={{ width: FRAME_W * scale, height: FRAME_H * scale }}
-            className="relative overflow-hidden"
+            className="relative mx-auto overflow-hidden"
           >
           <div
             style={{ transform: `scale(${scale})`, transformOrigin: 'top left' }}
