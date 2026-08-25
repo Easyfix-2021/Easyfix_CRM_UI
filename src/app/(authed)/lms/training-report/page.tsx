@@ -490,35 +490,28 @@ export default function TrainingReportPage() {
 
       <Card>
         <CardContent className="p-0">
-          {/* Fixed layout + colgroup so a long course name on one page doesn't
-              reflow the columns relative to another page. */}
-          <table className="data-table w-full" style={{ tableLayout: 'fixed' }}>
-            <colgroup>
-              {/*
-                Comments sit on their own lines, never trailing a <col /> after
-                a space. JSX strips whitespace that contains a newline but KEEPS
-                a same-line space between two expressions, so `<col />{/* x *\/}`
-                emits a " " text node — and a text node is illegal inside
-                <colgroup>, which React reports as a hydration error.
-              */}
-              {/* Technician */}
-              <col style={{ width: '17%' }} />
-              {/* Mobile */}
-              <col style={{ width: '11%' }} />
-              {/* Course */}
-              <col style={{ width: '17%' }} />
-              {/* Progress */}
-              <col style={{ width: '17%' }} />
-              {/* Score */}
-              <col style={{ width: '6%' }} />
-              {/* Assigned On */}
-              <col style={{ width: '10%' }} />
-              {/* Due Date — widest of the three date columns: it carries the
-                  Overdue chip and the days-left hint, not just a date. */}
-              <col style={{ width: '12%' }} />
-              {/* Completed On */}
-              <col style={{ width: '10%' }} />
-            </colgroup>
+          {/*
+            * Auto layout inside a horizontal scroller — the pattern every other
+            * data table here uses (customers/[id], settings/zones, …).
+            *
+            * This replaced `table-fixed` + a percentage colgroup. That gave
+            * stable column widths from page to page, but the percentages were a
+            * guess about content: "Assigned On" had 10%, which is narrower than
+            * "25 Aug 2026, 06:49 pm", so the timestamp ran under the Due Date
+            * column and the two read as one smeared cell.
+            *
+            * Auto layout sizes each column to its widest cell instead, and the
+            * scroller absorbs the overflow rather than the page squeezing the
+            * columns. The cost is honest: column widths can now shift slightly
+            * between pages as content changes. That is a smaller problem than
+            * two columns overlapping, and it is what the rest of the CRM does.
+            *
+            * whitespace-nowrap lives on the cells that must never wrap (dates,
+            * mobile) rather than on the table, so a long technician or course
+            * name can still wrap instead of forcing a very wide scroll.
+            */}
+          <div className="overflow-x-auto">
+          <table className="data-table w-full">
             <thead>
               <tr>
                 <SortHeader col="technician"     align="left"   sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Technician</SortHeader>
@@ -551,14 +544,18 @@ export default function TrainingReportPage() {
                 const completedOn = formatYmd(r.completion_date);
                 return (
                   <tr key={r.id}>
-                    <td className="!text-left font-medium truncate" title={r.technician_name ?? ''}>
+                    {/* max-w + truncate, not truncate alone: in an auto-layout
+                        table an unconstrained cell just grows, so `truncate`
+                        never ellipsizes. The cap lets short names size to
+                        content and only clips genuinely long ones. */}
+                    <td className="!text-left font-medium truncate max-w-[22ch]" title={r.technician_name ?? ''}>
                       {r.technician_name || <span className="text-muted-foreground">—</span>}
                     </td>
                     {/* Masked upstream — printed exactly as received. */}
-                    <td className="!text-left font-mono text-xs truncate">
+                    <td className="!text-left font-mono text-xs whitespace-nowrap">
                       {r.technician_mobile || <span className="text-muted-foreground font-sans">—</span>}
                     </td>
-                    <td className="!text-left truncate" title={r.course_name ?? ''}>
+                    <td className="!text-left truncate max-w-[28ch]" title={r.course_name ?? ''}>
                       {r.course_name || <span className="text-muted-foreground">—</span>}
                     </td>
                     <td className="!text-left">
@@ -647,6 +644,7 @@ export default function TrainingReportPage() {
               })}
             </tbody>
           </table>
+          </div>
         </CardContent>
       </Card>
 

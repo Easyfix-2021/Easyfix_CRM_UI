@@ -10,6 +10,7 @@ import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog';
 import { ToastHost } from '@/components/ui/toast';
 import { LiveCallProvider } from '@/components/calls/LiveCallContext';
 import { LiveCallPanel } from '@/components/calls/LiveCallPanel';
+import { AppViewPanelHost } from '@/components/easyfixer/AppViewPanel';
 import { WebCallProvider } from '@/components/calls/WebCallContext';
 import { WebCallPanel } from '@/components/calls/WebCallPanel';
 import { NoticeFlash } from '@/components/notice/NoticeFlash';
@@ -82,6 +83,10 @@ export default function AuthedLayout({ children }: { children: React.ReactNode }
               LiveCallPanel sits alongside it — both are portal/fixed
               overlays, rendered once at the root. */}
           <ToastHost />
+          {/* Floating technician App View — mounted here, not on the Easyfixers
+              page, so it survives navigation. The whole point is that an operator
+              can keep working while a technician is on the phone. */}
+          <AppViewPanelHost />
           <LiveCallPanel />
           <WebCallPanel />
           {/* Auto-flashes unread notices one at a time on login and on each

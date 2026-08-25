@@ -36,6 +36,7 @@ import { cn, formatDate, formatEasyfixerName } from '@/lib/utils';
 import { maskMobile } from '@/lib/format';
 import { EasyfixerModal, type EasyfixerModalMode } from '@/components/easyfixer/EasyfixerModal';
 import { EasyfixerActionMenu } from '@/components/easyfixer/EasyfixerActionMenu';
+import { openAppView } from '@/components/easyfixer/AppViewPanel';
 import { EasyfixerLifecycleChip } from '@/components/easyfixer/EasyfixerLifecycleChip';
 import { EasyfixerTransactionsModal } from '@/components/easyfixer/EasyfixerTransactionsModal';
 import { EasyfixerClientMappingModal } from '@/components/easyfixer/EasyfixerClientMappingModal';
@@ -701,17 +702,21 @@ export default function EasyfixersPage() {
     router.push('/coming-soon');
   }, [router]);
   /*
-   * App View — opens the read-only technician-app mirror
-   * (/easyfixers/:id/app-view). A plain sibling IconButton in the action
-   * cell rather than a DropdownMenuItem, matching the Live Location button
-   * beside it: the setTimeout(0) deferral the menu items need exists to let
-   * the dropdown's close pointer-up finish before a Dialog mounts, and this
-   * is a route navigation with no dialog to race. Same router.push shape as
-   * onRowEdit above, which is how the verification page is opened.
+   * Opens the FLOATING App View panel — not a route.
+   *
+   * This used to router.push to /easyfixers/[id]/app-view. That took the whole
+   * CRM away to show one thing, which is exactly wrong for the job: the
+   * operator is on the phone walking a technician through his screen and needs
+   * the technician's record, his jobs and their notes at the same time. The
+   * panel floats over whatever they are already doing and survives navigation,
+   * because it is mounted at the authed layout rather than by this page.
+   *
+   * No setTimeout(0) needed: openAppView only dispatches an event, so there is
+   * no dialog-close pointer event for a newly mounted surface to race.
    */
   const onRowAppView = useCallback((e: Ef) => {
-    router.push(`/easyfixers/${e.efr_id}/app-view`);
-  }, [router]);
+    openAppView({ efrId: e.efr_id, name: e.efr_name });
+  }, []);
 
   /*
    * Dev-only "Copy Dev URL" handler (2026-06-11). Hits the new
@@ -1430,7 +1435,10 @@ export default function EasyfixersPage() {
                 <SortHeader col="is_technician_verified" align="center" sortBy={sortKey} sortDir={sortDir} onSort={onSort}>Verified</SortHeader>
                 <SortHeader col="avg_rating"             align="right"  sortBy={sortKey} sortDir={sortDir} onSort={onSort}>Rating</SortHeader>
                 <SortHeader col="efr_status_label"       align="center" sortBy={sortKey} sortDir={sortDir} onSort={onSort}>Status</SortHeader>
-                <th className="!text-right whitespace-nowrap stick-col-head stick-right">Action</th>
+                {/* !pl-6 mirrors the body cell below. Padding applied to only
+                    one of th/td shifts the header 12px out of line with the
+                    icons it labels — the column stops reading as one column. */}
+                <th className="!text-right !pl-6 whitespace-nowrap stick-col-head stick-right">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -1773,7 +1781,19 @@ const EfRow = memo(function EfRow({
           fallbackTone={statusLabelTone(e.efr_status_label)}
         />
       </td>
-      <td className="!text-right stick-col stick-right">
+      {/*
+        * !pl-6 — extra breathing room on the LEFT of the sticky action column.
+        *
+        * The column to its left (Serviceable Pincode) is long and horizontally
+        * scrolled, so its text slides underneath this sticky cell. With only
+        * the shared `.data-table td` px-3, the last visible digits ended up
+        * touching the location icon and the two read as one control.
+        *
+        * `!` because `.data-table td` applies px-3 through @apply; a plain
+        * pl-6 is the same specificity and would win or lose on source order.
+        * The sibling !text-right is `!` for the same reason.
+        */}
+      <td className="!text-right !pl-6 stick-col stick-right">
         {/*
           * Live Location moved OUT of the 3-dot menu into this sibling
           * IconButton (2026-06-26). Opening it from a DropdownMenuItem race'd

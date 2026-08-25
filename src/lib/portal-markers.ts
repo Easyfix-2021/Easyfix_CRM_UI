@@ -55,6 +55,18 @@ export const CALL_PANEL_SELECTOR = `[${CALL_PANEL_MARKER}]`;
 export const CALL_PANEL_ATTR = { [CALL_PANEL_MARKER]: '' } as const;
 
 /**
+ * Floating technician App View panel (AppViewPanel). Portals to
+ * document.body and is explicitly designed to stay open WHILE the operator
+ * works elsewhere in the CRM — including inside modals, since the whole
+ * point is supporting a technician without losing your place. Without this
+ * marker, dragging the panel or hitting Refresh would register as an
+ * outside-interaction and close whatever dialog is underneath.
+ */
+export const APP_VIEW_PANEL_MARKER = 'data-app-view-panel';
+export const APP_VIEW_PANEL_SELECTOR = `[${APP_VIEW_PANEL_MARKER}]`;
+export const APP_VIEW_PANEL_ATTR = { [APP_VIEW_PANEL_MARKER]: '' } as const;
+
+/**
  * Full list consumed by Dialog's outside-click guards. Keep in sync
  * when adding a new marker above — Dialog reads from this single
  * source of truth so a new portal kind only needs a single export
@@ -64,4 +76,5 @@ export const DIALOG_IGNORED_PORTAL_SELECTORS: ReadonlyArray<string> = [
   PORTAL_POPOVER_SELECTOR,
   TOAST_HOST_SELECTOR,
   CALL_PANEL_SELECTOR,
+  APP_VIEW_PANEL_SELECTOR,
 ];
