@@ -102,7 +102,18 @@ export function magicLinkRescheduleGate(
  */
 export function relativeTime(iso: string | null | undefined): string {
   if (!iso) return '—';
-  const t = new Date(iso).getTime();
+  /*
+   * parseIstDateTime, for the same reason formatDate uses it — but the failure
+   * here is louder than a wrong-looking timestamp. These values are zone-less
+   * IST wall clocks; read as browser-local from a zone BEHIND IST, the instant
+   * lands in the future, `Date.now() - t` goes negative, and the clamp below
+   * turns it into "just now".
+   *
+   * That is the worst possible answer for the thing this labels: a technician's
+   * last known position, three hours stale, would read as live. LiveLocationPopover
+   * exists precisely so a stale dot cannot imply a fresh one.
+   */
+  const t = parseIstDateTime(iso).getTime();
   if (Number.isNaN(t)) return '—';
   const diffSec = Math.floor((Date.now() - t) / 1000);
   if (diffSec < 0) return 'just now';
