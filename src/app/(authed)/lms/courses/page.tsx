@@ -330,15 +330,38 @@ export default function ManageCoursesPage() {
       /* No due_date sent — the endpoint accepts an optional one and stores NULL
        * otherwise, which is what a blanket back-fill should be. Per-technician
        * deadlines are set from Assign Training, which owns that decision. */
-      const r = await api.post<{ assigned: number }>(`/admin/lms/courses/${c.id}/assign-all`, {});
+      const r = await api.post<{
+        requested: number;
+        assigned: number;
+        alreadyAssigned: number;
+        alreadyComplete: number;
+      }>(`/admin/lms/courses/${c.id}/assign-all`, {});
       dismissToast(t);
+      const n = (v: number) => v.toLocaleString('en-IN');
+      /*
+       * assigned = 0 has two very different meanings and the endpoint used to
+       * return only that number, so this had to guess. With alreadyAssigned we
+       * can say which it was: everyone already held the course, or there was
+       * nobody active to give it to — the second is a real problem worth
+       * seeing, and it used to read as success.
+       *
+       * alreadyComplete is called out separately because it is the reassuring
+       * half: those technicians are not newly blocked from work, they had
+       * already watched this content and were stamped complete on the spot.
+       */
+      let message: string;
+      if (r.assigned === 0 && r.requested === 0) {
+        message = 'No Active Technicians To Assign';
+      } else if (r.assigned === 0) {
+        message = 'Every Active Technician Already Had This Course';
+      } else {
+        message = `Assigned To ${n(r.assigned)} Technician${r.assigned === 1 ? '' : 's'}`;
+        if (r.alreadyAssigned > 0) message += ` · ${n(r.alreadyAssigned)} Already Had It`;
+        if (r.alreadyComplete > 0) message += ` · ${n(r.alreadyComplete)} Already Complete`;
+      }
       showToast({
-        variant: 'success',
-        /* 0 is a legitimate answer (idempotent re-run, or everyone already had
-         * it) and must not read as a failure. */
-        message: r.assigned === 0
-          ? 'Every Active Technician Already Had This Course'
-          : `Assigned To ${r.assigned.toLocaleString('en-IN')} Technician${r.assigned === 1 ? '' : 's'}`,
+        variant: r.assigned === 0 && r.requested === 0 ? 'error' : 'success',
+        message,
       });
       refreshCourses();
     } catch (e) {
