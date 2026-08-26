@@ -1456,7 +1456,7 @@ export default function CallTrackingPage() {
                   * repeats the tab name on every row is noise.
                   */}
                 <th className="!text-left" title={tab === 'inbound'
-                  ? 'Who rang in. Inbound calls arrive from Kaleyra with nobody attributed on our side, so these read Unattributed.'
+                  ? 'Who rang in. These arrive from Kaleyra and nobody on our side placed them, so there is no CRM user to name — the row is the incoming caller.'
                   : 'The operator who placed the call.'}>{tab === 'inbound' ? 'Caller' : 'Called By'}</th>
                 {/*
                   * To Whom can only ever say "Other" here: PARTY_ROLE resolves
@@ -1488,7 +1488,8 @@ export default function CallTrackingPage() {
                         <span className="ml-1 text-xs text-muted-foreground">#{r.userId}</span>
                       </>
                     ) : (
-                      <span className="font-normal text-muted-foreground">{r.userName || 'Unattributed'}</span>
+                      // The service names the row for what it is; this is only a guard.
+                      <span className="font-normal text-muted-foreground">{r.userName || 'No caller recorded'}</span>
                     )}
                   </td>
                   {tab === 'direct' && (
