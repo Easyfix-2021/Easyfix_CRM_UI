@@ -709,7 +709,19 @@ export default function ManageUsersPage() {
                   11 percent Manage Regions
                   10 percent Job Stages
                   7 percent  Status
-                  7 percent  Actions
+                  128px      Actions  <- FIXED, not a percentage
+
+                Actions is the one column whose content does not scale: four
+                20px icon buttons plus the cell's 24px of padding need 104px at
+                every viewport. As a percentage it was 7, which measures 63px at
+                a 1280 viewport, 75px at 1440 and 91px at 1680 -- overflowing on
+                every common laptop and fitting only at 1920, with 4px to spare.
+                That is why the last icon ran off the edge.
+
+                A pixel width sizes to the content instead of the window; the
+                nine percentages below share whatever is left, which is what
+                table-layout: fixed does with a mixed colgroup. They no longer
+                total 100 by design -- do NOT "correct" them back.
                 Inline JSX expression comments are illegal inside colgroup
                 (they introduce single-space text nodes that fail
                 hydration). See manage-roles for the full backstory.
@@ -724,7 +736,7 @@ export default function ManageUsersPage() {
               <col style={{ width: '11%' }} />
               <col style={{ width: '10%' }} />
               <col style={{ width: '7%' }} />
-              <col style={{ width: '7%' }} />
+              <col style={{ width: '128px' }} />
             </colgroup>
             <thead>
               <tr>
