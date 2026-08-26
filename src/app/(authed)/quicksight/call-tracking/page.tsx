@@ -22,6 +22,18 @@
  *            The sub-tabs appear ONLY when the window spans more than one day —
  *            on a single day the two grains are the same table, and a toggle
  *            between two identical views is just noise.
+ *   Other    the calls with NO job attached. They were always inside `totals`
+ *            and inside By User, but they had no row of their own anywhere, so
+ *            "9 Total Calls" over a By Job table with 2 rows had no way to
+ *            account for the other 7.
+ *
+ * ⚠ TWO UNRELATED KINDS OF CALL LAND IN "Other Calls", and the Direction column
+ * is what tells them apart — without it the tab mislabels the majority:
+ *   - OUTGOING with a caller — staff dialling from Manage EasyFixers / Customers
+ *     with no job in context. This is the one people mean by "direct calls".
+ *   - INCOMING with no caller — written by the LEGACY stack, not by this
+ *     backend, typically outside working hours. On a sample production day these
+ *     were 7 of the 9, so they dominate the tab and must not read as staff work.
  *
  * ⚠ "PER DAY" MEANS PER **ACTIVE** DAY on the Combined grain — divided by the
  * days this user actually placed a call on, never by the days in the selected
@@ -86,7 +98,7 @@
  */
 
 import { useCallback, useMemo, useState } from 'react';
-import { PhoneCall, Play, ChevronUp, ChevronDown, ChevronsUpDown, UsersRound, Receipt } from 'lucide-react';
+import { PhoneCall, Play, ChevronUp, ChevronDown, ChevronsUpDown, UsersRound, Receipt, PhoneMissed } from 'lucide-react';
 import { showToast } from '@/components/ui/toast';
 import { api, ApiError } from '@/lib/api';
 import { CallRecordingAudio } from '@/components/ui/call-recording-audio';
@@ -196,10 +208,33 @@ type CombinedUserRow = {
   firstCallAt: string | null; lastCallAt: string | null;
 };
 
+/*
+ * A call with NO job attached, at one row per (DAY × CALLER × DIRECTION).
+ *
+ * Direction is part of the GRAIN, not a decoration: the bucket mixes staff
+ * outbound calls with legacy inbound ones, and folding them into a single row
+ * per caller-day would file the inbound traffic under whoever happened to also
+ * call out that day. There is no job here by definition, so there is no
+ * currentJobStatus, no step snapshot and no uniqueJobs — only who, when, to
+ * whom, and for how long.
+ */
+type OtherRow = {
+  /** 'YYYY-MM-DD' — same day-expression every other aggregation uses. */
+  day: string;
+  direction: 'IN' | 'OUT';
+  /** null when nothing attributed the call — 0 is a sentinel, never a user. */
+  userId: number | null; userName: string;
+  calls: number; connected: number;
+  totalDurationSecs: number;
+  firstCallAt: string | null; lastCallAt: string | null;
+  parties: PartyBreak[];
+};
+
 type DayRow = { day: string; calls: number; connected: number; uniqueJobs: number };
 
 type Totals = {
   calls: number; uniqueJobs: number; uniqueCallers: number;
+  inboundCalls: number; inboundMissed: number;
   connected: number; connectRate: number;
   totalDurationSecs: number; avgDurationSecs: number | null;
 
@@ -255,6 +290,7 @@ type CallTrackingData = {
   byJob: JobRow[];
   byUser: UserRow[];
   byUserCombined: CombinedUserRow[];
+  byOther: OtherRow[];
   byDay: DayRow[];
 };
 
@@ -343,7 +379,15 @@ function BreakdownCell({ items }: { items: Array<{ key: string; text: string }> 
 }
 
 /* Which grain the table below the charts is showing. Purely client-side. */
-type Grain = 'job' | 'user';
+/*
+ * 'direct' and 'inbound' are two SECTIONS over the same byOther rows, split on
+ * `direction`. They are not one tab with a Direction column, because they are
+ * two different things: 'direct' is an operator ringing a customer or a
+ * technician from a list screen with no job open; 'inbound' is somebody ringing
+ * US and — on the sample day, every one of them — nobody answering, out of
+ * hours. Reading those as one population is how 8 missed calls stayed invisible.
+ */
+type Grain = 'job' | 'user' | 'direct' | 'inbound';
 /* Which aggregation the By User tab is showing. Also purely client-side —
    BOTH sub-views ride on the one summary response, so switching never refetches. */
 type UserGrain = 'date' | 'combined';
@@ -494,6 +538,14 @@ export default function CallTrackingPage() {
   const byJob = data?.byJob ?? [];
   const byUser = data?.byUser ?? [];
   const byUserCombinedRaw = data?.byUserCombined ?? [];
+  const byOther = data?.byOther ?? [];
+  /*
+   * One fetch, two tables. `direction` is in the backend's GROUP BY, so a row
+   * is never both — splitting here needs no extra query and cannot drift from
+   * the totals the same response carries.
+   */
+  const byDirect = useMemo(() => byOther.filter((r) => r.direction === 'OUT'), [byOther]);
+  const byInbound = useMemo(() => byOther.filter((r) => r.direction === 'IN'), [byOther]);
 
   /*
    * Default sort: Avg Calls / Day descending — the metric this grain exists to
@@ -576,7 +628,8 @@ export default function CallTrackingPage() {
   const [drill, setDrill] = useState<Drill | null>(null);
 
   const accessDenied = canView === false || summary.status === 403;
-  const isEmpty = !summary.loading && !summary.error && byJob.length === 0 && byUser.length === 0;
+  const isEmpty = !summary.loading && !summary.error
+    && byJob.length === 0 && byUser.length === 0 && byOther.length === 0;
 
   /*
    * Table footers are summed from the ROWS ON SCREEN, not taken from `totals`.
@@ -600,6 +653,17 @@ export default function CallTrackingPage() {
     const secs = byUser.reduce((a, r) => a + r.totalDurationSecs, 0);
     return { calls, connected, secs, rate: calls > 0 ? Math.round((connected / calls) * 100) : 0 };
   }, [byUser]);
+
+  /*
+   * Other-calls footer. Same rule as the two above — summed from the rows on
+   * screen, with the rate recomputed from those sums rather than averaged.
+   */
+  const otherFoot = useMemo(() => {
+    const calls = byOther.reduce((a, r) => a + r.calls, 0);
+    const connected = byOther.reduce((a, r) => a + r.connected, 0);
+    const secs = byOther.reduce((a, r) => a + r.totalDurationSecs, 0);
+    return { calls, connected, secs, rate: calls > 0 ? Math.round((connected / calls) * 100) : 0 };
+  }, [byOther]);
 
   /*
    * Combined-grain footer. The two per-day figures are Σcalls / ΣactiveDays and
@@ -805,6 +869,27 @@ export default function CallTrackingPage() {
                 icon={<UsersRound size={18} />}
               />
             </div>
+            {/*
+              * Missed inbound. MISSED is duration = 0, not caller_status —
+              * that column is not comparable across providers (the service
+              * header says so), while a positive duration is already this
+              * report's definition of Connected and means the same thing on
+              * every row.
+              *
+              * It sits in the reach band because it IS reach — the calls that
+              * reached nobody. Until now the report showed only calls we made;
+              * somebody ringing in and getting no answer was invisible in every
+              * surface, which is the likeliest place in this report to find
+              * lost work.
+              */}
+            <div title="Calls that came IN to us and never connected — nobody picked up. Counted by zero talk time, the same signal the Connected tile uses, because provider call statuses are not comparable. Open the Inbound tab for the individual calls.">
+              <QsKpiTile
+                label="Missed Inbound"
+                value={`${fmtCount(totals.inboundMissed)}${totals.inboundCalls > 0 ? ` of ${fmtCount(totals.inboundCalls)}` : ''}`}
+                accent={totals.inboundMissed > 0 ? QS_COLORS[3] : QS_COLORS[2]}
+                icon={<PhoneMissed size={18} />}
+              />
+            </div>
             <div title={CONF_BILLED_HELP}>
               <QsKpiTile
                 /*
@@ -854,6 +939,8 @@ export default function CallTrackingPage() {
           tabs={[
             { value: 'job',  label: 'By Job',  count: byJob.length },
             { value: 'user', label: 'By User', count: byUser.length },
+            { value: 'direct', label: 'Direct Calls', count: byDirect.length },
+            { value: 'inbound', label: 'Inbound', count: byInbound.length },
           ]}
         />
       </div>
@@ -963,7 +1050,7 @@ export default function CallTrackingPage() {
                     className="!text-center"
                     title={
                       totals && totals.calls !== jobFoot.calls
-                        ? `${totals.calls} calls in this window — ${totals.calls - jobFoot.calls} of them are not linked to a job, so they have no row here.`
+                        ? `${totals.calls} calls in this window — ${totals.calls - jobFoot.calls} of them are not linked to a job, so they have no row here. They are on the Other Calls tab.`
                         : undefined
                     }
                   >
@@ -1353,6 +1440,144 @@ export default function CallTrackingPage() {
         </>
       )}
 
+      {/* ── Tab 3: Other Calls — every call with NO job attached ─────── */}
+      {(tab === 'direct' || tab === 'inbound') && (
+        <div className="overflow-x-auto rounded-md border border-border mt-4">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th className="!text-left">Date</th>
+                {/*
+                  * No Direction column — the TAB is the direction. These were
+                  * one table with a Direction chip; splitting them is what makes
+                  * the inbound number readable on its own, and a column that
+                  * repeats the tab name on every row is noise.
+                  */}
+                <th className="!text-left" title={tab === 'inbound'
+                  ? 'Who rang in. Inbound calls arrive from Kaleyra with nobody attributed on our side, so these read Unattributed.'
+                  : 'The operator who placed the call.'}>{tab === 'inbound' ? 'Caller' : 'Called By'}</th>
+                {/*
+                  * To Whom can only ever say "Other" here: PARTY_ROLE resolves
+                  * the dialled number against the JOB's parties, and these calls
+                  * have no job. Shown for the outbound tab because that is where
+                  * it will start answering once PARTY_ROLE gains a job-free arm;
+                  * hidden on inbound, where the concept does not apply at all.
+                  */}
+                {tab === 'direct' && (
+                  <th className="!text-left" title="Who the call was placed to. These calls have no job, so the party cannot be resolved yet and reads Other — open the call list for the actual number.">To Whom</th>
+                )}
+                <th className="!text-center">Calls</th>
+                <th className="!text-center">Connected</th>
+                <th className="!text-center">Connect %</th>
+                <th className="!text-center">Total Duration</th>
+                <th className="!text-center">First Call</th>
+                <th className="!text-center">Last Call</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(tab === 'inbound' ? byInbound : byDirect).map((r) => (
+                <tr key={`${r.day}-${r.direction}-${r.userId ?? 'none'}`}>
+                  {/* Date on ONE line — it is an identifier, not prose. */}
+                  <td className="!text-left whitespace-nowrap">{fmtDay(r.day)}</td>
+                  <td className="!text-left font-medium whitespace-nowrap">
+                    {r.userId != null && r.userId > 0 ? (
+                      <>
+                        {r.userName}
+                        <span className="ml-1 text-xs text-muted-foreground">#{r.userId}</span>
+                      </>
+                    ) : (
+                      <span className="font-normal text-muted-foreground">{r.userName || 'Unattributed'}</span>
+                    )}
+                  </td>
+                  {tab === 'direct' && (
+                    <td className="!text-left text-xs">
+                      <BreakdownCell items={r.parties.map((p) => ({ key: p.role, text: `${p.role} (${p.calls})` }))} />
+                    </td>
+                  )}
+                  <td className="!text-center">
+                    {/*
+                      * Drillable even with NO caller — unlike the By User tabs,
+                      * where a row without a resolvable caller cannot be isolated
+                      * and stays plain text. Here `noJob` does that work: noJob +
+                      * day pins this set without needing a caller id, which is
+                      * the whole reason the unattributed rows are worth showing.
+                      */}
+                    {/*
+                      * direction + unattributed COMPLETE the key. A row is one
+                      * (day × caller × direction) cell, so a drill carrying only
+                      * noJob + day returns every job-less call that day, from
+                      * every caller, both ways — clicking 7 opened a list of 9.
+                      * This report's one hard invariant is that a drill-down
+                      * reconciles with the count that opened it.
+                      *
+                      * `unattributed` exists because a caller-less row cannot
+                      * send selectedCallerId: that is min(1) on purpose, since 0
+                      * is a sentinel rather than a user id.
+                      */}
+                    <CountLink
+                      n={r.calls}
+                      title="Show the individual calls behind this number"
+                      onClick={() => setDrill({
+                        day: r.day,
+                        callerId: r.userId != null && r.userId > 0 ? r.userId : undefined,
+                        noJob: true,
+                        direction: r.direction,
+                        unattributed: r.userId == null,
+                        label: `${r.userName} · ${fmtDay(r.day)} · ${r.direction === 'IN' ? 'Inbound' : 'Direct'}`,
+                      })}
+                    />
+                  </td>
+                  <td className="!text-center text-success-strong">{r.connected}</td>
+                  <td className="!text-center font-medium">
+                    {r.calls > 0 ? Math.round((r.connected / r.calls) * 100) : 0}%
+                  </td>
+                  <td className="!text-center tabular-nums">{fmtTalkTime(r.totalDurationSecs)}</td>
+                  <td className="!text-center text-xs"><DateTimeCell value={r.firstCallAt} /></td>
+                  <td className="!text-center text-xs"><DateTimeCell value={r.lastCallAt} /></td>
+                </tr>
+              ))}
+              {byOther.length === 0 && (
+                <tr><td colSpan={tab === 'direct' ? 9 : 8} className="!text-center text-muted-foreground py-6">{
+                  partyRole
+                    /*
+                      * Not "every call is linked to a job" — that would be a
+                      * false statement about the data. These rows have no job,
+                      * so PARTY_ROLE cannot resolve them and they evaluate to
+                      * 'Other'; any other Party filter empties the tab by
+                      * construction rather than because nothing happened.
+                      */
+                    ? 'No Calls Match The Party Filter — Calls With No Job Cannot Be Attributed To A Party.'
+                    : tab === 'inbound'
+                      ? 'No Inbound Calls In This Window.'
+                      : 'No Direct Calls In This Window — Every Outgoing Call Was Placed From A Job.'
+                }</td></tr>
+              )}
+            </tbody>
+            {byOther.length > 0 && (
+              <tfoot>
+                <tr className="bg-muted/60 font-semibold">
+                  <td className="!text-left" colSpan={4}>Total</td>
+                  <td
+                    className="!text-center"
+                    title={
+                      totals && totals.calls !== otherFoot.calls
+                        ? `${totals.calls} calls in this window — ${otherFoot.calls} of them have no job attached.`
+                        : undefined
+                    }
+                  >
+                    {otherFoot.calls}
+                  </td>
+                  <td className="!text-center">{otherFoot.connected}</td>
+                  <td className="!text-center">{otherFoot.rate}%</td>
+                  <td className="!text-center tabular-nums">{fmtTalkTime(otherFoot.secs)}</td>
+                  <td colSpan={2} />
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      )}
+
       <CallDrilldownDialog drill={drill} filters={applied} onClose={() => setDrill(null)} />
 
       {/* Hosts the in-place job workspace for every <JobRefLink> on this page. */}
@@ -1398,6 +1623,21 @@ type Drill = {
   callerId?: number;
   /** 'YYYY-MM-DD' — pairs with callerId to pin the (day × user) grain. */
   day?: string;
+  /**
+   * Restrict to calls with NO job attached (the Other Calls tab). It is what
+   * makes an UNATTRIBUTED row drillable at all: noJob + day pins that set
+   * without a caller id, which those rows do not have.
+   */
+  noJob?: boolean;
+  /**
+   * The other two thirds of a byOther row's key. Its grain is
+   * (day × caller × direction), so noJob + day alone selects a SUPERSET of the
+   * cell that was clicked and the list stops matching the number.
+   * `unattributed` stands in for a caller id the row does not have — 0 is a
+   * sentinel and selectedCallerId is min(1) on purpose.
+   */
+  direction?: 'IN' | 'OUT';
+  unattributed?: boolean;
   /** Row identity for the dialog title — "Job #N" or "Name · 03 Jul 2026". */
   label: string;
 };
@@ -1470,7 +1710,15 @@ function ListenButton({ callId }: { callId: number }) {
 
 /** The clicked selection's identity — the remount key for the body below. */
 function drillKey(d: Drill): string {
-  return `${d.jobId ?? ''}|${d.callerId ?? ''}|${d.day ?? ''}`;
+  // Every selection key is part of the identity, or the dialog does not remount
+  // and renders the previous cell's rows under the new cell's title. direction
+  // matters most: without it the Inbound and Direct rows for the same day and
+  // the same (absent) caller produce an IDENTICAL key, so clicking one after
+  // the other showed the first one's calls twice.
+  return [
+    d.jobId ?? '', d.callerId ?? '', d.day ?? '',
+    d.noJob ? 'nojob' : '', d.direction ?? '', d.unattributed ? 'unattr' : '',
+  ].join('|');
 }
 
 function CallDrilldownDialog({ drill, filters, onClose }: {
@@ -1525,6 +1773,9 @@ function CallDrilldownBody({ drill, filters, onClose }: {
     jobId: drill.jobId,
     selectedCallerId: drill.callerId,
     day: drill.day,
+    noJob: drill.noJob,
+    direction: drill.direction,
+    unattributed: drill.unattributed,
   }), [drill, filters]);
 
   const detail = usePostFetch<{ items: CallDetail[]; capped: boolean }>(
