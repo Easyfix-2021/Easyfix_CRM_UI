@@ -125,6 +125,23 @@
     @apply bg-muted/40;
   }
 
+  /* Header pinning for VIRTUALISED tables (components/ui/virtual-rows.tsx).
+     Those scroll inside a fixed-height box instead of letting the page scroll,
+     so without this the header scrolls out of the box and the operator loses
+     the column names 40 rows in — strictly worse than the page scroll it
+     replaces. Opt-in via the `head-sticky` class, so every table that still
+     scrolls with the page behaves exactly as before.
+     z-index sits ABOVE the sticky-column rules below (2 / 3) so a frozen first
+     column passes UNDER the header rather than over it. */
+  .data-table.head-sticky th {
+    position: sticky;
+    top: 0;
+    z-index: 4;
+  }
+  .data-table.head-sticky th.stick-col-head {
+    z-index: 5;
+  }
+
   /* Sticky column utilities for dense admin tables (Jobs / Easyfixers).
      When the table scrolls horizontally, pin the first column (record ID)
      and the last column (action buttons) so operators never lose context —
