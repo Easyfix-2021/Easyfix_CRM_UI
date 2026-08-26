@@ -179,6 +179,12 @@ export default function ManageCoursesPage() {
   const [search, setSearch] = React.useState('');
   const dq = useDebouncedValue(search, 300);
   const [includeRetired, setIncludeRetired] = React.useState(false);
+  /*
+   * Server-side, not a client filter over the fetched page: this list is
+   * paginated, so filtering locally would only narrow the rows that happen to
+   * be on screen and report a total for a different set.
+   */
+  const [mandatoryOnly, setMandatoryOnly] = React.useState(false);
 
   const [page, setPage] = React.useState(0);
   const [pageSize, setPageSize] = React.useState<TablePageSize>(20);
@@ -195,6 +201,7 @@ export default function ManageCoursesPage() {
   const qs = new URLSearchParams();
   if (dq.trim()) qs.set('q', dq.trim());
   if (includeRetired) qs.set('includeInactive', 'true');
+  if (mandatoryOnly) qs.set('mandatoryOnly', 'true');
   qs.set('limit', String(limit));
   qs.set('offset', String(page * limit));
   if (sortBy) { qs.set('sortBy', sortBy); qs.set('sortDir', sortDir); }
@@ -206,7 +213,7 @@ export default function ManageCoursesPage() {
    * search while sitting on page 3 asks for an offset the smaller result set
    * doesn't have, and the table goes empty with no visible cause.
    */
-  React.useEffect(() => { setPage(0); }, [dq, includeRetired, sortBy, sortDir]);
+  React.useEffect(() => { setPage(0); }, [dq, includeRetired, mandatoryOnly, sortBy, sortDir]);
 
   function onSort(col: SortKey) {
     const next = cycleSort<SortKey>(col, { sortBy, sortDir });
@@ -412,6 +419,20 @@ export default function ManageCoursesPage() {
               onChange={(e) => setIncludeRetired(e.target.checked)}
             />
             Include Retired
+          </label>
+          {/*
+            Answers "what is every technician held to?" directly. Without it
+            that question needs a page-by-page scan for chips, and getting it
+            wrong is expensive in both directions — a course nobody realised
+            was mandatory, or one everybody assumed was.
+          */}
+          <label className="flex items-center gap-1.5 text-xs whitespace-nowrap">
+            <input
+              type="checkbox"
+              checked={mandatoryOnly}
+              onChange={(e) => setMandatoryOnly(e.target.checked)}
+            />
+            Mandatory Only
           </label>
         </CardContent>
       </Card>
