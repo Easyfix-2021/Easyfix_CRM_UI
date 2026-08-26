@@ -57,6 +57,25 @@ const OPEN_EVENT = 'ef:app-view:open';
 const FRAME_W = 390;
 const FRAME_H = 844;
 
+/*
+ * The phone bezel, on each of the four sides.
+ *
+ * ⚠ THE STAGE MUST RESERVE THE BEZEL, and this constant is why it is a number
+ * rather than a Tailwind `border-[10px]` class. It was that class, and the
+ * stage below reserved FRAME_W x FRAME_H — the UNBORDERED size. Tailwind's
+ * preflight sets border-box, but the bezel element has no explicit width: it
+ * sizes to the 390x844 iframe inside it and the border is added AROUND that,
+ * making it 410x864. The stage clips (overflow-hidden), and transform-origin is
+ * top-left, so the top and left bezels drew and the RIGHT and BOTTOM ones were
+ * cut off — a phone with two edges missing.
+ *
+ * Both the border and the stage size now read this one value, so they cannot
+ * drift apart again.
+ */
+const BEZEL = 10;
+const STAGE_W = FRAME_W + BEZEL * 2;
+const STAGE_H = FRAME_H + BEZEL * 2;
+
 /* Panel chrome above and below the frame (header, version banner, footer). */
 const CHROME_H = 190;
 /*
@@ -81,7 +100,7 @@ function fitScale(): number {
   if (typeof window === 'undefined') return 0.8;
   const usableH = window.innerHeight - CHROME_H - 32;
   const usableW = window.innerWidth - 32;
-  return Math.min(MAX_SCALE, Math.max(MIN_SCALE, Math.min(usableH / FRAME_H, usableW / FRAME_W)));
+  return Math.min(MAX_SCALE, Math.max(MIN_SCALE, Math.min(usableH / STAGE_H, usableW / STAGE_W)));
 }
 
 export type AppViewTarget = { efrId: number; name?: string | null };
@@ -255,7 +274,7 @@ function AppViewPanel({ target, onClose }: { target: AppViewTarget; onClose: () 
 
   // Below ~0.6 scale the header floor wins, so the phone is centred rather
   // than pinned left — see MIN_PANEL_W.
-  const panelW = Math.max(FRAME_W * scale + BODY_PAD_X, MIN_PANEL_W);
+  const panelW = Math.max(STAGE_W * scale + BODY_PAD_X, MIN_PANEL_W);
 
   const technicianVersion = (data?.technicianAppVersion || '').trim();
   const versionMatches = technicianVersion !== '' && technicianVersion === MIRROR_VERSION;
@@ -381,12 +400,18 @@ function AppViewPanel({ target, onClose }: { target: AppViewTarget; onClose: () 
            * as it did before.
            */
           <div
-            style={{ width: FRAME_W * scale, height: FRAME_H * scale }}
+            style={{ width: STAGE_W * scale, height: STAGE_H * scale }}
             className="relative mx-auto overflow-hidden"
           >
           <div
-            style={{ transform: `scale(${scale})`, transformOrigin: 'top left' }}
-            className="absolute left-0 top-0 overflow-hidden rounded-[1.75rem] border-[10px] border-foreground bg-background"
+            style={{
+              transform: `scale(${scale})`,
+              transformOrigin: 'top left',
+              // Inline, not a Tailwind class — it has to be the same number the
+              // stage above reserved. See BEZEL.
+              borderWidth: BEZEL,
+            }}
+            className="absolute left-0 top-0 overflow-hidden rounded-[1.75rem] border-foreground bg-background"
           >
             {/*
               * NO `sandbox` — deliberate, and it reads as an omission
