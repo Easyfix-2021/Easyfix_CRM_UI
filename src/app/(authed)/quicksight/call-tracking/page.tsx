@@ -97,9 +97,9 @@
  * every count above them is byte-for-byte the number it was before.
  */
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { PhoneCall, Play, ChevronUp, ChevronDown, ChevronsUpDown, UsersRound, Receipt, PhoneMissed } from 'lucide-react';
-import { showToast } from '@/components/ui/toast';
+import { dismissToast, showToast } from '@/components/ui/toast';
 import { api, ApiError } from '@/lib/api';
 import { CallRecordingAudio } from '@/components/ui/call-recording-audio';
 import { IconButton } from '@/components/ui/icon-button';
@@ -122,12 +122,13 @@ import { GlidingTabs } from '@/components/ui/gliding-tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { StatusChip } from '@/components/ui/StatusChip';
+import { useVirtualRows, VirtualPad } from '@/components/ui/virtual-rows';
 import { statusLabel, statusTone } from '@/lib/utils';
 import { parseIstDateTime } from '@/lib/format';
 import { JobRefLink } from '@/components/job/JobRefLink';
 import { JobModalHost } from '@/components/job/JobModalHost';
 
-import { CallTrackingCharts } from './CallTrackingCharts';
+import { CallTrackingCharts, type ChartsData } from './CallTrackingCharts';
 import { fmtSecs, fmtTalkTime } from './duration';
 
 const ACTION_KEY = 'isQuickSightCallTrackingView';
@@ -388,6 +389,17 @@ function BreakdownCell({ items }: { items: Array<{ key: string; text: string }> 
  * hours. Reading those as one population is how 8 missed calls stayed invisible.
  */
 type Grain = 'job' | 'user' | 'direct' | 'inbound';
+/*
+ * Tab labels, in ONE place. They name the chart scope in the Graphical View
+ * caption as well as the tab strip, and a caption that disagreed with the tab it
+ * describes would be worse than no caption.
+ */
+const GRAIN_LABEL: Record<Grain, string> = {
+  job: 'By Job',
+  user: 'By User',
+  direct: 'Direct Calls',
+  inbound: 'Inbound',
+};
 /* Which aggregation the By User tab is showing. Also purely client-side —
    BOTH sub-views ride on the one summary response, so switching never refetches. */
 type UserGrain = 'date' | 'combined';
@@ -603,6 +615,57 @@ export default function CallTrackingPage() {
 
   const [tab, setTab] = useState<Grain>('job');
   const [userGrain, setUserGrain] = useState<UserGrain>('date');
+
+  /*
+   * ── ROW VIRTUALISATION ────────────────────────────────────────────────────
+   *
+   * The server row caps are gone (they were quietly answering a much smaller
+   * question than the one asked), so an eight-month window returns ~26,000 By
+   * Job rows and a two-year one roughly 135,000. Twelve cells apiece is over a
+   * million DOM nodes — the browser stops responding, which is a worse failure
+   * than the cap was.
+   *
+   * Only the DRAWING is bounded. The footer totals, the user search, the
+   * combined-grain sort and the XLSX export all still run over the FULL arrays;
+   * the hook decides which of those rows exist in the DOM right now. Under the
+   * hook's threshold nothing changes at all, which is every other window.
+   *
+   * Four hooks rather than one shared instance: each table has its own scroll
+   * position and its own row heights (a By Job row grows a line per caller),
+   * and only one is mounted at a time anyway.
+   */
+  /*
+   * ── THE GRAPHICAL VIEW'S OWN FETCH ────────────────────────────────────────
+   *
+   * A SECOND request, keyed on the active tab. It is not part of the summary
+   * for two reasons that both point the same way: /summary is uncapped and
+   * therefore large (a wide window is megabytes), so refetching it on a tab
+   * click to move a donut is absurd; and the summary cannot answer the question
+   * anyway — `parties` and `steps` are per-call derivations it only carries
+   * pre-summed against grains that no longer match the tab.
+   *
+   * usePostFetch serialises the body, so this re-fires on a tab change or a
+   * filter change and on nothing else, dedupes concurrent identical requests,
+   * and KEEPS the previous data while reloading — which is what lets the charts
+   * dim rather than blank between tabs.
+   */
+  const charts = usePostFetch<ChartsData>(
+    canView ? `${API_BASE}/charts` : null,
+    { ...applied, grain: tab },
+    { enabled: canView },
+  );
+
+  const vJob = useVirtualRows(byJob);
+  const vUserDay = useVirtualRows(byUserShown);
+  const vUserCombined = useVirtualRows(byUserCombinedShown);
+  // byInbound / byDirect are each memoised, so the ternary hands the hook a
+  // STABLE identity per tab — switching tabs resets the window, re-rendering
+  // does not.
+  const vOther = useVirtualRows(tab === 'inbound' ? byInbound : byDirect);
+  // Column count of the Other Calls table — Direct carries one extra column.
+  // Named because the spacer rows and the empty state must both span it, and
+  // two literals that have to agree is how one of them goes stale.
+  const otherCols = tab === 'direct' ? 9 : 8;
   /*
    * Does the window span more than one day? Read off byDay — the server's own
    * gap-filled day axis for the window it actually queried — rather than
@@ -718,9 +781,39 @@ export default function CallTrackingPage() {
       ? `Partial · ${fmtCount(confBilledCalls)} Of ${fmtCount(confRooms)} Rooms Reported`
       : `All ${fmtCount(confRooms)} Rooms Reported`;
 
+  /*
+   * ── EXPORT, AND WHY IT NEEDS MORE THAN A DISABLED BUTTON ──────────────────
+   *
+   * The report is uncapped now, so building the workbook for a wide window is a
+   * genuinely long request — tens of seconds, and it grows with the range. Two
+   * separate things stop an operator firing three of those at the server:
+   *
+   *   1. `downloadLock` — a REF, not the state below. State is what disables the
+   *      button, and that only helps if the button is the only way in and React
+   *      has repainted between the two clicks. The ref is set synchronously on
+   *      the first line of the handler, so a second entry can't get past it
+   *      whatever triggered it.
+   *   2. TELLING THE OPERATOR SOMETHING HAPPENED. This is the half that actually
+   *      caused repeat clicks. The failure path used to swallow the error
+   *      entirely — after 40 seconds the button quietly flipped back to
+   *      "Download XLSX" with no file and no message, which is indistinguishable
+   *      from a click that never registered. So the obvious next move was to
+   *      click it again, and the server built the same doomed workbook twice.
+   *
+   * The in-progress toast is not decoration either: the button lives in the page
+   * header, and an operator who has scrolled into a 26,000-row table cannot see
+   * its label change.
+   */
   const [downloading, setDownloading] = useState(false);
+  const downloadLock = useRef(false);
   const onDownload = useCallback(async () => {
+    if (downloadLock.current) return;
+    downloadLock.current = true;
     setDownloading(true);
+    const busyToast = showToast({
+      variant: 'loading',
+      message: 'Preparing Your Export — A Wide Date Range Can Take A Minute.',
+    });
     try {
       const base = process.env.NEXT_PUBLIC_API_URL || '/api';
       const token = typeof window !== 'undefined' ? localStorage.getItem('crm_auth_token') : null;
@@ -738,9 +831,17 @@ export default function CallTrackingPage() {
       a.href = url; a.download = 'call-tracking.xlsx';
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 500);
-    } catch {
-      /* busy state simply clears; keep the page chrome quiet */
+    } catch (e) {
+      // NEVER silent. A failure that looks like nothing happened is what makes
+      // an operator click again — and each retry is another full workbook build.
+      showToast({
+        variant: 'error',
+        message: `Export Failed (${e instanceof Error ? e.message : 'unknown error'}). `
+          + 'Nothing Was Saved — Try A Narrower Date Range.',
+      });
     } finally {
+      dismissToast(busyToast);
+      downloadLock.current = false;
       setDownloading(false);
     }
   }, [applied]);
@@ -829,7 +930,7 @@ export default function CallTrackingPage() {
       }
     >
       {/* KPI tiles + charts (Graphical View). */}
-      <CallTrackingCharts totals={totals} byDay={byDay} byUser={byUser} />
+      <CallTrackingCharts data={charts.data} loading={charts.loading} scopeLabel={GRAIN_LABEL[tab]} />
 
       {/*
         * ── Reach And Conference Cost ──────────────────────────────────────
@@ -949,8 +1050,8 @@ export default function CallTrackingPage() {
 
       {/* ── Tab 1: By Job ─────────────────────────────────────────────── */}
       {tab === 'job' && (
-        <div className="overflow-x-auto rounded-md border border-border mt-4">
-          <table className="data-table">
+        <div ref={vJob.scrollRef} className={`overflow-x-auto rounded-md border border-border mt-4 ${vJob.containerClass}`}>
+          <table className={`data-table ${vJob.active ? 'head-sticky' : ''}`}>
             <thead>
               <tr>
                 <th className="!text-left">Job #</th>
@@ -977,8 +1078,9 @@ export default function CallTrackingPage() {
                 <th className="!text-center">Last Call</th>
               </tr>
             </thead>
-            <tbody>
-              {byJob.map((j) => (
+            <tbody ref={vJob.bodyRef}>
+              <VirtualPad height={vJob.padTop} colSpan={12} />
+              {vJob.slice.map((j) => (
                 <tr key={j.jobId}>
                   <td className="!text-left font-medium">
                     {/* Opens the JobModal in place (JobModalHost below) — closing
@@ -1043,6 +1145,7 @@ export default function CallTrackingPage() {
               {byJob.length === 0 && (
                 <tr><td colSpan={12} className="!text-center text-muted-foreground py-6">No Calls In This Window.</td></tr>
               )}
+              <VirtualPad height={vJob.padBottom} colSpan={12} />
             </tbody>
             {byJob.length > 0 && (
               <tfoot>
@@ -1138,8 +1241,8 @@ export default function CallTrackingPage() {
 
       {/* ── Sub-tab 1: Date Wise (one row per day × user) ─────────────── */}
       {effectiveUserGrain === 'date' && (
-        <div className="overflow-x-auto rounded-md border border-border mt-4">
-          <table className="data-table">
+        <div ref={vUserDay.scrollRef} className={`overflow-x-auto rounded-md border border-border mt-4 ${vUserDay.containerClass}`}>
+          <table className={`data-table ${vUserDay.active ? 'head-sticky' : ''}`}>
             <thead>
               <tr>
                 <th className="!text-left">Date</th>
@@ -1160,8 +1263,9 @@ export default function CallTrackingPage() {
                 <th className="!text-center">Last Call</th>
               </tr>
             </thead>
-            <tbody>
-              {byUserShown.map((r) => (
+            <tbody ref={vUserDay.bodyRef}>
+              <VirtualPad height={vUserDay.padTop} colSpan={12} />
+              {vUserDay.slice.map((r) => (
                 <tr key={`${r.day}-${r.userId ?? r.userName}`}>
                   {/* Date on ONE line — it is an identifier, not prose. */}
                   <td className="!text-left whitespace-nowrap">{fmtDay(r.day)}</td>
@@ -1243,6 +1347,7 @@ export default function CallTrackingPage() {
               {byUserShown.length === 0 && (
                 <tr><td colSpan={12} className="!text-center text-muted-foreground py-6">No Calls In This Window.</td></tr>
               )}
+              <VirtualPad height={vUserDay.padBottom} colSpan={12} />
             </tbody>
             {byUserShown.length > 0 && (
               <tfoot>
@@ -1274,8 +1379,8 @@ export default function CallTrackingPage() {
 
       {/* ── Sub-tab 2: Combined (one row per user, whole window) ──────── */}
       {effectiveUserGrain === 'combined' && (
-        <div className="overflow-x-auto rounded-md border border-border mt-4">
-          <table className="data-table">
+        <div ref={vUserCombined.scrollRef} className={`overflow-x-auto rounded-md border border-border mt-4 ${vUserCombined.containerClass}`}>
+          <table className={`data-table ${vUserCombined.active ? 'head-sticky' : ''}`}>
             <thead>
               <tr>
                 <SortTh label="User" col="userName" sort={combinedSort} onSort={onCombinedSort} className="!text-left" />
@@ -1305,8 +1410,9 @@ export default function CallTrackingPage() {
                 <th className="!text-left" title="Who the call was placed to — Customer, Alternate, Client SPOC, Technician or Other. Counts calls, so a conference is attributed to the party dialled first; open the call list to see everyone who joined.">To Whom</th>
               </tr>
             </thead>
-            <tbody>
-              {byUserCombinedShown.map((r) => {
+            <tbody ref={vUserCombined.bodyRef}>
+              <VirtualPad height={vUserCombined.padTop} colSpan={12} />
+              {vUserCombined.slice.map((r) => {
                 // Spelled out per row so the number on screen carries its own
                 // denominator, not just the column header's general caveat.
                 const perDayTitle = `${PER_DAY_HELP} This user placed calls on ${r.activeDays} of the ${byDay.length} days in the range.`;
@@ -1388,6 +1494,7 @@ export default function CallTrackingPage() {
               {byUserCombinedShown.length === 0 && (
                 <tr><td colSpan={12} className="!text-center text-muted-foreground py-6">No Calls In This Window.</td></tr>
               )}
+              <VirtualPad height={vUserCombined.padBottom} colSpan={12} />
             </tbody>
             {byUserCombinedShown.length > 0 && (
               <tfoot>
@@ -1444,8 +1551,8 @@ export default function CallTrackingPage() {
 
       {/* ── Tab 3: Other Calls — every call with NO job attached ─────── */}
       {(tab === 'direct' || tab === 'inbound') && (
-        <div className="overflow-x-auto rounded-md border border-border mt-4">
-          <table className="data-table">
+        <div ref={vOther.scrollRef} className={`overflow-x-auto rounded-md border border-border mt-4 ${vOther.containerClass}`}>
+          <table className={`data-table ${vOther.active ? 'head-sticky' : ''}`}>
             <thead>
               <tr>
                 <th className="!text-left">Date</th>
@@ -1476,8 +1583,9 @@ export default function CallTrackingPage() {
                 <th className="!text-center">Last Call</th>
               </tr>
             </thead>
-            <tbody>
-              {(tab === 'inbound' ? byInbound : byDirect).map((r) => (
+            <tbody ref={vOther.bodyRef}>
+              <VirtualPad height={vOther.padTop} colSpan={otherCols} />
+              {vOther.slice.map((r) => (
                 <tr key={`${r.day}-${r.direction}-${r.userId ?? 'none'}`}>
                   {/* Date on ONE line — it is an identifier, not prose. */}
                   <td className="!text-left whitespace-nowrap">{fmtDay(r.day)}</td>
@@ -1540,7 +1648,7 @@ export default function CallTrackingPage() {
                 </tr>
               ))}
               {byOther.length === 0 && (
-                <tr><td colSpan={tab === 'direct' ? 9 : 8} className="!text-center text-muted-foreground py-6">{
+                <tr><td colSpan={otherCols} className="!text-center text-muted-foreground py-6">{
                   partyRole
                     /*
                       * Not "every call is linked to a job" — that would be a
@@ -1555,6 +1663,7 @@ export default function CallTrackingPage() {
                       : 'No Direct Calls In This Window — Every Outgoing Call Was Placed From A Job.'
                 }</td></tr>
               )}
+              <VirtualPad height={vOther.padBottom} colSpan={otherCols} />
             </tbody>
             {byOther.length > 0 && (
               <tfoot>

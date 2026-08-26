@@ -3,26 +3,28 @@
 /*
  * Graphical View for the QuickSight Call Tracking report.
  *
- * Pure presentation — every array is derived (with useMemo) from the SAME
- * /call-tracking/summary response the page already fetched. No extra API calls,
- * and only the shared QuickSight chart kit is used so this report reads as part
- * of the same family as the other native reports.
+ * ⚠ THE CHARTS FOLLOW THE ACTIVE TAB, AND THE SERVER DECIDES WHAT THAT MEANS.
  *
- * Layout mirrors TechnicianPerformanceCharts / RegionPerformanceCharts:
- * "Graphical View" heading + a caption, a KPI tile row, then a 2-column chart
- * grid.
+ * This file used to aggregate everything itself out of the summary's `byUser`
+ * rows. That had one population baked in — every call with a real caller — no
+ * matter which table was on screen. An operator on the Inbound tab read a donut
+ * and a trend built mostly from outbound job calls, with KPI tiles counting the
+ * whole window: the picture and the rows under it were answering different
+ * questions, and nothing on screen said so.
  *
- * ⚠ WHY THE BREAKDOWNS ARE AGGREGATED FROM byUser, NOT byJob
- * A call row can have a NULL job (an outbound call placed before it was tied to
- * a job). Such a call appears in byUser but has no byJob row, so summing
- * byJob[].parties / byJob[].steps would silently under-count and the donut would
- * disagree with the "Total Calls" tile. byUser is the grain that covers every
- * call, so the party + step breakdowns are summed from there.
+ * The aggregates now come from POST /call-tracking/charts, which recomputes them
+ * over the tab's own calls (see GRAIN_SCOPE in the service). Doing it there and
+ * not here is not a preference:
+ *   - `parties` and `steps` are per-CALL derivations. PARTY_ROLE compares the
+ *     dialled number against the numbers on the job; the step is a per-row
+ *     snapshot. The summary only ever carries them PRE-SUMMED against grains
+ *     that no longer match the tab, so re-slicing them in the browser would mean
+ *     re-deriving them from data that isn't in the response.
+ *   - The row caps are gone and /summary is now a very large payload. A tab
+ *     click must not refetch it to move a donut. /charts answers in kilobytes.
  *
- * ⚠ PERCENTAGES ARE RECOMPUTED FROM SUMMED COUNTS, never averaged across rows —
- * averaging per-row connect rates would weight a 1-call day the same as a
- * 200-call day. The API returns raw `connected` counts precisely so this file
- * can divide sums.
+ * So this file is pure presentation: it formats, it does not aggregate. The one
+ * thing it still computes is `shortName`, which is typography.
  *
  * ⚠ COLOUR COLLISIONS: QS_COLORS[1..4] are byte-identical to
  * QS_SEMANTIC.good/warn/bad/info. The metric colours below are pinned once and
@@ -31,7 +33,6 @@
  * local/no-duplicate-chart-series-color lint rule enforces that).
  */
 
-import { useMemo } from 'react';
 import { PhoneCall, PhoneForwarded, Percent, Briefcase, Users, Timer } from 'lucide-react';
 
 import {
@@ -40,28 +41,20 @@ import {
 
 import { fmtTalkTime } from './duration';
 
-/*
- * Structural prop types — deliberately the MINIMUM this component reads, not a
- * copy of the page's full wire types. The page's richer row types are
- * structurally assignable, so the contract stays in one place (page.tsx) while
- * this module keeps zero coupling to the fields it never touches.
- */
-type Totals = {
-  calls: number; uniqueJobs: number; uniqueCallers: number;
-  connected: number; connectRate: number;
+/* The wire shape of POST /admin/quicksight/call-tracking/charts. */
+export type ChartsTotals = {
+  calls: number; connected: number; connectRate: number;
   totalDurationSecs: number; avgDurationSecs: number | null;
+  uniqueJobs: number; uniqueCallers: number;
 };
-type Party = { role: string; calls: number };
-type Step = { status: number; label: string; calls: number };
-type Day = { day: string; calls: number; connected: number; uniqueJobs: number };
-type UserDay = {
-  userId: number | null; userName: string;
-  calls: number; connected: number;
-  parties: Party[]; steps: Step[];
+export type ChartsData = {
+  grain: string;
+  totals: ChartsTotals;
+  byDay: Array<{ day: string; calls: number; connected: number; uniqueJobs: number }>;
+  parties: Array<{ name: string; value: number }>;
+  steps: Array<{ name: string; calls: number }>;
+  callers: Array<{ name: string; calls: number; connected: number }>;
 };
-
-/* Keep the charts legible — past ~10 categories labels and slices collide. */
-const TOP_N = 10;
 
 /*
  * What each donut slice in "Calls By Party" actually means.
@@ -70,21 +63,19 @@ const TOP_N = 10;
  * dialled against the four numbers hanging off the job, in this priority order
  * (services/quicksight/quicksight-call-tracking.service.js, PARTY_ROLE):
  *   customer_mob_no → additional_number → client_spoc → efr_no
- * so the labels below must stay in step with that CASE.
+ * falling back to two JOB-FREE arms (a customer matched by id AND number, then a
+ * technician matched by number) for calls with no job attached. The labels below
+ * must stay in step with that CASE.
  *
  * "Other" is the one operators query, and the honest definition is a negative:
- * the dialled number matched NONE of those four (or was unusable). Common real
- * causes: the customer changed their number after the call, the call was placed
- * with no job attached (custom-number / QA click-to-call), or the job simply had
- * no number in that field at the time. It is NOT "Client SPOC" — that has its
- * own slice and just doesn't appear when it has zero calls in the window.
+ * the dialled number matched NONE of them (or was unusable).
  */
 const PARTY_ROLE_HELP: Record<string, string> = {
-  Customer: 'The customer number on the job (customer_mob_no).',
+  Customer: 'The customer number on the job (customer_mob_no) — or, on a call with no job, a customer whose id AND number both match.',
   Alternate: 'The job’s alternate contact number (additional_number).',
   'Client SPOC': 'The client’s single point of contact for the job (client_spoc).',
-  Technician: 'The assigned technician’s number (efr_no).',
-  Other: 'The number dialled matched none of the four numbers on the job — e.g. the customer changed their number after the call, the call had no job attached (custom-number / QA), or that field was empty at the time. Open the count to see the name captured at call time.',
+  Technician: 'The assigned technician’s number (efr_no) — or, on a call with no job, any technician whose number matches.',
+  Other: 'The number dialled matched nothing we hold — e.g. the customer changed their number after the call, or that field was empty at the time. Open the count to see the name captured at call time.',
 };
 
 /*
@@ -112,83 +103,58 @@ const fmt = (n: number) => n.toLocaleString('en-IN');
 const shortName = (name: string) => (name.trim().length > 18 ? `${name.trim().slice(0, 17)}…` : name.trim());
 
 export function CallTrackingCharts({
-  totals, byDay, byUser,
+  data, loading, scopeLabel,
 }: {
-  totals: Totals | undefined;
-  byDay: Day[];
-  byUser: UserDay[];
+  data: ChartsData | null;
+  /* True while the tab's aggregates are in flight. The previous tab's charts
+     stay on screen, dimmed, rather than blanking — a flash of empty cards on
+     every tab click reads as "no data", which is a different claim. */
+  loading: boolean;
+  /* The active tab's label, so the caption states what is being charted. */
+  scopeLabel: string;
 }) {
-  const charts = useMemo(() => {
-    /*
-     * Daily trend — byDay is already gap-filled server-side and ordered
-     * oldest → newest, so it maps straight onto a left-to-right time axis.
-     *
-     * Series keys are single lowercase words on purpose: the chart kit builds an
-     * SVG gradient id from the key (`url(#qsarea-<key>)`), and a key containing a
-     * space produces an invalid reference and an unfilled area. Display names
-     * come from `label`.
-     */
-    const trend = byDay.map((d) => ({
-      day: fmtDayLabel(d.day),
-      calls: d.calls,
-      connected: d.connected,
-      jobs: d.uniqueJobs,
-    }));
-
-    // Party roles ("to whom") across every call in the window.
-    const partyTotals = new Map<string, number>();
-    // Job status at the moment of the call ("at which step").
-    const stepTotals = new Map<string, number>();
-    // Calls per CALLER — byUser is (day × user), so days collapse by identity.
-    const callerTotals = new Map<string, { name: string; calls: number; connected: number }>();
-
-    for (const r of byUser) {
-      for (const p of r.parties) partyTotals.set(p.role, (partyTotals.get(p.role) ?? 0) + p.calls);
-      for (const s of r.steps) stepTotals.set(s.label, (stepTotals.get(s.label) ?? 0) + s.calls);
-      // userId is null for a call whose caller could not be resolved; key on the
-      // name so those collapse into one "unknown caller" bar instead of N bars.
-      const key = r.userId == null ? `name:${r.userName}` : `id:${r.userId}`;
-      const acc = callerTotals.get(key) ?? { name: r.userName, calls: 0, connected: 0 };
-      acc.calls += r.calls;
-      acc.connected += r.connected;
-      callerTotals.set(key, acc);
-    }
-
-    const parties = [...partyTotals.entries()]
-      .map(([name, value]) => ({ name, value }))
-      .filter((d) => d.value > 0)
-      .sort((a, b) => b.value - a.value);
-
-    const steps = [...stepTotals.entries()]
-      .map(([name, calls]) => ({ name, calls }))
-      .filter((d) => d.calls > 0)
-      .sort((a, b) => b.calls - a.calls)
-      .slice(0, TOP_N);
-
-    const callers = [...callerTotals.values()]
-      .sort((a, b) => b.calls - a.calls)
-      .slice(0, TOP_N)
-      .map((c) => ({ name: shortName(c.name), calls: c.calls, connected: c.connected }));
-
-    return { trend, parties, steps, callers };
-  }, [byDay, byUser]);
-
   // Nothing to draw — the report's own empty state already covers it.
-  if (!totals || totals.calls === 0) return null;
+  if (!data || data.totals.calls === 0) return null;
+
+  const { totals } = data;
+  const trend = data.byDay.map((d) => ({
+    /*
+     * Series keys are single lowercase words on purpose: the chart kit builds an
+     * SVG gradient id from the key (`url(#qsarea-<key>)`), and a key containing
+     * a space produces an invalid reference and an unfilled area.
+     */
+    day: fmtDayLabel(d.day),
+    calls: d.calls,
+    connected: d.connected,
+    jobs: d.uniqueJobs,
+  }));
+  const callers = data.callers.map((c) => ({ ...c, name: shortName(c.name) }));
 
   return (
-    <section className="space-y-4">
-      <div className="flex items-baseline justify-between">
+    <section className={`space-y-4 transition-opacity ${loading ? 'opacity-60' : ''}`}>
+      <div className="flex items-baseline justify-between gap-3">
         <h2 className="text-sm font-semibold text-ink-900">Graphical View</h2>
-        <span className="text-xs text-muted-foreground">Charts reflect the current filters.</span>
+        {/*
+          * Naming the scope is not a nicety. These numbers no longer match the
+          * window totals in the band below, and an unlabelled chart that
+          * disagrees with the tile beside it reads as a bug.
+          */}
+        <span className="text-xs text-muted-foreground">
+          {loading ? 'Updating…' : <>Current Filters · <span className="font-medium text-ink-700">{scopeLabel}</span> Only</>}
+        </span>
       </div>
 
-      {/* KPI row — window totals straight off the API (no client re-derivation). */}
+      {/* KPI row — the TAB's totals, straight off /charts. */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
         <QsKpiTile label="Total Calls" value={fmt(totals.calls)} accent={C_CALLS} icon={<PhoneCall size={18} />} />
         <QsKpiTile label="Connected" value={fmt(totals.connected)} accent={C_CONNECTED} icon={<PhoneForwarded size={18} />} />
         <QsKpiTile label="Connect %" value={`${totals.connectRate}%`} accent={QS_COLORS[6]} icon={<Percent size={18} />} />
         <QsKpiTile label="Jobs Called On" value={fmt(totals.uniqueJobs)} accent={C_JOBS} icon={<Briefcase size={18} />} />
+        {/*
+          * Callers excludes the caller_id 0 sentinel, so on the Inbound tab this
+          * correctly reads 0: nobody here placed those calls. A DISTINCT over the
+          * raw column counted the sentinel as a person.
+          */}
         <QsKpiTile label="Callers" value={fmt(totals.uniqueCallers)} accent={QS_COLORS[5]} icon={<Users size={18} />} />
         <QsKpiTile
           label={`Talk Time · Avg ${fmtTalkTime(totals.avgDurationSecs)}`}
@@ -199,14 +165,14 @@ export function CallTrackingCharts({
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        {charts.trend.length > 0 && (
+        {trend.length > 0 && (
           <ChartCard
             title="Calls Per Day"
-            subtitle="Calls, Connected Calls And Distinct Jobs Called On — Oldest To Newest"
+            subtitle={`${scopeLabel} — Calls, Connected Calls And Distinct Jobs Called On, Oldest To Newest`}
             className="md:col-span-2"
           >
             <QsLineChart
-              data={charts.trend}
+              data={trend}
               xKey="day"
               area
               height={300}
@@ -219,36 +185,34 @@ export function CallTrackingCharts({
           </ChartCard>
         )}
 
-        {charts.parties.length > 0 && (
+        {data.parties.length > 0 && (
           <ChartCard title="Calls By Party" subtitle="Who Was On The Other End Of The Call">
             {/* Default QS_COLORS rotation — role count is small and the palette's
                 first N hues are already mutually distinct. */}
-            <QsDonut data={charts.parties} nameKey="name" valueKey="value" height={300} />
-            {/*
-              * Legend key. "Other" is the slice operators ask about, so it is
-              * defined explicitly rather than left to inference: the role is
-              * derived by matching the number actually dialled against the four
-              * numbers on the job, so "Other" means NONE of them matched — it is
-              * not a synonym for Client SPOC (which has its own slice, and is
-              * simply absent from the donut when it has no calls in the window).
-              * Only roles PRESENT in the current window are listed, so the key
-              * never describes a colour that isn't on the chart.
-              */}
+            <QsDonut data={data.parties} nameKey="name" valueKey="value" height={300} />
+            {/* Legend key. Only roles PRESENT in this tab's window are listed, so
+                it never describes a colour that isn't on the chart. */}
             <dl className="mt-3 space-y-1 border-t border-border pt-2 text-xs leading-snug text-muted-foreground">
-              {charts.parties.map((p) => (
+              {data.parties.map((p) => (
                 <div key={p.name} className="flex gap-1.5">
                   <dt className="shrink-0 font-medium text-ink-700">{p.name}:</dt>
-                  <dd>{PARTY_ROLE_HELP[p.name] ?? 'A number on this job.'}</dd>
+                  <dd>{PARTY_ROLE_HELP[p.name] ?? 'A number we hold for this call.'}</dd>
                 </div>
               ))}
             </dl>
           </ChartCard>
         )}
 
-        {charts.callers.length > 0 && (
-          <ChartCard title="Top Callers" subtitle={`Most Calls Placed — Top ${TOP_N}`}>
+        {/*
+          * Absent on the Inbound tab BY CONSTRUCTION, not by accident: "top
+          * callers" means people who PLACED calls, and nobody here placed an
+          * inbound one. The server returns an empty array rather than one bar
+          * crediting the no-caller sentinel.
+          */}
+        {callers.length > 0 && (
+          <ChartCard title="Top Callers" subtitle={`Most Calls Placed — ${scopeLabel}`}>
             <QsBarChart
-              data={charts.callers}
+              data={callers}
               xKey="name"
               layout="vertical"
               height={300}
@@ -260,14 +224,20 @@ export function CallTrackingCharts({
           </ChartCard>
         )}
 
-        {charts.steps.length > 0 && (
+        {/*
+          * Job calls only, on every tab — "which step of the job lifecycle" has
+          * no answer for a call with no job. The old client-side version folded
+          * those into an 'Unknown' bar that was really "these had no job at all",
+          * a bar named for our ignorance rather than for what it counted.
+          */}
+        {data.steps.length > 0 && (
           <ChartCard
             title="Calls By Job Status At Call"
             subtitle="Which Step Of The Job Lifecycle The Calls Were Made From"
             className="md:col-span-2"
           >
             <QsBarChart
-              data={charts.steps}
+              data={data.steps}
               xKey="name"
               height={300}
               series={[{ key: 'calls', label: 'Calls', color: C_STEPS }]}
