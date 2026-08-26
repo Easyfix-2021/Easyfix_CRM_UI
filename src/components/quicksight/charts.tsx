@@ -233,8 +233,21 @@ export function QsKpiTile({
   icon?: ReactNode;
 }) {
   return (
-    <Card>
-      <CardContent className="p-4 flex items-center gap-3">
+    /*
+     * h-full so a row of tiles is a row of EQUAL tiles.
+     *
+     * Callers put these in a grid, and a grid stretches its ITEMS — but the item
+     * is the caller's wrapper, not this Card, so the Card kept sizing to its own
+     * content. Any tile with a taller `value` (the Plivo Billed Minutes tile
+     * carries a coverage line under the figure) then stood proud of the rest.
+     * Outside a grid this resolves against an auto-height parent and does
+     * nothing, so it is safe on every existing tile.
+     *
+     * CardContent already centres vertically, so the shorter tiles centre in the
+     * taller row rather than pinning their text to the top.
+     */
+    <Card className="h-full">
+      <CardContent className="h-full p-4 flex items-center gap-3">
         <div className="rounded-xl p-2.5" style={{ background: `${accent}1a`, color: accent }}>
           {icon}
         </div>
