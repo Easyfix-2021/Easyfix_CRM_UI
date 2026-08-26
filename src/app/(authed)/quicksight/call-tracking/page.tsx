@@ -292,6 +292,7 @@ type CallTrackingData = {
   byUser: UserRow[];
   byUserCombined: CombinedUserRow[];
   byOther: OtherRow[];
+  byProvider: ProviderRow[];
   byDay: DayRow[];
 };
 
@@ -379,6 +380,30 @@ function BreakdownCell({ items }: { items: Array<{ key: string; text: string }> 
   );
 }
 
+/*
+ * One row of the By Provider grain — (vendor x stack x direction).
+ *
+ * `provider` is the display label ('Plivo' / 'Kaleyra'); `providerKey` is the
+ * FILTER value ('plivo' / 'kaleyra') the drill-down sends. The backend derives
+ * both from the same isPlivo test, so a row can never drill into a vendor other
+ * than the one its own cell names.
+ */
+type ProviderRow = {
+  provider: string;
+  providerKey: Provider;
+  stack: string;
+  direction: 'IN' | 'OUT';
+  calls: number;
+  connected: number;
+  connectRate: number;
+  totalDurationSecs: number;
+  avgDurationSecs: number | null;
+  uniqueJobs: number;
+  uniqueCallers: number;
+  firstCallAt: string | null;
+  lastCallAt: string | null;
+};
+
 /* Which grain the table below the charts is showing. Purely client-side. */
 /*
  * 'direct' and 'inbound' are two SECTIONS over the same byOther rows, split on
@@ -388,7 +413,7 @@ function BreakdownCell({ items }: { items: Array<{ key: string; text: string }> 
  * US and — on the sample day, every one of them — nobody answering, out of
  * hours. Reading those as one population is how 8 missed calls stayed invisible.
  */
-type Grain = 'job' | 'user' | 'direct' | 'inbound';
+type Grain = 'job' | 'user' | 'direct' | 'inbound' | 'provider';
 /*
  * Tab labels, in ONE place. They name the chart scope in the Graphical View
  * caption as well as the tab strip, and a caption that disagreed with the tab it
@@ -399,6 +424,7 @@ const GRAIN_LABEL: Record<Grain, string> = {
   user: 'By User',
   direct: 'Direct Calls',
   inbound: 'Inbound',
+  provider: 'By Provider',
 };
 /* Which aggregation the By User tab is showing. Also purely client-side —
    BOTH sub-views ride on the one summary response, so switching never refetches. */
@@ -551,6 +577,7 @@ export default function CallTrackingPage() {
   const byUser = data?.byUser ?? [];
   const byUserCombinedRaw = data?.byUserCombined ?? [];
   const byOther = data?.byOther ?? [];
+  const byProvider = data?.byProvider ?? [];
   /*
    * One fetch, two tables. `direction` is in the backend's GROUP BY, so a row
    * is never both — splitting here needs no extra query and cannot drift from
@@ -612,6 +639,18 @@ export default function CallTrackingPage() {
 
   const byDay = data?.byDay ?? [];
   const totals = data?.totals;
+
+  /*
+   * Footer for the By Provider grain. Summed from the rows on screen like every
+   * other footer — but this one should equal totals.calls exactly, because the
+   * grain partitions the window instead of filtering it.
+   */
+  const providerFoot = useMemo(() => {
+    const calls = byProvider.reduce((a, r) => a + r.calls, 0);
+    const connected = byProvider.reduce((a, r) => a + r.connected, 0);
+    const secs = byProvider.reduce((a, r) => a + r.totalDurationSecs, 0);
+    return { calls, connected, secs, rate: calls > 0 ? Math.round((connected / calls) * 100) : 0 };
+  }, [byProvider]);
 
   const [tab, setTab] = useState<Grain>('job');
   const [userGrain, setUserGrain] = useState<UserGrain>('date');
@@ -1044,6 +1083,7 @@ export default function CallTrackingPage() {
             { value: 'user', label: 'By User', count: byUser.length },
             { value: 'direct', label: 'Direct Calls', count: byDirect.length },
             { value: 'inbound', label: 'Inbound', count: byInbound.length },
+            { value: 'provider', label: 'By Provider', count: byProvider.length },
           ]}
         />
       </div>
@@ -1690,6 +1730,100 @@ export default function CallTrackingPage() {
         </div>
       )}
 
+      {/* ── Tab 5: By Provider — vendor x stack x direction ───────────── */}
+      {tab === 'provider' && (
+        <div className="overflow-x-auto rounded-md border border-border mt-4">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th className="!text-left">Provider</th>
+                {/*
+                  * "Placed From", not "Source": the row says which CODEBASE
+                  * wrote the call, which is a migration question, and it is not
+                  * the same thing as tbl_job.source_type.
+                  */}
+                <th className="!text-left" title="Which stack wrote the row. A stamped provider column can ONLY come from the new backend — in both legacy Java stacks that field is @Transient, so they cannot write it at all.">Placed From</th>
+                <th className="!text-center" title="OUT = we called them. IN = they called us; only the legacy stack ever writes inbound rows.">Direction</th>
+                <th className="!text-center">Calls</th>
+                <th className="!text-center" title="Calls that actually connected, and that share of all calls">Connected</th>
+                <th className="!text-center">Total Duration</th>
+                <th className="!text-center">Avg Duration</th>
+                <th className="!text-center" title="Distinct jobs these calls touched">Jobs</th>
+                <th className="!text-center" title="Distinct operators who placed them. Zero on inbound — nobody here placed those.">Callers</th>
+                <th className="!text-center">First Call</th>
+                <th className="!text-center">Last Call</th>
+              </tr>
+            </thead>
+            <tbody>
+              {byProvider.map((r) => (
+                <tr key={`${r.providerKey}-${r.stack}-${r.direction}`}>
+                  <td className="!text-left font-medium">{r.provider}</td>
+                  <td className="!text-left whitespace-nowrap">{r.stack}</td>
+                  <td className="!text-center">
+                    <StatusChip tone={r.direction === 'IN' ? 'info' : 'neutral'}>
+                      {r.direction === 'IN' ? 'Inbound' : 'Outbound'}
+                    </StatusChip>
+                  </td>
+                  <td className="!text-center">
+                    <CountLink
+                      n={r.calls}
+                      title="Show the individual calls behind this number"
+                      onClick={() => setDrill({
+                        provider: r.providerKey,
+                        stack: r.stack,
+                        direction: r.direction,
+                        label: `${r.provider} · ${r.stack} · ${r.direction === 'IN' ? 'Inbound' : 'Outbound'}`,
+                      })}
+                    />
+                  </td>
+                  <td className="!text-center">
+                    <span className="text-success-strong">{r.connected}</span>
+                    <span className="ml-1 text-xs text-muted-foreground">({r.connectRate}%)</span>
+                  </td>
+                  <td className="!text-center tabular-nums">{fmtTalkTime(r.totalDurationSecs)}</td>
+                  <td className="!text-center tabular-nums">{fmtSecs(r.avgDurationSecs)}</td>
+                  <td className="!text-center">{r.uniqueJobs}</td>
+                  <td className="!text-center">{r.uniqueCallers}</td>
+                  <td className="!text-center text-xs"><DateTimeCell value={r.firstCallAt} /></td>
+                  <td className="!text-center text-xs"><DateTimeCell value={r.lastCallAt} /></td>
+                </tr>
+              ))}
+              {byProvider.length === 0 && (
+                <tr><td colSpan={11} className="!text-center text-muted-foreground py-6">No Calls In This Window.</td></tr>
+              )}
+            </tbody>
+            {byProvider.length > 0 && (
+              <tfoot>
+                <tr className="bg-muted/60 font-semibold">
+                  <td className="!text-left" colSpan={3}>Total</td>
+                  <td className="!text-center">{providerFoot.calls}</td>
+                  <td className="!text-center">
+                    {providerFoot.connected}
+                    <span className="ml-1 text-xs font-normal text-muted-foreground">({providerFoot.rate}%)</span>
+                  </td>
+                  <td className="!text-center tabular-nums">{fmtTalkTime(providerFoot.secs)}</td>
+                  <td className="!text-center tabular-nums">
+                    {fmtSecs(providerFoot.connected > 0 ? providerFoot.secs / providerFoot.connected : null)}
+                  </td>
+                  <td colSpan={4} />
+                </tr>
+              </tfoot>
+            )}
+          </table>
+          {/*
+            * This grain REGROUPS the window rather than narrowing it, so its
+            * total IS the window total — the one tab where that identity holds,
+            * and worth saying because every other tab's footer is a subset.
+            */}
+          <p className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
+            Every call in this window appears in exactly one row above, so this total matches the KPI band.
+            {byProvider.some((r) => r.providerKey === 'plivo' && r.stack === 'Old CRM')
+              ? null
+              : ' Plivo has no Old CRM row because the legacy stacks dial Kaleyra and cannot stamp the provider column at all.'}
+          </p>
+        </div>
+      )}
+
       <CallDrilldownDialog drill={drill} filters={applied} onClose={() => setDrill(null)} />
 
       {/* Hosts the in-place job workspace for every <JobRefLink> on this page. */}
@@ -1750,6 +1884,13 @@ type Drill = {
    */
   direction?: 'IN' | 'OUT';
   unattributed?: boolean;
+  /*
+   * The By Provider grain's other two thirds. `provider` OVERRIDES the page
+   * filter of the same name — the row was produced by grouping, not filtering,
+   * so the cell's vendor is the one that must reach the request.
+   */
+  provider?: Provider;
+  stack?: string;
   /** Row identity for the dialog title — "Job #N" or "Name · 03 Jul 2026". */
   label: string;
 };
@@ -1853,6 +1994,7 @@ function drillKey(d: Drill): string {
   return [
     d.jobId ?? '', d.callerId ?? '', d.day ?? '',
     d.noJob ? 'nojob' : '', d.direction ?? '', d.unattributed ? 'unattr' : '',
+    d.provider ?? '', d.stack ?? '',
   ].join('|');
 }
 
@@ -1911,6 +2053,11 @@ function CallDrilldownBody({ drill, filters, onClose }: {
     noJob: drill.noJob,
     direction: drill.direction,
     unattributed: drill.unattributed,
+    stack: drill.stack,
+    // AFTER the ...filters spread on purpose: on the By Provider tab the row's
+    // own vendor must win over whatever the page filter says, because that row
+    // came from a GROUP BY rather than from the filter.
+    ...(drill.provider ? { provider: drill.provider } : {}),
   }), [drill, filters]);
 
   const detail = usePostFetch<{ items: CallDetail[]; capped: boolean }>(
