@@ -98,6 +98,16 @@ export type JobContextData = {
   created_by_name?: string | null;
   created_date_time?: string | null;
   job_type?: string | null;
+  /**
+   * tbl_job.product_quantity — how many units the CLIENT asked for on the
+   * booking. Written by the legacy Bulk Upload and Dashboard stacks (16,372 of
+   * 16,395 uploaded jobs carry it); every other source leaves it NULL, which is
+   * why ReadField's em-dash is the right rendering rather than a hidden field.
+   *
+   * Already on the wire: the job detail query is `SELECT j.*`, so this needed
+   * no backend change — it was returned and simply never read.
+   */
+  product_quantity?: number | null;
   payment_mode?: string | null;
   requested_date_time?: string | null;
   /**
@@ -248,6 +258,18 @@ export function JobContextPanel({
                   job-level copies were both redundant and wrong for
                   multi-service jobs. */}
               <ReadField label="Job Type" value={job.job_type} />
+              {/* Beside Job Type, because both answer "what was booked". A
+                  quantity is only meaningful as a positive count, so 0 and a
+                  negative read as absent rather than as a figure an operator
+                  might quote back to a client. */}
+              <ReadField
+                label="Quantity"
+                value={
+                  typeof job.product_quantity === 'number' && job.product_quantity > 0
+                    ? job.product_quantity.toLocaleString('en-IN')
+                    : null
+                }
+              />
               <ReadField label="Payment Mode" value={job.payment_mode} />
               <ReadField label="Booked By" value={job.created_by_name} />
               {/* formatDate renders date + IST time — no separate datetime helper. */}
