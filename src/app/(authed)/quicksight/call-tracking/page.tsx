@@ -852,7 +852,9 @@ export default function CallTrackingPage() {
             <h2 className="text-sm font-semibold text-ink-900">Reach And Call Cost</h2>
             <span className="text-xs text-muted-foreground">Counts people and billed seconds — everything above counts calls.</span>
           </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {/* 4-up: this band gained Missed Inbound, and a 3-up grid left the
+              fourth card alone on its own row, reading as an afterthought. */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div title={PARTIES_REACHED_HELP}>
               <QsKpiTile
                 label="Parties Reached"
