@@ -12,6 +12,7 @@ import { CitySelect } from '@/components/ui/city-select';
 import { DownloadButton } from '@/components/ui/download-button';
 import { StatusChip, type StatusChipTone } from '@/components/ui/StatusChip';
 import { CsvCellModal, type CsvCellItem } from '@/components/ui/CsvCellModal';
+import { useVirtualRows, VirtualPad } from '@/components/ui/virtual-rows';
 import {
   Dialog,
   DialogContent,
@@ -1102,12 +1103,18 @@ export default function EasyfixersPage() {
    */
   // Rows arrive already sorted from the server (full-list sort), so we map the
   // raw `rows` directly — no client-side re-sort of the current page.
+  /*
+   * Row virtualisation. `displayRows` is memoised (the EfRow memo depends on
+   * that same stability), which is the hook's contract — an array rebuilt every
+   * render would reset the scroll window on every render.
+   */
   const displayRows = useMemo(() => rows.map((e) => ({
     e,
     catItems: parseCsvCell(e.efr_service_category, categoryById),
     typeItems: parseCsvCell(e.efr_service_type, serviceTypeById),
     efName: formatEasyfixerName(e.efr_name),
   })), [rows, categoryById, serviceTypeById]);
+  const vEf = useVirtualRows(displayRows);
 
   return (
     <div className="space-y-5">
@@ -1359,7 +1366,14 @@ export default function EasyfixersPage() {
         */}
       <Card>
         <CardContent className="p-0">
-          <div className="overflow-x-auto">
+          {/*
+            * ref + containerClass = row virtualisation (components/ui/virtual-rows).
+            * INERT below 200 rows, so 10 / 20 / 50 per page behave exactly as
+            * before and only "All" (500, the endpoint's Joi max) is windowed —
+            * which is the page size that mounts 500 rows x 22 cells AND 500
+            * Radix action menus in one go.
+            */}
+          <div ref={vEf.scrollRef} className={`overflow-x-auto ${vEf.containerClass}`}>
           {/*
             * Manage-Easyfixers list table (2026-06-08). Visual + behaviour
             * parity with the Manage Users table pattern:
@@ -1374,7 +1388,10 @@ export default function EasyfixersPage() {
             *   - SortHeader rendered with `align` so the header aligns to
             *     the cell content direction.
             */}
-          <table className="data-table" style={{ tableLayout: 'fixed', minWidth: '2950px' }}>
+          <table
+            className={`data-table ${vEf.active ? 'head-sticky' : ''}`}
+            style={{ tableLayout: 'fixed', minWidth: '2950px' }}
+          >
             {/*
               * Explicit px widths (not percentages) so the table has a
               * deterministic intrinsic width that exceeds the viewport,
@@ -1441,19 +1458,23 @@ export default function EasyfixersPage() {
                 <th className="!text-right !pl-6 whitespace-nowrap stick-col-head stick-right">Action</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody ref={vEf.bodyRef}>
               {/* Show "Loading…" on EVERY in-flight fetch — initial, search,
                   pagination AND sort. Sort reloads the full list server-side
                   and can take ~1-2s for aggregate columns, so a clear loading
                   state matters (the rows are gated on !loading below, so
                   without this the body would sit blank during the sort). */}
               {loading && (
-                <tr><td colSpan={22} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
+                <tr><td colSpan={EF_COLS} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
               )}
               {!loading && rows.length === 0 && (
-                <tr><td colSpan={22} className="!text-center text-muted-foreground py-6">No easyfixers match the current filters.</td></tr>
+                <tr><td colSpan={EF_COLS} className="!text-center text-muted-foreground py-6">No easyfixers match the current filters.</td></tr>
               )}
-              {!loading && displayRows.map((row) => (
+              {/* Gated on !loading like the rows: a spacer standing in for rows
+                  that are currently suppressed is thousands of px of blank under
+                  a "Loading…" line. */}
+              {!loading && <VirtualPad height={vEf.padTop} colSpan={EF_COLS} />}
+              {!loading && vEf.slice.map((row) => (
                 <EfRow
                   key={row.e.efr_id}
                   row={row}
@@ -1480,6 +1501,7 @@ export default function EasyfixersPage() {
                   onOpenDeepSkillModal={openDeepSkillModal}
                 />
               ))}
+              {!loading && <VirtualPad height={vEf.padBottom} colSpan={EF_COLS} />}
             </tbody>
           </table>
           </div>
@@ -1623,6 +1645,13 @@ export default function EasyfixersPage() {
  * component — the CSV columns are parsed and the name formatted ONCE per
  * rows/lookup change, not on every render pass.
  */
+/*
+ * Column count of the list table. Named because FOUR things must span it — the
+ * loading row, the empty row and the two virtualisation spacers — and four
+ * literals that have to agree is how one of them goes stale.
+ */
+const EF_COLS = 22;
+
 type DisplayRow = {
   e: EnrichedEf;
   catItems: CsvCellItem[];

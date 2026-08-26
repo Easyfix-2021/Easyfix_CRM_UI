@@ -48,6 +48,7 @@ import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
+import { useVirtualRows, VirtualPad } from '@/components/ui/virtual-rows';
 import { Checkbox } from '@/components/ui/checkbox';
 import { RefreshBar } from '@/components/ui/refresh-bar';
 import { LiveLocationPopover } from '@/components/location/LiveLocationPopover';
@@ -891,6 +892,22 @@ export default function JobsPage() {
   // Server already returns the page in sort order; keep the name `sorted` for the
   // render. filteredItems = the instant client q-filter over the current page.
   const sorted = filteredItems;
+  /*
+   * Row virtualisation. `sorted` is `filteredItems`, a useMemo — the hook's
+   * contract, since an array rebuilt on every render would reset the scroll
+   * window on every render and fight the operator's scroll.
+   *
+   * Only the main table is windowed; the Unconfirmed tab renders through
+   * UnconfirmedJobsTable, its own component with its own rows.
+   */
+  const vJobs = useVirtualRows(sorted);
+  /*
+   * Column count of the main table. The selection column only exists for
+   * operators who can bulk-transfer, so this is not a constant — and the
+   * loading row and both virtualisation spacers all have to span whatever it
+   * currently is.
+   */
+  const jobCols = canJob.isTransferJobOwnership ? 20 : 19;
 
   /*
    * ── Selection derivations ─────────────────────────────────────────
@@ -1501,7 +1518,17 @@ export default function JobsPage() {
               onMagicLinkSent={() => load(false, true)}
             />
           ) : (
-              <table className="data-table">
+            /*
+              * ref + containerClass = row virtualisation (components/ui/virtual-rows).
+              * Its own wrapper rather than the CardContent above, which also
+              * wraps UnconfirmedJobsTable — that table is a separate component
+              * with its own rows and must not share this scroll box.
+              *
+              * INERT below 200 rows, so 10 / 20 / 50 per page are unchanged and
+              * only "All" (500, the endpoint's Joi max) is windowed.
+              */
+            <div ref={vJobs.scrollRef} className={vJobs.containerClass}>
+              <table className={`data-table ${vJobs.active ? 'head-sticky' : ''}`}>
                 <thead>
                   <tr>
                     {/* Selection column — only rendered for operators who can
@@ -1548,9 +1575,13 @@ export default function JobsPage() {
                     <th className="stick-col-head stick-right text-right">Action</th>
                   </tr>
                 </thead>
-                <tbody>
-                  {loading && <tr><td colSpan={canJob.isTransferJobOwnership ? 20 : 19} className="text-center py-8 text-muted-foreground">Loading…</td></tr>}
-                  {!loading && sorted.map((j) => (
+                <tbody ref={vJobs.bodyRef}>
+                  {loading && <tr><td colSpan={jobCols} className="text-center py-8 text-muted-foreground">Loading…</td></tr>}
+                  {/* Gated on !loading like the rows: a spacer standing in for rows
+                      that are currently suppressed is thousands of px of blank
+                      under a "Loading…" line. */}
+                  {!loading && <VirtualPad height={vJobs.padTop} colSpan={jobCols} />}
+                  {!loading && vJobs.slice.map((j) => (
                 <tr key={j.job_id}>
                   {canJob.isTransferJobOwnership && (
                     <td>
@@ -1731,8 +1762,10 @@ export default function JobsPage() {
                   </td>
                 </tr>
               ))}
+                  {!loading && <VirtualPad height={vJobs.padBottom} colSpan={jobCols} />}
                 </tbody>
               </table>
+            </div>
           )}
         </CardContent>
       </Card>

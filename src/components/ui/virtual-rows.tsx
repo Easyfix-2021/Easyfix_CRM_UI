@@ -88,6 +88,17 @@ export type VirtualRows<T> = {
   containerClass: string;
 };
 
+/*
+ * ⚠ `rows` MUST BE A STABLE REFERENCE — a useMemo result, or an array read
+ * straight off fetched data. Not `items.filter(...)` computed inline.
+ *
+ * This is the standard contract for every virtualiser (react-window,
+ * tanstack-virtual) and it is not pedantry here: the reset effect keys on the
+ * array identity, so an array rebuilt on every render resets the window on
+ * every render — and since scrolling itself causes a render, the table would
+ * fight the operator's scroll and snap back to the top. The dev warning below
+ * catches exactly that, at the moment somebody introduces it.
+ */
 export function useVirtualRows<T>(rows: T[]): VirtualRows<T> {
   // The scroll container lives in STATE so effects re-run when it mounts — see
   // the note on scrollRef above. setState identities are stable, so passing the
@@ -121,6 +132,36 @@ export function useVirtualRows<T>(rows: T[]): VirtualRows<T> {
     if (scrollEl) scrollEl.scrollTop = 0;
     setRange((r) => (r.start === 0 && r.end === VIRTUALISE_ABOVE ? r : { start: 0, end: VIRTUALISE_ABOVE }));
   }, [rows, scrollEl]);
+
+  /*
+   * Dev-only tripwire for an unmemoised `rows`.
+   *
+   * A LEGITIMATE change — new page, new filter, re-sort — produces a new array
+   * ONCE and then settles. Churn produces one on every render, which is what
+   * makes the table snap back to the top mid-scroll. Counting CONSECUTIVE
+   * changes separates the two exactly: an isolated change resets the counter,
+   * and only a genuine churn ever reaches the threshold.
+   *
+   * A warning rather than a throw: the symptom is annoying, not dangerous, and
+   * a hard failure in a table nobody has scrolled yet would be worse than the
+   * bug it reports.
+   */
+  const churn = useRef({ last: rows, streak: 0 });
+  if (process.env.NODE_ENV !== 'production') {
+    if (churn.current.last === rows) churn.current.streak = 0;
+    else {
+      churn.current.last = rows;
+      churn.current.streak += 1;
+      if (churn.current.streak === 8) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          '[useVirtualRows] `rows` changed identity on 8 consecutive renders. '
+          + 'Wrap it in useMemo — an unstable array resets the scroll window on every '
+          + 'render, so the table will snap back to the top while the operator scrolls.',
+        );
+      }
+    }
+  }
 
   useEffect(() => {
     const el = scrollEl;
@@ -211,7 +252,9 @@ export function VirtualPad({ height, colSpan }: { height: number; colSpan: numbe
   if (height <= 0) return null;
   return (
     <tr data-vpad="" aria-hidden="true">
-      <td colSpan={colSpan} style={{ height, padding: 0, border: 0 }} />
+      {/* pointerEvents:none so `.data-table tr:hover td` never tints the spacer —
+          otherwise a faint band follows the cursor across empty space. */}
+      <td colSpan={colSpan} style={{ height, padding: 0, border: 0, pointerEvents: 'none' }} />
     </tr>
   );
 }
