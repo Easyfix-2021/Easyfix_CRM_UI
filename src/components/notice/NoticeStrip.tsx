@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Megaphone, Pin, ChevronDown, Image as ImageIcon, Radio, List } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { useFetch } from '@/lib/hooks';
+import { parseIstDateTime } from '@/lib/format';
 import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
 import { NoticeCategoryTag } from './NoticeChip';
@@ -38,20 +39,29 @@ const VISIBLE_DEFAULT = 3;
 
 /* Format the publish_at moment to a short "DD MMM" / "Today" / "Yesterday".
  * Anything older than 7 days falls back to "DD MMM" so the line stays compact. */
+/*
+ * "Today" means today IN IST, on both sides of the comparison.
+ *
+ * This compared LOCAL calendar fields of a value that is an IST wall clock
+ * against the browser's own local today, so the label slipped by a day around
+ * midnight for anyone outside IST. Converting only the parse would not have
+ * fixed it — a correct instant compared with local getters is still the wrong
+ * calendar. Both operands have to be reduced to the same IST day.
+ *
+ * 'en-CA' because it formats as YYYY-MM-DD, which compares as a string.
+ */
+const IST_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' });
+const istDay = (d: Date) => IST_DAY.format(d);
+
 function compactDate(value: string | null): string {
   if (!value) return '';
-  const d = new Date(value);
+  const d = parseIstDateTime(value);
   if (Number.isNaN(d.getTime())) return '';
-  const today = new Date();
-  const sameDay = (a: Date, b: Date) =>
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate();
-  if (sameDay(d, today)) return 'Today';
-  const yest = new Date(today);
-  yest.setDate(yest.getDate() - 1);
-  if (sameDay(d, yest)) return 'Yesterday';
-  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+  const now = new Date();
+  const day = istDay(d);
+  if (day === istDay(now)) return 'Today';
+  if (day === istDay(new Date(now.getTime() - 86_400_000))) return 'Yesterday';
+  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', timeZone: 'Asia/Kolkata' });
 }
 
 /* A single banner row. Category colour drives the left-border stripe

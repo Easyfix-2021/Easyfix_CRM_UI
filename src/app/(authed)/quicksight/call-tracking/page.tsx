@@ -1087,7 +1087,20 @@ export default function CallTrackingPage() {
                       * drilling on the day alone would return every user's calls —
                       * a number that wouldn't match the cell. So it stays plain.
                       */}
-                    {r.userId == null ? (
+                    {/*
+                      * `> 0`, not `!= null`. tbl_job_caller_info.caller_id
+                      * really contains 0 for calls with no attributed caller,
+                      * and 0 slipped past a null check — so the count rendered
+                      * as a link, the drill sent selectedCallerId: 0, and the
+                      * endpoint 400'd ("must be >= 1"). Reported from prod
+                      * 2026-08-26 as "Calls · User #0".
+                      *
+                      * The service now normalises that sentinel to null, so
+                      * this is belt-and-braces — kept because the CRM deploys
+                      * independently of the backend, and this is the guard
+                      * standing between an operator and a 400.
+                      */}
+                    {!(r.userId != null && r.userId > 0) ? (
                       <span title="These calls have no caller recorded, so they can't be isolated in a drill-down.">{r.calls}</span>
                     ) : (
                       <CountLink
@@ -1222,7 +1235,20 @@ export default function CallTrackingPage() {
                         * counts. The endpoint applies each selection key only
                         * when present, so caller-without-day already worked.
                         */}
-                      {r.userId == null ? (
+                      {/*
+                      * `> 0`, not `!= null`. tbl_job_caller_info.caller_id
+                      * really contains 0 for calls with no attributed caller,
+                      * and 0 slipped past a null check — so the count rendered
+                      * as a link, the drill sent selectedCallerId: 0, and the
+                      * endpoint 400'd ("must be >= 1"). Reported from prod
+                      * 2026-08-26 as "Calls · User #0".
+                      *
+                      * The service now normalises that sentinel to null, so
+                      * this is belt-and-braces — kept because the CRM deploys
+                      * independently of the backend, and this is the guard
+                      * standing between an operator and a 400.
+                      */}
+                    {!(r.userId != null && r.userId > 0) ? (
                         <span title="These calls have no caller recorded, so they can't be isolated in a drill-down.">{r.calls}</span>
                       ) : (
                         <CountLink

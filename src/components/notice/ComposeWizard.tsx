@@ -115,12 +115,40 @@ const EMPTY: Form = {
 const MAX_IMAGES = 5;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;  // matches BE multer limit
 
-/* datetime-local string → ISO. Empty/invalid → null. */
+/*
+ * datetime-local string → the wire, UNCONVERTED. Empty/invalid → null.
+ *
+ * ─── WHY THERE IS NO CONVERSION HERE ANY MORE ────────────────────────────
+ *
+ * This used to be `new Date(v).toISOString()`, and it was wrong for EVERYONE,
+ * including operators in IST — unlike the rest of this codebase's date bugs,
+ * which only appear outside India.
+ *
+ * `v` is a naive wall clock from <input type="datetime-local">, e.g.
+ * "2026-08-26T10:00", and the operator means 10:00 IST. `new Date(v)` read it
+ * as browser-local and `.toISOString()` shifted it to UTC — so an IST operator
+ * scheduling 10:00 sent 04:30Z. notice.service.js binds publish_at STRAIGHT
+ * INTO THE INSERT with no IST projection (unlike job.service.js, which
+ * projects), so 04:30 is what landed in the DATETIME column, and reading it
+ * back zone-less means 04:30 IST. The notice published five and a half hours
+ * early, every time.
+ *
+ * The fix is to stop converting. The value already IS the IST wall clock the
+ * column wants, and the backend validator's string branch accepts exactly this
+ * shape (`YYYY-MM-DD[ T]HH:mm(:ss)?` — notice.validator.js). fromBeDate below
+ * is a naive-string→naive-string identity in every timezone, so the round trip
+ * closes.
+ *
+ * Do NOT "fix" this with parseIstDateTime: that produces a real instant, and
+ * .toISOString() on it would reintroduce exactly the shift above.
+ */
+const NAIVE_LOCAL_DATETIME = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2})?$/;
 function toBeDate(v: string): string | null {
   if (!v) return null;
-  const d = new Date(v);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toISOString();
+  // Reject anything that is not a bare wall clock rather than passing a
+  // zone-bearing string through to a column that cannot represent one.
+  if (!NAIVE_LOCAL_DATETIME.test(v.trim())) return null;
+  return v.trim();
 }
 
 /* ISO → datetime-local string (server tz → local tz). Empty/invalid → ''. */

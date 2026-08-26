@@ -646,7 +646,18 @@ export function LiveLocationPopover({
                 </dd>
               </dl>
 
-              {mapsHref && (mapClickable ? (
+              {/*
+                * HIDDEN, not disabled, when ui.map.clickable is off.
+                *
+                * A greyed control that still reads "Open in Google Maps" tells
+                * the operator there is something here and then refuses — it
+                * looks like a broken link rather than a switched-off feature,
+                * and the only explanation was a title attribute nobody hovers.
+                * Withdrawing it entirely is the honest rendering of "this is
+                * turned off": the coordinates are still on screen, so nothing
+                * an operator needs is lost.
+                */}
+              {mapsHref && mapClickable && (
                 <a
                   href={mapsHref}
                   target="_blank"
@@ -655,14 +666,7 @@ export function LiveLocationPopover({
                 >
                   <ExternalLink className="h-4 w-4" /> Open in Google Maps
                 </a>
-              ) : (
-                <span
-                  className="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground cursor-not-allowed"
-                  title="Map links are temporarily disabled"
-                >
-                  <ExternalLink className="h-4 w-4" /> Open in Google Maps
-                </span>
-              ))}
+              )}
             </>
           )}
 
