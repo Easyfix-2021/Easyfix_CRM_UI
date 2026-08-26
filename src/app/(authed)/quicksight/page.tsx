@@ -35,9 +35,12 @@ import {
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { useMe } from '@/lib/auth-context';
+import { useFetch } from '@/lib/hooks';
 import { actionFlags } from '@/lib/permissions';
 
 /* Family gate — must be held to use any QuickSight report. */
+/* tbl_role.role_id for Admin — the same value the backend gate uses. */
+const ADMIN_ROLE_ID = 2;
 const FAMILY_KEY = 'ef-QuickSight';
 
 type ReportCardDef = {
@@ -204,7 +207,34 @@ export default function QuickSightLandingPage() {
     ...REPORTS.flatMap((r) => r.anyOf ?? []),
   ]);
   const hasFamily = flags[FAMILY_KEY];
-  const visible = REPORTS.filter((r) => (r.anyOf ? r.anyOf.some((k) => flags[k]) : flags[r.actionKey]));
+
+  /*
+   * Employee Productivity is open to Admins AND reporting managers — and being
+   * a reporting manager is a RELATION (somebody reports to you), not a role, so
+   * no permission flag can express it. The dropdown endpoint is the system's
+   * own answer to "who is a reporting manager", so we ask THAT rather than
+   * inventing a second definition that could drift from the one the report
+   * itself uses.
+   *
+   * The URL is byte-identical to the report page's first RM fetch, so
+   * useFetch's module-level cache serves that one from here — opening the
+   * report costs no second call.
+   *
+   * An Admin never depends on this: they are admitted locally, so a slow or
+   * failed lookup can never hide a tile they are entitled to. The call only
+   * ever ADDS the card, for a manager.
+   */
+  const RM_KEY = '/admin/quicksight/employee-productivity/reporting-managers?verticalId=0';
+  const rmRes = useFetch<{ user_id: number; user_name: string }[]>(RM_KEY);
+  const isAdmin = Number(me?.role?.role_id) === ADMIN_ROLE_ID;
+  const myUserId = Number(me?.user?.user_id) || 0;
+  const isReportingManager = (rmRes.data ?? []).some((m) => Number(m.user_id) === myUserId);
+  const canSeeEmployeeProductivity = isAdmin || isReportingManager;
+
+  const visible = REPORTS
+    .filter((r) => (r.anyOf ? r.anyOf.some((k) => flags[k]) : flags[r.actionKey]))
+    /* The permission flag still has to pass first; this only narrows it. */
+    .filter((r) => r.urlBase !== 'employee-productivity' || canSeeEmployeeProductivity);
   // Split AFTER gating, so both groups honour the same permission result and a
   // card lands in exactly one of them. The new group is sorted by its explicit
   // rank (NOT registry order) — see newOrder on ReportCardDef.

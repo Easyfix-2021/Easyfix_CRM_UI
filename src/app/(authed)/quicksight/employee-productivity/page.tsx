@@ -57,6 +57,8 @@ import { actionFlags } from '@/lib/permissions';
 
 const ACTION_KEY = 'isQuickSightEmployeeProductivityView';
 const BASE = '/admin/quicksight/employee-productivity';
+/* tbl_role.role_id for Admin — the same value the backend gate uses. */
+const ADMIN_ROLE_ID = 2;
 
 type AppointmentType = 'original' | 'requested';
 
@@ -198,6 +200,17 @@ export default function EmployeeProductivityPage() {
     ],
     [zonalRes.data],
   );
+  /*
+   * Admins choose a Reporting Manager; reporting managers do not get the
+   * choice — they see their own team and nothing else.
+   *
+   * Read off the session the navbar already loaded, so this costs no request.
+   * It is PRESENTATION ONLY: the server pins reportingManagerId to the caller
+   * for every non-Admin regardless of what the client sends, so hiding the
+   * control is a courtesy, not the boundary.
+   */
+  const isAdmin = Number(me?.role?.role_id) === ADMIN_ROLE_ID;
+
   const rmOptions = useMemo<SearchOption[]>(
     () => [
       { value: 0, label: 'All Reporting Managers' },
@@ -427,16 +440,20 @@ export default function EmployeeProductivityPage() {
             required
           />
         </div>
-        <div className="space-y-1">
-          <label className="text-xs font-medium text-muted-foreground">Reporting Manager</label>
-          <SearchSelect
-            value={reportingManagerId}
-            onChange={(v) => changeReportingManager(Number(v) || 0)}
-            options={rmOptions}
-            placeholder="All Reporting Managers"
-            required
-          />
-        </div>
+        {/* Reporting managers get no picker: the server scopes them to their own
+              team, so a control that cannot change the answer would only mislead. */}
+          {isAdmin && (
+            <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">Reporting Manager</label>
+            <SearchSelect
+              value={reportingManagerId}
+              onChange={(v) => changeReportingManager(Number(v) || 0)}
+              options={rmOptions}
+              placeholder="All Reporting Managers"
+              required
+            />
+          </div>
+          )}
         <div className="space-y-1">
           <label className="text-xs font-medium text-muted-foreground">Zonal Manager</label>
           <SearchSelect
