@@ -51,7 +51,17 @@ type TrainingVideo = {
    * legacy .mp4 files served from core.easyfix.in. */
   video_url: string | null;
   /* Delete blockers, computed by the backend on every list read — see
-   * `deleteBlockReason` below for why they are on the list response at all. */
+   * `deleteBlockReason` below for why they are on the list response at all.
+   *
+   * progress_count has NO column of its own, deliberately. It is
+   * COUNT(*) FROM easyfixer_watched_video WHERE video_id = <id> — WATCH
+   * PROGRESS, counted however the video was reached, course videos included.
+   * As a number it is right; as a column headed "Technicians" it was not: a
+   * video assigned to hundreds of people who have not opened it yet reads 0,
+   * so the table said "nobody" about a video that is squarely in front of
+   * everyone. It still governs the delete guard, where 0 is not a claim about
+   * who is being trained but the exact question the guard asks — is any
+   * progress row pointing at this id. */
   progress_count: number;
   course_count: number;
 };
@@ -251,15 +261,13 @@ export default function TrainingVideosPage() {
                 React as a hydration error.
               */}
               {/* Title */}
-              <col style={{ width: '30%' }} />
+              <col style={{ width: '36%' }} />
               {/* Sub Title */}
-              <col style={{ width: '24%' }} />
+              <col style={{ width: '28%' }} />
               {/* Video */}
-              <col style={{ width: '11%' }} />
-              {/* Technicians */}
               <col style={{ width: '12%' }} />
               {/* Courses */}
-              <col style={{ width: '11%' }} />
+              <col style={{ width: '12%' }} />
               {/* Actions */}
               <col style={{ width: '12%' }} />
             </colgroup>
@@ -272,19 +280,22 @@ export default function TrainingVideosPage() {
                     column means an operator spots the gap while scanning,
                     instead of opening each row to find out. */}
                 <th className="!text-center whitespace-nowrap">Video</th>
-                {/* Both count columns exist to explain a refused delete before
-                    it is attempted — they are the delete guard, surfaced. */}
-                <th className="!text-center whitespace-nowrap">Technicians</th>
+                {/* Surfaces the delete guard before the click. Its sibling
+                    count — progress_count — is fetched and still enforced by
+                    the guard, but NOT shown: it counts watch progress while
+                    the header said "Technicians", so a video assigned to
+                    people who have not started it yet read 0 and the column
+                    claimed nobody was on a video everybody had. */}
                 <th className="!text-center whitespace-nowrap">Courses</th>
                 <th className="!text-right whitespace-nowrap">Actions</th>
               </tr>
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={6} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
+                <tr><td colSpan={5} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
               )}
               {!loading && rows.length === 0 && (
-                <tr><td colSpan={6} className="!text-center text-muted-foreground py-6">No training videos match the current search.</td></tr>
+                <tr><td colSpan={5} className="!text-center text-muted-foreground py-6">No training videos match the current search.</td></tr>
               )}
               {!loading && rows.map((v) => {
                 const blocked = deleteBlockReason(v);
@@ -324,18 +335,9 @@ export default function TrainingVideosPage() {
                         </StatusChip>
                       )}
                     </td>
-                    {/* A non-zero count is a delete blocker, so it gets a chip
-                        (amber = "this holds something back"); zero is inert and
-                        stays muted so the blockers are what the eye finds. */}
-                    <td className="!text-center whitespace-nowrap">
-                      {v.progress_count > 0 ? (
-                        <StatusChip tone="amber" size="sm" title={`${v.progress_count.toLocaleString('en-IN')} technician(s) have watched-progress against this video`}>
-                          {v.progress_count.toLocaleString('en-IN')}
-                        </StatusChip>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">0</span>
-                      )}
-                    </td>
+                    {/* A non-zero count is a delete blocker, so it gets a chip;
+                        zero is inert and stays muted so the blockers are what
+                        the eye finds. */}
                     <td className="!text-center whitespace-nowrap">
                       {v.course_count > 0 ? (
                         <StatusChip tone="sky" size="sm" title={`Included in ${v.course_count.toLocaleString('en-IN')} course(s)`}>

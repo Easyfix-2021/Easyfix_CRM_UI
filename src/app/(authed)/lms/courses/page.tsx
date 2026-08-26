@@ -25,13 +25,14 @@
 import * as React from 'react';
 import {
   GraduationCap, Plus, Search, Pencil, ListVideo, Trash2, RotateCcw,
-  ChevronUp, ChevronDown, X, AlertTriangle, Play,
+  ChevronUp, ChevronDown, X, AlertTriangle, Play, Users,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { IconButton } from '@/components/ui/icon-button';
 import { SearchSelect } from '@/components/ui/search-select';
@@ -56,6 +57,16 @@ type Course = {
   name: string;
   description: string | null;
   status: number;            // 1 = Active, 0 = Retired
+  /*
+   * 1 = auto-assign this course to every technician who completes registration
+   * from now on. It is an ASSIGNMENT rule, not a gate: what a technician must
+   * complete is what they actually hold, so the flag on its own holds nobody.
+   * The backend's mandatory-video query also requires `status = 1`, so a
+   * retired course gates nobody even while flagged. Technicians who registered
+   * earlier are back-filled only by POST /courses/:id/assign-all.
+   * TINYINT on the wire, so compare against 1, not true.
+   */
+  is_mandatory: number;
   created_at: string | null;
   updated_at: string | null;
   video_count: number;
@@ -256,6 +267,86 @@ export default function ManageCoursesPage() {
     }
   }
 
+  /*
+   * Asked AFTER the save, and only when the flag has just been turned ON.
+   *
+   * The flag and the back-fill are two decisions with two different blast
+   * radii, and the backend keeps them as two calls for exactly that reason:
+   * `is_mandatory` only makes assignMandatoryCourses() hand the course to
+   * technicians who finish registration from here on, while assignCourseToAll
+   * is what reaches the ~2,600 who registered already. So the flag is saved by
+   * the time this runs, and declining does not undo it — it declines the
+   * back-fill, which is the only part that touches anyone today.
+   *
+   * Every clause below is anchored in SQL, so do not soften or embellish them:
+   *   - "given automatically at registration" — assignMandatoryCourses(),
+   *     is_mandatory = 1 AND status = 1, run at Gate 1 finalization.
+   *   - "app shows jobs locked" — jobsUnlocked in mobile-registration.service
+   *     ANDs trainingComplete, which counts the mandatory video set
+   *     (MANDATORY_VIDEO_IDS_SQL), and that set is per-technician: a course's
+   *     videos join it only once THAT technician holds the course.
+   *     Deliberately not "stops receiving work": the server-side withdrawal of
+   *     receiveNewJobs is the OVERDUE overlay, and this back-fill sends no
+   *     due_date, so nobody is made overdue by answering yes.
+   *   - "active technician" — assignCourseToAll filters efr_status = 1.
+   *   - "keeps their existing assignment" — its NOT EXISTS guard skips anyone
+   *     who already holds the course, due date and progress untouched.
+   *
+   * Lives on the PAGE, not in the modal, so the course dialog is closed while
+   * the question is on screen — a confirm stacked over the form it came from
+   * reads as part of the form, and this is a separate action.
+   */
+  async function promptAssignAll(c: { id: number; name: string }) {
+    const ok = await confirm({
+      title: 'Assign To Existing Technicians?',
+      description: (
+        <span className="space-y-2 block">
+          <span className="block">
+            <span className="font-medium">&ldquo;{c.name}&rdquo;</span> is now mandatory. That saves one
+            thing only: every technician who completes registration from now on is given this course
+            automatically, and their app shows jobs locked until they have watched its videos.
+            Technicians already registered are not given it and are not held to it.
+          </span>
+          <span className="block">
+            <span className="font-medium">Only Future Registrations</span> — nothing changes for anyone
+            already registered. They are not assigned this course, so nothing on their app changes.
+          </span>
+          <span className="block">
+            <span className="font-medium">Assign To All Active Technicians</span> — every active
+            technician is given this course now, and each of them then has to watch its videos before
+            their app unlocks jobs again. Anyone who already has it keeps their existing assignment, due
+            date and progress.
+          </span>
+        </span>
+      ),
+      confirmLabel: 'Assign To All Active Technicians',
+      cancelLabel: 'Only Future Registrations',
+      icon: <Users className="size-5" />,
+      iconAccent: 'sky',
+    });
+    if (!ok) return;
+    const t = showToast({ variant: 'loading', message: 'Assigning to active technicians…' });
+    try {
+      /* No due_date sent — the endpoint accepts an optional one and stores NULL
+       * otherwise, which is what a blanket back-fill should be. Per-technician
+       * deadlines are set from Assign Training, which owns that decision. */
+      const r = await api.post<{ assigned: number }>(`/admin/lms/courses/${c.id}/assign-all`, {});
+      dismissToast(t);
+      showToast({
+        variant: 'success',
+        /* 0 is a legitimate answer (idempotent re-run, or everyone already had
+         * it) and must not read as a failure. */
+        message: r.assigned === 0
+          ? 'Every Active Technician Already Had This Course'
+          : `Assigned To ${r.assigned.toLocaleString('en-IN')} Technician${r.assigned === 1 ? '' : 's'}`,
+      });
+      refreshCourses();
+    } catch (e) {
+      dismissToast(t);
+      showToast({ variant: 'error', message: errText(e, 'Assign to all failed') });
+    }
+  }
+
   const rows = listFetch.data?.rows ?? [];
   const total = listFetch.data?.total ?? 0;
 
@@ -352,7 +443,40 @@ export default function ManageCoursesPage() {
               {!listFetch.loading && rows.map((c) => (
                 <tr key={c.id}>
                   <td className="!text-left max-w-[360px]">
-                    <div className="font-medium truncate" title={c.name}>{c.name}</div>
+                    {/* Mandatory rides on the Name cell rather than taking a
+                        column of its own: it is not sortable (SORTABLE_COLUMNS
+                        in lms.service.js has no key for it, and an unsupported
+                        sortBy 400s the whole list), and the flag only ever
+                        reads as a property OF the course.
+
+                        Retired is called out ON the chip, not left to the
+                        Status column two cells away. The backend's mandatory
+                        set requires status = 1, so a retired course is handed
+                        to nobody and holds nobody — a bare "Mandatory" chip
+                        here would tell an operator the opposite of what the
+                        query does. */}
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="font-medium truncate" title={c.name}>{c.name}</span>
+                      {c.is_mandatory === 1 && (
+                        c.status === 1 ? (
+                          <StatusChip
+                            tone="warning"
+                            size="sm"
+                            title="Mandatory — assigned automatically to every technician who completes registration from now on"
+                          >
+                            Mandatory
+                          </StatusChip>
+                        ) : (
+                          <StatusChip
+                            tone="neutral"
+                            size="sm"
+                            title="Flagged mandatory, but retired — it is assigned to nobody new and holds nobody. Reactivate it to make the flag take effect."
+                          >
+                            Mandatory · Inactive
+                          </StatusChip>
+                        )
+                      )}
+                    </div>
                     {c.description && (
                       <div className="text-xs text-muted-foreground truncate" title={c.description}>
                         {c.description}
@@ -448,7 +572,13 @@ export default function ManageCoursesPage() {
         course={formCourse}
         canManage={canManage}
         onClose={() => setFormCourse(null)}
-        onSaved={() => { setFormCourse(null); refreshCourses(); }}
+        onSaved={(mandated) => {
+          setFormCourse(null);
+          refreshCourses();
+          // Only present when the save turned the flag ON; the modal passes
+          // nothing on a partial save, so a half-written course never prompts.
+          if (mandated) void promptAssignAll(mandated);
+        }}
       />
     </div>
   );
@@ -485,13 +615,17 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
   course: Course | 'new' | null;
   canManage: boolean;
   onClose: () => void;
-  onSaved: () => void;
+  /* Carries the course back ONLY when this save turned `is_mandatory` on, so
+   * the page knows to ask about back-filling existing technicians. Absent on
+   * every other save, including one that turns the flag off. */
+  onSaved: (mandated?: { id: number; name: string }) => void;
 }) {
   const open = course !== null;
   const editing = course !== null && course !== 'new' ? course : null;
 
   const [name, setName] = React.useState('');
   const [description, setDescription] = React.useState('');
+  const [mandatory, setMandatory] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -531,6 +665,7 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
     if (!open) return;
     setName(editing?.name ?? '');
     setDescription(editing?.description ?? '');
+    setMandatory(editing?.is_mandatory === 1);
     setError(null);
   }, [open, editing?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -653,12 +788,15 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
         await api.patch(`/admin/lms/courses/${existingId}`, {
           name: trimmedName,
           description: trimmedDesc,
+          // Joi wants a boolean here; the read model hands it back as 1/0.
+          is_mandatory: mandatory,
         });
         courseId = existingId;
       } else {
         const created = await api.post<{ id: number }>('/admin/lms/courses', {
           name: trimmedName,
           description: trimmedDesc,
+          is_mandatory: mandatory,
         });
         courseId = created.id;
         // Remember it BEFORE the content call, so a failure there leaves a
@@ -711,7 +849,13 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
     // The videos key lives under the same prefix, so this eviction covers both
     // the list row counts and this modal's own content fetch.
     invalidateFetch((k) => k.startsWith('/admin/lms/courses'));
-    onSaved();
+    /*
+     * Only a transition OFF→ON asks about existing technicians. Re-saving a
+     * course that was already mandatory is not a new decision, and asking
+     * again would train operators to dismiss the prompt without reading it.
+     * A create counts as a transition — there was no previous state.
+     */
+    onSaved(mandatory && editing?.is_mandatory !== 1 ? { id: courseId, name: trimmedName } : undefined);
     setSubmitting(false);
   }
 
@@ -755,6 +899,38 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
               {description.length} / {DESC_MAX}
             </div>
           </div>
+
+          {/*
+            Mandatory is not a second status, and it is not retroactive. It
+            decides one thing: that a technician finishing registration from
+            now on is AUTO-ASSIGNED this course, and is then held to it (their
+            videos join the set the app's jobs-unlocked check counts). Nobody
+            already registered is touched by ticking it — that is a separate
+            back-fill, which is why saving it on raises the "assign to existing
+            technicians too?" prompt instead of implying either answer.
+
+            No `label` prop on the Checkbox: that renders aria-label, which
+            REPLACES the accessible name, so the wrapping <label> below —
+            including the sentence explaining what the flag does — would be
+            dropped from what a screen reader announces. The primitive asks for
+            it only when there is no visible label beside it.
+          */}
+          <label className="flex items-start gap-2">
+            <Checkbox
+              checked={mandatory}
+              disabled={!canManage}
+              onChange={setMandatory}
+              className="mt-0.5"
+            />
+            <span className="min-w-0">
+              <span className="block text-sm font-medium">Mandatory Course</span>
+              <span className="block text-xs text-muted-foreground">
+                Technicians who complete registration from now on are given this course automatically and
+                must watch its videos before their app unlocks jobs. Technicians already registered are
+                not affected unless you assign it to them.
+              </span>
+            </span>
+          </label>
 
           {/*
             Content sits directly under Description, in the same modal and the
