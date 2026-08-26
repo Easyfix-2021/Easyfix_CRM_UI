@@ -1801,23 +1801,46 @@ type CallDetail = {
 function ListenButton({ callId }: { callId: number }) {
   const [loading, setLoading] = useState(false);
   const [url, setUrl] = useState<string | null>(null);
+  /*
+   * The button RETRACTS when the recording turns out not to exist.
+   *
+   * `recordingAvailable` now means "the endpoint can answer" rather than "the
+   * column is non-empty", which removes almost all of these — but one case is
+   * unknowable in SQL: an S3 key whose object has since gone. Before this, that
+   * row kept its ▶ forever and answered "No recording available for this call"
+   * every time it was pressed, which invites pressing it again. A control that
+   * cannot do the thing it offers should stop offering it.
+   *
+   * A 404 is the definitive answer and retracts; any other failure (network,
+   * 5xx, storage misconfigured) is transient and keeps the button so the
+   * operator can retry.
+   */
+  const [unavailable, setUnavailable] = useState(false);
 
   if (url) return <CallRecordingAudio src={url} autoPlay className="h-7 w-44" />;
+  if (unavailable) return <NoRecording title="Checked — the provider has no recording for this call" />;
 
   async function play() {
     setLoading(true);
     try {
       const r = await api.get<{ url: string }>(`/admin/calls/${callId}/recording`);
       if (r?.url) setUrl(r.url);
-      else showToast({ variant: 'error', message: 'No recording available for this call.' });
+      else setUnavailable(true);
     } catch (e) {
-      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Could not load the recording.' });
+      if (e instanceof ApiError && e.status === 404) setUnavailable(true);
+      else showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Could not load the recording.' });
     } finally {
       setLoading(false);
     }
   }
 
   return <IconButton icon={Play} label="Listen Recording" busy={loading} onClick={() => void play()} />;
+}
+
+/* The Recording cell when there is nothing to play. One component so the
+   never-had-one case and the turned-out-not-to-exist case read identically. */
+function NoRecording({ title }: { title?: string }) {
+  return <span className="text-muted-foreground" title={title}>No</span>;
 }
 
 /** The clicked selection's identity — the remount key for the body below. */
@@ -1936,7 +1959,7 @@ function CallDrilldownBody({ drill, filters, onClose }: {
                   <th className="!text-center">Duration</th>
                   <th className="!text-center">Outcome</th>
                   <th className="!text-left">Provider</th>
-                  <th className="!text-center" title="Whether a call recording was captured for this call">Recording</th>
+                  <th className="!text-center" title="Whether a recording can actually be played for this call — not merely whether a value was stored against it. A ▶ that turns into 'No' means the provider was asked and had nothing.">Recording</th>
                 </tr>
               </thead>
               <tbody>
@@ -2027,7 +2050,7 @@ function CallDrilldownBody({ drill, filters, onClose }: {
                     <td className="!text-center text-xs">
                       {c.recordingAvailable
                         ? <ListenButton callId={c.id} />
-                        : <span className="text-muted-foreground">No</span>}
+                        : <NoRecording />}
                     </td>
                   </tr>
                 ))}
