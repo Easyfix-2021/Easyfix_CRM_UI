@@ -41,7 +41,23 @@ export const URL_MAP: Record<string, string> = {
   // tree, so these are siblings rather than a nested Courses > Content
   // hierarchy. Writes across all four gate on isLmsManage.
   'lmsCourses':            '/lms/courses',
-  'lmsVideos':             '/lms/training-videos',
+  // 'lmsVideos' now resolves to the three-tab Content page (videos /
+  // assessments / documents), repointed 2026-08-26 when a course stopped
+  // being a list of videos and became a list of content items.
+  //
+  // The TOKEN stays 'lmsVideos' on purpose. Every role grant lives in
+  // tbl_role.menu_ids keyed on the tbl_menu ROW, along with its menu_action
+  // key and its entry in the new.crm.visible.menu.ids allowlist — so the
+  // 2026-08-26 backend migration RENAMES that row's menu_name to "Content"
+  // and leaves its url alone. Renaming carries the whole permission graph
+  // across untouched; a new leaf would need all three seeded again and would
+  // leave this one to be retired. The rename is invisible here — URL_MAP
+  // resolves the token, which is why the repoint happens in this file and
+  // nowhere else.
+  //
+  // /lms/training-videos still resolves: it is now a server-side redirect to
+  // /lms/content, so old bookmarks land on the tab that replaced them.
+  'lmsVideos':             '/lms/content',
   'lmsAssign':             '/lms/assign-training',
   'lmsReport':             '/lms/training-report',
   // The action tool, added 2026-08-21. Two more siblings under the same

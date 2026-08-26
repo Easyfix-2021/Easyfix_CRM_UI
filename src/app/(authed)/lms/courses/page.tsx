@@ -3,23 +3,37 @@
 /*
  * Manage Courses — LMS.
  *
- * A course is a named, ordered playlist of training videos that gets assigned
- * to technicians. Two surfaces live here:
+ * A course is a named, ordered list of CONTENT ITEMS that gets assigned to
+ * technicians. Two surfaces live here:
  *
  *   1. the course master (search / add / edit / retire / reactivate), and
- *   2. the CONTENT editor — the ordered video list behind a course.
+ *   2. the CONTENT editor — the ordered item list behind a course.
  *
- * The content editor matters more than it looks. A course with zero videos is
+ * ─── Content is three kinds now, not one (2026-08-26) ───────────────────
+ *
+ * Until the lms_content migration a course WAS a video playlist: course_videos
+ * held (course_id, video_id, sequence) and the editor below sent `video_ids`.
+ * An item can now be a video, a document (PPT/PDF) or an assessment (MCQ), and
+ * `lms_content` owns the ordering for all three — one list, one sequence.
+ * Completion is derived per kind and never stored twice:
+ *
+ *   video      — easyfixer_watched_video.watched_percentage = 100
+ *   document   — a row in lms_document_ack for that CONTENT id
+ *   assessment — a passing row in lms_assessment_attempt
+ *
+ * The catalogues the picker reads from are the three tabs of LMS ▸ Content.
+ *
+ * The content editor matters more than it looks. A course with zero items is
  * assignable but *uncompletable*: the technician opens it, finds nothing to
- * watch, and their progress can never reach 100%. So the video count is called
- * out on the row when it's 0, and the editor's empty state says so explicitly
- * rather than rendering a polite blank panel.
+ * do, and their progress can never reach 100%. The editor's empty state says
+ * so explicitly rather than rendering a polite blank panel.
  *
  * Retire is a SOFT delete (DELETE sets status 0). Existing assignments and
  * progress rows survive it, which is why the confirm copy says "retire" and
  * offers reactivation instead of warning about data loss.
  *
- * Backend: /admin/lms/courses (+ /:id/videos) and /admin/aux/training-videos.
+ * Backend: /admin/lms/courses (+ /:id/content), /admin/lms/documents,
+ * /admin/lms/assessments and /admin/aux/training-videos.
  */
 
 import * as React from 'react';
@@ -36,6 +50,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { IconButton } from '@/components/ui/icon-button';
 import { SearchSelect } from '@/components/ui/search-select';
+import { Select } from '@/components/ui/select';
 import { StatusChip } from '@/components/ui/StatusChip';
 import {
   TablePagination, pageSizeToLimit, type TablePageSize,
@@ -69,52 +84,111 @@ type Course = {
   is_mandatory: number;
   created_at: string | null;
   updated_at: string | null;
+  /* Misnamed on the wire and kept that way: it counts CONTENT ITEMS of all
+   * three kinds, not videos. See the "Content" header below. */
   video_count: number;
   assigned_count: number;
 };
 type CourseListResp = { rows: Course[]; total: number; limit: number; offset: number };
 
-/* A row of the course's content list as the API returns it. */
-type CourseVideo = {
-  id: number;               // link-row id — NOT what the PUT wants
-  video_id: number;         // the training video itself
+/*
+ * The three kinds an item can be. Matches the lms_content.kind ENUM exactly —
+ * the PUT sends these strings verbatim, so a typo here is a 400 rather than a
+ * silently wrong row.
+ */
+type ContentKind = 'video' | 'document' | 'assessment';
+
+/* A row of the course's content list as GET /courses/:id/content returns it. */
+type CourseContentItem = {
+  id: number;               // lms_content row id — NOT what the PUT wants
+  kind: ContentKind;
+  ref_id: number;           // training_videos.id / lms_document.id / lms_assessment.id
   sequence: number;
   title: string;
-  sub_title: string | null;
-  description: string | null;
-  /* Playable link, already repaired by the backend. Null when the catalogue
-   * entry has no video attached — which is worth seeing HERE, because such a
+  /* Kind-specific extras. Optional because each is present for exactly one
+   * kind, and the editor must render a row it does not recognise rather than
+   * crash on a missing field. */
+  sub_title?: string | null;
+  /* video only — playable link, already repaired by the backend. Null when the
+   * catalogue entry has no video attached, which is worth seeing HERE: such a
    * video can never be completed and so caps the whole course. */
-  video_url: string | null;
+  video_url?: string | null;
 };
-
-/* A row of the training-video catalogue (`id` here IS the video_id). */
-type CatalogueVideo = {
-  id: number;
-  title: string;
-  sub_title: string | null;
-  description: string | null;
-  video_url: string | null;
-  progress_count: number;
-  course_count: number;
-};
-type CatalogueResp = { rows: CatalogueVideo[]; total: number; limit: number; offset: number };
 
 /*
- * The editor's working copy. Deliberately keyed on `video_id` and NOT on the
- * link-row `id`: a freshly-added video has no link row yet, and `sequence` is
- * derived from array position at save time, so carrying either would just be a
- * second source of truth waiting to disagree with the array.
+ * One loose row type for all three catalogue endpoints. Every field beyond
+ * id/title is optional and belongs to exactly one endpoint:
+ *   /admin/aux/training-videos → sub_title, video_url
+ *   /admin/lms/documents       → (title is enough for the picker)
+ *   /admin/lms/assessments     → question_count
+ * Written as one type rather than three because the picker consumes them
+ * identically — it needs a label and an id.
  */
-type DraftVideo = {
-  video_id: number;
+type CatalogueRow = {
+  id: number;
   title: string;
-  sub_title: string | null;
-  /* Carried so the draft row can be previewed before the course is saved —
-   * a video added from the catalogue is playable immediately, without a
-   * round trip to re-read the content list. */
-  video_url: string | null;
+  sub_title?: string | null;
+  video_url?: string | null;
+  question_count?: number;
 };
+type CatalogueResp = { rows: CatalogueRow[]; total: number; limit: number; offset: number };
+
+/*
+ * The editor's working copy. Deliberately keyed on (kind, ref_id) and NOT on
+ * the lms_content row `id`: a freshly-added item has no content row yet, and
+ * `sequence` is derived from array position at save time, so carrying either
+ * would just be a second source of truth waiting to disagree with the array.
+ * (kind, ref_id) is also the DB's own uniqueness rule — uq_lms_content_item.
+ */
+type DraftItem = {
+  kind: ContentKind;
+  ref_id: number;
+  title: string;
+  sub_title?: string | null;
+  /* Carried so a video row can be previewed before the course is saved — a
+   * video added from the catalogue is playable immediately, without a round
+   * trip to re-read the content list. */
+  video_url?: string | null;
+};
+
+/* Stable identity for a draft row: the DB's own uniqueness key. A video and a
+ * document can share a numeric id, so ref_id alone would collide. */
+const itemKey = (i: { kind: ContentKind; ref_id: number }) => `${i.kind}:${i.ref_id}`;
+
+const KIND_LABEL: Record<ContentKind, string> = {
+  video: 'Video',
+  document: 'Document',
+  assessment: 'Assessment',
+};
+
+/* Which catalogue the picker reads for each kind. */
+const KIND_ENDPOINT: Record<ContentKind, string> = {
+  video: '/admin/aux/training-videos',
+  document: '/admin/lms/documents',
+  assessment: '/admin/lms/assessments',
+};
+
+const KIND_TONE: Record<ContentKind, 'info' | 'gold' | 'success'> = {
+  video: 'info',
+  document: 'gold',
+  assessment: 'success',
+};
+
+/*
+ * How a catalogue row reads in the picker. Each kind gets the one extra fact
+ * that distinguishes two similarly-named entries:
+ *   video      — its sub-title, which is what the app shows under the title
+ *   assessment — how many questions it has, because a 0-question assessment
+ *                is unpassable and would quietly cap the whole course
+ *   document   — nothing; the title is the document
+ */
+function catalogueLabel(kind: ContentKind, row: CatalogueRow): string {
+  if (kind === 'video' && row.sub_title) return `${row.title} — ${row.sub_title}`;
+  if (kind === 'assessment' && typeof row.question_count === 'number') {
+    return `${row.title} — ${row.question_count} question${row.question_count === 1 ? '' : 's'}`;
+  }
+  return row.title;
+}
 
 /*
  * Server-side sort whitelist — must stay in step with SORTABLE_COLUMNS in
@@ -454,8 +528,17 @@ export default function ManageCoursesPage() {
                 <SortHeader col="name" align="left" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>
                   Name
                 </SortHeader>
+                {/*
+                  Labelled "Content", sorted by `video_count`. The alias is a
+                  fossil: the backend subquery behind it counts EVERY row of
+                  lms_content — video, document and assessment alike — and the
+                  backend keeps the old name because it is also the sort key on
+                  the wire. The header says what the number is; the sort key
+                  says what the API calls it. Renaming the key is a
+                  backend-and-client change for a cosmetic gain.
+                */}
                 <SortHeader col="video_count" align="right" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>
-                  Videos
+                  Content
                 </SortHeader>
                 <SortHeader col="assigned_count" align="right" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>
                   Assigned
@@ -527,14 +610,16 @@ export default function ManageCoursesPage() {
                       </div>
                     )}
                   </td>
-                  {/* A 0 here is a real defect, not just a small number: the
-                      course is assignable but can never be completed. Call it
-                      out in-row so it's caught before someone assigns it. */}
+                  {/* Counts all three kinds, so a 0 still means exactly what
+                      it always did: the course is assignable and can never be
+                      completed. Called out in-row so it is caught before
+                      someone assigns it. A PPT-only course counts its PPTs and
+                      is not flagged. */}
                   <td className="!text-right tabular-nums">
                     {c.video_count === 0 ? (
                       <span
                         className="text-warning-strong font-semibold"
-                        title="No videos — technicians cannot complete this course"
+                        title="No content — technicians cannot complete this course"
                       >
                         0
                       </span>
@@ -615,7 +700,11 @@ export default function ManageCoursesPage() {
       <CourseModal
         course={formCourse}
         canManage={canManage}
-        onClose={() => setFormCourse(null)}
+        /* Close refreshes too, not just save: a half-failed save leaves the
+           modal open on purpose (see CourseModal), and the course it already
+           created has to appear in the list when the operator gives up and
+           closes it. */
+        onClose={() => { setFormCourse(null); refreshCourses(); }}
         onSaved={(mandated) => {
           setFormCourse(null);
           refreshCourses();
@@ -673,10 +762,14 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
-  /* Content editing state. */
-  const [draft, setDraft] = React.useState<DraftVideo[]>([]);
+  const confirm = useConfirm();
+
+  /* Content editing state. `addKind` drives which catalogue the picker below
+   * reads, so it is part of the fetch key rather than a filter applied after. */
+  const [draft, setDraft] = React.useState<DraftItem[]>([]);
+  const [addKind, setAddKind] = React.useState<ContentKind>('video');
   const [vq, setVq] = React.useState('');
-  const [previewing, setPreviewing] = React.useState<DraftVideo | null>(null);
+  const [previewing, setPreviewing] = React.useState<DraftItem | null>(null);
 
   /*
    * Survives a partial save: set once the POST succeeds so a retry PATCHes the
@@ -685,24 +778,28 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
    */
   const createdIdRef = React.useRef<number | null>(null);
 
-  /* Existing content — only an edit has any. */
-  const videosFetch = useFetch<CourseVideo[]>(
-    editing ? `/admin/lms/courses/${editing.id}/videos` : null,
+  /* Existing content — only an edit has any. All three kinds arrive in one
+   * ordered list; /videos still exists for compatibility but returns only part
+   * of the course, so this screen must not use it. */
+  const contentFetch = useFetch<CourseContentItem[]>(
+    editing ? `/admin/lms/courses/${editing.id}/content` : null,
   );
 
-  /* Catalogue for the picker, server-filtered by the typed query. */
+  /* Catalogue for the picker, server-filtered by the typed query. The KIND is
+   * part of the key, so flipping it re-fires the fetch on its own — no manual
+   * orchestration effect. */
   const dvq = useDebouncedValue(vq, 300);
   const catQs = new URLSearchParams();
   if (dvq.trim()) catQs.set('q', dvq.trim());
   catQs.set('limit', '50');
   catQs.set('offset', '0');
   const catFetch = useFetch<CatalogueResp>(
-    open && canManage ? `/admin/aux/training-videos?${catQs.toString()}` : null,
+    open && canManage ? `${KIND_ENDPOINT[addKind]}?${catQs.toString()}` : null,
   );
 
   /*
    * Form fields seed on OPEN only, keyed on the course id — deliberately NOT
-   * on `videosFetch.data`. Reseeding when the content list arrives would wipe
+   * on `contentFetch.data`. Reseeding when the content list arrives would wipe
    * whatever the operator had already typed into Name or Description.
    */
   React.useEffect(() => {
@@ -725,6 +822,7 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
       seededFor.current = null;
       createdIdRef.current = null;
       setDraft([]);
+      setAddKind('video');
       setVq('');
       setPreviewing(null);
       return;
@@ -734,60 +832,76 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
       if (seededFor.current !== 0) { seededFor.current = 0; setDraft([]); }
       return;
     }
-    if (videosFetch.data && seededFor.current !== editing.id) {
+    if (contentFetch.data && seededFor.current !== editing.id) {
       seededFor.current = editing.id;
-      setDraft(videosFetch.data.map((v) => ({
-        video_id: v.video_id,
-        title: v.title,
-        sub_title: v.sub_title,
-        video_url: v.video_url,
+      setDraft(contentFetch.data.map((c) => ({
+        kind: c.kind,
+        ref_id: c.ref_id,
+        title: c.title,
+        sub_title: c.sub_title ?? null,
+        video_url: c.video_url ?? null,
       })));
     }
-  }, [open, editing, videosFetch.data]);
+  }, [open, editing, contentFetch.data]);
 
   // Skip the discard prompt while a save is in flight — the modal is closing
   // on its own at that point and the prompt would fire over a completed action.
   const guardedOpenChange = useFormDirtyGuard(onClose, { when: () => !submitting });
 
-  const draftIds = new Set(draft.map((d) => d.video_id));
+  /* Keyed on kind+ref_id, not ref_id: a video and a document can share a
+   * numeric id, and dropping the kind would hide one behind the other. */
+  const draftKeys = new Set(draft.map(itemKey));
 
   /*
-   * Already-added videos are filtered OUT of the picker rather than shown
+   * Already-added items are filtered OUT of the picker rather than shown
    * disabled: SearchSelect's `pick()` doesn't honour an option's `disabled`
    * flag (only SearchMultiSelect does), so a disabled row would still be
    * selectable and would silently add a duplicate.
    */
   const pickerOptions = (catFetch.data?.rows ?? [])
-    .filter((v) => !draftIds.has(v.id))
+    .filter((v) => !draftKeys.has(itemKey({ kind: addKind, ref_id: v.id })))
     .map((v) => ({
       value: v.id,
-      label: v.sub_title ? `${v.title} — ${v.sub_title}` : v.title,
+      label: catalogueLabel(addKind, v),
     }));
 
   /*
-   * Whether the content PUT is worth making. Compared as a joined id string
-   * because ORDER is part of the content — reordering the same videos is a
-   * real change the technician sees as a different syllabus, so a set
-   * comparison would miss it.
+   * Whether the content PUT is worth making. Compared as a joined kind:id
+   * string because ORDER is part of the content — reordering the same items is
+   * a real change the technician sees as a different syllabus, so a set
+   * comparison would miss it. The kind is in the key for the same reason it is
+   * in the uniqueness rule: swapping video 7 for document 7 is a real edit.
    */
-  const serverOrder = (videosFetch.data ?? []).map((v) => v.video_id).join(',');
-  const draftOrder = draft.map((d) => d.video_id).join(',');
+  const serverKeys = new Set((contentFetch.data ?? []).map(itemKey));
+  const serverOrder = (contentFetch.data ?? []).map(itemKey).join(',');
+  const draftOrder = draft.map(itemKey).join(',');
   const contentDirty = editing ? draftOrder !== serverOrder : draft.length > 0;
 
-  function addVideo(rawId: string) {
+  /*
+   * Non-video items this save would ADD. Items already on the course are
+   * excluded on purpose: prompting on every reorder of a course that has long
+   * had a PPT is how a warning becomes something operators click through
+   * without reading, and this is the one prompt on the screen that must not
+   * become that.
+   */
+  const addedNonVideo = draft.filter((d) => d.kind !== 'video' && !serverKeys.has(itemKey(d)));
+
+  function addItem(rawId: string) {
     const id = Number(rawId);
     if (!Number.isFinite(id) || id <= 0) return;
     const v = catFetch.data?.rows.find((r) => r.id === id);
     if (!v) return;
-    if (draftIds.has(id)) return;
+    const item: DraftItem = {
+      kind: addKind,
+      ref_id: v.id,
+      title: v.title,
+      sub_title: v.sub_title ?? null,
+      video_url: v.video_url ?? null,
+    };
+    if (draftKeys.has(itemKey(item))) return;
     // Appended, not inserted: new content belongs at the end of the syllabus
     // by default, and the operator can move it with the reorder buttons.
-    setDraft((d) => [...d, {
-      video_id: v.id,
-      title: v.title,
-      sub_title: v.sub_title,
-      video_url: v.video_url,
-    }]);
+    setDraft((d) => [...d, item]);
   }
 
   function removeAt(idx: number) {
@@ -817,6 +931,32 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
       setError(`Description must be ${DESC_MAX} characters or fewer.`);
       return;
     }
+
+    /*
+     * The last stop before non-video content reaches an assigned course.
+     * The banner above states the problem; this states it at the moment it
+     * becomes true and makes the operator say yes to it. Asked BEFORE the
+     * POST/PATCH so backing out leaves nothing half-written.
+     */
+    if (addedNonVideo.length > 0) {
+      const what = addedNonVideo.length === 1
+        ? `"${addedNonVideo[0].title}" (${KIND_LABEL[addedNonVideo[0].kind].toLowerCase()})`
+        : `${addedNonVideo.length} items that are not videos`;
+      const ok = await confirm({
+        title: 'Field Technicians Cannot Open This Yet',
+        description:
+          `You are adding ${what} to "${trimmedName}". Every technician in the field is still on `
+          + 'the old app, which plays videos and has no screen for documents or assessments. They '
+          + 'will not see this item — and because a course is complete only when every item is, '
+          + 'this course becomes impossible to finish for everyone it is assigned to. '
+          + 'Safe on a course nobody holds yet; not safe on one already assigned.',
+        confirmLabel: 'Add Anyway',
+        cancelLabel: 'Go Back',
+        variant: 'destructive',
+      });
+      if (!ok) return;
+    }
+
     setError(null);
     setSubmitting(true);
 
@@ -864,11 +1004,17 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
      */
     if (contentDirty) {
       try {
-        // The PUT REPLACES the whole content list, so array order here is the
-        // sequence the technician sees. An empty array is a valid payload — it
-        // clears the course — which is why there's no "must have >= 1" guard.
-        await api.put(`/admin/lms/courses/${courseId}/videos`, {
-          video_ids: draft.map((d) => d.video_id),
+        // The PUT REPLACES the whole content list — ALL kinds, not just one —
+        // so array order here is the sequence the technician sees. An empty
+        // array is a valid payload (it clears the course), which is why
+        // there's no "must have >= 1" guard.
+        //
+        // /videos is deliberately NOT used even for a video-only course: it
+        // replaces only the video items and leaves documents and assessments
+        // in place, so a course whose last document the operator just removed
+        // would keep it.
+        await api.put(`/admin/lms/courses/${courseId}/content`, {
+          items: draft.map((d) => ({ kind: d.kind, ref_id: d.ref_id })),
         });
       } catch (e) {
         dismissToast(t);
@@ -879,7 +1025,10 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
         );
         showToast({ variant: 'error', message: `Course Saved, Content Failed — ${msg}` });
         invalidateFetch((k) => k.startsWith('/admin/lms/courses'));
-        onSaved();
+        /* NOT onSaved(): that closes the modal, and closing it takes the
+         * message above — and the content draft the retry needs — with it.
+         * The list still learns about the new course, because the parent
+         * refreshes on close as well as on save. */
         setSubmitting(false);
         return;
       }
@@ -984,51 +1133,109 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
           <div className="border-t pt-3">
             {canManage && (
               <div className="mb-2">
-                <Label className="block mb-1">Add Video</Label>
+                <Label className="block mb-1">Add Content</Label>
                 {/*
-                  `value` is pinned to '' so the control behaves as an "add"
-                  action rather than a selection: pick a video, it lands in the
-                  list below, and the picker resets for the next one.
+                  Kind first, then the catalogue for that kind. Two controls
+                  rather than one merged list of everything: the three
+                  catalogues are separately paginated and separately searched
+                  server-side, so a single list could only ever show the first
+                  50 of each and would make "find that PPT" a scroll.
                 */}
-                <SearchSelect
-                  value=""
-                  onChange={addVideo}
-                  onQueryChange={setVq}
-                  options={pickerOptions}
-                  placeholder="Search The Training Video Catalogue…"
-                  emptyText={catFetch.loading ? 'Loading…' : 'No Matching Videos'}
-                />
+                <div className="flex items-center gap-2">
+                  <Select
+                    className="w-40 shrink-0"
+                    value={addKind}
+                    onChange={(e) => { setAddKind(e.target.value as ContentKind); setVq(''); }}
+                    options={(Object.keys(KIND_LABEL) as ContentKind[]).map((k) => ({
+                      value: k,
+                      label: KIND_LABEL[k],
+                    }))}
+                  />
+                  {/*
+                    `value` is pinned to '' so the control behaves as an "add"
+                    action rather than a selection: pick an item, it lands in
+                    the list below, and the picker resets for the next one.
+                  */}
+                  <div className="flex-1 min-w-0">
+                    <SearchSelect
+                      value=""
+                      onChange={addItem}
+                      onQueryChange={setVq}
+                      options={pickerOptions}
+                      placeholder={`Search The ${KIND_LABEL[addKind]} Catalogue…`}
+                      emptyText={catFetch.loading ? 'Loading…' : `No Matching ${KIND_LABEL[addKind]}s`}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/*
+              THE LEGACY-FLEET WARNING. Not decoration, and not gated on
+              canManage — a reviewer needs to see it too.
+
+              Every technician in the field is on the old Flutter app, which
+              calls the video endpoints only: it has no screen for a document
+              and none for an assessment. An item of either kind is therefore
+              invisible to the whole live fleet, and since completion needs
+              EVERY item, one PPT on an assigned course pins it below 100% for
+              everyone holding it — which, with mandatory courses gating work,
+              eventually takes them off jobs.
+
+              Shown whenever the danger is present (the draft already holds a
+              non-video item) OR is about to be (the picker is pointed at a
+              non-video catalogue), so it is on screen before the pick, not
+              only after. The save also confirms — see handleSubmit.
+            */}
+            {(addKind !== 'video' || draft.some((d) => d.kind !== 'video')) && (
+              <div className="mb-2 flex items-start gap-2 rounded-md border border-urgent/30 bg-urgent-tint p-2 text-xs text-urgent-strong">
+                <AlertTriangle className="size-4 shrink-0 mt-px" />
+                <span>
+                  <strong>Technicians in the field cannot open documents or assessments yet.</strong>{' '}
+                  They are all still on the old app, which plays videos and nothing else. A document
+                  or an assessment on this course is invisible to them, and because a course is only
+                  complete when every item is, adding one makes this course impossible to finish for
+                  every technician it is assigned to. Add non-video content only to courses that are
+                  not assigned yet.
+                </span>
               </div>
             )}
 
             <Label className="block mb-1">Course Content ({draft.length})</Label>
             <div className="rounded-md border divide-y max-h-[32vh] overflow-y-auto">
-              {editing && videosFetch.loading && (
+              {editing && contentFetch.loading && (
                 <div className="p-4 text-sm text-muted-foreground">Loading…</div>
               )}
-              {!(editing && videosFetch.loading) && draft.length === 0 && (
+              {!(editing && contentFetch.loading) && draft.length === 0 && (
                 /*
                  * Not a neutral blank slate on purpose. An empty course is
                  * assignable but uncompletable — a technician who opens it has
-                 * nothing to watch and can never reach 100% — so the empty
-                 * state states the consequence rather than just the fact.
+                 * nothing to do and can never reach 100% — so the empty state
+                 * states the consequence rather than just the fact.
                  */
                 <div className="p-6 text-center">
-                  <div className="text-sm font-semibold">No Videos Added Yet</div>
+                  <div className="text-sm font-semibold">No Content Added Yet</div>
                   <div className="mt-1 text-xs text-muted-foreground">
                     A course with no content can never be completed by a technician —
                     it will show up as assigned and stay stuck at 0% forever.
-                    Add at least one video before assigning this course.
+                    Add at least one video, document or assessment before assigning this course.
                   </div>
                 </div>
               )}
-              {!(editing && videosFetch.loading) && draft.map((v, idx) => (
-                <div key={v.video_id} className="flex items-center gap-2 px-3 py-2">
+              {!(editing && contentFetch.loading) && draft.map((v, idx) => (
+                <div key={itemKey(v)} className="flex items-center gap-2 px-3 py-2">
                   {/* Position is derived from array order, so it renumbers
                       itself on every move/remove — no stale sequence values. */}
                   <span className="w-6 shrink-0 text-xs text-muted-foreground tabular-nums">
                     {idx + 1}.
                   </span>
+                  {/* The kind is the first thing to read on the row: the three
+                      complete in completely different ways (watched / read /
+                      passed), so "what is this item" governs everything an
+                      operator infers from the rest of the line. */}
+                  <StatusChip tone={KIND_TONE[v.kind]} size="sm" className="shrink-0">
+                    {KIND_LABEL[v.kind]}
+                  </StatusChip>
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium truncate" title={v.title}>{v.title}</div>
                     {v.sub_title && (
@@ -1041,18 +1248,22 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
                     {/*
                       Play sits OUTSIDE the canManage gate — watching is a read,
                       and someone reviewing a syllabus they cannot edit still
-                      needs to see what is in it. Disabled with the reason in the
-                      label when the catalogue entry has no video attached, which
-                      is worth noticing here: an unplayable entry can never be
+                      needs to see what is in it. Rendered only for videos:
+                      documents open from the Documents tab, and an assessment
+                      has nothing to play. Disabled with the reason in the label
+                      when the catalogue entry has no video attached, which is
+                      worth noticing here: an unplayable entry can never be
                       completed, so it caps the whole course at incomplete for
                       every technician assigned to it.
                     */}
-                    <IconButton
-                      icon={Play}
-                      label={v.video_url ? 'Play Video' : 'No Video Linked'}
-                      disabled={!v.video_url}
-                      onClick={() => setPreviewing(v)}
-                    />
+                    {v.kind === 'video' && (
+                      <IconButton
+                        icon={Play}
+                        label={v.video_url ? 'Play Video' : 'No Video Linked'}
+                        disabled={!v.video_url}
+                        onClick={() => setPreviewing(v)}
+                      />
+                    )}
                     {canManage && (
                       <>
                         <IconButton
@@ -1070,7 +1281,7 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
                         <IconButton
                           icon={X}
                           intent="danger"
-                          label="Remove Video"
+                          label={`Remove ${KIND_LABEL[v.kind]}`}
                           onClick={() => removeAt(idx)}
                         />
                       </>
@@ -1081,9 +1292,9 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
             </div>
           </div>
 
-          {(error || videosFetch.error) && (
+          {(error || contentFetch.error) && (
             <div className="text-sm text-urgent flex items-start gap-1">
-              <AlertTriangle className="size-4 shrink-0 mt-0.5" /> {error ?? videosFetch.error}
+              <AlertTriangle className="size-4 shrink-0 mt-0.5" /> {error ?? contentFetch.error}
             </div>
           )}
 
@@ -1113,7 +1324,10 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
           open
           onClose={() => setPreviewing(null)}
           title={previewing.title}
-          url={previewing.video_url}
+          /* `?? null` because video_url is optional on DraftItem — only the
+             video kind carries one, and the dialog's contract is "a url or
+             explicitly none", not "possibly absent". */
+          url={previewing.video_url ?? null}
         />
       )}
     </Dialog>

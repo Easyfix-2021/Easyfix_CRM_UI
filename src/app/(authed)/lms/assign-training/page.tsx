@@ -57,7 +57,9 @@ type Course = {
   name: string;
   description: string | null;
   status: number;
-  /* Correlated count from the BE — a course with 0 videos is unfinishable. */
+  /* Correlated count from the BE. Misnamed on the wire and kept that way: it
+   * counts CONTENT ITEMS of all three kinds (video / document / assessment),
+   * not videos. A course with 0 of them is unfinishable. */
   video_count: number;
   assigned_count: number;
 };
@@ -445,14 +447,14 @@ export default function AssignTrainingPage() {
   );
 
   /*
-   * The option label carries the video count so an empty course is visible at
-   * PICK time, not only after selection — the operator sees the problem while
-   * choosing rather than being corrected afterwards.
+   * The option label carries the content count so an empty course is visible
+   * at PICK time, not only after selection — the operator sees the problem
+   * while choosing rather than being corrected afterwards.
    */
   const courseOptions = React.useMemo<SearchOption[]>(
     () => courses.map((c) => ({
       value: c.id,
-      label: `${c.name} · ${c.video_count === 0 ? 'No Videos' : `${c.video_count} Video${c.video_count === 1 ? '' : 's'}`}`,
+      label: `${c.name} · ${c.video_count === 0 ? 'No Content' : `${c.video_count} Item${c.video_count === 1 ? '' : 's'}`}`,
     })),
     [courses],
   );
@@ -497,16 +499,16 @@ export default function AssignTrainingPage() {
 
   const overCap = selectedIds.length > MAX_PER_ASSIGN;
   /*
-   * A course with zero videos is now a HARD block, not a warning: the BE
-   * answers 409 because such a course can never be completed, so assigning it
-   * would only manufacture permanently-overdue rows.
+   * A course with zero content items is now a HARD block, not a warning: the
+   * BE answers 409 because such a course can never be completed, so assigning
+   * it would only manufacture permanently-overdue rows.
    */
-  const courseHasNoVideos = !!selectedCourse && selectedCourse.video_count === 0;
+  const courseHasNoContent = !!selectedCourse && selectedCourse.video_count === 0;
   const canSubmit =
     courseId !== ''
     && selectedIds.length > 0
     && !overCap
-    && !courseHasNoVideos
+    && !courseHasNoContent
     && durationValid
     && !assigning;
 
@@ -608,8 +610,8 @@ export default function AssignTrainingPage() {
                     // a blocker, and an amber "caution" chip would understate it.
                     <StatusChip tone={selectedCourse.video_count === 0 ? 'red' : 'emerald'} size="sm">
                       {selectedCourse.video_count === 0
-                        ? 'No Videos'
-                        : `${selectedCourse.video_count} Video${selectedCourse.video_count === 1 ? '' : 's'}`}
+                        ? 'No Content'
+                        : `${selectedCourse.video_count} Item${selectedCourse.video_count === 1 ? '' : 's'}`}
                     </StatusChip>
                   )}
                 </div>
@@ -701,21 +703,21 @@ export default function AssignTrainingPage() {
               <div className="flex-1 min-w-[260px] space-y-2">
                 {/*
                  * Empty-course BLOCK (was a soft warning until deadlines
-                 * landed). A course with no videos can never reach completion,
+                 * landed). A course with no content can never reach completion,
                  * so with a due date attached every technician assigned to it
                  * would tip into Overdue and stay there. The BE now answers 409
                  * for exactly this, so the button is disabled to match — the
                  * form refuses locally rather than letting the server error be
                  * the first thing the operator hears.
                  */}
-                {courseHasNoVideos && selectedCourse && (
+                {courseHasNoContent && selectedCourse && (
                   <div className="flex items-start gap-2 rounded-md border border-urgent/30 bg-urgent-tint p-2 text-xs text-urgent-strong">
                     <AlertTriangle className="size-4 shrink-0 mt-px" />
                     <span>
-                      <strong>{selectedCourse.name}</strong> has no videos yet and cannot be
-                      assigned until content is added. A course with no content can never be
+                      <strong>{selectedCourse.name}</strong> has no content yet and cannot be
+                      assigned until some is added. A course with no content can never be
                       completed, so everyone assigned it would go overdue and stay there. Add
-                      videos to the course first, then assign it.
+                      content to the course first, then assign it.
                     </span>
                   </div>
                 )}
