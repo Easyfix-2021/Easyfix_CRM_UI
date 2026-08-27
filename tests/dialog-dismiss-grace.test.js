@@ -55,6 +55,36 @@ test('DialogContent defines a dismiss grace window', () => {
     + 'and anything past ~1s starts swallowing a real click-away');
 });
 
+test('the stamp lives INSIDE the portal, where mounting means opening', () => {
+  /*
+   * The bug this exists for, and it shipped once.
+   *
+   * Radix's DialogPortal renders children through Presence, so only what is
+   * INSIDE it exists when open is true. The DialogContent wrapper itself runs
+   * on every render of whatever holds the dialog — and nearly every dialog here
+   * is rendered persistently with an `open` prop, so the wrapper mounts with the
+   * PAGE. A window stamped there begins at page load, is long gone by the time
+   * anyone clicks, and protects nothing while looking exactly like a fix.
+   */
+  assert.ok(/function DialogContentBody\(/.test(CODE),
+    'the content body must be its own component so it can mount on open');
+
+  const bodyStart = CODE.indexOf('function DialogContentBody(');
+  const wrapStart = CODE.indexOf('export const DialogContent = React.forwardRef');
+  assert.ok(bodyStart > -1 && wrapStart > bodyStart, 'body must be declared before the wrapper');
+
+  const body = CODE.slice(bodyStart, wrapStart);
+  const wrapper = CODE.slice(wrapStart);
+
+  assert.ok(/mountedAtRef\.current = Date\.now\(\)/.test(body),
+    'the stamp belongs in the portal-mounted body');
+  assert.ok(!/mountedAtRef/.test(wrapper),
+    'the stamp must NOT be in the DialogContent wrapper — that runs at page '
+    + 'load for every persistently-rendered dialog, which is a silent no-op');
+  assert.ok(/<DialogPortal>[\s\S]*<DialogContentBody/.test(wrapper),
+    'the body must be rendered inside DialogPortal, or it mounts while closed');
+});
+
 test('the grace window is stamped during render, not in an effect', () => {
   assert.ok(/mountedAtRef\s*=\s*React\.useRef\(0\)/.test(CODE),
     'the mount stamp must be a ref');

@@ -136,103 +136,44 @@ type DialogContentExtraProps = { hideClose?: boolean; noPadding?: boolean };
 
 const DialogPaddingContext = React.createContext<{ noPadding: boolean }>({ noPadding: false });
 
-export const DialogContent = React.forwardRef<
-  React.ElementRef<typeof DialogPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & DialogContentExtraProps
->(({ className, children, hideClose, noPadding, onInteractOutside, onPointerDownOutside, ...props }, ref) => {
+type DialogContentProps =
+  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & DialogContentExtraProps;
+
+/*
+ * The part that actually mounts when the dialog OPENS.
+ *
+ * This split is the whole point, and it is not cosmetic. Radix's DialogPortal
+ * renders its children through `Presence`, so nothing inside it exists until
+ * `open` is true. Everything OUTSIDE it — including the DialogContent wrapper
+ * function itself — runs on every render of whatever component holds the
+ * dialog, open or not.
+ *
+ * That distinction cost a deploy. Nearly every dialog in this app is rendered
+ * PERSISTENTLY with an `open` prop:
+ *
+ *     <EasyfixerTransactionsModal open={transactionsFor != null} … />
+ *
+ * so the wrapper mounts with the PAGE. A grace window stamped there starts
+ * counting at page load, is long expired by the time anyone clicks a row
+ * action, and silently protects nothing. Stamped HERE it starts counting when
+ * the dialog opens, which is what the window is about.
+ */
+function DialogContentBody({
+  contentRef, className, children, hideClose, noPadding,
+  onInteractOutside, onPointerDownOutside, ...props
+}: DialogContentProps & { contentRef: React.ForwardedRef<React.ElementRef<typeof DialogPrimitive.Content>> }) {
   /*
-   * DISMISS GRACE WINDOW — the "modal opens and instantly closes" bug.
-   *
-   * When a DropdownMenuItem's onClick opens a Dialog, the menu's own close
-   * hands focus back to its trigger. That focus/pointer shuffle lands while
-   * this content is mounting, and Radix's DismissableLayer reads it as an
-   * interaction OUTSIDE the dialog — so it dismisses a dialog the operator
-   * just asked for. The blink is ~0-50ms and looks like "nothing happened".
-   *
-   * This was fixed four times, per-dialog, by swallowing early closes in each
-   * one's onOpenChange (EasyfixerStatusDialog, …MobileDialog, …BankDialog,
-   * SendProfileUpdateLinkDialog). It was missed on three others — Transactions,
-   * Client Mapping and Deep Skill — because a copied fix only protects what
-   * someone remembered to copy it into. Doing it HERE covers every dialog in
-   * the app, including the next one nobody remembers.
-   *
-   * PRECISE, not blunt: this suppresses only Radix's outside-interaction
-   * dismissal, and only in the first 400ms. Escape still closes, the X and
-   * Cancel buttons still close, and every PROGRAMMATIC onOpenChange(false) —
-   * a form that closes itself on success — is untouched. Outside-click barely
-   * closes anything here anyway: the manual blocker below deliberately
-   * absorbs background clicks without dismissing.
-   *
-   * Stamped during RENDER, not in an effect: the racing event can arrive
-   * before effects flush, and a zero timestamp would make the window match
-   * everything. Radix unmounts content on close, so a fresh mount is a fresh
-   * open.
+   * Stamped during RENDER rather than in an effect: the racing focus shuffle
+   * can arrive before effects flush, and a zero stamp would make the window
+   * match everything.
    */
   const mountedAtRef = React.useRef(0);
   if (mountedAtRef.current === 0) mountedAtRef.current = Date.now();
   const withinGrace = () => Date.now() - mountedAtRef.current < DISMISS_GRACE_MS;
 
   return (
-  <DialogPortal>
-    <DialogOverlay />
-    {/*
-     * Manual click-blocking overlay — separate from Radix's
-     * DialogOverlay above. We render it as a sibling of DialogContent
-     * so it ALWAYS exists in the DOM regardless of Radix's modal-mode
-     * decisions. With `modal={false}` Radix tends to omit / disable
-     * its own overlay (`pointer-events: none` or skipped entirely),
-     * which is why a CSS `!pointer-events-auto` override on
-     * DialogOverlay isn't reliable. This sibling guarantees a real
-     * fullscreen click-absorber exists.
-     *
-     * Layered z-index:
-     *   z-50 = Radix's DialogOverlay (visual dim; behavior toggled by
-     *          modal prop)
-     *   z-50 = this manual blocker (always click-capturing)
-     *   z-50 = DialogContent (above both, accepts user interaction)
-     *
-     * All three share z-50 so DOM source order decides stacking.
-     * Source order is overlay → blocker → content → blocker stacks
-     * above the dim layer but below the modal content. Background
-     * page surfaces (z<50) lose to all three. Nested dialogs render
-     * their own portal trio at the same z-50 but later in source
-     * order, so each new dialog visually + interactively layers on
-     * top of the previous.
-     *
-     * Outside-click semantics: a click on this blocker should still
-     * close the dialog (like Radix's overlay normally does). We
-     * dispatch a click on the data-radix-dismissable surface via
-     * Radix's own outside-click detection — actually simpler than
-     * that, just call the onPointerDownOutside callback. But for
-     * safety/composition with `onInteractOutside`'s nested-dialog
-     * guards above, we let the click on this blocker do nothing —
-     * the operator dismisses via the modal's own X / Cancel button.
-     * That's the safer default; "click outside to close" can be a
-     * footgun for forms-with-unsaved-changes anyway.
-     */}
-    <div
-      data-radix-manual-overlay-blocker=""
-      className={cn(
-        'fixed inset-0 z-50 pointer-events-auto',
-        // Visual dim — Radix's DialogOverlay sibling above renders but
-        // typically doesn't paint when modal=false (its bg + blur classes
-        // don't apply reliably). The manual blocker becomes the SOLE
-        // reliable surface for both click-capture and visual dim of the
-        // background. Same `bg-ink-900/75 backdrop-blur-[4px]` as the
-        // intended DialogOverlay styling so the look matches what was
-        // designed for modal=true dialogs.
-        'bg-ink-900/75 backdrop-blur-[4px]',
-        // Match DialogOverlay's open/close fade so the manual blocker
-        // animates in tandem with the dialog content instead of popping
-        // in/out abruptly.
-        'data-[state=open]:animate-in data-[state=open]:fade-in-0',
-        'data-[state=closed]:animate-out data-[state=closed]:fade-out-0',
-        'duration-200',
-      )}
-      aria-hidden="true"
-    />
     <DialogPrimitive.Content
-      ref={ref}
+      ref={contentRef}
       /*
        * Radix's `DismissableLayer` treats any click whose target isn't
        * a DOM descendant of <Content> as "outside" — including clicks
@@ -392,9 +333,74 @@ export const DialogContent = React.forwardRef<
         </DialogPrimitive.Close>
       )}
     </DialogPrimitive.Content>
-  </DialogPortal>
   );
-});
+}
+
+export const DialogContent = React.forwardRef<
+  React.ElementRef<typeof DialogPrimitive.Content>,
+  DialogContentProps
+>((props, ref) => (
+  <DialogPortal>
+    <DialogOverlay />
+    {/*
+     * Manual click-blocking overlay — separate from Radix's
+     * DialogOverlay above. We render it as a sibling of DialogContent
+     * so it ALWAYS exists in the DOM regardless of Radix's modal-mode
+     * decisions. With `modal={false}` Radix tends to omit / disable
+     * its own overlay (`pointer-events: none` or skipped entirely),
+     * which is why a CSS `!pointer-events-auto` override on
+     * DialogOverlay isn't reliable. This sibling guarantees a real
+     * fullscreen click-absorber exists.
+     *
+     * Layered z-index:
+     *   z-50 = Radix's DialogOverlay (visual dim; behavior toggled by
+     *          modal prop)
+     *   z-50 = this manual blocker (always click-capturing)
+     *   z-50 = DialogContent (above both, accepts user interaction)
+     *
+     * All three share z-50 so DOM source order decides stacking.
+     * Source order is overlay → blocker → content → blocker stacks
+     * above the dim layer but below the modal content. Background
+     * page surfaces (z<50) lose to all three. Nested dialogs render
+     * their own portal trio at the same z-50 but later in source
+     * order, so each new dialog visually + interactively layers on
+     * top of the previous.
+     *
+     * Outside-click semantics: a click on this blocker should still
+     * close the dialog (like Radix's overlay normally does). We
+     * dispatch a click on the data-radix-dismissable surface via
+     * Radix's own outside-click detection — actually simpler than
+     * that, just call the onPointerDownOutside callback. But for
+     * safety/composition with `onInteractOutside`'s nested-dialog
+     * guards above, we let the click on this blocker do nothing —
+     * the operator dismisses via the modal's own X / Cancel button.
+     * That's the safer default; "click outside to close" can be a
+     * footgun for forms-with-unsaved-changes anyway.
+     */}
+    <div
+      data-radix-manual-overlay-blocker=""
+      className={cn(
+        'fixed inset-0 z-50 pointer-events-auto',
+        // Visual dim — Radix's DialogOverlay sibling above renders but
+        // typically doesn't paint when modal=false (its bg + blur classes
+        // don't apply reliably). The manual blocker becomes the SOLE
+        // reliable surface for both click-capture and visual dim of the
+        // background. Same `bg-ink-900/75 backdrop-blur-[4px]` as the
+        // intended DialogOverlay styling so the look matches what was
+        // designed for modal=true dialogs.
+        'bg-ink-900/75 backdrop-blur-[4px]',
+        // Match DialogOverlay's open/close fade so the manual blocker
+        // animates in tandem with the dialog content instead of popping
+        // in/out abruptly.
+        'data-[state=open]:animate-in data-[state=open]:fade-in-0',
+        'data-[state=closed]:animate-out data-[state=closed]:fade-out-0',
+        'duration-200',
+      )}
+      aria-hidden="true"
+    />
+    <DialogContentBody contentRef={ref} {...props} />
+  </DialogPortal>
+));
 DialogContent.displayName = DialogPrimitive.Content.displayName;
 
 /*
