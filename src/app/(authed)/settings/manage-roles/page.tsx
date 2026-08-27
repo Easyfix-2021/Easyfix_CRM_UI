@@ -36,6 +36,9 @@ import { api, ApiError } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
+import {
+  splitActionFamily, familyCheckState, applyToggle, applyFamilyToggle,
+} from '@/lib/action-family';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
 import { SortHeader, cycleSort } from '@/lib/use-sort';
 
@@ -876,13 +879,32 @@ function RoleFormModal({
     });
   }
 
-  function toggleAction(actionId: number) {
-    setSelectedActions((prev) => {
-      const next = new Set(prev);
-      if (next.has(actionId)) next.delete(actionId);
-      else next.add(actionId);
-      return next;
-    });
+  /*
+   * `impliesActionId` is the family key a child depends on. Ticking a report
+   * without `ef-QuickSight` grants nothing — the server checks the family key
+   * first — so the door is opened WITH the room.
+   *
+   * Deliberately one-way. Un-ticking the last report does NOT shut the door:
+   * holding the family key with no reports is a real, reachable state (it is
+   * what a reporting manager needs for Employee Productivity, which is gated
+   * on the relation rather than on a per-report grant), and revoking it here
+   * would take that away as a side effect of an unrelated click.
+   */
+  function toggleAction(actionId: number, impliesActionId?: number) {
+    setSelectedActions((prev) => applyToggle(prev, actionId, impliesActionId));
+  }
+
+  /*
+   * The family header checkbox: all-or-nothing over the door and every room.
+   *
+   * Two states, not three. "Some" is what the box DISPLAYS (indeterminate)
+   * when the children disagree; it is not something a click can produce,
+   * because there is no answer to "which some?". Clicking a partially-filled
+   * family fills it, and clicking a full one empties it — the same contract
+   * the menu parents above already use.
+   */
+  function toggleActionFamily(ids: number[]) {
+    setSelectedActions((prev) => applyFamilyToggle(prev, ids));
   }
 
   // "Select all children of this parent" — convenience for the operator.
@@ -1135,6 +1157,7 @@ function RoleFormModal({
                       enabled={parentChecked}
                       selected={selectedActions}
                       onToggle={toggleAction}
+                      onToggleFamily={toggleActionFamily}
                     />
                     {children
                       // When searching, only render the children whose own
@@ -1172,6 +1195,7 @@ function RoleFormModal({
                             enabled={childChecked}
                             selected={selectedActions}
                             onToggle={toggleAction}
+                            onToggleFamily={toggleActionFamily}
                           />
                         </div>
                       );
@@ -1208,34 +1232,75 @@ function RoleFormModal({
  * orphaned actions defensively.
  */
 function MenuActionRows({
-  actions, enabled, selected, onToggle,
+  actions, enabled, selected, onToggle, onToggleFamily,
 }: {
   actions: MenuActionRow[];
   enabled: boolean;
   selected: Set<number>;
-  onToggle: (id: number) => void;
+  onToggle: (id: number, impliesActionId?: number) => void;
+  onToggleFamily: (ids: number[]) => void;
 }) {
   if (actions.length === 0) return null;
+
+  // The QuickSight family, pulled out of the flat list. `reports` is derived
+  // from the KEY, so a report seeded later joins the tree on its own.
+  const { familyParent, reports, plain, familyIds } = splitActionFamily(actions);
+  const { allOn, indeterminate } = familyCheckState(familyIds, selected);
+
+  const row = (a: MenuActionRow, implies?: number) => (
+    <li key={a.id}>
+      <label className="flex items-center gap-1 cursor-pointer">
+        <input
+          type="checkbox"
+          disabled={!enabled}
+          checked={selected.has(a.id)}
+          onChange={() => onToggle(a.id, implies)}
+        />
+        <span>{a.name}</span>
+        <span className="text-xs font-mono text-muted-foreground">({a.action_name})</span>
+      </label>
+    </li>
+  );
+
   // Single-column list: one action per row. Previously this used
   // `flex flex-wrap gap-x-4` which packed 2-3 actions onto each line.
   // That made long permission labels truncate awkwardly and forced
   // operators to scan two dimensions to find a specific action.
   return (
     <ul className={`px-3 pl-12 py-1.5 flex flex-col gap-y-1 text-xs ${enabled ? '' : 'opacity-50'}`}>
-      {actions.map((a) => (
-        <li key={a.id}>
-        <label className="flex items-center gap-1 cursor-pointer">
-          <input
-            type="checkbox"
-            disabled={!enabled}
-            checked={selected.has(a.id)}
-            onChange={() => onToggle(a.id)}
-          />
-          <span>{a.name}</span>
-          <span className="text-xs font-mono text-muted-foreground">({a.action_name})</span>
-        </label>
+      {plain.map((a) => row(a))}
+
+      {familyIds.length > 0 && (
+        <li>
+          <label className="flex items-center gap-1 cursor-pointer">
+            <input
+              type="checkbox"
+              disabled={!enabled}
+              checked={allOn}
+              /*
+               * Indeterminate is a DISPLAY state, never a click target: it says
+               * "some reports, not all". Set imperatively because the DOM
+               * property has no React attribute.
+               */
+              ref={(el) => { if (el) el.indeterminate = indeterminate; }}
+              onChange={() => onToggleFamily(familyIds)}
+            />
+            <span className="font-medium">{familyParent ? familyParent.name : 'QuickSight'}</span>
+            {familyParent && (
+              <span className="text-xs font-mono text-muted-foreground">({familyParent.action_name})</span>
+            )}
+            <span className="text-muted-foreground">
+              · {reports.filter((r) => selected.has(r.id)).length}/{reports.length} reports
+            </span>
+          </label>
+
+          {/* Indented so the dependency reads at a glance: every report below
+              needs the key above it, and ticking one grants that key. */}
+          <ul className="mt-1 flex flex-col gap-y-1 border-l border-border pl-3 ml-1.5">
+            {reports.map((r) => row(r, familyParent ? familyParent.id : undefined))}
+          </ul>
         </li>
-      ))}
+      )}
     </ul>
   );
 }
