@@ -58,17 +58,16 @@ function fmtMoney(v: number | string | null | undefined): string {
   return `₹${n.toLocaleString('en-IN')}`;
 }
 
+/*
+ * formatDate ALREADY renders hour and minute, in Asia/Kolkata. This used to
+ * append its own HH:mm on top, which printed the time twice —
+ * "26 Aug 2026, 11:58 am 11:58" — and the appended half was wrong anywhere
+ * outside IST, because it came from `new Date(s).getHours()`, i.e. the
+ * BROWSER's clock, on a value that is a zone-less IST wall clock. That is the
+ * exact trap formatDate's own comment exists to warn about.
+ */
 function fmtDateTime(s: string | null | undefined): string {
-  if (!s) return '—';
-  // Reuse formatDate for the common case; if the source contains a time
-  // component, append HH:mm so the operator can distinguish multiple
-  // transactions on the same day.
-  const d = new Date(s);
-  if (!Number.isFinite(d.getTime())) return formatDate(s);
-  const date = formatDate(s);
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  return `${date} ${hh}:${mm}`;
+  return s ? formatDate(s) : '—';
 }
 
 export function EasyfixerTransactionsModal({
@@ -133,9 +132,34 @@ export function EasyfixerTransactionsModal({
         </DialogHeader>
 
         <div className="flex-1 overflow-auto px-4 py-3">
-          <table className="data-table w-full">
+          {/*
+            * `table-fixed` + an explicit colgroup, because the browser's auto
+            * layout was sizing columns by CONTENT and starving the two that
+            * actually need room: Customer Address wrapped to five lines inside
+            * ~90px while the date columns sat wide on a single short value.
+            *
+            * Each width holds its HEADER on one line — that is what stops
+            * "Trans. Id" and "Customer Address" breaking mid-phrase — and the
+            * three free-text columns wrap inside theirs. The total exceeds the
+            * modal, so the body scrolls sideways; min-w is what keeps the
+            * columns at their intended size instead of being squeezed back.
+            */}
+          <table className="data-table w-full table-fixed min-w-[1480px]">
+            <colgroup>
+              <col className="w-[92px]" />{/* Trans. Id */}
+              <col className="w-[152px]" />{/* Trans. Date */}
+              <col className="w-[152px]" />{/* Appointment Date Time */}
+              <col className="w-[168px]" />{/* Date Time For Completion */}
+              <col className="w-[104px]" />{/* Amount */}
+              <col className="w-[112px]" />{/* Balance */}
+              <col className="w-[160px]" />{/* Customer Name */}
+              <col className="w-[240px]" />{/* Customer Address */}
+              <col className="w-[120px]" />{/* Location */}
+              <col className="w-[132px]" />{/* Trans. By */}
+              <col className="w-[248px]" />{/* Description */}
+            </colgroup>
             <thead>
-              <tr>
+              <tr className="[&>th]:whitespace-nowrap [&>th]:align-bottom">
                 <th>Trans. Id</th>
                 <th>Trans. Date</th>
                 <th>Appointment Date Time</th>
@@ -172,18 +196,21 @@ export function EasyfixerTransactionsModal({
                 </tr>
               )}
               {!loading && !error && items.map((t) => (
-                <tr key={t.transaction_id}>
+                <tr key={t.transaction_id} className="align-top">
                   <td className="text-xs text-muted-foreground tabular-nums">{t.transaction_id}</td>
                   <td className="text-xs whitespace-nowrap">{fmtDateTime(t.transaction_date)}</td>
                   <td className="text-xs whitespace-nowrap">{fmtDateTime(t.appointment_date_time)}</td>
                   <td className="text-xs whitespace-nowrap">{fmtDateTime(t.completion_date_time)}</td>
-                  <td className="text-right tabular-nums">{fmtMoney(t.amount)}</td>
-                  <td className="text-right tabular-nums">{fmtMoney(t.balance)}</td>
-                  <td className="text-xs">{t.customer_name ?? '—'}</td>
-                  <td className="text-xs">{t.customer_address ?? '—'}</td>
-                  <td className="text-xs">{t.location ?? '—'}</td>
-                  <td className="text-xs">{t.transaction_by ?? '—'}</td>
-                  <td className="text-xs">{t.description ?? '—'}</td>
+                  <td className="text-right text-xs tabular-nums">{fmtMoney(t.amount)}</td>
+                  <td className="text-right text-xs tabular-nums">{fmtMoney(t.balance)}</td>
+                  <td className="text-xs break-words">{t.customer_name || '—'}</td>
+                  <td className="text-xs break-words">{t.customer_address || '—'}</td>
+                  <td className="text-xs break-words">{t.location || '—'}</td>
+                  <td className="text-xs break-words">{t.transaction_by || '—'}</td>
+                  {/* Ledger notes are free text and arrive with trailing CRLF —
+                      whitespace-pre-line keeps intended line breaks without
+                      preserving the stray ones as blank space. */}
+                  <td className="text-xs break-words whitespace-pre-line">{(t.description || '—').trim()}</td>
                 </tr>
               ))}
             </tbody>
