@@ -123,6 +123,15 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
  * skip the boilerplate. A dev-mode console warning fires if the className
  * looks like it's stripping padding but `noPadding` isn't set.
  */
+/*
+ * How long after mount an outside-interaction dismissal is treated as the
+ * opening gesture rather than a real dismiss. 400ms is what the four
+ * per-dialog copies of this fix already used; the race fires within ~50ms, so
+ * the window has a wide margin and is still far below the ~700ms it takes a
+ * person to open a dialog and deliberately click away from it.
+ */
+const DISMISS_GRACE_MS = 400;
+
 type DialogContentExtraProps = { hideClose?: boolean; noPadding?: boolean };
 
 const DialogPaddingContext = React.createContext<{ noPadding: boolean }>({ noPadding: false });
@@ -130,7 +139,40 @@ const DialogPaddingContext = React.createContext<{ noPadding: boolean }>({ noPad
 export const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & DialogContentExtraProps
->(({ className, children, hideClose, noPadding, onInteractOutside, onPointerDownOutside, ...props }, ref) => (
+>(({ className, children, hideClose, noPadding, onInteractOutside, onPointerDownOutside, ...props }, ref) => {
+  /*
+   * DISMISS GRACE WINDOW — the "modal opens and instantly closes" bug.
+   *
+   * When a DropdownMenuItem's onClick opens a Dialog, the menu's own close
+   * hands focus back to its trigger. That focus/pointer shuffle lands while
+   * this content is mounting, and Radix's DismissableLayer reads it as an
+   * interaction OUTSIDE the dialog — so it dismisses a dialog the operator
+   * just asked for. The blink is ~0-50ms and looks like "nothing happened".
+   *
+   * This was fixed four times, per-dialog, by swallowing early closes in each
+   * one's onOpenChange (EasyfixerStatusDialog, …MobileDialog, …BankDialog,
+   * SendProfileUpdateLinkDialog). It was missed on three others — Transactions,
+   * Client Mapping and Deep Skill — because a copied fix only protects what
+   * someone remembered to copy it into. Doing it HERE covers every dialog in
+   * the app, including the next one nobody remembers.
+   *
+   * PRECISE, not blunt: this suppresses only Radix's outside-interaction
+   * dismissal, and only in the first 400ms. Escape still closes, the X and
+   * Cancel buttons still close, and every PROGRAMMATIC onOpenChange(false) —
+   * a form that closes itself on success — is untouched. Outside-click barely
+   * closes anything here anyway: the manual blocker below deliberately
+   * absorbs background clicks without dismissing.
+   *
+   * Stamped during RENDER, not in an effect: the racing event can arrive
+   * before effects flush, and a zero timestamp would make the window match
+   * everything. Radix unmounts content on close, so a fresh mount is a fresh
+   * open.
+   */
+  const mountedAtRef = React.useRef(0);
+  if (mountedAtRef.current === 0) mountedAtRef.current = Date.now();
+  const withinGrace = () => Date.now() - mountedAtRef.current < DISMISS_GRACE_MS;
+
+  return (
   <DialogPortal>
     <DialogOverlay />
     {/*
@@ -210,6 +252,9 @@ export const DialogContent = React.forwardRef<
        * includes focus). Letting either through closes the dialog.
        */
       onPointerDownOutside={(e) => {
+        // The just-opened dialog is not being dismissed by the click that
+        // opened it. See DISMISS GRACE WINDOW above.
+        if (withinGrace()) { e.preventDefault(); return; }
         // Radix's CustomEvent.target points at the layer (not the
         // original click target). The actual target is in
         // `detail.originalEvent.target`. Always read THAT, not e.target.
@@ -239,6 +284,10 @@ export const DialogContent = React.forwardRef<
         onPointerDownOutside?.(e);
       }}
       onInteractOutside={(e) => {
+        // Same grace window. This is the event that actually dismisses —
+        // DismissableLayer treats the menu's focus-return as an outside
+        // interaction, so this is where the phantom close is stopped.
+        if (withinGrace()) { e.preventDefault(); return; }
         const original = (e as unknown as { detail?: { originalEvent?: Event } })
           .detail?.originalEvent?.target as Element | null;
         if (
@@ -344,7 +393,8 @@ export const DialogContent = React.forwardRef<
       )}
     </DialogPrimitive.Content>
   </DialogPortal>
-));
+  );
+});
 DialogContent.displayName = DialogPrimitive.Content.displayName;
 
 /*

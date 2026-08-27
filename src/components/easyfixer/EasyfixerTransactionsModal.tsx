@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
@@ -118,11 +119,17 @@ export function EasyfixerTransactionsModal({
       <DialogContent className="max-w-6xl w-[min(96vw,1200px)] h-[80vh] overflow-hidden p-0 flex flex-col">
         <DialogHeader className="!mx-0 !mt-0 px-6 py-4 mb-0">
           <DialogTitle>{headerTitle}</DialogTitle>
-          {easyfixerMobile && (
-            <div className="text-[12px] text-ink-300/85 mt-0.5">
-              Mobile: {maskMobile(easyfixerMobile)}
-            </div>
-          )}
+          {/*
+            * DialogDescription, not a bare <div>: Radix warns when DialogContent
+            * has no description, and the sub-line was already carrying exactly
+            * that role. Rendered unconditionally so the dialog is still
+            * described when the easyfixer has no mobile on file.
+            */}
+          <DialogDescription className="mt-0.5">
+            {easyfixerMobile
+              ? `Mobile: ${maskMobile(easyfixerMobile)}`
+              : 'Completed job transactions for this easyfixer.'}
+          </DialogDescription>
         </DialogHeader>
 
         <div className="flex-1 overflow-auto px-4 py-3">
