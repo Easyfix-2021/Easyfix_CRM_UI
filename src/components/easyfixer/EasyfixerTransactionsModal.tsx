@@ -144,22 +144,39 @@ export function EasyfixerTransactionsModal({
             * modal, so the body scrolls sideways; min-w is what keeps the
             * columns at their intended size instead of being squeezed back.
             */}
-          <table className="data-table w-full table-fixed min-w-[1480px]">
+          <table className="data-table w-full table-fixed min-w-[1848px]">
             <colgroup>
-              <col className="w-[92px]" />{/* Trans. Id */}
-              <col className="w-[152px]" />{/* Trans. Date */}
-              <col className="w-[152px]" />{/* Appointment Date Time */}
-              <col className="w-[168px]" />{/* Date Time For Completion */}
-              <col className="w-[104px]" />{/* Amount */}
-              <col className="w-[112px]" />{/* Balance */}
-              <col className="w-[160px]" />{/* Customer Name */}
+              <col className="w-[96px]" />{/* Trans. Id */}
+              <col className="w-[164px]" />{/* Trans. Date */}
+              <col className="w-[208px]" />{/* Appointment Date Time */}
+              <col className="w-[232px]" />{/* Date Time For Completion */}
+              <col className="w-[112px]" />{/* Amount */}
+              <col className="w-[120px]" />{/* Balance */}
+              <col className="w-[168px]" />{/* Customer Name */}
               <col className="w-[240px]" />{/* Customer Address */}
-              <col className="w-[120px]" />{/* Location */}
-              <col className="w-[132px]" />{/* Trans. By */}
+              <col className="w-[124px]" />{/* Location */}
+              <col className="w-[136px]" />{/* Trans. By */}
               <col className="w-[248px]" />{/* Description */}
             </colgroup>
             <thead>
-              <tr className="[&>th]:whitespace-nowrap [&>th]:align-bottom">
+              {/*
+                * NO whitespace-nowrap here, deliberately.
+                *
+                * With table-fixed a header wider than its column does not
+                * shrink and does not clip — it OVERFLOWS into the neighbour, so
+                * "Appointment Date Time" ran straight into "Date Time For
+                * Completion" with no gap at all. nowrap turns a column that is
+                * slightly too narrow into overlapping text instead of a second
+                * line, which is the worse of the two failures and depends on
+                * the exact font metrics of whoever is looking.
+                *
+                * The widths above hold every header on one line at the table's
+                * 14px semibold, with room to spare. Letting them wrap is the
+                * safety valve: if a font renders wider than expected the header
+                * takes two lines and stays inside its own column, rather than
+                * printing on top of the next one.
+                */}
+              <tr className="[&>th]:align-bottom">
                 <th>Trans. Id</th>
                 <th>Trans. Date</th>
                 <th>Appointment Date Time</th>
