@@ -231,10 +231,26 @@ export default function QuickSightLandingPage() {
   const isReportingManager = (rmRes.data ?? []).some((m) => Number(m.user_id) === myUserId);
   const canSeeEmployeeProductivity = isAdmin || isReportingManager;
 
-  const visible = REPORTS
-    .filter((r) => (r.anyOf ? r.anyOf.some((k) => flags[k]) : flags[r.actionKey]))
-    /* The permission flag still has to pass first; this only narrows it. */
-    .filter((r) => r.urlBase !== 'employee-productivity' || canSeeEmployeeProductivity);
+  /*
+   * Two reports are gated on a RELATION as well as a permission: somebody
+   * reports to you. Their backends accept Admin OR the per-report key OR being
+   * a reporting manager, and this mirrors that exactly — mirror it, because a
+   * card the server refuses is worse than no card.
+   *
+   * The previous shape ran the permission filter FIRST and then narrowed, with
+   * a comment saying the flag "still has to pass first". That made the manager
+   * check able only to REMOVE a card, never to add one — so a Project Manager
+   * with a team but without the per-report grant got "No Reports Available",
+   * which is exactly what was reported from production.
+   */
+  const RM_GATED = new Set(['employee-productivity', 'admin-dashboard']);
+
+  const visible = REPORTS.filter((r) => {
+    const byPermission = r.anyOf ? r.anyOf.some((k) => flags[k]) : flags[r.actionKey];
+    return RM_GATED.has(r.urlBase)
+      ? byPermission || canSeeEmployeeProductivity
+      : byPermission;
+  });
   // Split AFTER gating, so both groups honour the same permission result and a
   // card lands in exactly one of them. The new group is sorted by its explicit
   // rank (NOT registry order) — see newOrder on ReportCardDef.
