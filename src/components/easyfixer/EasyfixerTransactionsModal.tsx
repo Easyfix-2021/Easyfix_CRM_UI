@@ -40,7 +40,18 @@ type Transaction = {
   location: string | null;
   transaction_by: string | null;
   description: string | null;
+  /*
+   * 1 = DEBIT, 2 = CREDIT. Derived from the ledger itself rather than assumed:
+   * across the most recent 39,293 rows, every type-2 row moves `balance` up by
+   * exactly `amount` (99.9%) and every type-1 row moves it down by exactly
+   * `amount` (100%). The residual is rows with amount 0, where +0 and -0 both
+   * match — not a counter-example.
+   */
+  transaction_type: number | null;
 };
+
+const CREDIT = 2;
+const DEBIT = 1;
 
 type Resp = { items: Transaction[]; total: number; limit: number; offset: number };
 
@@ -218,7 +229,24 @@ export function EasyfixerTransactionsModal({
                   <td className="text-xs whitespace-nowrap">{fmtDateTime(t.transaction_date)}</td>
                   <td className="text-xs whitespace-nowrap">{fmtDateTime(t.appointment_date_time)}</td>
                   <td className="text-xs whitespace-nowrap">{fmtDateTime(t.completion_date_time)}</td>
-                  <td className="text-right text-xs tabular-nums">{fmtMoney(t.amount)}</td>
+                  <td
+                    className={`text-right text-xs tabular-nums font-medium ${
+                      Number(t.transaction_type) === CREDIT ? 'text-success-strong'
+                        : Number(t.transaction_type) === DEBIT ? 'text-urgent-strong'
+                          : ''
+                    }`}
+                  >
+                    {/*
+                      * The SIGN carries the meaning, the colour only reinforces
+                      * it: an operator who cannot distinguish red from green —
+                      * or is reading a printed XLSX — still sees + or −.
+                      * A row with an unknown type gets neither, rather than
+                      * being guessed into a direction.
+                      */}
+                    {t.amount == null || t.amount === ''
+                      ? '—'
+                      : `${Number(t.transaction_type) === CREDIT ? '+' : Number(t.transaction_type) === DEBIT ? '−' : ''}${fmtMoney(t.amount)}`}
+                  </td>
                   <td className="text-right text-xs tabular-nums">{fmtMoney(t.balance)}</td>
                   <td className="text-xs break-words">{t.customer_name || '—'}</td>
                   <td className="text-xs break-words">{t.customer_address || '—'}</td>

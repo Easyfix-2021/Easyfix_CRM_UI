@@ -1004,11 +1004,26 @@ function RoleFormModal({
           out two columns of per-menu action checkboxes on most screens,
           and matches the wider Add/Edit User modal so the two settings
           forms feel like siblings. */}
-      <DialogContent className="!max-w-[1100px] w-[95vw]">
-        <DialogHeader>
+      {/*
+        * PINNED HEADER AND FOOTER.
+        *
+        * DialogContent scrolls the WHOLE panel by default (max-h-[85vh]
+        * overflow-y-auto), so on a long role the title scrolled away and the
+        * operator lost both the role they were editing and the Save button
+        * while working down 32 menus. The shared component documents this exact
+        * opt-out: flex column, header and footer flex-none, one flex-1 middle
+        * that absorbs the overflow instead.
+        *
+        * min-h-0 is load-bearing, not tidy-up: a flex child defaults to
+        * min-height:auto, which refuses to shrink below its content, so the
+        * middle would grow the panel instead of scrolling and the pinning would
+        * silently do nothing.
+        */}
+      <DialogContent className="!max-w-[1100px] w-[95vw] max-h-[85vh] flex flex-col overflow-hidden">
+        <DialogHeader className="shrink-0">
           <DialogTitle>{isEdit ? `Edit "${editing!.role_name}"` : 'Add Role'}</DialogTitle>
         </DialogHeader>
-        <div className="space-y-4 max-h-[75vh] overflow-y-auto pr-1">
+        <div className="space-y-4 flex-1 min-h-0 overflow-y-auto pr-1">
           {/* Identity — two-column layout:
                 Row 1:  Role Name  (left)            |  Status toggle (right, edit only)
                 Row 2:  Description spans both columns
@@ -1212,7 +1227,7 @@ function RoleFormModal({
             </div>
           )}
         </div>
-        <DialogFooter>
+        <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={cancelWithConfirm} disabled={submitting}>Cancel</Button>
           <Button onClick={handleSubmit} disabled={submitting || hydrating || hydrateFailed}>
             {hydrating ? 'Loading…' : submitting ? 'Saving…' : isEdit ? 'Save Changes' : 'Add Role'}
