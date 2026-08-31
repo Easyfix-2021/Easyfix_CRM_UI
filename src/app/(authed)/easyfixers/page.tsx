@@ -306,12 +306,17 @@ function buildQuery(f: Filters, extras: Record<string, string | number | undefin
    * Searching a primary key means "find this one", so the two STATUS filters
    * are suppressed for that query. Every other filter still applies — an id
    * search is narrowed by nothing the operator cannot see.
+   *
+   * SUPPRESSED MEANS status=0, NOT "omit it". A missing status makes the
+   * backend apply its own Active default, so dropping the parameter would
+   * re-arm the very filter this is removing. 0 is the explicit All.
    */
   const idLookup = Boolean(f.easyfixerId);
   if (f.name) q.name = f.name;
   if (f.mobileNo) q.mobileNo = f.mobileNo;
   if (f.efAccount) q.efAccount = f.efAccount;
-  if (!idLookup && f.status !== '') q.status = f.status;
+  if (idLookup) q.status = 0;
+  else if (f.status !== '') q.status = f.status;
   // Lifecycle-status filter (13-state technician machine). Sent as the canonical
   // UPPER_SNAKE value; empty = All (no filter). Independent of the coarse
   // `status` bucket param above. Suppressed for an id lookup for the same
@@ -1232,9 +1237,31 @@ export default function EasyfixersPage() {
                 onChange={(v) => setFilters({
                   ...filters,
                   lifecycleStatus: v,
-                  // Clear the legacy status bucket so it doesn't AND with the
-                  // lifecycle filter (Active + Blacklisted → zero rows).
-                  status: v ? '' : filters.status,
+                  /*
+                   * ALWAYS clear the legacy bucket, including when the operator
+                   * picks "All".
+                   *
+                   * It used to keep `filters.status` on the empty value, and
+                   * that default is '1' (Active) — so choosing All left an
+                   * Active filter running that no control on this form shows.
+                   * The one field labelled Status said All while a different,
+                   * invisible filter did the excluding, which is how efr 9501
+                   * (efr_status NULL) read as "no results" for a record that
+                   * exists.
+                   *
+                   * Touching this control now decides the whole status
+                   * dimension: a value filters by lifecycle, All filters by
+                   * nothing. The counts strip above still sets the bucket for
+                   * anyone who wants Active/Idle/Not Eligible explicitly, and
+                   * it shows which one is on.
+                   *
+                   * '0', NOT ''. An EMPTY status is OMITTED from the query, and
+                   * the backend reads a missing status as its own Active
+                   * default — so clearing the field would have meant "Active"
+                   * just as loudly as leaving it. 0 is the API's explicit
+                   * "All", and it is the only value that filters nothing.
+                   */
+                  status: v ? '' : '0',
                 })}
                 options={LIFECYCLE_STATUS_OPTS}
               />
