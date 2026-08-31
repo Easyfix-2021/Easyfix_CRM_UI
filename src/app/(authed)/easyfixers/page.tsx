@@ -292,14 +292,31 @@ const LIFECYCLE_STATUS_OPTS = EASYFIXER_LIFECYCLE_STATUSES.map((s) => ({
 function buildQuery(f: Filters, extras: Record<string, string | number | undefined> = {}) {
   const q: Record<string, string | number | undefined> = { ...extras };
   if (f.easyfixerId) q.easyfixerId = f.easyfixerId;
+  /*
+   * AN ID SEARCH IS AN IDENTITY LOOKUP, so no roster bucket narrows it.
+   *
+   * `status` defaults to '1' (Active) and there is no control on this form that
+   * shows it — the visible "Status" dropdown drives `lifecycleStatus`, and the
+   * bucket is only surfaced by the counts strip above the filters. So typing an
+   * Easyfixer Id while the form reads "Status: All" still sent status=1, and a
+   * technician who is not Active came back as "no results" for a record that
+   * plainly exists. Reported for efr 9501 (efr_status NULL,
+   * lifecycle REGISTRATION_INCOMPLETE): 0 rows by id, 1 row with status=0.
+   *
+   * Searching a primary key means "find this one", so the two STATUS filters
+   * are suppressed for that query. Every other filter still applies — an id
+   * search is narrowed by nothing the operator cannot see.
+   */
+  const idLookup = Boolean(f.easyfixerId);
   if (f.name) q.name = f.name;
   if (f.mobileNo) q.mobileNo = f.mobileNo;
   if (f.efAccount) q.efAccount = f.efAccount;
-  if (f.status !== '') q.status = f.status;
+  if (!idLookup && f.status !== '') q.status = f.status;
   // Lifecycle-status filter (13-state technician machine). Sent as the canonical
   // UPPER_SNAKE value; empty = All (no filter). Independent of the coarse
-  // `status` bucket param above.
-  if (f.lifecycleStatus) q.lifecycleStatus = f.lifecycleStatus;
+  // `status` bucket param above. Suppressed for an id lookup for the same
+  // reason as the bucket — see the note at the top of this function.
+  if (!idLookup && f.lifecycleStatus) q.lifecycleStatus = f.lifecycleStatus;
   if (f.stateId) q.stateId = f.stateId;
   if (f.cityId) q.cityId = f.cityId;
   if (f.serviceCategory) q.serviceCategory = f.serviceCategory;
