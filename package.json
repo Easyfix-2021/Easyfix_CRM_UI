@@ -16,6 +16,7 @@
     "brand:roundtrip": "node scripts/check-brand-roundtrip.mjs",
     "brand:sync": "node scripts/sync-brand-assets.mjs",
     "brand:sync:check": "node scripts/sync-brand-assets.mjs --check",
+    "hooks:install": "git config core.hooksPath .githooks && echo \"hooks installed (core.hooksPath=.githooks)\"",
     "check:brand": "node scripts/check-brand-tokens.js",
     "verify:env": "node scripts/env-verify.js"
   },

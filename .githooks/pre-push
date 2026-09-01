@@ -1,0 +1,42 @@
+#!/bin/sh
+# Brand-asset drift guard, at push time.
+#
+# WHY PRE-PUSH AND NOT PRE-COMMIT OR CI.
+#
+# `npm run brand:sync:check` has two modes and neither belongs anywhere else:
+#
+#   kit present  compares the vendored bytes against the Brand Kit itself.
+#                This is the ONLY mode that catches the kit moving on without a
+#                re-sync — no local file changed, so no hash changed, so the
+#                lockfile cannot see it. It needs the kit on disk, which is true
+#                on a developer machine and false in CI.
+#   kit absent   compares against brand-assets.lock.json. That runs in CI, and
+#                already gates `npm run build`.
+#
+# So the kit-present check has exactly one place it can live: the last moment
+# on a machine that has the kit. That is pre-push.
+#
+# It is a WARNING, not a block. Being behind the kit is a real finding but not
+# always something to fix before pushing — a brand release may be deliberately
+# staged ahead of the apps that consume it. A hand-edited asset is the harder
+# failure, and `npm run build` already refuses that one.
+
+set -eu
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+# No kit, nothing to add over what the build already checks.
+KIT="${EASYFIX_BRAND_KIT:-$HOME/Documents/GitHub/EasyFix-Brand-Kit}"
+[ -d "$KIT" ] || exit 0
+
+OUT="$(npm run --silent brand:sync:check 2>&1)" || {
+  printf '\n'
+  printf 'pre-push: brand assets are BEHIND the Brand Kit.\n'
+  printf '%s\n' "$OUT" | sed 's/^/  /'
+  printf '\n'
+  printf '  Run: npm run brand:sync   (then commit the result)\n'
+  printf '  Pushing anyway — this is a warning, not a block.\n\n'
+  exit 0
+}
+exit 0
