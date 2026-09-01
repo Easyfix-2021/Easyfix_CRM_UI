@@ -91,28 +91,35 @@ test('an existing code survives an edit that does not touch it', async () => {
 });
 
 /*
- * A KNOWN, DELIBERATE DIVERGENCE, recorded here so the next person finds it in a
- * test rather than in a support ticket.
+ * SEQUENCE 0 — resolved 2026-09-01, and worth keeping a test on precisely
+ * because it was the one place the two repos disagreed.
  *
- * The backend accepts sequence 0 — 'E000000' matches its regex, so it round-trips
- * there by design. This repo refuses it: formatEmpCode has an `n < 1` guard so an
- * operator typing 0 cannot mint E000000.
+ * The backend accepts 0 and mints E000000 so that format∘parse is total across
+ * its regex. This repo used to refuse it, on the reasoning that an operator
+ * should not be able to type 0 into a mandatory field. That guard never stopped
+ * E000000 existing — only the backend mints codes — it just made a user who had
+ * one impossible to edit at all, since user_code rides along on every save.
  *
- * Both choices are defensible and they do not meet in the middle: a user whose
- * code was SEEDED as E000000 hydrates to '0', re-assembles to '', and the dialog
- * blocks the save with "Employee Code is required" — on a field the operator can
- * see is filled in. Allocation never produces it (nextEmpCode starts at 1), so
- * this is only reachable via a manual ops seed, which is why it is documented
- * rather than fixed: making the CRM accept 0 to match would also let an operator
- * type it, and that is a product call, not a cleanup.
+ * Now both accept it, so the useful property holds: every code the validator
+ * accepts, the dialog can hydrate and post back unchanged.
  */
-test('sequence 0 is where the two repos deliberately disagree', () => {
-  assert.equal(formatEmpCode('0'), '', 'this repo refuses to mint E000000');
-  assert.equal(parseEmpCodeCount('E000000'), '0', 'but it will happily parse one');
-  assert.notEqual(formatEmpCode(parseEmpCodeCount('E000000')), 'E000000',
-    'so a seeded E000000 cannot be round-tripped — the divergence, pinned');
+test('sequence 0 round-trips on both sides — the last divergence, closed', () => {
+  assert.equal(formatEmpCode('0'), 'E000000');
+  assert.equal(parseEmpCodeCount('E000000'), '0');
+  assert.equal(formatEmpCode(parseEmpCodeCount('E000000')), 'E000000',
+    'a seeded E000000 survives an edit instead of stranding the record');
   if (backend) {
-    assert.equal(backend.formatEmpCode(0), 'E000000', 'the backend, by contrast, mints it');
-    assert.ok(backend.EMP_CODE_RE.test('E000000'), 'and considers it valid');
+    assert.equal(backend.formatEmpCode(0), 'E000000', 'the backend agrees');
+    assert.ok(backend.EMP_CODE_RE.test('E000000'), 'and validates it');
+  }
+});
+
+/*
+ * Emptiness is the thing still refused, and it must stay refused: it is what
+ * makes the dialog raise "Employee Code is required" instead of posting ''.
+ */
+test('an empty count is still refused — the required-field check depends on it', () => {
+  for (const empty of ['', '   ', null, undefined, 'abc']) {
+    assert.equal(formatEmpCode(empty), '', `${JSON.stringify(empty)} must not become a code`);
   }
 });

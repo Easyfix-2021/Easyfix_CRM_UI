@@ -25,12 +25,36 @@ export const EMP_CODE_PREFIX = 'E';
 export const EMP_CODE_DIGITS = 6;
 export const EMP_CODE_RE = new RegExp(`^${EMP_CODE_PREFIX}\\d{${EMP_CODE_DIGITS}}$`);
 
-/** 200244 -> 'E200244'. Returns '' for anything that cannot be a code. */
+/**
+ * 200244 -> 'E200244'. Returns '' for anything that cannot be a code.
+ *
+ * ZERO IS ACCEPTED, and it did not used to be (2026-09-01). There was an
+ * `n < 1` guard here so an operator could not type 0 into a mandatory field and
+ * mint E000000. It looked like the careful choice and it was the wrong one.
+ *
+ * It never stopped E000000 EXISTING — the backend's own formatEmpCode accepts 0
+ * and its regex matches the result, so a manually seeded row can hold one. What
+ * the guard actually did was make that user uneditable: the dialog hydrates the
+ * code down to its count ('0'), re-assembles it to '', and blocks the save with
+ * "Employee Code is required" on a field the operator can see is filled. Since
+ * user_code is posted on every save, that blocked changing their ROLE or their
+ * STATUS too — nothing about that person could be edited from the CRM at all.
+ *
+ * The two failures are not the same size. Accepting 0 risks an operator minting
+ * E000000, which is visible on the row, fixable with one edit, and harmless to
+ * allocation (nextEmpCode takes MAX + 1, and a 0 row contributes nothing to the
+ * MAX). Refusing it strands a record with no route out of the UI. So this now
+ * matches the backend exactly, which is the property that was worth having:
+ * every code the validator accepts, this can round-trip.
+ *
+ * Emptiness is still refused — `if (!digits)` above is what makes the dialog's
+ * "Employee Code is required" fire, and it is untouched.
+ */
 export function formatEmpCode(count: string | number | null | undefined): string {
   const digits = String(count ?? '').replace(/\D+/g, '');
   if (!digits) return '';
   const n = Number(digits);
-  if (!Number.isSafeInteger(n) || n < 1 || digits.length > EMP_CODE_DIGITS) return '';
+  if (!Number.isSafeInteger(n) || digits.length > EMP_CODE_DIGITS) return '';
   return EMP_CODE_PREFIX + digits.padStart(EMP_CODE_DIGITS, '0');
 }
 

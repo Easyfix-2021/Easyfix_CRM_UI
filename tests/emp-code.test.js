@@ -54,9 +54,17 @@ test('formatEmpCode assembles exactly what the backend regex accepts', () => {
  * plausible-looking code the operator never typed.
  */
 test('formatEmpCode refuses what cannot be a code, rather than guessing', () => {
-  for (const bad of [null, undefined, '', '   ', 'abc', 0, '0', 1000000, '1234567']) {
+  for (const bad of [null, undefined, '', '   ', 'abc', 1000000, '1234567']) {
     assert.equal(formatEmpCode(bad), '', `${JSON.stringify(bad)} must yield ''`);
   }
+  /*
+   * 0 is NOT in that list, and its absence is the point. It was refused until
+   * 2026-09-01, which stranded any user whose code had been seeded E000000 —
+   * see the note on formatEmpCode. The domain here is now exactly the backend's.
+   */
+  assert.equal(formatEmpCode(0), 'E000000');
+  assert.equal(formatEmpCode('0'), 'E000000');
+  assert.ok(EMP_CODE_RE.test('E000000'), 'and it is a code by this repo\'s own regex');
 });
 
 /*
