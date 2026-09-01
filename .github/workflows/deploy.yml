@@ -79,7 +79,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
+      # FULL history — see ci.yml for why: the message-literal audit's RETIRED
+      # half reads `git log -L` over this repo, and a depth-1 checkout makes it
+      # silently unable to find anything.
       - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
       - uses: actions/setup-node@v4
         with: { node-version: 20, cache: 'npm' }
       - run: npm ci
@@ -99,8 +103,20 @@ jobs:
       # that a type-checker cannot see, because they are facts about data this
       # repo has no access to. `npm test` compiles the module under test into
       # .test-build/ first; see tests/job-slots.test.js for why.
+      # The message-literal audit has exactly ONE home — the backend repo — and
+      # tests/message-literals.test.js explains why it is not copied here. Both
+      # repos are public, so a plain shallow clone reaches it with no token and
+      # no secret. It lands in RUNNER_TEMP, deliberately OUTSIDE the workspace:
+      # inside it, `eslint .` would lint 300 backend files with this repo's
+      # config, and the audit's own file walk would scan them as if they were
+      # ours. The audit reads git history from THIS repo, not that one, so a
+      # depth-1 clone of the tool is all that is needed.
+      - name: Fetch the shared message-literal audit
+        run: git clone --quiet --depth 1 https://github.com/Easyfix-2021/Easyfix_Backend.git "$RUNNER_TEMP/easyfix-backend-audit"
       - name: Test
-        run: npm test
+        env:
+          EASYFIX_BACKEND_PATH: ${{ runner.temp }}/easyfix-backend-audit
+        run: npm test")
 
   build-and-push:
     name: Build image & push to ECR

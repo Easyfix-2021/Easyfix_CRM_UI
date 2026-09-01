@@ -1926,7 +1926,15 @@ function UserFormModal({
               showing a redundant always-on switch. Grid collapses to one
               column on narrow viewports so the toggle drops below the
               name field gracefully. */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 items-end">
+          {/* No `items-end` here, unlike every other row in this form — and that
+              is the point. Employee Code carries a conditional hint under it
+              ("Prefilled with the next free code…"), so bottom-aligning the row
+              pushed its label and input ~2 lines ABOVE Full Name's, and moved
+              them again depending on whether the hint was showing. Alignment
+              must not be a function of optional content. Top-aligned, the two
+              fields share a baseline and the hint hangs below, which is exactly
+              what rows 2-4 already do with their own conditional helper text. */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             <div>
               <Label className="block mb-1" required>
                 Full Name {isEdit && <span className="text-xs text-muted-foreground font-normal">(not editable)</span>}
@@ -1970,7 +1978,13 @@ function UserFormModal({
               )}
             </div>
             {isEdit ? (
-              <div className="flex items-center justify-end gap-3 pb-1.5">
+              /* `lg:` only, and that is load-bearing. At lg the grid is 3-across
+                 and Status sits BESIDE the two fields, so it needs the label
+                 block above them — Label is text-sm/leading-none (14px) + mb-1
+                 (4px) = 18px — plus the input's own h-9 to centre against. At md
+                 the grid is 2-across, so Status wraps onto a row of its own where
+                 that offset would just be 18px of stray space. Measured both. */
+              <div className="flex h-9 items-center justify-end gap-3 lg:mt-[18px]">
                 <span className="text-sm font-medium">Status</span>
                 <Switch checked={active} onCheckedChange={setActive} ariaLabel="Toggle user active" />
                 <span

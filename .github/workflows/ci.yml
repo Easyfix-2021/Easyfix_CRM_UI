@@ -53,7 +53,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # FULL history, not the default depth-1. The RETIRED half of the
+      # message-literal audit asks `git log -L` what a constant USED to hold,
+      # against THIS repo's history. In a depth-1 clone the only commit is HEAD,
+      # so every constant's history is exactly its current value and the check
+      # cannot fire — a clean 0 that means nothing. 408 commits, so it is free.
       - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
       - uses: actions/setup-node@v4
         with: { node-version: 20, cache: 'npm' }
       - run: npm ci
@@ -74,5 +80,17 @@ jobs:
       # Value-level unit tests (node:test, no extra runner). `npm test`
       # compiles the modules under test into .test-build/ first — see
       # tests/job-slots.test.js for why that step exists.
+      # The message-literal audit has exactly ONE home — the backend repo — and
+      # tests/message-literals.test.js explains why it is not copied here. Both
+      # repos are public, so a plain shallow clone reaches it with no token and
+      # no secret. It lands in RUNNER_TEMP, deliberately OUTSIDE the workspace:
+      # inside it, `eslint .` would lint 300 backend files with this repo's
+      # config, and the audit's own file walk would scan them as if they were
+      # ours. The audit reads git history from THIS repo, not that one, so a
+      # depth-1 clone of the tool is all that is needed.
+      - name: Fetch the shared message-literal audit
+        run: git clone --quiet --depth 1 https://github.com/Easyfix-2021/Easyfix_Backend.git "$RUNNER_TEMP/easyfix-backend-audit"
       - name: Test
+        env:
+          EASYFIX_BACKEND_PATH: ${{ runner.temp }}/easyfix-backend-audit
         run: npm test
