@@ -2,8 +2,8 @@
  * Employee code — ONE definition of the format, shared by every screen that
  * shows or edits it.
  *
- * The stored value on tbl_user.user_code is the whole string, `EF` + six
- * zero-padded digits (EF258123). The operator only ever edits the COUNT: the
+ * The stored value on tbl_user.user_code is the whole string, the prefix plus
+ * six zero-padded digits (E200244). The operator only ever edits the COUNT: the
  * prefix is rendered as a fixed affix beside the input, exactly like the
  * `@easyfix.in` suffix on Official Email, so a foreign prefix cannot be typed.
  *
@@ -13,11 +13,19 @@
  * just produces a 400 the operator cannot act on.
  */
 
-export const EMP_CODE_PREFIX = 'EF';
+/*
+ * A PARAMETER, not a literal. It was briefly 'EF' — the real codes already in
+ * the business are E200244, one letter. Everything below derives from these two
+ * constants, so a future change is one line here and one in the backend's
+ * lib/emp-code.js. They must change together: this side renders the prefix as a
+ * fixed affix and posts only the digits, so a disagreement produces a 400 the
+ * operator cannot act on.
+ */
+export const EMP_CODE_PREFIX = 'E';
 export const EMP_CODE_DIGITS = 6;
-export const EMP_CODE_RE = /^EF\d{6}$/;
+export const EMP_CODE_RE = new RegExp(`^${EMP_CODE_PREFIX}\\d{${EMP_CODE_DIGITS}}$`);
 
-/** 258123 -> 'EF258123'. Returns '' for anything that cannot be a code. */
+/** 200244 -> 'E200244'. Returns '' for anything that cannot be a code. */
 export function formatEmpCode(count: string | number | null | undefined): string {
   const digits = String(count ?? '').replace(/\D+/g, '');
   if (!digits) return '';
@@ -27,7 +35,7 @@ export function formatEmpCode(count: string | number | null | undefined): string
 }
 
 /**
- * 'EF258123' -> '258123'. Leading zeros are STRIPPED so the operator edits the
+ * 'E200244' -> '200244'. Leading zeros are STRIPPED so the operator edits the
  * number they think in, not a padded string — formatEmpCode pads it back on the
  * way out. A value that is not a well-formed code yields '' rather than a
  * half-parsed guess.

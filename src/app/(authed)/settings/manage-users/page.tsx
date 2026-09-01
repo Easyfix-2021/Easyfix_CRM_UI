@@ -20,6 +20,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { invalidateFetch, useDebouncedValue, useFetch } from '@/lib/hooks';
 import { EMP_CODE_PREFIX, formatEmpCode, parseEmpCodeCount, sanitiseEmpCount } from '@/lib/emp-code';
+import { INDIAN_MOBILE_REGEX, INDIAN_MOBILE_ERROR } from '@/lib/format';
 import {
   UserCog, Users, Search, Plus, Pencil, Trash2, MailWarning,
   AlertTriangle, ChevronDown, ChevronRight, Info, Layers, KeyRound,
@@ -1171,8 +1172,18 @@ function UserFormModal({
    */
   const [empCount, setEmpCount] = useState('');
   const empSeededRef = useRef(false);
+  /*
+   * Fetched for a NEW user and equally for an EXISTING one that has no code
+   * yet. user_code is NULL for every row on production until ops seed real
+   * codes, so an Edit form that only prefilled on Add would confront an admin
+   * with a mandatory empty field every time they touched a legacy user — and
+   * they came to flip a status, not to allocate an employee code. Suggesting
+   * the next free one turns that block into a single confirming click, and the
+   * backend leaves user_code optional on PATCH so nothing forces the issue.
+   */
+  const needsEmpSuggestion = open && !parseEmpCodeCount(editing?.user_code);
   const nextEmpCode = useFetch<{ count: number; code: string }>(
-    open && !editing ? '/admin/users/next-emp-code' : null,
+    needsEmpSuggestion ? '/admin/users/next-emp-code' : null,
   );
 
   const [manageClients,   setManageClients]   = useState<Set<number>>(new Set());
@@ -1220,18 +1231,18 @@ function UserFormModal({
   /* Seeded ONCE per open. Without the ref the suggestion would land again on
    * every refetch and overwrite a count the operator had already edited. */
   useEffect(() => {
-    if (open && !editing && !empSeededRef.current && nextEmpCode.data?.count) {
+    if (needsEmpSuggestion && !empSeededRef.current && nextEmpCode.data?.count) {
       setEmpCount(String(nextEmpCode.data.count));
       empSeededRef.current = true;
     }
-  }, [open, editing, nextEmpCode.data]);
+  }, [needsEmpSuggestion, nextEmpCode.data]);
 
   useEffect(() => {
     if (open) {
       setName(editing?.user_name ?? '');
       // Edit hydrates the existing code; Add waits for the suggestion above.
       setEmpCount(parseEmpCodeCount(editing?.user_code));
-      empSeededRef.current = !!editing;
+      empSeededRef.current = !!parseEmpCodeCount(editing?.user_code);
       setEmail(editing?.official_email ?? '');
       setPersonalEmail(editing?.personal_email ?? '');
       setMobile(editing?.mobile_no ?? '');
@@ -1438,7 +1449,10 @@ function UserFormModal({
       setMobileCheck({ state: 'idle' });
       return;
     }
-    if (!/^[0-9]{10}$/.test(mobile)) {
+    // Canonical rule, shared with every other mobile field in the CRM and now
+    // with the backend's Joi. This screen used to hand-roll a looser ten-digit
+    // check, which let it probe availability for numbers create would reject.
+    if (!INDIAN_MOBILE_REGEX.test(mobile)) {
       // length warning is rendered by the existing UI; we stay idle.
       setMobileCheck({ state: mobile.length === 0 ? 'idle' : 'invalid' });
       return;
@@ -1675,7 +1689,7 @@ function UserFormModal({
      * caught rather than half-stored. Mirrors the backend createBody, which now
      * allows '' / null but keeps the same pattern.
      */
-    if (mobile.trim() && !/^[0-9]{10}$/.test(mobile)) { setError('Mobile must be 10 digits'); return; }
+    if (mobile.trim() && !INDIAN_MOBILE_REGEX.test(mobile)) { setError(INDIAN_MOBILE_ERROR); return; }
     if (altMob && !/^[0-9]{10}$/.test(altMob)) { setError('Alternate number must be 10 digits or blank'); return; }
     // Block submit if the real-time probe found a collision. Backend
     // re-checks on create/update too — this is defensive UX only. We
@@ -1933,15 +1947,17 @@ function UserFormModal({
                   inputMode="numeric"
                   value={empCount}
                   onChange={(e) => setEmpCount(sanitiseEmpCount(e.target.value))}
-                  placeholder="258123"
+                  placeholder="200244"
                   className="rounded-l-none"
                 />
               </div>
-              {!isEdit && (
+              {needsEmpSuggestion && (
                 <p className="mt-1 text-xs text-muted-foreground">
                   {nextEmpCode.loading
                     ? 'Finding The Next Free Code…'
-                    : 'Prefilled with the next free code. Edit it if this employee already has one.'}
+                    : isEdit
+                      ? 'This user has no code yet. Prefilled with the next free one — change it if they already have one.'
+                      : 'Prefilled with the next free code. Edit it if this employee already has one.'}
                 </p>
               )}
             </div>
@@ -2093,8 +2109,12 @@ function UserFormModal({
                 placeholder="10-digit number (optional)"
                 className="font-mono"
               />
-              {mobile && mobile.length !== 10 && (
-                <p className="text-xs text-warning-strong mt-1">Mobile must be exactly 10 digits ({mobile.length}/10).</p>
+              {mobile && !INDIAN_MOBILE_REGEX.test(mobile) && (
+                <p className="text-xs text-warning-strong mt-1">
+                  {mobile.length !== 10
+                    ? `Mobile must be exactly 10 digits (${mobile.length}/10).`
+                    : INDIAN_MOBILE_ERROR}
+                </p>
               )}
               {/* Real-time DB uniqueness check — only renders for a complete
                   10-digit number that actually differs from the user being

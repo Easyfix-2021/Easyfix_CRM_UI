@@ -23,13 +23,24 @@
  * Fields are definition-list rows, not cards. A column of labels is scannable;
  * a grid of same-weight boxes is a search.
  *
- * ─── THREE EDIT MODES, EACH SAID IN WORDS BEFORE THE CLICK ──────────────────
- *   Alternate Number  — inline. Saves immediately, no approval (PATCH).
- *   Date Of Birth     — free to set ONCE while blank (POST .../date-of-birth);
- *                       locked afterwards, and then it takes a request. Which
- *                       state the field is in is stated on the row.
- *   Mobile / Bank     — always a Profile Update Request. Nothing on the record
- *                       moves until HR approves.
+ * ─── ONE EDIT BUTTON, NOT ONE PER FIELD ─────────────────────────────────────
+ * A single "Request Change" in the page header opens EditProfileDialog, which
+ * edits every editable field at once and submits them together. That is the
+ * backend's own model: a submission MERGES into the caller's single open
+ * request, so three separate posts were three merges into one row. The dialog
+ * sends only the fields that actually changed.
+ *
+ * Two things stay ON the record rather than in that dialog:
+ *   Date Of Birth, first set — a DIRECT write (POST .../date-of-birth) with no
+ *                       approval while the column is still NULL. Putting it in
+ *                       the approval dialog would route a free set through an
+ *                       approval it does not need, so the row keeps its own
+ *                       input for exactly that one case.
+ *   The bank eyes    — revealing an encrypted value is a read, not an edit.
+ * Alternate Number lives IN the dialog but keeps its direct PATCH, visually
+ * separated, because it is the one field there that needs no approval.
+ *
+ * The profile photo has no approval either — it is set on the avatar itself.
  *
  * Everything else — role, scope, hierarchy, feature grants — stays read-only.
  *
@@ -60,10 +71,11 @@ import { api, ApiError } from '@/lib/api';
 import { useFetchOnce, invalidateFetch } from '@/lib/hooks';
 import { useMe, type ScopeDimension } from '@/lib/auth-context';
 import {
-  ProfileRow, PendingBanner, PendingFieldNote, RequestChangeDialog,
+  ProfileRow, PendingBanner, PendingFieldNote, EditProfileDialog, ProfilePhoto,
+  RevealButton, RevealNotice, useReveal,
   pendingItems, fmtDate, dobError, dobMin, dobMax,
-  PHONE_RE, PHONE_ERROR,
-  type ProfileDetails, type RequestableField,
+  bankHolderMasked, bankAccountMasked,
+  type ProfileDetails, type RequestableField, type RevealedBank,
 } from '@/components/profile/ProfileFields';
 
 /* Same rule as the client and technician headers: first + last initial. */
@@ -99,6 +111,29 @@ function Section({
   );
 }
 
+/*
+ * A masked value with its eye beside it.
+ *
+ * Both bank secrets share ONE reveal: /profile/bank/reveal returns both halves
+ * in a single response and writes a single audit row, so clicking either eye
+ * shows both and clicking either hides both.
+ */
+function SecretValue({ masked, revealed, shown, busy, onToggle, what }: {
+  masked: string;
+  revealed?: string | null;
+  shown: boolean;
+  busy: boolean;
+  onToggle: () => void;
+  what: string;
+}) {
+  return (
+    <span className="inline-flex items-center gap-2 flex-wrap">
+      <span className="break-all">{(shown && revealed) || masked}</span>
+      <RevealButton shown={shown} busy={busy} onToggle={onToggle} what={what} />
+    </span>
+  );
+}
+
 /* Loading placeholder — the app's convention is inline pulse blocks, there is
  * no Skeleton component in this codebase. */
 function PulseRows({ n = 4 }: { n?: number }) {
@@ -114,12 +149,28 @@ function PulseRows({ n = 4 }: { n?: number }) {
   );
 }
 
-/* Compact label/value pair for the quiet Access section. */
-function MiniStat({ label, value, tone }: { label: string; value: ReactNode; tone?: string }) {
+/*
+ * Compact label/value pair for the quiet Access section.
+ *
+ * Label OVER value below `lg`, side-by-side above it. Side-by-side in a narrow
+ * column is what broke: the real values here are multi-word stage lists
+ * ("Booked, Assigned, In Progress") and chips, and `justify-between` in a
+ * ~260px column wrapped BOTH halves — leaving a chip beside "Scheduled" with
+ * "Jobs" hanging underneath it.
+ *
+ * The stacking alone was NOT enough, which the re-render showed and reasoning
+ * did not: at 1440 `lg` is active, three columns of a max-w-4xl page are still
+ * only 247px, and the row measured 40px — two lines, with the LABEL broken as
+ * well as the value. So the label is additionally `lg:whitespace-nowrap`: the
+ * longest one here is "Downstream Reports" at ~105px, which fits, and a long
+ * value wrapping under a whole label is ordinary. A label split mid-phrase
+ * beside a value split mid-phrase is not.
+ */
+function MiniStat({ label, value }: { label: string; value: ReactNode }) {
   return (
-    <div className="flex items-baseline justify-between gap-3 py-1">
-      <span className="text-xs text-muted-foreground">{label}</span>
-      <span className={`text-xs font-medium text-right ${tone ?? ''}`}>{value}</span>
+    <div className="flex flex-col gap-0.5 py-1 lg:flex-row lg:items-baseline lg:justify-between lg:gap-3">
+      <span className="text-xs text-muted-foreground lg:whitespace-nowrap">{label}</span>
+      <span className="text-xs font-medium lg:text-right lg:min-w-0">{value}</span>
     </div>
   );
 }
@@ -128,12 +179,20 @@ function MiniStat({ label, value, tone }: { label: string; value: ReactNode; ton
  * One scope dimension. 'none' is highlighted rather than shown as a quiet zero
  * because it almost always means the operator's manage_* column is mis-seeded —
  * which is the whole reason the original dropdown existed.
+ *
+ * As a CHIP, not bare `text-warning-strong`. That token is the foreground half
+ * of the `bg-warning-tint` pairing and the two SWAP between themes, so bare it
+ * renders near-white in dark — indistinguishable from the ordinary values it
+ * exists to stand out from. A contrast checker passes it, because what is lost
+ * is differentiation from its peers, not legibility. StatusChip carries the
+ * tint+text pairing and is correct in both themes, and it matches the
+ * Granted / Not Granted chips two columns over.
  */
-function scopeValue(dim?: ScopeDimension): { text: ReactNode; tone?: string } {
-  if (!dim) return { text: 'All' };
-  if (dim.mode === 'allow') return { text: dim.ids.length };
-  if (dim.mode === 'none') return { text: 'None', tone: 'text-warning-strong' };
-  return { text: 'All' };
+function scopeValue(dim?: ScopeDimension): ReactNode {
+  if (!dim) return 'All';
+  if (dim.mode === 'allow') return dim.ids.length;
+  if (dim.mode === 'none') return <StatusChip tone="warning" size="sm">None</StatusChip>;
+  return 'All';
 }
 
 export default function MyProfilePage() {
@@ -145,19 +204,27 @@ export default function MyProfilePage() {
   const { data: details, loading: detailsLoading, error: detailsError } =
     useFetchOnce<ProfileDetails>('/profile/details');
 
-  /* Which field's approval dialog is open, if any. */
-  const [requestField, setRequestField] = useState<RequestableField | null>(null);
-
-  /* Alternate Number — inline editor. */
-  const [editingAlt, setEditingAlt] = useState(false);
-  const [altDraft, setAltDraft] = useState('');
-  const [savingAlt, setSavingAlt] = useState(false);
+  /* The one editor — every editable field, one submission. */
+  const [editing, setEditing] = useState(false);
 
   /* Date Of Birth — the one free set, while it is still blank. */
   const [dobDraft, setDobDraft] = useState('');
   const [savingDob, setSavingDob] = useState(false);
 
   const [withdrawing, setWithdrawing] = useState(false);
+
+  /*
+   * Revealing your own bank details — a POST, audited server-side, so it gets a
+   * pending state and a failure toast rather than being treated as a toggle.
+   *
+   * The response envelope is not fixed by the contract (the route is being
+   * written alongside this page), so the wrapped and the flat shape are both
+   * accepted; collapse this to whichever it returns once it lands.
+   */
+  const bankReveal = useReveal<RevealedBank>(async () => {
+    const r = await api.post<{ bank?: RevealedBank } & RevealedBank>('/profile/bank/reveal');
+    return r?.bank ?? r ?? {};
+  });
 
   const pending = details?.pending ?? null;
   const changes = pending?.changes;
@@ -166,28 +233,6 @@ export default function MyProfilePage() {
    * note so the blast radius of "Withdraw" is never a surprise. */
   const othersFor = (key: RequestableField) =>
     allPending.filter((it) => it.key !== key).map((it) => it.label);
-
-  /* ── Alternate Number — direct write, no approval ───────────────────── */
-  const altValid = altDraft === '' || PHONE_RE.test(altDraft);
-  async function saveAlternate() {
-    if (!altValid || savingAlt) return;
-    setSavingAlt(true);
-    try {
-      await api.patch('/profile/alternate-no', { alternate_no: altDraft });
-      /* Written to tbl_user, so /auth/me is stale too — refresh both caches. */
-      invalidateFetch((k) => k.startsWith('/profile'));
-      await refresh();
-      showToast({ variant: 'success', message: 'Alternate number saved.' });
-      setEditingAlt(false);
-    } catch (e) {
-      showToast({
-        variant: 'error',
-        message: e instanceof ApiError ? e.message : 'Could not save the alternate number.',
-      });
-    } finally {
-      setSavingAlt(false);
-    }
-  }
 
   /* ── Date Of Birth — the single self-service set ────────────────────── */
   const dobDraftError = dobDraft.length > 0 ? dobError(dobDraft) : null;
@@ -272,11 +317,22 @@ export default function MyProfilePage() {
     ? 'All Stages'
     : (stages.stages.length ? stages.stages.join(', ') : 'None');
 
+  /*
+   * The record only ever carries the MASKED halves — account number and holder
+   * name are encrypted at rest, and GET /profile/details never ships either the
+   * plaintext or the ciphertext.
+   */
   const bank = details?.bank;
-  const hasBank = !!(bank && (bank.account_number || bank.ifsc || bank.account_name || bank.bank_name));
+  const bankHolder = bankHolderMasked(bank);
+  const bankAccount = bankAccountMasked(bank);
+  const hasBank = bank?.has_details
+    ?? !!(bankHolder || bankAccount || bank?.ifsc || bank?.bank_name);
   const bankPending = changes?.bank !== undefined;
   const mobilePending = changes?.mobile_no !== undefined;
   const dobPending = changes?.date_of_birth !== undefined;
+
+  /* The one free set: the row carries its own date input. */
+  const dobFirstSet = !!details && !dobPending && !details.date_of_birth && !details.dob_locked;
 
   /* Employee code lives on tbl_user (useMe) and is echoed by /profile/details;
    * prefer the record fetch, fall back to the session payload. */
@@ -288,14 +344,26 @@ export default function MyProfilePage() {
 
       {/* ═══ 1. Identity band — the page's one focal element ═════════════ */}
       <Card className="overflow-hidden">
-        <div className="bg-gradient-to-br from-primary/10 via-card to-card p-5 sm:p-6">
+        {/*
+          * `to-foreground/[0.07]`, not `to-card`.
+          *
+          * The old gradient ended on the card colour, so outside the tinted
+          * top-left corner the band WAS the card — in dark that left a hue
+          * shift with no value shift (luminance delta 0.002) and it stopped
+          * reading as a band at all. An alpha of the FOREGROUND is the one
+          * overlay that shifts value in both themes without a second surface
+          * token: near-black over white darkens, near-white over slate
+          * lightens. The primary tint stays for the corner warmth.
+          */}
+        <div className="bg-gradient-to-br from-primary/15 via-foreground/[0.07] to-foreground/[0.07] p-5 sm:p-6">
           <div className="flex items-start gap-4 flex-wrap">
-            <span
-              aria-hidden
-              className="size-16 shrink-0 rounded-2xl bg-primary/10 text-primary font-semibold flex items-center justify-center text-xl"
-            >
-              {initialsOf(user?.user_name)}
-            </span>
+            {/* The avatar: the photo when one is set, the initials plate when
+                not. The plate's contrast fix lives inside ProfilePhoto so both
+                states share one geometry. */}
+            <ProfilePhoto
+              initials={initialsOf(user?.user_name)}
+              photoUrl={details?.photo_url ?? null}
+            />
             <div className="min-w-0 flex-1">
               <h1 className="text-2xl font-semibold truncate">
                 {meLoading ? 'Loading…' : (user?.user_name ?? '—')}
@@ -316,6 +384,18 @@ export default function MyProfilePage() {
                 )}
               </div>
             </div>
+            {/* ONE edit control for the whole page, aligned with the heading —
+                not one button per field. */}
+            <Button
+              variant="outline"
+              size="sm"
+              className="shrink-0 ml-auto"
+              disabled={!details}
+              onClick={() => setEditing(true)}
+            >
+              <Pencil className="size-3.5 mr-1.5" />
+              {allPending.length > 0 ? 'Revise Request' : 'Request Change'}
+            </Button>
           </div>
 
           {/* At-a-glance identity facts, inline rather than in their own card. */}
@@ -361,20 +441,21 @@ export default function MyProfilePage() {
       <Section title="Personal & Contact Details" icon={<Mail className="size-4" />}>
         {detailsLoading ? <PulseRows n={5} /> : (
           <div>
-            <ProfileRow label="Official Email" value={user?.official_email} />
+            {/* Official Email is NOT repeated here — it sits in the identity
+                band ~130px above, and the same address twice in one screenful
+                reads as two different fields. */}
             <ProfileRow label="Personal Email" value={details?.personal_email} />
 
-            {/* Mobile Number — approval only. */}
+            {/* Mobile Number — a request, whether it is a change or a first
+                add. There is no direct write route for it at all. */}
             <ProfileRow
               label="Mobile Number"
               value={details?.mobile_no ?? user?.mobile_no}
               mono
-              hint={mobilePending ? undefined : 'A change here needs HR approval before it takes effect.'}
-              action={details && (
-                <Button variant="outline" size="sm" onClick={() => setRequestField('mobile_no')}>
-                  {mobilePending ? 'Revise Request' : 'Request Change'}
-                </Button>
-              )}
+              hint={mobilePending ? undefined
+                : (details?.mobile_no ?? user?.mobile_no)
+                  ? 'A change here needs HR approval before it takes effect.'
+                  : 'Not on record. Adding one needs HR approval before it takes effect.'}
             >
               {mobilePending && (
                 <PendingFieldNote
@@ -384,59 +465,14 @@ export default function MyProfilePage() {
               )}
             </ProfileRow>
 
-            {/* Alternate Number — inline, immediate. */}
+            {/* Alternate Number — the one genuinely free field. Edited in the
+                same modal as the rest, but written directly. */}
             <ProfileRow
               label="Alternate Number"
               value={details?.alternate_no ?? user?.alternate_no}
-              hideValue={editingAlt}
               mono
-              hint={editingAlt ? undefined : 'You can change this yourself — it saves straight away, no approval needed.'}
-              action={!editingAlt && details && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setAltDraft(String(details?.alternate_no ?? ''));
-                    setEditingAlt(true);
-                  }}
-                >
-                  <Pencil className="size-3.5 mr-1.5" /> Edit
-                </Button>
-              )}
-            >
-              {editingAlt && (
-                <div className="space-y-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Label htmlFor="pf-alt" className="sr-only">Alternate Number</Label>
-                    <Input
-                      id="pf-alt"
-                      value={altDraft}
-                      onChange={(e) => setAltDraft(e.target.value.replace(/\D/g, '').slice(0, 10))}
-                      inputMode="numeric"
-                      autoComplete="off"
-                      placeholder="10-digit number"
-                      className="font-mono w-48"
-                      autoFocus
-                    />
-                    <Button size="sm" onClick={saveAlternate} disabled={!altValid || savingAlt}>
-                      {savingAlt ? 'Saving…' : 'Save'}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setEditingAlt(false)}
-                      disabled={savingAlt}
-                    >
-                      Cancel
-                    </Button>
-                  </div>
-                  {!altValid && <p className="text-xs text-destructive">{PHONE_ERROR}</p>}
-                  <p className="text-xs text-muted-foreground">
-                    Saves straight away, no approval needed. Leave it empty to remove the number.
-                  </p>
-                </div>
-              )}
-            </ProfileRow>
+              hint="You can change this yourself — it saves straight away, no approval needed."
+            />
 
             {/* Date Of Birth — three states, each named on the row. */}
             <ProfileRow
@@ -451,18 +487,15 @@ export default function MyProfilePage() {
                   )
                   : undefined
               }
+              /* Same reason Alternate Number passes it: the row's own date
+                 input already holds the value, so an em dash above it reads as
+                 a second, empty field rather than as "nothing on record". */
+              hideValue={dobFirstSet}
               hint={
                 dobPending ? undefined
                   : (!details?.date_of_birth && !details?.dob_locked)
                     ? 'Not set yet. You can set it once yourself — after that it is locked and any correction needs HR approval.'
                     : 'Set and locked. A correction needs HR approval before it takes effect.'
-              }
-              action={
-                details && (dobPending || details.date_of_birth || details.dob_locked) ? (
-                  <Button variant="outline" size="sm" onClick={() => setRequestField('date_of_birth')}>
-                    {dobPending ? 'Revise Request' : 'Request Change'}
-                  </Button>
-                ) : undefined
               }
             >
               {dobPending && (
@@ -471,7 +504,7 @@ export default function MyProfilePage() {
                   alsoCovers={othersFor('date_of_birth')}
                 />
               )}
-              {details && !dobPending && !details.date_of_birth && !details.dob_locked && (
+              {dobFirstSet && (
                 <div className="mt-2 space-y-2">
                   <div className="flex flex-wrap items-center gap-2">
                     <Label htmlFor="pf-dob-once" className="sr-only">Date Of Birth</Label>
@@ -501,40 +534,81 @@ export default function MyProfilePage() {
       </Section>
 
       {/* ═══ 4. Bank Details — one approval covers all four values ═══════ */}
-      <Section
-        title="Bank Details"
-        icon={<Landmark className="size-4" />}
-        action={details && (
-          <Button variant="outline" size="sm" onClick={() => setRequestField('bank')}>
-            {bankPending ? 'Revise Request' : hasBank ? 'Request Change' : 'Add Bank Details'}
-          </Button>
-        )}
-      >
-        {detailsLoading ? <PulseRows n={4} /> : (
-          <div>
-            <ProfileRow label="Account Holder Name" value={bank?.account_name} />
-            <ProfileRow label="Account Number" value={bank?.account_number} mono />
-            <ProfileRow label="IFSC Code" value={bank?.ifsc} mono />
-            <ProfileRow label="Bank Name" value={bank?.bank_name} />
-            {bankPending ? (
+      <Section title="Bank Details" icon={<Landmark className="size-4" />}>
+        {detailsLoading ? <PulseRows n={4} /> : !hasBank ? (
+          /* One sentence, not four em dashes: an empty record is one fact, and
+             four blank rows read as four fields that failed to load. Adding
+             them happens in the page's one edit dialog. */
+          <div className="space-y-2">
+            <p className="text-sm text-muted-foreground">
+              No bank details on record. Adding them raises a request for HR to approve —
+              they only reach your record once HR does.
+            </p>
+            {bankPending && (
               <PendingFieldNote
                 text={pendingItems(changes).find((i) => i.key === 'bank')?.text ?? '—'}
                 alsoCovers={othersFor('bank')}
               />
-            ) : (
-              <p className="text-xs text-muted-foreground pt-3">
-                {hasBank
-                  ? 'All four values change together, and only after HR approves.'
-                  : 'No bank details on record. Adding them raises a request for HR to approve.'}
-              </p>
             )}
+          </div>
+        ) : (
+          <div>
+            <ProfileRow
+              label="Account Holder Name"
+              value={bankHolder ? (
+                <SecretValue
+                  masked={bankHolder}
+                  revealed={bankReveal.value?.account_name}
+                  shown={bankReveal.shown}
+                  busy={bankReveal.busy}
+                  onToggle={bankReveal.toggle}
+                  what="Bank Details"
+                />
+              ) : undefined}
+            />
+            <ProfileRow
+              label="Account Number"
+              mono
+              value={bankAccount ? (
+                <SecretValue
+                  masked={bankAccount}
+                  revealed={bankReveal.value?.account_number}
+                  shown={bankReveal.shown}
+                  busy={bankReveal.busy}
+                  onToggle={bankReveal.toggle}
+                  what="Bank Details"
+                />
+              ) : undefined}
+            />
+            <ProfileRow label="IFSC Code" value={bank?.ifsc} mono />
+            <ProfileRow label="Bank Name" value={bank?.bank_name} />
+            {bankPending && (
+              <PendingFieldNote
+                text={pendingItems(changes).find((i) => i.key === 'bank')?.text ?? '—'}
+                alsoCovers={othersFor('bank')}
+              />
+            )}
+            <div className="pt-3 space-y-1.5">
+              {!bankPending && (
+                <p className="text-xs text-muted-foreground">
+                  All four values change together, and only after HR approves.
+                </p>
+              )}
+              <RevealNotice>
+                Your account number and holder name are stored encrypted and shown masked.
+                Showing them in full is recorded against your name.
+              </RevealNotice>
+            </div>
           </div>
         )}
       </Section>
 
       {/* ═══ 5. Access & Permissions — read-only, deliberately quiet ═════ */}
       <Section title="Access & Permissions" icon={<ShieldCheck className="size-4" />} muted>
-        <div className="grid gap-x-8 gap-y-4 sm:grid-cols-3">
+        {/* Two columns before `lg`, three after. Three columns inside a
+            max-w-4xl page gives each ~260px, which is not enough for a stage
+            list beside its own label. */}
+        <div className="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
           <div>
             <div className="text-xs font-semibold mb-1.5 flex items-center gap-1.5">
               <Layers className="size-3.5 text-muted-foreground" /> Record Scope
@@ -550,10 +624,9 @@ export default function MyProfilePage() {
                   ['Cities', me.scope.cities],
                   ['States', me.scope.states],
                   ['Verticals', me.scope.verticals],
-                ] as Array<[string, ScopeDimension]>).map(([label, dim]) => {
-                  const v = scopeValue(dim);
-                  return <MiniStat key={label} label={label} value={v.text} tone={v.tone} />;
-                })}
+                ] as Array<[string, ScopeDimension]>).map(([label, dim]) => (
+                  <MiniStat key={label} label={label} value={scopeValue(dim)} />
+                ))}
               </div>
             )}
           </div>
@@ -608,12 +681,17 @@ export default function MyProfilePage() {
         be changed here. To correct any of them, contact HR.
       </p>
 
-      {requestField && details && (
-        <RequestChangeDialog
-          field={requestField}
+      {editing && details && (
+        <EditProfileDialog
           details={details}
-          onClose={() => setRequestField(null)}
-          onSubmitted={() => setRequestField(null)}
+          onClose={() => setEditing(false)}
+          onSubmitted={async () => {
+            /* Alternate Number is written to tbl_user, so the /auth/me cache is
+               stale too — the dialog invalidates /profile, this refreshes the
+               session payload the identity band reads. */
+            await refresh();
+            setEditing(false);
+          }}
         />
       )}
     </div>

@@ -33,6 +33,17 @@
  *                              rendered at all and a banner says why. A column
  *                              of dead buttons reads as a broken page; a missing
  *                              column plus a sentence reads as a decision.
+ *
+ * ── BANK VALUES ARE MASKED, AND REVEALING ONE IS AUDITED ─────────────────────
+ * `changes` / `old_values` carry the bank account number and holder name
+ * ENCRYPTED, and the list route ships them masked. The plaintext exists behind
+ * POST :id/reveal, gated on isProfileApprovalProcess — approving is what needs
+ * it, so a view-only approver gets no eye at all, not a disabled one.
+ *
+ * The reveal is a POST that writes an audit row, so it gets a real pending
+ * state and re-masks itself; and the fact that it is recorded is stated up top,
+ * before anyone clicks. The audit log protects the company either way — saying
+ * it exists is what protects the colleague whose account number is being read.
  */
 
 import * as React from 'react';
@@ -58,6 +69,7 @@ import { actionFlags } from '@/lib/permissions';
 import { formatDate } from '@/lib/utils';
 import { parseIstDateTime, pluralize, titleCaseLabel } from '@/lib/format';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
+import { RevealButton, RevealNotice, maskedText, useReveal } from '@/components/profile/ProfileFields';
 
 const ENDPOINT = '/admin/profile-update-requests';
 
@@ -176,13 +188,28 @@ function formatDob(v: unknown): string | null {
   return `${ymd.slice(8, 10)} ${MONTHS[Number(ymd.slice(5, 7)) - 1]} ${ymd.slice(0, 4)}`;
 }
 
-/* Values are shown as the user will read them back, not as the column stores
- * them. Everything except a DOB is already display-ready. */
+/*
+ * Values are shown as the user will read them back, not as the column stores
+ * them. Everything except a DOB is already display-ready.
+ *
+ * Routed through maskedText() so that ANY value still shaped like ciphertext
+ * (`v1:<iv>:<tag>:<ct>`) renders as absent rather than being painted on screen
+ * as though it were a value. That is a server bug if it happens, but the one
+ * thing this page must not do is display a stored secret it was handed by
+ * mistake — and the guard costs nothing on the fields that are stored in clear.
+ */
 function displayValue(key: string, v: unknown): string | null {
   if (v == null || v === '') return null;
-  if (key === 'date_of_birth') return formatDob(v) ?? String(v);
-  return String(v);
+  if (key === 'date_of_birth') return maskedText(formatDob(v) ?? String(v));
+  return maskedText(String(v));
 }
+
+/* The two bank sub-fields that are encrypted at rest. The IFSC code and the
+ * bank name are stored in clear and need no reveal. */
+const SECRET_BANK_FIELDS = new Set<string>(['account_number', 'account_name']);
+
+/* What POST :id/reveal hands back — the request's bank values, both sides. */
+type RevealedRequestBank = { before: BankFields; after: BankFields };
 
 /* "Mobile Number, Date Of Birth and Bank Details" — used in confirm copy, where
  * the whole point is that the approver reads every field going through. */
@@ -258,23 +285,33 @@ function BeforeAfter({ label, before, after }: {
 }
 
 /*
- * The Changes cell: a count, then every field's before → after.
+ * The bank block — its own component ONLY because it owns a reveal, and a hook
+ * cannot be called inside the rows' .map(). Per-row state is the right scope
+ * anyway: revealing one request must not unmask the rest of the queue.
  *
- * `bank` is one KEY but four VALUES, so it renders as its own labelled block
- * with one line per sub-field. Sub-fields the user re-submitted unchanged are
- * marked "No Change" instead of being hidden — the request applies all four
- * together, and an approver should see exactly what will be written.
+ * One eye covers the whole block (four masked values across before and after),
+ * because one POST returns them all and writes ONE audit row. An eye per value
+ * would bill four looks for one reading.
  */
-function ChangeSummary({ changes, oldValues }: {
-  changes: ProfileChanges;
-  oldValues: ProfileChanges;
+function BankBlock({ requestId, canReveal, oldBank, newBank }: {
+  requestId: number;
+  canReveal: boolean;
+  oldBank: BankFields;
+  newBank: BankFields;
 }) {
-  const keys = changedKeys(changes);
-  if (keys.length === 0) {
-    return <span className="text-xs text-muted-foreground">No Fields In This Request</span>;
-  }
-  const oldBank = (oldValues.bank ?? {}) as BankFields;
-  const newBank = (changes.bank ?? {}) as BankFields;
+  const reveal = useReveal<RevealedRequestBank>(async () => {
+    /* The response envelope is not fixed by the contract; the row-mirroring and
+     * the flat shape are both accepted. Collapse once the route lands. */
+    const r = await api.post<{
+      changes?: { bank?: BankFields }; old_values?: { bank?: BankFields };
+      bank?: BankFields; old_bank?: BankFields;
+    }>(`${ENDPOINT}/${requestId}/reveal`);
+    return {
+      after: r?.changes?.bank ?? r?.bank ?? {},
+      before: r?.old_values?.bank ?? r?.old_bank ?? {},
+    };
+  });
+
   /* Every bank sub-field the request carries, in reading order, plus anything
      unexpected the backend added. */
   const bankKeys = [
@@ -284,25 +321,75 @@ function ChangeSummary({ changes, oldValues }: {
     ),
   ];
 
+  /* Masked by default; the revealed plaintext is substituted only for the two
+   * encrypted sub-fields, and only while the reveal is showing. */
+  const side = (bk: string, from: BankFields, plain?: BankFields) =>
+    displayValue(
+      bk,
+      (reveal.shown && SECRET_BANK_FIELDS.has(bk) ? plain?.[bk as keyof BankFields] : undefined)
+        ?? from[bk as keyof BankFields],
+    );
+
+  return (
+    <div className="rounded bg-muted px-2 py-1.5 space-y-1">
+      <div className="flex items-center gap-1.5">
+        <span className="text-xs font-medium">{FIELD_LABEL.bank}</span>
+        {/* No eye at all without the process key — not a disabled one. */}
+        {canReveal && (
+          <RevealButton
+            shown={reveal.shown}
+            busy={reveal.busy}
+            onToggle={reveal.toggle}
+            what={`Bank Details For Request #${requestId}`}
+          />
+        )}
+      </div>
+      {bankKeys.length === 0
+        ? <span className="text-xs text-muted-foreground">No Bank Fields Supplied</span>
+        : bankKeys.map((bk) => (
+          <BeforeAfter
+            key={bk}
+            label={BANK_FIELD_LABEL[bk] ?? titleCaseLabel(bk)}
+            before={side(bk, oldBank, reveal.value?.before)}
+            after={side(bk, newBank, reveal.value?.after)}
+          />
+        ))}
+    </div>
+  );
+}
+
+/*
+ * The Changes cell: a count, then every field's before → after.
+ *
+ * `bank` is one KEY but four VALUES, so it renders as its own labelled block
+ * with one line per sub-field. Sub-fields the user re-submitted unchanged are
+ * marked "No Change" instead of being hidden — the request applies all four
+ * together, and an approver should see exactly what will be written.
+ */
+function ChangeSummary({ requestId, canReveal, changes, oldValues }: {
+  requestId: number;
+  canReveal: boolean;
+  changes: ProfileChanges;
+  oldValues: ProfileChanges;
+}) {
+  const keys = changedKeys(changes);
+  if (keys.length === 0) {
+    return <span className="text-xs text-muted-foreground">No Fields In This Request</span>;
+  }
+
   return (
     <div className="space-y-1.5">
       <StatusChip tone="info" size="sm">{pluralize(keys.length, 'Change')}</StatusChip>
       <div className="space-y-1">
         {keys.map((k) => (
           k === 'bank' ? (
-            <div key={k} className="rounded bg-muted px-2 py-1.5 space-y-1">
-              <div className="text-xs font-medium">{FIELD_LABEL.bank}</div>
-              {bankKeys.length === 0
-                ? <span className="text-xs text-muted-foreground">No Bank Fields Supplied</span>
-                : bankKeys.map((bk) => (
-                  <BeforeAfter
-                    key={bk}
-                    label={BANK_FIELD_LABEL[bk] ?? titleCaseLabel(bk)}
-                    before={displayValue(bk, oldBank[bk as keyof BankFields])}
-                    after={displayValue(bk, newBank[bk as keyof BankFields])}
-                  />
-                ))}
-            </div>
+            <BankBlock
+              key={k}
+              requestId={requestId}
+              canReveal={canReveal}
+              oldBank={(oldValues.bank ?? {}) as BankFields}
+              newBank={(changes.bank ?? {}) as BankFields}
+            />
           ) : (
             <BeforeAfter
               key={k}
@@ -451,6 +538,18 @@ export default function ProfileUpdateApprovalsPage() {
         </Card>
       )}
 
+      {/* Said once, before anyone clicks an eye. */}
+      {canProcess && (
+        <Card>
+          <CardContent className="p-3">
+            <RevealNotice>
+              Bank account numbers and holder names are stored encrypted and shown masked.
+              Showing one in full is recorded against your name.
+            </RevealNotice>
+          </CardContent>
+        </Card>
+      )}
+
       {/* ── Filters ────────────────────────────────────────────────── */}
       <Card>
         <CardContent className="flex flex-wrap items-center gap-2 p-3">
@@ -534,7 +633,12 @@ export default function ProfileUpdateApprovalsPage() {
                       </div>
                     </td>
                     <td className="!text-left">
-                      <ChangeSummary changes={changes} oldValues={oldValues} />
+                      <ChangeSummary
+                        requestId={r.request_id}
+                        canReveal={canProcess}
+                        changes={changes}
+                        oldValues={oldValues}
+                      />
                     </td>
                     <td className="!text-left text-xs">
                       <div className="whitespace-nowrap">{formatDate(r.requested_on)}</div>
