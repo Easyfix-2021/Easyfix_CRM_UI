@@ -97,6 +97,16 @@ const PARENT_META: Record<string, { icon: LucideIcon }> = {
   'Clients':           { icon: Building2 },
   'EasyFixers':        { icon: UserCircle2 },
   'Finance':           { icon: Coins },
+  /*
+   * 'HRMS' and 'User' are the SAME menu row (menu_id 11), before and after the
+   * 2026-09-01 rename that turns it into the HRMS parent for Manage Users +
+   * Approvals. PARENT_META is keyed on menu_name, so the rename would drop the
+   * icon to the Circle fallback the moment the migration lands. BOTH keys stay
+   * listed — deliberately, and permanently: the SQL and this deploy can land in
+   * either order, and a rollback of either one must not leave the parent
+   * iconless. Same icon on both, so nothing visibly changes at the swap.
+   */
+  'HRMS':              { icon: User },
   'User':              { icon: User },
   'Settings':          { icon: Settings },
   'Report':            { icon: BarChart3 },

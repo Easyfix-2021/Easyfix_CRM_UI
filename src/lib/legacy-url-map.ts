@@ -132,6 +132,14 @@ export const URL_MAP: Record<string, string> = {
   'user':                  '/settings/manage-users',
   // Manage Roles (legacy `usertype`): tbl_role rows + group classification.
   'usertype':              '/settings/manage-roles',
+  /*
+   * HRMS → Approvals (2026-09-01). Menu id 11 is RENAMED 'User' → 'HRMS' by the
+   * same migration that seeds this leaf, so 'Manage Users' (id 12) and this row
+   * become the two children of one HRMS parent. Without this entry the sidebar
+   * link falls through to /coming-soon no matter what tbl_menu says — the SQL
+   * seeds the token, this map is the half that resolves it.
+   */
+  'hrmsApprovals':         '/hrms/approvals',
   // Master-data settings ported from legacy CRM.
   'servicecategory':       '/settings/service-categories',
   'servicetype':           '/settings/service-types',

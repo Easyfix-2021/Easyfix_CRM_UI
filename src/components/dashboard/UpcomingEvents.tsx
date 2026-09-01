@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Calendar, Megaphone } from 'lucide-react';
+import { Calendar, Megaphone, Cake } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { useFetch } from '@/lib/hooks';
 import { NoticeDetailModal } from '@/components/notice/NoticeDetailModal';
@@ -26,12 +26,22 @@ import type { Holiday, Notice } from '@/lib/notice-types';
  *   │ MON │ ║ ⚠️ Eid-ul-Zuha (Restri…║
  *   │25 May│╚════════════════════════╝
  *
- * Date pill on the left, holiday cards on the right. v1 = holidays only;
- * birthdays / SLA deadlines deferred per plan.
+ * Date pill on the left, event cards on the right. Three kinds share the rail
+ * now — national holidays, dated notices, and EMPLOYEE BIRTHDAYS — all grouped
+ * onto the same date keys. SLA deadlines remain deferred per plan.
  */
 
 type Resp = { items: Holiday[]; degraded?: boolean };
 type NoticeResp = { items: Notice[] };
+/*
+ * GET /admin/birthdays/upcoming?days=N. The endpoint matches on MONTH/DAY
+ * across the window and deliberately returns NO birth year — so there is
+ * nothing here to derive an age from, and none is invented. `date` is the
+ * upcoming occurrence as a plain 'YYYY-MM-DD', the same key shape the rail
+ * already groups on.
+ */
+type Birthday = { user_id: number; user_name: string; date: string };
+type BirthdayResp = { items: Birthday[] };
 
 /*
  * The rail shows two kinds of thing on the same timeline: national holidays
@@ -44,7 +54,8 @@ type NoticeResp = { items: Notice[] };
  */
 type RailEntry =
   | { kind: 'holiday'; key: string; label: string; title?: string }
-  | { kind: 'notice'; key: string; label: string; title?: string; notice: Notice };
+  | { kind: 'notice'; key: string; label: string; title?: string; notice: Notice }
+  | { kind: 'birthday'; key: string; label: string; title?: string };
 
 /* Day-name pill — small circle with WEEKDAY · DD MONTH */
 function DatePill({ date }: { date: string }) {
@@ -89,6 +100,11 @@ export function UpcomingEvents({ days = 7 }: { days?: number }) {
    * re-reads the notices that are already on the page.
    */
   const noticesFetched = useFetch<NoticeResp>('/admin/notices/active?surface=crm&limit=20');
+  /*
+   * Birthdays run on the SAME window as the holidays call, so the rail's two
+   * server-side sources always agree about what "upcoming" means.
+   */
+  const birthdaysFetched = useFetch<BirthdayResp>(`/admin/birthdays/upcoming?days=${days}`);
   const [openNotice, setOpenNotice] = React.useState<Notice | null>(null);
 
   const holidayEntries = (fetched.data?.items ?? []).map((h) => ({
@@ -115,7 +131,32 @@ export function UpcomingEvents({ days = 7 }: { days?: number }) {
       entry: { kind: 'notice' as const, key: `n-${n.notice_id}`, label: n.title, title: n.title, notice: n },
     }));
 
-  const groups = groupByDate([...holidayEntries, ...noticeEntries]);
+  /*
+   * FAILS SOFT, BY CONSTRUCTION. useFetch leaves `data` null on error, so a
+   * birthdays outage contributes an empty array and the rail still renders
+   * holidays and notices — no error branch, nothing to throw. A dashboard
+   * widget must not be able to take the dashboard down.
+   *
+   * The regex guard is for the group key, not the payload: a malformed date
+   * would open a group whose DatePill renders "Invalid Date". Dropping the row
+   * is quieter than printing that next to someone's name.
+   *
+   * NO YEAR, NO AGE — the label is the name and nothing else. The endpoint does
+   * not send a birth year and this component must never look like it knows one.
+   */
+  const birthdayEntries = (birthdaysFetched.data?.items ?? [])
+    .filter((b) => /^\d{4}-\d{2}-\d{2}$/.test(String(b?.date ?? '')))
+    .map((b) => ({
+      date: String(b.date).slice(0, 10),
+      entry: {
+        kind: 'birthday' as const,
+        key: `b-${b.user_id}-${b.date}`,
+        label: b.user_name,
+        title: `${b.user_name} · Birthday`,
+      },
+    }));
+
+  const groups = groupByDate([...holidayEntries, ...noticeEntries, ...birthdayEntries]);
 
   return (
     /*
@@ -147,7 +188,11 @@ export function UpcomingEvents({ days = 7 }: { days?: number }) {
           </div>
         )}
 
-        {!fetched.loading && groups.length === 0 && (
+        {/* Both gates: with only birthdays due on a given week, checking the
+            holidays call alone would flash "No Upcoming Events" until the
+            second response lands. `loading` resolves on failure too, so a
+            broken birthdays endpoint still reaches the empty state. */}
+        {!fetched.loading && !birthdaysFetched.loading && groups.length === 0 && (
           <div className="p-6 text-center text-xs text-muted-foreground">
             No Upcoming Events
             <div className="mt-1 opacity-70">
@@ -177,6 +222,25 @@ export function UpcomingEvents({ days = 7 }: { days?: number }) {
                         <Megaphone className="h-3.5 w-3.5 shrink-0 opacity-80" />
                         <span className="truncate">{e.label}</span>
                       </button>
+                    ) : e.kind === 'birthday' ? (
+                      /* Third colour, same card shape: gold reads as
+                         celebratory next to the green holidays and the blue
+                         notices, and `-strong` rather than the base tint is
+                         what carries white label text at a readable contrast.
+                         Not clickable — there is nothing to open. */
+                      <div
+                        key={e.key}
+                        className="rounded-md bg-gold-strong text-white px-3 py-2 text-[13px] font-medium shadow-sm flex items-center gap-2"
+                        title={e.title}
+                      >
+                        <Cake className="h-3.5 w-3.5 shrink-0 opacity-80" />
+                        <span className="truncate">{e.label}</span>
+                        {/* Says what the row IS. A bare name under a cake icon
+                            is guessable; this removes the guess. */}
+                        <span className="ml-auto shrink-0 text-xs font-normal opacity-80">
+                          Birthday
+                        </span>
+                      </div>
                     ) : (
                       <div
                         key={e.key}

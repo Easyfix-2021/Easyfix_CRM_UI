@@ -18,7 +18,8 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { invalidateFetch, useDebouncedValue } from '@/lib/hooks';
+import { invalidateFetch, useDebouncedValue, useFetch } from '@/lib/hooks';
+import { EMP_CODE_PREFIX, formatEmpCode, parseEmpCodeCount, sanitiseEmpCount } from '@/lib/emp-code';
 import {
   UserCog, Users, Search, Plus, Pencil, Trash2, MailWarning,
   AlertTriangle, ChevronDown, ChevronRight, Info, Layers, KeyRound,
@@ -1157,6 +1158,23 @@ function UserFormModal({
   // list. Cities are no longer collected here — the form always saves
   // manage_cities='0' and the backend derives the effective city scope
   // from the user's states (regions).
+  /*
+   * Employee code. State holds the COUNT ONLY — the `EF` prefix is a fixed affix
+   * beside the input and is added back by formatEmpCode() on save, so a foreign
+   * prefix cannot be typed and the stored value can never be half a code.
+   *
+   * On Add it is prefilled with the next free count from the backend. That is a
+   * SUGGESTION, not a reservation: nothing is held, so two admins who open this
+   * form at the same moment are handed the same number, and the backend's
+   * duplicate check inside the create transaction is what actually prevents a
+   * collision. The operator can overwrite it, which is the point of the field.
+   */
+  const [empCount, setEmpCount] = useState('');
+  const empSeededRef = useRef(false);
+  const nextEmpCode = useFetch<{ count: number; code: string }>(
+    open && !editing ? '/admin/users/next-emp-code' : null,
+  );
+
   const [manageClients,   setManageClients]   = useState<Set<number>>(new Set());
   const [manageStates,    setManageStates]    = useState<Set<number>>(new Set());
   const [manageVerticals, setManageVerticals] = useState<Set<number>>(new Set());
@@ -1199,9 +1217,21 @@ function UserFormModal({
     );
   }
 
+  /* Seeded ONCE per open. Without the ref the suggestion would land again on
+   * every refetch and overwrite a count the operator had already edited. */
+  useEffect(() => {
+    if (open && !editing && !empSeededRef.current && nextEmpCode.data?.count) {
+      setEmpCount(String(nextEmpCode.data.count));
+      empSeededRef.current = true;
+    }
+  }, [open, editing, nextEmpCode.data]);
+
   useEffect(() => {
     if (open) {
       setName(editing?.user_name ?? '');
+      // Edit hydrates the existing code; Add waits for the suggestion above.
+      setEmpCount(parseEmpCodeCount(editing?.user_code));
+      empSeededRef.current = !!editing;
       setEmail(editing?.official_email ?? '');
       setPersonalEmail(editing?.personal_email ?? '');
       setMobile(editing?.mobile_no ?? '');
@@ -1612,6 +1642,18 @@ function UserFormModal({
       }
     }
     /*
+     * Employee Code is mandatory on both paths. formatEmpCode returns '' for
+     * anything that is not a whole 1-6 digit count, so this one check covers
+     * empty, non-numeric and over-long in a single answer — and the value that
+     * goes on the wire is the one the shared formatter produced, never the raw
+     * field, so the padding can't drift between here and the backend.
+     */
+    const empCode = formatEmpCode(empCount);
+    if (!empCode) {
+      setError('Employee Code is required');
+      return;
+    }
+    /*
      * Personal Email — gated on the SAME `personalEmailRequired` constant that
      * drives the asterisk, so the two can't drift. The format check runs on any
      * non-empty value regardless of requiredness: an optional field is still
@@ -1719,6 +1761,7 @@ function UserFormModal({
       }
       if (isEdit) {
         await api.patch(`/admin/users/${editing!.user_id}`, {
+          user_code:        empCode,
           // null (not '') when cleared — the column is NULLable and '' would
           // store an address that can never be mailed but reads as "present".
           personal_email:   personal || null,
@@ -1737,6 +1780,7 @@ function UserFormModal({
       } else {
         created = await api.post<CreatedUser>('/admin/users', {
           user_name:        name.trim(),
+          user_code:        empCode,
           // The PRE-FLIGHT's answer, not the raw field — on a collision this is
           // the numbered address the operator confirmed.
           official_email:   officialEmail,
@@ -1862,7 +1906,7 @@ function UserFormModal({
               showing a redundant always-on switch. Grid collapses to one
               column on narrow viewports so the toggle drops below the
               name field gracefully. */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-end">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 items-end">
             <div>
               <Label className="block mb-1" required>
                 Full Name {isEdit && <span className="text-xs text-muted-foreground font-normal">(not editable)</span>}
@@ -1873,6 +1917,33 @@ function UserFormModal({
                 placeholder="e.g. Priya Sharma"
                 disabled={isEdit}
               />
+            </div>
+            <div>
+              <Label className="block mb-1" required>Employee Code</Label>
+              {/* Prefix as a non-editable affix, mirroring the @easyfix.in
+                  suffix on Official Email below: the operator edits the count
+                  and only the count, so EF is guaranteed and the padding is
+                  applied on save by the shared formatter. */}
+              <div className="flex items-stretch">
+                <span className="inline-flex select-none items-center rounded-l-md border border-r-0 border-input bg-muted px-3 text-sm text-muted-foreground">
+                  {EMP_CODE_PREFIX}
+                </span>
+                <Input
+                  type="text"
+                  inputMode="numeric"
+                  value={empCount}
+                  onChange={(e) => setEmpCount(sanitiseEmpCount(e.target.value))}
+                  placeholder="258123"
+                  className="rounded-l-none"
+                />
+              </div>
+              {!isEdit && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {nextEmpCode.loading
+                    ? 'Finding The Next Free Code…'
+                    : 'Prefilled with the next free code. Edit it if this employee already has one.'}
+                </p>
+              )}
             </div>
             {isEdit ? (
               <div className="flex items-center justify-end gap-3 pb-1.5">
