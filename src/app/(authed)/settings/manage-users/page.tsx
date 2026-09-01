@@ -1940,9 +1940,9 @@ function UserFormModal({
           {/* Row 1: Full Name | Status toggle (edit only).
               On Add, the Status column is unused — Status defaults to
               Active for new users so we omit it entirely instead of
-              showing a redundant always-on switch. Grid collapses to one
-              column on narrow viewports so the toggle drops below the
-              name field gracefully. */}
+              showing a redundant always-on switch, and the grid carries two
+              tracks rather than three. Below md everything is one column, so
+              the toggle drops under the name field gracefully. */}
           {/* No `items-end` here, unlike every other row in this form — and that
               is the point. Employee Code carries a conditional hint under it
               ("Prefilled with the next free code…"), so bottom-aligning the row
@@ -1950,8 +1950,35 @@ function UserFormModal({
               them again depending on whether the hint was showing. Alignment
               must not be a function of optional content. Top-aligned, the two
               fields share a baseline and the hint hangs below, which is exactly
-              what rows 2-4 already do with their own conditional helper text. */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              what rows 2-4 already do with their own conditional helper text.
+
+              WIDTHS, per-mode, because Status changes what is affordable.
+              Measured in Chrome against the compiled stylesheet, over the
+              1048px of content width inside the 1100px panel:
+
+                Add    60% name | 157px | 25% code     code flush right, 1 row
+                Edit   57.6%    |  12px | 25% | 15.1%  status flush right
+
+              Add has only two cells, so `[60%_25%]` plus justify-between spends
+              every leftover pixel as a single gap in the middle — and it now
+              holds from md up, where the old thirds-grid gave 49/49 with no gap
+              at all.
+
+              Edit cannot have 60%. Status is intrinsically 159px (label +
+              switch + the w-16 state word) = 15.0% of 1048, and two gaps take
+              24px more, so a literal 60/25/15 overflows by 26px and squeezes
+              the state word onto two lines. `1fr` hands Full Name every pixel
+              that is genuinely free — 57.6% — with Employee Code still exactly
+              25%. Both class strings are written out in full: Tailwind scans
+              source text, so a template literal assembled from fragments would
+              emit no rule at all. */}
+          <div
+            className={`grid grid-cols-1 gap-3 ${
+              isEdit
+                ? 'md:grid-cols-2 lg:grid-cols-[1fr_25%_auto]'
+                : 'md:grid-cols-[60%_25%] md:justify-between'
+            }`}
+          >
             <div>
               <Label className="block mb-1" required>
                 Full Name {isEdit && <span className="text-xs text-muted-foreground font-normal">(not editable)</span>}
@@ -2012,12 +2039,7 @@ function UserFormModal({
                   {active ? 'Active' : 'Inactive'}
                 </span>
               </div>
-            ) : (
-              /* Spacer so the grid keeps its two-column layout on md+
-                 (otherwise Full Name would stretch full-width which
-                 doesn't match the rest of the form's row rhythm). */
-              <div className="hidden md:block" aria-hidden="true" />
-            )}
+            ) : null}
           </div>
 
           {/* Row 2: Official Email | Personal Email | Role.
