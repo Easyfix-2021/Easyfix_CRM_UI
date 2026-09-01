@@ -659,9 +659,13 @@ export default function ManageCoursesPage() {
                       ? c.reward_points.toLocaleString('en-IN')
                       : <span className="text-muted-foreground">—</span>}
                   </td>
-                  {/* Chip only when ON. "No certificate" is the default for
-                      most courses, so a second chip saying so would be noise
-                      on nearly every row.
+                  {/* Answers the column's own question — "Certificate?" —
+                      so every row says something. It previously rendered a chip
+                      reading "Certificate" under a column headed Certificate
+                      (the header restated, not an answer) and NOTHING at all
+                      when off, which is indistinguishable from data that failed
+                      to load. Yes / No is the whole vocabulary; the tone still
+                      carries the emphasis.
 
                       This flag is about NEW completions only. A badge is
                       recorded when it is earned (easyfixer_courses.
@@ -674,24 +678,30 @@ export default function ManageCoursesPage() {
                       course grants nothing new, so a bare gold chip would read
                       as an active offer. */}
                   <td className="!text-center">
-                    {c.certificate_enabled === 1 && (
-                      c.status === 1 ? (
-                        <StatusChip
-                          tone="gold"
-                          size="sm"
-                          title="Completing this course earns a downloadable certificate and a trophy on the technician's course list. Once earned, neither is revoked by later changes to this course."
-                        >
-                          Certificate
-                        </StatusChip>
-                      ) : (
-                        <StatusChip
-                          tone="neutral"
-                          size="sm"
-                          title="Certificate enabled, but the course is retired — no NEW completions can earn one. Certificates already earned from this course are unaffected and remain downloadable."
-                        >
-                          Certificate · Inactive
-                        </StatusChip>
-                      )
+                    {c.certificate_enabled !== 1 ? (
+                      <StatusChip
+                        tone="slate"
+                        size="sm"
+                        title="Completing this course earns no certificate or trophy."
+                      >
+                        No
+                      </StatusChip>
+                    ) : c.status === 1 ? (
+                      <StatusChip
+                        tone="gold"
+                        size="sm"
+                        title="Completing this course earns a downloadable certificate and a trophy on the technician's course list. Once earned, neither is revoked by later changes to this course."
+                      >
+                        Yes
+                      </StatusChip>
+                    ) : (
+                      <StatusChip
+                        tone="neutral"
+                        size="sm"
+                        title="Certificate enabled, but the course is retired — no NEW completions can earn one. Certificates already earned from this course are unaffected and remain downloadable."
+                      >
+                        Yes · Inactive
+                      </StatusChip>
                     )}
                   </td>
                   <td className="!text-center">

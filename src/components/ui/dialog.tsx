@@ -317,21 +317,33 @@ function DialogContentBody({
       )}
       {...props}
     >
+      {!hideClose && (
+        /*
+         * The X rides in a ZERO-HEIGHT sticky strip so it pins with the header
+         * band it visually sits in. Left `absolute` on the scrolling content
+         * box it scrolled away with the body, leaving a pinned header with no
+         * close affordance — worse than before the header was pinned.
+         *
+         * `h-0` + `-mb-4` (cancelling the grid gap) means the strip occupies no
+         * space, so the button lands exactly where it always has. The strip is
+         * click-through; only the button itself takes pointer events.
+         */
+        <div className="pointer-events-none sticky top-0 z-30 -mb-4 h-0">
+          {/* Visible-on-ink close: tinted background pill so the X reads
+              against the dark band (was disappearing as a low-contrast glyph
+              before). Hover bumps to white/15 for clear feedback. */}
+          <DialogPrimitive.Close
+            className="pointer-events-auto absolute right-3 top-3 inline-flex h-7 w-7 items-center justify-center rounded-md bg-white/10 text-white/85 hover:bg-white/20 hover:text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+            aria-label="Close"
+          >
+            <X className="h-4 w-4" />
+            <span className="sr-only">Close</span>
+          </DialogPrimitive.Close>
+        </div>
+      )}
       <DialogPaddingContext.Provider value={{ noPadding: !!noPadding }}>
         {children}
       </DialogPaddingContext.Provider>
-      {!hideClose && (
-        // Visible-on-ink close: tinted background pill so the X reads
-        // against the dark band (was disappearing as a low-contrast glyph
-        // before). Hover bumps to white/15 for clear feedback.
-        <DialogPrimitive.Close
-          className="absolute right-3 top-3 inline-flex h-7 w-7 items-center justify-center rounded-md bg-white/10 text-white/85 hover:bg-white/20 hover:text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
-          aria-label="Close"
-        >
-          <X className="h-4 w-4" />
-          <span className="sr-only">Close</span>
-        </DialogPrimitive.Close>
-      )}
     </DialogPrimitive.Content>
   );
 }
@@ -436,6 +448,22 @@ export const DialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLD
     <div
       className={cn(
         'flex flex-col space-y-1 text-left',
+        /*
+         * PINNED (2026-09-01). DialogContent is the scroll container
+         * (`max-h-[85vh] overflow-y-auto`), so a long modal used to scroll its
+         * own title out of view — the operator lost both the heading and, with
+         * it, any sense of which record they were editing.
+         *
+         * `sticky top-0` costs nothing at rest: the `-mt-6` below already lifts
+         * the band to the scrollport's top edge, so top:0 pins it exactly where
+         * it already sits and only engages once the body scrolls under it.
+         *
+         * A no-op for the modals that opt into `flex flex-col` + an inner
+         * `flex-1 overflow-y-auto`: there the scroller is the inner region, the
+         * header has no scrollable ancestor, and sticky degrades to relative.
+         * z-20 + the opaque gradient keep body content from painting over it.
+         */
+        'sticky top-0 z-20',
         // The `-mx-6 -mt-6` here assumes DialogContent has `p-6`. When
         // noPadding is set, override to !mx-0 !mt-0 so the band stays
         // inside the modal frame.
@@ -472,6 +500,11 @@ export const DialogFooter = ({ className, ...props }: React.HTMLAttributes<HTMLD
     <div
       className={cn(
         'flex items-center justify-end gap-2',
+        // Pinned for the same reason as DialogHeader — the actions are what the
+        // operator came for, and scrolling to find Save is the failure this
+        // fixes. `-mb-6` already seats the band on the scrollport's bottom
+        // edge, so bottom:0 holds it there rather than moving it.
+        'sticky bottom-0 z-20',
         '-mx-6 -mb-6 px-6 pt-3 pb-4 mt-1 border-t bg-background',
         noPadding && '!mx-0 !mb-0',
         className,
