@@ -1160,9 +1160,15 @@ function UserFormModal({
   // manage_cities='0' and the backend derives the effective city scope
   // from the user's states (regions).
   /*
-   * Employee code. State holds the COUNT ONLY — the `EF` prefix is a fixed affix
+   * Employee code. State holds the COUNT ONLY — the prefix is a fixed affix
    * beside the input and is added back by formatEmpCode() on save, so a foreign
    * prefix cannot be typed and the stored value can never be half a code.
+   *
+   * Named, never spelt out. This comment and the one on the affix below both
+   * said `EF` until 2026-09-01 — the prefix the codes have not used since the
+   * format was corrected to E + 6 — while the JSX three lines down rendered
+   * EMP_CODE_PREFIX correctly. A comment that contradicts the line it annotates
+   * is worse than no comment: the next reader trusts it over the code.
    *
    * On Add it is prefilled with the next free count from the backend. That is a
    * SUGGESTION, not a reservation: nothing is held, so two admins who open this
@@ -1936,8 +1942,10 @@ function UserFormModal({
               <Label className="block mb-1" required>Employee Code</Label>
               {/* Prefix as a non-editable affix, mirroring the @easyfix.in
                   suffix on Official Email below: the operator edits the count
-                  and only the count, so EF is guaranteed and the padding is
-                  applied on save by the shared formatter. */}
+                  and only the count, so the prefix is guaranteed and the padding
+                  is applied on save by the shared formatter. Rendered from
+                  EMP_CODE_PREFIX, so naming it here would just be a second copy
+                  free to drift — as it did. */}
               <div className="flex items-stretch">
                 <span className="inline-flex select-none items-center rounded-l-md border border-r-0 border-input bg-muted px-3 text-sm text-muted-foreground">
                   {EMP_CODE_PREFIX}
