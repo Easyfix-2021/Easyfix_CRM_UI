@@ -7,8 +7,8 @@
  * far through a course's videos a technician has actually got. Read-only by
  * design: assignment happens on the Assign screen and course content on the
  * Courses screen, so there is nothing to create or edit here. The single
- * action column mutates nothing either — it downloads a completion
- * certificate for the rows whose course actually issues one.
+ * action column mutates nothing either — it downloads the certificate for the
+ * rows that have actually earned the badge (`badge_earned_at`).
  *
  * EVERY filter is server-side. The `status` (complete / incomplete) filter in
  * particular MUST NOT be re-applied in JS: the backend evaluates it inside the
@@ -84,15 +84,17 @@ type ReportRow = {
    * deadline is judged against (videos_done >= videos_total is the progress
    * bar's separate concern). */
   completion_date: string | null;
-  /* The COURSE's certificate settings, denormalised onto the row so the
-   * download button can gate on the same three facts the server checks
-   * instead of discovering the other two as a 404 (see the certificate note
-   * in the component). Read through `toNum`: these are TINYINTs wider than
-   * TINYINT(1), so db.js's TINYINT(1)→boolean cast does not apply to them and
-   * mysql2 is free to hand them over as strings. */
-  certificate_enabled: number | string;
-  /* 1 = active. A retired course issues nothing, however complete the row. */
-  course_status: number | string;
+  /* DATETIME, 'YYYY-MM-DD HH:mm:ss'. Stamped once, at the moment the badge is
+   * earned, and null until then. Non-null IS the entitlement: this technician
+   * holds the badge and can download the certificate. Because it is RECORDED
+   * rather than derived, an admin switching the course's certificate off — or
+   * retiring the course — cannot retroactively revoke a badge already earned.
+   *
+   * The course's own `certificate_enabled` means only that the course OFFERS a
+   * certificate: it is true for every technician on the course, including those
+   * who have not finished, so it is not an earned state and is deliberately not
+   * shipped on this row. Neither is `course_status`. */
+  badge_earned_at: string | null;
 };
 
 type ReportResponse = {
@@ -218,15 +220,13 @@ const OVERDUE_TITLE =
  * open and still in time, and is deliberately absent once a row is finished
  * (the deadline stopped mattering) or overdue (the chip says it louder).
  *
- * `finished` is returned rather than kept local because the certificate action
- * gates on the SAME fact (alongside the course's own certificate settings) —
- * re-spelling the predicate at the call site is how the two would drift apart.
+ * `finished` stays local to this function: the certificate action no longer
+ * derives anything from progress — it reads the recorded `badge_earned_at`.
  */
 type DueView = {
   dueLabel: string | null;
   overdue: boolean;
   daysLeft: number | null;
-  finished: boolean;
 };
 
 function dueView(row: ReportRow, todayYmd: string): DueView {
@@ -238,16 +238,12 @@ function dueView(row: ReportRow, todayYmd: string): DueView {
    * still goes through formatYmd, so such a value shows an em-dash rather than
    * a "0" — the row is simply not called overdue on the strength of it. */
   const finished = row.completion_date != null && String(row.completion_date).trim() !== '';
-  /* An assignment with no deadline still has a completion fact — `finished`
-   * must survive this early return or every certificate on a deadline-less
-   * course would be unreachable. */
-  if (!due) return { dueLabel: null, overdue: false, daysLeft: null, finished };
+  if (!due) return { dueLabel: null, overdue: false, daysLeft: null };
   const overdue = !finished && due < todayYmd;
   return {
     dueLabel: formatYmd(due),
     overdue,
     daysLeft: finished || overdue ? null : daysBetweenYmd(todayYmd, due),
-    finished,
   };
 }
 
@@ -421,19 +417,20 @@ export default function TrainingReportPage() {
    * revoke) and never inspects the payload, so it is reused verbatim rather
    * than inlining a sixth copy of it; only its name is XLSX-specific.
    *
-   * WHICH ROWS OFFER IT. The backend issues a certificate only when the course
-   * is active AND the course has `certificate_enabled = 1` AND the enrolment is
-   * stamped complete. The row now carries all three (`course_status` and
-   * `certificate_enabled` ship for exactly this), so the button gates on the
-   * same conjunction and hides itself instead of 404-ing on click. Completion
-   * is still the stamped `completion_date` — the fact the backend rides,
-   * deliberately not the videos_done >= videos_total maths that can disagree
-   * for a moment.
+   * WHICH ROWS OFFER IT. The entitlement is RECORDED, not derived: the badge is
+   * stamped into `badge_earned_at` the moment it is earned, and the backend
+   * serves the certificate on exactly that. So `badge_earned_at != null` is the
+   * whole gate — one fact, the same one the server checks. The old three-part
+   * conjunction (course active AND certificate_enabled AND complete) is gone,
+   * and with it the bug it carried: those were live course settings, so
+   * flipping the certificate off or retiring the course erased badges already
+   * earned. A badge is something a technician holds; a switch must not take it
+   * back.
    *
    * WHO IS OFFERED IT. The download is requireLmsManage ('isLmsManage'); GET
    * /report carries no action guard, so a read-only role reaches this page
    * legitimately. Without the permission in the gate they would see a button
-   * that 403s on every click, so it joins the three facts above.
+   * that 403s on every click, so it joins the earned fact above.
    *
    * BUSY STATE IS A SET, not one id. Each download is an independent GET and
    * nothing stops a second row being clicked while the first is still
@@ -452,12 +449,12 @@ export default function TrainingReportPage() {
         filename: certificateFilename(row),
       });
     } catch (e) {
-      /* A 404 is STILL a normal outcome, not a bug: the row gates on the same
-       * three facts the server does, but they are a snapshot taken at page
-       * load — certificates can be switched off on the course, or the course
-       * retired, while the report sits open. Matched on the backend's own 404
-       * text so a real 500 still surfaces its own message instead of being
-       * dressed up as "no certificate". */
+      /* A 404 should now be rare — the row gates on the same recorded fact the
+       * server checks, and an earned badge is not un-earned by a later settings
+       * change — but it is still handled: the row is a snapshot taken at page
+       * load. Matched on the backend's own 404 text so a real 500 still
+       * surfaces its own message instead of being dressed up as "no
+       * certificate". */
       const msg = e instanceof Error ? e.message : String(e);
       showToast({
         variant: 'error',
@@ -651,15 +648,12 @@ export default function TrainingReportPage() {
                 const pct = toNum(r.completion_pct);
                 const view = progressView(done, totalVideos, pct);
                 const due = dueView(r, todayYmd);
-                /* The server's own three-part gate, plus the permission its
-                   route requires — see the certificate note above. toNum
-                   because these TINYINTs can arrive as strings. */
-                const canDownloadCertificate =
-                  canManageLms
-                  && due.finished
-                  && toNum(r.course_status) === 1
-                  && toNum(r.certificate_enabled) === 1;
+                /* The recorded entitlement, plus the permission the download
+                   route requires — see the certificate note above. Nothing
+                   about the course's live settings enters this. */
+                const canDownloadCertificate = canManageLms && r.badge_earned_at != null;
                 const completedOn = formatYmd(r.completion_date);
+                const badgeEarnedOn = formatYmd(r.badge_earned_at);
                 return (
                   <tr key={r.id}>
                     {/* max-w + truncate, not truncate alone: in an auto-layout
@@ -759,19 +753,25 @@ export default function TrainingReportPage() {
                     </td>
                     <td className="!text-right">
                       {canDownloadCertificate ? (
+                        /* The earned date rides in the label (IconButton uses
+                           it for both title and aria-label) rather than in a
+                           tenth column: this table already carries three date
+                           columns, and "Earned" would repeat "Completed On" for
+                           all but a handful of rows. */
                         <IconButton
                           icon={Award}
-                          label="Download Certificate"
+                          label={badgeEarnedOn
+                            ? `Download Certificate — Badge Earned ${badgeEarnedOn}`
+                            : 'Download Certificate'}
                           intent="primary"
                           busy={certifyingIds.has(r.id)}
                           onClick={() => downloadCertificate(r)}
                         />
                       ) : (
-                        /* Em-dash, not a disabled icon: every excluded case is
-                           one the backend refuses outright (unfinished, course
-                           retired, certificates off, or no isLmsManage), and
-                           most rows in this report are unfinished — a column of
-                           dead controls is worse than a blank. */
+                        /* Em-dash, not a disabled icon: the row has not earned
+                           the badge (or the operator lacks isLmsManage), and
+                           most rows in this report have not — a column of dead
+                           controls is worse than a blank. */
                         <span className="text-muted-foreground">—</span>
                       )}
                     </td>

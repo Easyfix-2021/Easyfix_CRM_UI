@@ -663,18 +663,23 @@ export default function ManageCoursesPage() {
                       most courses, so a second chip saying so would be noise
                       on nearly every row.
 
-                      Split on status for the same reason Mandatory is, above:
-                      certificateData() requires status = 1 AND
-                      certificate_enabled = 1 and 404s otherwise, so a bare
-                      gold chip on a retired course would promise a download
-                      that cannot be issued. */}
+                      This flag is about NEW completions only. A badge is
+                      recorded when it is earned (easyfixer_courses.
+                      badge_earned_at), and the download gates on that stamp
+                      alone — so unticking this, or retiring the course, does
+                      NOT revoke certificates anyone already holds. It only
+                      stops future completions earning one.
+
+                      Still split on status, like Mandatory above: a retired
+                      course grants nothing new, so a bare gold chip would read
+                      as an active offer. */}
                   <td className="!text-center">
                     {c.certificate_enabled === 1 && (
                       c.status === 1 ? (
                         <StatusChip
                           tone="gold"
                           size="sm"
-                          title="Completing this course grants a downloadable certificate and a trophy on the technician's course list"
+                          title="Completing this course earns a downloadable certificate and a trophy on the technician's course list. Once earned, neither is revoked by later changes to this course."
                         >
                           Certificate
                         </StatusChip>
@@ -682,7 +687,7 @@ export default function ManageCoursesPage() {
                         <StatusChip
                           tone="neutral"
                           size="sm"
-                          title="Certificate enabled, but retired — no certificate can be issued while the course is retired. Reactivate it to make the flag take effect."
+                          title="Certificate enabled, but the course is retired — no NEW completions can earn one. Certificates already earned from this course are unaffected and remain downloadable."
                         >
                           Certificate · Inactive
                         </StatusChip>
