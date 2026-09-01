@@ -60,13 +60,29 @@ export default function FinanceLandingPage() {
   //   URL → tab   (when a sidebar sub-menu link changes ?tab= while the
   //                page is already mounted; without this the page froze on
   //                the FIRST clicked sub-menu and ignored subsequent ones)
+  //
+  // THE WRITE EFFECT MUST NOT DEPEND ON `sp` (2026-09-01). It did, and the two
+  // effects fought each other into an infinite navigation loop — visible as the
+  // page flickering and the network tab filling with alternating ?tab=invoices /
+  // ?tab=ndm-collection RSC requests.
+  //
+  // The cycle: a sidebar sub-menu changes the URL to tab=B while state still
+  // holds A. Effects run in declaration order, so THIS one fires first, sees a
+  // fresh `sp` next to a stale `tab`, and helpfully writes A back over B. The
+  // sync-down effect below then sets state to B, the URL says A, and the two
+  // trade places forever.
+  //
+  // Reading window.location.search instead of `sp` gets the same value without
+  // subscribing to it, so this effect fires only when the OPERATOR changes the
+  // tab — which is the only time it has anything to say.
   useEffect(() => {
-    const params = new URLSearchParams(sp.toString());
+    const params = new URLSearchParams(window.location.search);
     if (params.get('tab') !== tab) {
       params.set('tab', tab);
       router.replace(`${pathname}?${params.toString()}`);
     }
-  }, [tab, sp, router, pathname]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, router, pathname]);
   useEffect(() => {
     const urlTab = sp.get('tab');
     if (urlTab && TABS.includes(urlTab as TabKey) && urlTab !== tab) {
@@ -946,8 +962,12 @@ function EfrLedgerTab() {
   const [efrId, setEfrId] = useState('');
   const debouncedEfrId = useDebouncedValue(efrId, 300);
 
+  // Same rule as the tab sync above: a URL-WRITE effect never depends on the
+  // URL it writes. With `sp` in the deps this re-fired on every navigation the
+  // parent made and wrote `type` back into the URL the parent had just
+  // rewritten, adding a second voice to the same loop.
   useEffect(() => {
-    const params = new URLSearchParams(sp.toString());
+    const params = new URLSearchParams(window.location.search);
     if (type && params.get('type') !== type) {
       params.set('type', type);
       router.replace(`${pathname}?${params.toString()}`);
@@ -955,7 +975,8 @@ function EfrLedgerTab() {
       params.delete('type');
       router.replace(`${pathname}?${params.toString()}`);
     }
-  }, [type, sp, router, pathname]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [type, router, pathname]);
 
   const qs = new URLSearchParams();
   if (type) qs.set('type', type);
