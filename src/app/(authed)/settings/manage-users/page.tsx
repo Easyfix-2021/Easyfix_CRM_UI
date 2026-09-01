@@ -1914,12 +1914,29 @@ function UserFormModal({
     <Dialog open={open} onOpenChange={guardedOpenChange}>
       {/* Wider modal — matches Add/Edit Role so the two settings forms
           feel like siblings, and gives the multi-select pickers enough
-          horizontal room for the chip rows below them. */}
-      <DialogContent className="!max-w-[1100px] w-[95vw]">
-        <DialogHeader>
+          horizontal room for the chip rows below them.
+
+          ONE SCROLLER, and that is the whole point of these three classes.
+          DialogContent's base is `max-h-[85vh] overflow-y-auto`, so a body
+          that ALSO declared `max-h-[70vh] overflow-y-auto` — as this one did —
+          put two scroll containers in the same chain. Measured in Chrome at
+          1400x900: the inner band scrolled 1419px and the panel itself another
+          56px, so a wheel gesture ran the form to its end and then lurched the
+          whole modal, header and all. That extra 56px was also the only way to
+          reach the footer, which is why Save Changes sat below the fold.
+
+          `overflow-hidden` deletes the base overflow via tailwind-merge (the
+          local/no-unscrollable-dialog-content rule allows it precisely because
+          there IS a scroll region beneath), `flex flex-col` gives the body a
+          track to fill, and `flex-1 min-h-0` lets it shrink below its content
+          so it — and only it — scrolls. Header and footer are pinned with
+          shrink-0. Byte-for-byte the arrangement Add/Edit Role already used;
+          this modal had simply diverged from the sibling it claims to match. */}
+      <DialogContent className="!max-w-[1100px] w-[95vw] max-h-[85vh] flex flex-col overflow-hidden">
+        <DialogHeader className="shrink-0">
           <DialogTitle>{isEdit ? `Edit "${editing!.user_name}"` : 'Add User'}</DialogTitle>
         </DialogHeader>
-        <div className="space-y-3 max-h-[70vh] overflow-y-auto pr-1">
+        <div className="space-y-3 flex-1 min-h-0 overflow-y-auto pr-1">
           {/* Row 1: Full Name | Status toggle (edit only).
               On Add, the Status column is unused — Status defaults to
               Active for new users so we omit it entirely instead of
@@ -2387,7 +2404,7 @@ function UserFormModal({
           * `flex-1 text-left` claims the space DialogFooter would otherwise
           * leave empty on the left, so the buttons stay where they were.
           */}
-        <DialogFooter>
+        <DialogFooter className="shrink-0">
           {error && (
             <div className="flex-1 text-left text-sm text-urgent flex items-center gap-1">
               <AlertTriangle className="size-4 shrink-0" /> {error}
