@@ -87,7 +87,7 @@ function CallToast({ variant, message, onDismiss }: {
         onClick={onDismiss}
         className={cn(
           'rounded p-0.5 shrink-0',
-          variant === 'success' ? 'hover:bg-success-strong/40 text-white' : 'hover:bg-urgent/15 text-urgent-strong',
+          variant === 'success' ? 'hover:bg-success-strong/40 text-white' : 'hover:bg-destructive/15 text-urgent-strong',
         )}
         aria-label="Dismiss"
       >

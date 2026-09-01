@@ -239,17 +239,17 @@ export function CandidateTable({
             const rowCls = isCurrent
               ? 'group bg-warning-tint hover:bg-warning/15'
               : offerBlocked
-                ? 'group bg-urgent-tint/70 hover:bg-urgent/15/70'
+                ? 'group bg-urgent-tint/70 hover:bg-destructive/15/70'
               : 'group hover:bg-muted/40 ' + (isSelected ? 'bg-primary/5' : '');
             const selectBg = isCurrent
               ? 'bg-warning-tint group-hover:bg-warning/15'
               : offerBlocked
-                ? 'bg-urgent-tint group-hover:bg-urgent/15'
+                ? 'bg-urgent-tint group-hover:bg-destructive/15'
               : (isSelected ? 'bg-primary/5' : 'bg-card group-hover:bg-ink-100');
             const nameTd = isCurrent
               ? '!text-left sticky z-20 bg-warning-tint group-hover:bg-warning/15 shadow-[2px_0_0_0_var(--border)] min-w-[190px] ' + (canCommit ? 'left-10' : 'left-0')
               : offerBlocked
-                ? '!text-left sticky z-20 bg-urgent-tint group-hover:bg-urgent/15 shadow-[2px_0_0_0_var(--border)] min-w-[190px] ' + (canCommit ? 'left-10' : 'left-0')
+                ? '!text-left sticky z-20 bg-urgent-tint group-hover:bg-destructive/15 shadow-[2px_0_0_0_var(--border)] min-w-[190px] ' + (canCommit ? 'left-10' : 'left-0')
               : '!text-left sticky z-20 group-hover:bg-ink-100 shadow-[2px_0_0_0_var(--border)] min-w-[190px] ' + (canCommit ? 'left-10' : 'left-0') + ' ' + (isSelected ? 'bg-primary/5' : 'bg-card');
             return (
             <tr key={c.efr_id} className={rowCls}>

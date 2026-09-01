@@ -219,7 +219,7 @@ function DocumentWidget({
                     aria-label={`Delete ${title}`}
                     disabled={deletingId === d.image_id}
                     onClick={() => void handleDelete(d.image_id)}
-                    className="absolute -right-2 -top-2 flex size-6 items-center justify-center rounded-full border border-urgent bg-card text-urgent-strong shadow-sm hover:bg-urgent/15 disabled:opacity-50"
+                    className="absolute -right-2 -top-2 flex size-6 items-center justify-center rounded-full border border-urgent bg-card text-urgent-strong shadow-sm hover:bg-destructive/15 disabled:opacity-50"
                   >
                     {deletingId === d.image_id
                       ? <Loader2 className="size-3 animate-spin" />

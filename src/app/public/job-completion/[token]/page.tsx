@@ -1208,7 +1208,7 @@ export default function JobCompletionMagicLinkPage() {
               type="button"
               size="lg"
               onClick={() => setDialog('cancel')}
-              className="gap-2 bg-urgent text-white hover:bg-urgent-strong"
+              className="gap-2 bg-destructive text-white hover:bg-destructive-strong"
             >
               <X className="h-5 w-5" />
               Cancel
@@ -1508,7 +1508,7 @@ function CancelDialog({
         </Button>
         <Button type="button" size="lg" variant="destructive" disabled={busy}
           onClick={() => { setTouched(true); if (reason) onSubmit(reason, remarks); }}
-          className="w-full sm:w-auto bg-urgent hover:bg-urgent-strong text-white">
+          className="w-full sm:w-auto bg-destructive hover:bg-destructive-strong text-white">
           {busy ? 'Submitting…' : 'Request Cancellation'}
         </Button>
       </div>
@@ -2167,7 +2167,7 @@ function MediaUploader({
               </div>
             )}
             <button type="button" onClick={() => handleDeleteImage(img.image_id)}
-              className="absolute z-10 -top-1.5 -right-1.5 w-5 h-5 bg-urgent text-white rounded-full text-xs font-semibold leading-none flex items-center justify-center hover:bg-urgent-strong"
+              className="absolute z-10 -top-1.5 -right-1.5 w-5 h-5 bg-destructive text-white rounded-full text-xs font-semibold leading-none flex items-center justify-center hover:bg-destructive-strong"
               aria-label="Remove photo">×</button>
           </div>
         ))}
@@ -2197,7 +2197,7 @@ function MediaUploader({
               Video #{idx + 1}
             </div>
             <button type="button" onClick={() => handleDeleteVideo(vid.media_id)}
-              className="absolute z-20 -top-1.5 -right-1.5 w-5 h-5 bg-urgent text-white rounded-full text-xs font-semibold leading-none flex items-center justify-center hover:bg-urgent-strong"
+              className="absolute z-20 -top-1.5 -right-1.5 w-5 h-5 bg-destructive text-white rounded-full text-xs font-semibold leading-none flex items-center justify-center hover:bg-destructive-strong"
               aria-label="Remove video">×</button>
           </div>
         ))}

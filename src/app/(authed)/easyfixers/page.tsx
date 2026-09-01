@@ -2094,7 +2094,7 @@ function StatusCountsStrip({
     { key: 'active',          label: 'Active',                   status: '1', lifecycleStatus: '', dot: 'bg-success', ring: 'ring-success/30' },
     { key: 'inactive',        label: 'Inactive',                 status: '2', lifecycleStatus: '', dot: 'bg-ink-500',   ring: 'ring-ink-500/30' },
     { key: 'idle',            label: 'Idle',                     status: '3', lifecycleStatus: '', dot: 'bg-ink-300',   ring: 'ring-ink-300/30' },
-    { key: 'not_eligible',    label: 'Not Eligible',             status: '4', lifecycleStatus: '', dot: 'bg-urgent',     ring: 'ring-urgent/30' },
+    { key: 'not_eligible',    label: 'Not Eligible',             status: '4', lifecycleStatus: '', dot: 'bg-destructive',     ring: 'ring-urgent/30' },
     { key: 'not_suitable',    label: 'Not Suitable',             status: '5', lifecycleStatus: '', dot: 'bg-warning',   ring: 'ring-warning/30' },
     { key: 'reg_in_progress', label: 'Registration In Progress', status: '6', lifecycleStatus: '', dot: 'bg-info',        ring: 'ring-info/30' },
     /*

@@ -323,7 +323,7 @@ export function MagicLinkActionPopup({
                 type="button"
                 onClick={handleOverride}
                 disabled={busy}
-                className="bg-urgent hover:bg-urgent-strong text-white"
+                className="bg-destructive hover:bg-destructive-strong text-white"
                 title={`Bypass the ${magicLinkMaxSendCount}-send cap (Admin only)`}
               >
                 {busy ? 'Sending…' : 'Force Send (Override)'}

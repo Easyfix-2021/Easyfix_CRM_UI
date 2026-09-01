@@ -328,7 +328,7 @@ export function ServicesTab({ clientId, canEdit }: Props) {
                                 type="button"
                                 title="Remove Service"
                                 aria-label="Remove Service"
-                                className="inline-flex items-center justify-center w-7 h-7 rounded border bg-card border-urgent text-urgent-strong hover:bg-urgent/15"
+                                className="inline-flex items-center justify-center w-7 h-7 rounded border bg-card border-urgent text-urgent-strong hover:bg-destructive/15"
                                 onClick={() => onDelete(r)}
                               >
                                 <Trash2 className="h-3.5 w-3.5" />

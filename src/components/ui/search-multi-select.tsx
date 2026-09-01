@@ -352,7 +352,7 @@ export function SearchMultiSelect({
                           // unmistakably reads as "click to drop". Unselected:
                           // a quiet outlined + "add".
                           isSel
-                            ? 'bg-urgent text-white'
+                            ? 'bg-destructive text-white'
                             : 'border border-muted-foreground/40 text-muted-foreground',
                         )}
                       >

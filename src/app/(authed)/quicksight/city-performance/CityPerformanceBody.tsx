@@ -692,7 +692,7 @@ function TatHighlights({
               <span className="text-muted-foreground">({s.tatMoreThan85}) TAT &gt;= 85</span>
             </span>
             <span className="inline-flex items-center gap-2">
-              <span className="size-2.5 rounded-full bg-urgent" />
+              <span className="size-2.5 rounded-full bg-destructive" />
               <span className="font-medium">{s.tatLessThan85Percentage ?? 0}%</span>
               <span className="text-muted-foreground">({s.tatLessThan85}) TAT &lt; 85</span>
             </span>

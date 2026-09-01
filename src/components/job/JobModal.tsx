@@ -1853,7 +1853,7 @@ function JobQuotationsTab({ jobId }: { jobId: number }) {
                         </button>
                         <button
                           type="button"
-                          className="text-xs px-2 py-1 rounded border bg-urgent-tint border-urgent text-urgent-strong hover:bg-urgent/15 disabled:opacity-50"
+                          className="text-xs px-2 py-1 rounded border bg-urgent-tint border-urgent text-urgent-strong hover:bg-destructive/15 disabled:opacity-50"
                           onClick={() => rejectRow(r)}
                           disabled={busy}
                         >
@@ -2565,7 +2565,7 @@ function ServicesTabBody({ job, onMutated, onDirtyChange }: { job: Job; onMutate
                             type="button"
                             title="Remove Service"
                             aria-label="Remove Service"
-                            className="inline-flex items-center justify-center w-7 h-7 rounded border bg-card border-urgent text-urgent-strong hover:bg-urgent/15 disabled:opacity-50"
+                            className="inline-flex items-center justify-center w-7 h-7 rounded border bg-card border-urgent text-urgent-strong hover:bg-destructive/15 disabled:opacity-50"
                             onClick={() => removeService(id)}
                             disabled={busy}
                           >
@@ -3355,7 +3355,7 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pe
             aria-hidden="true"
             className="pointer-events-none absolute inset-0 flex items-center justify-center"
           >
-            <div className="w-[110%] h-[2px] bg-urgent rotate-[-25deg] origin-center shadow-[0_0_0_1px_rgba(255,255,255,0.6)]" />
+            <div className="w-[110%] h-[2px] bg-destructive rotate-[-25deg] origin-center shadow-[0_0_0_1px_rgba(255,255,255,0.6)]" />
           </div>
         )}
         {/* Caption row removed in compact mode — the 72px footprint
@@ -7651,7 +7651,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                                   </div>
                                 )}
                                 {status === 'error' && (
-                                  <div className="absolute inset-0 bg-urgent/75 flex items-center justify-center text-white text-2xl font-semibold">
+                                  <div className="absolute inset-0 bg-destructive/75 flex items-center justify-center text-white text-2xl font-semibold">
                                     !
                                   </div>
                                 )}
@@ -9978,7 +9978,7 @@ function AutoServicesTable({
                       onClick={() => removeService(csId)}
                       title="Remove from booking"
                       aria-label="Remove from booking"
-                      className="inline-flex items-center justify-center h-7 w-7 rounded text-urgent hover:bg-urgent/15 hover:text-urgent-strong transition-colors"
+                      className="inline-flex items-center justify-center h-7 w-7 rounded text-urgent hover:bg-destructive/15 hover:text-urgent-strong transition-colors"
                     >
                       <X className="h-4 w-4" />
                     </button>
@@ -11036,7 +11036,7 @@ function JobOutcomeDialog({
             <Button
               type="button"
               variant="outline"
-              className="bg-urgent hover:bg-urgent-strong text-white border-urgent hover:text-white"
+              className="bg-destructive hover:bg-destructive-strong text-white border-urgent hover:text-white"
               onClick={onClose}
             >
               Cancel

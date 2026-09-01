@@ -420,7 +420,7 @@ function LiveCallCard({
             onClick={onHangup}
             disabled={hangupBusy}
             className={cn(
-              'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded bg-urgent text-white hover:bg-urgent-strong transition-colors',
+              'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded bg-destructive text-white hover:bg-destructive-strong transition-colors',
               hangupBusy && 'opacity-60 cursor-wait',
             )}
             aria-label={endsConference ? 'End call for everyone' : 'Hang up'}
@@ -534,8 +534,8 @@ function LiveCallCard({
             disabled={hangupBusy}
             className={cn(
               'w-full inline-flex items-center justify-center gap-1.5 h-9 rounded-md',
-              'bg-urgent text-white text-xs font-semibold shadow-sm',
-              'hover:bg-urgent-strong transition-colors',
+              'bg-destructive text-white text-xs font-semibold shadow-sm',
+              'hover:bg-destructive-strong transition-colors',
               hangupBusy && 'opacity-60 cursor-wait',
             )}
           >

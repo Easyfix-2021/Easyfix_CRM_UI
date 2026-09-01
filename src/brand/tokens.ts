@@ -52,8 +52,16 @@ const light: TokenMap = {
   accent: p.red50,
   'accent-foreground': p.red700,
 
+  // `destructive` is the FILL half of the old `urgent` token: every solid red
+  // block that carries white text lives here, in both modes, at red-600. See
+  // the `urgent` note in the dark map for why the two roles had to split.
+  // `destructive-strong` is its hover/pressed step — red-700 in BOTH modes, so
+  // a destructive button darkens on hover on a white page and on a dark one.
+  // It does not swap the way the `-strong` members of the meaning families do,
+  // because `destructive` itself does not swap either.
   destructive: p.red600,
   'destructive-foreground': p.white,
+  'destructive-strong': p.red700,
 
   border: p.ink100,
   input: p.ink100,
@@ -168,8 +176,12 @@ const dark: TokenMap = {
   accent: p.red700,
   'accent-foreground': p.red100,
 
+  // Invariant with light — see the light map. `destructive` is the fill role,
+  // and a fill that carries white text cannot move down the ramp in dark
+  // without dropping white text below 4.5:1.
   destructive: p.red600,
   'destructive-foreground': p.white,
+  'destructive-strong': p.red700,
 
   border: p.ink500,
   input: p.ink500,
@@ -211,23 +223,51 @@ const dark: TokenMap = {
   'warning-strong': p.warningTint,
 
   /*
-   * red-500, not red-600 — `urgent` is read as bare ink far more than it is
-   * used as a fill (155 `text-urgent` + 68 `border-urgent` against 38
-   * `bg-urgent`), and red-600 on the dark card measures 1.54:1: the reject
-   * action is the one control an operator cannot see, while the approve tick
-   * beside it manages 3.27:1. red-500 is the lightest red the token can take
-   * WITHOUT breaking the other role — measured, 1.54 -> 1.96:1 on a card and
-   * 2.37 -> 3.00:1 on the page.
+   * red-100 — and it can be, because `urgent` is now INK ONLY.
    *
-   * It is a partial fix and deliberately so. red-100 would take the ink to
-   * 8.85:1, but `bg-urgent text-white` (about 20 destructive buttons) then
-   * measures 1.28:1 — rendered and confirmed, not reasoned. One token cannot
-   * be both a fill that carries white text and ink on a dark surface; the real
-   * fix is to move those fills onto `destructive` (already red-600 + white in
-   * both modes) and then take `urgent` to red-100. That is a component
-   * migration, not a token remap.
+   * This token used to serve two roles that pull opposite ways: a solid fill
+   * carrying white text, and bare ink on a surface. No single value satisfies
+   * both. red-600 measured 1.54:1 as ink on the dark card — the reject action
+   * was the one control an operator could not see, while the approve tick
+   * beside it managed 3.27:1 — and the earlier red-500 step reached only
+   * 1.96:1, still under the 3:1 non-text floor. red-100 fixes the ink outright
+   * (8.85:1 on a card) and used to be unavailable only because `bg-urgent
+   * text-white` then measured 1.28:1.
+   *
+   * So the roles were split rather than compromised. All 25 solid `bg-urgent`
+   * fills — buttons, badges, status dots, the notice rail, the cancelled-strike
+   * rule — plus the 13 `bg-urgent/N` washes and the 2 gradient stops
+   * (`from-urgent` / `via-urgent` on the notice heroes, which carry white
+   * icons and which a `bg-urgent` grep does not see) now sit on `destructive`
+   * (red-600 + white, invariant across modes), and every paired
+   * `hover:bg-urgent-strong` became `hover:bg-destructive-strong` (red-700), so
+   * a destructive control still DARKENS on hover in both themes rather than
+   * going pale — in dark it previously went red-500 -> red-100 and put white
+   * text on pale pink at 1.28:1, i.e. the hover state erased the button.
+   *
+   * `bg-urgent` is now zero occurrences and must stay that way: a solid
+   * red-100 block is pale pink and signals nothing. The same goes for any
+   * other FILL utility — `from-`, `via-`, `to-`, `fill-`. Ink, borders and
+   * rings are the roles this token is for.
+   *
+   * KNOWN RESIDUAL: a `bg-destructive` status dot on a dark card measures
+   * 1.54:1, down from red-500's 1.96:1 — both under the 3:1 non-text floor.
+   * That is not specific to red: `bg-info` measures 2.22:1 on the same card
+   * and `bg-warning` 2.52:1 on a light one. Full-strength meaning colours as
+   * small solid indicators are a palette-wide gap, and closing it needs a
+   * lighter step on each meaning ramp — rule 10, an owner decision.
+   *
+   * What still consumes `urgent` is ink and edges — `text-urgent`,
+   * `border-urgent`, `ring-urgent/N` — all of which get better at red-100 on a
+   * dark ground. Light is untouched: `urgent` and `destructive` are both
+   * red-600 there, so the whole fill migration is a no-op in light mode.
+   *
+   * `urgent-strong` is also red-100 here, so `text-urgent` and
+   * `text-urgent-strong` collapse to the same ink in dark. That is correct in
+   * both their contexts (bare on a card; on the red-700 `urgent-tint` plate)
+   * and not worth a fourth red step to separate.
    */
-  urgent: p.red500,
+  urgent: p.red100,
   'urgent-tint': p.red700,
   'urgent-strong': p.red100,
 

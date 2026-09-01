@@ -606,8 +606,8 @@ function LeadActions({ efrId, onReload }: { efrId: number; onReload: () => Promi
       )}
       <div className="flex flex-wrap gap-2 justify-center">
         <Button onClick={() => call(1)} disabled={!checked || busy} className="bg-success hover:bg-success-strong text-white">Accept</Button>
-        <Button onClick={() => call(2)} disabled={busy} className="bg-urgent hover:bg-urgent-strong text-white">Deny</Button>
-        <Button onClick={() => call(0)} disabled={busy} className="bg-urgent hover:bg-urgent-strong text-white">Send Back To Technician</Button>
+        <Button onClick={() => call(2)} disabled={busy} className="bg-destructive hover:bg-destructive-strong text-white">Deny</Button>
+        <Button onClick={() => call(0)} disabled={busy} className="bg-destructive hover:bg-destructive-strong text-white">Send Back To Technician</Button>
       </div>
       {canRunTeleprompter && (
         <TeleprompterPanel open={teleprompterOpen} efrId={efrId} onClose={() => setTeleprompterOpen(false)} onApplied={onReload} />
@@ -822,7 +822,7 @@ function BankingSection({ efrId, d, onReload, addComment }: {
             <Button disabled={busy || d.verification_status === 1} onClick={() => setStatus(1)} className="bg-success hover:bg-success-strong text-white">
               Valid Banking Details
             </Button>
-            <Button disabled={busy} onClick={() => setStatus(2)} className="bg-urgent hover:bg-urgent-strong text-white">
+            <Button disabled={busy} onClick={() => setStatus(2)} className="bg-destructive hover:bg-destructive-strong text-white">
               Invalid Banking Details
             </Button>
           </div>
@@ -916,7 +916,7 @@ function IdentitySection({ efrId, d, onReload, addComment }: {
             <Button disabled={savingStatus || d.verification_status === 1} onClick={() => setStatus(1)} className="bg-success hover:bg-success-strong text-white">
               Send To Finance
             </Button>
-            <Button disabled={savingStatus} onClick={() => setStatus(2)} className="bg-urgent hover:bg-urgent-strong text-white">
+            <Button disabled={savingStatus} onClick={() => setStatus(2)} className="bg-destructive hover:bg-destructive-strong text-white">
               Reject Profile
             </Button>
           </div>

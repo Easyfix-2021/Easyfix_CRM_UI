@@ -357,7 +357,7 @@ export function ConferenceSection({
                   disabled={busy || removingId != null}
                   className={cn(
                     'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded',
-                    'text-ink-500 hover:bg-urgent/15 hover:text-urgent-strong transition-colors',
+                    'text-ink-500 hover:bg-destructive/15 hover:text-urgent-strong transition-colors',
                     (busy || removingId != null) && 'opacity-50 cursor-not-allowed',
                   )}
                   aria-label={`Remove ${p.display_name || targetKindLabel(p.target_kind)} from the call`}

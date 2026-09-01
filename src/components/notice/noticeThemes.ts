@@ -54,16 +54,16 @@ const AURORA: Omit<NoticeTheme, 'celebration'> = {
 
 const SPOTLIGHT: Omit<NoticeTheme, 'celebration'> = {
   key: 'spotlight',
-  heroClass: 'nb-sweep bg-gradient-to-br from-urgent to-warning',
+  heroClass: 'nb-sweep bg-gradient-to-br from-destructive to-warning',
   icon: AlertTriangle,
   iconClass: 'text-white',
-  buttonClass: 'bg-urgent hover:bg-urgent-strong text-white',
-  railClass: 'bg-urgent',
+  buttonClass: 'bg-destructive hover:bg-destructive-strong text-white',
+  railClass: 'bg-destructive',
 };
 
 const CELEBRATION: Omit<NoticeTheme, 'celebration'> = {
   key: 'celebration',
-  heroClass: 'bg-gradient-to-br from-gold via-urgent to-gold-strong',
+  heroClass: 'bg-gradient-to-br from-gold via-destructive to-gold-strong',
   icon: PartyPopper,
   iconClass: 'text-warning-tint',
   buttonClass: 'bg-gold hover:bg-gold-strong text-white',

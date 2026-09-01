@@ -53,7 +53,7 @@ const ACTION_KEY = 'isQuickSightVerticalOrdersView';
 // Toggle definitions — order + Title-Case labels + flag tokens match spec.
 type ToggleDef = { flag: string; label: string; active: string };
 const TOGGLES: ToggleDef[] = [
-  { flag: 'waitingtx', label: 'Technician Unallocated', active: 'bg-urgent hover:bg-urgent-strong text-white border-urgent' },
+  { flag: 'waitingtx', label: 'Technician Unallocated', active: 'bg-destructive hover:bg-destructive-strong text-white border-urgent' },
   { flag: 'runninglate', label: 'Running Late', active: 'bg-warning hover:bg-warning-strong text-white border-warning' },
   { flag: 'openonapp', label: 'Waiting To Close On App', active: 'bg-info hover:bg-info-strong text-white border-info' },
   { flag: 'underaudit', label: 'Under Audit', active: 'bg-success hover:bg-success-strong text-white border-success' },

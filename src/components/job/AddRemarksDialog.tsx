@@ -252,7 +252,7 @@ export function AddRemarksDialog({ open, jobId, onClose, onSaved, currentUserNam
             <Button
               type="button"
               variant="outline"
-              className="bg-urgent hover:bg-urgent-strong text-white border-urgent hover:text-white"
+              className="bg-destructive hover:bg-destructive-strong text-white border-urgent hover:text-white"
               onClick={onClose}
             >
               Cancel

@@ -285,7 +285,7 @@ export default function MyCityPage() {
             <span
               className={`mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-full ${
                 data.notEarningCount > 0
-                  ? 'bg-urgent text-primary-foreground'
+                  ? 'bg-destructive text-primary-foreground'
                   : 'bg-success text-primary-foreground'
               }`}
               aria-hidden="true"

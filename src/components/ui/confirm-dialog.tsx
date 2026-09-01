@@ -92,7 +92,7 @@ const ConfirmContext = React.createContext<ConfirmFn | null>(null);
 function accentPlateClass(accent?: 'sky' | 'emerald' | 'rose' | 'amber'): string {
   switch (accent) {
     case 'emerald': return 'bg-success/20 ring-1 ring-success/40 text-success-tint dark:text-success-strong';
-    case 'rose':    return 'bg-urgent/20 ring-1 ring-urgent/40 text-urgent-tint dark:text-urgent-strong';
+    case 'rose':    return 'bg-destructive/20 ring-1 ring-urgent/40 text-urgent-tint dark:text-urgent-strong';
     case 'amber':   return 'bg-warning/20 ring-1 ring-warning/40 text-warning-tint dark:text-warning-strong';
     case 'sky':
     default:        return 'bg-info/20 ring-1 ring-info/40 text-info-tint dark:text-info-strong';

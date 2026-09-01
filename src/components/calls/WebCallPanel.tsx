@@ -501,7 +501,7 @@ export function WebCallPanel() {
             onClick={controlMode === 'end-room' ? () => void endRoom() : hangup}
             disabled={endingRoom}
             className={cn(
-              'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded bg-urgent text-white hover:bg-urgent-strong transition-colors',
+              'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded bg-destructive text-white hover:bg-destructive-strong transition-colors',
               endingRoom && 'opacity-60 cursor-wait',
             )}
             aria-label={controlMode === 'end-room' || othersOnCall ? 'End call for everyone' : 'Hang up'}
@@ -692,7 +692,7 @@ export function WebCallPanel() {
                 <button
                   type="button"
                   onClick={hangup}
-                  className="flex-1 inline-flex items-center justify-center gap-1.5 h-9 rounded-md bg-urgent text-white text-xs font-semibold shadow-sm hover:bg-urgent-strong transition-colors"
+                  className="flex-1 inline-flex items-center justify-center gap-1.5 h-9 rounded-md bg-destructive text-white text-xs font-semibold shadow-sm hover:bg-destructive-strong transition-colors"
                 >
                   <PhoneOff className="h-3.5 w-3.5" />
                   {othersOnCall ? 'End Call For Everyone' : 'Hangup'}
@@ -715,8 +715,8 @@ export function WebCallPanel() {
                 disabled={endingRoom}
                 className={cn(
                   'w-full inline-flex items-center justify-center gap-1.5 h-9 rounded-md',
-                  'bg-urgent text-white text-xs font-semibold shadow-sm',
-                  'hover:bg-urgent-strong transition-colors',
+                  'bg-destructive text-white text-xs font-semibold shadow-sm',
+                  'hover:bg-destructive-strong transition-colors',
                   endingRoom && 'opacity-60 cursor-wait',
                 )}
               >

@@ -1327,7 +1327,7 @@ function DeepSkillEditor({
                     type="button"
                     onClick={removeImage}
                     title="Remove Image"
-                    className="absolute -top-1 -right-1 inline-flex items-center justify-center h-5 w-5 rounded-full bg-urgent hover:bg-urgent-strong text-white shadow"
+                    className="absolute -top-1 -right-1 inline-flex items-center justify-center h-5 w-5 rounded-full bg-destructive hover:bg-destructive-strong text-white shadow"
                   >
                     <XIcon className="h-3 w-3" />
                   </button>
