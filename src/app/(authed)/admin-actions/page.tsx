@@ -16,7 +16,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
   ShieldCheck, Webhook, FileSpreadsheet, ShieldAlert, Workflow, Database, FileText, Trash2, Activity, Sparkles, AudioLines,
-  Timer,
+  Timer, KeyRound, Fingerprint,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -25,7 +25,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { SearchSelect } from '@/components/ui/search-select';
 import { useMe } from '@/lib/auth-context';
-import { hasAction } from '@/lib/permissions';
+import { actionFlags, hasAction } from '@/lib/permissions';
 import { useLookup } from '@/lib/use-lookup';
 import { api } from '@/lib/api';
 import { showToast } from '@/components/ui/toast';
@@ -35,6 +35,8 @@ import { CallingModeToggle } from './CallingModeToggle';
 import { OtpChannelToggle } from './OtpChannelToggle';
 import { DeleteEntityDialog } from './DeleteEntityDialog';
 import { DeletedRecordsDialog } from './DeletedRecordsDialog';
+import { FieldRekeyDialog } from './FieldRekeyDialog';
+import { RecoveryKeyDialog } from './RecoveryKeyDialog';
 
 const ACTIONS = [
   {
@@ -115,6 +117,14 @@ export default function AdminActionsPage() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deletedRecordsOpen, setDeletedRecordsOpen] = useState(false);
   const [recBackfillOpen, setRecBackfillOpen] = useState(false);
+  /* Field-encryption key management (contract ADDENDUM 2 / 3). Two separate
+   * action keys, not one: re-keying is a bulk decrypt of every encrypted
+   * column, while minting a recovery keypair is a different privilege that a
+   * different person may hold. Both cards self-hide; the dialogs repeat the
+   * check and name the literal key if reached without it. */
+  const keyFlags = actionFlags(me, ['isFieldRekeyRun', 'isRecoveryKeyManage']);
+  const [rekeyOpen, setRekeyOpen] = useState(false);
+  const [recoveryKeyOpen, setRecoveryKeyOpen] = useState(false);
   // Legacy sidebar URL_MAP routes generateClientInvoice → /admin-actions?focus=generate-invoice
   // — auto-open the dialog when that param is present.
   const sp = useSearchParams();
@@ -296,6 +306,56 @@ export default function AdminActionsPage() {
             </Card>
           </button>
         )}
+        {/* Re-Key Encrypted Fields — bulk re-wrap of every encrypted field's
+            DEK onto a new operational key. Dry run first; the master key is
+            only asked for on the recovery path. */}
+        {keyFlags.isFieldRekeyRun && (
+          <button
+            type="button"
+            onClick={() => setRekeyOpen(true)}
+            className="w-full text-left"
+          >
+            <Card className="hover:border-primary hover:shadow-sm transition-colors h-full">
+              <CardContent className="p-4 space-y-2">
+                <div className="flex items-center gap-2">
+                  <div className="h-8 w-8 rounded-md bg-urgent-tint text-urgent grid place-items-center">
+                    <KeyRound className="h-4 w-4" />
+                  </div>
+                  <h2 className="font-medium flex-1">Re-Key Encrypted Fields</h2>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Re-wrap every encrypted field&apos;s key onto a new operational key. Dry run reports
+                  the row count before anything is written; the recovery key is only needed when the
+                  current one is lost.
+                </p>
+              </CardContent>
+            </Card>
+          </button>
+        )}
+        {/* Recovery Key — generate the break-glass keypair IN THE BROWSER and
+            post only the public half. */}
+        {keyFlags.isRecoveryKeyManage && (
+          <button
+            type="button"
+            onClick={() => setRecoveryKeyOpen(true)}
+            className="w-full text-left"
+          >
+            <Card className="hover:border-primary hover:shadow-sm transition-colors h-full">
+              <CardContent className="p-4 space-y-2">
+                <div className="flex items-center gap-2">
+                  <div className="h-8 w-8 rounded-md bg-primary/10 text-primary grid place-items-center">
+                    <Fingerprint className="h-4 w-4" />
+                  </div>
+                  <h2 className="font-medium flex-1">Recovery Key</h2>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Show the active break-glass key&apos;s fingerprint, or generate a new one in this
+                  browser — only the public half is sent, and the private half is shown once.
+                </p>
+              </CardContent>
+            </Card>
+          </button>
+        )}
         {/* Backfill Call Recordings — recovers tbl_plivo_call_log.recording_url for
             calls whose Plivo push callback never landed, by pulling each from the
             Plivo Recording API. Gated on isClickToCall (same as the BE endpoint). */}
@@ -326,6 +386,8 @@ export default function AdminActionsPage() {
       {canDelete && <DeleteEntityDialog open={deleteOpen} onClose={() => setDeleteOpen(false)} />}
       {canRestore && <DeletedRecordsDialog open={deletedRecordsOpen} onClose={() => setDeletedRecordsOpen(false)} />}
       {canBackfillRecordings && <RecordingBackfillDialog open={recBackfillOpen} onClose={() => setRecBackfillOpen(false)} />}
+      {keyFlags.isFieldRekeyRun && <FieldRekeyDialog open={rekeyOpen} onClose={() => setRekeyOpen(false)} />}
+      {keyFlags.isRecoveryKeyManage && <RecoveryKeyDialog open={recoveryKeyOpen} onClose={() => setRecoveryKeyOpen(false)} />}
     </div>
   );
 }
