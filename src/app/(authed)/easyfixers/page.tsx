@@ -1491,7 +1491,18 @@ export default function EasyfixersPage() {
               <col style={{ width: '175px' }} />{/* Registered on — sized to date+time content */}
               <col style={{ width: '95px'  }} />{/* Verified */}
               <col style={{ width: '95px'  }} />{/* Rating */}
-              <col style={{ width: '115px' }} />{/* Status */}
+              {/*
+                * 190px, not 115px. This column used to render only
+                * efr_status_label (six values); it now renders the LIFECYCLE
+                * chip, whose longest label is "Registration Incomplete" — 23
+                * characters. At 115px the chip was clipped mid-word by the
+                * cell's own `truncate` and disappeared under the sticky Action
+                * column, so the one thing the column exists to say was the part
+                * that got cut. Sized to the longest label rather than the
+                * average, because a status that reads "Registration Inco" is
+                * worse than no status at all.
+                */}
+              <col style={{ width: '190px' }} />{/* Status — fits the longest lifecycle label */}
               <col style={{ width: '72px' }} />{/* Action — sticky-right; kebab menu only (was 130px when 6 inline icons) */}
             </colgroup>
             <thead>
@@ -1868,7 +1879,7 @@ const EfRow = memo(function EfRow({
           ? (e.avg_rating != null ? `${Number(e.avg_rating).toFixed(1)} ★` : '—')
           : <span className="text-muted-foreground">…</span>}
       </td>
-      <td className="!text-center truncate">
+      <td className="!text-center whitespace-nowrap">
         <EasyfixerLifecycleChip
           value={e}
           fallbackLabel={e.efr_status_label}
