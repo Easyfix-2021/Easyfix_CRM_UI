@@ -39,6 +39,18 @@ export type Me = {
     user_code?: string | null;
     alternate_no?: string | null;
     user_status?: number | null;
+    /*
+     * Short-TTL presigned URL for the header avatar, or null when the user has
+     * no photo — which is also what a misconfigured object store returns, on
+     * purpose. Both mean "render the initials monogram", so nothing downstream
+     * needs a separate degraded branch. It is never a placeholder image URL: a
+     * broken <img> and "no photo set" must not be indistinguishable to the UI.
+     *
+     * TTL matters: this is resolved when /auth/me is fetched, so it expires on
+     * a session left open for hours. The <img> falls back to initials via its
+     * onError, rather than showing a broken-image glyph in the header.
+     */
+    photo_url?: string | null;
   };
   role?: { role_id: number; role_name: string; group: string };
   /*

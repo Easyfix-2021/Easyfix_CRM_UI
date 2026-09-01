@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
 import { Bell, LogOut, Menu, Info, AlertTriangle, Plus } from 'lucide-react';
@@ -45,6 +45,27 @@ export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
   // Escalated Jobs modal — opens from the navbar button. Replaces the
   // previous "navigate to /jobs?focus=escalated" behaviour with the
   // dedicated escalation table that matches the legacy column shape.
+
+  /*
+   * Initials from the display name: first letter of the first and last words,
+   * so "Priyanka Balasubramaniam" reads PB and a single-word name reads one
+   * letter rather than a doubled one. Uppercased because a lowercased login
+   * name would otherwise render a lowercase monogram.
+   */
+  const initials = useMemo(() => {
+    const parts = String(me?.user?.user_name ?? '').trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return '';
+    const first = parts[0][0] ?? '';
+    const last  = parts.length > 1 ? (parts[parts.length - 1][0] ?? '') : '';
+    return (first + last).toUpperCase();
+  }, [me?.user?.user_name]);
+
+  const photoUrl = me?.user?.photo_url ?? null;
+  /* Reset when the URL changes, or a re-login with a NEW photo would stay
+     stuck on the monogram for the rest of the session. */
+  const [avatarFailed, setAvatarFailed] = useState(false);
+  useEffect(() => { setAvatarFailed(false); }, [photoUrl]);
+
   const [escalatedOpen, setEscalatedOpen] = useState(false);
   // Call Info modal — opens from the navbar button. Replaces the
   // previous "navigate to /admin-actions/call-info" page so ops stay
@@ -177,11 +198,40 @@ export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
          */}
         <Link
           href="/profile"
-          className="hidden sm:block text-right text-xs px-2 py-1 -mx-2 -my-1 rounded hover:bg-muted/60 transition-colors"
+          className="hidden sm:flex items-center gap-2.5 text-xs px-2 py-1 -mx-2 -my-1 rounded hover:bg-muted/60 transition-colors"
           title="My Profile"
         >
-          <div className="font-medium">{me?.user?.user_name ?? '…'}</div>
-          <div className="text-muted-foreground">{me?.role?.role_name ?? me?.user?.official_email ?? ''}</div>
+          {/*
+            AVATAR BEFORE THE NAME, matching the client dashboard's identity
+            block. Photo when there is one, initials otherwise — and initials
+            are not a fallback state to be ashamed of: most users will never
+            upload a photo, so the monogram is the COMMON case and has to look
+            deliberate rather than empty.
+
+            `avatarFailed` covers the third state nobody designs for: the URL is
+            presigned and short-lived, so a session left open past its TTL would
+            otherwise render a browser broken-image glyph in the header. onError
+            drops back to the monogram, which is indistinguishable from having
+            no photo — exactly right, because to the viewer it is.
+          */}
+          <span
+            aria-hidden
+            className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary text-xs font-semibold text-primary-foreground"
+          >
+            {photoUrl && !avatarFailed ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={photoUrl}
+                alt=""
+                className="size-full object-cover"
+                onError={() => setAvatarFailed(true)}
+              />
+            ) : initials}
+          </span>
+          <span className="text-right">
+            <span className="block font-medium">{me?.user?.user_name ?? '…'}</span>
+            <span className="block text-muted-foreground">{me?.role?.role_name ?? me?.user?.official_email ?? ''}</span>
+          </span>
         </Link>
         <Button variant="ghost" size="icon" onClick={logout} title="Log out">
           <LogOut className="h-5 w-5" />
