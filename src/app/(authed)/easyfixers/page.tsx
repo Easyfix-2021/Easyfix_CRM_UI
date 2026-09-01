@@ -332,11 +332,32 @@ function buildQuery(f: Filters, extras: Record<string, string | number | undefin
   if (f.zonalManagerId) q.zonalManagerId = f.zonalManagerId;
   if (f.attendance) q.attendance = f.attendance;
   if (f.deepSkillMapped) q.deepSkillMapped = f.deepSkillMapped;
-  // Manage Easyfixers shows ONLY verified technicians (2026-07-13). Forced here
-  // so both the list load and the XLSX export (both build their query through
-  // this fn) are constrained; Joi coerces the 'true' string → boolean and
-  // list() appends `is_technician_verified = 1`.
-  q.isVerified = 'true';
+  /*
+   * `isVerified=true` USED TO BE FORCED HERE, and it is gone because it was
+   * redundant where it worked and destructive everywhere else.
+   *
+   * It appended `is_technician_verified = 1` to EVERY request. The default view
+   * and the Active/Inactive buckets already carry that predicate themselves, so
+   * for those it changed nothing — measured, not assumed: 2,636 / 2,636 / 215,
+   * identical with and without.
+   *
+   * The other four buckets are DEFINED by not being verified, so the flag
+   * contradicted them and they returned nothing while the counts strip above
+   * them advertised a number:
+   *
+   *     Idle              3,449 counted →     0 shown
+   *     Not Eligible      2,476 counted →     0 shown
+   *     Not Suitable      1,222 counted →     0 shown
+   *     Reg In Progress     356 counted →     0 shown
+   *
+   * 7,503 technicians counted and unreachable, and every id search for one of
+   * them answered "no easyfixers match" — which is how efr 9501 (unverified,
+   * Activation Pending) read as missing while the Registered queue showed it.
+   *
+   * The 2026-07-13 intent — the roster is verified technicians — is unchanged
+   * and now comes from the buckets themselves rather than from a parameter
+   * that overrode them.
+   */
   return q;
 }
 
