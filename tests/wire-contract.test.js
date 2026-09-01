@@ -102,10 +102,18 @@ test('the backend copy of the contract is byte-identical', (t) => {
   const sibling = siblingContract();
   if (!sibling) {
     /*
-     * SKIPPED, NOT PASSED. In CI only one repo is checked out, so this cannot
-     * run there — say so out loud rather than letting a green tick imply a
-     * check that never happened. Set EASYFIX_BACKEND_DIR to enable it.
+     * SKIPPED, NOT PASSED — and only ever locally. This used to skip in CI too,
+     * because only one repo was checked out there, which meant cross-repo parity
+     * was never once verified by the thing that gates the deploy. CI now fetches
+     * the backend into RUNNER_TEMP and points EASYFIX_BACKEND_DIR at it (see the
+     * "Fetch the shared message-literal audit" step), so an absence HERE can
+     * only mean that step broke — a failure, not a shrug.
      */
+    if (process.env.CI) {
+      assert.fail('EasyFix_Backend is missing in CI. The workflow must clone it and set '
+        + 'EASYFIX_BACKEND_DIR — cross-repo parity must never degrade to a silent skip '
+        + 'in the run that gates the deploy.');
+    }
     t.skip('EasyFix_Backend not found beside this repo — cross-repo parity NOT verified');
     return;
   }

@@ -16,7 +16,7 @@ const { execFileSync } = require('node:child_process');
  * WHERE IT IS FOUND. Two layouts, and as of 2026-09-01 CI is no longer one that
  * gets to shrug:
  *
- *   EASYFIX_BACKEND_PATH  CI. The workflow shallow-clones the backend into
+ *   EASYFIX_BACKEND_DIR   CI. The workflow shallow-clones the backend into
  *                         RUNNER_TEMP — both repos are public, so this needs no
  *                         token and no secret — and points this variable at it.
  *                         RUNNER_TEMP, not the workspace: inside it, `eslint .`
@@ -42,7 +42,7 @@ const { execFileSync } = require('node:child_process');
  */
 function resolveAudit() {
   const roots = [
-    process.env.EASYFIX_BACKEND_PATH,
+    process.env.EASYFIX_BACKEND_DIR,
     path.join(__dirname, '..', '..', 'EasyFix_Backend'),
   ];
   for (const r of roots) {
@@ -59,7 +59,7 @@ test('no retired value is named in prose, and no owned value is spelt out', (t) 
     if (process.env.CI) {
       assert.fail('the message-literal audit is missing in CI. The "Fetch the shared '
         + 'message-literal audit" workflow step must clone EasyFix_Backend and set '
-        + 'EASYFIX_BACKEND_PATH. This must never degrade to a silent skip here — that '
+        + 'EASYFIX_BACKEND_DIR. This must never degrade to a silent skip here — that '
         + 'is how a guard ends up committed, green, and never run.');
     }
     t.skip('EasyFix_Backend not checked out beside this repo — audit unavailable');

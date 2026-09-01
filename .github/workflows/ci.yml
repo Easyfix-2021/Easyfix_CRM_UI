@@ -92,5 +92,5 @@ jobs:
         run: git clone --quiet --depth 1 https://github.com/Easyfix-2021/Easyfix_Backend.git "$RUNNER_TEMP/easyfix-backend-audit"
       - name: Test
         env:
-          EASYFIX_BACKEND_PATH: ${{ runner.temp }}/easyfix-backend-audit
+          EASYFIX_BACKEND_DIR: ${{ runner.temp }}/easyfix-backend-audit
         run: npm test
