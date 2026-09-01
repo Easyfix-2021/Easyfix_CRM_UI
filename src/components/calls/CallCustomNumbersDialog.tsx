@@ -115,8 +115,8 @@ export function CallCustomNumbersDialog({
       {/* overflow-y-auto (not overflow-hidden) so a long number list stays
           reachable; `auto` still clips to the rounded corners for the header
           band, while `overflow-hidden` would out-merge the base scroll. */}
-      <DialogContent className="sm:max-w-md !p-0 !gap-0 overflow-x-hidden overflow-y-auto">
-        <DialogHeader className="!mx-0 !mt-0 !mb-0 !py-4">
+      <DialogContent noPadding className="sm:max-w-md !gap-0 overflow-x-hidden overflow-y-auto">
+        <DialogHeader className="!py-4">
           <div className="flex items-center gap-3">
             <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-success/20 ring-1 ring-success/40 text-success-tint">
               <Phone className="h-4 w-4" />

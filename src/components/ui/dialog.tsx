@@ -134,7 +134,10 @@ const DISMISS_GRACE_MS = 400;
 
 type DialogContentExtraProps = { hideClose?: boolean; noPadding?: boolean };
 
-const DialogPaddingContext = React.createContext<{ noPadding: boolean }>({ noPadding: false });
+const DialogPaddingContext = React.createContext<{ noPadding: boolean; showClose: boolean }>({
+  noPadding: false,
+  showClose: false,
+});
 
 type DialogContentProps =
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & DialogContentExtraProps;
@@ -170,6 +173,27 @@ function DialogContentBody({
   const mountedAtRef = React.useRef(0);
   if (mountedAtRef.current === 0) mountedAtRef.current = Date.now();
   const withinGrace = () => Date.now() - mountedAtRef.current < DISMISS_GRACE_MS;
+
+  /*
+   * WHERE THE CLOSE X LIVES (2026-09-01, second attempt).
+   *
+   * It has to pin with the header band, and the first attempt did that by
+   * putting it in a zero-height `sticky` strip of its own. Measured, that
+   * strip costs 16px: this box is a GRID, a strip is a grid ITEM, and a
+   * grid item's negative margin is clamped out of row sizing rather than
+   * pulling the next row up — so `-mb-4` cancelled nothing and the gap
+   * pushed the header band 16px off the top edge.
+   *
+   * A button inside the band has no such problem: it rides the band's own
+   * sticky positioning for free and needs no margin arithmetic at all. So
+   * when a DialogHeader is present it hosts the X, and the strip survives
+   * only for the handful of modals with no header band to put it in
+   * (NoticeDetailModal, AddRemarksDialog) — where an extra grid row is
+   * harmless because there is no band for it to displace.
+   */
+  const headerHostsClose = !hideClose && React.Children.toArray(children).some(
+    (c) => React.isValidElement(c) && c.type === DialogHeader,
+  );
 
   return (
     <DialogPrimitive.Content
@@ -317,7 +341,7 @@ function DialogContentBody({
       )}
       {...props}
     >
-      {!hideClose && (
+      {!hideClose && !headerHostsClose && (
         /*
          * The X rides in a ZERO-HEIGHT sticky strip so it pins with the header
          * band it visually sits in. Left `absolute` on the scrolling content
@@ -341,7 +365,7 @@ function DialogContentBody({
           </DialogPrimitive.Close>
         </div>
       )}
-      <DialogPaddingContext.Provider value={{ noPadding: !!noPadding }}>
+      <DialogPaddingContext.Provider value={{ noPadding: !!noPadding, showClose: headerHostsClose }}>
         {children}
       </DialogPaddingContext.Provider>
     </DialogPrimitive.Content>
@@ -439,11 +463,11 @@ DialogContent.displayName = DialogPrimitive.Content.displayName;
  * override the negative margins (`!mx-0 !mt-0`) — see [JobModal.tsx]
  * for the standard pattern.
  */
-export const DialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => {
+export const DialogHeader = ({ className, children, ...props }: React.HTMLAttributes<HTMLDivElement>) => {
   // Auto-override the negative-margin compensation when the parent
   // DialogContent has noPadding. Without this, the header band escapes
   // the modal frame and clips at the viewport edge.
-  const { noPadding } = React.useContext(DialogPaddingContext);
+  const { noPadding, showClose } = React.useContext(DialogPaddingContext);
   return (
     <div
       className={cn(
@@ -462,8 +486,17 @@ export const DialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLD
          * `flex-1 overflow-y-auto`: there the scroller is the inner region, the
          * header has no scrollable ancestor, and sticky degrades to relative.
          * z-20 + the opaque gradient keep body content from painting over it.
+         *
+         * THE INSET MUST CANCEL THE MARGIN (2026-09-01, measured). A sticky
+         * box is held inside the scrollport by its MARGIN box, and `-mt-6`
+         * puts this band's margin edge 24px above its border edge — so plain
+         * `top-0` pinned the band 24px BELOW the panel's top edge and left a
+         * white strip above every modal header. `-top-6` cancels exactly that,
+         * and only relaxes the constraint, so a modal whose own className
+         * zeroes the margin is unaffected either way.
          */
-        'sticky top-0 z-20',
+        'sticky z-20',
+        noPadding ? 'top-0' : '-top-6',
         // The `-mx-6 -mt-6` here assumes DialogContent has `p-6`. When
         // noPadding is set, override to !mx-0 !mt-0 so the band stays
         // inside the modal frame.
@@ -477,10 +510,26 @@ export const DialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLD
         // arbitrary value, so the token's CSS custom property is read
         // directly — still a token, never a colour literal.
         'shadow-[inset_0_-3px_0_0_hsl(var(--primary)_/_0.85)]',
+        // Keep a long title clear of the close button it now shares a band with.
+        showClose && 'pr-12',
         className,
       )}
       {...props}
-    />
+    >
+      {children}
+      {showClose && (
+        /* Tinted pill so the X reads against the dark band. Vertically
+           centred rather than pinned to a corner offset: the band's height
+           varies with whether the caller renders a DialogDescription. */
+        <DialogPrimitive.Close
+          className="absolute right-3 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md bg-white/10 text-white/85 transition-colors hover:bg-white/20 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+          aria-label="Close"
+        >
+          <X className="h-4 w-4" />
+          <span className="sr-only">Close</span>
+        </DialogPrimitive.Close>
+      )}
+    </div>
   );
 };
 
@@ -502,9 +551,11 @@ export const DialogFooter = ({ className, ...props }: React.HTMLAttributes<HTMLD
         'flex items-center justify-end gap-2',
         // Pinned for the same reason as DialogHeader — the actions are what the
         // operator came for, and scrolling to find Save is the failure this
-        // fixes. `-mb-6` already seats the band on the scrollport's bottom
-        // edge, so bottom:0 holds it there rather than moving it.
-        'sticky bottom-0 z-20',
+        // fixes. Same measured inset rule: `bottom-0` held the band 24px ABOVE
+        // the panel's bottom edge (the `-mb-6` margin edge is what gets pinned),
+        // leaving a white gutter under the buttons. `-bottom-6` cancels it.
+        'sticky z-20',
+        noPadding ? 'bottom-0' : '-bottom-6',
         '-mx-6 -mb-6 px-6 pt-3 pb-4 mt-1 border-t bg-background',
         noPadding && '!mx-0 !mb-0',
         className,

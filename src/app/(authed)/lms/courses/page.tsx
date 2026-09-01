@@ -568,6 +568,7 @@ export default function ManageCoursesPage() {
                   degrading to an unsorted one.
                 */}
                 <th className="!text-right">Points</th>
+                <th className="!text-center">Mandatory</th>
                 <th className="!text-center">Certificate</th>
                 <SortHeader col="status" align="center" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>
                   Status
@@ -581,14 +582,14 @@ export default function ManageCoursesPage() {
             <tbody>
               {listFetch.loading && Array.from({ length: 5 }).map((_, i) => (
                 <tr key={`sk-${i}`}>
-                  {Array.from({ length: 8 }).map((_, c) => (
+                  {Array.from({ length: 9 }).map((_, c) => (
                     <td key={c}><div className="h-3 w-24 rounded bg-muted animate-pulse" /></td>
                   ))}
                 </tr>
               ))}
               {!listFetch.loading && rows.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="!text-center text-muted-foreground py-8">
+                  <td colSpan={9} className="!text-center text-muted-foreground py-8">
                     No courses match the current filters.
                   </td>
                 </tr>
@@ -596,39 +597,8 @@ export default function ManageCoursesPage() {
               {!listFetch.loading && rows.map((c) => (
                 <tr key={c.id}>
                   <td className="!text-left max-w-[360px]">
-                    {/* Mandatory rides on the Name cell rather than taking a
-                        column of its own: it is not sortable (SORTABLE_COLUMNS
-                        in lms.service.js has no key for it, and an unsupported
-                        sortBy 400s the whole list), and the flag only ever
-                        reads as a property OF the course.
-
-                        Retired is called out ON the chip, not left to the
-                        Status column two cells away. The backend's mandatory
-                        set requires status = 1, so a retired course is handed
-                        to nobody and holds nobody — a bare "Mandatory" chip
-                        here would tell an operator the opposite of what the
-                        query does. */}
                     <div className="flex items-center gap-1.5 min-w-0">
                       <span className="font-medium truncate" title={c.name}>{c.name}</span>
-                      {c.is_mandatory === 1 && (
-                        c.status === 1 ? (
-                          <StatusChip
-                            tone="warning"
-                            size="sm"
-                            title="Mandatory — assigned automatically to every technician who completes registration from now on"
-                          >
-                            Mandatory
-                          </StatusChip>
-                        ) : (
-                          <StatusChip
-                            tone="neutral"
-                            size="sm"
-                            title="Flagged mandatory, but retired — it is assigned to nobody new and holds nobody. Reactivate it to make the flag take effect."
-                          >
-                            Mandatory · Inactive
-                          </StatusChip>
-                        )
-                      )}
                     </div>
                     {c.description && (
                       <div className="text-xs text-muted-foreground truncate" title={c.description}>
@@ -658,6 +628,48 @@ export default function ManageCoursesPage() {
                     {c.reward_points
                       ? c.reward_points.toLocaleString('en-IN')
                       : <span className="text-muted-foreground">—</span>}
+                  </td>
+                  {/* Was a chip on the Name cell that appeared only when the
+                      flag was on, so "not mandatory" and "the list failed to
+                      load" looked identical — the same defect the Certificate
+                      column had. It reads as a property of the course either
+                      way, and a column that answers Yes/No on every row says
+                      more than a badge that says nothing on most of them.
+
+                      Not sortable, hence a plain <th>: SORTABLE_COLUMNS in
+                      lms.service.js has no key for it and an unsupported sortBy
+                      fails Joi, 400ing the whole list rather than degrading.
+
+                      Split on status for the reason the chip was: the backend's
+                      mandatory set requires status = 1, so a retired course is
+                      handed to nobody — a bare "Yes" would tell an operator the
+                      opposite of what the query does. */}
+                  <td className="!text-center">
+                    {c.is_mandatory !== 1 ? (
+                      <StatusChip
+                        tone="slate"
+                        size="sm"
+                        title="Not assigned automatically. Technicians only get this course if someone assigns it to them."
+                      >
+                        No
+                      </StatusChip>
+                    ) : c.status === 1 ? (
+                      <StatusChip
+                        tone="warning"
+                        size="sm"
+                        title="Assigned automatically to every technician who completes registration from now on, and their app stays locked until they watch it. Technicians already registered are unaffected."
+                      >
+                        Yes
+                      </StatusChip>
+                    ) : (
+                      <StatusChip
+                        tone="neutral"
+                        size="sm"
+                        title="Flagged mandatory, but retired — it is assigned to nobody new and holds nobody. Reactivate the course to make the flag take effect."
+                      >
+                        Yes · Inactive
+                      </StatusChip>
+                    )}
                   </td>
                   {/* Answers the column's own question — "Certificate?" —
                       so every row says something. It previously rendered a chip
@@ -1247,7 +1259,13 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
               type="text"
               inputMode="numeric"
               value={rewardPoints}
-              onChange={(e) => setRewardPoints(e.target.value)}
+              /* Digits only, filtered on the way in. Everything the field
+                 rejects here — letters, dots, signs, exponents — could only
+                 ever fail the whole-number check below, so refusing the
+                 keystroke says it sooner than an error message does. '' still
+                 survives the filter, which is what keeps "clear it to pay
+                 nothing" reachable. */
+              onChange={(e) => setRewardPoints(e.target.value.replace(/\D+/g, ''))}
               disabled={!canManage}
               placeholder="0 — pays nothing"
               className="w-56"
@@ -1455,7 +1473,14 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
             </div>
           )}
 
-          <div className="flex justify-end gap-2 pt-2">
+          {/*
+            Pinned to the bottom of THIS scroller, not DialogContent's. The
+            modal keeps its actions inside the same `max-h-[75vh] overflow-y-auto`
+            band as the fields, so DialogFooter's sticky footer never applied to
+            it — the buttons simply scrolled off with the content. No negative
+            margins here, so a plain `bottom-0` pins flush.
+          */}
+          <div className="sticky bottom-0 z-10 flex justify-end gap-2 border-t bg-background pt-3 pb-1">
             <CancelButton onCancel={onClose} disabled={submitting} />
             {canManage && (
               <Button onClick={handleSubmit} disabled={submitting}>

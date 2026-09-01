@@ -162,7 +162,7 @@ export function ConfirmDialogProvider({ children }: { children: React.ReactNode 
             `overflow-hidden` here would out-merge DialogContent's base
             `overflow-y-auto` (tailwind-merge treats it as the same conflict
             group) and silently re-clip the content at 85vh. */}
-        <DialogContent className="sm:max-w-md !p-0 !gap-0 overflow-x-hidden overflow-y-auto">
+        <DialogContent noPadding className="sm:max-w-md !gap-0 overflow-x-hidden overflow-y-auto">
           {/* HEADER — dark slate band, edge-to-edge.
               `!mx-0 !mt-0` cancels the negative margins DialogHeader uses
               to extend itself past DialogContent's default p-6 (we set
@@ -170,7 +170,7 @@ export function ConfirmDialogProvider({ children }: { children: React.ReactNode 
               header outside the dialog body). `!mb-0` removes the 20px
               bottom margin DialogHeader adds — the body's own pt-5 owns
               that spacing now. `!py-4` keeps the header band compact. */}
-          <DialogHeader className="!mx-0 !mt-0 !mb-0 !py-4">
+          <DialogHeader className="!py-4">
             {/*
              * `pr-10` (2026-06-05): the top-right close X is positioned
              * `absolute right-3 top-3 h-7 w-7` by DialogContent. Without
