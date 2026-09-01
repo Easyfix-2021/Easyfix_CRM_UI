@@ -37,7 +37,7 @@
  * joining is absent for the same reason (insert_date is row-creation time,
  * wrong for every migrated user, and is not in this payload).
  */
-import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { ArrowLeft, Mail, Phone, ShieldCheck, Users, Layers } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
@@ -119,6 +119,7 @@ function GrantRow({ label, granted, detail }: { label: string; granted: boolean;
 }
 
 export default function MyProfilePage() {
+  const router = useRouter();
   const { me, loading } = useMe();
   const user = me?.user;
   const active = Number(user?.user_status ?? 1) === 1;
@@ -135,12 +136,26 @@ export default function MyProfilePage() {
 
   return (
     <div className="p-4 sm:p-6 space-y-4 max-w-5xl">
-      <Link
-        href="/dashboard"
+      {/*
+        * Back to wherever they came from, not to a fixed page. This is reached
+        * from the navbar, which is on EVERY screen — so a hardcoded destination
+        * would take an operator who opened their profile from a job list and
+        * drop them somewhere they were not.
+        *
+        * Falls back to the dashboard when there is nothing to go back TO: a
+        * direct link, a fresh tab, or a hard reload all leave history with one
+        * entry, and router.back() there walks the user out of the app.
+        */}
+      <button
+        type="button"
+        onClick={() => {
+          if (typeof window !== 'undefined' && window.history.length > 1) router.back();
+          else router.push('/dashboard');
+        }}
         className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
       >
-        <ArrowLeft className="size-4" /> Back To Dashboard
-      </Link>
+        <ArrowLeft className="size-4" /> Back
+      </button>
 
       {/* ── Hero ─────────────────────────────────────────────────────── */}
       <Card className="overflow-hidden">
@@ -176,7 +191,7 @@ export default function MyProfilePage() {
             * edit form whose inputs have gone missing.
             */}
           <p className="text-xs text-muted-foreground mt-4">
-            This page is view only. To correct anything here, contact your administrator.
+            This page is view only. To correct anything here, contact HR.
           </p>
         </CardContent>
       </Card>
