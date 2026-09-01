@@ -23,7 +23,23 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default: 'bg-primary text-primary-foreground hover:bg-primary/90',
-        destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive/90',
+        /*
+         * `hover:bg-destructive-strong`, NOT `hover:bg-destructive/90`.
+         *
+         * An alpha hover composites the fill against whatever sits behind it,
+         * so the SAME class does opposite things per theme: measured, /90 goes
+         * lum 0.0936 -> 0.1212 on a white page (it LIGHTENS on hover, and white
+         * text drops 7.31 -> 6.13) while darkening to 0.0791 on the dark one. A
+         * hover that brightens a destructive button reads as disabled-becoming-
+         * active, which is backwards for the one control you want people to
+         * hesitate over.
+         *
+         * destructive-strong is red-700 in BOTH maps, so it darkens either way
+         * (lum 0.0558, white text 9.92) and cannot drift with its backdrop. The
+         * other 19 destructive fills already use it; this makes the shared
+         * Button agree with them.
+         */
+        destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive-strong',
         // text-foreground is explicit (not inherited) so outline buttons
         // stay legible when placed inside dark-text-context containers
         // like the dark-slate DialogHeader band — without it, the white
