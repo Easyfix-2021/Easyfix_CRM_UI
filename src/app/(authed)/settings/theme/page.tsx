@@ -1219,7 +1219,15 @@ function VariantFormModal({
             </div>
           )}
 
-          <div className="flex justify-end gap-2 pt-2">
+          {/*
+            Pinned to the bottom of THIS scroller, not DialogContent's. The
+            actions live inside the same `max-h-[70vh] overflow-y-auto` band as
+            the fields, so DialogFooter's sticky footer never applied to them —
+            the buttons simply scrolled off with the content. No negative
+            margins here, so a plain `bottom-0` pins flush (measured: `-bottom-6`
+            would hang the row 24px BELOW the scrollport and clip it).
+          */}
+          <div className="sticky bottom-0 z-10 flex justify-end gap-2 border-t bg-background pt-3 pb-1">
             <CancelButton onCancel={onClose} disabled={submitting} />
             <Button onClick={handleSubmit} disabled={submitting}>
               {submitting ? 'Saving…' : isEdit ? 'Save Changes' : 'Add Festival Window'}
