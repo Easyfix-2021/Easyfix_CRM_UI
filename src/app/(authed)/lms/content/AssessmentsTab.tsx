@@ -28,7 +28,7 @@
 import * as React from 'react';
 import {
   Search, Plus, Pencil, Trash2, AlertTriangle, ClipboardCheck,
-  ChevronUp, ChevronDown, X,
+  ChevronUp, ChevronDown, X, Image as ImageIcon,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -73,7 +73,21 @@ type ListResponse = { rows: Assessment[]; total: number; limit: number; offset: 
  * pass_percent, max_attempts) IS the raw column and stays a number.
  */
 type DetailOption = { id: number; option_text: string; is_correct: boolean; sequence: number };
-type DetailQuestion = { id: number; question_text: string; sequence: number; options: DetailOption[] };
+/*
+ * `image_key` and `imageUrl` are the same picture seen two ways and are NOT
+ * interchangeable: the key is the durable S3 object name and the only thing
+ * the questions PUT accepts, while imageUrl is a presigned view of it that
+ * expires in an hour. Sending the URL back as the key would store a link that
+ * is dead by tomorrow.
+ */
+type DetailQuestion = {
+  id: number;
+  question_text: string;
+  sequence: number;
+  image_key: string | null;
+  imageUrl: string | null;
+  options: DetailOption[];
+};
 type AssessmentDetail = Assessment & { questions: DetailQuestion[] };
 
 /*
@@ -86,7 +100,20 @@ type AssessmentDetail = Assessment & { questions: DetailQuestion[] };
  * row below an insert or a move, blowing away focus mid-typing.
  */
 type DraftOption = { key: string; text: string; correct: boolean };
-type DraftQuestion = { key: string; text: string; options: DraftOption[] };
+/*
+ * `imageKey` is what the save sends; `imageUrl` is only what this editor draws
+ * — a presigned link when the question was seeded from the server, a local
+ * blob: URL straight after an upload (the images endpoint answers with a key
+ * and nothing displayable). Both optional because most questions have none,
+ * and '' is the backend's own spelling of "no image".
+ */
+type DraftQuestion = {
+  key: string;
+  text: string;
+  imageKey?: string | null;
+  imageUrl?: string | null;
+  options: DraftOption[];
+};
 
 let keySeq = 0;
 const nextKey = () => `k${++keySeq}`;
@@ -128,6 +155,21 @@ const OPTION_MAX = 500;
  * with the Joi line.
  */
 const ATTEMPTS_MAX = 20;
+
+/*
+ * Mirrors POST /assessments/images, which enforces both server-side and stays
+ * the authority. Checked here first only so a 6 MB photograph is refused in
+ * the instant it is picked rather than after it has been pushed up the wire
+ * and bounced as a 400.
+ */
+const IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+
+/* Only blob: URLs are ours to free. A presigned https link is not an object
+ * URL, and handing one to revokeObjectURL is at best a no-op. */
+function revokeIfBlob(url: string | null | undefined) {
+  if (url && url.startsWith('blob:')) URL.revokeObjectURL(url);
+}
 
 /*
  * Joi rejections arrive with a generic top-level message and the per-field
@@ -418,8 +460,42 @@ function AssessmentModal({ target, onClose, onSaved }: {
   const [draft, setDraft] = React.useState<DraftQuestion[]>([]);
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  /*
+   * Keys of the questions whose image is mid-upload — a LIST rather than a
+   * boolean because two picks can overlap, and Save has to stay disabled until
+   * the last one lands. A save that races an upload sends the question's OLD
+   * image_key, and because the PUT is a full replace the image that finished
+   * uploading a moment later ends up pointing at nothing.
+   */
+  const [uploadingKeys, setUploadingKeys] = React.useState<string[]>([]);
+  const isUploading = (k: string) => uploadingKeys.includes(k);
+  const anyUploading = uploadingKeys.length > 0;
 
   const createdIdRef = React.useRef<number | null>(null);
+
+  /*
+   * A mirror of `draft`, for the blob: bookkeeping only. Revoking has to happen
+   * OUTSIDE setDraft — React treats an updater as pure and is free to re-invoke
+   * it (double-invoked under StrictMode, replayed when a render is discarded),
+   * and a revoke that runs an unknown number of times is luck, not a policy —
+   * so every revoke path reads the URL it is about to drop from here and frees
+   * it AFTER the update. The async upload needs the ref for a second reason:
+   * its closure's `draft` is the one from the render that STARTED the round
+   * trip, which the operator can have edited since.
+   */
+  const draftRef = React.useRef<DraftQuestion[]>(draft);
+  /*
+   * Assigned DURING RENDER, not in an effect.
+   *
+   * React flushes passive effects before a discrete event, so an effect would
+   * be current for every click path here. It does NOT flush them before an
+   * awaited promise continuation — so if a Remove Question click and the
+   * upload's network response land in the same tick, uploadImage would read a
+   * stale row, revoke the URL that is still on screen, and store the new one
+   * nowhere. Writing the ref in render closes that window: the ref is current
+   * the moment the new draft exists, not one effect later.
+   */
+  draftRef.current = draft;
 
   /* Questions only exist on an edit, and only the detail read carries them —
    * the list row has a count, not the content. */
@@ -452,7 +528,13 @@ function AssessmentModal({ target, onClose, onSaved }: {
     if (!open) {
       seededFor.current = null;
       createdIdRef.current = null;
+      setUploadingKeys([]);
+      /* Free this session's blob: previews on the way out — the browser holds
+       * an object URL for the life of the document otherwise, and the draft
+       * that was the last reference to them is about to be dropped. */
+      const dropped = draftRef.current;
       setDraft([]);
+      dropped.forEach((q) => revokeIfBlob(q.imageUrl));
       return;
     }
     if (!editing) {
@@ -472,6 +554,11 @@ function AssessmentModal({ target, onClose, onSaved }: {
       setDraft((detail.data.questions ?? []).map((q) => ({
         key: nextKey(),
         text: q.question_text,
+        /* BOTH, never just the URL: the key is what the save must hand back,
+         * and a draft that only remembered the presigned link would send no
+         * key on the next save and orphan the image. */
+        imageKey: q.image_key ?? '',
+        imageUrl: q.imageUrl ?? null,
         options: (q.options ?? []).map((o) => ({
           key: nextKey(),
           text: o.option_text,
@@ -501,6 +588,15 @@ function AssessmentModal({ target, onClose, onSaved }: {
       return copy;
     });
   }
+  function removeQuestion(qi: number) {
+    /* The dropped row is the last reference to its blob: preview, and the
+     * close effect only walks questions STILL in the draft — so a removed
+     * question's URL is freed here or it is pinned for the life of the
+     * document. */
+    const gone = draftRef.current[qi]?.imageUrl;
+    setDraft((d) => d.filter((_, i) => i !== qi));
+    revokeIfBlob(gone);
+  }
   function markCorrect(qi: number, oi: number) {
     /* Exactly-one is enforced by REWRITING every option's flag, not by
      * toggling the clicked one. The radio group already behaves this way
@@ -520,6 +616,60 @@ function AssessmentModal({ target, onClose, onSaved }: {
       if (!options.some((o) => o.correct) && options.length > 0) options[0] = { ...options[0], correct: true };
       return { ...q, options };
     });
+  }
+
+  /*
+   * Image upload. Addressed by the question's stable `key`, NOT by its index —
+   * every other mutator here is index-keyed because it runs synchronously, but
+   * this one resolves after a round trip the operator can spend moving or
+   * deleting rows, and an index-keyed patch would then drop the image onto
+   * whichever question slid into that slot.
+   */
+  async function uploadImage(qKey: string, f: File | null) {
+    if (!f) return;
+    if (!IMAGE_TYPES.includes(f.type)) {
+      showToast({ variant: 'error', message: 'Only PNG, JPEG, WebP and GIF images are accepted.' });
+      return;
+    }
+    if (f.size > IMAGE_MAX_BYTES) {
+      const mb = (f.size / 1024 / 1024).toFixed(1);
+      showToast({ variant: 'error', message: `That image is ${mb} MB. The limit is 5 MB.` });
+      return;
+    }
+    setUploadingKeys((k) => [...k, qKey]);
+    try {
+      /* Multipart, not JSON — api.post passes a FormData body straight through
+       * and deliberately omits Content-Type so the browser can set its own
+       * multipart boundary. Field name must be exactly 'file'. */
+      const fd = new FormData();
+      fd.append('file', f);
+      const { key } = await api.post<{ key: string }>('/admin/lms/assessments/images', fd);
+      /* The endpoint returns a key and nothing to display, so the preview comes
+       * off the file already in the operator's hand rather than a second round
+       * trip to presign what they just uploaded. */
+      const url = URL.createObjectURL(f);
+      const target = draftRef.current.find((q) => q.key === qKey);
+      setDraft((d) => d.map((q) => (q.key === qKey ? { ...q, imageKey: key, imageUrl: url } : q)));
+      /* Free whichever URL just lost its last reference: the question's OLD
+       * preview when the row is still there, and the one created a line above
+       * when it is not — a question removed, or a modal closed, during the
+       * round trip matches nothing, so the map stores `url` nowhere and no
+       * later revoke can reach it. */
+      revokeIfBlob(target ? target.imageUrl : url);
+    } catch (e) {
+      showToast({ variant: 'error', message: errText(e, 'Image Upload Failed.') });
+    } finally {
+      setUploadingKeys((k) => k.filter((x) => x !== qKey));
+    }
+  }
+
+  function removeImage(qKey: string) {
+    const prev = draftRef.current.find((q) => q.key === qKey)?.imageUrl;
+    /* '' is the backend's "no image". Nothing is deleted from S3 — the
+     * question simply stops pointing at the object, which keeps Remove
+     * instant and keeps an accidental removal recoverable by re-uploading. */
+    setDraft((d) => d.map((q) => (q.key === qKey ? { ...q, imageKey: '', imageUrl: null } : q)));
+    revokeIfBlob(prev);
   }
 
   async function handleSubmit() {
@@ -586,6 +736,11 @@ function AssessmentModal({ target, onClose, onSaved }: {
         questions: draft.map((q, qi) => ({
           question_text: q.text.trim(),
           sequence: qi + 1,
+          /* Sent for EVERY question, including the ones nobody touched. The PUT
+           * deletes and re-inserts the whole list, so a question that omits its
+           * key comes back imageless — fixing one typo would strip the pictures
+           * off every other question in the assessment. */
+          image_key: q.imageKey ?? '',
           options: q.options.map((o, oi) => ({
             option_text: o.text.trim(),
             is_correct: o.correct,
@@ -719,6 +874,74 @@ function AssessmentModal({ target, onClose, onSaved }: {
 
             {!loadingQuestions && draft.map((q, qi) => (
               <div key={q.key} className="rounded-md border p-3 mb-2 space-y-2">
+                {/*
+                  Image FIRST, above the question text — the same order the
+                  technician sees on the phone (image, then the question about
+                  it, then the options). An image-based question reads as "look
+                  at this scene, now answer", so an editor that composed the
+                  text above the picture would have the operator authoring a
+                  layout nobody is shown.
+
+                  Optional, one per question, pinned to a fixed 56px box: a
+                  portrait photograph at its natural height would push the
+                  options far enough down that the answer key leaves the
+                  viewport, and object-cover keeps the thumbnail square without
+                  distorting it.
+                */}
+                <div className="pl-8 flex items-center gap-2">
+                  {q.imageUrl ? (
+                    <img
+                      src={q.imageUrl}
+                      alt={`Question ${qi + 1} Image`}
+                      className="size-14 object-cover rounded border bg-muted"
+                    />
+                  ) : q.imageKey ? (
+                    /* A key with no URL — the read did not presign one. The
+                       image IS still attached and must survive the save, so it
+                       gets a stand-in rather than a bare "Add Image" that would
+                       claim the question has none. */
+                    <span
+                      className="size-14 flex items-center justify-center rounded border bg-muted"
+                      title="An Image Is Attached But Could Not Be Previewed"
+                    >
+                      <ImageIcon className="size-4 text-muted-foreground" />
+                    </span>
+                  ) : null}
+                  <label
+                    className={`inline-flex items-center gap-1 h-8 rounded-md border border-dashed border-input px-2 text-xs transition-colors ${
+                      submitting || isUploading(q.key)
+                        ? 'opacity-50 pointer-events-none'
+                        : 'cursor-pointer hover:bg-muted/40'
+                    }`}
+                  >
+                    <ImageIcon className="size-3.5 text-muted-foreground" />
+                    <span className="text-muted-foreground">
+                      {isUploading(q.key) ? 'Uploading…' : q.imageKey ? 'Replace Image' : 'Add Image'}
+                    </span>
+                    <input
+                      type="file"
+                      accept={IMAGE_TYPES.join(',')}
+                      className="hidden"
+                      disabled={submitting || isUploading(q.key)}
+                      onChange={(e) => {
+                        const f = e.target.files?.[0] ?? null;
+                        /* Cleared before the upload starts so re-picking the
+                           SAME file after a failed one still fires a change. */
+                        e.target.value = '';
+                        uploadImage(q.key, f);
+                      }}
+                    />
+                  </label>
+                  {q.imageKey ? (
+                    <IconButton
+                      icon={X}
+                      intent="danger"
+                      label="Remove Image"
+                      disabled={submitting || isUploading(q.key)}
+                      onClick={() => removeImage(q.key)}
+                    />
+                  ) : null}
+                </div>
                 <div className="flex items-start gap-2">
                   <span className="mt-2 w-6 shrink-0 text-xs text-muted-foreground tabular-nums">
                     {qi + 1}.
@@ -753,10 +976,11 @@ function AssessmentModal({ target, onClose, onSaved }: {
                       intent="danger"
                       label="Remove Question"
                       disabled={submitting}
-                      onClick={() => setDraft((d) => d.filter((_, i) => i !== qi))}
+                      onClick={() => removeQuestion(qi)}
                     />
                   </div>
                 </div>
+
 
                 <div className="pl-8 space-y-1.5">
                   {q.options.map((o, oi) => (
@@ -827,8 +1051,11 @@ function AssessmentModal({ target, onClose, onSaved }: {
 
           <div className="flex justify-end gap-2 pt-2">
             <CancelButton onCancel={onClose} disabled={submitting} />
-            <Button onClick={handleSubmit} disabled={submitting || loadingQuestions}>
-              {submitting ? 'Saving…' : editing ? 'Save Changes' : 'Add Assessment'}
+            {/* Blocked on anyUploading, and the label says so — a save that
+                races an upload silently drops the image, and a Save that is
+                merely dead for a second with no explanation reads as broken. */}
+            <Button onClick={handleSubmit} disabled={submitting || loadingQuestions || anyUploading}>
+              {submitting ? 'Saving…' : anyUploading ? 'Uploading Image…' : editing ? 'Save Changes' : 'Add Assessment'}
             </Button>
           </div>
         </div>

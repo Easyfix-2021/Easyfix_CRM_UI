@@ -52,6 +52,7 @@ import { IconButton } from '@/components/ui/icon-button';
 import { SearchSelect } from '@/components/ui/search-select';
 import { Select } from '@/components/ui/select';
 import { StatusChip } from '@/components/ui/StatusChip';
+import { Switch } from '@/components/ui/switch';
 import {
   TablePagination, pageSizeToLimit, type TablePageSize,
 } from '@/components/ui/table-pagination';
@@ -88,6 +89,21 @@ type Course = {
    * three kinds, not videos. See the "Content" header below. */
   video_count: number;
   assigned_count: number;
+  /*
+   * What completing this course pays, in points. NULL means it pays nothing —
+   * the backend normalises anything non-positive to NULL, so a number here
+   * always means "this course pays". The ledger it feeds is append-only and
+   * pays each technician once per course, so editing this number never touches
+   * what has already been awarded; it only prices future completions.
+   */
+  reward_points: number | null;
+  /*
+   * 1 = a technician who completes this course can download a certificate AND
+   * gets the trophy beside it on their course list. ONE flag governs both, so
+   * there is nothing to keep in step. TINYINT on the wire like is_mandatory,
+   * so compare against 1, not true.
+   */
+  certificate_enabled: number;
 };
 type CourseListResp = { rows: Course[]; total: number; limit: number; offset: number };
 
@@ -212,6 +228,8 @@ const COURSE_PAGE_SIZES: ReadonlyArray<{ value: TablePageSize; label: string }> 
 ];
 
 const NAME_MIN = 2;
+/* Mirrors the endpoint's Joi ceiling — over it and the save 400s. */
+const REWARD_MAX = 100000;
 const NAME_MAX = 150;
 const DESC_MAX = 2000;
 
@@ -543,6 +561,14 @@ export default function ManageCoursesPage() {
                 <SortHeader col="assigned_count" align="right" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>
                   Assigned
                 </SortHeader>
+                {/*
+                  Plain <th>s, not SortHeaders: neither key is on
+                  SORTABLE_COLUMNS in lms.service.js, and an unsupported
+                  sortBy fails Joi and 400s the whole list rather than
+                  degrading to an unsorted one.
+                */}
+                <th className="!text-right">Points</th>
+                <th className="!text-center">Certificate</th>
                 <SortHeader col="status" align="center" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>
                   Status
                 </SortHeader>
@@ -555,14 +581,14 @@ export default function ManageCoursesPage() {
             <tbody>
               {listFetch.loading && Array.from({ length: 5 }).map((_, i) => (
                 <tr key={`sk-${i}`}>
-                  {Array.from({ length: 6 }).map((_, c) => (
+                  {Array.from({ length: 8 }).map((_, c) => (
                     <td key={c}><div className="h-3 w-24 rounded bg-muted animate-pulse" /></td>
                   ))}
                 </tr>
               ))}
               {!listFetch.loading && rows.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="!text-center text-muted-foreground py-8">
+                  <td colSpan={8} className="!text-center text-muted-foreground py-8">
                     No courses match the current filters.
                   </td>
                 </tr>
@@ -626,6 +652,43 @@ export default function ManageCoursesPage() {
                     ) : c.video_count}
                   </td>
                   <td className="!text-right tabular-nums">{c.assigned_count}</td>
+                  {/* An em dash, not a 0: the backend stores "pays nothing" as
+                      NULL, and a literal 0 reads like a deliberate price. */}
+                  <td className="!text-right tabular-nums">
+                    {c.reward_points
+                      ? c.reward_points.toLocaleString('en-IN')
+                      : <span className="text-muted-foreground">—</span>}
+                  </td>
+                  {/* Chip only when ON. "No certificate" is the default for
+                      most courses, so a second chip saying so would be noise
+                      on nearly every row.
+
+                      Split on status for the same reason Mandatory is, above:
+                      certificateData() requires status = 1 AND
+                      certificate_enabled = 1 and 404s otherwise, so a bare
+                      gold chip on a retired course would promise a download
+                      that cannot be issued. */}
+                  <td className="!text-center">
+                    {c.certificate_enabled === 1 && (
+                      c.status === 1 ? (
+                        <StatusChip
+                          tone="gold"
+                          size="sm"
+                          title="Completing this course grants a downloadable certificate and a trophy on the technician's course list"
+                        >
+                          Certificate
+                        </StatusChip>
+                      ) : (
+                        <StatusChip
+                          tone="neutral"
+                          size="sm"
+                          title="Certificate enabled, but retired — no certificate can be issued while the course is retired. Reactivate it to make the flag take effect."
+                        >
+                          Certificate · Inactive
+                        </StatusChip>
+                      )
+                    )}
+                  </td>
                   <td className="!text-center">
                     <StatusChip tone={c.status === 1 ? 'emerald' : 'slate'}>
                       {c.status === 1 ? 'Active' : 'Retired'}
@@ -759,6 +822,10 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
   const [name, setName] = React.useState('');
   const [description, setDescription] = React.useState('');
   const [mandatory, setMandatory] = React.useState(false);
+  /* Kept as a STRING, not a number: '' is a real value here ("this course pays
+   * nothing") and 0 would be indistinguishable from an untouched field. */
+  const [rewardPoints, setRewardPoints] = React.useState('');
+  const [certificateEnabled, setCertificateEnabled] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -807,6 +874,10 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
     setName(editing?.name ?? '');
     setDescription(editing?.description ?? '');
     setMandatory(editing?.is_mandatory === 1);
+    /* A stored 0 seeds blank on purpose — the backend already treats
+     * non-positive as "pays nothing", so the two are the same course. */
+    setRewardPoints(editing?.reward_points ? String(editing.reward_points) : '');
+    setCertificateEnabled(editing?.certificate_enabled === 1);
     setError(null);
   }, [open, editing?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -931,6 +1002,17 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
       setError(`Description must be ${DESC_MAX} characters or fewer.`);
       return;
     }
+    /*
+     * Blank is legitimate, so only a typed value is checked. Worth checking at
+     * all because a number input happily hands back "1e5" and "12.5", and the
+     * endpoint's integer Joi rejects both with a message that names neither.
+     */
+    const trimmedPoints = rewardPoints.trim();
+    const points = trimmedPoints === '' ? null : Number(trimmedPoints);
+    if (points !== null && (!Number.isInteger(points) || points < 0 || points > REWARD_MAX)) {
+      setError(`Reward points must be a whole number between 0 and ${REWARD_MAX.toLocaleString('en-IN')}.`);
+      return;
+    }
 
     /*
      * The last stop before non-video content reaches an assigned course.
@@ -974,6 +1056,10 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
           description: trimmedDesc,
           // Joi wants a boolean here; the read model hands it back as 1/0.
           is_mandatory: mandatory,
+          // null, not '', for "pays nothing" — both are accepted, and null is
+          // what the column actually holds.
+          reward_points: points,
+          certificate_enabled: certificateEnabled,
         });
         courseId = existingId;
       } else {
@@ -981,6 +1067,8 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
           name: trimmedName,
           description: trimmedDesc,
           is_mandatory: mandatory,
+          reward_points: points,
+          certificate_enabled: certificateEnabled,
         });
         courseId = created.id;
         // Remember it BEFORE the content call, so a failure there leaves a
@@ -1124,6 +1212,60 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
               </span>
             </span>
           </label>
+
+          {/*
+            What finishing this course is WORTH — one question in the
+            operator's head, so both halves of the answer sit together.
+          */}
+          <div>
+            <Label className="block mb-1">Reward Points</Label>
+            {/*
+              Text, NOT type="number". A number input sanitises anything it
+              cannot parse — "1e", "5-", "2.." — down to '', and '' is a
+              MEANINGFUL value on this one field: it saves as reward_points
+              null and demotes a paying course to "pays nothing". Keeping the
+              raw string means a mistype stays visible and fails the
+              whole-number check in handleSubmit with a message, while an
+              operator who actually empties the field still clears it.
+            */}
+            <Input
+              type="text"
+              inputMode="numeric"
+              value={rewardPoints}
+              onChange={(e) => setRewardPoints(e.target.value)}
+              disabled={!canManage}
+              placeholder="0 — pays nothing"
+              className="w-56"
+            />
+            {/*
+              Both sentences are load-bearing. A blank number field reads as
+              "unset" rather than "zero", and the points ledger is append-only
+              and pays each technician once per course — so lowering this claws
+              nothing back and raising it tops nobody up.
+            */}
+            <div className="mt-1 text-xs text-muted-foreground">
+              Leave blank to pay nothing. Editing this prices future completions only — points
+              already awarded are never clawed back or topped up.
+            </div>
+          </div>
+
+          <div className="flex items-start justify-between gap-3 rounded border bg-muted/30 px-3 py-2">
+            <div className="min-w-0">
+              <div className="text-sm font-medium">Certificate &amp; Badge</div>
+              {/* One flag, two visible rewards — said plainly so nobody goes
+                  looking for a separate badge setting that does not exist. */}
+              <div className="text-xs text-muted-foreground">
+                Technicians who complete this course get a downloadable certificate and a trophy
+                beside it on their course list.
+              </div>
+            </div>
+            <Switch
+              checked={certificateEnabled}
+              disabled={!canManage}
+              ariaLabel="Certificate And Badge"
+              onCheckedChange={setCertificateEnabled}
+            />
+          </div>
 
           {/*
             Content sits directly under Description, in the same modal and the

@@ -20,7 +20,26 @@ export type Me = {
   // returned by GET /auth/me via findUserById (services/auth.service.js
   // SELECTs it). Surfaced in the type so click-to-call's QA-mode dialog
   // can pre-fill the Call From field; safe to read elsewhere too.
-  user: { user_id: number; user_name: string; official_email: string; mobile_no?: string | null };
+  /*
+   * These are the columns findUserById already SELECTs (services/auth.service.js)
+   * and /auth/me already returns verbatim as `user` — the type simply declared
+   * four of them and stayed silent about the rest. Widened for the My Profile
+   * page; purely additive, so no existing reader changes.
+   *
+   * NOT declared, because they are NOT in the payload and never have been:
+   * a profile image and bank details. tbl_user has no such columns — those
+   * belong to TECHNICIANS on tbl_easyfixer. Adding optional fields here for
+   * them would invite a reader to render undefined forever.
+   */
+  user: {
+    user_id: number;
+    user_name: string;
+    official_email: string;
+    mobile_no?: string | null;
+    user_code?: string | null;
+    alternate_no?: string | null;
+    user_status?: number | null;
+  };
   role?: { role_id: number; role_name: string; group: string };
   /*
    * Effective permissions resolved server-side from tbl_role.menu_ids +
@@ -111,8 +130,9 @@ export type Me = {
   allowedStages?: { mode: 'all' | 'list'; stages: string[] };
 };
 
-// Scope dimension shape — exported so the Navbar's effective-access panel
-// can type the row renderer without redeclaring the union locally.
+// Scope dimension shape — exported so the My Profile page's Effective Access
+// table can type its row renderer without redeclaring the union locally.
+// (It lived in the Navbar until that dropdown became the profile page.)
 export type ScopeDimension = { mode: 'all' | 'allow' | 'none'; ids: number[]; placeholders?: string };
 
 const Ctx = createContext<{ me: Me | null; loading: boolean; refresh: () => Promise<void> }>({

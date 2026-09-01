@@ -6,8 +6,9 @@
  * One row per (technician, assigned course) from GET /admin/lms/report — how
  * far through a course's videos a technician has actually got. Read-only by
  * design: assignment happens on the Assign screen and course content on the
- * Courses screen, so there is nothing to create or edit here and no action
- * column at all.
+ * Courses screen, so there is nothing to create or edit here. The single
+ * action column mutates nothing either — it downloads a completion
+ * certificate for the rows whose course actually issues one.
  *
  * EVERY filter is server-side. The `status` (complete / incomplete) filter in
  * particular MUST NOT be re-applied in JS: the backend evaluates it inside the
@@ -37,16 +38,20 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { BarChart3, Search, AlertTriangle } from 'lucide-react';
+import { BarChart3, Search, AlertTriangle, Award } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { StatusChip, type StatusChipTone } from '@/components/ui/StatusChip';
 import { SearchSelect, type SearchOption } from '@/components/ui/search-select';
+import { IconButton } from '@/components/ui/icon-button';
 import { TablePagination, pageSizeToLimit, type TablePageSize } from '@/components/ui/table-pagination';
 import { SortHeader, cycleSort, type SortDir } from '@/lib/use-sort';
 import { useFetch, useDebouncedValue } from '@/lib/hooks';
 import { showToast } from '@/components/ui/toast';
+import { downloadXlsx } from '@/lib/download-xlsx';
+import { useMe } from '@/lib/auth-context';
+import { hasAction } from '@/lib/permissions';
 import { formatDate } from '@/lib/utils';
 
 type ReportRow = {
@@ -79,6 +84,15 @@ type ReportRow = {
    * deadline is judged against (videos_done >= videos_total is the progress
    * bar's separate concern). */
   completion_date: string | null;
+  /* The COURSE's certificate settings, denormalised onto the row so the
+   * download button can gate on the same three facts the server checks
+   * instead of discovering the other two as a 404 (see the certificate note
+   * in the component). Read through `toNum`: these are TINYINTs wider than
+   * TINYINT(1), so db.js's TINYINT(1)→boolean cast does not apply to them and
+   * mysql2 is free to hand them over as strings. */
+  certificate_enabled: number | string;
+  /* 1 = active. A retired course issues nothing, however complete the row. */
+  course_status: number | string;
 };
 
 type ReportResponse = {
@@ -203,11 +217,16 @@ const OVERDUE_TITLE =
  * `daysLeft` is a hint, not a status: it exists only for rows that are still
  * open and still in time, and is deliberately absent once a row is finished
  * (the deadline stopped mattering) or overdue (the chip says it louder).
+ *
+ * `finished` is returned rather than kept local because the certificate action
+ * gates on the SAME fact (alongside the course's own certificate settings) —
+ * re-spelling the predicate at the call site is how the two would drift apart.
  */
 type DueView = {
   dueLabel: string | null;
   overdue: boolean;
   daysLeft: number | null;
+  finished: boolean;
 };
 
 function dueView(row: ReportRow, todayYmd: string): DueView {
@@ -219,12 +238,16 @@ function dueView(row: ReportRow, todayYmd: string): DueView {
    * still goes through formatYmd, so such a value shows an em-dash rather than
    * a "0" — the row is simply not called overdue on the strength of it. */
   const finished = row.completion_date != null && String(row.completion_date).trim() !== '';
-  if (!due) return { dueLabel: null, overdue: false, daysLeft: null };
+  /* An assignment with no deadline still has a completion fact — `finished`
+   * must survive this early return or every certificate on a deadline-less
+   * course would be unreachable. */
+  if (!due) return { dueLabel: null, overdue: false, daysLeft: null, finished };
   const overdue = !finished && due < todayYmd;
   return {
     dueLabel: formatYmd(due),
     overdue,
     daysLeft: finished || overdue ? null : daysBetweenYmd(todayYmd, due),
+    finished,
   };
 }
 
@@ -232,6 +255,23 @@ function dueView(row: ReportRow, todayYmd: string): DueView {
 function daysLeftLabel(days: number): string {
   if (days <= 0) return 'Due Today';
   return days === 1 ? 'In 1 Day' : `In ${days.toLocaleString('en-IN')} Days`;
+}
+
+/*
+ * Saved filename for one row's certificate.
+ *
+ * Built here rather than taken from the response: a blob download takes its
+ * name from the anchor's `download` attribute, so the Content-Disposition the
+ * backend sets is ignored and an absent name saves the file under an opaque
+ * object-URL id. Mirrors the backend's own scheme (slugged course + efr id) so
+ * a certificate saved from the CRM and one saved from anywhere else match.
+ */
+function certificateFilename(row: ReportRow): string {
+  const slug = (row.course_name || '')
+    .replace(/[^a-z0-9]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60) || 'course';
+  return `EasyFix-Certificate-${slug}-${row.easyfixer_id}.pdf`;
 }
 
 /*
@@ -268,6 +308,12 @@ function progressView(done: number, total: number, pct: number): ProgressView {
 }
 
 export default function TrainingReportPage() {
+  /* The certificate route is requireLmsManage while GET /report has no action
+   * guard at all — same me/permissions source and same split as the Assign
+   * screen. See the certificate note below for why the gate is needed. */
+  const { me } = useMe();
+  const canManageLms = hasAction(me, 'isLmsManage');
+
   const [search, setSearch] = useState('');
   const [courseId, setCourseId] = useState('');
   const [status, setStatus] = useState('');
@@ -364,6 +410,69 @@ export default function TrainingReportPage() {
   /* complete + incomplete ONLY — see the note above on why overdue is excluded. */
   const grandTotal =
     completeTotal != null && incompleteTotal != null ? completeTotal + incompleteTotal : null;
+
+  /*
+   * ── Certificate download ────────────────────────────────────────────
+   *
+   * GET /admin/lms/courses/:courseId/certificate/:easyfixerId streams a PDF
+   * behind the normal Bearer header, so a plain <a href> 401s — it has to be
+   * fetched and handed to the browser as a blob. `downloadXlsx` is exactly
+   * that recipe (fetch with the token → blob → object URL → click → deferred
+   * revoke) and never inspects the payload, so it is reused verbatim rather
+   * than inlining a sixth copy of it; only its name is XLSX-specific.
+   *
+   * WHICH ROWS OFFER IT. The backend issues a certificate only when the course
+   * is active AND the course has `certificate_enabled = 1` AND the enrolment is
+   * stamped complete. The row now carries all three (`course_status` and
+   * `certificate_enabled` ship for exactly this), so the button gates on the
+   * same conjunction and hides itself instead of 404-ing on click. Completion
+   * is still the stamped `completion_date` — the fact the backend rides,
+   * deliberately not the videos_done >= videos_total maths that can disagree
+   * for a moment.
+   *
+   * WHO IS OFFERED IT. The download is requireLmsManage ('isLmsManage'); GET
+   * /report carries no action guard, so a read-only role reaches this page
+   * legitimately. Without the permission in the gate they would see a button
+   * that 403s on every click, so it joins the three facts above.
+   *
+   * BUSY STATE IS A SET, not one id. Each download is an independent GET and
+   * nothing stops a second row being clicked while the first is still
+   * streaming — with a single id the first request's cleanup cleared the
+   * spinner on the second, still-downloading row.
+   */
+  const [certifyingIds, setCertifyingIds] = useState<ReadonlySet<number>>(new Set());
+
+  async function downloadCertificate(row: ReportRow) {
+    /* Functional updates on both edges: two rows started in the same tick must
+     * not drop each other's entry. */
+    setCertifyingIds((prev) => new Set(prev).add(row.id));
+    try {
+      await downloadXlsx({
+        url: `/admin/lms/courses/${row.course_id}/certificate/${row.easyfixer_id}`,
+        filename: certificateFilename(row),
+      });
+    } catch (e) {
+      /* A 404 is STILL a normal outcome, not a bug: the row gates on the same
+       * three facts the server does, but they are a snapshot taken at page
+       * load — certificates can be switched off on the course, or the course
+       * retired, while the report sits open. Matched on the backend's own 404
+       * text so a real 500 still surfaces its own message instead of being
+       * dressed up as "no certificate". */
+      const msg = e instanceof Error ? e.message : String(e);
+      showToast({
+        variant: 'error',
+        message: /no certificate available/i.test(msg)
+          ? 'No Certificate Available For This Technician And Course'
+          : `Certificate Download Failed — ${msg}`,
+      });
+    } finally {
+      setCertifyingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(row.id);
+        return next;
+      });
+    }
+  }
 
   /* Course filter options. includeInactive=true on purpose: a retired course
    * still has historical assignments in this report, and hiding it from the
@@ -526,14 +635,15 @@ export default function TrainingReportPage() {
                     is pinned to exactly its key set. */}
                 <SortHeader col="due_date"        align="left"   sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Due Date</SortHeader>
                 <SortHeader col="completion_date" align="left"   sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Completed On</SortHeader>
+                <th className="!text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={8} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
+                <tr><td colSpan={9} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
               )}
               {!loading && rows.length === 0 && (
-                <tr><td colSpan={8} className="!text-center text-muted-foreground py-6">No assignments match the current filters.</td></tr>
+                <tr><td colSpan={9} className="!text-center text-muted-foreground py-6">No assignments match the current filters.</td></tr>
               )}
               {!loading && rows.map((r) => {
                 const done = toNum(r.videos_done);
@@ -541,6 +651,14 @@ export default function TrainingReportPage() {
                 const pct = toNum(r.completion_pct);
                 const view = progressView(done, totalVideos, pct);
                 const due = dueView(r, todayYmd);
+                /* The server's own three-part gate, plus the permission its
+                   route requires — see the certificate note above. toNum
+                   because these TINYINTs can arrive as strings. */
+                const canDownloadCertificate =
+                  canManageLms
+                  && due.finished
+                  && toNum(r.course_status) === 1
+                  && toNum(r.certificate_enabled) === 1;
                 const completedOn = formatYmd(r.completion_date);
                 return (
                   <tr key={r.id}>
@@ -638,6 +756,24 @@ export default function TrainingReportPage() {
                     {/* Completed On — em-dash while still in progress. */}
                     <td className="!text-left whitespace-nowrap text-xs">
                       {completedOn ?? <span className="text-muted-foreground">—</span>}
+                    </td>
+                    <td className="!text-right">
+                      {canDownloadCertificate ? (
+                        <IconButton
+                          icon={Award}
+                          label="Download Certificate"
+                          intent="primary"
+                          busy={certifyingIds.has(r.id)}
+                          onClick={() => downloadCertificate(r)}
+                        />
+                      ) : (
+                        /* Em-dash, not a disabled icon: every excluded case is
+                           one the backend refuses outright (unfinished, course
+                           retired, certificates off, or no isLmsManage), and
+                           most rows in this report are unfinished — a column of
+                           dead controls is worse than a blank. */
+                        <span className="text-muted-foreground">—</span>
+                      )}
                     </td>
                   </tr>
                 );

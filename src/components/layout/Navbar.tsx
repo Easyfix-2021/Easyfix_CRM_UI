@@ -1,118 +1,15 @@
 'use client';
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
+import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
 import { Bell, LogOut, Menu, Info, AlertTriangle, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { api } from '@/lib/api';
 import { useFetchOnce } from '@/lib/hooks';
-import { useMe, clearMeCache, type ScopeDimension, type Me } from '@/lib/auth-context';
+import { useMe, clearMeCache } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
 import { EscalatedJobsModal } from '@/components/job/EscalatedJobsModal';
 import { CallInfoModal } from '@/components/call-info/CallInfoModal';
-
-/*
- * EffectiveAccessPanel — small dropdown surfaced from the user-identity
- * cluster in the navbar. Renders a 4-row table (clients / cities / states /
- * verticals) with the resolved scope counts so operators can self-diagnose
- * RBAC scope mismatches without filing a ticket. See the call-site comment
- * in Navbar for the broader rationale.
- *
- * Rendering rules per dimension:
- *   mode='all'   → "All"
- *   mode='allow' → ids.length (e.g. "2")
- *   mode='none'  → "None" in amber, since the user has zero access on that
- *                   dimension and queries will return zero rows.
- *
- * For Admin/Finance (scope === undefined) we collapse the table into a
- * single "Effective access: All (bypass role)" line — there's nothing
- * useful to show per-dimension.
- */
-/*
- * EffectiveAccessPopover — popover CONTENTS only.
- *
- * Refactor (2026-06-05): the trigger used to be a standalone "Access"
- * pill button. Operators found that visually noisy next to the
- * identity (name / role) cluster, and the natural mental model is
- * "click on who I am to see what I can see." So the trigger is now
- * the identity div itself (see the Navbar render at the call-site)
- * and this component renders only the floating panel body — the
- * call-site owns the open/close state, the click-target, and the
- * positioning wrapper.
- *
- * Background fix (2026-06-05, root-caused 2026-08-18): `bg-popover` used to
- * compile to no CSS rule at all — the `--popover` variables existed but the
- * matching Tailwind colour alias was never added to the config — so the panel
- * rendered transparent, and the workaround was a hardcoded `bg-white`. That
- * workaround does not flip in dark mode: it would stay a white card with dark
- * text on an otherwise dark page. The alias is now mapped in
- * tailwind.config.ts, so the token works and the panel follows the theme.
- */
-function EffectiveAccessPopover({
-  scope,
-  hierarchy,
-}: {
-  scope: Me['scope'];
-  hierarchy: Me['hierarchy'];
-}) {
-  return (
-    <div
-      className="absolute right-0 top-full mt-1 z-50 w-56 rounded-md border border-ink-100 bg-popover text-popover-foreground shadow-lg p-2"
-      role="dialog"
-      aria-label="Effective Access"
-    >
-      {!scope ? (
-        <div className="text-xs">
-          <div className="font-semibold mb-1">Effective Access</div>
-          <div className="text-muted-foreground">All (bypass role)</div>
-        </div>
-      ) : (
-        <>
-          <div className="text-xs font-semibold mb-1">Effective Access</div>
-          <div className="border-t" />
-          <table className="w-full text-xs mt-1">
-            <tbody>
-              <ScopeRow label="Clients"   dim={scope.clients} />
-              <ScopeRow label="Cities"    dim={scope.cities} />
-              <ScopeRow label="States"    dim={scope.states} />
-              <ScopeRow label="Verticals" dim={scope.verticals} />
-            </tbody>
-          </table>
-          {hierarchy && hierarchy.descendantsCount > 0 && (
-            <>
-              <div className="border-t mt-1" />
-              <div className="text-xs text-muted-foreground italic mt-1">
-                Including {hierarchy.descendantsCount} downstream report{hierarchy.descendantsCount === 1 ? '' : 's'}
-              </div>
-            </>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-// Renders one row of the Effective Access table. `mode='none'` highlights
-// in amber because zero access usually means the operator's manage_*
-// column is mis-seeded — exactly the class of bug this panel exists to
-// surface.
-function ScopeRow({ label, dim }: { label: string; dim: ScopeDimension }) {
-  let value: ReactNode;
-  let valueClass = '';
-  if (dim.mode === 'all') {
-    value = 'All';
-  } else if (dim.mode === 'allow') {
-    value = dim.ids.length;
-  } else {
-    value = 'None';
-    valueClass = 'text-warning-strong font-medium';
-  }
-  return (
-    <tr>
-      <td className="text-left text-muted-foreground py-0.5">{label}</td>
-      <td className={`text-right py-0.5 ${valueClass}`}>{value}</td>
-    </tr>
-  );
-}
 
 export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
   const router = useRouter();
@@ -154,10 +51,6 @@ export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
   // on Dashboard / Manage Jobs while picking a date range and reading
   // the resulting call history table.
   const [callInfoOpen, setCallInfoOpen] = useState(false);
-  // Effective Access popover open/close — driven by clicks on the
-  // identity (name / role) block in the right-side cluster. See the
-  // render below for the wiring + click-outside dismiss strategy.
-  const [accessOpen, setAccessOpen] = useState(false);
 
   // Permission gates — mirror the legacy CRM, which only showed each header
   // button if the operator had the matching action permission. Keys
@@ -269,49 +162,27 @@ export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
       </button>
       <div className="flex items-center gap-3 border-l pl-3">
         {/*
-         * Identity-as-trigger (2026-06-05). Clicking the name/role
-         * block toggles the Effective Access popover. Matches the
-         * operator's intuition ("click on who I am to see what I can
-         * see") and removes the visual clutter of a standalone
-         * "Access" pill. Wrapper is `relative` so the popover
-         * positions against THIS div, not the whole right-side
-         * cluster.
+         * Identity-as-trigger. Clicking the name/role block used to open a
+         * small Effective Access dropdown; it now opens /profile, which shows
+         * that same scope table plus the rest of the operator's own record —
+         * employee code, contact numbers, reporting reach and the three feature
+         * grants that live outside the menu/role pipeline and previously had no
+         * surface anywhere in the CRM.
          *
-         * Trigger is a real <button> for keyboard + a11y (Space/Enter
-         * toggle, focus ring), styled to look identical to the
-         * previous inline div — only adds a subtle hover background +
-         * a pointer cursor so operators discover it's clickable.
+         * A <Link>, not router.push: middle-click and open-in-new-tab work for
+         * free, and there is no state to carry.
          *
-         * Behavior: tracks `accessOpen` locally. Click-outside dismiss
-         * is handled by the same onBlur subtree-check pattern used
-         * elsewhere in this navbar (works because the popover sits
-         * inside the wrapper, so focus landing on it doesn't trigger
-         * a close).
+         * `hidden sm:block` is inherited, not introduced — the identity block
+         * has always been desktop-only, and mobile users reach nothing new here.
          */}
-        <div className="relative">
-          <button
-            type="button"
-            onClick={() => setAccessOpen((v) => !v)}
-            onBlur={(e) => {
-              if (!e.currentTarget.parentElement?.contains(e.relatedTarget as Node)) {
-                setAccessOpen(false);
-              }
-            }}
-            className="hidden sm:block text-right text-xs px-2 py-1 -mx-2 -my-1 rounded hover:bg-muted/60 transition-colors cursor-pointer"
-            title="Show effective row-level access scope"
-            aria-haspopup="dialog"
-            aria-expanded={accessOpen}
-          >
-            <div className="font-medium">{me?.user?.user_name ?? '…'}</div>
-            <div className="text-muted-foreground">{me?.role?.role_name ?? me?.user?.official_email ?? ''}</div>
-          </button>
-          {accessOpen && (
-            <EffectiveAccessPopover
-              scope={me?.scope}
-              hierarchy={me?.hierarchy}
-            />
-          )}
-        </div>
+        <Link
+          href="/profile"
+          className="hidden sm:block text-right text-xs px-2 py-1 -mx-2 -my-1 rounded hover:bg-muted/60 transition-colors"
+          title="My Profile"
+        >
+          <div className="font-medium">{me?.user?.user_name ?? '…'}</div>
+          <div className="text-muted-foreground">{me?.role?.role_name ?? me?.user?.official_email ?? ''}</div>
+        </Link>
         <Button variant="ghost" size="icon" onClick={logout} title="Log out">
           <LogOut className="h-5 w-5" />
         </Button>
