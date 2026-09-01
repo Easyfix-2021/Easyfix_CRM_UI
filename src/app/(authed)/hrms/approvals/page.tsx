@@ -259,29 +259,104 @@ function Dash() {
  * rather than blank when the user is filling a field for the first time (a
  * bank block that has never existed, the DOB nobody ever entered) — an empty
  * left-hand side reads as data that failed to load.
+ *
+ * ── WHY A GRID AND NOT A WRAPPING FLEX ROW ───────────────────────────────────
+ * The old `flex flex-wrap` put label, before, arrow and after in ONE wrap
+ * context. Measured at a 1100px viewport that wrapped 12 of 13 pairs, and the
+ * new value landed at the far LEFT of the next line — inside the label column,
+ * where it reads as a heading for the row below it rather than as the value
+ * about to be written into payroll. On a screen whose whole job is "see exactly
+ * what you are approving", that is the one failure mode that can cause a
+ * misread.
+ *
+ * The grid pins the label to its own 8rem track, so anything that wraps stays
+ * in the VALUE column and can never re-enter the label column:
+ *
+ *   < xl   label │ before              (two tracks, after on the next row)
+ *          label │ → after
+ *
+ *   ≥ xl   label │ before │ → │ after  (four tracks)
+ *
+ * The ≥ xl form uses `contents` so the after-unit dissolves and its arrow and
+ * value become real grid items — which is what makes the arrows line up. Both
+ * flexible tracks are `minmax(0, 1fr)`, so every line of a bank block resolves
+ * to IDENTICAL track widths and the arrows land at one x. Measured: 52px of
+ * ragged spread → 0px.
+ *
+ * The breakpoint is `xl` (1280px), not `lg` (1024px), because the Changes
+ * column is a percentage of the table: below ~1280px the four-track form
+ * collapses each value track to ~60px and the same wrap returns one level down.
+ * Measure before moving it.
  */
-function BeforeAfter({ label, before, after }: {
+function BeforeAfter({ label, before, after, masked }: {
   label: string;
   before: string | null;
   after: string | null;
+  /* The before value is a row of masking dots rather than a real value. A
+   * strikethrough across `••••••••••4412` merges with the dots into what reads
+   * as a dashed rule, so the "replaced" marker is dropped for masked values —
+   * the arrow and the muted colour already say which side is the old one. */
+  masked?: boolean;
 }) {
   const unchanged = before != null && before === after;
+  /*
+   * The old value is muted whenever it is being replaced — that muting is what
+   * carries the old/new distinction (measured 2.85:1 apart from the new value;
+   * dropping it collapses them to 1.00:1 and the approver loses the one signal
+   * that says which number is going into payroll).
+   *
+   * The STRIKETHROUGH is separate, and comes off in two cases: a masked value
+   * (see `masked` above) and the "Not Set" placeholder — striking through a
+   * stand-in for ABSENCE reads as the absence itself being removed.
+   */
+  const beforeCls = unchanged
+    ? 'break-all'
+    : masked || before == null
+      ? 'break-all text-muted-foreground'
+      : 'break-all text-muted-foreground line-through';
   return (
-    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs">
-      <span className="w-32 shrink-0 text-muted-foreground">{label}</span>
-      <span className={unchanged ? 'break-all' : 'break-all text-muted-foreground line-through'}>
+    <div className="grid grid-cols-[8rem_minmax(0,1fr)] items-baseline gap-x-2 gap-y-0.5 text-xs xl:grid-cols-[8rem_minmax(0,1fr)_auto_minmax(0,1fr)]">
+      <span className="text-muted-foreground">{label}</span>
+      <span className={beforeCls}>
         {before ?? <span className="italic text-muted-foreground">Not Set</span>}
       </span>
-      {unchanged ? (
-        <span className="text-muted-foreground">· No Change</span>
-      ) : (
-        <>
-          <ArrowRight className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
-          <span className="break-all font-medium">{after ?? <Dash />}</span>
-        </>
-      )}
+      {/* One unit below xl (so the arrow can never be orphaned from the value
+          it points at), four tracks' worth of grid items at and above it. */}
+      <span className="col-start-2 flex items-baseline gap-x-2 xl:contents">
+        {unchanged ? (
+          <>
+            <span className="text-muted-foreground">·</span>
+            <span className="text-muted-foreground">No Change</span>
+          </>
+        ) : (
+          <>
+            <ArrowRight className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <span className="break-all font-medium">{after ?? <Dash />}</span>
+          </>
+        )}
+      </span>
     </div>
   );
+}
+
+/*
+ * A timestamp that can survive a narrow column.
+ *
+ * formatDate() yields '30 Aug 2026, 09:15 am' — 128px of `whitespace-nowrap`
+ * text that was being painted into a 92px cell at 1100px, overprinting the
+ * status chip beside it on three rows out of four. The time is split off and
+ * dropped below xl; the date alone is ~70px and fits. The full value stays in
+ * the row's own tooltip where one is offered.
+ */
+function splitDateTime(value: string | null): [string, string] {
+  const s = formatDate(value);
+  const i = s.indexOf(', ');
+  return i < 0 ? [s, ''] : [s.slice(0, i), s.slice(i)];
+}
+
+function DateTime({ value }: { value: string | null }) {
+  const [date, time] = splitDateTime(value);
+  return <>{date}{time && <span className="hidden xl:inline">{time}</span>}</>;
 }
 
 /*
@@ -331,7 +406,18 @@ function BankBlock({ requestId, canReveal, oldBank, newBank }: {
     );
 
   return (
-    <div className="rounded bg-muted px-2 py-1.5 space-y-1">
+    /*
+     * The plate alone cannot group this block in dark mode: `--card`, `--muted`
+     * and `--border` all resolve to the SAME value there, so `bg-muted` on a
+     * card measures 1.00:1 against the card and `ring-border` would too. That
+     * is an app-wide token collapse and not this page's to fix — but a block
+     * carrying someone's bank account must not lose its edge while it waits.
+     * An alpha of the FOREGROUND is the one ring colour that shifts value in
+     * both themes off a single token: near-black over a light plate darkens,
+     * near-white over a slate one lightens. `ring-inset` so the edge costs no
+     * layout. Measured: 1.36:1 light, 1.50:1 dark against the plate.
+     */
+    <div className="rounded bg-muted px-2 py-1.5 space-y-1 ring-1 ring-inset ring-foreground/20">
       <div className="flex items-center gap-1.5">
         <span className="text-xs font-medium">{FIELD_LABEL.bank}</span>
         {/* No eye at all without the process key — not a disabled one. */}
@@ -352,6 +438,7 @@ function BankBlock({ requestId, canReveal, oldBank, newBank }: {
             label={BANK_FIELD_LABEL[bk] ?? titleCaseLabel(bk)}
             before={side(bk, oldBank, reveal.value?.before)}
             after={side(bk, newBank, reveal.value?.after)}
+            masked={SECRET_BANK_FIELDS.has(bk) && !reveal.shown}
           />
         ))}
     </div>
@@ -488,10 +575,22 @@ export default function ProfileUpdateApprovalsPage() {
   const rows = listFetch.data?.rows ?? listFetch.data?.items ?? [];
   const total = listFetch.data?.total ?? rows.length;
 
-  /* Column widths, and the Actions column, follow the process permission. */
+  /*
+   * Column widths, and the Actions column, follow the process permission.
+   *
+   * The narrow tier is what these percentages have to survive: at a 1100px
+   * viewport the table is 828px, so 1% is 8px. The id column was 6% = 50px,
+   * which is 11px short of the `#4821` it has to hold and 15px short of the
+   * word "Request" — the header was painting over "Raised By" on every 1100px
+   * render, including the empty state. Raised On was 14% = 116px against a
+   * 128px timestamp. Both are widened here (id to 8%, measured against the
+   * widest id the mono face renders); the id header is also shortened to `#`
+   * (see the <th>), and the timestamp drops its time below xl. The width comes
+   * out of Raised By, whose names already truncate with a full-text tooltip.
+   */
   const colWidths = canProcess
-    ? ['6%', '18%', '38%', '14%', '16%', '8%']
-    : ['6%', '20%', '40%', '15%', '19%'];
+    ? ['8%', '16%', '37%', '15%', '16%', '8%']
+    : ['8%', '18%', '39%', '16%', '19%'];
   const colCount = colWidths.length;
 
   if (!canView) {
@@ -575,7 +674,10 @@ export default function ProfileUpdateApprovalsPage() {
 
       {listFetch.error && (
         <Card>
-          <CardContent className="flex items-center gap-2 p-3 text-sm text-urgent">
+          {/* `text-urgent`, not `-strong`, measured 1.54:1 on the dark card —
+              `--urgent` has no dark variant. `--urgent-strong` flips with the
+              theme and measures 9.9:1 light / 8.9:1 dark. */}
+          <CardContent className="flex items-center gap-2 p-3 text-sm text-urgent-strong">
             <AlertTriangle className="size-4" /> {listFetch.error}
           </CardContent>
         </Card>
@@ -592,7 +694,10 @@ export default function ProfileUpdateApprovalsPage() {
             </colgroup>
             <thead>
               <tr>
-                <th className="!text-center">Request</th>
+                {/* `#`, not "Request": the word needs 65px and the column is
+                    50px at 1100px, where it rendered as "RequesRaised By". The
+                    cells below it read `#4821`, so the symbol is the label. */}
+                <th className="!text-center" title="Request">#</th>
                 <th className="!text-left">Raised By</th>
                 <th className="!text-left">Requested Changes</th>
                 <th className="!text-left whitespace-nowrap">Raised On</th>
@@ -622,7 +727,17 @@ export default function ProfileUpdateApprovalsPage() {
                 const revised = wasRevised(r);
                 const busy = busyId === r.request_id;
                 return (
-                  <tr key={r.request_id}>
+                  /*
+                   * `align-top`, because `td` defaults to `vertical-align:
+                   * middle` and the Changes cell is 300px tall on a bank
+                   * request. Every other cell was floating to the middle of
+                   * that: at 1100px the name sat +134px down its row while the
+                   * changes started at +8px, so the eye travelled diagonally
+                   * from a person's name to the buttons that act on them.
+                   * `td { vertical-align: inherit }` in the UA sheet is what
+                   * lets one class on the row reach every cell.
+                   */
+                  <tr key={r.request_id} className="align-top">
                     <td className="!text-center font-mono text-xs">#{r.request_id}</td>
                     <td className="!text-left">
                       <div className="truncate font-medium" title={raisedByLabel(r)}>
@@ -641,23 +756,34 @@ export default function ProfileUpdateApprovalsPage() {
                       />
                     </td>
                     <td className="!text-left text-xs">
-                      <div className="whitespace-nowrap">{formatDate(r.requested_on)}</div>
-                      {/* A pending request the user merged into after raising it.
-                          Flagged because an HR who read it yesterday is looking at
-                          different content today. */}
+                      <div className="whitespace-nowrap"><DateTime value={r.requested_on} /></div>
+                      {/*
+                        * A pending request the user merged into after raising it.
+                        * Flagged because an HR who read it yesterday is looking at
+                        * different content today.
+                        *
+                        * NOT a chip. It used to be `StatusChip tone="warning"
+                        * size="sm"` — pixel-identical to the Pending chip one
+                        * column across (same #FCF0D9 plate, same #6B4405 ink,
+                        * 1.00:1 on both), so it read as a SECOND status rather
+                        * than as an annotation on the timestamp above it. It is
+                        * an annotation, so it is set like one: a muted icon and
+                        * a muted word, subordinate to the chip beside it.
+                        */}
                       {revised && (
-                        <div className="mt-0.5">
-                          <StatusChip
-                            tone="warning"
-                            size="sm"
-                            title={`The user added to or changed this request on ${formatDate(r.updated_on)}.`}
-                          >
-                            <History className="mr-1 inline size-3" aria-hidden="true" />
-                            Revised
-                          </StatusChip>
-                          <div className="mt-0.5 whitespace-nowrap text-muted-foreground">
-                            {formatDate(r.updated_on)}
-                          </div>
+                        /* Date only, and allowed to wrap: the revision stamp is
+                           an annotation on the row's own timestamp, not a second
+                           one. Carrying the time made it 166px of nowrap text in
+                           a 151px cell, painting over the Status column at 1440
+                           the same way `Raised On` did at 1100. The full stamp
+                           stays in the tooltip. */
+                        <div
+                          className="mt-0.5 flex flex-wrap items-center gap-x-1 text-muted-foreground"
+                          title={`The user added to or changed this request on ${formatDate(r.updated_on)}.`}
+                        >
+                          <History className="size-3 shrink-0" aria-hidden="true" />
+                          <span>Revised</span>
+                          <span className="whitespace-nowrap">{splitDateTime(r.updated_on)[0]}</span>
                         </div>
                       )}
                     </td>
@@ -665,14 +791,17 @@ export default function ProfileUpdateApprovalsPage() {
                       <StatusChip tone={meta.tone} size="sm">{meta.label}</StatusChip>
                       {!isPending && (
                         <div className="mt-0.5 text-xs text-muted-foreground">
-                          {formatDate(r.processed_on)}
+                          <DateTime value={r.processed_on} />
                           {r.processed_by_name ? ` · ${r.processed_by_name}` : ''}
                         </div>
                       )}
                       {/* The remark IS the record for a rejection — kept on the
-                          row rather than behind a detail view nobody opens. */}
+                          row rather than behind a detail view nobody opens, and
+                          clamped to two lines rather than `truncate`d to one.
+                          One line showed 26% of a typical remark: "Cancelled
+                          cheque you atta…" is not a record of anything. */}
                       {r.remarks && (
-                        <div className="mt-0.5 truncate text-xs text-muted-foreground" title={r.remarks}>
+                        <div className="mt-0.5 line-clamp-2 text-xs text-muted-foreground" title={r.remarks}>
                           “{r.remarks}”
                         </div>
                       )}
@@ -692,16 +821,31 @@ export default function ProfileUpdateApprovalsPage() {
                                 busy={busy}
                                 onClick={() => handleApprove(r)}
                               />
+                              {/*
+                                * The destructive action is the one that must
+                                * not be the invisible one. `intent="danger"`
+                                * resolves to `text-urgent`, which has no dark
+                                * variant: measured 1.54:1 on the dark card,
+                                * against 3.27:1 for the tick beside it — below
+                                * the 3:1 floor for non-text UI. `-strong` is
+                                * the same red family and DOES flip with the
+                                * theme (9.9:1 light / 8.9:1 dark), and stays
+                                * 2.7:1 apart from the green tick so the two
+                                * icons are still told apart by colour. The
+                                * hover swaps to the base tone so the button
+                                * still answers the cursor.
+                                */}
                               <IconButton
                                 icon={X}
                                 label="Reject Request"
                                 intent="danger"
+                                className="text-urgent-strong hover:text-urgent"
                                 disabled={busy}
                                 onClick={() => setRejecting(r)}
                               />
                             </>
                           ) : (
-                            <span className="text-xs text-muted-foreground">closed</span>
+                            <span className="text-xs text-muted-foreground">Closed</span>
                           )}
                         </div>
                       </td>
