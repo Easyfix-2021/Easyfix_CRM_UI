@@ -116,7 +116,7 @@ jobs:
       - name: Test
         env:
           EASYFIX_BACKEND_DIR: ${{ runner.temp }}/easyfix-backend-audit
-        run: npm test")
+        run: npm test
 
   build-and-push:
     name: Build image & push to ECR
