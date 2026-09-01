@@ -102,7 +102,7 @@ export default function AdminActionsPage() {
   // by a per-user easyfix_properties allowlist, NOT the user's role/RBAC. The BE
   // enforces the same allowlist on every gated route; these flags only show/hide
   // the cards. GET /admin/access/features → { canSwitchCallMode, canDeleteEntities }.
-  const featureAccess = useFetchOnce<{ canSwitchCallMode: boolean; canDeleteEntities: boolean; canValidateFlows: boolean; canBuildSkillMatrix: boolean; canSwitchOtpChannel: boolean }>(
+  const featureAccess = useFetchOnce<{ canSwitchCallMode: boolean; canDeleteEntities: boolean; canValidateFlows: boolean; canBuildSkillMatrix: boolean; canSwitchOtpChannel: boolean; canManageSecrets: boolean }>(
     '/admin/access/features',
   );
   const canSwitchCallMode = featureAccess.data?.canSwitchCallMode === true;
@@ -110,6 +110,15 @@ export default function AdminActionsPage() {
   const canRestore = canDelete;
   const canValidateFlows = featureAccess.data?.canValidateFlows === true;
   const canBuildSkillMatrix = featureAccess.data?.canBuildSkillMatrix === true;
+  /*
+   * Secrets Manager is gated TWICE and both must pass: the RBAC action key says
+   * the screen exists, `secrets.manager.emails` says who may reach it. This is
+   * the show/hide half — the routes enforce the same allowlist server-side, and
+   * that is the half that matters. `=== true` rather than a truthy check because
+   * an in-flight or failed fetch leaves this undefined, and undefined must read
+   * as DENY on a screen that can decrypt every account number in the company.
+   */
+  const canManageSecrets = featureAccess.data?.canManageSecrets === true;
   const canSwitchOtpChannel = featureAccess.data?.canSwitchOtpChannel === true;
   // Call-recording backfill — gated on the same isClickToCall action the BE
   // endpoint requires (requireClickToCallAction on /admin/calls/recordings/backfill).
@@ -306,10 +315,10 @@ export default function AdminActionsPage() {
             </Card>
           </button>
         )}
-        {/* Re-Key Encrypted Fields — bulk re-wrap of every encrypted field's
+        {/* Secrets Manager — bulk re-wrap of every encrypted field's
             DEK onto a new operational key. Dry run first; the master key is
             only asked for on the recovery path. */}
-        {keyFlags.isFieldRekeyRun && (
+        {canManageSecrets && keyFlags.isFieldRekeyRun && (
           <button
             type="button"
             onClick={() => setRekeyOpen(true)}
@@ -321,7 +330,7 @@ export default function AdminActionsPage() {
                   <div className="h-8 w-8 rounded-md bg-urgent-tint text-urgent grid place-items-center">
                     <KeyRound className="h-4 w-4" />
                   </div>
-                  <h2 className="font-medium flex-1">Re-Key Encrypted Fields</h2>
+                  <h2 className="font-medium flex-1">Secrets Manager</h2>
                 </div>
                 <p className="text-xs text-muted-foreground">
                   Re-wrap every encrypted field&apos;s key onto a new operational key. Dry run reports
@@ -334,7 +343,7 @@ export default function AdminActionsPage() {
         )}
         {/* Recovery Key — generate the break-glass keypair IN THE BROWSER and
             post only the public half. */}
-        {keyFlags.isRecoveryKeyManage && (
+        {canManageSecrets && keyFlags.isRecoveryKeyManage && (
           <button
             type="button"
             onClick={() => setRecoveryKeyOpen(true)}
@@ -386,8 +395,8 @@ export default function AdminActionsPage() {
       {canDelete && <DeleteEntityDialog open={deleteOpen} onClose={() => setDeleteOpen(false)} />}
       {canRestore && <DeletedRecordsDialog open={deletedRecordsOpen} onClose={() => setDeletedRecordsOpen(false)} />}
       {canBackfillRecordings && <RecordingBackfillDialog open={recBackfillOpen} onClose={() => setRecBackfillOpen(false)} />}
-      {keyFlags.isFieldRekeyRun && <FieldRekeyDialog open={rekeyOpen} onClose={() => setRekeyOpen(false)} />}
-      {keyFlags.isRecoveryKeyManage && <RecoveryKeyDialog open={recoveryKeyOpen} onClose={() => setRecoveryKeyOpen(false)} />}
+      {canManageSecrets && keyFlags.isFieldRekeyRun && <FieldRekeyDialog open={rekeyOpen} onClose={() => setRekeyOpen(false)} />}
+      {canManageSecrets && keyFlags.isRecoveryKeyManage && <RecoveryKeyDialog open={recoveryKeyOpen} onClose={() => setRecoveryKeyOpen(false)} />}
     </div>
   );
 }

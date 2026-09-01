@@ -46,7 +46,17 @@ import { formatDate } from '@/lib/utils';
 const ACTION_KEY = 'isRecoveryKeyManage';
 const ENDPOINT = '/admin/field-rekey/recovery-key';
 
-type ActiveKey = { fingerprint: string; created_on: string } | null;
+/*
+ * GET /recovery-key always returns an OBJECT now — it used to return null when
+ * nothing was registered. So `active` is the field to branch on, never the
+ * truthiness of the response: a `!data` check reads "no key" as "still loading"
+ * and, worse, renders a Fingerprint panel full of nulls once it resolves.
+ */
+type ActiveKey = {
+  fingerprint: string | null;
+  created_on: string | null;
+  active: boolean;
+};
 
 /* DER → PEM. `String.fromCharCode(...)` is safe at these sizes (a 4096-bit
  * PKCS#8 blob is ~2.4 KB, well under the argument limit). */
@@ -202,13 +212,13 @@ export function RecoveryKeyDialog({ open, onClose }: { open: boolean; onClose: (
               {!active.loading && active.error && (
                 <div className="text-xs text-urgent-strong">{active.error}</div>
               )}
-              {!active.loading && !active.error && !active.data && (
+              {!active.loading && !active.error && !active.data?.active && (
                 <div className="text-xs text-muted-foreground">
                   No recovery key is on record yet. The environment bootstrap key is in use until one is
                   generated here.
                 </div>
               )}
-              {!active.loading && active.data && (
+              {!active.loading && active.data?.active && (
                 <div className="text-xs text-muted-foreground space-y-0.5">
                   <div>
                     Fingerprint <code className="break-all">{active.data.fingerprint}</code>
@@ -231,7 +241,7 @@ export function RecoveryKeyDialog({ open, onClose }: { open: boolean; onClose: (
                 </li>
                 <li>
                   If the old key <strong>leaked</strong> and you still hold it — run Re-Seal Recovery Key in
-                  Re-Key Encrypted Fields. That re-seals the stored rows to the new key and makes the leaked
+                  Secrets Manager. That re-seals the stored rows to the new key and makes the leaked
                   one worthless.
                 </li>
                 <li>

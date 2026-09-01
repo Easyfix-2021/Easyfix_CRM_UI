@@ -1,7 +1,13 @@
 'use client';
 
 /*
- * Re-Key Encrypted Fields — Admin Actions dialog (contract ADDENDUM 2).
+ * Secrets Manager — Admin Actions dialog (contract ADDENDUM 2).
+ *
+ * The FILE, the component and the action keys keep their -rekey names on
+ * purpose: renaming a route or a permission key to match a label churns the
+ * migration, the guard and every grep, and buys nothing a reader can see.
+ * 'Secrets Manager' is what the operator reads; 'field-rekey' is what the
+ * system is.
  *
  * WHAT IT DOES
  * Re-wraps every field-group DEK onto a NEW operational key, in bulk, without
@@ -33,7 +39,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { KeyRound, ScanSearch, ShieldAlert, Clock } from 'lucide-react';
+import { KeyRound, ScanSearch, ShieldAlert, Clock, Sparkles, Copy } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -46,6 +52,7 @@ import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { api } from '@/lib/api';
+import { useFetch } from '@/lib/hooks';
 
 /* The one action key the BE route requires. Named literally in the Access
  * Denied card below so an operator can quote it to whoever grants it. */
@@ -60,12 +67,17 @@ const GROUPS: { value: string; label: string }[] = [
   { value: 'bank', label: 'Bank Details' },
 ];
 
-type Mode = 'rotate' | 'recover' | 'reseal';
+type Mode = 'rotate' | 'recover' | 'reseal' | 'seal';
 
 /*
- * The three modes, in the order an operator should consider them. `rotate` is
+ * The four modes, in the order an operator should consider them. `rotate` is
  * first AND default: it is the routine path and the only one that needs no
  * recovery key.
+ *
+ * A mode the DATA cannot support is disabled with its reason rather than
+ * hidden — `recover` on rows that carry no seal is not a missing feature, it is
+ * a consequence of running without a recovery key, and an operator hunting for
+ * a button that silently is not there learns nothing.
  */
 const MODES: { value: Mode; label: string; blurb: string }[] = [
   {
@@ -83,6 +95,14 @@ const MODES: { value: Mode; label: string; blurb: string }[] = [
       + 'the recovery private key unseals each DEK instead. Audited as a recovery run.',
   },
   {
+    value: 'seal',
+    label: 'Add A Recovery Seal',
+    blurb:
+      'Rows written while no recovery key was configured carry no break-glass path. This gives them '
+      + 'one, using ONLY the operational key you already have — no pasted secret of any kind. '
+      + 'Running without a recovery key is not a one-way door, and this is the door.',
+  },
+  {
     value: 'reseal',
     label: 'Re-Seal Recovery Key',
     blurb:
@@ -97,9 +117,9 @@ type RunResult = { changed: number; skipped: number; failed: number };
 
 /* Which secret each mode actually consumes. Nothing renders a field a mode
  * does not use — see the header note on why absence beats disabled. */
-const NEEDS_NEW_KEY: Record<Mode, boolean> = { rotate: true, recover: true, reseal: false };
-const NEEDS_MASTER_KEY: Record<Mode, boolean> = { rotate: false, recover: true, reseal: false };
-const NEEDS_OLD_RECOVERY_KEY: Record<Mode, boolean> = { rotate: false, recover: false, reseal: true };
+const NEEDS_NEW_KEY: Record<Mode, boolean> = { rotate: true, recover: true, reseal: false, seal: false };
+const NEEDS_MASTER_KEY: Record<Mode, boolean> = { rotate: false, recover: true, reseal: false, seal: false };
+const NEEDS_OLD_RECOVERY_KEY: Record<Mode, boolean> = { rotate: false, recover: false, reseal: true, seal: false };
 
 function modeLabel(mode: Mode): string {
   return MODES.find((m) => m.value === mode)?.label ?? mode;
@@ -116,7 +136,62 @@ export function FieldRekeyDialog({ open, onClose }: { open: boolean; onClose: ()
 
   const [group, setGroup] = useState<string>(GROUPS[0].value);
   const [mode, setMode] = useState<Mode>('rotate');
+  /*
+   * Which modes the DATA can support, straight from the backend — it knows
+   * whether a recovery key is registered and whether the stored rows carry a
+   * seal, and neither is guessable from here. `modes` is absent while loading
+   * or if the call fails, and an absent answer must not silently enable a mode
+   * that will fail deep inside the run, so it reads as "only rotate".
+   */
+  const capability = useFetch<{
+    active: boolean;
+    seals?: { sealed: boolean; unsealed: boolean };
+    modes?: Record<Mode, boolean>;
+  }>(open ? '/admin/field-rekey/recovery-key' : null);
+  const modeAvailable = (m: Mode): boolean =>
+    m === 'rotate' ? true : capability.data?.modes?.[m] === true;
+  const modeBlockedWhy = (m: Mode): string => {
+    if (capability.loading) return 'Checking What This Data Supports…';
+    if (m === 'recover') return 'No stored row carries a recovery seal, so there is nothing a private key could unseal.';
+    if (m === 'reseal') return 'Needs rows that are already sealed, plus a newer recovery key on record to re-seal them to.';
+    if (m === 'seal') return 'Needs a recovery key registered first — generate one in Recovery Key.';
+    return 'Not available for the current data.';
+  };
+
   const [newKey, setNewKey] = useState('');
+  /*
+   * Set only when THIS dialog generated the key, so the plaintext block below
+   * appears for a key the operator has not yet stored anywhere — and never for
+   * one they pasted in, which they already hold.
+   */
+  const [generatedKey, setGeneratedKey] = useState('');
+
+  /*
+   * Generated in the BROWSER, and unlike the recovery private key this one is
+   * MEANT to reach the server — it ends up in EASYFIX_FIELD_ENC_KEY and the run
+   * re-wraps every data key with it. So there is no "must never touch a server"
+   * constraint to protect here; generating it in the page just removes a
+   * transcription step and a trip to a terminal.
+   *
+   * crypto.getRandomValues, not Math.random: this is a real AES-256 key and the
+   * difference between a CSPRNG and a PRNG is the whole security of it.
+   */
+  function generateNewKey() {
+    const bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    const b64 = btoa(String.fromCharCode(...bytes));
+    setNewKey(b64);
+    setGeneratedKey(b64);
+  }
+
+  async function copyGeneratedKey() {
+    try {
+      await navigator.clipboard.writeText(generatedKey);
+      showToast({ variant: 'success', message: 'Key Copied' });
+    } catch {
+      showToast({ variant: 'error', message: 'Could Not Copy — Select The Text And Copy Manually' });
+    }
+  }
   const [masterKey, setMasterKey] = useState('');
   const [oldRecoveryKey, setOldRecoveryKey] = useState('');
   const [busy, setBusy] = useState<'dry' | 'run' | null>(null);
@@ -138,7 +213,7 @@ export function FieldRekeyDialog({ open, onClose }: { open: boolean; onClose: ()
   /* Every secret out of component state, in one place. Called on Run, on close
    * and on unmount. */
   const wipeKeys = useCallback(() => {
-    setNewKey('');
+    setNewKey(''); setGeneratedKey('');
     setMasterKey('');
     setOldRecoveryKey('');
   }, []);
@@ -171,7 +246,7 @@ export function FieldRekeyDialog({ open, onClose }: { open: boolean; onClose: ()
   const guardedOpenChange = useFormDirtyGuard(close, {
     isDirty: () => !!(newKey || masterKey || oldRecoveryKey || dryRun || runResult),
     when: () => busy === null,
-    title: 'Discard This Re-Key Form?',
+    title: 'Discard This Secrets Manager Form?',
     description: 'Any key you have pasted will be cleared.',
   });
 
@@ -257,7 +332,7 @@ export function FieldRekeyDialog({ open, onClose }: { open: boolean; onClose: ()
     <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent className="max-w-xl">
         <DialogHeader>
-          <DialogTitle>Re-Key Encrypted Fields</DialogTitle>
+          <DialogTitle>Secrets Manager</DialogTitle>
         </DialogHeader>
         {!can[ACTION_KEY] ? (
           <div className="p-4">
@@ -290,8 +365,12 @@ export function FieldRekeyDialog({ open, onClose }: { open: boolean; onClose: ()
                 <label
                   key={m.value}
                   className={
-                    'flex gap-3 rounded-md border p-3 cursor-pointer transition-colors '
-                    + (mode === m.value ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50')
+                    'flex gap-3 rounded-md border p-3 transition-colors '
+                    + (!modeAvailable(m.value)
+                      ? 'cursor-not-allowed border-border opacity-60'
+                      : mode === m.value
+                        ? 'cursor-pointer border-primary bg-primary/5'
+                        : 'cursor-pointer border-border hover:border-primary/50')
                   }
                 >
                   <input
@@ -299,6 +378,7 @@ export function FieldRekeyDialog({ open, onClose }: { open: boolean; onClose: ()
                     name="rekey-mode"
                     className="mt-1 h-4 w-4 shrink-0 accent-primary"
                     checked={mode === m.value}
+                    disabled={!modeAvailable(m.value)}
                     onChange={() => {
                       setMode(m.value);
                       setDryRun(null);
@@ -315,8 +395,14 @@ export function FieldRekeyDialog({ open, onClose }: { open: boolean; onClose: ()
                       {m.value === 'rotate' && (
                         <span className="ml-2 text-xs text-muted-foreground">(Default)</span>
                       )}
+                      {!modeAvailable(m.value) && (
+                        <span className="ml-2 text-xs text-muted-foreground">(Unavailable)</span>
+                      )}
                     </span>
                     <span className="block text-xs text-muted-foreground">{m.blurb}</span>
+                    {!modeAvailable(m.value) && (
+                      <span className="block text-xs text-warning-strong">{modeBlockedWhy(m.value)}</span>
+                    )}
                   </span>
                 </label>
               ))}
@@ -325,7 +411,12 @@ export function FieldRekeyDialog({ open, onClose }: { open: boolean; onClose: ()
             {/* KEY INPUTS — only what the selected mode consumes is rendered. */}
             {NEEDS_NEW_KEY[mode] && (
               <div className="space-y-1">
-                <Label htmlFor="rekey-new-key">New Operational Key *</Label>
+                <div className="flex items-center justify-between gap-2">
+                  <Label htmlFor="rekey-new-key">New Operational Key *</Label>
+                  <Button type="button" variant="outline" size="sm" onClick={generateNewKey}>
+                    <Sparkles className="mr-1.5 size-3.5" /> Generate
+                  </Button>
+                </div>
                 <Input
                   id="rekey-new-key"
                   type="password"
@@ -335,9 +426,38 @@ export function FieldRekeyDialog({ open, onClose }: { open: boolean; onClose: ()
                   onChange={(e) => setNewKey(e.target.value)}
                   placeholder="32 Raw Bytes, Base64-Encoded"
                 />
-                <p className="text-xs text-muted-foreground">
-                  This is the value that goes into <code>EASYFIX_FIELD_ENC_KEY</code> after the run.
-                </p>
+                {generatedKey ? (
+                  <div className="space-y-2 rounded-md border border-warning/40 bg-warning-tint p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-xs font-semibold text-warning-strong">
+                        Copy This Now — Put It Into <code>backend.env</code> Before You Run
+                      </p>
+                      <Button type="button" variant="outline" size="sm" onClick={copyGeneratedKey}>
+                        <Copy className="mr-1.5 size-3.5" /> Copy
+                      </Button>
+                    </div>
+                    <code className="block break-all rounded bg-card p-2 text-xs">{generatedKey}</code>
+                    {/*
+                      The ORDER is the part people get wrong, so it is stated at the
+                      moment the key exists rather than in a runbook nobody opens.
+                      Editing backend.env does NOT affect a running process — dotenv
+                      populates process.env once at boot — so the app keeps the OLD
+                      key in memory and can still unwrap while the run executes. Edit
+                      first, run second, restart third, and the unreadable window is
+                      one restart instead of an SSM session.
+                    */}
+                    <ol className="list-decimal space-y-0.5 pl-4 text-xs text-muted-foreground">
+                      <li>Put this into <code>EASYFIX_FIELD_ENC_KEY</code> on every box — do not restart yet.</li>
+                      <li>Run the re-key below. The app is still holding the old key, which is what unwraps the rows.</li>
+                      <li>Restart every box. Bank details are unreadable only between the run finishing and the restart.</li>
+                    </ol>
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    This is the value that goes into <code>EASYFIX_FIELD_ENC_KEY</code> after the run.
+                    Generate one, or paste a key you made yourself.
+                  </p>
+                )}
               </div>
             )}
 
