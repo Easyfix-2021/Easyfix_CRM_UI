@@ -116,7 +116,23 @@
     @apply w-full text-sm;
   }
   .data-table th {
-    @apply bg-muted text-muted-foreground text-left font-semibold px-3 py-2 border-b border-border;
+    /*
+     * `dark:text-foreground` is not decoration — it repairs a pairing that the
+     * dark surface fix broke. `muted-foreground` (ink300) is designed to sit on
+     * a CARD; on the header's own `bg-muted` band it measured 4.33:1 while that
+     * band was invisible, and 2.33:1 once the band became visible — below the
+     * text floor, on every table in the app.
+     *
+     * The band had to move (it was rendering at 1.00:1 against the card, along
+     * with every row separator), so the label has to move with it. Light is
+     * untouched: there `muted-foreground` on ink100 measures 4.90:1 and is
+     * correct as it stands.
+     *
+     * The general lesson, worth keeping: moving a SURFACE token silently
+     * re-pairs every FOREGROUND token bound to it, and nothing in the toolchain
+     * checks that pairing.
+     */
+    @apply bg-muted text-muted-foreground dark:text-foreground text-left font-semibold px-3 py-2 border-b border-border;
   }
   .data-table td {
     @apply px-3 py-2 border-b border-border;

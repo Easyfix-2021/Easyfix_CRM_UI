@@ -130,10 +130,39 @@ const dark: TokenMap = {
   'primary-foreground': p.white,
   'primary-pressed': p.red600,
 
-  secondary: p.ink700,
+  /*
+   * ink-500, NOT ink-700 — the four "one step off the card" tokens.
+   *
+   * secondary / muted / border / input are all ink-100 in light: one step off
+   * the card AND one step off the page background, which is what makes a muted
+   * plate read as a plate and a 1px rule read as a rule. Dark originally put
+   * all four on ink-700, the card's own value, so against a card they measured
+   * 1.00:1 — every muted plate, every card header band and every table row
+   * separator in the CRM simply did not render in dark mode.
+   *
+   * ink-500 is the mirror of that light relationship: light muted is DARKER
+   * than both surfaces, dark muted is LIGHTER than both. Measured off rendered
+   * pixels: plate/card 1.86:1, plate/page 2.85:1, row rule/card 1.86:1.
+   *
+   * NOT ink-900, the other candidate: ink-900 is the page background, so a
+   * `bg-muted` element sitting on the page measures 1.00:1 — and the active tab
+   * indicator, which is `bg-background` on a `bg-muted` list, disappears in all
+   * 18 tab strips, as does the `hover:bg-muted` on 269 outline/ghost buttons.
+   *
+   * KNOWN RESIDUAL: `text-muted-foreground` (ink-300) sitting ON a full-strength
+   * ink-500 band measures 2.33:1 — `.data-table th` and ~52 other class strings.
+   * No value on the six-step ink ramp fixes this: a band dark enough for ink-300
+   * text is a band invisible on the card or on the page. Closing it needs either
+   * a new palette step between ink-700 and ink-500 (rule 10 — an owner decision,
+   * not one to take here) or a dark-only text colour on those bands. Left at
+   * ink-500 because an illegible label is a smaller defect than 400+ elements
+   * that render at 1.00:1, and muted-foreground cannot move: at ink-100 it
+   * measures 1.15:1 against `foreground` and stops reading as muted at all.
+   */
+  secondary: p.ink500,
   'secondary-foreground': p.ink50,
 
-  muted: p.ink700,
+  muted: p.ink500,
   'muted-foreground': p.ink300,
 
   accent: p.red700,
@@ -142,8 +171,8 @@ const dark: TokenMap = {
   destructive: p.red600,
   'destructive-foreground': p.white,
 
-  border: p.ink700,
-  input: p.ink700,
+  border: p.ink500,
+  input: p.ink500,
   ring: p.red500,
 
   /*
@@ -181,7 +210,24 @@ const dark: TokenMap = {
   'warning-tint': p.warningText,
   'warning-strong': p.warningTint,
 
-  urgent: p.red600,
+  /*
+   * red-500, not red-600 — `urgent` is read as bare ink far more than it is
+   * used as a fill (155 `text-urgent` + 68 `border-urgent` against 38
+   * `bg-urgent`), and red-600 on the dark card measures 1.54:1: the reject
+   * action is the one control an operator cannot see, while the approve tick
+   * beside it manages 3.27:1. red-500 is the lightest red the token can take
+   * WITHOUT breaking the other role — measured, 1.54 -> 1.96:1 on a card and
+   * 2.37 -> 3.00:1 on the page.
+   *
+   * It is a partial fix and deliberately so. red-100 would take the ink to
+   * 8.85:1, but `bg-urgent text-white` (about 20 destructive buttons) then
+   * measures 1.28:1 — rendered and confirmed, not reasoned. One token cannot
+   * be both a fill that carries white text and ink on a dark surface; the real
+   * fix is to move those fills onto `destructive` (already red-600 + white in
+   * both modes) and then take `urgent` to red-100. That is a component
+   * migration, not a token remap.
+   */
+  urgent: p.red500,
   'urgent-tint': p.red700,
   'urgent-strong': p.red100,
 
