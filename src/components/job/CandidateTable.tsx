@@ -239,7 +239,18 @@ export function CandidateTable({
             const rowCls = isCurrent
               ? 'group bg-warning-tint hover:bg-warning/15'
               : offerBlocked
-                ? 'group bg-urgent-tint/70 hover:bg-destructive/15/70'
+                /*
+                 * `hover:bg-destructive/15` — ONE alpha suffix. This read
+                 * `/15/70` for its whole life, which Tailwind never generates,
+                 * so the row body had no hover at all while the two sticky
+                 * cells below (selectBg, nameTd) hovered correctly. A blocked
+                 * row half-lit: the frozen Select and Name columns washed and
+                 * the rest of the row did not.
+                 *
+                 * Matches the isCurrent row directly above, which is the same
+                 * shape — a tint at rest, the meaning colour at /15 on hover.
+                 */
+                ? 'group bg-urgent-tint/70 hover:bg-destructive/15'
               : 'group hover:bg-muted/40 ' + (isSelected ? 'bg-primary/5' : '');
             const selectBg = isCurrent
               ? 'bg-warning-tint group-hover:bg-warning/15'
