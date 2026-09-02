@@ -51,12 +51,38 @@ const INFLIGHT = new Map<string, Promise<unknown>>();
 // dropdown mid-alphabet at ~"Balwada") + payload trimmed to id/name/state_id.
 // Without this bump, a warm tab keeps serving the stale 1000-row list for 30min.
 const SS_PREFIX = 'efx-lookup:v2:';
+
+/*
+ * THE CACHE IS NAMESPACED BY USER, and that is a security property, not tidiness.
+ *
+ * Several of these lookups are RBAC-SCOPED server-side — `clients` most of all:
+ * /shared/lookup/clients filters `client_id IN (scope.clients.ids)` for a caller
+ * with specific clients assigned. The cached payload is therefore that ONE
+ * user's list, but the key was just `efx-lookup:v2:clients`.
+ *
+ * sessionStorage survives a logout — it is cleared when the TAB closes, not when
+ * the session ends, and nothing called clearLookupCache() on sign-out. So an
+ * Admin signing in first warmed `clients` with EVERY client, and a Project
+ * Manager signing in afterwards in the same tab read that entry and saw all of
+ * them, for up to the 30-minute TTL, while the job rows underneath stayed
+ * correctly scoped. Reported on a real account: 10 clients mapped, every client
+ * in the dropdown.
+ *
+ * Namespacing by user id makes it structurally impossible to read another
+ * identity's entry, which is stronger than remembering to clear on the way out —
+ * a missed clear is silent, a namespace mismatch simply misses the cache and
+ * refetches. setLookupIdentity() below is called from the auth provider whenever
+ * the session resolves, and it also drops the previous identity's entries so a
+ * shared machine leaves nothing behind.
+ */
+let IDENTITY = '';
+function ns(key: string) { return IDENTITY ? `${IDENTITY}:${key}` : key; }
 const SS_TTL_MS = 30 * 60 * 1000;
 
 function readSession<T>(key: string): T | null {
   if (typeof window === 'undefined') return null;
   try {
-    const raw = window.sessionStorage.getItem(SS_PREFIX + key);
+    const raw = window.sessionStorage.getItem(SS_PREFIX + ns(key));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as { t: number; d: T };
     if (Date.now() - parsed.t > SS_TTL_MS) return null;
@@ -65,22 +91,26 @@ function readSession<T>(key: string): T | null {
 }
 function writeSession<T>(key: string, data: T) {
   if (typeof window === 'undefined') return;
-  try { window.sessionStorage.setItem(SS_PREFIX + key, JSON.stringify({ t: Date.now(), d: data })); }
+  try { window.sessionStorage.setItem(SS_PREFIX + ns(key), JSON.stringify({ t: Date.now(), d: data })); }
   catch { /* quota — ignore */ }
 }
 
 async function fetchOnce<T>(key: string, loader: () => Promise<T>): Promise<T> {
-  if (MEM_CACHE.has(key)) return MEM_CACHE.get(key) as T;
+  // MEM_CACHE is namespaced too: it outlives a client-side sign-out, which does
+  // not reload the page, so an un-namespaced in-memory hit would leak exactly
+  // the same way sessionStorage did.
+  const mk = ns(key);
+  if (MEM_CACHE.has(mk)) return MEM_CACHE.get(mk) as T;
   const fromSession = readSession<T>(key);
-  if (fromSession != null) { MEM_CACHE.set(key, fromSession); return fromSession; }
-  if (INFLIGHT.has(key)) return INFLIGHT.get(key) as Promise<T>;
+  if (fromSession != null) { MEM_CACHE.set(mk, fromSession); return fromSession; }
+  if (INFLIGHT.has(mk)) return INFLIGHT.get(mk) as Promise<T>;
   const promise = loader().then((data) => {
-    MEM_CACHE.set(key, data);
+    MEM_CACHE.set(mk, data);
     writeSession(key, data);
-    INFLIGHT.delete(key);
+    INFLIGHT.delete(mk);
     return data;
-  }).catch((err) => { INFLIGHT.delete(key); throw err; });
-  INFLIGHT.set(key, promise);
+  }).catch((err) => { INFLIGHT.delete(mk); throw err; });
+  INFLIGHT.set(mk, promise);
   return promise;
 }
 
@@ -187,10 +217,24 @@ export function clearLookupCache() {
  */
 export function invalidateLookup(...keys: string[]) {
   for (const key of keys) {
-    MEM_CACHE.delete(key);
-    INFLIGHT.delete(key);
+    MEM_CACHE.delete(ns(key));
+    INFLIGHT.delete(ns(key));
     if (typeof window !== 'undefined') {
-      try { window.sessionStorage.removeItem(SS_PREFIX + key); } catch { /* ignore */ }
+      try { window.sessionStorage.removeItem(SS_PREFIX + ns(key)); } catch { /* ignore */ }
     }
   }
+}
+
+/**
+ * Bind the lookup caches to a user. Called by the auth provider every time the
+ * session resolves; a CHANGE of identity drops everything the previous one
+ * cached. See the namespacing note on SS_PREFIX — the scoped lookups
+ * (`clients` above all) are per-user payloads under what used to be a shared
+ * key. Passing null/undefined (signed out) namespaces to '' and still clears.
+ */
+export function setLookupIdentity(userId: string | number | null | undefined) {
+  const next = String(userId ?? '');
+  if (next === IDENTITY) return;
+  clearLookupCache();
+  IDENTITY = next;
 }

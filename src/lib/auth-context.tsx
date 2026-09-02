@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api, ApiError } from './api';
+import { setLookupIdentity } from './use-lookup';
 
 /*
  * Single source of truth for the logged-in user + role. Before this, Sidebar
@@ -204,17 +205,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // role/permissions — eliminates the "loading flicker" on every internal
   // navigation that remounts the layout.
   const cached = typeof window !== 'undefined' ? readMeCache() : null;
+  /*
+   * Bind the lookup caches to this identity BEFORE anything can read them.
+   * use-lookup namespaces its sessionStorage and in-memory entries by user
+   * because several lookups are RBAC-SCOPED server-side — /shared/lookup/clients
+   * returns only the caller's assigned clients. sessionStorage outlives a
+   * sign-out (it dies with the TAB, not the session) and nothing cleared it, so
+   * an Admin's warm `clients` entry was served to the next user who signed in on
+   * the same tab: reported on a real account with 10 clients mapped and every
+   * client in the dropdown.
+   *
+   * Called during render rather than in a useEffect on purpose — an effect runs
+   * AFTER the first render, and a lookup fired during that render would already
+   * have read the previous identity's cache. setLookupIdentity is a no-op when
+   * the id has not changed, so this is safe to run on every render.
+   */
+  setLookupIdentity(cached?.user?.user_id ?? null);
   const [me, setMe] = useState<Me | null>(cached);
   const [loading, setLoading] = useState(!cached);
 
   async function refresh() {
     try {
       const fresh = await fetchMeOnce();
+      // The identity may have CHANGED — sign out, sign in as someone else, same
+      // tab. That drops the previous user's cached lookups; unchanged is a no-op.
+      setLookupIdentity(fresh?.user?.user_id ?? null);
       setMe(fresh);
       writeMeCache(fresh);
     } catch (e) {
       if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
         clearMeCache();
+        setLookupIdentity(null); // signed out — drop this user's cached lookups
         router.replace('/login');
       }
       // Transient failure (network blip, 5xx, backend restart): keep the
