@@ -88,6 +88,7 @@ export function SortHeader<K>({
   onSort,
   children,
   className,
+  style,
 }: {
   col: K;
   align?: 'left' | 'center' | 'right';
@@ -96,6 +97,15 @@ export function SortHeader<K>({
   onSort: (col: K) => void;
   children: React.ReactNode;
   className?: string;
+  /*
+   * Escape hatch for values that cannot be a utility class because they are
+   * COMPUTED. The case it exists for: a frozen column's `left` offset has to
+   * equal the width of the column before it, so the two numbers must be
+   * derived from one constant in the calling page — a Tailwind class would
+   * hardcode a copy free to drift the moment that width changes.
+   * Not for styling that a class could express.
+   */
+  style?: React.CSSProperties;
 }) {
   const isActive = sortBy === col;
   const alignCls = align === 'left' ? '!text-left'
@@ -111,6 +121,7 @@ export function SortHeader<K>({
         'cursor-pointer select-none hover:bg-muted/40 transition-colors whitespace-nowrap overflow-hidden',
         className,
       )}
+      style={style}
       onClick={() => onSort(col)}
       role="button"
       aria-sort={isActive ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}

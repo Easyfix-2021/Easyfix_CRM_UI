@@ -79,6 +79,7 @@ export type RevealedBank = {
 
 /* Only the keys actually awaiting approval are present. */
 export type PendingChanges = {
+  user_name?: string;
   mobile_no?: string;
   date_of_birth?: string;
   bank?: BankDetails;
@@ -93,6 +94,9 @@ export type PendingRequest = {
 
 export type ProfileDetails = {
   user_code: string | null;
+  /* Present so the edit dialog can seed Full Name. The page header reads the
+     name from the session, not from here. */
+  user_name: string | null;
   mobile_no: string | null;
   alternate_no: string | null;
   personal_email: string | null;
@@ -128,9 +132,10 @@ export type ProfileDetails = {
   photo_url: string | null;
 };
 
-export type RequestableField = 'mobile_no' | 'date_of_birth' | 'bank';
+export type RequestableField = 'user_name' | 'mobile_no' | 'date_of_birth' | 'bank';
 
 export const FIELD_LABEL: Record<RequestableField, string> = {
+  user_name: 'Full Name',
   mobile_no: 'Mobile Number',
   date_of_birth: 'Date Of Birth',
   bank: 'Bank Details',
@@ -239,6 +244,11 @@ export function pendingItems(changes?: PendingChanges | null):
   Array<{ key: RequestableField; label: string; text: string }> {
   if (!changes) return [];
   const out: Array<{ key: RequestableField; label: string; text: string }> = [];
+  /* First, because it is first on the form. Omitting it here would make a
+     pending name change the one request the user cannot see they submitted. */
+  if (changes.user_name !== undefined) {
+    out.push({ key: 'user_name', label: FIELD_LABEL.user_name, text: String(changes.user_name) });
+  }
   if (changes.mobile_no !== undefined) {
     out.push({ key: 'mobile_no', label: FIELD_LABEL.mobile_no, text: String(changes.mobile_no) });
   }
@@ -761,6 +771,7 @@ export function EditProfileDialog({ details, onClose, onSubmitted }: {
   onSubmitted: () => void | Promise<void>;
 }) {
   const pendingChanges = details.pending?.changes;
+  const pendingName = pendingChanges?.user_name;
   const pendingMobile = pendingChanges?.mobile_no;
   const pendingDob = pendingChanges?.date_of_birth;
   const pendingBank = pendingChanges?.bank;
@@ -768,10 +779,17 @@ export function EditProfileDialog({ details, onClose, onSubmitted }: {
   /* Baselines: what is already pending wins over what is on record, because a
    * pending value is what the user last asked for. */
   const baseAlt = String(details.alternate_no ?? '');
+  /* Personal email is a DIRECT write, so it seeds from the record — there is no
+     pending value for it to lose to. Full Name is the opposite: it goes through
+     approval, so a pending request wins over the record. */
+  const basePersonalEmail = String(details.personal_email ?? '');
+  const baseName = String(pendingName ?? details.user_name ?? '');
   const baseMobile = String(pendingMobile ?? details.mobile_no ?? '');
   const baseDob = String(pendingDob ?? details.date_of_birth ?? '').slice(0, 10);
 
   const [alt, setAlt] = React.useState(baseAlt);
+  const [personalEmail, setPersonalEmail] = React.useState(basePersonalEmail);
+  const [fullName, setFullName] = React.useState(baseName);
   const [phone, setPhone] = React.useState(baseMobile);
   const [dob, setDob] = React.useState(baseDob);
   /*
@@ -811,11 +829,13 @@ export function EditProfileDialog({ details, onClose, onSubmitted }: {
 
   /* ── What actually changed ───────────────────────────────────────────── */
   const altDirty = alt !== baseAlt;
+  const personalEmailDirty = personalEmail.trim() !== basePersonalEmail.trim();
+  const nameDirty = fullName.trim() !== baseName.trim();
   const phoneDirty = phone !== baseMobile;
   const dobDirty = dobEditable && dob !== baseDob;
   const bankDirty = (Object.keys(bank) as Array<keyof BankForm>)
     .some((k) => bank[k] !== bankSeed.current[k]);
-  const dirty = altDirty || phoneDirty || dobDirty || bankDirty;
+  const dirty = altDirty || personalEmailDirty || nameDirty || phoneDirty || dobDirty || bankDirty;
 
   /* ── Per-field validation ────────────────────────────────────────────── */
   const altError = alt !== '' && !PHONE_RE.test(alt) ? PHONE_ERROR : null;
@@ -831,7 +851,19 @@ export function EditProfileDialog({ details, onClose, onSubmitted }: {
     ? 'All four bank fields are needed: HR approves them as one set.'
     : null;
 
+  /* Shape only — the server owns the real rule, including the ban on using a
+     company address as a personal one. */
+  const personalEmailError = personalEmailDirty && personalEmail.trim() !== ''
+    && !/^\S+@\S+\.\S+$/.test(personalEmail.trim())
+    ? 'That does not look like a valid email address.' : null;
+  const nameError = nameDirty && fullName.trim() === ''
+    ? 'Full Name cannot be empty.'
+    : nameDirty && /[0-9]/.test(fullName)
+      ? 'A name cannot contain digits.' : null;
+
   const canSubmit = dirty && !submitting
+    && !personalEmailError
+    && !nameError
     && !(altDirty && altError)
     && !(phoneDirty && !PHONE_RE.test(phone))
     && !(dobDirty && (dob === '' || dobError(dob) !== null))
@@ -848,8 +880,15 @@ export function EditProfileDialog({ details, onClose, onSubmitted }: {
         await api.patch('/profile/alternate-no', { alternate_no: alt });
         done.push('Alternate number saved');
       }
+      /* Also a direct write — no approval, same reasoning as the alternate
+         number: nothing downstream keys off a personal address. */
+      if (personalEmailDirty) {
+        await api.patch('/profile/personal-email', { personal_email: personalEmail.trim() });
+        done.push('Personal email saved');
+      }
 
       const changes: PendingChanges = {};
+      if (nameDirty) changes.user_name = fullName.trim().replace(/\s+/g, ' ');
       if (phoneDirty) changes.mobile_no = phone;
       if (dobDirty) changes.date_of_birth = dob;
       if (bankDirty) {
@@ -916,12 +955,45 @@ export function EditProfileDialog({ details, onClose, onSubmitted }: {
               {altError && <p className="text-xs text-destructive">{altError}</p>}
               <p className="text-xs text-muted-foreground">Leave it empty to remove the number.</p>
             </div>
+
+            <div className="space-y-1">
+              <Label htmlFor="pf-personal-email">Personal Email</Label>
+              <Input
+                id="pf-personal-email"
+                type="email"
+                value={personalEmail}
+                onChange={(e) => setPersonalEmail(e.target.value.replace(/\s+/g, ''))}
+                autoComplete="off"
+                placeholder="e.g. priya.sharma@gmail.com"
+              />
+              {personalEmailError && <p className="text-xs text-destructive">{personalEmailError}</p>}
+              <p className="text-xs text-muted-foreground">
+                Where we can reach you if your work inbox is unavailable. Use a
+                personal address, not a company one.
+              </p>
+            </div>
           </DialogGroup>
 
           <DialogGroup
             title="Needs HR Approval"
             note="Nothing here reaches your record until HR approves it, and they approve or reject the whole request together. Adding one of these for the first time is a request too — only a date of birth has a free first set."
           >
+            <div className="space-y-1">
+              <Label htmlFor="pf-full-name">Full Name</Label>
+              <Input
+                id="pf-full-name"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                autoComplete="off"
+                placeholder="Your name as HR should record it"
+              />
+              {nameError && <p className="text-xs text-destructive">{nameError}</p>}
+              <p className="text-xs text-muted-foreground">
+                A correction to your recorded name — a spelling fix, or a name
+                change after marriage. HR approves it before it takes effect.
+              </p>
+            </div>
+
             <div className="space-y-1">
               <Label htmlFor="pf-mobile">{details.mobile_no ? 'Mobile Number' : 'Add Mobile Number'}</Label>
               <Input

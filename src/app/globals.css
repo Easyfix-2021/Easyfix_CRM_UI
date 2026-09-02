@@ -222,6 +222,24 @@
     box-shadow: -3px 0 6px -2px hsl(var(--ink-900) / 0.14);
   }
 
+  /* The right edge of a MULTI-column frozen group.
+
+     `.stick-left` bundles three things — the offset (left: 0), a left border
+     and the edge shadow — which is exactly right when ONE column is frozen.
+     Manage Users freezes TWO (the avatar, then Employee Code). Applying
+     `.stick-left` to both would put a left border BETWEEN them, drawing a
+     stray vertical rule in a table that has no other vertical rules, and would
+     cast the "content slides under here" shadow from the wrong column.
+
+     So the offset is set inline (it has to equal the previous column's width,
+     and keeping the two numbers in one file is what stops them drifting) and
+     the edge treatment is this class, applied only to the LAST frozen column
+     on that side. */
+  .data-table .stick-edge-right.stick-col,
+  .data-table .stick-edge-right.stick-col-head {
+    box-shadow: 3px 0 6px -2px hsl(var(--ink-900) / 0.14);
+  }
+
   /* Native datetime-local + date inputs: make the calendar-picker icon obey
      the input's theming. By default Chrome/Safari render it at the far right
      with no padding breathing room, so it jams against the border when the

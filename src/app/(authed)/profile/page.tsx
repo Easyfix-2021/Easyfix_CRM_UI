@@ -127,8 +127,13 @@ function Section({
  * or an approval request, so an unqualified toggle here would read as a change
  * that goes somewhere. It does not.
  *
- * Placed BELOW the "maintained by HR" footnote deliberately: that note says the
- * sections above it cannot be changed here, which is exactly untrue of this one.
+ * It used to sit below a footnote reading "…maintained by HR and cannot be
+ * changed here", placed there deliberately because that sentence was untrue of
+ * this section. The footnote is gone (2026-09-02), so the placement no longer
+ * has anything to work around — but the reason it mattered is worth keeping:
+ * a blanket "you cannot change anything here" note and a section that changes
+ * something contradict each other, and whichever the reader believes, one of
+ * them has lied to them.
  */
 function AppearanceSection() {
   const { theme, setTheme } = useTheme();
@@ -587,32 +592,23 @@ export default function MyProfilePage() {
               mono
             />
 
-            {/* Date Of Birth — three states, each named on the row. */}
+            {/*
+              * Date Of Birth — just the date.
+              *
+              * The "Locked" chip and the sentence explaining the lock are gone
+              * on purpose. Both described a RESTRICTION rather than the value,
+              * and a date of birth is not a thing anyone expects to edit twice
+              * — so the explanation was answering a question nobody was asking,
+              * on the row where the answer is least interesting. The lock still
+              * exists server-side; it simply no longer narrates itself.
+              */}
             <ProfileRow
               label="Date Of Birth"
-              value={
-                details?.date_of_birth
-                  ? (
-                    <span className="inline-flex items-center gap-2 flex-wrap">
-                      {fmtDate(details.date_of_birth)}
-                      {details.dob_locked && <StatusChip tone="neutral" size="sm">Locked</StatusChip>}
-                    </span>
-                  )
-                  : undefined
-              }
+              value={details?.date_of_birth ? fmtDate(details.date_of_birth) : undefined}
               /* Same reason Alternate Number passes it: the row's own date
                  input already holds the value, so an em dash above it reads as
                  a second, empty field rather than as "nothing on record". */
               hideValue={dobFirstSet}
-              hint={
-                /* The "not set yet" state says nothing the row does not: the
-                   date input and its Set button are sitting right there. Only
-                   the LOCKED state still explains something the screen cannot —
-                   why the field the operator can see is not editable. */
-                dobPending || (!details?.date_of_birth && !details?.dob_locked)
-                  ? undefined
-                  : 'Set and locked. A correction needs HR approval before it takes effect.'
-              }
             >
               {dobPending && (
                 <PendingFieldNote
@@ -836,11 +832,6 @@ export default function MyProfilePage() {
       {/* ═══ Appearance — per-device, and the only thing here you can change ═ */}
       <AppearanceSection />
       </div>
-
-      <p className="text-xs text-muted-foreground px-1">
-        Your name, employee code, role, access and reporting line are maintained by HR and cannot
-        be changed here. To correct any of them, contact HR.
-      </p>
 
       {editing && details && (
         <EditProfileDialog

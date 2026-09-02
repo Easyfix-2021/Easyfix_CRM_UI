@@ -262,6 +262,46 @@ const EMAIL_RE = /^\S+@\S+\.\S+$/;
 const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 
 /*
+ * ── MANAGE USERS COLUMN WIDTHS ──────────────────────────────────────
+ * PIXELS, not percentages, and the table SCROLLS. Both are deliberate.
+ *
+ * Measured in headless Chrome against the compiled stylesheet (both chunks —
+ * the utility chunk and the :root token chunk; with only the first, every
+ * hsl(var(--x)) resolves to nothing and you measure fiction), in the real
+ * authed shell: 240px sidebar + main's px-4 + the Card border. That leaves the
+ * table 906px at a 1180 viewport, 1006 at 1280, 1166 at 1440, 1646 at 1920.
+ *
+ * The header labels alone need, including 24px of cell padding and the 16px a
+ * SortHeader's active arrow adds:
+ *
+ *     Photo 59 · Employee Code 133.7 · User ID 86.8 · Name 75 · Email 75.8
+ *     Personal Email 115.4 · Mobile 82 · Role 67.2 · Regions 71.5
+ *     Job Stages 87.4 · Status 77.4 · Actions 69.1
+ *
+ * and the widest realistic CELL values need more still (a 27-character personal
+ * email is 193.6). Summed, the honest minimum is ~1268px of header and ~1594
+ * once the content is legible — against 906 available at 1180. IT DOES NOT FIT,
+ * and no redistribution of percentages makes it fit; the previous plan gave
+ * Employee Code 7% ≈ 63px for a label needing 133.7, which is why it rendered
+ * as "Employe".
+ *
+ * So the table is sized in pixels, given a min-width, and allowed to scroll
+ * horizontally — the same shape the px-width tables elsewhere in the CRM use,
+ * and the reason those are the ones with no clipping. Photo, Employee Code and
+ * Actions stay FROZEN so the row is always identifiable and always actionable
+ * however far it is scrolled.
+ *
+ * PHOTO_COL_W is exported into the sticky offset of the column that follows it.
+ * Two numbers that must agree, defined once.
+ */
+const PHOTO_COL_W = 72;
+const EMP_CODE_COL_W = 140;
+/* Sum of every width below. The table can shrink no further than this, which is
+   what turns "clip the header" into "scroll the table". */
+const USERS_TABLE_MIN_W =
+  PHOTO_COL_W + EMP_CODE_COL_W + 92 + 180 + 210 + 210 + 120 + 140 + 110 + 112 + 92 + 128;
+
+/*
  * Must stay a subset of user.service.js's SORTABLE_COLUMNS keys. The BACKEND
  * pair cannot drift — routes/admin/users.js derives its Joi whitelist from that
  * object — but this list is hand-kept, and a key here that the server does not
@@ -325,6 +365,36 @@ export default function ManageUsersPage() {
    */
   const [sortBy,  setSortBy]  = useState<SortKey | null>('user_name');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
+
+  /*
+   * EVERY filter change goes through here.
+   *
+   * The bug it fixes: an operator on page 3 typed a search term, the page index
+   * stayed at 3, and a search matching one user rendered "No users match the
+   * current filters" over a range that read "Showing 21–1 of 1". The result was
+   * there; it was on page 1, and nothing on screen said so. They had to guess.
+   *
+   * Reset HERE, in the handler, rather than in a useEffect keyed on the filter
+   * values. An effect fires AFTER the render that already changed the filter, so
+   * the list would fetch once with the STALE PAGE — rendering exactly the empty
+   * state above — then reset and fetch again. The user sees that flash. Doing
+   * both in the same tick means the out-of-range combination is never requested.
+   *
+   * For role, city and include-inactive that also means exactly one fetch. For
+   * SEARCH it does not, and it is worth being precise: the fetch effect keys on
+   * `debouncedSearch`, so the first keystroke after being on page >1 changes
+   * `page` immediately while the search term is still 300ms behind — one extra
+   * request for page 1 of the PREVIOUS filter. That is a valid, correct result
+   * set being fetched slightly early, not the broken state this fixes, and
+   * later keystrokes cost nothing because page is already 0. Keying the reset
+   * to the debounced value instead would remove that request and bring the
+   * stale-page fetch back, which is the trade in the wrong direction.
+   *
+   * onSort already did this; the four filters below simply never did.
+   */
+  function resetToFirstPage() {
+    setPage(0);
+  }
 
   function onSort(col: SortKey) {
     const next = cycleSort<SortKey>(col, { sortBy, sortDir });
@@ -597,7 +667,8 @@ export default function ManageUsersPage() {
             <UserCog className="size-6" /> Manage Users
           </h1>
           <p className="text-sm text-muted-foreground">
-            Internal CRM staff. Auth is OTP-only — there are no passwords to manage.
+            Add employees, keep their details up to date, and control what each
+            person can see and do.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -716,7 +787,7 @@ export default function ManageUsersPage() {
               <Input
                 placeholder="Search by name, email, mobile, or code…"
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={(e) => { setSearch(e.target.value); resetToFirstPage(); }}
                 className="pl-8"
               />
             </div>
@@ -726,7 +797,7 @@ export default function ManageUsersPage() {
             <div className="min-w-[180px]">
               <SearchSelect
                 value={roleFilter === '' ? '' : roleFilter}
-                onChange={(v) => setRoleFilter(v ? Number(v) : '')}
+                onChange={(v) => { setRoleFilter(v ? Number(v) : ''); resetToFirstPage(); }}
                 options={lookup.roles.map((r) => ({ value: r.role_id, label: r.role_name }))}
                 placeholder="All roles"
               />
@@ -734,124 +805,59 @@ export default function ManageUsersPage() {
             <div className="min-w-[180px]">
               <CitySelect
                 value={cityFilter}
-                onChange={(id) => setCityFilter(id ? Number(id) : '')}
+                onChange={(id) => { setCityFilter(id ? Number(id) : ''); resetToFirstPage(); }}
                 placeholder="All cities"
               />
             </div>
             <label className="flex items-center gap-1 text-xs">
-              <input type="checkbox" checked={includeInactive} onChange={(e) => setIncludeInactive(e.target.checked)} />
+              <input type="checkbox" checked={includeInactive} onChange={(e) => { setIncludeInactive(e.target.checked); resetToFirstPage(); }} />
               Include inactive
             </label>
           </div>
-          <table className="data-table w-full" style={{ tableLayout: 'fixed' }}>
+          {/* The horizontal scroller. Without it the table had nowhere to go
+              but narrower, which is what forced the percentage plan that
+              clipped three headers. */}
+          <div className="overflow-x-auto">
+          <table
+            className="data-table w-full"
+            style={{ tableLayout: 'fixed', minWidth: `${USERS_TABLE_MIN_W}px` }}
+          >
             {/*
-                Column widths (must match the th/td sequence below):
-                  72px       Photo    <- FIXED, not a percentage
-                   7 percent User ID
-                   7 percent Employee Code
-                  13 percent Name
-                  13 percent Email
-                  17 percent Personal Email
-                  10 percent Mobile
-                  11 percent Role
-                  11 percent Manage Regions
-                   8 percent Job Stages
-                   7 percent Status
-                  128px      Actions  <- FIXED, not a percentage
+                COLUMN WIDTHS — the numbers are in USERS_TABLE_MIN_W and the
+                colgroup below; the reasoning is at the constant's definition.
+                In short: the headers plus legible content need ~1606px and a
+                1180 viewport offers 906, so the table is sized in pixels and
+                SCROLLS rather than squeezing three headers into a clip.
 
-                THE TWO PIXEL COLUMNS ARE THE ONES WHOSE CONTENT DOES NOT SCALE.
-                Actions is four 20px icon buttons plus 24px of cell padding.
-                Photo is a 32px circle plus that same 24px: 56px of content in a
-                72px column. 72 rather than 56 because the HEADER, not the
-                avatar, is the wider of the two — the word "Photo" measures
-                39.7px, so a 64px column left it 0.3px of slack, which is
-                rounding noise rather than a margin. At 72 it has 8.3px.
+                Order matters here: Employee Code comes BEFORE User ID because
+                it is the identifier HR actually works from, and it is frozen
+                alongside the avatar so it survives a horizontal scroll.
 
-                THE PERCENTAGES SUM TO 104 AND THAT IS CORRECT. With
-                table-layout: fixed and a mixed colgroup, Chrome scales the
-                percentage columns to fill whatever the two pixel columns leave
-                (measured: at a 1006px table each 1 percent resolved to 7.75px,
-                i.e. (1006 - 72 - 128)/104). Only the RATIOS matter — do NOT
-                "correct" them back to 100.
-
-                RE-MEASURED 2026-09-02, when the Photo column was added, because
-                a twelfth column narrows every percentage column and a header
-                that fitted with 2px to spare stops fitting. Method: the page's
-                shell (240px sidebar + main's 32px of px-4 + the Card's 2px of
-                border, so table width = viewport - 274) rendered in headless
-                Chrome against BOTH compiled CSS chunks and the real IBM Plex
-                faces; each header label wrapped in an inline <span> and its
-                getBoundingClientRect().width compared against the th's
-                clientWidth minus its 24px of padding. NOT scrollWidth >
-                clientWidth — table cells do not scroll, so that test can never
-                fire and reports "no clipping" for a header that is visibly cut.
-                Controls: starving Name (the largest-slack column) to 1 percent
-                flagged it at all four viewports, so the detector can fail.
-
-                MEASURED LABEL WIDTHS (semibold 14px, including the sort arrow
-                on sortable columns, since any column can be the active sort)
-                and the column each one gets:
-
-                  label            needs |  @1180  @1280  @1440  @1920
-                  Photo             39.7 |     72     72     72     72
-                  User ID           65.6 |   47.5   54.2     65   97.3
-                  Employee Code    120.5 |   47.5   54.2     65   97.3
-                  Name              55.2 |   88.3  100.8  120.8  180.8
-                  Email             52.5 |   88.3  100.8  120.8  180.8
-                  Personal Email    98.7 |  115.4  131.8  157.9  236.4
-                  Mobile            61.2 |   67.9   77.5   92.9  139.0
-                  Role              45.5 |   74.7   85.2  102.2  152.9
-                  Manage Regions    54.1 |   74.7   85.2  102.2  152.9
-                  Job Stages        75.5 |   54.3   62.0   74.3  111.2
-                  Status            59.9 |   47.6   54.3   65.1   97.4
-                  Actions           50.9 |    128    128    128    128
-
-                THE HEADERS CLIP BELOW 1920 AND DID BEFORE THIS COLUMN EXISTED.
-                Every label above needs its width PLUS 24px of padding, and the
-                titles want 928px of a table that is 1006px wide at 1280 with
-                200px of it already committed to the two pixel columns. Measured
-                clipped sets, before and after adding Photo, are IDENTICAL:
-                  1180  User ID, Employee Code, Personal Email, Mobile,
-                        Manage Regions, Job Stages, Status
-                  1280  User ID, Employee Code, Mobile, Job Stages, Status
-                  1440  User ID, Employee Code, Job Stages, Status
-                  1920  Employee Code
-                That parity is the whole reason the percentages moved. Holding
-                the old 7/8/12/12/13/8/10/9/8/6 and simply inserting a 12th
-                column pushed Personal Email over at 1280 and Mobile at 1440;
-                the set above puts the freed points where the labels actually
-                are. Tightest surviving margin is Role at +3.5px, at 1180 with
-                a classic always-on scrollbar — the pessimistic case, since
-                macOS Chrome uses overlay scrollbars. In that same case the new
-                set is strictly BETTER than the old one at 1280: Personal Email
-                clipped there before and does not now.
-
-                THE 139px FIGURE IN THE PREVIOUS VERSION OF THIS COMMENT DOES
-                NOT REPRODUCE. "User ID" plus its arrow measures 65.6px, so the
-                column needs 89.6px, not 139. Nor do the headers wrap: SortHeader
-                pins `whitespace-nowrap` on both the th AND its inner span, so
-                the two-line-header design this comment used to describe is not
-                what ships. Employee Code needs 120.5px on one line and clips at
-                every viewport including 1920 — a live, PRE-EXISTING defect that
-                only a shorter label or a wrappable SortHeader can fix, and
-                neither is in this file.
+                Verified in headless Chrome at 1180 / 1280 / 1440 / 1920: zero
+                clipped headers at all four. The measurement is only worth
+                anything because it was run with a CONTROL — the previous
+                percentage plan, measured the same way, reports Employee Code,
+                Job Stages and Status clipped at every viewport (and Employee
+                Code even at 1920), which is precisely the defect reported from
+                production. A detector that cannot produce a failure cannot
+                certify a pass.
 
                 Inline JSX expression comments are illegal inside colgroup
-                (they introduce single-space text nodes that fail
-                hydration). See manage-roles for the full backstory.
+                (they introduce single-space text nodes that fail hydration).
+                See manage-roles for the full backstory.
             */}
             <colgroup>
-              <col style={{ width: '72px' }} />
-              <col style={{ width: '7%' }} />
-              <col style={{ width: '7%' }} />
-              <col style={{ width: '13%' }} />
-              <col style={{ width: '13%' }} />
-              <col style={{ width: '17%' }} />
-              <col style={{ width: '10%' }} />
-              <col style={{ width: '11%' }} />
-              <col style={{ width: '11%' }} />
-              <col style={{ width: '8%' }} />
-              <col style={{ width: '7%' }} />
+              <col style={{ width: `${PHOTO_COL_W}px` }} />
+              <col style={{ width: `${EMP_CODE_COL_W}px` }} />
+              <col style={{ width: '92px' }} />
+              <col style={{ width: '180px' }} />
+              <col style={{ width: '210px' }} />
+              <col style={{ width: '210px' }} />
+              <col style={{ width: '120px' }} />
+              <col style={{ width: '140px' }} />
+              <col style={{ width: '110px' }} />
+              <col style={{ width: '112px' }} />
+              <col style={{ width: '92px' }} />
               <col style={{ width: '128px' }} />
             </colgroup>
             <thead>
@@ -861,8 +867,10 @@ export default function ManageUsersPage() {
                   * clickable header over a column of faces would only invite a
                   * click that does nothing.
                   */}
-                <th className="!text-center whitespace-nowrap">Photo</th>
-                <SortHeader col="user_id"        align="center" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>User ID</SortHeader>
+                <th
+                  className="!text-center whitespace-nowrap stick-col-head"
+                  style={{ left: 0 }}
+                >Photo</th>
                 {/*
                   * Employee Code (tbl_user.user_code) — already on the list
                   * projection, just never rendered. Ops identify people by it
@@ -877,7 +885,22 @@ export default function ManageUsersPage() {
                   * is numeric order — and users with no code yet sort to the top
                   * ascending, which is the end you want them at.
                   */}
-                <SortHeader col="user_code" align="center" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Employee Code</SortHeader>
+                {/* Employee Code sits FIRST of the two identifiers and is FROZEN.
+                    It is the number HR reads off the master sheet, so it is the one
+                    that has to stay on screen while the row is scrolled; user_id is
+                    an internal surrogate that only matters in a support ticket.
+                    `left` is set inline because it must equal PHOTO_COL_W — see the
+                    width block above for why those two numbers live together. */}
+                <SortHeader
+                  col="user_code"
+                  align="center"
+                  sortBy={sortBy}
+                  sortDir={sortDir}
+                  onSort={onSort}
+                  className="stick-col-head stick-edge-right"
+                  style={{ left: PHOTO_COL_W }}
+                >Employee Code</SortHeader>
+                <SortHeader col="user_id" align="center" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>User ID</SortHeader>
                 <SortHeader col="user_name"      align="left"   sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Name</SortHeader>
                 <SortHeader col="official_email" align="left"   sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Email</SortHeader>
                 {/*
@@ -912,7 +935,7 @@ export default function ManageUsersPage() {
                   */}
                 <th className="!text-left whitespace-nowrap" title="Job lifecycle stages this user can see and act on (tbl_user_allowed_stages)">Job Stages</th>
                 <SortHeader col="user_status"    align="center" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Status</SortHeader>
-                <th className="!text-right whitespace-nowrap">Actions</th>
+                <th className="!text-right whitespace-nowrap stick-col-head stick-right">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -937,18 +960,24 @@ export default function ManageUsersPage() {
                       a fixed 32px circle inside a 64px column, so there is
                       nothing to overflow and `overflow:hidden` would only risk
                       clipping the focus ring. */}
-                  <td className="!text-center">
+                  <td className="!text-center stick-col" style={{ left: 0 }}>
                     <div className="flex items-center justify-center">
                       <UserAvatar name={u.user_name} photoUrl={u.photo_url} />
                     </div>
                   </td>
-                  <td className="!text-center font-mono text-xs truncate">{u.user_id}</td>
-                  {/* Monospace like User ID — both are identifiers people read
-                      digit by digit and compare down a column. "—" when unset,
-                      matching Personal Email below. */}
-                  <td className="!text-center font-mono text-xs truncate" title={u.user_code ?? ''}>
+                  {/* Employee Code first, and FROZEN with the avatar — the two
+                      things that identify the row stay on screen however far it
+                      is scrolled. Monospace because it is read digit by digit
+                      and compared down a column; "—" when unset, matching
+                      Personal Email below. */}
+                  <td
+                    className="!text-center font-mono text-xs truncate stick-col stick-edge-right"
+                    style={{ left: PHOTO_COL_W }}
+                    title={u.user_code ?? ''}
+                  >
                     {u.user_code || <span className="text-muted-foreground">—</span>}
                   </td>
+                  <td className="!text-center font-mono text-xs truncate">{u.user_id}</td>
                   <td className="!text-left font-medium truncate" title={u.user_name}>{u.user_name}</td>
                   <td className="!text-left truncate" title={u.official_email}>{u.official_email}</td>
                   {/* Same treatment as Email above (left, truncate, full value
@@ -972,7 +1001,7 @@ export default function ManageUsersPage() {
                       ? <span className="text-success-strong text-xs">Active</span>
                       : <span className="text-muted-foreground text-xs">Inactive</span>}
                   </td>
-                  <td className="!text-right whitespace-nowrap">
+                  <td className="!text-right whitespace-nowrap stick-col stick-right">
                     {/*
                       * Icon-only row actions via the shared <IconButton>
                       * (src/components/ui/icon-button.tsx) — the single
@@ -1060,6 +1089,7 @@ export default function ManageUsersPage() {
               ))}
             </tbody>
           </table>
+          </div>
           {/* Pagination band — acts as the table's visual footer row,
               sharing the same Card boundary as the filter band + table. */}
           <div className="px-3 py-2 border-t">
@@ -1362,10 +1392,27 @@ function UserFormModal({
    * every open, the current value is shown as text beside them, and they are
    * submitted ONLY when the operator has typed something.
    */
+  const [dob, setDob] = useState('');
   const [doj, setDoj] = useState('');
   const [uan, setUan] = useState('');
   const [pan, setPan] = useState('');
   const [aadhaar, setAadhaar] = useState('');
+  /*
+   * PAN and Aadhaar need THREE states, not two, and an empty text box can only
+   * express two of them.
+   *
+   *   untouched  → box empty, flag false → key OMITTED from the payload
+   *   replaced   → box has a value       → key sent with the new value
+   *   removed    → box empty, flag TRUE  → key sent as null
+   *
+   * The other three identifiers get by with two states because their stored
+   * value is prefilled, so "box is empty" unambiguously means "clear it". These
+   * two are never prefilled — the server only ever returns them masked — so an
+   * empty box is the NORMAL state and cannot also mean "delete". Without the
+   * flag there is simply no way to remove a PAN that was entered by mistake.
+   */
+  const [panCleared, setPanCleared] = useState(false);
+  const [aadhaarCleared, setAadhaarCleared] = useState(false);
   const [address, setAddress] = useState('');
   const [mobile,  setMobile]  = useState('');
   const [altMob,  setAltMob]  = useState('');
@@ -1459,7 +1506,8 @@ function UserFormModal({
    * back to '' and the section renders empty rather than breaking.
    */
   const userDetail = useFetch<Partial<User> & {
-    date_of_joining?: string | null; uan?: string | null; address?: string | null;
+    date_of_birth?: string | null; date_of_joining?: string | null;
+    uan?: string | null; address?: string | null;
     pan_masked?: string | null; aadhaar_masked?: string | null;
   }>(open && editing ? `/admin/users/${editing.user_id}` : null);
 
@@ -1544,9 +1592,12 @@ function UserFormModal({
        * what stops the previous user's UAN sitting in the box for the moment
        * between opening the modal and the fetch returning.
        */
-      setDoj(''); setUan(''); setAddress('');
-      /* pan/aadhaar are never hydrated — see the state comment. */
+      setDob(''); setDoj(''); setUan(''); setAddress('');
+      /* pan/aadhaar are never hydrated — see the state comment. The removal
+         flags reset with them, so a Remove clicked and then cancelled on one
+         user cannot carry into the next one opened. */
       setPan(''); setAadhaar('');
+      setPanCleared(false); setAadhaarCleared(false);
       // Job Stage Access — NULL / absent allowed_stages = unrestricted, so
       // hydrate the "All stages" toggle ON with an empty pick set. An ARRAY
       // (even an empty one) means the operator has set an explicit grant:
@@ -1568,6 +1619,7 @@ function UserFormModal({
   useEffect(() => {
     const d = userDetail.data;
     if (!open || !d) return;
+    setDob(d.date_of_birth ?? '');
     setDoj(d.date_of_joining ?? '');
     setUan(d.uan ?? '');
     setAddress(d.address ?? '');
@@ -1824,6 +1876,32 @@ function UserFormModal({
   const personalEmailRequired = !isEdit || (editing!.user_status === 1 && active);
 
   /*
+   * PERSONAL DETAILS ARE MANDATORY — same rule, same two exemptions, as
+   * Personal Email above, and derived from the same expression on purpose: an
+   * inactive user and the edit that deactivates one are both excused, because
+   * offboarding someone who has already left must not require chasing them for
+   * a PAN. The backend enforces the identical rule (enforceHrIdentifiers), and
+   * per the mobile_no lesson the stricter layer is the one that decides.
+   */
+  const personalDetailsRequired = personalEmailRequired;
+
+  /*
+   * SATISFIED means "a value will exist after the save", NOT "the box is
+   * non-empty" — pan and aadhaar are never prefilled, because the server only
+   * ever returns them masked. Requiring a non-empty box would make every edit
+   * of a user who already has a PAN re-type it off paper, and the likeliest
+   * outcome of that is a typo overwriting a correct number.
+   *
+   * A pending Remove un-satisfies the field, which is why Remove is hidden
+   * entirely while the mandate applies: a control whose only outcome is a
+   * blocked save is worse than no control.
+   */
+  const panOnFile     = Boolean(userDetail.data?.pan_masked);
+  const aadhaarOnFile = Boolean(userDetail.data?.aadhaar_masked);
+  const panSatisfied     = Boolean(pan.trim()) || (panOnFile && !panCleared);
+  const aadhaarSatisfied = Boolean(aadhaar.trim()) || (aadhaarOnFile && !aadhaarCleared);
+
+  /*
    * ── Official-email DIRECTORY pre-flight ──────────────────────────────
    *
    * Returns the address to actually create the user with, or null when the
@@ -1994,6 +2072,22 @@ function UserFormModal({
      * All three are skipped when blank: these fields are optional, and an
      * empty one is how HR clears a value entered by mistake.
      */
+    if (personalDetailsRequired) {
+      /* Named in the order they appear on the form, so the message points at
+         the first box the operator has to go back to. */
+      const missing: string[] = [];
+      if (!dob.trim())        missing.push('Date Of Birth');
+      if (!doj.trim())        missing.push('Date Of Joining');
+      if (!uan.trim())        missing.push('UAN');
+      if (!panSatisfied)      missing.push('PAN');
+      if (!aadhaarSatisfied)  missing.push('Aadhaar');
+      if (!address.trim())    missing.push('Address');
+      if (missing.length) {
+        setError(`${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} required`);
+        return;
+      }
+    }
+
     if (uan.trim() && uan.trim().length !== 12) {
       setError('UAN must be exactly 12 digits');
       return;
@@ -2106,12 +2200,18 @@ function UserFormModal({
        * upsert treats an absent key exactly that way.
        */
       const identifierPayload: Record<string, string | null> = {
+        date_of_birth:   dob.trim() || null,
         date_of_joining: doj.trim() || null,
         uan:             uan.trim() || null,
         address:         address.trim() || null,
       };
-      if (pan.trim())     identifierPayload.pan     = pan.trim();
-      if (aadhaar.trim()) identifierPayload.aadhaar = aadhaar.trim();
+      /* Typing wins over a pending removal — the operator's last action is the
+         one that counts, and setPan() clears the flag anyway. null is what
+         tells the backend to CLEAR; omitting the key leaves the value alone. */
+      if (pan.trim())          identifierPayload.pan     = pan.trim();
+      else if (panCleared)     identifierPayload.pan     = null;
+      if (aadhaar.trim())      identifierPayload.aadhaar = aadhaar.trim();
+      else if (aadhaarCleared) identifierPayload.aadhaar = null;
 
       if (isEdit) {
         await api.patch(`/admin/users/${editing!.user_id}`, {
@@ -2584,12 +2684,35 @@ function UserFormModal({
           <div className="rounded-md border border-border p-3 space-y-3">
             <p className="text-sm font-medium">
               Personal Details{' '}
-              <span className="text-xs text-muted-foreground font-normal">(optional)</span>
+              {!personalDetailsRequired && (
+                <span className="text-xs text-muted-foreground font-normal">
+                  (optional while this user is inactive)
+                </span>
+              )}
             </p>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label className="block mb-1">Date Of Joining</Label>
+                {/*
+                  * Date Of Birth is ALSO settable by the employee on their own
+                  * profile, where it locks after one set and a correction needs
+                  * HR approval. There is no lock here, and that is not a
+                  * loophole: the lock's documented escape hatch is "HR approves
+                  * a correction", and this form is HR. Same validation either
+                  * way — the backend reuses one validateDateOfBirth.
+                  */}
+                <Label className="block mb-1" required={personalDetailsRequired}>Date Of Birth</Label>
+                <Input
+                  type="date"
+                  value={dob}
+                  onChange={(e) => setDob(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Shows as a Birthday on the dashboard each year.
+                </p>
+              </div>
+              <div>
+                <Label className="block mb-1" required={personalDetailsRequired}>Date Of Joining</Label>
                 <Input
                   type="date"
                   value={doj}
@@ -2599,8 +2722,11 @@ function UserFormModal({
                   Shows as a Work Anniversary on the dashboard each year.
                 </p>
               </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label className="block mb-1">UAN</Label>
+                <Label className="block mb-1" required={personalDetailsRequired}>UAN</Label>
                 <Input
                   value={uan}
                   onChange={(e) => setUan(e.target.value.replace(/\D/g, '').slice(0, 12))}
@@ -2617,19 +2743,52 @@ function UserFormModal({
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label className="block mb-1">PAN</Label>
+                <Label className="block mb-1" required={personalDetailsRequired}>PAN</Label>
                 <Input
                   value={pan}
-                  onChange={(e) => setPan(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10))}
-                  placeholder={userDetail.data?.pan_masked ? 'Type to replace' : 'e.g. ABCDE1234F'}
+                  onChange={(e) => {
+                    setPan(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10));
+                    /* Typing is an implicit "no, keep it — use this instead". */
+                    setPanCleared(false);
+                  }}
+                  placeholder={userDetail.data?.pan_masked ? 'Type To Replace' : 'e.g. ABCDE1234F'}
                   className="font-mono"
+                  disabled={panCleared}
                 />
                 {/* The stored value, masked. It is shown as TEXT rather than
                     prefilled into the box precisely so that saving without
                     touching this field leaves the real PAN alone. */}
-                {userDetail.data?.pan_masked && !pan && (
+                {/* Mandatory: the value is shown but cannot be removed. */}
+                {userDetail.data?.pan_masked && !pan && !panCleared && personalDetailsRequired && (
                   <p className="text-xs text-muted-foreground mt-1">
                     On file: <span className="font-mono">{userDetail.data.pan_masked}</span>
+                  </p>
+                )}
+                {userDetail.data?.pan_masked && !pan && !panCleared && !personalDetailsRequired && (
+                  <p className="text-xs text-muted-foreground mt-1 flex items-center gap-2">
+                    <span>On file: <span className="font-mono">{userDetail.data.pan_masked}</span></span>
+                    <button
+                      type="button"
+                      onClick={() => { setPan(''); setPanCleared(true); }}
+                      className="text-destructive underline underline-offset-2 hover:no-underline"
+                    >
+                      Remove
+                    </button>
+                  </p>
+                )}
+                {/* Staged, not done. Nothing is deleted until Save, and saying
+                    so is what makes the red text safe to show without a
+                    confirm dialog — the Undo is right there. */}
+                {panCleared && (
+                  <p className="text-xs text-destructive mt-1 flex items-center gap-2">
+                    <span>Will Be Removed On Save</span>
+                    <button
+                      type="button"
+                      onClick={() => setPanCleared(false)}
+                      className="text-muted-foreground underline underline-offset-2 hover:no-underline"
+                    >
+                      Undo
+                    </button>
                   </p>
                 )}
                 {pan && !PAN_RE.test(pan) && (
@@ -2639,16 +2798,44 @@ function UserFormModal({
                 )}
               </div>
               <div>
-                <Label className="block mb-1">Aadhaar</Label>
+                <Label className="block mb-1" required={personalDetailsRequired}>Aadhaar</Label>
                 <Input
                   value={aadhaar}
-                  onChange={(e) => setAadhaar(e.target.value.replace(/\D/g, '').slice(0, 12))}
-                  placeholder={userDetail.data?.aadhaar_masked ? 'Type to replace' : '12 digits'}
+                  onChange={(e) => {
+                    setAadhaar(e.target.value.replace(/\D/g, '').slice(0, 12));
+                    setAadhaarCleared(false);
+                  }}
+                  placeholder={userDetail.data?.aadhaar_masked ? 'Type To Replace' : '12 digits'}
                   className="font-mono"
+                  disabled={aadhaarCleared}
                 />
-                {userDetail.data?.aadhaar_masked && !aadhaar && (
+                {userDetail.data?.aadhaar_masked && !aadhaar && !aadhaarCleared && personalDetailsRequired && (
                   <p className="text-xs text-muted-foreground mt-1">
                     On file: <span className="font-mono">{userDetail.data.aadhaar_masked}</span>
+                  </p>
+                )}
+                {userDetail.data?.aadhaar_masked && !aadhaar && !aadhaarCleared && !personalDetailsRequired && (
+                  <p className="text-xs text-muted-foreground mt-1 flex items-center gap-2">
+                    <span>On file: <span className="font-mono">{userDetail.data.aadhaar_masked}</span></span>
+                    <button
+                      type="button"
+                      onClick={() => { setAadhaar(''); setAadhaarCleared(true); }}
+                      className="text-destructive underline underline-offset-2 hover:no-underline"
+                    >
+                      Remove
+                    </button>
+                  </p>
+                )}
+                {aadhaarCleared && (
+                  <p className="text-xs text-destructive mt-1 flex items-center gap-2">
+                    <span>Will Be Removed On Save</span>
+                    <button
+                      type="button"
+                      onClick={() => setAadhaarCleared(false)}
+                      className="text-muted-foreground underline underline-offset-2 hover:no-underline"
+                    >
+                      Undo
+                    </button>
                   </p>
                 )}
                 {aadhaar && aadhaar.length !== 12 && (
@@ -2660,7 +2847,7 @@ function UserFormModal({
             </div>
 
             <div>
-              <Label className="block mb-1">Address</Label>
+              <Label className="block mb-1" required={personalDetailsRequired}>Address</Label>
               <Input
                 value={address}
                 onChange={(e) => setAddress(e.target.value.slice(0, 512))}
