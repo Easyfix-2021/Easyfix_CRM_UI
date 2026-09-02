@@ -659,7 +659,28 @@ export function JobModal({
               {!loading && job && (Number(job.job_status) === 9 || mode === 'checkin') && (
                 <Button
                   variant="outline"
-                  className="bg-success hover:bg-success-strong text-white border-success hover:text-white"
+                  /* THEME FIX — option (c), hover-only crossover. The RESTING
+                      state is already safe: --success is one of the 16 stable
+                      tokens (148.85 70.81% 36.27% under BOTH :root and .dark),
+                      so `bg-success text-white` holds in either theme. Only the
+                      hover inverts — --success-strong is 20.78% lightness in
+                      light and 92.35% in dark, so the moment the pointer lands
+                      in dark mode the label goes white-on-near-white, the same
+                      failure DialogHeader had with --ink-900 (17.31:1 light,
+                      1.08:1 dark) before commit 497cd6e.
+                      There is no stable token holding a DARKER green — the
+                      stable set tops out at --success itself — so option (a) is
+                      unavailable without either killing the hover feedback or
+                      changing the light theme, and the hover must not be
+                      deleted. `dark:hover:bg-success-tint` is the exact
+                      counterpart instead: --success-tint and --success-strong
+                      swap WITH each other (92.35 ⇄ 20.78), so in dark mode
+                      -tint resolves to 149.23 73.58% 20.78% — byte-identical to
+                      what -strong paints in light. The hover is therefore the
+                      SAME dark green in both themes and white stays legible on
+                      it. Light theme is untouched: `hover:bg-success-strong`
+                      still wins there, the dark: variant never matching. */
+                  className="bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white border-success hover:text-white"
                   onClick={() => setAddRemarksOpen(true)}
                 >
                   Add Remarks
@@ -2546,10 +2567,31 @@ function ServicesTabBody({ job, onMutated, onDirtyChange }: { job: Job; onMutate
                           type="button"
                           title={isOpen ? 'Hide Breakdown' : 'Show Breakdown'}
                           aria-label={isOpen ? 'Hide Breakdown' : 'Show Breakdown'}
+                          /* THEME FIX — option (b), paired foreground. The open
+                             arm painted `bg-brand-50 text-primary`: --brand-50
+                             inverts (96.27% lightness in light, 30.39% in dark)
+                             but --primary is stable at 45.49% in both, so in
+                             dark the chip became a 30.39% red plate under 45.49%
+                             red text — the same crossover DialogHeader hit with
+                             --ink-900 (17.31:1 light, 1.08:1 dark). No stable
+                             token holds brand-50's near-white light value, so
+                             (a) has no exact twin here and this is a tinted
+                             chip, which the brief points at (b) anyway.
+                             --brand-700 is brand-50's swap partner: 30.39% in
+                             light, 91.76% in dark — the two trade places, so the
+                             pair reads deep-red-on-pale in light and
+                             pale-on-deep-red in dark. Light theme is NOT
+                             pixel-identical: the glyph moves from --primary
+                             45.49% to --brand-700 30.39%, i.e. the same hue one
+                             step darker, which raises contrast on the pale plate
+                             rather than lowering it. `border-primary` is left
+                             alone — a border is not a foreground and --primary
+                             is stable. The closed arm is already a correct
+                             inverting pair (bg-card + text-ink-700). */
                           className={
                             'inline-flex items-center justify-center w-7 h-7 rounded border ' +
                             (isOpen
-                              ? 'bg-brand-50 border-primary text-primary'
+                              ? 'bg-brand-50 border-primary text-brand-700'
                               : 'bg-card border-ink-100 text-ink-700 hover:bg-ink-50')
                           }
                           onClick={async () => {
@@ -3381,7 +3423,7 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pe
               onDelete();
             }}
             disabled={deleting}
-            className={`absolute top-0 right-0 text-white rounded-bl-md w-5 h-5 flex items-center justify-center text-xs font-semibold leading-none disabled:opacity-60 ${pendingDelete ? 'bg-warning hover:bg-warning-strong' : 'bg-black/65 hover:bg-black/90'}`}
+            className={`absolute top-0 right-0 text-white rounded-bl-md w-5 h-5 flex items-center justify-center text-xs font-semibold leading-none disabled:opacity-60 ${pendingDelete ? 'bg-warning hover:bg-warning-strong dark:hover:bg-warning-tint' : 'bg-black/65 hover:bg-black/90'}`}
             title={pendingDelete ? 'Undo — keep this image' : 'Mark for deletion'}
           >
             {pendingDelete ? '↺' : '×'}
@@ -7789,7 +7831,15 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             <Button
               type="button"
               variant="outline"
-              className="bg-success hover:bg-success-strong text-white border-success hover:text-white"
+              /* THEME FIX — option (c), hover-only crossover; same treatment and
+                 same reasoning as the view-mode Add Remarks button in the
+                 JobModal footer above, where it is written out in full.
+                 --success is stable (36.27% both themes) so the resting state
+                 was never at risk; --success-strong crosses 20.78% → 92.35%, and
+                 `dark:hover:bg-success-tint` repaints that hover as 20.78% in
+                 dark — the identical green light already shows. Light theme
+                 unchanged. */
+              className="bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white border-success hover:text-white"
               onClick={() => setAddRemarksFormOpen(true)}
               disabled={!initial?.job_id}
               title={initial?.job_id ? 'Add a remark / note to this job' : 'Save the job first, then add remarks'}
@@ -7884,7 +7934,21 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                   ? 'Add at least one service in the Products section before booking.'
                   : ''
             }
-            className="bg-gold hover:bg-gold-strong text-white"
+            /* THEME FIX — option (c), hover-only crossover. --gold is one of the
+               16 stable tokens (41.81 62.75% 48.43% under both :root and .dark),
+               so the resting `bg-gold text-white` was never the problem;
+               --gold-strong is what crosses, 21.96% lightness in light and
+               91.57% in dark, so hovering Book Call in dark mode painted a
+               near-white plate under a white label — DialogHeader's --ink-900
+               failure (17.31:1 → 1.08:1) in miniature. The stable set has no
+               darker amber, so option (a) cannot preserve the light hover, and
+               the hover stays. --gold-tint is -strong's swap partner (91.57% in
+               light, 21.96% in dark), so `dark:hover:bg-gold-tint` resolves to
+               40.59 91.07% 21.96% — exactly the shade -strong paints in light.
+               Same deep amber hover in both themes, white legible on it, and the
+               light theme is untouched because the dark: variant never matches
+               there. */
+            className="bg-gold hover:bg-gold-strong dark:hover:bg-gold-tint text-white"
           >
             Book Call
           </LoadBtn>
@@ -9320,7 +9384,13 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             <Button
               type="button"
               variant="outline"
-              className="bg-success hover:bg-success-strong text-white border-success hover:text-white"
+              /* THEME FIX — option (c), hover-only crossover; third instance of
+                 the Add Remarks button, same treatment as the two above (the
+                 full write-up sits on the view-mode footer copy). Resting
+                 `bg-success` is stable at 36.27%; only `hover:bg-success-strong`
+                 crosses (20.78% → 92.35%), and `dark:hover:bg-success-tint`
+                 lands that hover on 20.78% in dark. Light theme unchanged. */
+              className="bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white border-success hover:text-white"
               onClick={() => setAddRemarksFormOpen(true)}
               title="Add a remark / note to this job"
             >
@@ -9361,7 +9431,13 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
               type="submit"
               loading={submitting && submitVariant === 'book'}
               onClick={() => setSubmitVariant('book')}
-              className="bg-gold hover:bg-gold-strong text-white"
+              /* THEME FIX — option (c), hover-only crossover; the create-mode
+                 twin of the confirm-mode Book Call button above, where the
+                 measurements are written out in full. `bg-gold` is stable at
+                 48.43%; `hover:bg-gold-strong` crosses 21.96% → 91.57%, and
+                 `dark:hover:bg-gold-tint` puts that hover back on 21.96% in
+                 dark. Light theme unchanged. */
+              className="bg-gold hover:bg-gold-strong dark:hover:bg-gold-tint text-white"
             >
               Book Call
             </LoadBtn>
@@ -10971,10 +11047,31 @@ function JobOutcomeDialog({
             (NOT DialogHeader) because DialogHeader's `-mx-6 -mt-6`
             assumes the parent has p-6 padding, but we use `!p-0` to
             let the band sit edge-to-edge. DialogTitle alone satisfies
-            Radix's a11y check. */}
-        <div className="px-6 py-4 bg-gradient-to-r from-ink-900 via-ink-700 to-ink-900 text-white flex items-center gap-2.5 shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]">
+            Radix's a11y check.
+
+            THEME FIX — option (a), stable surface. This band is a hand-rolled
+            copy of DialogHeader and it still carried the exact defect commit
+            497cd6e fixed there: `from-ink-900 via-ink-700 to-ink-900 text-white`.
+            --ink-900 is 10.59% lightness under :root — rgb(23,27,31), 17.31:1
+            against white — and 96.27% under .dark, rgb(244,246,247), 1.08:1, so
+            this dialog's title was white-on-near-white in dark mode. --sidebar
+            and --sidebar-accent are chrome tokens pinned at 10.59% and 23.33% in
+            BOTH blocks, and those are precisely the light-mode values of
+            --ink-900 and --ink-700, so the swap is PIXEL-IDENTICAL in light
+            theme and takes dark from 1.08:1 to 17.31:1. Same substitution, same
+            reasoning, same numbers as dialog.tsx — see the comment there.
+
+            The icon moved with the plate. --info-tint is not a surface so the
+            lint rule cannot see it, but it inverts (93.73% light → 18.24% dark)
+            and it was only legible in dark BECAUSE the band was wrongly
+            near-white there; pinning the band dark in both themes would have
+            left an 18.24% navy glyph on a 10.59% slate plate. --info-strong is
+            -tint's swap partner (31.76% → 93.73%), so `dark:text-info-strong`
+            renders 210 68.75% 93.73% in dark — the same pale blue -tint gives in
+            light. Light theme unchanged; the glyph now reads in both. */}
+        <div className="px-6 py-4 bg-gradient-to-r from-sidebar via-sidebar-accent to-sidebar text-white flex items-center gap-2.5 shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]">
           <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-info/20 ring-1 ring-info/40">
-            <Pencil className="h-3.5 w-3.5 text-info-tint" />
+            <Pencil className="h-3.5 w-3.5 text-info-tint dark:text-info-strong" />
           </span>
           <DialogTitle className="text-[15px] font-semibold tracking-tight">{title}</DialogTitle>
         </div>
@@ -11028,7 +11125,17 @@ function JobOutcomeDialog({
           <div className="flex justify-end gap-2 pt-2 border-t">
             <Button
               type="submit"
-              className="bg-success hover:bg-success-strong text-white"
+              /* THEME FIX — option (c), hover-only crossover. Same shape as the
+                 three Add Remarks buttons: `bg-success` is stable (36.27% in
+                 both blocks) so the resting green CTA is fine, and only
+                 `hover:bg-success-strong` crosses the mid-point, 20.78% in light
+                 to 92.35% in dark, which would drop white text onto a near-white
+                 plate on hover. No stable token is a darker green, so the hover
+                 keeps -strong for light and gains its swap partner for dark:
+                 --success-tint resolves to 149.23 73.58% 20.78% under .dark,
+                 identical to what -strong paints under :root. Light theme
+                 unchanged. */
+              className="bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white"
               disabled={!reason || !remarks.trim()}
             >
               Submit

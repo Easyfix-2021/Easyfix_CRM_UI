@@ -119,7 +119,19 @@ export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
           <button
             type="button"
             onClick={() => setCallInfoOpen(true)}
-            className="inline-flex items-center gap-1.5 px-3 h-9 rounded-md bg-success text-white text-xs font-semibold shadow-sm hover:bg-success-strong hover:shadow-md hover:scale-[1.02] transition-all"
+            /*
+             * Option (c) — hover-only crossover. The resting fill
+             * `bg-success` is stable (36.27% lightness under both :root
+             * and .dark), so the white label was only ever at risk while
+             * the pointer was down on the button: --success-strong
+             * INVERTS, 20.78% in light and 92.35% in dark, which put
+             * `text-white` on a near-white green in dark mode.
+             * --success-tint is the token success-strong swaps WITH
+             * (92.35% ⇄ 20.78%), so `dark:hover:bg-success-tint` hands
+             * dark mode the identical 20.78% green light mode already
+             * shows. Hover kept; light theme unchanged.
+             */
+            className="inline-flex items-center gap-1.5 px-3 h-9 rounded-md bg-success text-white text-xs font-semibold shadow-sm hover:bg-success-strong dark:hover:bg-success-tint hover:shadow-md hover:scale-[1.02] transition-all"
           >
             <Info className="h-4 w-4" />
             Call Info

@@ -268,12 +268,26 @@ export function NoticeStrip() {
         </div>
       )}
 
-      {/* Show more — collapsed by default when > VISIBLE_DEFAULT. */}
+      {/* Show more — collapsed by default when > VISIBLE_DEFAULT.
+
+          The hover tint is (c) a HOVER-ONLY fix: resting, the row is bare on the
+          card and `text-primary` is a stable brand red (45.49% in both themes),
+          so only the hover moved. `bg-muted/40` inverts — 90.59% under :root,
+          39.02% under .dark — and at 40% over the card that dragged the label
+          from 5.29:1 to 1.53:1 in dark, i.e. red on a plate that had climbed to
+          meet it. There is no stable near-white neutral to swap in (the stable
+          set tops out at --sidebar-foreground, 63.33%), so the hover instead
+          uses the label's OWN stable token as a 10% wash: it reads as a tint of
+          the affordance in either theme and leaves the label essentially at its
+          resting contrast (light 5.77 -> 4.91, dark 1.96 -> 1.91) rather than
+          collapsing it. Light theme does change — a faint brand tint where a
+          neutral grey used to be — which (c) permits; only (a) swaps must be
+          pixel-identical, and no (a) swap exists here. */}
       {!fetched.loading && mode === 'list' && hiddenCount > 0 && !showAll && (
         <button
           type="button"
           onClick={() => setShowAll(true)}
-          className="w-full px-4 py-2 text-xs font-medium text-primary hover:bg-muted/40 flex items-center justify-center gap-1 border-t"
+          className="w-full px-4 py-2 text-xs font-medium text-primary dark:text-brand-700 hover:bg-muted/40 flex items-center justify-center gap-1 border-t"
         >
           Show {hiddenCount} More <ChevronDown className="h-3 w-3" />
         </button>

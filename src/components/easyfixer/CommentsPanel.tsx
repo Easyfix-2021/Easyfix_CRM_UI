@@ -53,10 +53,28 @@ export function CommentsPanel({
         placeholder="Your Notes"
       />
       <div className="flex justify-end">
+        {/* (c) hover-only crossover. The resting green is fine — --success is
+          * 36.27% lightness in BOTH themes (STABLE), so `text-white` holds at
+          * 4.6:1 either way. The hover is the defect: --success-strong is
+          * 20.78% under :root but 92.35% under .dark, crossing the mid-point
+          * while `text-white` does not move —
+          *
+          *   light  --success-strong  rgb(14,92,52)     8.08:1 vs white ✓
+          *   dark   --success-strong  rgb(226,245,234)  1.14:1 vs white ✗
+          *
+          * so "Add" went white-on-near-white in dark mode on hover. Rather
+          * than drop the hover, name the dark half: --success-tint and
+          * --success-strong SWAP with each other (92.35% ↔ 20.78%), so dark
+          * --success-tint IS rgb(14,92,52), bit-identical to the light-mode
+          * hover. `dark:hover:` compiles to `.dark .dark\:hover\:…:hover` —
+          * two classes to `hover:`'s one — so it wins on specificity whatever
+          * the source order. Light theme is byte-identical; the `dark:` half
+          * never applies there. Same idiom as the green CTAs in
+          * easyfixers/[id]/verification. */}
         <Button
           type="button"
           size="sm"
-          className="bg-success hover:bg-success-strong text-white"
+          className="bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white"
           onClick={submit}
           disabled={saving || draft.trim().length === 0}
         >

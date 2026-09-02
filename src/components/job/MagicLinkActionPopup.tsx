@@ -281,12 +281,40 @@ export function MagicLinkActionPopup({
           <div className="flex flex-wrap items-center gap-2">
             {hasBeenSent ? (
               <>
+                {/*
+                  * (c) HOVER-ONLY FIX — amber CTA hover pinned to one dark amber
+                  * in BOTH themes. Same shape as the green
+                  * `hover:bg-success-strong dark:hover:bg-success-tint` idiom
+                  * used across easyfixers/[id]/verification.
+                  *
+                  * Resting is fine: `--warning` is STABLE — 37.89 87.45% 46.86%
+                  * in `:root` and in `.dark` — so `bg-warning text-white` holds
+                  * either way. Only the hover inverted. `--warning-strong` and
+                  * `--warning-tint` swap WITH EACH OTHER between themes:
+                  *
+                  *   light  --warning-strong  21.96%  dark amber, safe under white
+                  *   dark   --warning-strong  91.96%  near-white, ~1.1:1 vs white ✗
+                  *
+                  * so Send Reminder turned into white-on-cream on hover in dark
+                  * mode — the DialogHeader failure of commit 497cd6e, one
+                  * pseudo-class down. Because the pair swaps, dark
+                  * `--warning-tint` is 37.06 91.07% 21.96%, string-identical to
+                  * light-mode `--warning-strong`, so naming both halves gives
+                  * the button the same dark amber hover in either theme.
+                  * `dark:hover:` is two classes to `hover:`'s one and wins on
+                  * specificity regardless of source order.
+                  *
+                  * LIGHT THEME IS UNCHANGED: the `dark:` half never applies
+                  * there. The Cancel-side `bg-destructive
+                  * hover:bg-destructive-strong` below needs no such treatment —
+                  * both of those tokens are stable already.
+                  */}
                 <Button
                   type="button"
                   onClick={() => send('reminder')}
                   disabled={actionsDisabled}
                   title={disableReason ?? undefined}
-                  className="bg-warning hover:bg-warning-strong text-white"
+                  className="bg-warning hover:bg-warning-strong dark:hover:bg-warning-tint text-white"
                 >
                   {busy && pendingAction === 'reminder' ? 'Sending…' : 'Send Reminder'}
                 </Button>

@@ -989,7 +989,16 @@ export default function JobCompletionMagicLinkPage() {
               type="button"
               variant="outline"
               onClick={() => setMapOpen((o) => !o)}
-              className="gap-2 border-primary/40 text-primary hover:bg-brand-50 hover:text-brand-600"
+              // Hover plate uses the accent PAIR, not brand-50 + brand-600.
+              // --brand-50 inverts (L 96.27% light / 30.39% dark) but
+              // --brand-600 is stable (38.82% both), so in dark the hover was
+              // rgb(167,31,41) on rgb(131,24,32) = 1.36:1 — the label vanished
+              // the moment you moused over it. --accent carries the IDENTICAL
+              // light value as --brand-50 (both 354.55 57.89% 96.27% →
+              // rgb(251,240,241)), so the light plate is byte-for-byte what it
+              // renders today; --accent-foreground inverts with it. Measured:
+              // light 6.56 → 8.90:1, dark 1.36 → 7.77:1.
+              className="gap-2 border-primary/40 text-primary hover:bg-accent hover:text-accent-foreground"
             >
               <MapPin className="h-4 w-4" />
               {mapOpen ? 'Hide Map' : 'Pin Exact Location On Map'}
@@ -1110,11 +1119,35 @@ export default function JobCompletionMagicLinkPage() {
             </div>
             {/* Green Call button → existing bridged SPOC call flow (spoc_confirm).
                 Green = "go / place call", mirroring the Call EasyFix SPOC CTA. */}
+            {/* GREEN CTA HOVER — the rationale for every `bg-success
+                hover:bg-success-strong` button on this page (4 of them; the
+                other three carry a one-line back-reference to here).
+                  --success is STABLE (148.85 70.81% 36.27%, rgb(27,158,90)) so
+                the RESTING `text-white` is fine in both themes and is left
+                alone. --success-strong is not: it INVERTS, and it inverts by
+                swapping values with --success-tint —
+                  light  --success-strong 20.78% ↔ --success-tint 92.35%
+                  dark   --success-strong 92.35% ↔ --success-tint 20.78%
+                so on hover in dark mode the plate became rgb(226,245,234), a
+                near-white green, and `text-white` on it measured 1.14:1. The
+                button read as blank the whole time the pointer was on it.
+                  The fix is the second half of the pair: let the foreground
+                pin the surface with `dark:hover:bg-success-tint`, which holds
+                --success-strong in the opposite direction by construction. That
+                is the same contract the brief blesses as `bg-success-tint
+                text-success-strong`, used in the mirror direction.
+                  Measured hover contrast: light 8.08 → 7.11:1 (white → the
+                92.35%-L tint, a barely-perceptible warm-green cast on an
+                unchanged rgb(14,92,52) plate), dark 1.14 → 7.11:1. Both stay
+                well clear of AA. The light PLATE is untouched.
+                  Not option (a): the palette has no stable dark green — only
+                --success itself — so there is nothing to swap the hover surface
+                to that would hold its value across themes. */}
             <Button
               type="button"
               onClick={() => setDialog('spoc_confirm')}
               disabled={actionBusy === 'spoc'}
-              className="shrink-0 gap-1.5 bg-success text-white hover:bg-success-strong"
+              className="shrink-0 gap-1.5 bg-success text-white hover:bg-success-strong dark:hover:bg-success-tint"
             >
               <Phone className="h-4 w-4" />
               {actionBusy === 'spoc' ? 'Connecting…' : 'Call'}
@@ -1268,7 +1301,10 @@ export default function JobCompletionMagicLinkPage() {
             suppressed={!!asPreviewObj(spocPreview)?.suppressed}
           />
           {/* Shared <Button> at size="lg" so dialog footer matches the rest of
-              the page: dismiss = outline, confirm = solid emerald CTA. */}
+              the page: dismiss = outline, confirm = solid emerald CTA.
+              `dark:hover:bg-success-tint` — see the GREEN CTA HOVER note on the
+              "Your Coordinator" Call button; --success-strong inverts and
+              --success-tint is the half that inverts opposite it. */}
           <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-1">
             <Button type="button" size="lg" variant="outline" disabled={actionBusy === 'spoc'}
               onClick={() => { if (actionBusy !== 'spoc') setDialog(null); }}
@@ -1277,7 +1313,7 @@ export default function JobCompletionMagicLinkPage() {
             </Button>
             <Button type="button" size="lg" disabled={actionBusy === 'spoc'}
               onClick={() => { setDialog(null); void handleSpocCall(); }}
-              className="w-full sm:w-auto bg-success hover:bg-success-strong text-white">
+              className="w-full sm:w-auto bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white">
               {actionBusy === 'spoc' ? 'Connecting…' : 'Call EasyFix SPOC'}
             </Button>
           </div>
@@ -1315,10 +1351,12 @@ export default function JobCompletionMagicLinkPage() {
               className="w-full sm:w-auto">
               Close
             </Button>
+            {/* `dark:hover:bg-success-tint` — see the GREEN CTA HOVER note on the
+                "Your Coordinator" Call button. */}
             {supportPreview !== 'unavailable' && (
               <Button type="button" size="lg" disabled={actionBusy === 'support' || supportPreview === 'loading'}
                 onClick={() => { setDialog(null); void handleSupportCall(); }}
-                className="w-full sm:w-auto bg-success hover:bg-success-strong text-white">
+                className="w-full sm:w-auto bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white">
                 {actionBusy === 'support' ? 'Connecting…' : 'Call EasyFix Support'}
               </Button>
             )}
@@ -1350,8 +1388,23 @@ const inputClass =
 function OrderHeader({ clientName }: { clientName: string }) {
   return (
     // Same band treatment as every CRM modal header (see DialogHeader):
-    // ink-900 → 700 → 900 gradient + a 3px sky-500 inset underline.
-    <div className="rounded-lg bg-gradient-to-r from-ink-900 via-ink-700 to-ink-900 px-5 py-4 text-white shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]">
+    // sidebar → sidebar-accent → sidebar gradient + a 3px sky-500 inset
+    // underline.
+    //
+    // This band was `from-ink-900 via-ink-700 to-ink-900 text-white`, copied
+    // from DialogHeader before DialogHeader was fixed (497cd6e). The ink ramp
+    // is a TEXT scale and inverts by design: --ink-900 is rgb(23,27,31) in
+    // light (17.31:1 under white) and rgb(244,246,247) in dark (1.08:1), so in
+    // dark mode this header — the customer's own name and "Order For" — was
+    // white on near-white. --ink-700 was no better at 1.24:1.
+    //
+    // --sidebar and --sidebar-accent are STABLE (identical under :root and
+    // .dark) AND hold exactly the light-mode ink values:
+    //   --sidebar        210 14.81% 10.59%  ==  light --ink-900  → rgb(23,27,31)
+    //   --sidebar-accent 212.73 9.24% 23.33% == light --ink-700  → rgb(54,59,65)
+    // so the light theme is byte-for-byte unchanged and dark now measures
+    // 17.31:1 / 11.30:1 instead of 1.08 / 1.24. Same swap DialogHeader made.
+    <div className="rounded-lg bg-gradient-to-r from-sidebar via-sidebar-accent to-sidebar px-5 py-4 text-white shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]">
       <div className="text-xs font-semibold uppercase tracking-wider text-white/70">Order For</div>
       {/* Always side-by-side. On mobile the chip stacks its own two parts
           ("Fulfilled by" over the logo) so it's narrow enough to leave the
@@ -1362,8 +1415,9 @@ function OrderHeader({ clientName }: { clientName: string }) {
           "Fulfilled by" as a caption above. sm+ keeps the centered inline row. */}
       <div className="mt-1 flex items-end justify-between gap-3 sm:items-center">
         <div className="min-w-0 truncate text-2xl font-semibold leading-tight">{clientName}</div>
-        {/* The band is the ink-900 gradient, so the on-dark lockup is the
-            correct surface — white wordmark, red house. */}
+        {/* The band is the sidebar gradient — stable and dark in BOTH themes
+            (rgb(23,27,31)) — so the on-dark lockup is the correct surface in
+            both: white wordmark, red house. */}
         <span className="flex shrink-0 flex-col items-end gap-0.5 text-xs font-medium text-white/80 sm:flex-row sm:items-center sm:gap-2">
           <span>Fulfilled by</span>
           <Logo variant="horizontal" surface="dark" height={20} />
@@ -1459,7 +1513,7 @@ function RescheduleDialog({
         </Button>
         <Button type="button" size="lg" disabled={busy}
           onClick={() => { setTouched(true); if (reason) onSubmit(reason, preferred, remarks); }}
-          className="w-full sm:w-auto bg-success hover:bg-success-strong text-white">
+          className="w-full sm:w-auto bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white">
           {busy ? 'Submitting…' : 'Request Reschedule'}
         </Button>
       </div>
@@ -2171,9 +2225,17 @@ function MediaUploader({
               aria-label="Remove photo">×</button>
           </div>
         ))}
+        {/* Tile plate is --sidebar, not --ink-900. The tile has to stay DARK in
+            both themes — it is the letterbox behind a poster frame, and the play
+            glyph, the "Video #n" caption and their bg-black/45 and bg-black/60
+            scrims are all `text-white`. --ink-900 inverts (rgb(23,27,31) light →
+            rgb(244,246,247) dark), which in dark mode turned the fallback tile
+            near-white and took the caption to 1.08:1. --sidebar is stable and
+            holds the light --ink-900 value exactly (210 14.81% 10.59% →
+            rgb(23,27,31)), so light is unchanged and dark is 17.31:1. */}
         {videos.map((vid, idx) => (
           <div key={`vid-${vid.media_id}`}
-            className="relative w-[72px] h-[72px] rounded-md border bg-ink-900 text-white overflow-hidden">
+            className="relative w-[72px] h-[72px] rounded-md border bg-sidebar text-white overflow-hidden">
             {/* The whole tile is a play button when we have a playback URL:
                 poster-frame thumbnail (just-picked video) + play-glyph overlay.
                 Tap → lightbox <video>. Falls back to a non-clickable dark tile

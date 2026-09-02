@@ -348,7 +348,29 @@ export function ClientFormDialog({ open, onClose, onSaved, mode, initial }: Prop
        *     container.
        */}
       <DialogContent className="!max-w-3xl max-h-[calc(100vh-48px)] !p-0 gap-0 overflow-hidden flex flex-col">
-        <DialogHeader className="!mx-0 !mt-0 !mb-0 shrink-0 px-6 py-4 bg-gradient-to-r from-ink-900 via-ink-700 to-ink-900 text-white shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]">
+        {/*
+         * (a) STABLE SURFACE — dark-slate header band pinned to one value in
+         * BOTH themes. This is the commit-497cd6e substitution applied to a
+         * header that predates it.
+         *
+         * `--ink-900` and `--ink-700` are text-ramp tokens: they INVERT, which
+         * is correct for text and wrong for a plate carrying a fixed
+         * `text-white`. Measured against white:
+         *
+         *   light  --ink-900  rgb(23,27,31)     17.31:1 ✓
+         *   dark   --ink-900  rgb(244,246,247)   1.08:1 ✗
+         *   light  --ink-700  rgb(54,60,65)     10.99:1 ✓
+         *   dark   --ink-700  rgb(226,231,234)   1.25:1 ✗
+         *
+         * i.e. in dark mode the whole title bar went white-on-near-white.
+         * `--sidebar` and `--sidebar-accent` are STABLE and hold exactly the
+         * LIGHT-mode ink values — `--sidebar: 210 14.81% 10.59%` is
+         * bit-identical to light `--ink-900`, `--sidebar-accent:
+         * 212.73 9.24% 23.33%` to light `--ink-700` — so the LIGHT theme
+         * renders IDENTICALLY and dark goes 1.08 → 17.31:1. The sky-blue
+         * inset underline is a literal rgba, unaffected either way.
+         */}
+        <DialogHeader className="!mx-0 !mt-0 !mb-0 shrink-0 px-6 py-4 bg-gradient-to-r from-sidebar via-sidebar-accent to-sidebar text-white shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]">
           <DialogTitle className="text-white text-base font-semibold">
             {isEdit ? `Edit Client — ${initial?.client_name ?? ''}` : 'Add New Client'}
           </DialogTitle>

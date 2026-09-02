@@ -16,7 +16,9 @@ import { cn } from '@/lib/utils';
  *   <DownloadButton onClick={downloadXlsx} disabled={!hasRows} downloading={busy} />
  *
  * Design contract (kept identical to the original CallInfoModal pattern):
- *   - emerald-600 background, hover emerald-700
+ *   - emerald-600 background, hover emerald-700 — and in dark mode the
+ *     hover is re-pointed at --success-tint, which carries that same
+ *     emerald-700 value (20.78%) there; see the className below
  *   - white text + Download icon (lucide)
  *   - disabled state: 40%-opacity emerald background, not-allowed cursor
  *   - inline-flex with 1.5 gap between icon and label
@@ -74,8 +76,17 @@ export function DownloadButton({
         // md:w-auto / w-full: full-width on mobile so it doesn't look
         // orphaned, fixed-width on desktop where the toolbar has room.
         'md:w-auto w-full h-9 inline-flex items-center gap-1.5',
-        // Canonical Easyfix green CTA palette.
-        'bg-success hover:bg-success-strong text-white',
+        // Canonical Easyfix green CTA palette. `bg-success` is one of the
+        // 16 stable tokens (36.27% lightness in both blocks), so the
+        // resting CTA was always fine — option (c), a hover-only
+        // crossover. --success-strong INVERTS (20.78% under :root,
+        // 92.35% under .dark), so in dark mode the pointer landing on
+        // this button turned it near-white under a pinned `text-white`
+        // label. --success-tint is its swap partner (92.35% ⇄ 20.78%),
+        // which means `dark:hover:bg-success-tint` reproduces the light
+        // theme's 20.78% deep green exactly. The hover is preserved, not
+        // dropped, and the light theme is byte-for-byte unchanged.
+        'bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white',
         // Disabled state — keep the brand colour but visibly muted so
         // it doesn't read as a primary CTA when there's nothing to do.
         'disabled:bg-success/40 disabled:hover:bg-success/40 disabled:cursor-not-allowed',

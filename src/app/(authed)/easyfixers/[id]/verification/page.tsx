@@ -475,8 +475,42 @@ function VerificationView({ data, onReload, backHref }: { data: VerificationPayl
           {/* Proceed gate */}
           {data.registrationVerification.is_verified && (
             <div className="flex justify-center pt-2">
+              {/*
+                * Green-CTA hover, pinned to one dark green in BOTH themes.
+                * This page has nine of these buttons; they all carry the same
+                * class string, and this is the note for all of them.
+                *
+                * `--success` is STABLE — rgb(27,158,90) in `:root` and in
+                * `.dark` — so the resting `bg-success text-white` is fine.
+                * `--success-strong` is not: it and `--success-tint` swap WITH
+                * EACH OTHER between themes, so a bare `hover:bg-success-strong`
+                * measures
+                *
+                *   light  --success-strong  rgb(14,92,52)     8.08:1 vs white ✓
+                *   dark   --success-strong  rgb(226,245,234)  1.14:1 vs white ✗
+                *
+                * i.e. on hover the button went near-white under white text in
+                * dark mode. Because the pair swaps, dark `--success-tint` IS
+                * rgb(14,92,52) — bit-identical to the light-mode hover — so
+                * naming both sides pins that one dark green everywhere.
+                * `dark:hover:` compiles to `.dark .dark\:hover\:…:hover`,
+                * two classes to `hover:`'s one, so it wins on specificity
+                * regardless of source order.
+                *
+                * Light theme is byte-identical to before: the `dark:` half
+                * never applies there. `text-white` stays valid at 8.08:1.
+                *
+                * This also keeps the green CTA behaving like the red one
+                * beside it — `bg-destructive hover:bg-destructive-strong` is
+                * already stable on both halves, so it darkens on hover in
+                * both themes. Letting the green invert its polarity instead
+                * would break a pair that sits on the same button row.
+                *
+                * Same shape as the `text-success-tint dark:text-success-strong`
+                * idiom in components/ui/confirm-dialog.
+                */}
               <Button
-                className="bg-success hover:bg-success-strong text-white rounded-full px-6"
+                className="bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white rounded-full px-6"
                 onClick={async () => {
                   /*
                    * proceed-to-activation is a pure gate-check on the BE
@@ -605,7 +639,10 @@ function LeadActions({ efrId, onReload }: { efrId: number; onReload: () => Promi
         </div>
       )}
       <div className="flex flex-wrap gap-2 justify-center">
-        <Button onClick={() => call(1)} disabled={!checked || busy} className="bg-success hover:bg-success-strong text-white">Accept</Button>
+        {/* Hover pinned to dark green in both themes — see the Proceed gate above.
+            The two destructive buttons beside this one need no `dark:` half:
+            `--destructive-strong` is stable, so they already darken in both. */}
+        <Button onClick={() => call(1)} disabled={!checked || busy} className="bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white">Accept</Button>
         <Button onClick={() => call(2)} disabled={busy} className="bg-destructive hover:bg-destructive-strong text-white">Deny</Button>
         <Button onClick={() => call(0)} disabled={busy} className="bg-destructive hover:bg-destructive-strong text-white">Send Back To Technician</Button>
       </div>
@@ -746,7 +783,7 @@ function PersonalSection({ efrId, d, onReload, addComment }: {
             className="w-full rounded-md border border-ink-100 px-3 py-2 text-sm" />
           <AnimatedLoadingBar visible={saving} message="Saving Personal Details…" tone="emerald" />
           <div className="flex justify-end">
-            <Button disabled={saving || d.is_verified} onClick={markVerified} className="bg-success hover:bg-success-strong text-white">
+            <Button disabled={saving || d.is_verified} onClick={markVerified} className="bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white">
               {saving ? 'Saving…' : 'Yes, I Have Validated All Details'}
             </Button>
           </div>
@@ -819,7 +856,7 @@ function BankingSection({ efrId, d, onReload, addComment }: {
             className="w-full rounded-md border border-ink-100 px-3 py-2 text-sm" />
           <AnimatedLoadingBar visible={busy} message="Saving Banking Details…" tone="emerald" />
           <div className="flex flex-wrap gap-2 justify-end">
-            <Button disabled={busy || d.verification_status === 1} onClick={() => setStatus(1)} className="bg-success hover:bg-success-strong text-white">
+            <Button disabled={busy || d.verification_status === 1} onClick={() => setStatus(1)} className="bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white">
               Valid Banking Details
             </Button>
             <Button disabled={busy} onClick={() => setStatus(2)} className="bg-destructive hover:bg-destructive-strong text-white">
@@ -913,7 +950,7 @@ function IdentitySection({ efrId, d, onReload, addComment }: {
             className="w-full rounded-md border border-ink-100 px-3 py-2 text-sm" />
           <AnimatedLoadingBar visible={savingStatus} message="Saving Identity Verification…" tone="emerald" />
           <div className="flex flex-wrap gap-2 justify-end">
-            <Button disabled={savingStatus || d.verification_status === 1} onClick={() => setStatus(1)} className="bg-success hover:bg-success-strong text-white">
+            <Button disabled={savingStatus || d.verification_status === 1} onClick={() => setStatus(1)} className="bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white">
               Send To Finance
             </Button>
             <Button disabled={savingStatus} onClick={() => setStatus(2)} className="bg-destructive hover:bg-destructive-strong text-white">
@@ -1097,7 +1134,10 @@ function ActivationSection({
               className="w-full rounded-md border border-ink-100 px-3 py-2 text-sm" />
             <AnimatedLoadingBar visible={activating} message="Activating Technician…" tone="emerald" />
             <div className="flex justify-end">
-              <Button onClick={activate} disabled={activating} className="bg-success hover:bg-success-strong text-white">
+              {/* Hover pinned to dark green in both themes — see the Proceed
+                  gate near the top of this file; bare `hover:bg-success-strong`
+                  lands on rgb(226,245,234) in dark mode, 1.14:1 under white. */}
+              <Button onClick={activate} disabled={activating} className="bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white">
                 Activate Technician
               </Button>
             </div>
@@ -1587,7 +1627,7 @@ function DeepSkillOptionMapping({ efrId, onReload }: { efrId: number; onReload?:
           </div>
 
           <div className="flex justify-end gap-2 pt-1">
-            <Button disabled={saving || !dirty} onClick={save} className="bg-success hover:bg-success-strong text-white">
+            <Button disabled={saving || !dirty} onClick={save} className="bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white">
               {saving ? 'Saving…' : 'Save Option Mappings'}
             </Button>
           </div>
@@ -2012,12 +2052,14 @@ function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: ()
                   className="pl-8"
                 />
               </div>
+              {/* Hover pinned to dark green in both themes — see the Proceed
+                  gate near the top of this file. */}
               {isBulkInput && (
                 <Button
                   type="button"
                   onClick={() => void handleBulkAdd()}
                   disabled={bulkLookupBusy}
-                  className="bg-success hover:bg-success-strong text-white whitespace-nowrap"
+                  className="bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white whitespace-nowrap"
                 >
                   {bulkLookupBusy ? (
                     <span className="inline-flex items-center gap-1.5">
@@ -2119,7 +2161,7 @@ function ServiceablePincodes({ efrId, onReload }: { efrId: number; onReload?: ()
           {error && <div className="text-xs text-urgent">{error}</div>}
 
           <div className="flex justify-end gap-2 pt-1">
-            <Button disabled={saving || !dirty} onClick={save} className="bg-success hover:bg-success-strong text-white">
+            <Button disabled={saving || !dirty} onClick={save} className="bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white">
               {saving ? 'Saving…' : 'Save Serviceable Pincodes'}
             </Button>
           </div>

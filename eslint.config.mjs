@@ -700,12 +700,468 @@ const dialogSingleScroller = {
   },
 };
 
+/* ───────────────────────────────────────────────────────────────────────────
+ * LOCAL RULE — local/no-inverting-surface-with-fixed-foreground
+ *
+ * Bans a surface class (`bg-` / `from-` / `via-` / `to-`) built on a token
+ * whose LIGHTNESS INVERTS between themes, when the same class set pins the
+ * foreground to something that does NOT invert — a literal (`text-white`,
+ * `text-black`, `text-[#fff]`) or one of the 16 stable tokens. The surface
+ * follows the theme, the text does not, and in one of the two themes they
+ * cross over.
+ *
+ * THE MEASUREMENT THAT DEFINES THE TOKEN SETS. src/app/brand.css declares all
+ * 54 semantic colour tokens twice, once under `:root` and once under `.dark`,
+ * as space-separated HSL triplets. Parse both blocks, read the third component
+ * (lightness) of each pair, and a token INVERTS when the two values sit on
+ * opposite sides of the 50% mid-point. That split is 38 inverting / 16 stable
+ * (byte-identical in both blocks; none of the 54 changes value without also
+ * crossing). `--radius` is the only other custom property and is not a colour.
+ * The INVERTING_TOKENS map carries both lightness values per token precisely so
+ * the message can quote them and so the next person can re-derive the list:
+ * re-run that comparison over brand.css after `npm run brand:gen` and the two
+ * halves should still add to 54.
+ *
+ * INVERTING IS NOT THE BUG. A text scale MUST invert — `text-ink-900` has to
+ * stay readable in both themes — and most tokens invert IN PAIRS: `--card`
+ * flips and `--card-foreground` flips with it, so `bg-card text-card-foreground`
+ * is correct. `--success-tint` (92.35% → 20.78%) and `--success-strong`
+ * (20.78% → 92.35%) swap WITH EACH OTHER, so `bg-success-tint
+ * text-success-strong` is correct too. The rule therefore stays silent the
+ * moment the foreground is itself an inverting token — that pairing IS the
+ * design, not the defect.
+ *
+ * THE DEFECT THAT PROMPTED IT, measured. DialogHeader painted
+ * `bg-gradient-to-r from-ink-900 via-ink-700 to-ink-900 text-white`. --ink-900
+ * is rgb(23,27,31) under :root — 17.31:1 against white — and rgb(244,246,247)
+ * under .dark, which is 1.08:1. Every dialog title in the app was
+ * white-on-near-white in dark mode. Commit 497cd6e fixed it by swapping to
+ * --sidebar / --sidebar-accent: stable in both themes AND equal to the
+ * light-mode ink values, so the light theme came out pixel-identical.
+ *
+ * WHY THIS ISN'T A no-restricted-syntax SELECTOR, and why it does NOT reuse
+ * `literalTextIn`. Same relational problem as the two dialog rules above — the
+ * condition is "this class set holds an inverting surface AND a non-inverting
+ * foreground" — but with one twist that rules the shared helper out.
+ * `literalTextIn` CONCATENATES every branch on purpose, which is exactly right
+ * for the dialog pair (it makes them quiet) and exactly wrong here (it would
+ * make this one LOUD). The single largest false-positive source for this defect
+ * is pairing a surface from one ternary arm with a foreground from the other:
+ *
+ *     isOpen ? 'bg-brand-50 text-primary' : 'bg-card text-ink-700'
+ *
+ * Concatenated, that also reads as `bg-card` + `text-primary` and reports a
+ * pairing that can never render. So this rule splits a class expression into
+ * INDEPENDENT sets instead: the unconditional text is a base, and each
+ * conditional arm, each `&&`/`||` right-hand side and each template quasi
+ * becomes its own set layered on that base. Sibling `cn()` arguments DO share
+ * one set — they are emitted together onto one element — and that is what
+ * catches the sites that split an element's classes across several string
+ * arguments.
+ *
+ * NOT JUST className. The QUIET notice theme stores its CTA classes as a plain
+ * object property (`buttonClass: 'bg-ink-900 hover:bg-ink-700 text-white'` in
+ * src/components/notice/noticeThemes.ts) and never touches a JSX attribute, so
+ * an attribute-scoped rule would miss it. So the rule accepts a set root from a
+ * className attribute, an argument to a class combinator (cn/clsx/classNames/
+ * twMerge/cva), OR an object property / variable binding whose NAME ends in
+ * `class`, `classes` or `className` — which is how this codebase stores class
+ * strings outside JSX.
+ *
+ * IT IS NAME-GATED, NOT SHAPE-GATED, and that is a real limitation rather than
+ * an oversight. It once did walk the whole program and treat any class-shaped
+ * expression as a root; that version reported
+ *
+ *     const MSG = 'Could not load bg-ink-900 text-white preset';
+ *
+ * which is prose, reaches no `class` attribute, and cannot be a contrast bug. A
+ * rule that flags prose gets switched off, and then it protects nothing. The
+ * cost of the gate is that a class string in a generically named binding —
+ * `const T = { active: 'bg-ink-900 text-white' }` — is invisible here. Probed:
+ * `buttonClass`, `heroClass` and `className` all report; `active` and `klass`
+ * do not. Name the binding after what it holds and the rule sees it.
+ *
+ * VARIANTS. `hover:` / `focus:` / `active:` / `group-hover:` surfaces pair with
+ * the element's own foreground and ARE reportable — a green CTA whose base is
+ * the stable `bg-success` but whose hover is the inverting `bg-success-strong`
+ * loses its white label the moment the pointer lands — so the message names the
+ * variant. Anything carrying `dark:` is theme-specific by construction and the
+ * whole set is skipped: the author has already said what dark mode should do.
+ *
+ * WHAT IT DELIBERATELY CANNOT SEE — skipped silently, never guessed:
+ *   · a class string assembled from a variable, a prop, a MemberExpression or a
+ *     lookup table in another file — there is no literal to read, so nothing is
+ *     contributed to the set;
+ *   · a surface and a foreground that live on DIFFERENT elements but share one
+ *     literal (a `cn()` handed to a wrapper and its label) — read as one set;
+ *     the documented escape is an eslint-disable-next-line, as with the rules
+ *     above;
+ *   · composited alpha (`bg-ink-900/85`): the opacity is stripped and the token
+ *     judged at full strength. That chip does still cross — 11.14:1 in light,
+ *     1.47:1 in dark — but the rule is not computing the composite, it is
+ *     flagging the token underneath it;
+ *   · a set with no `text-` colour at all — colour is inherited and the pairing
+ *     is decided somewhere this rule cannot see, so it is NOT a defect;
+ *   · a set declaring BOTH a fixed and an inverting foreground AT THE SAME
+ *     variant scope — which one wins depends on emission order, and ambiguous
+ *     is not a violation. (Foregrounds at DIFFERENT scopes no longer mask each
+ *     other; see crossoverIn.)
+ * A noisy rule gets disabled within a week; a quiet one keeps working.
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/* token → [lightness under :root, lightness under .dark]. Derived from
+ * src/app/brand.css by the mid-point comparison documented above — 38 of 54.
+ * Regenerate, do not hand-edit. */
+const INVERTING_TOKENS = new Map([
+  ['accent',               [96.27, 30.39]],
+  ['accent-foreground',    [30.39, 91.76]],
+  ['background',           [96.27, 10.59]],
+  ['border',               [90.59, 39.02]],
+  ['brand-100',            [91.76, 38.82]],
+  ['brand-50',             [96.27, 30.39]],
+  ['brand-700',            [30.39, 91.76]],
+  ['card',                 [100.00, 23.33]],
+  ['card-foreground',      [10.59, 96.27]],
+  ['foreground',           [10.59, 96.27]],
+  ['gold-strong',          [21.96, 91.57]],
+  ['gold-tint',            [91.57, 21.96]],
+  ['info-deep',            [18.24, 93.73]],
+  ['info-strong',          [31.76, 93.73]],
+  ['info-tint',            [93.73, 18.24]],
+  ['ink-100',              [90.59, 23.33]],
+  ['ink-300',              [63.33, 39.02]],
+  ['ink-50',               [96.27, 10.59]],
+  ['ink-500',              [39.02, 63.33]],
+  ['ink-700',              [23.33, 90.59]],
+  ['ink-900',              [10.59, 96.27]],
+  ['input',                [90.59, 39.02]],
+  ['muted',                [90.59, 39.02]],
+  ['muted-foreground',     [39.02, 63.33]],
+  ['neutral',              [39.02, 63.33]],
+  ['neutral-strong',       [23.33, 90.59]],
+  ['neutral-tint',         [90.59, 23.33]],
+  ['popover',              [100.00, 23.33]],
+  ['popover-foreground',   [10.59, 96.27]],
+  ['secondary',            [90.59, 39.02]],
+  ['secondary-foreground', [10.59, 96.27]],
+  ['success-strong',       [20.78, 92.35]],
+  ['success-tint',         [92.35, 20.78]],
+  ['urgent',               [38.82, 91.76]],
+  ['urgent-strong',        [30.39, 91.76]],
+  ['urgent-tint',          [91.76, 30.39]],
+  ['warning-strong',       [21.96, 91.96]],
+  ['warning-tint',         [91.96, 21.96]],
+]);
+
+/* The other 16: byte-identical under :root and .dark. Safe as chrome, and the
+ * only surfaces a `text-white` label may sit on — but as a FOREGROUND they are
+ * the fixed half of the crossover, which is why the same list feeds both
+ * FIXED_FOREGROUNDS and the "use one of these instead" half of the message. */
+const STABLE_TOKENS = [
+  'brand-500', 'brand-600', 'destructive', 'destructive-foreground', 'destructive-strong',
+  'gold', 'info', 'primary', 'primary-foreground', 'primary-pressed', 'ring',
+  'sidebar', 'sidebar-accent', 'sidebar-foreground', 'success', 'warning',
+];
+
+/* A foreground that will NOT move when the theme flips. Bare literals plus the
+ * stable tokens; arbitrary colour values (`text-[#fff]`) are matched separately
+ * by ARBITRARY_COLOR because they have no closed vocabulary. */
+const FIXED_FOREGROUNDS = new Set(['white', 'black', ...STABLE_TOKENS]);
+const ARBITRARY_COLOR = /^\[(#|rgb|hsl|oklch)/i;
+
+/* Surfaces only: the gradient stops count because `from-ink-900 … text-white`
+ * IS the DialogHeader defect. `text-` is handled separately as the foreground;
+ * `border-` and `ring-` are not surfaces and never carry the label. */
+const SURFACE_UTILITY = /^(bg|from|via|to)-(.+)$/;
+
+/* Variants that describe an interaction STATE rather than a viewport or a
+ * theme. Used only to phrase the message ("on `hover:`"); a state-only
+ * crossover is still a crossover. */
+const STATE_VARIANT = /(^|-)(hover|focus|focus-visible|focus-within|active|open|checked|selected|pressed|disabled)$/;
+
+/* Functions whose arguments are all emitted onto ONE element, so they share a
+ * class set. Counted in src/: cn 121, twMerge 1, clsx 1, cva 1. */
+const CLASS_JOINERS = new Set(['cn', 'clsx', 'classNames', 'classnames', 'twMerge', 'cva']);
+
+/* Is this node part of a class expression — i.e. can classSets() read it?
+ * Used twice: to walk INTO a class expression, and to decide whether a node is
+ * the OUTERMOST one (a set root) by asking the same question of its parent. A
+ * CallExpression only counts when its callee is a known joiner, so an unrelated
+ * `showToast('…')` leaves its string literal to be judged on its own. */
+const isClassExpr = (n) => {
+  if (!n || typeof n.type !== 'string') return false;
+  switch (n.type) {
+    case 'CallExpression':
+      return !!n.callee && n.callee.type === 'Identifier' && CLASS_JOINERS.has(n.callee.name);
+    case 'BinaryExpression':
+      return n.operator === '+';
+    case 'Literal':
+      return typeof n.value === 'string';
+    case 'TemplateLiteral':
+    case 'ConditionalExpression':
+    case 'LogicalExpression':
+    case 'ArrayExpression':
+    case 'JSXExpressionContainer':
+    case 'JSXAttribute':
+    case 'TSAsExpression':
+      return true;
+    default:
+      return false;
+  }
+};
+
+/* Strip the `!` important marker, peel the variant chain off the front and the
+ * `/40` opacity off the back, and hand back both halves. Bracket-depth aware:
+ * `bg-[url(a:b)]` and `text-[hsl(0_0%_0%/50%)]` must not be split on the colon
+ * or the slash inside their arbitrary value. */
+const utilityParts = (token) => {
+  const tok = token.replace(/^!/, '');
+  const variants = [];
+  let depth = 0;
+  let cur = '';
+  for (const ch of tok) {
+    if (ch === '[' || ch === '(') depth += 1;
+    else if (ch === ']' || ch === ')') depth -= 1;
+    if (ch === ':' && depth === 0) { variants.push(cur); cur = ''; continue; }
+    cur += ch;
+  }
+  const base = cur.replace(/^!/, '').replace(/\/[\d.]+$/, '');
+  return { variants, base };
+};
+
+/* Every INDEPENDENT class set a class expression can emit, as arrays of raw
+ * utility tokens. Returns [base, ...branches] where every branch already has
+ * the base folded in — so `cn('bg-success text-white', busy && 'opacity-60')`
+ * yields a base holding the pairing, and a nested ternary's arms never see each
+ * other. Unreadable shapes (Identifier, MemberExpression, a call to anything
+ * that is not a joiner) contribute NOTHING rather than a guess.
+ *
+ * Each template QUASI is its own set, not one concatenated run: the static text
+ * either side of an interpolation is frequently two different elements' worth
+ * of classes, and keeping them apart costs nothing real (a quasi that genuinely
+ * holds both halves of a pairing still holds them together). */
+const classSets = (node) => {
+  const base = [];
+  const branches = [];
+  const addText = (s) => { for (const t of String(s).split(/\s+/)) if (t) base.push(t); };
+  const tokensOf = (s) => String(s).split(/\s+/).filter(Boolean);
+
+  const walk = (n) => {
+    if (!n || typeof n !== 'object') return;
+    switch (n.type) {
+      case 'Literal':
+        if (typeof n.value === 'string') addText(n.value);
+        return;
+      case 'TemplateLiteral':
+        for (const q of n.quasis) branches.push(tokensOf(q.value.cooked ?? q.value.raw ?? ''));
+        for (const e of n.expressions) branches.push(...classSets(e));
+        return;
+      case 'ConditionalExpression':
+        branches.push(...classSets(n.consequent), ...classSets(n.alternate));
+        return;
+      case 'LogicalExpression':
+        // `cond && '…'` / `x ?? '…'` — only the right side can reach the DOM.
+        branches.push(...classSets(n.right));
+        return;
+      case 'BinaryExpression':
+        if (n.operator === '+') { walk(n.left); walk(n.right); }
+        return;
+      case 'ArrayExpression':
+        (n.elements || []).forEach(walk);
+        return;
+      case 'CallExpression':
+        if (isClassExpr(n)) (n.arguments || []).forEach(walk);
+        return;
+      case 'JSXExpressionContainer': walk(n.expression); return;
+      case 'JSXAttribute': walk(n.value); return;
+      case 'TSAsExpression': walk(n.expression); return;
+      default: return;   // unreadable — skipped silently, see the header
+    }
+  };
+
+  walk(node);
+  return [base, ...branches.map((b) => base.concat(b))];
+};
+
+/* The crossover test for ONE set, or null.
+ *
+ * FOREGROUNDS ARE MATCHED AT THE SURFACE'S OWN VARIANT SCOPE, and that detail
+ * earns its keep. NoticeDetailModal's Open Link chip is
+ * `border-brand-100 bg-brand-50 text-primary hover:bg-brand-100
+ * hover:text-brand-700`: the RESTING state is the defect (--brand-50 inverts
+ * 96.27% → 30.39% under a fixed primary red — 5.17:1 light, 1.72:1 dark) while
+ * the hover state is fine, because brand-100 and brand-700 swap with each
+ * other. A flat "does this set contain any inverting foreground" test reads the
+ * `hover:text-brand-700` and calls the whole chip safe — one real defect lost to
+ * a recolour that only applies under the pointer. So each foreground is filed
+ * under its own variant key, and a surface consults the foregrounds declared at
+ * its key, falling back to the unvariant ones when it has none of its own —
+ * which is what the cascade actually does. */
+const crossoverIn = (tokens) => {
+  let surface = null;
+  let surfacePrefix = '';
+  let surfaceVariants = [];
+  const foregrounds = [];   // { key, colour, inverting }
+
+  for (const tok of tokens) {
+    const { variants, base } = utilityParts(tok);
+    // A `dark:` anywhere in the set means the author is already steering the
+    // theme by hand; the whole set is theirs, not ours.
+    if (variants.includes('dark')) return null;
+    const key = variants.slice().sort().join('.');
+
+    const surfaceMatch = SURFACE_UTILITY.exec(base);
+    if (surfaceMatch && INVERTING_TOKENS.has(surfaceMatch[2]) && !surface) {
+      surface = surfaceMatch[2];
+      surfacePrefix = surfaceMatch[1];
+      surfaceVariants = variants;
+      continue;
+    }
+    if (!base.startsWith('text-')) continue;
+    const colour = base.slice('text-'.length);
+    if (INVERTING_TOKENS.has(colour)) foregrounds.push({ key, colour, inverting: true });
+    else if (FIXED_FOREGROUNDS.has(colour) || ARBITRARY_COLOR.test(colour)) {
+      foregrounds.push({ key, colour, inverting: false });
+    }
+  }
+  if (!surface) return null;
+
+  const surfaceKey = surfaceVariants.slice().sort().join('.');
+  const own = foregrounds.filter((f) => f.key === surfaceKey);
+  const applicable = own.length ? own : foregrounds.filter((f) => f.key === '');
+  // An inverting foreground at the same scope IS the intended pairing; a scope
+  // carrying both is ambiguous, and ambiguous is not a violation.
+  if (!applicable.length || applicable.some((f) => f.inverting)) return null;
+
+  const state = surfaceVariants.find((v) => STATE_VARIANT.test(v));
+  return { surface, surfacePrefix, fixedFg: applicable[0].colour, state };
+};
+
+const noInvertingSurfaceWithFixedForeground = {
+  meta: {
+    type: 'problem',
+    docs: { description: 'Disallow an inverting surface token paired with a foreground that does not invert.' },
+    schema: [],
+    messages: {
+      crossover:
+        '`{{prefix}}-{{surface}}`{{when}} is an INVERTING surface but `text-{{fg}}` is not: --{{surface}} is '
+        + '{{light}}% lightness under :root and {{dark}}% under .dark, so it crosses the 50% mid-point between '
+        + 'themes while the text stays put — in one of the two themes they land on the same side and the '
+        + 'contrast collapses. Measured precedent: DialogHeader painted `from-ink-900 via-ink-700 to-ink-900 '
+        + 'text-white`; --ink-900 is rgb(23,27,31) in light (17.31:1 against white) and rgb(244,246,247) in '
+        + 'dark (1.08:1), so every dialog title in the app was white-on-near-white. Commit 497cd6e fixed it by '
+        + 'moving to --sidebar / --sidebar-accent, which do not invert and happen to equal the light-mode ink '
+        + 'values, so the light theme stayed pixel-identical. Two fixes, both correct: (1) paint the surface '
+        + 'with a STABLE token — sidebar, sidebar-accent, primary, primary-pressed, brand-500, brand-600, '
+        + 'success, warning, info, gold, destructive, destructive-strong, ring — which hold one value in both '
+        + 'themes; or (2) drop the fixed foreground and use the matching -foreground / paired token instead '
+        + '(`bg-card text-card-foreground`, `bg-success-tint text-success-strong`), so both halves flip '
+        + 'together. If the surface and the label are never on the same element, add an '
+        + 'eslint-disable-next-line saying so.',
+    },
+  },
+  create(context) {
+    const report = (node, hit) => {
+      const [light, dark] = INVERTING_TOKENS.get(hit.surface);
+      context.report({
+        node,
+        messageId: 'crossover',
+        data: {
+          prefix: hit.surfacePrefix,
+          surface: hit.surface,
+          fg: hit.fixedFg,
+          when: hit.state ? ' on `' + hit.state + ':`' : '',
+          light: light.toFixed(2),
+          dark: dark.toFixed(2),
+        },
+      });
+    };
+
+    return {
+      'Program:exit'(program) {
+        /* One walk, tracking the parent explicitly rather than trusting
+         * node.parent — a set ROOT is any class expression whose parent is not
+         * itself one, and that question has to be answerable for every node.
+         * The walk continues THROUGH a root: a ternary arm may hold a whole
+         * JSXElement, whose own className is a separate root further down. */
+        /*
+         * CLASSNAME CONTEXT GATE (2026-09-02). Without this the rule walked the
+         * whole program and reported any string that merely LOOKED like classes.
+         * The adversarial pass caught it on real shapes:
+         *
+         *   const MSG = 'Could not load bg-ink-900 text-white preset';   <- prose
+         *   return 'from-ink-900 to-ink-900 text-white';                 <- a plain return
+         *
+         * Neither reaches a `class` attribute, so neither can be a contrast bug.
+         * A rule that flags prose gets disabled, and then it protects nothing.
+         *
+         * In context means: a className JSX attribute, an argument to a class
+         * combinator, or an object property / variable whose NAME ends in Class
+         * — which is how this codebase stores class strings outside JSX
+         * (noticeThemes.ts uses `buttonClass`, `heroClass`, `iconClass`).
+         *
+         * KNOWN LIMITATION, deliberate: a class string held in a generically
+         * named binding (`const TOGGLES = [{ on: 'bg-ink-900 text-white' }]`) is
+         * not reachable from here and is silently skipped. Quiet beats noisy:
+         * every miss is one this rule never claimed, whereas one false positive
+         * costs the whole rule.
+         */
+        const CLASS_FNS = new Set(['cn', 'clsx', 'classNames', 'twMerge', 'cva']);
+        const NAME_IS_CLASSY = /class(es|name)?$/i;
+        const opensContext = (n) => {
+          if (!n || typeof n.type !== 'string') return false;
+          if (n.type === 'JSXAttribute') return n.name && n.name.name === 'className';
+          if (n.type === 'CallExpression') {
+            const c = n.callee;
+            return !!c && ((c.type === 'Identifier' && CLASS_FNS.has(c.name))
+              || (c.type === 'MemberExpression' && c.property && CLASS_FNS.has(c.property.name)));
+          }
+          if (n.type === 'Property') {
+            const k = n.key;
+            const name = k && (k.name || k.value);
+            return typeof name === 'string' && NAME_IS_CLASSY.test(name);
+          }
+          if (n.type === 'VariableDeclarator') {
+            return n.id && n.id.type === 'Identifier' && NAME_IS_CLASSY.test(n.id.name);
+          }
+          return false;
+        };
+
+        const visit = (node, parent, inCtx) => {
+          if (!node || typeof node !== 'object') return;
+          const ctx = inCtx || opensContext(node);
+          if (ctx && typeof node.type === 'string' && isClassExpr(node) && !isClassExpr(parent)) {
+            for (const set of classSets(node)) {
+              const hit = crossoverIn(set);
+              if (!hit) continue;
+              // One report per root: a gradient names three stops and both arms
+              // of a ternary can be wrong, but there is one edit to make.
+              report(node, hit);
+              break;
+            }
+          }
+          for (const key of Object.keys(node)) {
+            // `tokens` / `comments` hang off Program and carry a `type` of their
+            // own; descending into them walks the whole file a second time.
+            if (key === 'parent' || key === 'tokens' || key === 'comments' || key === 'loc') continue;
+            const v = node[key];
+            if (Array.isArray(v)) { for (const c of v) if (c && typeof c.type === 'string') visit(c, node, ctx); }
+            else if (v && typeof v.type === 'string') visit(v, node, ctx);
+          }
+        };
+        visit(program, null, false);
+      },
+    };
+  },
+};
+
 const localPlugin = {
   rules: {
     'no-duplicate-chart-series-color': noDuplicateChartSeriesColor,
     'no-raw-time-slot-render': noRawTimeSlotRender,
     'no-unscrollable-dialog-content': noUnscrollableDialogContent,
     'dialog-single-scroller': dialogSingleScroller,
+    'no-inverting-surface-with-fixed-foreground': noInvertingSurfaceWithFixedForeground,
   },
 };
 
@@ -766,6 +1222,15 @@ const config = [
       // child is a deliberate sub-region and is left alone. Inert on files with
       // no DialogContent.
       'local/dialog-single-scroller': 'error',
+      // Dark-mode crossover guard: a surface token whose lightness INVERTS
+      // between :root and .dark (38 of the 54 in brand.css) must not be paired
+      // with a foreground that stays put — a literal `text-white`/`text-black`
+      // or one of the 16 stable tokens. That is the DialogHeader defect
+      // (17.31:1 in light, 1.08:1 in dark) generalised. Each conditional branch
+      // is judged on its own, so a surface in one ternary arm never pairs with
+      // a foreground in the other. Inert on files with no Tailwind colour
+      // classes.
+      'local/no-inverting-surface-with-fixed-foreground': 'error',
     },
   },
 

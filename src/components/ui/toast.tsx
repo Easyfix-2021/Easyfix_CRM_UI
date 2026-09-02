@@ -288,8 +288,20 @@ export function ToastHost() {
              * `motion-reduce:scale-100` forces the static state for
              * extra safety on browsers that interpret motion-safe
              * differently.
+             *
+             * Surface is `bg-sidebar/85`, not the `bg-ink-900/85` this
+             * chip used to carry — option (a), the stable-surface swap.
+             * --ink-900 INVERTS (10.59% lightness under :root, 96.27%
+             * under .dark), so the pinned `text-white` label held at
+             * 11.14:1 in light and collapsed to 1.47:1 in dark once the
+             * 85% alpha composited. --sidebar is one of the 16 stable
+             * tokens and holds 10.59% in BOTH blocks — byte-identical to
+             * the light-mode ink-900 it replaces — so the LIGHT theme
+             * renders pixel-identically and dark simply stops inverting.
+             * Same substitution, same reason, as commit 497cd6e on
+             * DialogHeader. The /85 alpha is carried across unchanged.
              */
-            className={`pointer-events-none rounded-full bg-ink-900/85 text-white text-xs font-medium px-2.5 py-0.5 shadow-md motion-safe:transition-transform motion-safe:duration-300 motion-safe:ease-out motion-reduce:scale-100 ${pulse ? 'motion-safe:scale-110' : 'scale-100'}`}
+            className={`pointer-events-none rounded-full bg-sidebar/85 text-white text-xs font-medium px-2.5 py-0.5 shadow-md motion-safe:transition-transform motion-safe:duration-300 motion-safe:ease-out motion-reduce:scale-100 ${pulse ? 'motion-safe:scale-110' : 'scale-100'}`}
             role="status"
             aria-label={`${hiddenCount} earlier toast${hiddenCount === 1 ? '' : 's'} hidden by stack cap`}
             title="Older toasts were hidden to keep the stack readable. Stack resets when current toasts clear."
@@ -330,7 +342,17 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
         // `success`): a solid amber block reads as an alarm, and amber-on-white
         // keeps the message legible at the contrast the tinted style gives.
         toast.variant === 'warning' && 'bg-warning-tint border-warning/30 text-warning-strong',
-        toast.variant === 'loading' && 'bg-ink-900 border-ink-700 text-white',
+        // Option (a) — stable surface. This branch used to be
+        // `bg-ink-900 border-ink-700`, and --ink-900 INVERTS: 10.59%
+        // lightness under :root, 96.27% under .dark. The `text-white`
+        // label pinned to it measured 17.31:1 in light and 1.08:1 in
+        // dark — the exact DialogHeader defect commit 497cd6e fixed.
+        // --sidebar (10.59%) and --sidebar-accent (23.33%) are stable in
+        // both blocks and equal the LIGHT-mode values of ink-900 and
+        // ink-700 respectively, so the light theme is unchanged down to
+        // the pixel and the dark loading toast goes back to a dark chip
+        // with a legible white label.
+        toast.variant === 'loading' && 'bg-sidebar border-sidebar-accent text-white',
       )}
     >
       {toast.variant === 'success' && <CheckCircle2 className="h-5 w-5 mt-0.5 shrink-0 text-white" />}
@@ -350,7 +372,17 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
             // success-or-else-rose ternary — under that shape a new variant
             // silently inherited the rose hover. `loading` never reaches here
             // (it renders no dismiss button).
-            toast.variant === 'success' && 'hover:bg-success-strong/40 text-white',
+            // Option (c) — hover-only crossover, so the resting state
+            // (transparent over the stable `bg-success`) was never wrong
+            // and the hover is kept, not deleted. --success-strong and
+            // --success-tint SWAP with each other (20.78% ⇄ 92.35%), so
+            // `dark:hover:bg-success-tint/40` paints the dark theme with
+            // the very same 20.78% green the light theme gets: one
+            // darkening wash under a white glyph in both themes. Without
+            // it, dark mode washed the button with a 92.35% near-white
+            // green under `text-white`. Light theme is untouched — the
+            // `dark:` class cannot match under :root.
+            toast.variant === 'success' && 'hover:bg-success-strong/40 dark:hover:bg-success-tint/40 text-white',
             toast.variant === 'warning' && 'hover:bg-warning-tint text-warning-strong',
             toast.variant === 'error'   && 'hover:bg-urgent-tint text-urgent-strong',
           )}

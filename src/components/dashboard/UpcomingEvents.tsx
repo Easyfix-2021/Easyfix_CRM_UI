@@ -226,11 +226,37 @@ export function UpcomingEvents({ days = 7 }: { days?: number }) {
                       /* Third colour, same card shape: gold reads as
                          celebratory next to the green holidays and the blue
                          notices, and `-strong` rather than the base tint is
-                         what carries white label text at a readable contrast.
+                         what gives the plate enough depth to carry a label.
+
+                         PIN THE PLATE, DO NOT MOVE THE LABEL. An older comment
+                         here claimed -strong carried white text "at a readable
+                         contrast" — true only in light. --gold-strong INVERTS:
+                         21.96% lightness under :root, 91.57% under .dark, so
+                         white measured 8.06:1 in light and 1.12:1 in dark — a
+                         near-white name on a near-white plate every evening.
+
+                         Gold has no stable twin at this depth (the stable set
+                         carries --gold at 48.43% and nothing darker in this
+                         hue), so the fix is not a stable surface but a dark-mode
+                         one: --gold-tint under .dark is 40.59 91.07% 21.96%,
+                         which is byte-identical to what --gold-strong paints
+                         under :root. `dark:bg-gold-tint` therefore repaints the
+                         plate to the SAME amber in dark that it already is in
+                         light, and `text-white` holds 8.06:1 in both themes.
+
+                         A first pass moved the label instead (text-gold-tint,
+                         the -strong mirror) and measured 7.16:1 in both. That
+                         works, but it dims the light theme for no reason — the
+                         light half was never broken. Pinning the surface leaves
+                         light pixel-identical, which is the property that makes
+                         these swaps safe to ship without re-reviewing every
+                         screen. Same shape as the green CTAs' dark:hover:
+                         bg-success-tint and the undo badge's
+                         dark:hover:bg-warning-tint.
                          Not clickable — there is nothing to open. */
                       <div
                         key={e.key}
-                        className="rounded-md bg-gold-strong text-white px-3 py-2 text-[13px] font-medium shadow-sm flex items-center gap-2"
+                        className="rounded-md bg-gold-strong dark:bg-gold-tint text-white px-3 py-2 text-[13px] font-medium shadow-sm flex items-center gap-2"
                         title={e.title}
                       >
                         <Cake className="h-3.5 w-3.5 shrink-0 opacity-80" />

@@ -87,7 +87,31 @@ function CallToast({ variant, message, onDismiss }: {
         onClick={onDismiss}
         className={cn(
           'rounded p-0.5 shrink-0',
-          variant === 'success' ? 'hover:bg-success-strong/40 text-white' : 'hover:bg-destructive/15 text-urgent-strong',
+          /* (c) hover-only crossover, fixed by naming the dark half — the same
+           * shape already shipped across easyfixers/[id]/verification.
+           *
+           * The resting X is transparent and inherits the toast's `text-white`
+           * over the STABLE `bg-success` (36.27% in both themes), which is
+           * fine. Only the hover wash inverts: --success-strong is 20.78%
+           * lightness under :root and 92.35% under .dark, so it crosses the
+           * mid-point while `text-white` stays put —
+           *
+           *   light  --success-strong  rgb(14,92,52)     dark green wash ✓
+           *   dark   --success-strong  rgb(226,245,234)  near-white wash ✗
+           *
+           * i.e. hovering the dismiss button in dark mode washed a white ✕ out
+           * against near-white. --success-tint and --success-strong SWAP with
+           * each other (92.35% ↔ 20.78%), so dark `--success-tint` IS
+           * rgb(14,92,52) — bit-identical to the light-mode hover — and naming
+           * both halves pins that one dark green in both themes. `dark:hover:`
+           * compiles to two classes against `hover:`'s one, so it wins on
+           * specificity regardless of source order.
+           *
+           * The /40 alpha is preserved on both halves; light theme is
+           * byte-identical, since the `dark:` half never applies there. */
+          variant === 'success'
+            ? 'hover:bg-success-strong/40 dark:hover:bg-success-tint/40 text-white'
+            : 'hover:bg-destructive/15 text-urgent-strong',
         )}
         aria-label="Dismiss"
       >
@@ -628,7 +652,19 @@ export function CallButton({
         className={cn(
           'inline-flex items-center gap-1.5 px-3 h-9 rounded-md',
           'bg-success text-white text-xs font-semibold shadow-sm',
-          'hover:bg-success-strong hover:shadow-md transition-all',
+          /* (c) hover-only crossover on the green CTA — same fix as the toast
+           * dismiss above and as the Accept/Verify buttons in
+           * easyfixers/[id]/verification. The RESTING half is already safe:
+           * --success is 36.27% in both themes (STABLE), 4.6:1 under white.
+           * Only `hover:bg-success-strong` inverts — 20.78% under :root,
+           * 92.35% under .dark — so in dark mode the button went near-white
+           * (rgb(226,245,234), 1.14:1) under a white label the instant the
+           * pointer landed. Because --success-tint/--success-strong swap with
+           * each other, dark --success-tint is the identical rgb(14,92,52) the
+           * light theme hovers to, so naming both halves darkens on hover
+           * everywhere. Light theme is byte-identical — the `dark:` half never
+           * applies there — and `text-white` stays valid at 8.08:1. */
+          'hover:bg-success-strong dark:hover:bg-success-tint hover:shadow-md transition-all',
           busy && 'opacity-60 cursor-wait',
           className,
         )}

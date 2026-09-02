@@ -292,7 +292,30 @@ export function ServicesTab({ clientId, canEdit }: Props) {
                         <div className="inline-flex items-center gap-0.5 justify-end">
                           {/* Show/Hide Breakdown — always rendered (even
                               when canEdit is false) so read-only viewers
-                              can still audit the cascade. */}
+                              can still audit the cascade.
+
+                              The open/active arm carries `text-brand-700`,
+                              not `text-primary` — option (b), paired
+                              foreground. --brand-50 INVERTS (96.27%
+                              lightness under :root, 30.39% under .dark)
+                              but --primary is one of the 16 stable tokens
+                              (45.49% in both), so in dark mode the glyph
+                              sat at 45.49% on a 30.39% tile and the icon
+                              all but vanished — the same crossover commit
+                              497cd6e measured on DialogHeader, where
+                              --ink-900 went from 17.31:1 against white in
+                              light to 1.08:1 in dark. --brand-700 is the
+                              token that SWAPS with --brand-50 (30.39% →
+                              91.76%), so surface and glyph move together:
+                              30.39 on 96.27 in light, 91.76 on 30.39 in
+                              dark. Swapping the SURFACE for a stable token
+                              instead (option a) isn't available — nothing
+                              in the stable set lives in the brand-50 tint
+                              range — so the light theme does shift a shade:
+                              the glyph darkens from 45.49% to 30.39% at
+                              essentially the same hue. The inactive arm is
+                              already correct: --card / --ink-700 /
+                              --ink-50 all invert together. */}
                           <button
                             type="button"
                             title={isOpen ? 'Hide Breakdown' : 'Show Breakdown'}
@@ -300,7 +323,7 @@ export function ServicesTab({ clientId, canEdit }: Props) {
                             className={
                               'inline-flex items-center justify-center w-7 h-7 rounded border ' +
                               (isOpen
-                                ? 'bg-brand-50 border-primary text-primary'
+                                ? 'bg-brand-50 border-primary text-brand-700'
                                 : 'bg-card border-ink-100 text-ink-700 hover:bg-ink-50')
                             }
                             onClick={() => setOpenBreakdownId(isOpen ? null : r.client_service_id)}

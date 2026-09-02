@@ -579,9 +579,32 @@ export function AssignTechnicianModal({
           {/* LEFT — Add Remarks. Reuses JobModal's extracted AddRemarksDialog, in
               the SAME bottom-left position / variant / label as Schedule & Assign. */}
           <div className="flex items-center gap-2">
+            {/*
+              * (c) HOVER-ONLY FIX — green CTA hover pinned to one dark green in
+              * BOTH themes, the same idiom the nine buttons on
+              * easyfixers/[id]/verification carry.
+              *
+              * Resting is fine: `--success` is STABLE — 148.85 70.81% 36.27% in
+              * `:root` and in `.dark` — so `bg-success text-white` holds either
+              * way. Only the hover inverted. `--success-strong` and
+              * `--success-tint` swap WITH EACH OTHER between themes, so a bare
+              * `hover:bg-success-strong` measured
+              *
+              *   light  --success-strong  20.78%  rgb(14,92,52)     8.08:1 vs white ✓
+              *   dark   --success-strong  92.35%  rgb(226,245,234)  1.14:1 vs white ✗
+              *
+              * i.e. Add Remarks went near-white under its white label the moment
+              * the pointer touched it in dark mode. Because the pair swaps, dark
+              * `--success-tint` IS rgb(14,92,52) — bit-identical to the
+              * light-mode hover — so naming both halves pins that one dark green
+              * everywhere. `dark:hover:` compiles to two classes against
+              * `hover:`'s one, so it wins on specificity regardless of order.
+              *
+              * LIGHT THEME IS UNCHANGED: the `dark:` half never applies there.
+              */}
             <Button
               variant="outline"
-              className="bg-success hover:bg-success-strong text-white border-success hover:text-white"
+              className="bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white border-success hover:text-white"
               onClick={() => setRemarksOpen(true)}
               disabled={!jobId || committing}
             >

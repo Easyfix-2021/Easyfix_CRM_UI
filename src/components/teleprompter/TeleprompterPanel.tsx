@@ -523,8 +523,21 @@ export function TeleprompterPanel({ open, efrId, onClose, onApplied }: {
                 <div className="mb-1 text-sm font-medium">Captured Deep Skills</div>
                 {(session?.result?.deep_skill_items || []).length === 0 && <div className="text-xs text-ink-500">None captured.</div>}
                 <div className="flex flex-wrap gap-1.5">
+                  {/* Picked-chip label is `text-brand-700`, NOT `text-brand-600` — option (b),
+                      paired foreground. The chip surface --brand-50 INVERTS (96.27% lightness
+                      under :root, 30.39% under .dark) while --brand-600 is one of the 16 stable
+                      tokens (38.82% in both). In dark mode that put a 38.82% label on a 30.39%
+                      pill — the same crossover commit 497cd6e fixed on DialogHeader, where
+                      --ink-900 went 17.31:1 against white in light and 1.08:1 in dark.
+                      --brand-700 is the token that SWAPS with --brand-50: 30.39% → 91.76%, the
+                      exact mirror of the surface, so the pair holds in both themes (30.39 on
+                      96.27 in light, 91.76 on 30.39 in dark). There is no stable pale-pink twin
+                      to swap the SURFACE for — the stable set tops out at primary-foreground
+                      (white) and has nothing in the brand-50 tint range — so (a) is unavailable
+                      here and the light theme does shift slightly: the label darkens from
+                      45.49%/38.82% to 30.39%, same hue family. */}
                   {(session?.result?.deep_skill_items || []).map((it, i) => (
-                    <label key={i} className={'flex items-center gap-1 rounded-full border px-2 py-1 text-xs cursor-pointer ' + (pickedSkills.has(i) ? 'border-primary bg-brand-50 text-brand-600' : 'border-ink-100 text-ink-500')}>
+                    <label key={i} className={'flex items-center gap-1 rounded-full border px-2 py-1 text-xs cursor-pointer ' + (pickedSkills.has(i) ? 'border-primary bg-brand-50 text-brand-700' : 'border-ink-100 text-ink-500')}>
                       <input
                         type="checkbox"
                         checked={pickedSkills.has(i)}
@@ -540,8 +553,12 @@ export function TeleprompterPanel({ open, efrId, onClose, onApplied }: {
                 <div className="mb-1 text-sm font-medium">Serviceable Pincodes</div>
                 {(session?.result?.serviceable_pincodes || []).length === 0 && <div className="text-xs text-ink-500">None captured.</div>}
                 <div className="flex flex-wrap gap-1.5">
+                  {/* Same picked-chip pairing as the Deep Skills list above — option (b):
+                      `bg-brand-50` inverts (96.27% → 30.39%) so its label must invert with it,
+                      and --brand-700 (30.39% → 91.76%) is the token that swaps against it.
+                      `text-brand-600` was stable at 38.82% and collapsed onto the dark pill. */}
                   {(session?.result?.serviceable_pincodes || []).map((p) => (
-                    <label key={p.pincode_id} className={'flex items-center gap-1 rounded-full border px-2 py-1 text-xs cursor-pointer ' + (pickedPins.has(p.pincode_id) ? 'border-primary bg-brand-50 text-brand-600' : 'border-ink-100 text-ink-500')}>
+                    <label key={p.pincode_id} className={'flex items-center gap-1 rounded-full border px-2 py-1 text-xs cursor-pointer ' + (pickedPins.has(p.pincode_id) ? 'border-primary bg-brand-50 text-brand-700' : 'border-ink-100 text-ink-500')}>
                       <input
                         type="checkbox"
                         checked={pickedPins.has(p.pincode_id)}
@@ -561,7 +578,20 @@ export function TeleprompterPanel({ open, efrId, onClose, onApplied }: {
 
               <div className="flex items-center justify-end gap-2 border-t pt-3">
                 <Button variant="outline" size="sm" onClick={onClose}>Close</Button>
-                <Button size="sm" onClick={apply} disabled={applying} className="bg-success hover:bg-success-strong text-white">
+                {/* Option (c) — the RESTING state was already correct and only the HOVER
+                    crossed over. --success is stable (36.27% in both themes) so `text-white`
+                    sits on it safely; --success-strong INVERTS (20.78% under :root, 92.35%
+                    under .dark), so in dark mode the moment the pointer landed the button
+                    turned near-white and took its white label with it — 1.0x contrast, the
+                    DialogHeader defect on a hover instead of a header.
+                    The hover is NOT deleted: `dark:hover:bg-success-tint` gives dark mode its
+                    own target, and --success-tint is the token that swaps WITH -strong
+                    (92.35% → 20.78%), so under .dark it resolves to 20.78% — byte-identical to
+                    what `hover:bg-success-strong` renders in light. The hover therefore looks
+                    the same dark green in both themes and the white label keeps the same
+                    contrast. Light theme is untouched: `hover:bg-success-strong` still wins
+                    there, `dark:` never applies. */}
+                <Button size="sm" onClick={apply} disabled={applying} className="bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white">
                   {applying ? 'Applying…' : 'Apply To Profile'}
                 </Button>
               </div>

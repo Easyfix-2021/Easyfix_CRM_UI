@@ -290,11 +290,56 @@ export default function ManageZonesPage() {
                     </td>
                     <td className="!text-right whitespace-nowrap">
                       <div className="inline-flex items-center gap-1 justify-end">
+                        {/* Hand-rolled twin of <IconButton intent="primary">, which
+                            can't be used here because this action navigates (it
+                            needs a real <Link href> for cmd-click + prefetch).
+                            The hover FOREGROUND diverges from IconButton on
+                            purpose — see below.
+
+                            hover:bg-muted/60 is an INVERTING surface: --muted is
+                            L90.59% light / L39.02% dark. Composited over the row
+                            (which itself paints hover:bg-muted/40 over --card),
+                            the plate under this icon measures rgb(234,237,239)
+                            light and rgb(83,89,97) dark.
+
+                            --brand-600 is STABLE (rgb(167,31,41) in both themes),
+                            so the plate moved out from under it: 6.22:1 light but
+                            1.03:1 dark — the icon vanished on hover, the same
+                            failure DialogHeader had at 1.08:1.
+
+                            --brand-700 INVERTS opposite --muted (L30.39% light /
+                            L91.76% dark), so it darkens on a pale plate and
+                            lightens on a dark one — which is what a hover step
+                            past --primary should do in each theme. Measured
+                            8.44:1 light, 5.54:1 dark.
+
+                            LIGHT THEME CHANGES, slightly: the hover red deepens
+                            from rgb(167,31,41) to rgb(131,24,32) — 6.22:1 -> 8.44:1.
+                            Not pixel-identical, unlike the DialogHeader swap.
+                            --urgent WOULD have been pixel-identical in light
+                            (its light value is exactly --brand-600's) and equally
+                            correct in dark, but it is the danger token that
+                            IconButton hands to intent="danger"; painting a benign
+                            "Manage Pincodes" link with it would silently repaint
+                            this icon the day --urgent is retuned. Matching a
+                            value is not the same as matching a role.
+
+                            The neighbouring <IconButton intent="primary"> still
+                            pairs hover:bg-muted/60 with hover:text-brand-600 and
+                            so is still 1.03:1 in dark — that is the shared
+                            component's to fix, not this file's. The two hover
+                            reds never appear together anyway: only one icon can
+                            be hovered at a time.
+
+                            The RESTING colour stays text-primary. It is also
+                            STABLE-on-inverting, but it is the app-wide resting
+                            colour for every primary icon; changing it here alone
+                            would make this one icon permanently off-palette. */}
                         <Link
                           href={`/settings/zones/${z.zone_id}`}
                           title="Manage Pincodes"
                           aria-label="Manage Pincodes"
-                          className="inline-flex size-7 shrink-0 items-center justify-center rounded text-primary transition-colors hover:bg-muted/60 hover:text-brand-600"
+                          className="inline-flex size-7 shrink-0 items-center justify-center rounded text-primary transition-colors hover:bg-muted/60 hover:text-brand-700"
                         >
                           <MapPinned className="size-4" aria-hidden="true" />
                         </Link>

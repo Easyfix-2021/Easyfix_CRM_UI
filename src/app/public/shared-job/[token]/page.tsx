@@ -185,8 +185,19 @@ export default function SharedJobPage() {
       )}
 
       {/* Header band — client/brand + Fulfilled by EasyFix. Same treatment as
-          the job-completion page: dark ink gradient + a 3px accent underline. */}
-      <div className="rounded-lg bg-gradient-to-r from-ink-900 via-ink-700 to-ink-900 px-5 py-4 text-white shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]">
+          the job-completion page: dark plate + a 3px accent underline.
+            Painted from --sidebar/--sidebar-accent, NOT --ink-900/--ink-700.
+          The ink ramp is a TEXT scale, so it INVERTS: --ink-900 is 10.59% L
+          rgb(23,27,31) in light but 96.27% rgb(244,246,247) in dark, and
+          --ink-700 follows it 23.33% -> 90.59%. Against the `text-white` on
+          this band (and the /70 and /80 children) that is 17.31:1 in light and
+          1.08:1 in dark — the whole header read white-on-near-white, exactly
+          the DialogHeader failure fixed in commit 497cd6e.
+            --sidebar (210 14.81% 10.59%) and --sidebar-accent (212.73 9.24%
+          23.33%) are byte-identical to those LIGHT ink values and carry the
+          same triplet in both maps, so the light band is pixel-identical to
+          what shipped and dark keeps the 17.31:1 plate. */}
+      <div className="rounded-lg bg-gradient-to-r from-sidebar via-sidebar-accent to-sidebar px-5 py-4 text-white shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]">
         <div className="text-xs font-semibold uppercase tracking-wider text-white/70">Job For</div>
         <div className="mt-1 flex items-end justify-between gap-3 sm:items-center">
           <div className="min-w-0 truncate text-2xl font-semibold leading-tight">{clientName}</div>
@@ -228,8 +239,22 @@ export default function SharedJobPage() {
         )}
         {directionsUrl && (
           <div className="flex justify-center">
+            {/* Label is --accent-foreground, not --primary.
+                  --card is an inverting SURFACE (0 0% 100% light -> 212.73
+                9.24% 23.33% rgb(54,60,65) dark) but --primary is stable red
+                rgb(196,36,48), so the label measured 5.82:1 on the white card
+                and 1.89:1 on the dark one — illegible on the very card it sits
+                in. `hover:bg-brand-50` had the same shape: 96.27% L in light,
+                30.39% in dark, still under stable red.
+                  --accent-foreground is the token that inverts OPPOSITE the
+                brand tint — brand-700 rgb(131,24,32) in light, brand-100
+                rgb(246,222,224) in dark — giving 9.92:1 and 8.60:1. Its
+                partner --accent is the SAME triplet brand-50 carries in light,
+                so the hover pixels are unchanged there and dark now darkens
+                instead of washing out. Only light change: the label goes one
+                step down the red ramp, rgb(196,36,48) -> rgb(131,24,32). */}
             <a href={directionsUrl} target="_blank" rel="noopener noreferrer"
-              className="inline-flex items-center justify-center gap-2 rounded-md border border-primary/40 bg-card px-4 py-2 text-sm font-medium text-primary hover:bg-brand-50">
+              className="inline-flex items-center justify-center gap-2 rounded-md border border-primary/40 bg-card px-4 py-2 text-sm font-medium text-accent-foreground hover:bg-accent">
               <Navigation className="h-4 w-4" />
               Navigate
             </a>
@@ -241,8 +266,21 @@ export default function SharedJobPage() {
       <InfoCard icon={<Phone className="h-4 w-4" />} title="Contact">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="text-sm text-ink-700">Connect to the customer — your number stays private.</div>
+          {/* GREEN CTA HOVER — `dark:hover:bg-success-tint` is load-bearing.
+                --success itself is stable, but --success-strong is not: it is
+              hsl(149.23 73.58% 20.78%) rgb(14,92,52) in light and 92.35%
+              rgb(226,245,234) in dark, i.e. it SWAPS with --success-tint. Held
+              against `text-white` the hovered button measured 8.08:1 in light
+              and 1.14:1 in dark — white on near-white.
+                Option (a) is unavailable here: the palette has no second
+              stable green to pin the hover surface to. So the foreground
+              follows the surface — the tint is the token that swaps WITH
+              --success-strong, so hover lands at 7.11:1 in BOTH maps. The
+              light hover plate is untouched; only its label shifts white ->
+              the 92.35%-L tint, 8.08 -> 7.11:1. Matches the same fix on the
+              sibling job-completion page. */}
           <Button type="button" onClick={openCallDialog}
-            className="w-full shrink-0 gap-1.5 bg-success text-white hover:bg-success-strong sm:w-auto">
+            className="w-full shrink-0 gap-1.5 bg-success text-white hover:bg-success-strong dark:hover:bg-success-tint sm:w-auto">
             <Phone className="h-4 w-4" />
             Call Customer
           </Button>
@@ -286,8 +324,10 @@ export default function SharedJobPage() {
                 <Button type="button" size="lg" variant="outline" disabled={busy} onClick={() => setCallStep('number')} className="w-full sm:w-auto">
                   Back
                 </Button>
+                {/* `dark:hover:bg-success-tint` — see the GREEN CTA HOVER note
+                    on the "Call Customer" button above. */}
                 <Button type="button" size="lg" disabled={busy} onClick={placeCall}
-                  className="w-full sm:w-auto bg-success hover:bg-success-strong text-white gap-2">
+                  className="w-full sm:w-auto bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white gap-2">
                   <CheckCircle2 className="h-5 w-5" />
                   {busy ? 'Connecting…' : 'Call Now'}
                 </Button>

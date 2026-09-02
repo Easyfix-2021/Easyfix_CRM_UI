@@ -80,8 +80,34 @@ export function VerificationSection({
         onClick={handleToggle}
         className={cn(
           'w-full text-left px-4 py-3 flex items-center gap-3 transition-colors',
+          /*
+           * (a) STABLE SURFACE — the hover's dark gradient stop moved from
+           * `--brand-700` to `--destructive-strong`, which is the SAME COLOUR
+           * under a name that does not invert.
+           *
+           * The resting pair is already safe: `--brand-600` (38.82%) and
+           * `--primary` (45.49%) are both STABLE — one value in `:root` and in
+           * `.dark` — so `text-white` holds in both themes. The hover was not.
+           * `--brand-700` is 355.51 69.03% 30.39% in `:root` but 355 57.14%
+           * 91.76% in `.dark`: it and `--brand-100` swap with each other, so
+           * hovering this header in dark mode slid the left half of the
+           * gradient to a near-white pink under the white label — the same
+           * failure commit 497cd6e measured on DialogHeader, where `--ink-900`
+           * went 17.31:1 to 1.08:1 against white.
+           *
+           * `--destructive-strong` is declared 355.51 69.03% 30.39% on BOTH
+           * sides of brand.css — string-identical to light-mode `--brand-700`,
+           * not merely close — so the LIGHT THEME RENDERS PIXEL-IDENTICALLY and
+           * dark mode now darkens on hover instead of inverting. It is the same
+           * step of the brand-red ramp; the app already leans on it for exactly
+           * this job in `bg-destructive hover:bg-destructive-strong` (see
+           * MagicLinkActionPopup, quicksight/vertical-orders), which is why it
+           * is the stable name available at this lightness.
+           *
+           * `hover:to-brand-600` needs no change — `--brand-600` is stable.
+           */
           headerTone === 'primary'
-            ? 'bg-gradient-to-r from-brand-600 to-primary text-white hover:from-brand-700 hover:to-brand-600'
+            ? 'bg-gradient-to-r from-brand-600 to-primary text-white hover:from-destructive-strong hover:to-brand-600'
             : 'bg-ink-50 hover:bg-ink-100 text-ink-700',
         )}
       >

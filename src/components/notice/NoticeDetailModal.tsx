@@ -314,10 +314,24 @@ export function NoticeDetailModal({
 
           {notice.action_url && (
             <div className="mt-5">
+              {/* Resting label is `text-brand-700`, not `text-primary` — option (b), paired
+                  foreground. The pill surface --brand-50 INVERTS (96.27% lightness under
+                  :root, 30.39% under .dark) while --primary is one of the 16 stable tokens
+                  (45.49% in both), so in dark mode a 45.49% label sat on a 30.39% pill and the
+                  CTA text washed out — the crossover commit 497cd6e measured on DialogHeader,
+                  where --ink-900 is 17.31:1 against white in light and 1.08:1 in dark.
+                  --brand-700 is the token that SWAPS with --brand-50 (30.39% → 91.76%), so
+                  both halves move together: 30.39 on 96.27 in light, 91.76 on 30.39 in dark.
+                  No stable token lives in the brand-50 tint range, so re-painting the SURFACE
+                  (option a) isn't on the table and the light theme darkens the label one step,
+                  45.49% → 30.39%, same hue family.
+                  The hover keeps its own inverting pair and needed no change: --brand-100
+                  (91.76% → 38.82%) against the same --brand-700 label. `hover:text-brand-700`
+                  is dropped only because it is now the resting colour and restated nothing. */}
               <Link
                 href={notice.action_url}
                 target={notice.action_url.startsWith('http') ? '_blank' : undefined}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-brand-100 bg-brand-50 px-3 py-1.5 text-sm font-medium text-primary hover:bg-brand-100 hover:text-brand-700 transition-colors"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-brand-100 bg-brand-50 px-3 py-1.5 text-sm font-medium text-brand-700 hover:bg-brand-100 transition-colors"
               >
                 Open Link <ExternalLink className="h-3.5 w-3.5" />
               </Link>

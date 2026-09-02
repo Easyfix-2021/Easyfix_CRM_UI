@@ -176,10 +176,44 @@ export function AddRemarksDialog({ open, jobId, onClose, onSaved, currentUserNam
           keeps its clip, whereas `overflow-hidden` out-merges DialogContent's
           base scroll and re-clips at 85vh. */}
       <DialogContent className="!max-w-xl p-0 gap-0 overflow-x-hidden overflow-y-auto">
-        {/* Dark-slate band header matching JobOutcomeDialog. */}
-        <div className="px-6 py-4 bg-gradient-to-r from-ink-900 via-ink-700 to-ink-900 text-white flex items-center gap-2.5 shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]">
+        {/*
+         * Dark-slate band header matching JobOutcomeDialog.
+         *
+         * (a) STABLE SURFACE — commit 497cd6e's DialogHeader substitution,
+         * applied to this hand-rolled band (it is a bare <div>, not
+         * DialogHeader, so it never inherited the shared fix).
+         *
+         * `--ink-900` / `--ink-700` are text-ramp tokens and INVERT, so under
+         * a fixed `text-white` they measured:
+         *
+         *   light  --ink-900  rgb(23,27,31)     17.31:1 ✓
+         *   dark   --ink-900  rgb(244,246,247)   1.08:1 ✗
+         *   light  --ink-700  rgb(54,60,65)     10.99:1 ✓
+         *   dark   --ink-700  rgb(226,231,234)   1.25:1 ✗
+         *
+         * `--sidebar` (210 14.81% 10.59%) and `--sidebar-accent`
+         * (212.73 9.24% 23.33%) are STABLE and hold exactly those LIGHT-mode
+         * ink values, so the LIGHT theme is pixel-identical and dark goes
+         * 1.08 → 17.31:1.
+         *
+         * The icon has to move with the band. `--info` is STABLE, so the
+         * `bg-info/20 ring-info/40` plate is fine, but `--info-tint` INVERTS
+         * (93.73% → 18.24%) and was only readable in dark because the band
+         * underneath it was near-white — accidentally, not by design. Pinning
+         * the band dark in both themes strands it:
+         *
+         *   light  --info-tint  rgb(224,238,252)  14.67:1 on the band ✓
+         *   dark   --info-tint  rgb(16,44,77)      1.23:1 on the band ✗
+         *
+         * `--info-tint` and `--info-strong` swap WITH EACH OTHER, so dark
+         * `--info-strong` IS rgb(224,238,252) — naming both sides pins one
+         * pale blue at 14.67:1 everywhere. Same idiom as
+         * components/ui/confirm-dialog. Light theme unchanged: the `dark:`
+         * half never applies there.
+         */}
+        <div className="px-6 py-4 bg-gradient-to-r from-sidebar via-sidebar-accent to-sidebar text-white flex items-center gap-2.5 shadow-[inset_0_-3px_0_0_rgba(14,165,233,0.85)]">
           <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-info/20 ring-1 ring-info/40">
-            <Pencil className="h-3.5 w-3.5 text-info-tint" />
+            <Pencil className="h-3.5 w-3.5 text-info-tint dark:text-info-strong" />
           </span>
           <DialogTitle className="text-[15px] font-semibold tracking-tight">Job CheckOut Remarks</DialogTitle>
         </div>
@@ -242,10 +276,36 @@ export function AddRemarksDialog({ open, jobId, onClose, onSaved, currentUserNam
           </div>
           {err && <div className="text-sm text-urgent-strong text-right">{err}</div>}
           <div className="flex justify-end gap-2 pt-2 border-t">
+            {/*
+             * (c) HOVER-ONLY — the resting state is already correct and stays
+             * as it is; only the hover inverted, so it gets a dark: override
+             * rather than being removed.
+             *
+             * `--success` is STABLE — rgb(27,158,90) in `:root` and in `.dark`
+             * — so `bg-success text-white` at rest is fine in both themes.
+             * `--success-strong` is not: it and `--success-tint` swap WITH
+             * EACH OTHER, so a bare `hover:bg-success-strong` measured
+             *
+             *   light  --success-strong  rgb(14,92,52)     8.08:1 vs white ✓
+             *   dark   --success-strong  rgb(226,245,234)  1.14:1 vs white ✗
+             *
+             * i.e. hovering Submit turned it near-white under white text in
+             * dark mode. Because the pair swaps, dark `--success-tint` IS
+             * rgb(14,92,52) — bit-identical to the light-mode hover — so
+             * naming both sides pins that one dark green everywhere.
+             * `dark:hover:` compiles to two classes against `hover:`'s one,
+             * so it wins on specificity regardless of source order.
+             *
+             * Light theme is byte-identical to before: the `dark:` half never
+             * applies there. Same class string as the nine green CTAs on
+             * easyfixers/[id]/verification. The Cancel button beside it needs
+             * nothing — `--destructive` and `--destructive-strong` are both
+             * STABLE, so it already darkens on hover in both themes.
+             */}
             <Button
               onClick={go}
               disabled={loading || !reasonId || !text.trim()}
-              className="bg-success hover:bg-success-strong text-white"
+              className="bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white"
             >
               {loading ? 'Saving…' : 'Submit'}
             </Button>

@@ -210,10 +210,30 @@ function OtpGate({
               className="h-11 sm:h-9 w-36 text-center tracking-widest font-mono text-lg"
               autoFocus
             />
+            {/*
+              * Green CTA, hover pinned across the theme swap.
+              *
+              * `--success` is STABLE — rgb(27,158,90) in both themes — so the
+              * resting `bg-success text-white` is fine. `--success-strong` is
+              * not: it and `--success-tint` swap WITH EACH OTHER between
+              * themes, so the hover surface measures
+              *
+              *   light  --success-strong  rgb(14,92,52)     8.08:1 vs white ✓
+              *   dark   --success-strong  rgb(226,245,234)  1.14:1 vs white ✗
+              *
+              * i.e. in dark mode the button went near-white under white text
+              * on hover. Because the pair swaps, dark `--success-tint` is
+              * rgb(14,92,52) — bit-identical to the light-mode hover — so
+              * naming both sides pins one dark green in both themes. Light
+              * theme is unchanged; `text-white` stays valid at 8.08:1.
+              *
+              * Same shape as the existing `text-success-tint
+              * dark:text-success-strong` idiom in components/ui/confirm-dialog.
+              */}
             <Button
               onClick={handleVerify}
               disabled={sending || otpValue.length !== 4}
-              className="h-11 sm:h-9 bg-success hover:bg-success-strong text-white"
+              className="h-11 sm:h-9 bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white"
             >
               {sending ? (
                 <><Loader2 className="h-4 w-4 animate-spin mr-2" />Saving…</>
@@ -909,7 +929,10 @@ function ReadyForm({
                   ? () => { setError(null); setOtpGateOpen(true); }
                   : () => { setError(null); void save(); }}
                 disabled={!canSave || saving}
-                className="h-11 sm:h-9 w-full sm:w-auto bg-success hover:bg-success-strong text-white"
+                // Hover pinned to dark green in both themes — see the Verify &
+                // Save button above; bare `hover:bg-success-strong` lands on
+                // rgb(226,245,234) in dark mode, 1.14:1 under `text-white`.
+                className="h-11 sm:h-9 w-full sm:w-auto bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white"
               >
                 {saved && !dirty ? 'Saved · Tap To Re-Save' : 'Save Profile'}
               </Button>
@@ -1826,7 +1849,10 @@ function PincodePicker({
                   type="button"
                   onClick={() => ensurePincode(debouncedSearch.trim())}
                   disabled={ensuring}
-                  className="h-9 w-full sm:w-auto bg-success hover:bg-success-strong text-white text-xs"
+                  // Hover pinned to dark green in both themes — see the Verify
+                  // & Save button; `--success-strong` inverts to rgb(226,245,234)
+                  // in dark mode, which is 1.14:1 under `text-white`.
+                  className="h-9 w-full sm:w-auto bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white text-xs"
                 >
                   {ensuring ? 'Adding…' : `Add Pincode ${debouncedSearch.trim()}`}
                 </Button>

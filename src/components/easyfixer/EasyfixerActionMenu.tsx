@@ -136,7 +136,31 @@ export function EasyfixerActionMenu({
           type="button"
           className={cn(
             'inline-flex h-7 w-7 items-center justify-center rounded',
-            'text-muted-foreground hover:bg-ink-100 hover:text-primary',
+            /* (b) PAIRED FOREGROUND on the hover scope. The hover surface
+             * --ink-100 inverts (90.59% under :root, 23.33% under .dark) but
+             * the old `hover:text-primary` does not — --primary is
+             * 355.5 68.97% 45.49% in BOTH blocks — so the kebab measured
+             *
+             *   light  #C4212B on rgb(226,230,233)   ≈ 5.3:1 ✓
+             *   dark   #C4212B on rgb(55,59,65)      ≈ 1.7:1 ✗
+             *
+             * a mid red sitting on dark slate: the icon all but vanished the
+             * moment you hovered it in dark mode. Fixed by letting the label
+             * travel with its surface — --brand-700 is the same 355° brand red
+             * and inverts the OTHER way (30.39% → 91.76%), so it lands deep on
+             * the light grey and pale on the dark slate: ≈6.4:1 light, ≈9.9:1
+             * dark. Same swap the sibling row-action kebab in
+             * settings/zones/page.tsx already ships.
+             *
+             * Light theme is NOT byte-identical here — that is (a)'s
+             * requirement, and there is no stable token sitting at ink-100's
+             * 90.59%. The hover red deepens 45.49% → 30.39%; same hue, still
+             * on-palette, and now matching the zones kebab. The RESTING colour
+             * stays `text-muted-foreground`, which is itself inverting
+             * (39.02% → 63.33%) and is the app-wide resting tone for a row
+             * action — changing it here alone would put this one icon
+             * permanently off-palette. */
+            'text-muted-foreground hover:bg-ink-100 hover:text-brand-700',
             'transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
           )}
           aria-label={`Actions for ${easyfixer.efr_name}`}

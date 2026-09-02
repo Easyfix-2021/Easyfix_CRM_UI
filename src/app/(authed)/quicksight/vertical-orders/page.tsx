@@ -50,13 +50,31 @@ import { cn } from '@/lib/utils';
 const FAMILY_KEY = 'ef-QuickSight';
 const ACTION_KEY = 'isQuickSightVerticalOrdersView';
 
-// Toggle definitions — order + Title-Case labels + flag tokens match spec.
+/*
+ * Toggle definitions — order + Title-Case labels + flag tokens match spec.
+ *
+ * Hover foregrounds: the base surfaces (--destructive/--warning/--info/
+ * --success) are theme-stable, but three of the four hover surfaces are not.
+ * Measured from src/app/brand.css, light -> dark:
+ *   --warning-strong  hsl(37.06 91.07% 21.96%) rgb(107,68,5)  -> 91.96% rgb(252,240,217)
+ *   --info-strong     hsl(212.78 66.67% 31.76%) rgb(27,76,135) -> 93.73% rgb(228,239,250)
+ *   --success-strong  hsl(149.23 73.58% 20.78%) rgb(14,92,52)  -> 92.35% rgb(226,245,234)
+ * Against text-white that is 8.56 / 8.64 / 8.08 in light but 1.13 / 1.16 /
+ * 1.14 in dark — a hovered selected toggle went white-on-near-white, the same
+ * failure DialogHeader had with --ink-900 (commit 497cd6e).
+ *
+ * Fix is the foreground following the surface: --card inverts the opposite way
+ * (0 0% 100% light -> 212.73 9.24% 23.33% dark, rgb(54,59,65)), so
+ * `hover:text-card` is pure white in light — the hovered pixels are IDENTICAL
+ * to before — and dark slate in dark, restoring 10.01 / 9.70 / 9.94.
+ * --destructive-strong is stable in both themes, so that row keeps text-white.
+ */
 type ToggleDef = { flag: string; label: string; active: string };
 const TOGGLES: ToggleDef[] = [
   { flag: 'waitingtx', label: 'Technician Unallocated', active: 'bg-destructive hover:bg-destructive-strong text-white border-urgent' },
-  { flag: 'runninglate', label: 'Running Late', active: 'bg-warning hover:bg-warning-strong text-white border-warning' },
-  { flag: 'openonapp', label: 'Waiting To Close On App', active: 'bg-info hover:bg-info-strong text-white border-info' },
-  { flag: 'underaudit', label: 'Under Audit', active: 'bg-success hover:bg-success-strong text-white border-success' },
+  { flag: 'runninglate', label: 'Running Late', active: 'bg-warning hover:bg-warning-strong text-white hover:text-card border-warning' },
+  { flag: 'openonapp', label: 'Waiting To Close On App', active: 'bg-info hover:bg-info-strong text-white hover:text-card border-info' },
+  { flag: 'underaudit', label: 'Under Audit', active: 'bg-success hover:bg-success-strong text-white hover:text-card border-success' },
 ];
 
 // ── API response types (field names match the legacy DTO 1:1) ──────────

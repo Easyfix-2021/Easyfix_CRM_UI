@@ -1075,9 +1075,24 @@ export function ScheduleAssignModal({
               (./AddRemarksDialog, ./CancelWithReasonDialog) so behaviour
               stays identical. */}
           <div className="flex items-center gap-2">
+            {/* (c) HOVER-ONLY inversion, pinned with a `dark:hover:` twin.
+                The resting surface `bg-success` is STABLE — 36.27% lightness
+                under both :root and .dark — so `text-white` is safe at rest in
+                either theme. Only the hover crossed: `--success-strong` is
+                20.78% in light (rgb(14,92,52), 8.08:1 vs white) and 92.35% in
+                dark (rgb(226,245,234), 1.14:1), so the button went near-white
+                under white text the moment the pointer landed in dark mode.
+                Because -tint and -strong SWAP with each other, dark
+                `--success-tint` IS 20.78% — bit-identical to the light-mode
+                hover — so naming both sides pins that one dark green in both
+                themes. `dark:hover:` compiles to two classes against
+                `hover:`'s one, so it wins on specificity regardless of source
+                order. LIGHT THEME IS UNCHANGED: the `dark:` half never applies
+                there, and `text-white` stays valid at 8.08:1. Same fix already
+                shipped on the verification page's Accept/Verify CTAs. */}
             <Button
               variant="outline"
-              className="bg-success hover:bg-success-strong text-white border-success hover:text-white"
+              className="bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white border-success hover:text-white"
               onClick={() => setRemarksOpen(true)}
               disabled={!jobId || committing}
             >
