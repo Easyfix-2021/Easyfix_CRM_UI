@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 5180",
-    "build": "npm run brand:sync:check && next build",
+    "build": "node scripts/build-lock.js npm run build:unlocked",
+    "build:unlocked": "npm run brand:sync:check && next build",
     "start": "next start -p 5180",
     "lint": "next lint",
     "lint:flat": "eslint . --max-warnings=0",
