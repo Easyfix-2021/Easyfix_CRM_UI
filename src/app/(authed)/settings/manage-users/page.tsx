@@ -5,8 +5,8 @@
  *
  * Lists internal CRM staff (tbl_user where user_type_id = 5). Operates on
  * /api/admin/users (services/user.service.js). Columns:
- *   User ID | Name | Email | Personal Email | Mobile | Role | Regions |
- *   Job Stages | Status | Actions.
+ *   User ID | Employee Code | Name | Email | Personal Email | Mobile | Role |
+ *   Regions | Job Stages | Status | Actions.
  *
  * Soft-delete only — tbl_user rows are referenced by tbl_job audit columns
  * and historical assignments. Deactivation flips user_status to 0; the row
@@ -702,16 +702,30 @@ export default function ManageUsersPage() {
             {/*
                 Column widths (must match the th/td sequence below, and must
                 total 100):
-                  5 percent  User ID
-                  13 percent Name
-                  14 percent Email
-                  14 percent Personal Email
+                  7 percent  User ID
+                  8 percent  Employee Code
+                  12 percent Name
+                  12 percent Email
+                  13 percent Personal Email
                   8 percent  Mobile
-                  11 percent Role
-                  11 percent Manage Regions
-                  10 percent Job Stages
-                  7 percent  Status
+                  10 percent Role
+                  9 percent  Manage Regions
+                  8 percent  Job Stages
+                  6 percent  Status   <- 5 clipped its own title at 1280
                   128px      Actions  <- FIXED, not a percentage
+
+                USER ID WAS 5 AND CLIPPED ITS OWN TITLE. Measured against the
+                compiled stylesheet: the header "User ID" plus its sort arrow and
+                the cell's padding is 139px, while 5 percent of the 1272px that
+                ten columns share at a 1400px table is 64px — so it rendered as
+                "User IC". It is 7 now (89px), and the header is allowed to wrap.
+
+                HEADERS WRAP (`whitespace-normal` on the wide ones). The eleven
+                titles want 1605px of the 1400px table if each stays on one line,
+                which is why adding Employee Code needed either a shortened label
+                or two-line headers. Two lines keeps the full words — "Employee
+                Code" reads better than "Emp Code" to someone who has never seen
+                this screen — and costs one header row of height, once.
 
                 Actions is the one column whose content does not scale: four
                 20px icon buttons plus the cell's 24px of padding need 104px at
@@ -729,20 +743,35 @@ export default function ManageUsersPage() {
                 hydration). See manage-roles for the full backstory.
             */}
             <colgroup>
-              <col style={{ width: '5%' }} />
-              <col style={{ width: '13%' }} />
-              <col style={{ width: '14%' }} />
-              <col style={{ width: '14%' }} />
-              <col style={{ width: '8%' }} />
-              <col style={{ width: '11%' }} />
-              <col style={{ width: '11%' }} />
-              <col style={{ width: '10%' }} />
               <col style={{ width: '7%' }} />
+              <col style={{ width: '8%' }} />
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '13%' }} />
+              <col style={{ width: '8%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '9%' }} />
+              <col style={{ width: '8%' }} />
+              <col style={{ width: '6%' }} />
               <col style={{ width: '128px' }} />
             </colgroup>
             <thead>
               <tr>
                 <SortHeader col="user_id"        align="center" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>User ID</SortHeader>
+                {/*
+                  * Employee Code (tbl_user.user_code) — already on the list
+                  * projection, just never rendered. Ops identify people by it
+                  * on every other screen, so its absence here meant reading a
+                  * user's code off their profile page one at a time.
+                  *
+                  * A PLAIN th, NOT a SortHeader, and deliberately. `user_code`
+                  * is absent from user.service.js's SORTABLE_COLUMNS, and that
+                  * lookup ends in `|| SORTABLE_COLUMNS.user_name` — so a
+                  * sortable-looking header here would quietly sort by NAME and
+                  * look broken rather than error. Add it to the whitelist first
+                  * if sorting by code is ever wanted.
+                  */}
+                <th className="!text-center whitespace-normal" title="Employee code (tbl_user.user_code)">Employee Code</th>
                 <SortHeader col="user_name"      align="left"   sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Name</SortHeader>
                 <SortHeader col="official_email" align="left"   sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Email</SortHeader>
                 {/*
@@ -791,14 +820,20 @@ export default function ManageUsersPage() {
                 * put, then the additional rows append on response.
                 */}
               {loading && items.length === 0 && (
-                <tr><td colSpan={10} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
+                <tr><td colSpan={11} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
               )}
               {!loading && items.length === 0 && (
-                <tr><td colSpan={10} className="!text-center text-muted-foreground py-6">No users match the current filters.</td></tr>
+                <tr><td colSpan={11} className="!text-center text-muted-foreground py-6">No users match the current filters.</td></tr>
               )}
               {items.map((u) => (
                 <tr key={u.user_id}>
                   <td className="!text-center font-mono text-xs truncate">{u.user_id}</td>
+                  {/* Monospace like User ID — both are identifiers people read
+                      digit by digit and compare down a column. "—" when unset,
+                      matching Personal Email below. */}
+                  <td className="!text-center font-mono text-xs truncate" title={u.user_code ?? ''}>
+                    {u.user_code || <span className="text-muted-foreground">—</span>}
+                  </td>
                   <td className="!text-left font-medium truncate" title={u.user_name}>{u.user_name}</td>
                   <td className="!text-left truncate" title={u.official_email}>{u.official_email}</td>
                   {/* Same treatment as Email above (left, truncate, full value
