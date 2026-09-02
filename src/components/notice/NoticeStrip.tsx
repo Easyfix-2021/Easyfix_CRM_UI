@@ -190,9 +190,17 @@ export function NoticeStrip() {
           </button>
         )}
         {canManage && items.length > 0 && (
+          /* Same defect as the "Show More" footer below, missed because this
+             link sits on a DIFFERENT plate: the header's bg-muted/20 composited
+             over the card gives #3e4349 in dark, and against fixed --primary
+             (45.49% in both blocks) that measured 1.73:1 — the worst resting
+             state in the file, in the file everyone assumed was already fixed.
+             `dark:text-brand-700` is the same (c) fix the footer ships; light is
+             byte-identical because a `dark:` variant is inert under :root.
+             Measured: light 5.53 → 5.53, dark 1.73 → 7.82:1. */
           <Link
             href="/notice-board"
-            className="text-xs font-medium text-primary hover:text-brand-700 shrink-0"
+            className="text-xs font-medium text-primary dark:text-brand-700 hover:text-brand-700 shrink-0"
           >
             View All →
           </Link>

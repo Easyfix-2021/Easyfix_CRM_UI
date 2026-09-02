@@ -331,15 +331,26 @@ export default function ManageZonesPage() {
                             reds never appear together anyway: only one icon can
                             be hovered at a time.
 
-                            The RESTING colour stays text-primary. It is also
-                            STABLE-on-inverting, but it is the app-wide resting
-                            colour for every primary icon; changing it here alone
-                            would make this one icon permanently off-palette. */}
+                            The RESTING colour keeps text-primary as its LIGHT
+                            value — it is the app-wide resting colour for every
+                            primary icon and a bare swap here would put this one
+                            icon permanently off-palette. But text-primary alone
+                            is STABLE-on-inverting: --primary is fixed at 45.49%
+                            in both blocks while --card drops to 21.18%, so the
+                            resting glyph measured 1.96:1 in dark (#c42430 on
+                            #363b41), under even the 3.0 non-text bar. The 1.53
+                            figure quoted elsewhere is the HOVER chain, not this.
+                            `dark:text-brand-700` is the (c) fix and costs the
+                            palette nothing: it repaints dark to the same token
+                            the hover already uses, and a `dark:` variant is
+                            inert under :root so light stays byte-identical.
+                            Measured resting: light 5.77 → 5.77, dark 1.96 →
+                            8.85:1. */}
                         <Link
                           href={`/settings/zones/${z.zone_id}`}
                           title="Manage Pincodes"
                           aria-label="Manage Pincodes"
-                          className="inline-flex size-7 shrink-0 items-center justify-center rounded text-primary transition-colors hover:bg-muted/60 hover:text-brand-700"
+                          className="inline-flex size-7 shrink-0 items-center justify-center rounded text-primary dark:text-brand-700 transition-colors hover:bg-muted/60 hover:text-brand-700"
                         >
                           <MapPinned className="size-4" aria-hidden="true" />
                         </Link>

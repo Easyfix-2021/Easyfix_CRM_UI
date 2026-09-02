@@ -159,7 +159,11 @@ export function EasyfixerActionMenu({
              * stays `text-muted-foreground`, which is itself inverting
              * (39.02% → 63.33%) and is the app-wide resting tone for a row
              * action — changing it here alone would put this one icon
-             * permanently off-palette. */
+             * permanently off-palette. Measured resting on the row's bg-card
+             * plate: light 6.08:1, dark 4.33:1 (#9aa1a9 on #363b41). This is a
+             * bare glyph with no text label, so the bar is WCAG 1.4.11's 3.0
+             * for non-text contrast, not 4.5 — 4.33 clears it in both themes.
+             * Left as-is deliberately; do not "fix" it to 4.5 here alone. */
             'text-muted-foreground hover:bg-ink-100 hover:text-brand-700',
             'transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
           )}
@@ -225,7 +229,17 @@ export function EasyfixerActionMenu({
         )}
         {canUpdateMobile && onUpdateMobile && (
           <DropdownMenuItem onClick={onUpdateMobile}>
-            <Smartphone className="mr-2 h-4 w-4 text-primary" />
+            {/* DropdownMenuContent paints bg-popover, which inverts hard
+                (100% → 23.33%) while --primary is fixed at 45.49% in both
+                blocks: this glyph measured 1.96:1 on #363b41, the worst in the
+                menu. Its two siblings are already safe because -strong tokens
+                travel with the popover (text-gold-strong above,
+                text-success-strong below) — text-primary was the outlier.
+                `dark:text-brand-700` repaints only the dark side (--brand-700
+                is 91.76% there); light is byte-identical, a `dark:` variant
+                cannot apply under :root. Measured: light 5.77 → 5.77, dark
+                1.96 → 8.85:1. */}
+            <Smartphone className="mr-2 h-4 w-4 text-primary dark:text-brand-700" />
             Update Mobile Number
           </DropdownMenuItem>
         )}

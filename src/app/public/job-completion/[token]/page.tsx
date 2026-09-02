@@ -998,7 +998,20 @@ export default function JobCompletionMagicLinkPage() {
               // rgb(251,240,241)), so the light plate is byte-for-byte what it
               // renders today; --accent-foreground inverts with it. Measured:
               // light 6.56 → 8.90:1, dark 1.36 → 7.77:1.
-              className="gap-2 border-primary/40 text-primary hover:bg-accent hover:text-accent-foreground"
+              //
+              // The RESTING label needed the same treatment and did not get it
+              // in that pass. Note the plate is NOT the InfoCard: variant
+              // "outline" carries `bg-background` in its own base string
+              // (ui/button.tsx), so the button repaints the page ground on top
+              // of the card. Measured plate #171b1f, and --primary is fixed at
+              // 45.49% in both blocks → 3.00:1 dark. The label is text-sm/500,
+              // so WCAG large-text does not apply and the bar is 4.5.
+              // `dark:text-brand-700` is the (c) fix: --brand-700 inverts the
+              // other way (30.39% light / 91.76% dark) so it lands pale on the
+              // near-black ground. Light is byte-identical — a `dark:` variant
+              // cannot apply under :root. Measured resting: light 5.32 → 5.32,
+              // dark 3.00 → 13.56:1.
+              className="gap-2 border-primary/40 text-primary dark:text-brand-700 hover:bg-accent hover:text-accent-foreground"
             >
               <MapPin className="h-4 w-4" />
               {mapOpen ? 'Hide Map' : 'Pin Exact Location On Map'}
