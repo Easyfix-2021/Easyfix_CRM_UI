@@ -96,7 +96,10 @@ type JobRow = JobAgeFields & {
   remarks: string | null;
   fk_customer_id: number; customer_name: string; customer_mob_no: string;
   fk_client_id: number; client_name: string;
-  fk_easyfixter_id: number | null; easyfixer_name: string | null;
+  // easyfixer_mobile is ef.efr_no, already on the LIST projection
+  // (services/job.service.js). Rendered as the second line of the merged
+  // Technician cell — null whenever the job is unassigned.
+  fk_easyfixter_id: number | null; easyfixer_name: string | null; easyfixer_mobile: string | null;
   job_owner: number | null; owner_name: string | null;
   fk_address_id: number; city_name: string | null;
   // service_count surfaced on the LIST projection (2026-05-28) so the FE
@@ -907,7 +910,9 @@ export default function JobsPage() {
    * loading row and both virtualisation spacers all have to span whatever it
    * currently is.
    */
-  const jobCols = canJob.isTransferJobOwnership ? 20 : 19;
+  // 18 after the 2026-09-02 merge of Mobile into Customer (the Technician
+  // mobile was never its own column, so only ONE column was removed).
+  const jobCols = canJob.isTransferJobOwnership ? 19 : 18;
 
   /*
    * ── Selection derivations ─────────────────────────────────────────
@@ -1238,6 +1243,10 @@ export default function JobsPage() {
                     { value: 'completed', label: 'Completed Date' },
                     { value: 'requested', label: 'Appointment Date' },
                     { value: 'ticket',    label: 'Ticket Created' },
+                    // cancel_date_time (stamped on the move to status 6
+                    // CANCELLED) — last in the list because it is the only
+                    // terminal-negative date here.
+                    { value: 'cancelled', label: 'Cancelled Date' },
                   ]}
                 />
               </div>
@@ -1533,7 +1542,11 @@ export default function JobsPage() {
                   <tr>
                     {/* Selection column — only rendered for operators who can
                         actually bulk-transfer, so nobody else pays a column of
-                        horizontal space on an already 19-wide table. */}
+                        horizontal space on an already wide table.
+                        (Deliberately not restating the count. It read "19" here
+                        and "18" twenty lines below after the Customer/Mobile
+                        merge — two numbers in one <thead> can only ever
+                        disagree. The count lives in jobCols.) */}
                     {canJob.isTransferJobOwnership && (
                       <th className="w-8">
                         <Checkbox
@@ -1554,13 +1567,27 @@ export default function JobsPage() {
                         shared JOB_AGE_SORT_KEY so ordering is by PRECISE age
                         (seconds), never the floored day label. Kept adjacent to
                         the pinned Job # so it stays readable without scrolling
-                        this 19-column table sideways. */}
+                        this 18-column table sideways. */}
                     <SortHeader col={JOB_AGE_SORT_KEY} sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="w-16">Age</SortHeader>
                     <SortHeader col="job_reference_id"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Job Ref</SortHeader>
                     <SortHeader col="client_ref_id"      sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Client Ref</SortHeader>
                     <SortHeader col="client_name"        sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Client</SortHeader>
+                    {/* Customer and Technician each carry their mobile on a
+                        second line. That retires the standalone Mobile column
+                        (one column removed — the tech number never had one),
+                        so the table is 18 columns, 19 with selection.
+                        A merged column can only sort on ONE key: both use the
+                        NAME key (customer_name / easyfixer_name). Sorting by
+                        customer_mob_no is no longer reachable from the header.
+                        The filter covering "find by number" for a CUSTOMER is
+                        "Customer Name / No." (filters.customerQ) — NOT EFR
+                        Mobile, which is the TECHNICIAN's number and searches
+                        tbl_easyfixer.efr_no, so it could never have stood in for
+                        this. customer_mob_no is still in the backend's
+                        SORTABLE_COLUMNS, so a saved URL carrying
+                        ?sortBy=customer_mob_no still sorts correctly; it simply
+                        has no header left to click. */}
                     <SortHeader col="customer_name"      sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Customer</SortHeader>
-                    <SortHeader col="customer_mob_no"    sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Mobile</SortHeader>
                     <SortHeader col="city_name"          sortBy={sortKey} sortDir={sortDir} onSort={toggle}>City</SortHeader>
                     <SortHeader col="job_type"           sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Type</SortHeader>
                     <SortHeader col="source_type"        sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Source</SortHeader>
@@ -1622,17 +1649,53 @@ export default function JobsPage() {
                   <td className="text-xs">{j.job_reference_id ?? '—'}</td>
                   <td className="text-xs">{j.client_ref_id ?? '—'}</td>
                   <td className="whitespace-nowrap">{j.client_name ?? '—'}</td>
-                  <td className="whitespace-nowrap">{j.customer_name ?? '—'}</td>
-                  <td className="text-xs">
-                    {/* Click-to-call lives on the mobile cell itself. The
-                        component never receives unmasked digits — only the
-                        jobId. BE resolves customer mobile server-side. */}
-                    <CallableMobile jobId={j.job_id} mobile={j.customer_mob_no} />
+                  <td className="whitespace-nowrap">
+                    {j.customer_name ?? '—'}
+                    {/* Click-to-call still lives on the mobile line itself —
+                        CallableMobile carries the masking + call rules and
+                        never receives unmasked digits, only the jobId; BE
+                        resolves the customer mobile server-side. The wrapper
+                        is muted so the digits read as the secondary line; the
+                        call button keeps its own colour. */}
+                    <div className="text-muted-foreground">
+                      <CallableMobile jobId={j.job_id} mobile={j.customer_mob_no} />
+                    </div>
                   </td>
                   <td>{j.city_name ?? '—'}</td>
                   <td className="text-xs">{j.job_type}</td>
                   <td className="text-xs text-muted-foreground">{j.source_type ?? '—'}</td>
-                  <td className="whitespace-nowrap">{j.easyfixer_name ? formatEasyfixerName(j.easyfixer_name) : <span className="text-muted-foreground">unassigned</span>}</td>
+                  {/* ASSIGNMENT IS KEYED ON THE ID, not the name.
+                      easyfixer_name arrives through a LEFT JOIN (ef.efr_name),
+                      so a job that IS assigned, to a technician whose row
+                      carries a blank efr_name, rendered the literal word
+                      "unassigned" — while the StatusChip on this very row
+                      already asked `fk_easyfixter_id != null`. One row, two
+                      answers. Both ask the id now.
+
+                      The number is a CallableMobile, matching how
+                      PendingToStartView renders this same field. Left as plain
+                      text it would be the one technician number in the app you
+                      cannot click, and it would skip the call-logging that
+                      component carries. */}
+                  <td className="whitespace-nowrap">
+                    {j.fk_easyfixter_id != null ? (
+                      <>
+                        {formatEasyfixerName(j.easyfixer_name) || '—'}
+                        {/* Second line only when the tech HAS a number — an
+                            assigned tech with a blank efr_no shows the name
+                            alone rather than a stray dash. */}
+                        {j.easyfixer_mobile && (
+                          <div className="text-xs text-muted-foreground">
+                            <CallableMobile
+                              efrId={j.fk_easyfixter_id}
+                              jobContextId={j.job_id}
+                              mobile={j.easyfixer_mobile}
+                            />
+                          </div>
+                        )}
+                      </>
+                    ) : <span className="text-muted-foreground">unassigned</span>}
+                  </td>
                   <td className="text-xs text-muted-foreground whitespace-nowrap">{j.owner_name ?? '—'}</td>
                   <td className="text-xs whitespace-nowrap">{formatDate(j.created_date_time)}</td>
                   <td className="text-xs whitespace-nowrap">{formatDate(j.requested_date_time)}</td>
@@ -1717,7 +1780,7 @@ export default function JobsPage() {
                           onClick={() => setLocationJob(j)}
                         />
                       )}
-                      {/* Outbound call lives on the customer mobile cell (Mobile column). */}
+                      {/* Outbound call lives on the mobile line inside the Customer cell. */}
                       {/* Unconfirmed (status=9) → Confirm & Schedule. Gate: isJobConfirm
                           AND the 9→0 stage transition. */}
                       {j.job_status === 9 && canJob.isJobConfirm && transitionAllowed(me?.allowedStages, j.job_status, 0) && (
