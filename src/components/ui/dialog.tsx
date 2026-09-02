@@ -502,9 +502,26 @@ export const DialogHeader = ({ className, children, ...props }: React.HTMLAttrib
         // inside the modal frame.
         '-mx-6 -mt-6 px-6 py-4 mb-5',
         noPadding && '!mx-0 !mt-0 !mb-0',
-        // Pronounced ink gradient (ink-900 → ink-700 → ink-900)
-        // gives the band visible depth instead of a flat fill.
-        'bg-gradient-to-r from-ink-900 via-ink-700 to-ink-900 text-white',
+        /*
+         * Pronounced dark gradient gives the band visible depth instead of a
+         * flat fill. The stops are the SIDEBAR tokens, not the ink scale, and
+         * that distinction is the whole point.
+         *
+         * `--ink-*` is the TEXT scale and it INVERTS under `.dark` — correctly,
+         * so `text-ink-900` stays readable body copy in either theme. Using it
+         * as a SURFACE while pinning the foreground to a literal `text-white`
+         * made the two cross over: measured against the compiled stylesheet,
+         * `--ink-900` is rgb(23,27,31) in light (contrast 17.31 against white)
+         * and rgb(244,246,247) in dark — contrast 1.08. Every dialog title in
+         * the app was white-on-near-white in dark mode.
+         *
+         * `--sidebar` and `--sidebar-accent` are chrome tokens: deliberately
+         * 10.6% and 23.3% lightness in BOTH themes. They also happen to hold
+         * exactly the light-mode values of ink-900 and ink-700, so this swap is
+         * pixel-identical in light theme and takes dark theme from 1.08 to
+         * 17.31. Verified both, in a browser, before and after.
+         */
+        'bg-gradient-to-r from-sidebar via-sidebar-accent to-sidebar text-white',
         // 3px brand-red underline drawn as an inset shadow. Tailwind's
         // `theme()`-with-opacity syntax doesn't reliably resolve inside an
         // arbitrary value, so the token's CSS custom property is read
