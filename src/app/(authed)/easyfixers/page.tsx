@@ -1415,10 +1415,11 @@ export default function EasyfixersPage() {
         * 15+ column admin tables — see Jobs list for prior art):
         *   - `overflow-x-auto` on the table-wrapping div so the table
         *     scrolls horizontally when it exceeds viewport width.
-        *   - The table itself has an explicit min-width via colgroup
-        *     px values that sum to ~2260px. Columns get readable widths;
-        *     content-heavy cells (Email, Name, Service Cat/Type) get
-        *     extra room.
+        *   - The table itself has an explicit intrinsic width via
+        *     colgroup px values that sum to 3012px (measured 2026-09-02;
+        *     see the width plan on the colgroup). Columns get readable
+        *     widths; content-heavy cells (Email, Name, Service Cat/Type)
+        *     get extra room.
         *   - `.stick-col` / `.stick-left` / `.stick-right` (defined in
         *     globals.css) pin the ID column to the left viewport edge
         *     and the Action column to the right, with subtle inset
@@ -1445,8 +1446,9 @@ export default function EasyfixersPage() {
             *   - `data-table w-full` + `tableLayout: 'fixed'` so columns
             *     don't auto-size to the widest cell (which made the table
             *     scroll horizontally past the viewport on 20 columns).
-            *   - `<colgroup>` with explicit percentage widths that sum to
-            *     ~100% — wider for content-heavy cells (Name, Email,
+            *   - `<colgroup>` with explicit PX widths (not percentages —
+            *     Manage Users can share a viewport across 8 columns, 22
+            *     cannot), wider for content-heavy cells (Name, Email,
             *     Service Cat/Type), narrower for numeric / status cells.
             *   - Cell content uses `truncate` + `title=` so overflowing
             *     text gets an ellipsis with the full value on hover.
@@ -1466,27 +1468,66 @@ export default function EasyfixersPage() {
               *
               * Column order follows the user-specified sequence (2026-06-17).
               * EF Account column removed from the UI (BE still returns the
-              * field). Widths sized to the CONTENT/header + ~16px headroom so
-              * the active-sort arrow (SortHeader is whitespace-nowrap +
-              * overflow-hidden) is never clipped. Sum ≈ 2937px.
+              * field).
+              *
+              * WIDTH PLAN — re-measured 2026-09-02 in headless Chrome against
+              * the compiled stylesheet, at 1180 / 1280 / 1440 / 1920. The
+              * numbers are IDENTICAL at all four: these are px columns behind a
+              * horizontal scroller, so the viewport never resizes them and
+              * "fine on my monitor" is not a thing that can happen here.
+              *
+              * A header has to fit its label PLUS the active-sort arrow —
+              * SortHeader is whitespace-nowrap + overflow-hidden, and the arrow
+              * adds 12px + a 4px gap on whichever column is currently sorted.
+              * The budget is `width − 24px` (px-3 each side). Five headers were
+              * over budget and rendered cut (needed vs available, then old → new):
+              *
+              *     Clients Mapped   116.8 vs 106     130 → 144
+              *     Total Earnings   108.2 vs 106     130 → 136
+              *     Job Count         81.8 vs  81     105 → 109
+              *     Profile %         75.5 vs  71      95 → 103
+              *     Action            41.8 vs  36      72 →  81
+              *
+              * Action's budget is `width − 36px`, not 24 — `!pl-6` exists to sit
+              * the label over the kebab, and the label had grown into exactly
+              * that alignment padding.
+              *
+              * The 41px came out of Email (200 → 180) and Serviceable Pincodes
+              * (220 → 199): the two donors whose CONTENT truncates with a title
+              * tooltip, so the cost is a couple of characters behind a hover
+              * rather than a number that cannot shrink. Both still clear their
+              * own headers — Email needs 52.6 of 156, Pincodes 138.8 of 175 —
+              * and the 3-pincode preview + "+N" badge still fits.
+              *
+              * Everything now clears its budget at all four widths. The
+              * tightest survivor is A/C Balance: 95.8 needed against 96, i.e.
+              * 0.2px. It is not clipped and was left alone, but it is the next
+              * column to break if a label or the header font ever changes —
+              * re-measure it before trimming anything else here.
+              *
+              * THE TOTAL IS UNCHANGED AT 3012px, deliberately: the scroll
+              * extent and the sticky-edge geometry stay where operators learned
+              * them. 3012 is already above the table's own minWidth of 2950, so
+              * that min-width never binds — it is a floor for the day someone
+              * cuts columns out of this colgroup, nothing more.
               */}
             <colgroup>
               <col style={{ width: '70px'  }} />{/* ID — sticky-left */}
               <col style={{ width: '160px' }} />{/* Name */}
               <col style={{ width: '110px' }} />{/* Mobile */}
-              <col style={{ width: '200px' }} />{/* Email */}
+              <col style={{ width: '180px' }} />{/* Email — donor: cell truncates + title tooltip */}
               <col style={{ width: '110px' }} />{/* State */}
               <col style={{ width: '110px' }} />{/* City */}
               <col style={{ width: '160px' }} />{/* Service Category */}
               <col style={{ width: '140px' }} />{/* Service Type */}
-              <col style={{ width: '220px' }} />{/* Serviceable Pincodes */}
+              <col style={{ width: '199px' }} />{/* Serviceable Pincodes — donor: preview truncates + title tooltip */}
               <col style={{ width: '165px' }} />{/* Mapped Deep Skill */}
               <col style={{ width: '185px' }} />{/* User Mapped to Client */}
-              <col style={{ width: '130px' }} />{/* Clients Mapped */}
-              <col style={{ width: '105px' }} />{/* Job Count */}
-              <col style={{ width: '130px' }} />{/* Total Earnings */}
+              <col style={{ width: '144px' }} />{/* Clients Mapped — header+arrow needs 116.8 + 24 padding */}
+              <col style={{ width: '109px' }} />{/* Job Count — header+arrow needs 81.8 + 24 padding */}
+              <col style={{ width: '136px' }} />{/* Total Earnings — header+arrow needs 108.2 + 24 padding */}
               <col style={{ width: '120px' }} />{/* A/C Balance */}
-              <col style={{ width: '95px'  }} />{/* Profile % */}
+              <col style={{ width: '103px' }} />{/* Profile % — header+arrow needs 75.5 + 24 padding */}
               <col style={{ width: '175px' }} />{/* Last Link Sent */}
               <col style={{ width: '175px' }} />{/* Registered on — sized to date+time content */}
               <col style={{ width: '95px'  }} />{/* Verified */}
@@ -1503,7 +1544,7 @@ export default function EasyfixersPage() {
                 * worse than no status at all.
                 */}
               <col style={{ width: '190px' }} />{/* Status — fits the longest lifecycle label */}
-              <col style={{ width: '72px' }} />{/* Action — sticky-right; kebab menu only (was 130px when 6 inline icons) */}
+              <col style={{ width: '81px' }} />{/* Action — sticky-right; kebab only, +9px so the label clears its own !pl-6 */}
             </colgroup>
             <thead>
               <tr>

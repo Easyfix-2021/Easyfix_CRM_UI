@@ -98,6 +98,23 @@ export type ProfileDetails = {
   personal_email: string | null;
   date_of_birth: string | null;
   dob_locked: boolean;
+  /*
+   * ── HR MASTER DATA — READ-ONLY ────────────────────────────────────
+   * Maintained by HR in Manage Users, not by the employee, so unlike
+   * date_of_birth there is no `*_locked` companion: locked/unlocked only means
+   * something for a field you could otherwise set yourself. A correction goes
+   * to HR.
+   *
+   * pan and aadhaar arrive MASKED and there is no unmasked variant on this
+   * type on purpose — the profile page's job is to let someone CHECK that HR
+   * holds the right number, which the last four digits answer. They already
+   * know their own PAN.
+   */
+  date_of_joining: string | null;
+  uan: string | null;
+  address: string | null;
+  pan_masked: string | null;
+  aadhaar_masked: string | null;
   bank: BankDetails | null;
   pending: PendingRequest | null;
   /*

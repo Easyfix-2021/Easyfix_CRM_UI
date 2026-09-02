@@ -86,7 +86,9 @@ test('an existing code survives an edit that does not touch it', async () => {
    */
   for (const stored of ['E000001', 'E000123', 'E200244', 'E999999']) {
     assert.equal(formatEmpCode(parseEmpCodeCount(stored)), stored);
-    if (backend) assert.equal(backend.parseEmpCode(stored), Number(parseEmpCodeCount(stored)));
+    // Number() here because the BACKEND's parseEmpCode returns a number, while
+  // the CRM's parseEmpCodeCount now returns the padded digit string.
+  if (backend) assert.equal(backend.parseEmpCode(stored), Number(parseEmpCodeCount(stored)));
   }
 });
 
@@ -105,7 +107,7 @@ test('an existing code survives an edit that does not touch it', async () => {
  */
 test('sequence 0 round-trips on both sides — the last divergence, closed', () => {
   assert.equal(formatEmpCode('0'), 'E000000');
-  assert.equal(parseEmpCodeCount('E000000'), '0');
+  assert.equal(parseEmpCodeCount('E000000'), '000000', 'the digits as stored');
   assert.equal(formatEmpCode(parseEmpCodeCount('E000000')), 'E000000',
     'a seeded E000000 survives an edit instead of stranding the record');
   if (backend) {

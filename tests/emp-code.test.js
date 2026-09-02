@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   EMP_CODE_PREFIX, EMP_CODE_DIGITS, EMP_CODE_RE,
-  formatEmpCode, parseEmpCodeCount, sanitiseEmpCount,
+  formatEmpCode, padEmpCount, parseEmpCodeCount, sanitiseEmpCount,
 } = require('../.test-build/emp-code');
 
 /*
@@ -68,16 +68,23 @@ test('formatEmpCode refuses what cannot be a code, rather than guessing', () => 
 });
 
 /*
- * Round-trip. The edit dialog parses a stored code down to the bare count so the
- * operator sees the number they think in, then formats it back on save. A
+ * Round-trip. The edit dialog parses a stored code down to its DIGITS so the
+ * operator sees exactly what the column holds, then formats it back on save. A
  * mismatch here silently REWRITES an existing user's code on an unrelated edit.
  */
 test('parse ∘ format round-trips, so opening and saving cannot rewrite a code', () => {
   for (const code of ['E000001', 'E000123', 'E200244', 'E999999']) {
     assert.equal(formatEmpCode(parseEmpCodeCount(code)), code);
   }
-  assert.equal(parseEmpCodeCount('E200244'), '200244', 'leading zeros are stripped for the input');
+  assert.equal(parseEmpCodeCount('E200244'), '200244');
   assert.equal(parseEmpCodeCount(' e200244 '), '200244', 'trimmed and upper-cased on the way in');
+  /*
+   * LEADING ZEROS ARE KEPT (2026-09-02). They used to be stripped, which saved
+   * correctly but displayed 'E000001' as "E" + "1" — the one screen whose job
+   * is to show the code showed a different string from the column.
+   */
+  assert.equal(parseEmpCodeCount('E000001'), '000001', 'the digits as stored, not as a number');
+  assert.equal(parseEmpCodeCount('E000123'), '000123');
   for (const bad of [null, undefined, '', 'EF200244', 'E20024', 'E2002444', '200244']) {
     assert.equal(parseEmpCodeCount(bad), '', `${JSON.stringify(bad)} is not one of ours`);
   }
@@ -87,4 +94,23 @@ test('sanitiseEmpCount keeps the input inside the code width as it is typed', ()
   assert.equal(sanitiseEmpCount('20a02b44'), '200244');
   assert.equal(sanitiseEmpCount('12345678'), '123456', 'capped at the code width');
   assert.equal(sanitiseEmpCount('abc'), '');
+});
+
+/*
+ * padEmpCount — what the box settles to on blur. The operator types the number
+ * they think in ("1"); the field then shows the six digits that will be stored.
+ */
+test('padEmpCount settles a typed count to the stored six-digit shape', () => {
+  assert.equal(padEmpCount('1'), '000001', 'the case the owner named');
+  assert.equal(padEmpCount('123'), '000123');
+  assert.equal(padEmpCount('200244'), '200244', 'already six digits — unchanged');
+  assert.equal(padEmpCount('0'), '000000');
+  assert.equal(padEmpCount(''), '', 'blank stays blank so "required" can still fire');
+  assert.equal(padEmpCount(null), '');
+  assert.equal(padEmpCount('12a3'), '000123', 'non-digits dropped, like sanitiseEmpCount');
+  // The property that matters: pad then format is the same as format alone.
+  for (const typed of ['1', '123', '200244', '0']) {
+    assert.equal(formatEmpCode(padEmpCount(typed)), formatEmpCode(typed),
+      'padding on blur must never change what gets saved');
+  }
 });

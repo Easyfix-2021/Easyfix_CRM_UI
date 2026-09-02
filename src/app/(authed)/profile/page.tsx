@@ -526,20 +526,31 @@ export default function MyProfilePage() {
       )}
 
       {/*
-       * ONE SCREEN, TWO COLUMNS from xl up. Stacked, these five sections ran
-       * well past the fold on a 1600px screen while two thirds of the width sat
-       * empty — the operator scrolled through a narrow ribbon. The tall,
-       * editable sections take the 2/3 column; Access & Permissions and
-       * Appearance are short and read-only, so they fill the 1/3 beside them
-       * rather than pushing everything down.
+       * ONE SCREEN, IN TWO PAIRED ROWS — and the pairing is decided by what
+       * each card CONTAINS, not by how tall it looked in a mock.
        *
-       * `items-start` so a short right column does not stretch to match the
-       * left one, which would leave a card of empty space under Appearance.
-       * Below xl it collapses back to the original single stack, in the original
-       * order.
+       * The first attempt put Access & Permissions in a 1/3 column because it
+       * reads as a short, quiet card. It is not: inside, it is its own
+       * `sm:grid-cols-2 lg:grid-cols-3` grid of three scope groups. At a third
+       * of a 1440px page each of those inner columns got ~150px, so "All
+       * Stages" and "Not Granted" ran off the card and the prose under
+       * Reporting wrapped into a ragged tower. A card's own layout, not its
+       * apparent weight, decides the width it needs.
+       *
+       * So the wide card gets width. Row one pairs the two label/value lists,
+       * which are the same shape and want the same room. Row two gives Access
+       * two thirds (≈960px at 1440 → ~320px per inner column, wider than the
+       * ~260px this file already recorded as workable) and hands the last third
+       * to Appearance, which is three buttons and a line.
+       *
+       * Each Section is a DIRECT grid child, so the browser's default stretch
+       * makes paired cards share a height — the misalignment in between was two
+       * independently-sized columns, not a styling gap.
+       *
+       * Below the breakpoints both rows collapse to the original single stack,
+       * in the original order.
        */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 items-start">
-        <div className="xl:col-span-2 space-y-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
 
       {/* ═══ 3. Personal & Contact Details ═══════════════════════════════ */}
       <Section title="Personal & Contact Details" icon={<Mail className="size-4" />}>
@@ -634,6 +645,41 @@ export default function MyProfilePage() {
                 </div>
               )}
             </ProfileRow>
+
+            {/*
+              * ── HR MASTER DATA ────────────────────────────────────────
+              * Read-only, and only rendered when HR has actually filled the
+              * field in. A blank row for every unfilled identifier would turn
+              * a mostly-empty section into five em dashes and bury the fields
+              * that DO have a value — so each row is conditional rather than
+              * showing "—".
+              *
+              * No hint text repeating "HR maintains this" five times: the
+              * section note below says it once, where it reads as a statement
+              * about the group rather than as five separate warnings.
+              */}
+            {details?.date_of_joining && (
+              <ProfileRow label="Date Of Joining" value={fmtDate(details.date_of_joining)} />
+            )}
+            {details?.uan && (
+              <ProfileRow label="UAN" value={details.uan} mono />
+            )}
+            {details?.pan_masked && (
+              <ProfileRow label="PAN" value={details.pan_masked} mono />
+            )}
+            {details?.aadhaar_masked && (
+              <ProfileRow label="Aadhaar" value={details.aadhaar_masked} mono />
+            )}
+            {details?.address && (
+              <ProfileRow label="Address" value={details.address} />
+            )}
+            {(details?.date_of_joining || details?.uan || details?.pan_masked
+              || details?.aadhaar_masked || details?.address) && (
+              <p className="text-xs text-muted-foreground">
+                Your PAN and Aadhaar are stored securely and only the last few
+                digits are shown. To correct any of these, contact HR.
+              </p>
+            )}
           </div>
         )}
       </Section>
@@ -708,10 +754,11 @@ export default function MyProfilePage() {
         )}
       </Section>
 
-        </div>
+      </div>
 
-        <div className="space-y-4">
-      {/* ═══ 5. Access & Permissions — read-only, deliberately quiet ═════ */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+        <div className="xl:col-span-2">
+      {/* ═══ 5. Access & Permissions — read-only, but WIDE: see the row note ═ */}
       <Section title="Access & Permissions" icon={<ShieldCheck className="size-4" />} muted>
         {/* Two columns before `lg`, three after. Three columns inside a
             max-w-4xl page gives each ~260px, which is not enough for a stage
@@ -784,9 +831,10 @@ export default function MyProfilePage() {
         </div>
       </Section>
 
+        </div>
+
       {/* ═══ Appearance — per-device, and the only thing here you can change ═ */}
       <AppearanceSection />
-        </div>
       </div>
 
       <p className="text-xs text-muted-foreground px-1">

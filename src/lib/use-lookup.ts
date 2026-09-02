@@ -15,7 +15,14 @@ import { formatEasyfixerName } from './utils';
  * Cached dropdown data from /api/shared/lookup/*.
  * Session-scoped cache (single module-level Map) — lookups rarely change
  * within a session, and a page-level refetch is always available via refresh().
+ *
+ * The cache itself lives in ./lookup-cache — it is the user-namespacing
+ * described there, and it had no test until it was somewhere `tsc`-in-isolation
+ * could compile. This file keeps only the React hook, and re-exports the three
+ * cache controls below so every existing `@/lib/use-lookup` import still works.
  */
+import { fetchOnce, clearLookupCache, invalidateLookup, setLookupIdentity } from './lookup-cache';
+export { clearLookupCache, invalidateLookup, setLookupIdentity };
 
 type City = { city_id: number; city_name: string; state_id: number | null };
 type State = { state_id: number; state_name: string };
@@ -30,89 +37,6 @@ type Bank = { id: number; bank_name: string };
 type DocumentType = { document_type_id: number; document_name: string };
 type Vertical = { vertical_id: number; vertical_name: string };
 type Zone     = { zone_id: number;     zone_name: string };
-
-/*
- * Three-tier cache:
- *   1. in-memory Map     — zero-cost read for the rest of the session
- *   2. sessionStorage    — survives soft/hard browser reload; cleared on tab close
- *   3. in-flight Promise — de-dupes concurrent first-fetches (the real fix for
- *      the saturation bug: two modals mounting in parallel used to each fire
- *      all 10 lookup requests simultaneously, so 20 requests hit the backend
- *      in the same millisecond)
- *
- * A 30-minute TTL on sessionStorage entries keeps long-lived tabs from
- * permanently caching a stale dropdown.
- */
-const MEM_CACHE = new Map<string, unknown>();
-const INFLIGHT = new Map<string, Promise<unknown>>();
-// Versioned prefix: bump the suffix whenever a lookup's SHAPE or CONTENT bounds
-// change so already-cached sessionStorage payloads are ignored on next load.
-// v2 (2026-07-07): cities lookup limit raised 1000→20000 (was truncating the
-// dropdown mid-alphabet at ~"Balwada") + payload trimmed to id/name/state_id.
-// Without this bump, a warm tab keeps serving the stale 1000-row list for 30min.
-const SS_PREFIX = 'efx-lookup:v2:';
-
-/*
- * THE CACHE IS NAMESPACED BY USER, and that is a security property, not tidiness.
- *
- * Several of these lookups are RBAC-SCOPED server-side — `clients` most of all:
- * /shared/lookup/clients filters `client_id IN (scope.clients.ids)` for a caller
- * with specific clients assigned. The cached payload is therefore that ONE
- * user's list, but the key was just `efx-lookup:v2:clients`.
- *
- * sessionStorage survives a logout — it is cleared when the TAB closes, not when
- * the session ends, and nothing called clearLookupCache() on sign-out. So an
- * Admin signing in first warmed `clients` with EVERY client, and a Project
- * Manager signing in afterwards in the same tab read that entry and saw all of
- * them, for up to the 30-minute TTL, while the job rows underneath stayed
- * correctly scoped. Reported on a real account: 10 clients mapped, every client
- * in the dropdown.
- *
- * Namespacing by user id makes it structurally impossible to read another
- * identity's entry, which is stronger than remembering to clear on the way out —
- * a missed clear is silent, a namespace mismatch simply misses the cache and
- * refetches. setLookupIdentity() below is called from the auth provider whenever
- * the session resolves, and it also drops the previous identity's entries so a
- * shared machine leaves nothing behind.
- */
-let IDENTITY = '';
-function ns(key: string) { return IDENTITY ? `${IDENTITY}:${key}` : key; }
-const SS_TTL_MS = 30 * 60 * 1000;
-
-function readSession<T>(key: string): T | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const raw = window.sessionStorage.getItem(SS_PREFIX + ns(key));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as { t: number; d: T };
-    if (Date.now() - parsed.t > SS_TTL_MS) return null;
-    return parsed.d;
-  } catch { return null; }
-}
-function writeSession<T>(key: string, data: T) {
-  if (typeof window === 'undefined') return;
-  try { window.sessionStorage.setItem(SS_PREFIX + ns(key), JSON.stringify({ t: Date.now(), d: data })); }
-  catch { /* quota — ignore */ }
-}
-
-async function fetchOnce<T>(key: string, loader: () => Promise<T>): Promise<T> {
-  // MEM_CACHE is namespaced too: it outlives a client-side sign-out, which does
-  // not reload the page, so an un-namespaced in-memory hit would leak exactly
-  // the same way sessionStorage did.
-  const mk = ns(key);
-  if (MEM_CACHE.has(mk)) return MEM_CACHE.get(mk) as T;
-  const fromSession = readSession<T>(key);
-  if (fromSession != null) { MEM_CACHE.set(mk, fromSession); return fromSession; }
-  if (INFLIGHT.has(mk)) return INFLIGHT.get(mk) as Promise<T>;
-  const promise = loader().then((data) => {
-    MEM_CACHE.set(mk, data);
-    writeSession(key, data);
-    INFLIGHT.delete(mk);
-    return data;
-  }).catch((err) => { INFLIGHT.delete(mk); throw err; });
-  INFLIGHT.set(mk, promise);
-  return promise;
-}
 
 export function useLookup() {
   const [cities, setCities] = useState<City[]>([]);
@@ -192,49 +116,4 @@ export function useLookup() {
       documentTypes: documentTypes.map<SelectOption>((d) => ({ value: d.document_type_id, label: d.document_name })),
     },
   };
-}
-
-export function clearLookupCache() {
-  MEM_CACHE.clear();
-  if (typeof window !== 'undefined') {
-    const keys: string[] = [];
-    for (let i = 0; i < window.sessionStorage.length; i++) {
-      const k = window.sessionStorage.key(i);
-      if (k && k.startsWith(SS_PREFIX)) keys.push(k);
-    }
-    keys.forEach((k) => window.sessionStorage.removeItem(k));
-  }
-}
-
-/**
- * Drop ONE or more lookup caches by key (the same keys passed to fetchOnce —
- * e.g. 'svcType', 'svcCat'). Clears the in-memory, in-flight, AND sessionStorage
- * layers so the NEXT useLookup() mount refetches that lookup fresh. Use after a
- * mutation that changes a lookup's contents — e.g. deactivating a service type
- * must invalidate 'svcType', otherwise the active-only dropdowns (Manage Deep
- * Skills, Book New Call) keep serving it from the 30-min sessionStorage cache.
- * Prefer this over clearLookupCache() so unrelated lookups stay warm.
- */
-export function invalidateLookup(...keys: string[]) {
-  for (const key of keys) {
-    MEM_CACHE.delete(ns(key));
-    INFLIGHT.delete(ns(key));
-    if (typeof window !== 'undefined') {
-      try { window.sessionStorage.removeItem(SS_PREFIX + ns(key)); } catch { /* ignore */ }
-    }
-  }
-}
-
-/**
- * Bind the lookup caches to a user. Called by the auth provider every time the
- * session resolves; a CHANGE of identity drops everything the previous one
- * cached. See the namespacing note on SS_PREFIX — the scoped lookups
- * (`clients` above all) are per-user payloads under what used to be a shared
- * key. Passing null/undefined (signed out) namespaces to '' and still clears.
- */
-export function setLookupIdentity(userId: string | number | null | undefined) {
-  const next = String(userId ?? '');
-  if (next === IDENTITY) return;
-  clearLookupCache();
-  IDENTITY = next;
 }

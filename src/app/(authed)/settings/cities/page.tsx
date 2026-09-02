@@ -275,38 +275,119 @@ export default function ManageCitiesPage() {
             * uses `auto` layout — column widths are recomputed based on the
             * widest cell in the *visible* page, so a sort that brings a long
             * district name into view (or a 4-digit technician count) snaps
-            * the headers around. Sums to 100% so the table fills the card.
+            * the headers around.
             *
-            * Sort-arrow icons are an extra ~12px in active headers; widths
-            * include enough padding that the arrow doesn't push text onto
-            * a second line on the narrowest column (City ID).
+            * WIDTH PLAN — every number below is MEASURED, in a headless Chrome
+            * driven against the compiled stylesheet (both chunks: the utility
+            * chunk and the :root token chunk — with only the first, every
+            * hsl(var(--x)) resolves to nothing and you measure fiction), in the
+            * real authed shell: 240px sidebar + main's px-4 + the Card border.
+            * That makes the table 906px at a 1180 viewport, 1006 at 1280,
+            * 1166 at 1440, 1646 at 1920. 1180 is the binding case; anything
+            * that fits there fits everywhere, because all eleven widths are
+            * percentages and scale together.
+            *
+            * The old plan (7/14/12/17/6/7/8/10/12/8/11) claimed to sum to 100
+            * and summed to 112, and six headers rendered cut off:
+            *   City ID 7%, Pincodes 8%, Technicians 10% — cut with no arrow
+            *   at 1180 AND 1280; Zones 7% and Status 8% at 1180; Tier 6%
+            *   only once it became the active sort. The percentages never
+            *   needed to total 100 (with no px column here the browser just
+            *   normalises them, so each column gets pct/112 of the table) —
+            *   but the TOTAL is kept at 112 so the ratios below can be read
+            *   against the old ones, and so a future px column added to this
+            *   group inherits the same remainder arithmetic manage-users
+            *   documents.
+            *
+            * THE ARROW IS THE WHOLE PROBLEM. Header text needs 555px in total
+            * and the eleven cells' px-3 padding eats another 264px, which fits
+            * inside 906px with 87px to spare. But nine of these columns are
+            * sortable, `<SortHeader>` adds a 12px arrow + 4px gap to whichever
+            * one is active, and the widths are STATIC — so every one of the
+            * nine has to reserve 16px for an arrow that only one of them ever
+            * shows. That reservation is 144px against 87px of slack. On one
+            * line, the eleven headers want 119.11% of a 112% budget: the table
+            * is over-subscribed by 57px and NO reallocation can fix it.
+            *
+            * SO THREE HEADERS WRAP. City ID, City Name and Created By are the
+            * only multi-word titles here, and a two-line header costs one row
+            * of height, once — cheaper than the percentage it would take to
+            * keep them on one line, and it keeps the full words (see
+            * manage-users for the same trade). Wrapping them drops the demand
+            * from 119.11% to 110.78%, which fits 112 with 9.9px to spare.
+            * "Technicians", "Pincodes", "District" etc. are single words with
+            * no break opportunity, so they can only be paid for in percent —
+            * which is why they are the ones that grew.
+            *
+            * Width taken from CONTENT columns that truncate gracefully with a
+            * title tooltip (City Name 14→9.8, State 12→9.3, District 17→11,
+            * Created By 12→9.4) and given to the short identifier / count /
+            * status columns, which have nowhere to put an overflow:
+            *   City ID      7   → 8.2   (needs 8.09 at 1180, wrapped)
+            *   City Name   14   → 9.8   (needs 9.66, wrapped)
+            *   State       12   → 9.3   (needs 9.21)
+            *   District    17   → 11    (needs 10.81)
+            *   Tier         6   → 8.2   (needs 8.07)
+            *   Zones        7   → 9.9   (needs 9.79)
+            *   Pincodes     8   → 12.4  (needs 12.27)
+            *   Technicians 10   → 14.5  (needs 14.42 — the widest single word)
+            *   Created By  12   → 9.4   (needs 9.32, wrapped)
+            *   Status       8   → 10.2  (needs 10.13)
+            *   Actions     11   → 9.1   (needs 9.00: the "Actions" title is
+            *                             wider than its two 20px icons)
+            *
+            * THE TENTHS ARE LOAD-BEARING — do not "tidy" them to integers.
+            * Rounding each column up to a whole percent costs 117% against a
+            * 112% budget; measured, the integer version puts State, Pincodes
+            * and City ID back to clipping at 1180. Every column above clears
+            * its requirement by 0.5–1.6px and no more; there is no headroom
+            * left in this table to spend elsewhere.
             */}
           <table className="data-table w-full" style={{ tableLayout: 'fixed' }}>
             <colgroup>
-              <col style={{ width: '7%'  }} />{/* City ID */}
-              <col style={{ width: '14%' }} />{/* City Name */}
-              <col style={{ width: '12%' }} />{/* State */}
-              <col style={{ width: '17%' }} />{/* District */}
-              <col style={{ width: '6%'  }} />{/* Tier */}
-              <col style={{ width: '7%'  }} />{/* Zones */}
-              <col style={{ width: '8%'  }} />{/* Pincodes */}
-              <col style={{ width: '10%' }} />{/* Technicians */}
-              <col style={{ width: '12%' }} />{/* Created By */}
-              <col style={{ width: '8%'  }} />{/* Status */}
-              <col style={{ width: '11%' }} />{/* Actions */}
+              <col style={{ width: '8.2%'  }} />{/* City ID */}
+              <col style={{ width: '9.8%'  }} />{/* City Name */}
+              <col style={{ width: '9.3%'  }} />{/* State */}
+              <col style={{ width: '11%'   }} />{/* District */}
+              <col style={{ width: '8.2%'  }} />{/* Tier */}
+              <col style={{ width: '9.9%'  }} />{/* Zones */}
+              <col style={{ width: '12.4%' }} />{/* Pincodes */}
+              <col style={{ width: '14.5%' }} />{/* Technicians */}
+              <col style={{ width: '9.4%'  }} />{/* Created By */}
+              <col style={{ width: '10.2%' }} />{/* Status */}
+              <col style={{ width: '9.1%'  }} />{/* Actions */}
             </colgroup>
             <thead>
               <tr>
-                <SortHeader col={'city_id'          as keyof City} align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>City ID</SortHeader>
-                <SortHeader col={'city_name'        as keyof City} align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>City Name</SortHeader>
+                {/*
+                  * The inner `whitespace-normal` span is what lets these two
+                  * titles fall onto a second line. `<SortHeader>` hard-codes
+                  * `whitespace-nowrap` on BOTH the th and the inline-flex span
+                  * it wraps children in, and only the th's copy goes through
+                  * cn()/tailwind-merge — so a className on the header cannot
+                  * reach the text. A span of our own inside it can: white-space
+                  * inherits, and this one overrides it for its own content.
+                  * Measured: at a 1180 viewport the label goes from a 82.9px
+                  * single line overflowing a 55px cell to two 54.1px lines.
+                  * It is a wrap, not a forced break — at 1920 both titles sit
+                  * on one line and this costs nothing.
+                  */}
+                <SortHeader col={'city_id'          as keyof City} align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}><span className="whitespace-normal">City ID</span></SortHeader>
+                <SortHeader col={'city_name'        as keyof City} align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}><span className="whitespace-normal">City Name</span></SortHeader>
                 <SortHeader col={'state_name'       as keyof City} align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>State</SortHeader>
                 <SortHeader col={'district'         as keyof City} align="left"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>District</SortHeader>
                 <SortHeader col={'tier'             as keyof City} align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Tier</SortHeader>
                 <SortHeader col={'zone_count'       as keyof City} align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Zones</SortHeader>
                 <SortHeader col={'pincode_count'    as keyof City} align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Pincodes</SortHeader>
                 <SortHeader col={'technician_count' as keyof City} align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Technicians</SortHeader>
-                {/* Created By — technician (self-service) or CRM operator who added the city. */}
-                <th className="!text-left whitespace-nowrap">Created By</th>
+                {/* Created By — technician (self-service) or CRM operator who
+                    added the city. No `whitespace-nowrap` on the HEADER: the
+                    title needs 71.2px and this column is 52px wide at 1180, so
+                    it wraps to "Created / By" there and at 1280 rather than
+                    losing its second word. The cell below keeps its nowrap +
+                    truncate — a badge and a name have no break point worth
+                    taking. */}
+                <th className="!text-left">Created By</th>
                 <SortHeader col={'city_status'      as keyof City} align="center" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Status</SortHeader>
                 <th className="!text-right whitespace-nowrap">Actions</th>
               </tr>

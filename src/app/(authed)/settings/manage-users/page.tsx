@@ -5,8 +5,8 @@
  *
  * Lists internal CRM staff (tbl_user where user_type_id = 5). Operates on
  * /api/admin/users (services/user.service.js). Columns:
- *   User ID | Employee Code | Name | Email | Personal Email | Mobile | Role |
- *   Regions | Job Stages | Status | Actions.
+ *   Photo | User ID | Employee Code | Name | Email | Personal Email | Mobile |
+ *   Role | Regions | Job Stages | Status | Actions.
  *
  * Soft-delete only — tbl_user rows are referenced by tbl_job audit columns
  * and historical assignments. Deactivation flips user_status to 0; the row
@@ -19,13 +19,20 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { invalidateFetch, useDebouncedValue, useFetch } from '@/lib/hooks';
-import { EMP_CODE_PREFIX, formatEmpCode, parseEmpCodeCount, sanitiseEmpCount } from '@/lib/emp-code';
+import { EMP_CODE_PREFIX, formatEmpCode, padEmpCount, parseEmpCodeCount, sanitiseEmpCount } from '@/lib/emp-code';
 import { INDIAN_MOBILE_REGEX, INDIAN_MOBILE_ERROR } from '@/lib/format';
 import {
   UserCog, Users, Search, Plus, Pencil, Trash2, MailWarning,
   AlertTriangle, ChevronDown, ChevronRight, Info, Layers, KeyRound,
 } from 'lucide-react';
 import { BulkUpdateUsersDialog } from '@/components/users/BulkUpdateUsersDialog';
+/*
+ * The CRM's one image lightbox — a `{ url, name }` panel with a title bar and
+ * the standard guarded close. Its NAME says skill because that was its first
+ * caller; nothing in it is skill-specific, and a second hand-rolled zoom Dialog
+ * on this page would be the fourth in the repo. Reused rather than copied.
+ */
+import { SkillImageLightbox } from '@/components/easyfixer/SkillImageLightbox';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -68,6 +75,20 @@ type User = {
    * Either way the "—" placeholder renders and nothing crashes.
    */
   personal_email?: string | null;
+  /*
+   * HR master data, present ONLY on the detail response (GET /admin/users/:id)
+   * and only for the Admin role — never on the list projection. Optional here
+   * because the list rows genuinely lack them.
+   *
+   * pan and aadhaar appear as MASKED strings and there is no unmasked variant
+   * on this type on purpose: nothing in the CRM has a use for the full value,
+   * so nothing should be able to hold one.
+   */
+  date_of_joining?: string | null;
+  uan?: string | null;
+  address?: string | null;
+  pan_masked?: string | null;
+  aadhaar_masked?: string | null;
   mobile_no: string;
   alternate_no: string | null;
   user_role: number | null;
@@ -89,6 +110,15 @@ type User = {
    * (all stages); [] = explicit no access; non-empty = restricted to those keys.
    */
   allowed_stages?: string[] | null;
+  /*
+   * Profile photo — a PRESIGNED S3 URL, not a key, so a plain <img src> loads
+   * it with no auth header (the navbar's identity block does exactly this).
+   * Optional because it is short-lived and only present for users who have
+   * actually uploaded one: most rows carry null and render the monogram
+   * instead. Presigned means expiring, which is why <UserAvatar> also handles
+   * a URL that 404s rather than assuming "present" means "loadable".
+   */
+  photo_url?: string | null;
 };
 
 type ListResponse = { items: User[]; total: number };
@@ -222,6 +252,14 @@ type OfficialEmailCheck = {
  * addresses that Joi accepts.
  */
 const EMAIL_RE = /^\S+@\S+\.\S+$/;
+/*
+ * Inline hint only — the authority is normalisePan() in the backend's
+ * user.service.js, which rejects the same shapes with the message the footer
+ * shows. Deliberately NOT /g: a global regex carries lastIndex between .test()
+ * calls, so the second keystroke against the same pattern can return false on
+ * a valid value.
+ */
+const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 
 /*
  * Must stay a subset of user.service.js's SORTABLE_COLUMNS keys. The BACKEND
@@ -707,63 +745,123 @@ export default function ManageUsersPage() {
           </div>
           <table className="data-table w-full" style={{ tableLayout: 'fixed' }}>
             {/*
-                Column widths (must match the th/td sequence below, and must
-                total 100):
-                  7 percent  User ID
-                  8 percent  Employee Code
-                  12 percent Name
-                  12 percent Email
-                  13 percent Personal Email
-                  8 percent  Mobile
-                  10 percent Role
-                  9 percent  Manage Regions
-                  8 percent  Job Stages
-                  6 percent  Status   <- 5 clipped its own title at 1280
+                Column widths (must match the th/td sequence below):
+                  72px       Photo    <- FIXED, not a percentage
+                   7 percent User ID
+                   7 percent Employee Code
+                  13 percent Name
+                  13 percent Email
+                  17 percent Personal Email
+                  10 percent Mobile
+                  11 percent Role
+                  11 percent Manage Regions
+                   8 percent Job Stages
+                   7 percent Status
                   128px      Actions  <- FIXED, not a percentage
 
-                USER ID WAS 5 AND CLIPPED ITS OWN TITLE. Measured against the
-                compiled stylesheet: the header "User ID" plus its sort arrow and
-                the cell's padding is 139px, while 5 percent of the 1272px that
-                ten columns share at a 1400px table is 64px — so it rendered as
-                "User IC". It is 7 now (89px), and the header is allowed to wrap.
+                THE TWO PIXEL COLUMNS ARE THE ONES WHOSE CONTENT DOES NOT SCALE.
+                Actions is four 20px icon buttons plus 24px of cell padding.
+                Photo is a 32px circle plus that same 24px: 56px of content in a
+                72px column. 72 rather than 56 because the HEADER, not the
+                avatar, is the wider of the two — the word "Photo" measures
+                39.7px, so a 64px column left it 0.3px of slack, which is
+                rounding noise rather than a margin. At 72 it has 8.3px.
 
-                HEADERS WRAP (`whitespace-normal` on the wide ones). The eleven
-                titles want 1605px of the 1400px table if each stays on one line,
-                which is why adding Employee Code needed either a shortened label
-                or two-line headers. Two lines keeps the full words — "Employee
-                Code" reads better than "Emp Code" to someone who has never seen
-                this screen — and costs one header row of height, once.
+                THE PERCENTAGES SUM TO 104 AND THAT IS CORRECT. With
+                table-layout: fixed and a mixed colgroup, Chrome scales the
+                percentage columns to fill whatever the two pixel columns leave
+                (measured: at a 1006px table each 1 percent resolved to 7.75px,
+                i.e. (1006 - 72 - 128)/104). Only the RATIOS matter — do NOT
+                "correct" them back to 100.
 
-                Actions is the one column whose content does not scale: four
-                20px icon buttons plus the cell's 24px of padding need 104px at
-                every viewport. As a percentage it was 7, which measures 63px at
-                a 1280 viewport, 75px at 1440 and 91px at 1680 -- overflowing on
-                every common laptop and fitting only at 1920, with 4px to spare.
-                That is why the last icon ran off the edge.
+                RE-MEASURED 2026-09-02, when the Photo column was added, because
+                a twelfth column narrows every percentage column and a header
+                that fitted with 2px to spare stops fitting. Method: the page's
+                shell (240px sidebar + main's 32px of px-4 + the Card's 2px of
+                border, so table width = viewport - 274) rendered in headless
+                Chrome against BOTH compiled CSS chunks and the real IBM Plex
+                faces; each header label wrapped in an inline <span> and its
+                getBoundingClientRect().width compared against the th's
+                clientWidth minus its 24px of padding. NOT scrollWidth >
+                clientWidth — table cells do not scroll, so that test can never
+                fire and reports "no clipping" for a header that is visibly cut.
+                Controls: starving Name (the largest-slack column) to 1 percent
+                flagged it at all four viewports, so the detector can fail.
 
-                A pixel width sizes to the content instead of the window; the
-                nine percentages below share whatever is left, which is what
-                table-layout: fixed does with a mixed colgroup. They no longer
-                total 100 by design -- do NOT "correct" them back.
+                MEASURED LABEL WIDTHS (semibold 14px, including the sort arrow
+                on sortable columns, since any column can be the active sort)
+                and the column each one gets:
+
+                  label            needs |  @1180  @1280  @1440  @1920
+                  Photo             39.7 |     72     72     72     72
+                  User ID           65.6 |   47.5   54.2     65   97.3
+                  Employee Code    120.5 |   47.5   54.2     65   97.3
+                  Name              55.2 |   88.3  100.8  120.8  180.8
+                  Email             52.5 |   88.3  100.8  120.8  180.8
+                  Personal Email    98.7 |  115.4  131.8  157.9  236.4
+                  Mobile            61.2 |   67.9   77.5   92.9  139.0
+                  Role              45.5 |   74.7   85.2  102.2  152.9
+                  Manage Regions    54.1 |   74.7   85.2  102.2  152.9
+                  Job Stages        75.5 |   54.3   62.0   74.3  111.2
+                  Status            59.9 |   47.6   54.3   65.1   97.4
+                  Actions           50.9 |    128    128    128    128
+
+                THE HEADERS CLIP BELOW 1920 AND DID BEFORE THIS COLUMN EXISTED.
+                Every label above needs its width PLUS 24px of padding, and the
+                titles want 928px of a table that is 1006px wide at 1280 with
+                200px of it already committed to the two pixel columns. Measured
+                clipped sets, before and after adding Photo, are IDENTICAL:
+                  1180  User ID, Employee Code, Personal Email, Mobile,
+                        Manage Regions, Job Stages, Status
+                  1280  User ID, Employee Code, Mobile, Job Stages, Status
+                  1440  User ID, Employee Code, Job Stages, Status
+                  1920  Employee Code
+                That parity is the whole reason the percentages moved. Holding
+                the old 7/8/12/12/13/8/10/9/8/6 and simply inserting a 12th
+                column pushed Personal Email over at 1280 and Mobile at 1440;
+                the set above puts the freed points where the labels actually
+                are. Tightest surviving margin is Role at +3.5px, at 1180 with
+                a classic always-on scrollbar — the pessimistic case, since
+                macOS Chrome uses overlay scrollbars. In that same case the new
+                set is strictly BETTER than the old one at 1280: Personal Email
+                clipped there before and does not now.
+
+                THE 139px FIGURE IN THE PREVIOUS VERSION OF THIS COMMENT DOES
+                NOT REPRODUCE. "User ID" plus its arrow measures 65.6px, so the
+                column needs 89.6px, not 139. Nor do the headers wrap: SortHeader
+                pins `whitespace-nowrap` on both the th AND its inner span, so
+                the two-line-header design this comment used to describe is not
+                what ships. Employee Code needs 120.5px on one line and clips at
+                every viewport including 1920 — a live, PRE-EXISTING defect that
+                only a shorter label or a wrappable SortHeader can fix, and
+                neither is in this file.
+
                 Inline JSX expression comments are illegal inside colgroup
                 (they introduce single-space text nodes that fail
                 hydration). See manage-roles for the full backstory.
             */}
             <colgroup>
+              <col style={{ width: '72px' }} />
               <col style={{ width: '7%' }} />
-              <col style={{ width: '8%' }} />
-              <col style={{ width: '12%' }} />
-              <col style={{ width: '12%' }} />
+              <col style={{ width: '7%' }} />
               <col style={{ width: '13%' }} />
-              <col style={{ width: '8%' }} />
+              <col style={{ width: '13%' }} />
+              <col style={{ width: '17%' }} />
               <col style={{ width: '10%' }} />
-              <col style={{ width: '9%' }} />
+              <col style={{ width: '11%' }} />
+              <col style={{ width: '11%' }} />
               <col style={{ width: '8%' }} />
-              <col style={{ width: '6%' }} />
+              <col style={{ width: '7%' }} />
               <col style={{ width: '128px' }} />
             </colgroup>
             <thead>
               <tr>
+                {/*
+                  * Photo. Not sortable — there is nothing to order by, and a
+                  * clickable header over a column of faces would only invite a
+                  * click that does nothing.
+                  */}
+                <th className="!text-center whitespace-nowrap">Photo</th>
                 <SortHeader col="user_id"        align="center" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>User ID</SortHeader>
                 {/*
                   * Employee Code (tbl_user.user_code) — already on the list
@@ -828,13 +926,22 @@ export default function ManageUsersPage() {
                 * put, then the additional rows append on response.
                 */}
               {loading && items.length === 0 && (
-                <tr><td colSpan={11} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
+                <tr><td colSpan={12} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
               )}
               {!loading && items.length === 0 && (
-                <tr><td colSpan={11} className="!text-center text-muted-foreground py-6">No users match the current filters.</td></tr>
+                <tr><td colSpan={12} className="!text-center text-muted-foreground py-6">No users match the current filters.</td></tr>
               )}
               {items.map((u) => (
                 <tr key={u.user_id}>
+                  {/* No `truncate` here, unlike every other cell: the content is
+                      a fixed 32px circle inside a 64px column, so there is
+                      nothing to overflow and `overflow:hidden` would only risk
+                      clipping the focus ring. */}
+                  <td className="!text-center">
+                    <div className="flex items-center justify-center">
+                      <UserAvatar name={u.user_name} photoUrl={u.photo_url} />
+                    </div>
+                  </td>
                   <td className="!text-center font-mono text-xs truncate">{u.user_id}</td>
                   {/* Monospace like User ID — both are identifiers people read
                       digit by digit and compare down a column. "—" when unset,
@@ -1022,6 +1129,94 @@ function expandCsvToNames(csv: string | null | undefined, nameById: Map<number, 
     .filter((name): name is string => !!name);
 }
 
+/*
+ * ─── Profile photo, list + modal ────────────────────────────────────────────
+ *
+ * Same three-state avatar the navbar's identity block renders
+ * (components/layout/Navbar.tsx), lifted here so a row and the Add/Edit modal
+ * can share one implementation:
+ *
+ *   1. photo   — <img> straight off the presigned `photo_url`.
+ *   2. INITIALS — and this is the COMMON case, not a failure state. Almost
+ *      nobody on tbl_user has uploaded a photo, so the monogram is what this
+ *      column mostly IS; it gets the solid `bg-primary` plate and
+ *      `text-primary-foreground` lettering so it reads as a deliberate
+ *      identity chip rather than an empty hole. Both tokens are stable across
+ *      :root/.dark, which is what local/no-inverting-surface-with-fixed-
+ *      foreground requires of a plate carrying pinned lettering.
+ *   3. the URL 404s — the third state nobody designs for. `photo_url` is
+ *      presigned and short-lived, so a list left open past its TTL would
+ *      otherwise paint a row of broken-image glyphs. onError drops back to the
+ *      monogram, which is indistinguishable from having no photo — correct,
+ *      because to the viewer it is.
+ *
+ * ONLY A REAL PHOTO IS CLICKABLE. With no photo there is nothing to enlarge, so
+ * the monogram renders as a plain <span> and cannot open an empty lightbox; the
+ * button (and its pointer cursor) appears only when a click would show
+ * something. `failed` participates in that test, so a 404 removes the
+ * affordance too rather than opening a dialog onto the same broken image.
+ */
+function UserAvatar({ name, photoUrl }: { name: string; photoUrl?: string | null }) {
+  const [failed, setFailed] = useState(false);
+  const [zoomed, setZoomed] = useState(false);
+  /* Reset on URL change, or a refreshed list (new presigned URL for the same
+     user) would stay stuck on the monogram for the rest of the session. */
+  useEffect(() => { setFailed(false); setZoomed(false); }, [photoUrl]);
+
+  /* First letter of the first and last words, so "Priyanka Balasubramaniam"
+     reads PB and a single-word name reads one letter rather than a doubled
+     one. Uppercased — a lowercased login name would render a lowercase
+     monogram. Identical rule to the navbar, deliberately. */
+  const initials = useMemo(() => {
+    const parts = String(name ?? '').trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return '';
+    const first = parts[0][0] ?? '';
+    const last  = parts.length > 1 ? (parts[parts.length - 1][0] ?? '') : '';
+    return (first + last).toUpperCase();
+  }, [name]);
+
+  const hasPhoto = !!photoUrl && !failed;
+  const face = (
+    <span
+      aria-hidden
+      className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary text-xs font-semibold text-primary-foreground"
+    >
+      {hasPhoto ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={photoUrl!}
+          alt=""
+          className="size-full object-cover"
+          onError={() => setFailed(true)}
+        />
+      ) : initials}
+    </span>
+  );
+
+  if (!hasPhoto) return face;
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setZoomed(true)}
+        title="Click To Enlarge"
+        aria-label={`Enlarge Photo Of ${name}`}
+        className="rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        {face}
+      </button>
+      {/* Closed lightbox costs nothing: DialogContent sits inside Radix's
+          DialogPortal, which renders null until `open`, so the per-row
+          instances never reach the DOM until one is clicked. */}
+      <SkillImageLightbox
+        value={zoomed ? { url: photoUrl!, name } : null}
+        onClose={() => setZoomed(false)}
+      />
+    </>
+  );
+}
+
 function ManageRegionsCell({ csv, nameById }: { csv: string | null | undefined; nameById: Map<number, string> }) {
   // '0' is the legacy "All" sentinel (lib/scope.js — mode === 'all').
   // Render it as a green pill so ops can see at a glance which users
@@ -1154,6 +1349,24 @@ function UserFormModal({
   const [name,    setName]    = useState('');
   const [email,   setEmail]   = useState('');
   const [personalEmail, setPersonalEmail] = useState('');
+  /*
+   * ── HR MASTER DATA ────────────────────────────────────────────────
+   * All five are optional. doj / uan / address round-trip normally: the stored
+   * value is prefilled, and clearing the box clears the column.
+   *
+   * pan and aadhaar do NOT round-trip, and cannot. The backend returns them
+   * MASKED (XXXXXX234F) because a full PAN on every user load is a PAN in the
+   * browser cache — so there is no stored value to prefill with. Prefilling the
+   * MASK would be worse than useless: an untouched Save would post the literal
+   * X's back and overwrite the real number. Both boxes therefore start EMPTY on
+   * every open, the current value is shown as text beside them, and they are
+   * submitted ONLY when the operator has typed something.
+   */
+  const [doj, setDoj] = useState('');
+  const [uan, setUan] = useState('');
+  const [pan, setPan] = useState('');
+  const [aadhaar, setAadhaar] = useState('');
+  const [address, setAddress] = useState('');
   const [mobile,  setMobile]  = useState('');
   const [altMob,  setAltMob]  = useState('');
   /*
@@ -1235,6 +1448,21 @@ function UserFormModal({
     needsEmpSuggestion ? '/admin/users/next-emp-code' : null,
   );
 
+  /*
+   * The five identifiers come from GET /admin/users/:id, NOT from the list row.
+   * The list deliberately does not carry them: it would put a PAN, an Aadhaar
+   * and a home address for every member of staff into one pageable response,
+   * and the backend gates them behind the Admin ROLE on the detail endpoint for
+   * that reason. One extra request, opened only when the modal is.
+   *
+   * A non-Admin caller gets a row without the keys, so every read below falls
+   * back to '' and the section renders empty rather than breaking.
+   */
+  const userDetail = useFetch<Partial<User> & {
+    date_of_joining?: string | null; uan?: string | null; address?: string | null;
+    pan_masked?: string | null; aadhaar_masked?: string | null;
+  }>(open && editing ? `/admin/users/${editing.user_id}` : null);
+
   const [manageClients,   setManageClients]   = useState<Set<number>>(new Set());
   const [manageStates,    setManageStates]    = useState<Set<number>>(new Set());
   const [manageVerticals, setManageVerticals] = useState<Set<number>>(new Set());
@@ -1281,7 +1509,7 @@ function UserFormModal({
    * every refetch and overwrite a count the operator had already edited. */
   useEffect(() => {
     if (needsEmpSuggestion && !empSeededRef.current && nextEmpCode.data?.count) {
-      setEmpCount(String(nextEmpCode.data.count));
+      setEmpCount(padEmpCount(String(nextEmpCode.data.count)));
       empSeededRef.current = true;
     }
   }, [needsEmpSuggestion, nextEmpCode.data]);
@@ -1310,6 +1538,15 @@ function UserFormModal({
       setManageStates(isAll(editing?.manage_states) ? new Set() : csvToSet(editing?.manage_states));
       setManageVerticals(isAll(editing?.manage_verticals) ? new Set() : csvToSet(editing?.manage_verticals));
       setReportingManager(editing?.reporting_manager ?? '');
+      /*
+       * Cleared on EVERY open, then hydrated by the effect below when the
+       * detail request resolves. Resetting here rather than only on close is
+       * what stops the previous user's UAN sitting in the box for the moment
+       * between opening the modal and the fetch returning.
+       */
+      setDoj(''); setUan(''); setAddress('');
+      /* pan/aadhaar are never hydrated — see the state comment. */
+      setPan(''); setAadhaar('');
       // Job Stage Access — NULL / absent allowed_stages = unrestricted, so
       // hydrate the "All stages" toggle ON with an empty pick set. An ARRAY
       // (even an empty one) means the operator has set an explicit grant:
@@ -1321,6 +1558,20 @@ function UserFormModal({
       setError(null);
     }
   }, [open, editing]);
+
+  /*
+   * Hydrate the three round-trippable identifiers once the detail arrives.
+   * Keyed on `userDetail.data` so it runs when the request resolves, not on
+   * every render — and NOT merged into the open-effect above, which fires
+   * before the response exists.
+   */
+  useEffect(() => {
+    const d = userDetail.data;
+    if (!open || !d) return;
+    setDoj(d.date_of_joining ?? '');
+    setUan(d.uan ?? '');
+    setAddress(d.address ?? '');
+  }, [open, userDetail.data]);
 
   function toggleManageClient(id: number) {
     setManageClients((prev) => {
@@ -1732,6 +1983,29 @@ function UserFormModal({
       setError('Personal Email format looks wrong');
       return;
     }
+
+    /*
+     * ── HR identifiers ────────────────────────────────────────────────
+     * Blocking checks, in the footer where every other validation message
+     * lands. Each mirrors a backend rule exactly (normaliseUan / normalisePan /
+     * normaliseAadhaar in user.service.js) — the backend is still the
+     * authority, this just saves a round trip and points at the right box.
+     *
+     * All three are skipped when blank: these fields are optional, and an
+     * empty one is how HR clears a value entered by mistake.
+     */
+    if (uan.trim() && uan.trim().length !== 12) {
+      setError('UAN must be exactly 12 digits');
+      return;
+    }
+    if (pan.trim() && !PAN_RE.test(pan.trim())) {
+      setError('PAN must be 5 letters, 4 digits, then a letter — e.g. ABCDE1234F');
+      return;
+    }
+    if (aadhaar.trim() && !/^[2-9][0-9]{11}$/.test(aadhaar.trim())) {
+      setError('Aadhaar must be 12 digits and cannot start with 0 or 1');
+      return;
+    }
     /*
      * Mobile is OPTIONAL (2026-08-03) — it used to be mandatory. Blank passes;
      * anything typed must still be exactly 10 digits, so a mistyped number is
@@ -1822,8 +2096,26 @@ function UserFormModal({
         if (resolved === null) return;  // operator cancelled — nothing submitted
         officialEmail = resolved;
       }
+      /*
+       * The five identifiers, assembled once for both branches.
+       *
+       * doj / uan / address are ALWAYS sent (as null when blank) so clearing a
+       * box clears the column. pan / aadhaar are sent ONLY when the operator
+       * typed something: the form never holds the stored value, so an absent
+       * key is the only way to say "leave it as it is" — and the backend's
+       * upsert treats an absent key exactly that way.
+       */
+      const identifierPayload: Record<string, string | null> = {
+        date_of_joining: doj.trim() || null,
+        uan:             uan.trim() || null,
+        address:         address.trim() || null,
+      };
+      if (pan.trim())     identifierPayload.pan     = pan.trim();
+      if (aadhaar.trim()) identifierPayload.aadhaar = aadhaar.trim();
+
       if (isEdit) {
         await api.patch(`/admin/users/${editing!.user_id}`, {
+          ...identifierPayload,
           user_code:        empCode,
           // null (not '') when cleared — the column is NULLable and '' would
           // store an address that can never be mailed but reads as "present".
@@ -1842,6 +2134,7 @@ function UserFormModal({
         });
       } else {
         created = await api.post<CreatedUser>('/admin/users', {
+          ...identifierPayload,
           user_name:        name.trim(),
           user_code:        empCode,
           // The PRE-FLIGHT's answer, not the raw field — on a collision this is
@@ -1977,7 +2270,27 @@ function UserFormModal({
           this modal had simply diverged from the sibling it claims to match. */}
       <DialogContent className="!max-w-[1100px] w-[95vw] max-h-[85vh] flex flex-col overflow-hidden">
         <DialogHeader className="shrink-0">
-          <DialogTitle>{isEdit ? `Edit "${editing!.user_name}"` : 'Add User'}</DialogTitle>
+          {/*
+            * Avatar beside the title, same component the list column renders, so
+            * the operator confirms they opened the right person's record before
+            * reading a single field. Click enlarges, exactly as in the list.
+            *
+            * EDIT ONLY, and that is the whole handling of the Add case: on Add
+            * there is no user, so there is no name to build a monogram from and
+            * no photo to show — an avatar there would be a circle standing in
+            * for nobody. It is omitted rather than rendered empty, and the row
+            * collapses back to just the title.
+            *
+            * Reads `editing.photo_url`, which arrives from whichever fetch
+            * opened the modal (the list row, or the ?unmasked=true refetch the
+            * Edit action does). If a backend build serves photo_url on the list
+            * but not on the detail projection, this degrades to the monogram —
+            * the same third state the 404 path lands on, and equally harmless.
+            */}
+          <div className="flex items-center gap-3">
+            {isEdit && <UserAvatar name={editing!.user_name} photoUrl={editing!.photo_url} />}
+            <DialogTitle>{isEdit ? `Edit "${editing!.user_name}"` : 'Add User'}</DialogTitle>
+          </div>
         </DialogHeader>
         <div className="space-y-3 flex-1 min-h-0 overflow-y-auto pr-1">
           {/* Row 1: Full Name | Status toggle (edit only).
@@ -2050,6 +2363,10 @@ function UserFormModal({
                   inputMode="numeric"
                   value={empCount}
                   onChange={(e) => setEmpCount(sanitiseEmpCount(e.target.value))}
+                  /* Settle to the six digits that will be stored. Padding on
+                     every keystroke would turn "1" into "000001" and the next
+                     digit into "0000012"; on blur it is just the truth. */
+                  onBlur={() => setEmpCount((c) => padEmpCount(c))}
                   placeholder="200244"
                   className="rounded-l-none"
                 />
@@ -2248,6 +2565,111 @@ function UserFormModal({
               {altMob && altMob.length !== 10 && (
                 <p className="text-xs text-warning-strong mt-1">If supplied, alt mobile must be 10 digits.</p>
               )}
+            </div>
+          </div>
+
+          {/*
+            * ── PERSONAL DETAILS (HR MASTER DATA) ─────────────────────────
+            * Every field here is OPTIONAL and every one is stored on
+            * tbl_user_personal_details, never on tbl_user. HR fills them in
+            * from the master sheet as it is reconciled, a few people at a
+            * time — which is why there is no bulk import behind this and why
+            * nothing on the form blocks a save when they are empty.
+            *
+            * Date Of Joining also feeds the dashboard's Upcoming Events rail
+            * (Work Anniversary), the same way Date Of Birth already feeds
+            * Birthday. That is the only place any of this is read outside the
+            * user's own profile page.
+            */}
+          <div className="rounded-md border border-border p-3 space-y-3">
+            <p className="text-sm font-medium">
+              Personal Details{' '}
+              <span className="text-xs text-muted-foreground font-normal">(optional)</span>
+            </p>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="block mb-1">Date Of Joining</Label>
+                <Input
+                  type="date"
+                  value={doj}
+                  onChange={(e) => setDoj(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Shows as a Work Anniversary on the dashboard each year.
+                </p>
+              </div>
+              <div>
+                <Label className="block mb-1">UAN</Label>
+                <Input
+                  value={uan}
+                  onChange={(e) => setUan(e.target.value.replace(/\D/g, '').slice(0, 12))}
+                  placeholder="12-digit EPFO number"
+                  className="font-mono"
+                />
+                {uan && uan.length !== 12 && (
+                  <p className="text-xs text-warning-strong mt-1">
+                    UAN must be exactly 12 digits ({uan.length}/12).
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="block mb-1">PAN</Label>
+                <Input
+                  value={pan}
+                  onChange={(e) => setPan(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10))}
+                  placeholder={userDetail.data?.pan_masked ? 'Type to replace' : 'e.g. ABCDE1234F'}
+                  className="font-mono"
+                />
+                {/* The stored value, masked. It is shown as TEXT rather than
+                    prefilled into the box precisely so that saving without
+                    touching this field leaves the real PAN alone. */}
+                {userDetail.data?.pan_masked && !pan && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    On file: <span className="font-mono">{userDetail.data.pan_masked}</span>
+                  </p>
+                )}
+                {pan && !PAN_RE.test(pan) && (
+                  <p className="text-xs text-warning-strong mt-1">
+                    PAN is 5 letters, 4 digits, then a letter — e.g. ABCDE1234F.
+                  </p>
+                )}
+              </div>
+              <div>
+                <Label className="block mb-1">Aadhaar</Label>
+                <Input
+                  value={aadhaar}
+                  onChange={(e) => setAadhaar(e.target.value.replace(/\D/g, '').slice(0, 12))}
+                  placeholder={userDetail.data?.aadhaar_masked ? 'Type to replace' : '12 digits'}
+                  className="font-mono"
+                />
+                {userDetail.data?.aadhaar_masked && !aadhaar && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    On file: <span className="font-mono">{userDetail.data.aadhaar_masked}</span>
+                  </p>
+                )}
+                {aadhaar && aadhaar.length !== 12 && (
+                  <p className="text-xs text-warning-strong mt-1">
+                    Aadhaar must be exactly 12 digits ({aadhaar.length}/12).
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <Label className="block mb-1">Address</Label>
+              <Input
+                value={address}
+                onChange={(e) => setAddress(e.target.value.slice(0, 512))}
+                placeholder="Home address (optional)"
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                The user&apos;s own address. Separate from the city and state
+                on their account, which say where they are posted.
+              </p>
             </div>
           </div>
 

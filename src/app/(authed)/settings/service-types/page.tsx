@@ -185,14 +185,65 @@ export default function ManageServiceTypePage() {
 
       <Card>
         <CardContent className="p-0">
+          {/* COLUMN WIDTH PLAN — measured, not guessed.
+                 8%   ID
+                20%   Service Type Name
+                22%   Service Description   <- the donor
+                18%   Service Category
+                11%   Display
+                11%   Status
+                10%   Actions
+              Still totals 100: there is no fixed-px column on this table, so
+              unlike manage-users the percentages do share the whole width.
+
+              ID WAS 6 AND STATUS WAS 8, AND BOTH CLIPPED THEIR OWN TITLES.
+              Measured against the compiled stylesheet (both chunks linked —
+              utilities and the :root token block — at 1180/1280/1440/1920, with
+              the real sidebar (240px) and main px-4 in the chain, so the table
+              is 906px at a 1180 viewport and 1006px at 1280):
+
+                Status  needs 58px (the word, plus gap-1 and the 12px sort
+                        arrow). At 8 percent it got 72px of column, 48px after
+                        the cell's 24px of padding — 10px short at 1180 and
+                        still 2px short at 1280, a real laptop. It is 11 now:
+                        76px of room for 58px of title.
+                ID      needs 31.6px: 15.6px of text plus that same arrow. At
+                        6 percent it got 30px of usable width at 1180 — 1.6px
+                        short, so the arrow had nowhere to sit. It is 8 now
+                        (48px usable).
+
+              THE ARROW IS WHY TWO CHARACTERS DON'T FIT. This page's local
+              SortHeader renders ArrowUpDown unconditionally, so every sortable
+              header carries 16px (4px gap-1 + 12px size-3 icon) it cannot shed.
+              Half of what "ID" needs is an icon.
+
+              ALL SIX POINTS CAME OUT OF SERVICE DESCRIPTION (28 -> 22), which
+              is the only column here whose CONTENT degrades gracefully under
+              the loss: it truncates with a `title` tooltip,
+              and its header only ever needed 126px of the 230px it held at 1180.
+              At 22 percent it still carries 175px of usable width — 49px more
+              than its title needs. Neither ID nor Status can shrink and neither
+              can wrap: they are single words, so `whitespace-normal` buys them
+              nothing and the width had to be real.
+
+              Display went 10 -> 11 in the same pass. It was not clipped, but it
+              was the next one to fail: 2.9px of slack at 1180. It has 11.9px now,
+              the tightest column on the table.
+
+              Verified at all four widths: minimum slack 11.9px (Display @1180),
+              no header clipped. Inline JSX expression comments are illegal
+              inside colgroup — they introduce single-space text nodes that fail
+              hydration — which is why this block sits above it. See manage-users
+              for the full backstory.
+          */}
           <table className="data-table w-full" style={{ tableLayout: 'fixed' }}>
             <colgroup>
-              <col style={{ width: '6%'  }} />
-              <col style={{ width: '20%' }} />
-              <col style={{ width: '28%' }} />
-              <col style={{ width: '18%' }} />
-              <col style={{ width: '10%' }} />
               <col style={{ width: '8%'  }} />
+              <col style={{ width: '20%' }} />
+              <col style={{ width: '22%' }} />
+              <col style={{ width: '18%' }} />
+              <col style={{ width: '11%' }} />
+              <col style={{ width: '11%' }} />
               <col style={{ width: '10%' }} />
             </colgroup>
             <thead>

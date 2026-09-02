@@ -183,14 +183,41 @@ export default function ManageRateCardsB2CPage() {
 
       <Card>
         <CardContent className="p-0">
+          {/*
+              Width plan. All seven columns are percentages and they total 100
+              — there is no px column here to share a remainder with, unlike
+              manage-users. Keep the total at 100 when re-balancing.
+
+              The previous split (6/18/18/26/12/8/12) clipped its own headers at
+              1180, a real laptop width. Measured against the compiled CSS at
+              1180 (table = 900px, th padding = px-3 → 24px of the column is
+              never available to the label):
+
+                ID     6% → 54px, 30px usable, label+arrow 31.56px → -1.56
+                Status 8% → 73px, 49px usable, label+arrow 53.36px → -4.36
+
+              Both are short identifier/state labels with nowhere to go: "ID"
+              and "Status" are single words, so letting them wrap would only
+              drop the sort arrow onto a second line, and every SortHeader here
+              renders that arrow unconditionally (ArrowUpDown when inactive),
+              so ~16px of every one of these headers is icon, not text.
+
+              So the 3 points they needed came out of the three columns whose
+              CONTENT truncates gracefully with a title tooltip — Service
+              Category, Service Type and B2C Service Name each gave up 1 point.
+              Re-measured at 1180/1280/1440/1920, nothing clips; the tightest
+              header in the whole table is now ID at 1180 with 8.44px to spare,
+              and Service Category — the column that gave up width and carries
+              the longest header — still holds 11.77px.
+          */}
           <table className="data-table w-full" style={{ tableLayout: 'fixed' }}>
             <colgroup>
-              <col style={{ width: '6%'  }} />
-              <col style={{ width: '18%' }} />
-              <col style={{ width: '18%' }} />
-              <col style={{ width: '26%' }} />
+              <col style={{ width: '7%'  }} />
+              <col style={{ width: '17%' }} />
+              <col style={{ width: '17%' }} />
+              <col style={{ width: '25%' }} />
               <col style={{ width: '12%' }} />
-              <col style={{ width: '8%'  }} />
+              <col style={{ width: '10%' }} />
               <col style={{ width: '12%' }} />
             </colgroup>
             <thead>

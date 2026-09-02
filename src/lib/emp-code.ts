@@ -67,7 +67,37 @@ export function formatEmpCode(count: string | number | null | undefined): string
 export function parseEmpCodeCount(code: string | null | undefined): string {
   const raw = String(code ?? '').trim().toUpperCase();
   if (!EMP_CODE_RE.test(raw)) return '';
-  return String(Number(raw.slice(EMP_CODE_PREFIX.length)));
+  /*
+   * THE DIGITS VERBATIM — no Number() round-trip (2026-09-02).
+   *
+   * It used to be String(Number(...)), which stripped the leading zeros, and
+   * the value SAVED was always correct: formatEmpCode pads on the way out, so
+   * 'E000001' hydrated to '1' and posted back as 'E000001'.
+   *
+   * What was wrong was what the operator SAW. The prefix is a fixed affix
+   * beside the box, so a user whose code is E000001 opened the dialog reading
+   * "E" then "1" — which looks like the code is E1, on the one screen whose job
+   * is to show what the code is. Two people comparing a CRM record against the
+   * HR sheet see different strings for the same employee.
+   *
+   * Keeping the digits as stored makes the field show exactly what the column
+   * holds. formatEmpCode still pads, so a hand-typed short value is unaffected
+   * — this only changes what an EXISTING code hydrates to.
+   */
+  return raw.slice(EMP_CODE_PREFIX.length);
+}
+
+/**
+ * '1' -> '000001'. Blank stays blank.
+ *
+ * Applied on BLUR, not on every keystroke: padding as the operator types turns
+ * "1" into "000001" and the next digit into "0000012", which is unusable. On
+ * blur the box settles to the six digits that will actually be stored, so what
+ * is on screen and what is in the column are the same string.
+ */
+export function padEmpCount(value: string | null | undefined): string {
+  const digits = String(value ?? '').replace(/\D+/g, '').slice(0, EMP_CODE_DIGITS);
+  return digits ? digits.padStart(EMP_CODE_DIGITS, '0') : '';
 }
 
 /** Digits-only, capped at the code width — for onChange on the count input. */

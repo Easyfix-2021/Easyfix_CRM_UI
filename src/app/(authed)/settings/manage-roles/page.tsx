@@ -382,13 +382,70 @@ export default function ManageRolesPage() {
           <table className="data-table w-full" style={{ tableLayout: 'fixed' }}>
             {/*
                 Column widths, in order (must match the th/td sequence below):
-                  6 percent  Role ID
-                  17 percent Name
-                  25 percent Description
-                  28 percent Menu Access (clickable to expand)
-                  8 percent  Users
-                  8 percent  Status
-                  8 percent  Actions
+                  11 percent Role ID
+                  16 percent Role Name
+                  22 percent Description
+                  23 percent Menu Access (clickable to expand)
+                  9 percent  Users
+                  10 percent Status
+                  9 percent  Actions
+                Totals 100 percent, unchanged — there is no fixed-px column
+                here, so the whole budget is shared by these seven.
+
+                WHY THESE NUMBERS, and not the 6/17/25/28/8/8/8 they replace.
+                Measured in headless Chrome against the compiled stylesheet
+                (both chunks — utilities plus the token block; with only the
+                utilities chunk every token resolves to nothing and the
+                geometry is fiction), inside a copy of the authed shell:
+                240px sidebar, main px-4, Card border. Table width comes out
+                at 906 / 1006 / 1166 / 1646 px for viewports 1180 / 1280 /
+                1440 / 1920.
+
+                The detector is the label span's own rect against
+                th.clientWidth minus the th's px-3 padding (24px total), and
+                it has to be a span the harness forces to nowrap ITSELF —
+                measuring SortHeader's inline-flex wrapper instead reports
+                46.3px for a "Role ID" that really needs 47.8, because the
+                flex box gets squeezed by the cell it is overflowing and so
+                understates its own requirement. Required widths, at 14px/600:
+                  Role ID      47.8px idle, 63.8px while it is the active
+                               sort (the arrow is 12px plus a 4px gap)
+                  Role Name    70.3 / 86.3
+                  Description  74.5 / 90.5
+                  Menu Access  84.3 (plain th, never gets an arrow)
+                  Users        37.0 / 53.0
+                  Status       42.0 / 58.0
+                  Actions      48.8
+
+                At the OLD widths the 6 percent Role ID column offered only
+                30 / 36 / 46px of content box — short of 47.8 at every
+                viewport up to and including 1440, so the label rendered cut
+                off on a real laptop, not just a narrow one. Status at 8
+                percent lost its arrow at 1180 and 1280 (48 and 56 available
+                against 58 needed) and Users lost its at 1180 (48 against
+                53). The new widths clear every one of those at 1180, the
+                tightest viewport, with the least slack on Role ID: 76px
+                available against 63.8 needed.
+
+                The 9 points that Role ID, Status, Users and Actions gained
+                came out of Description (25 to 22), Menu Access (28 to 23)
+                and Role Name (17 to 16). Those three hold
+                free text and truncate gracefully — Description and Role Name
+                carry the full value in a title tooltip, and Menu Access is
+                the click-to-expand cell, so its full contents are one click
+                away. Role ID, Users and Status hold short values that cannot
+                shrink, so taking from them would only move the clipping.
+
+                WRAPPING IS NOT AVAILABLE for these three. Letting "Role ID"
+                break over two lines would need only 28.9px (its widest word)
+                and would have been the cheaper fix, but SortHeader
+                (lib/use-sort.tsx) puts its children inside an inline-flex
+                span that hardcodes `whitespace-nowrap`. cn() runs twMerge, so
+                passing `whitespace-normal` from here does drop the nowrap on
+                the th itself — and measurably changes nothing, because the
+                inner span still refuses to break. That variant was rendered
+                and measured alongside the others: identical numbers, still
+                CLIP. Buying the percentage was the only lever this file owns.
 
                 HISTORY of this colgroup hydration bug, kept for the
                 next person who tries to add comments inside:
@@ -412,13 +469,13 @@ export default function ManageRolesPage() {
                 breaks parsing too. Plain words sidestep both.
             */}
             <colgroup>
-              <col style={{ width: '6%' }} />
-              <col style={{ width: '17%' }} />
-              <col style={{ width: '25%' }} />
-              <col style={{ width: '28%' }} />
-              <col style={{ width: '8%' }} />
-              <col style={{ width: '8%' }} />
-              <col style={{ width: '8%' }} />
+              <col style={{ width: '11%' }} />
+              <col style={{ width: '16%' }} />
+              <col style={{ width: '22%' }} />
+              <col style={{ width: '23%' }} />
+              <col style={{ width: '9%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '9%' }} />
             </colgroup>
             <thead>
               <tr>

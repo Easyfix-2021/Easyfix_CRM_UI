@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Calendar, Megaphone, Cake } from 'lucide-react';
+import { Calendar, Megaphone, Cake, PartyPopper } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { useFetch } from '@/lib/hooks';
 import { NoticeDetailModal } from '@/components/notice/NoticeDetailModal';
@@ -26,9 +26,12 @@ import type { Holiday, Notice } from '@/lib/notice-types';
  *   │ MON │ ║ ⚠️ Eid-ul-Zuha (Restri…║
  *   │25 May│╚════════════════════════╝
  *
- * Date pill on the left, event cards on the right. Three kinds share the rail
- * now — national holidays, dated notices, and EMPLOYEE BIRTHDAYS — all grouped
- * onto the same date keys. SLA deadlines remain deferred per plan.
+ * Date pill on the left, event cards on the right. Four kinds share the rail
+ * now — national holidays, dated notices, EMPLOYEE BIRTHDAYS and WORK
+ * ANNIVERSARIES — all grouped onto the same date keys. The last two come from
+ * one request (/admin/birthdays/upcoming returns both arrays) because they run
+ * on the same window and must never disagree about what "upcoming" means.
+ * SLA deadlines remain deferred per plan.
  */
 
 type Resp = { items: Holiday[]; degraded?: boolean };
@@ -41,7 +44,18 @@ type NoticeResp = { items: Notice[] };
  * already groups on.
  */
 type Birthday = { user_id: number; user_name: string; date: string };
-type BirthdayResp = { items: Birthday[] };
+/*
+ * WORK ANNIVERSARIES ride on the SAME response as the birthdays — one request,
+ * one window, one definition of "upcoming". `anniversaries` is optional on the
+ * type because a backend that predates it simply omits the key, and the rail
+ * must degrade to birthdays-only rather than crash on `undefined.filter`.
+ *
+ * `years` is an ORDINAL the server computed, not a joining date. The endpoint
+ * never sends the date itself — same discipline as the missing birth year,
+ * applied to the one part of it that is nobody's business.
+ */
+type Anniversary = { user_id: number; user_name: string; date: string; years: number };
+type BirthdayResp = { items: Birthday[]; anniversaries?: Anniversary[] };
 
 /*
  * The rail shows two kinds of thing on the same timeline: national holidays
@@ -55,7 +69,8 @@ type BirthdayResp = { items: Birthday[] };
 type RailEntry =
   | { kind: 'holiday'; key: string; label: string; title?: string }
   | { kind: 'notice'; key: string; label: string; title?: string; notice: Notice }
-  | { kind: 'birthday'; key: string; label: string; title?: string };
+  | { kind: 'birthday'; key: string; label: string; title?: string }
+  | { kind: 'anniversary'; key: string; label: string; title?: string; years: number };
 
 /* Day-name pill — small circle with WEEKDAY · DD MONTH */
 function DatePill({ date }: { date: string }) {
@@ -156,7 +171,29 @@ export function UpcomingEvents({ days = 7 }: { days?: number }) {
       },
     }));
 
-  const groups = groupByDate([...holidayEntries, ...noticeEntries, ...birthdayEntries]);
+  /*
+   * Same payload, same fail-soft construction, same date guard as the
+   * birthdays above — see that comment. The one difference is `years`, which
+   * the card prints instead of the word "Birthday": it is the whole point of
+   * the row, and a plate that just said "Anniversary" would be strictly less
+   * useful than the one it sits next to.
+   */
+  const anniversaryEntries = (birthdaysFetched.data?.anniversaries ?? [])
+    .filter((a) => /^\d{4}-\d{2}-\d{2}$/.test(String(a?.date ?? '')))
+    .map((a) => ({
+      date: String(a.date).slice(0, 10),
+      entry: {
+        kind: 'anniversary' as const,
+        key: `a-${a.user_id}-${a.date}`,
+        label: a.user_name,
+        title: `${a.user_name} · ${a.years} ${a.years === 1 ? 'Year' : 'Years'} At EasyFix`,
+        years: a.years,
+      },
+    }));
+
+  const groups = groupByDate([
+    ...holidayEntries, ...noticeEntries, ...birthdayEntries, ...anniversaryEntries,
+  ]);
 
   return (
     /*
@@ -265,6 +302,32 @@ export function UpcomingEvents({ days = 7 }: { days?: number }) {
                             is guessable; this removes the guess. */}
                         <span className="ml-auto shrink-0 text-xs font-normal opacity-80">
                           Birthday
+                        </span>
+                      </div>
+                    ) : e.kind === 'anniversary' ? (
+                      /*
+                       * THE SAME GOLD PLATE AS THE BIRTHDAY, on purpose. Both
+                       * rows are "celebrate a colleague today", and giving the
+                       * second one its own colour would say they are different
+                       * kinds of thing while adding a fourth hue to a rail that
+                       * already carries three.
+                       *
+                       * It also inherits the dark:bg-gold-tint fix measured for
+                       * the birthday plate above — --gold-strong INVERTS between
+                       * themes, and a new colour would need that whole contrast
+                       * exercise repeating. The icon and the trailing count are
+                       * what tell the two apart, which is the distinction that
+                       * actually matters to a reader.
+                       */
+                      <div
+                        key={e.key}
+                        className="rounded-md bg-gold-strong dark:bg-gold-tint text-white px-3 py-2 text-[13px] font-medium shadow-sm flex items-center gap-2"
+                        title={e.title}
+                      >
+                        <PartyPopper className="h-3.5 w-3.5 shrink-0 opacity-80" />
+                        <span className="truncate">{e.label}</span>
+                        <span className="ml-auto shrink-0 text-xs font-normal opacity-80">
+                          {e.years} {e.years === 1 ? 'Year' : 'Years'}
                         </span>
                       </div>
                     ) : (
