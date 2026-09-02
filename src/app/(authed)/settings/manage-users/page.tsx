@@ -223,8 +223,15 @@ type OfficialEmailCheck = {
  */
 const EMAIL_RE = /^\S+@\S+\.\S+$/;
 
+/*
+ * Must stay a subset of user.service.js's SORTABLE_COLUMNS keys. The BACKEND
+ * pair cannot drift — routes/admin/users.js derives its Joi whitelist from that
+ * object — but this list is hand-kept, and a key here that the server does not
+ * know is rejected by Joi with a 400. Adding `user_code` without adding it there
+ * first is the mistake this comment exists to prevent.
+ */
 type SortKey =
-  | 'user_id' | 'user_name' | 'official_email' | 'mobile_no'
+  | 'user_id' | 'user_code' | 'user_name' | 'official_email' | 'mobile_no'
   | 'role_name' | 'city_name' | 'user_status' | 'insert_date';
 type SortDir = 'asc' | 'desc';
 
@@ -764,14 +771,15 @@ export default function ManageUsersPage() {
                   * on every other screen, so its absence here meant reading a
                   * user's code off their profile page one at a time.
                   *
-                  * A PLAIN th, NOT a SortHeader, and deliberately. `user_code`
-                  * is absent from user.service.js's SORTABLE_COLUMNS, and that
-                  * lookup ends in `|| SORTABLE_COLUMNS.user_name` — so a
-                  * sortable-looking header here would quietly sort by NAME and
-                  * look broken rather than error. Add it to the whitelist first
-                  * if sorting by code is ever wanted.
+                  * Sortable: `user_code` is in user.service.js's
+                  * SORTABLE_COLUMNS, and routes/admin/users.js derives its Joi
+                  * whitelist from those same keys, so the two sides agree by
+                  * construction rather than by anyone remembering. It sorts as
+                  * TEXT — codes are E-prefixed and zero-padded, so lexical order
+                  * is numeric order — and users with no code yet sort to the top
+                  * ascending, which is the end you want them at.
                   */}
-                <th className="!text-center whitespace-normal" title="Employee code (tbl_user.user_code)">Employee Code</th>
+                <SortHeader col="user_code" align="center" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Employee Code</SortHeader>
                 <SortHeader col="user_name"      align="left"   sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Name</SortHeader>
                 <SortHeader col="official_email" align="left"   sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Email</SortHeader>
                 {/*
