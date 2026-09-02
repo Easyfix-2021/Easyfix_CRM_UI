@@ -557,8 +557,29 @@ export default function PriorityJobsPage() {
 
       {/* ── Drill-down dialog ── */}
       <Dialog open={!!drill} onOpenChange={onDrillOpenChange}>
-        <DialogContent className="max-w-5xl">
-          <DialogHeader className="bg-sidebar text-sidebar-foreground">
+        {/*
+          * ONE SCROLLER, NOT TWO.
+          *
+          * DialogContent scrolls the whole panel by default (max-h-[85vh]
+          * overflow-y-auto). With a max-h-[60vh] scroller on the drill-down
+          * table as well, a busy city gave the operator two nested
+          * scrollbars: the inner one for the rows, the outer one for the few
+          * remaining pixels of panel — and on a short viewport the last rows
+          * only came into view once you found the outer scrollbar.
+          *
+          * Flex column + overflow-hidden on the panel, shrink-0 on the header,
+          * flex-1 min-h-0 on the table wrapper: the header stays pinned and
+          * the rows are the only thing that scrolls. min-h-0 is load-bearing —
+          * a flex child's min-height defaults to auto, so without it the
+          * wrapper refuses to shrink below the table and grows the panel
+          * instead of scrolling.
+          *
+          * overflow-auto (not overflow-y-auto) on the wrapper is deliberate:
+          * six columns of job data can outrun a narrow window, and the
+          * horizontal scroll belongs to the table, not the page.
+          */}
+        <DialogContent className="max-w-5xl max-h-[85vh] flex flex-col overflow-hidden">
+          <DialogHeader className="shrink-0 bg-sidebar text-sidebar-foreground">
             <DialogTitle className="flex items-center justify-between gap-3">
               <span>
                 {drill?.cityName} — {drillData.data?.length ?? 0} Jobs
@@ -575,7 +596,7 @@ export default function PriorityJobsPage() {
           ) : (drillData.data?.length ?? 0) === 0 ? (
             <div className="p-8 text-center text-sm text-muted-foreground">No Jobs Found</div>
           ) : (
-            <div className="max-h-[60vh] overflow-auto rounded-md border border-border">
+            <div className="flex-1 min-h-0 overflow-auto rounded-md border border-border">
               <table className="data-table">
                 <thead>
                   <tr>

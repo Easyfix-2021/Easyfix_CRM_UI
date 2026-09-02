@@ -643,8 +643,26 @@ export default function SupplyGapPage() {
         // eslint-disable-next-line no-restricted-syntax -- read-only drill-down modal — no form state to guard
         onOpenChange={(o) => !o && setAllocId(null)}
       >
-        <DialogContent className="max-w-3xl">
-          <DialogHeader className="bg-sidebar text-sidebar-foreground">
+        {/*
+          * PINNED HEADER, ONE SCROLLER.
+          *
+          * DialogContent scrolls the whole panel by default (max-h-[85vh]
+          * overflow-y-auto), and the allocations table below already caps
+          * itself at max-h-[60vh]. That is two nested vertical scrollers: a gap
+          * with enough technicians filled the inner band, the panel then
+          * scrolled a second time, and the operator had to find the outer
+          * scrollbar to see the bottom of the list. Same opt-out the shared
+          * component documents and manage-roles uses: flex column here, header
+          * shrink-0, one flex-1 middle that absorbs the overflow.
+          *
+          * min-h-0 on that middle is load-bearing — a flex child defaults to
+          * min-height:auto and refuses to shrink below its content, so without
+          * it the band would grow the panel instead of scrolling and this whole
+          * change would be a no-op. There is no footer on this drill-down, so
+          * nothing else needs shrink-0.
+          */}
+        <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col overflow-hidden">
+          <DialogHeader className="bg-sidebar text-sidebar-foreground shrink-0">
             <DialogTitle>
               Added Technicians — Gap #{allocId}
               {allocations.data ? ` (${allocations.data.length})` : ''}
@@ -659,7 +677,10 @@ export default function SupplyGapPage() {
           ) : (allocations.data?.length ?? 0) === 0 ? (
             <div className="p-8 text-center text-sm text-muted-foreground">No Record Found.</div>
           ) : (
-            <div className="max-h-[60vh] overflow-auto rounded-md border border-border">
+            /* overflow-auto, not overflow-y-auto: seven columns do not fit
+             * max-w-3xl, and the horizontal scroll has to stay inside this
+             * bordered band because DialogContent hides overflow-x. */
+            <div className="flex-1 min-h-0 overflow-auto rounded-md border border-border">
               <table className="data-table">
                 <thead>
                   <tr>

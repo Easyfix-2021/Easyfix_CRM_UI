@@ -100,8 +100,26 @@ export function TechnicianCategoryModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl">
-        <DialogHeader>
+      {/*
+        * SINGLE SCROLLER — pinned header and navigator.
+        *
+        * DialogContent scrolls the whole panel by default (max-h-[85vh]
+        * overflow-y-auto), and the table band below used to carry its own
+        * max-h-[60vh] overflow-auto. That is two nested scrollers: a technician
+        * with many categories filled the inner band, the panel then scrolled a
+        * second time, and the period navigator scrolled out of reach while the
+        * operator was still reading the table it drives. Opting out the way the
+        * shared component documents — flex column, non-scrolling children
+        * shrink-0, one flex-1 middle absorbing the overflow — leaves exactly
+        * one scrollbar.
+        *
+        * min-h-0 is load-bearing: a flex child defaults to min-height:auto and
+        * refuses to shrink below its content, so without it the table band
+        * would grow the panel instead of scrolling and the pinning would
+        * silently do nothing.
+        */}
+      <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col overflow-hidden">
+        <DialogHeader className="shrink-0">
           <DialogTitle>
             Category Performance — {txName}
             {txId != null ? ` (${txId})` : ''}
@@ -109,7 +127,7 @@ export function TechnicianCategoryModal({
         </DialogHeader>
 
         {/* Period navigator. */}
-        <div className="flex items-center justify-center gap-4 py-1">
+        <div className="shrink-0 flex items-center justify-center gap-4 py-1">
           <button
             type="button"
             aria-label="Previous Period"
@@ -133,7 +151,7 @@ export function TechnicianCategoryModal({
           </button>
         </div>
 
-        <div className="max-h-[60vh] overflow-auto rounded-md border">
+        <div className="flex-1 min-h-0 overflow-y-auto rounded-md border">
           {loading ? (
             <div className="flex items-center justify-center gap-2 p-8 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" /> Loading…

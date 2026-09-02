@@ -173,8 +173,11 @@ export function NoticeDetailModal({
           /*
            * BOUNDED HEIGHT + INTERNAL SCROLL (2026-08-13).
            *
-           * Base DialogContent is `fixed top-1/2 -translate-y-1/2` with
-           * `overflow-hidden` and NO max-height. A notice longer than the
+           * Base DialogContent was, when this was written, `fixed top-1/2
+           * -translate-y-1/2` with `overflow-hidden` and NO max-height. (It has
+           * since gained `max-h-[85vh] overflow-y-auto` — see the overflow-hidden
+           * note below, which is what that change made necessary here.)
+           * A notice longer than the
            * viewport therefore grew the card past the screen in BOTH
            * directions, could not scroll internally, and could not be scrolled
            * into view from the page because it is `fixed` — so the footer's
@@ -188,8 +191,14 @@ export function NoticeDetailModal({
            * settings/deep-skills). It is a call-site fix, not a base one,
            * because that is this codebase's convention and 105 dialogs is too
            * wide a blast radius to change blind.
+           *
+           * `overflow-hidden` (added 2026-09-02) is what makes the claim three
+           * lines down — "the ONLY scrolling region" — actually true. The base has
+           * carried `overflow-y-auto` since this comment was written, so the panel
+           * was quietly scrolling too and this was a two-scroller modal: the body
+           * ran out, then the whole card moved under the same gesture.
            */
-          'sm:max-w-[32rem] rounded-2xl border-0 flex flex-col max-h-[85vh] '
+          'sm:max-w-[32rem] rounded-2xl border-0 flex flex-col overflow-hidden max-h-[85vh] '
           + (stackDepth >= 2
             ? 'shadow-[0_25px_50px_-12px_rgb(0_0_0_/_0.4),0_-9px_0_-4px_rgb(255_255_255_/_0.9),0_-18px_0_-8px_rgb(255_255_255_/_0.65)]'
             : stackDepth === 1

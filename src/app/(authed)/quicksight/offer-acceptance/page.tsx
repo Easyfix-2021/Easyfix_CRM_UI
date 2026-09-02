@@ -737,8 +737,35 @@ function OfferDrilldownDialog({ drill, filters, onClose }: {
 
   return (
     <Dialog open={drill != null} onOpenChange={guardedOpenChange}>
-      <DialogContent className="max-w-5xl">
-        <DialogHeader>
+      {/*
+        * PINNED HEADER, ONE SCROLLER (2026-09-01, measured).
+        *
+        * DialogContent scrolls the WHOLE panel by default (max-h-[85vh]
+        * overflow-y-auto), and the table region below scrolls too — two nested
+        * vertical scrollports, which is the trap the house rule names.
+        *
+        * The other half of that rule — "just drop the inner scroller" — is
+        * wrong HERE, so this modal takes the pinned pattern instead. The inner
+        * div is the only horizontal scrollport this table has: DialogContent
+        * is deliberately `overflow-x-hidden` (the header band's rounded top
+        * corners depend on that clip), and these 11 columns measured 428px
+        * wider than the panel's content box at max-w-5xl. Delete the inner
+        * container and Reason / Response fall off the right edge unreachable.
+        *
+        * So: flex column, header flex-none, one flex-1 middle that absorbs BOTH
+        * axes. min-h-0 is load-bearing — a flex child's min-height defaults to
+        * auto and refuses to shrink below its content, so without it the middle
+        * would grow the panel instead of scrolling and the pinning would
+        * silently do nothing.
+        *
+        * MEASURED at a 757px-tall viewport, 100 rows: the panel goes 547 → 641
+        * and the visible table 452 → 546, because 60vh no longer leaves the
+        * bottom 94px of an 85vh panel empty. Short buckets are unaffected — a
+        * one-row drill-down measured 125px tall before and after, so flex-1
+        * does not stretch a nearly-empty modal to full height.
+        */}
+      <DialogContent className="max-w-5xl max-h-[85vh] flex flex-col overflow-hidden">
+        <DialogHeader className="shrink-0">
           <DialogTitle>{drill ? `${DRILL_TITLE[drill.status]} · ${drill.label}` : ''}</DialogTitle>
         </DialogHeader>
         {detail.error && <p className="text-sm text-urgent-strong">{String(detail.error)}</p>}
@@ -752,7 +779,9 @@ function OfferDrilldownDialog({ drill, filters, onClose }: {
                 Showing the 500 most recent offers — narrow the filters to see the rest.
               </p>
             )}
-            <div className="max-h-[60vh] overflow-auto rounded-md border border-border">
+            {/* overflow-auto, not overflow-y-auto: this is the table's only
+                horizontal scrollport — see the DialogContent note above. */}
+            <div className="flex-1 min-h-0 overflow-auto rounded-md border border-border">
               <table className="data-table">
                 <thead>
                   <tr>

@@ -548,8 +548,26 @@ export default function AdminDashboardPage() {
 
       {/* ── Org Chart dialog ── */}
       <Dialog open={orgOpen} onOpenChange={setOrgOpen}>
-        <DialogContent className="max-w-3xl">
-          <DialogHeader className="bg-sidebar text-sidebar-foreground">
+        {/*
+          * PINNED HEADER, ONE SCROLLER.
+          *
+          * DialogContent scrolls the whole panel by default (max-h-[85vh]
+          * overflow-y-auto), so an inner `max-h-[65vh] overflow-auto` body gave
+          * the modal two nested vertical scrollers: the operator dragging a deep
+          * org tree could hit the bottom of the inner band and still have panel
+          * left to scroll, with no visual cue which scrollbar they were on.
+          * Same opt-out the shared component documents and manage-roles uses:
+          * flex column, header shrink-0, one flex-1 middle that absorbs the
+          * overflow. min-h-0 is load-bearing — a flex child defaults to
+          * min-height:auto and refuses to shrink below its content, so without
+          * it the middle would grow the panel instead of scrolling.
+          *
+          * The body keeps `overflow-auto` rather than `overflow-y-auto`: a wide
+          * org chart needs horizontal panning as much as vertical, and only the
+          * vertical axis was ever duplicated.
+          */}
+        <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col overflow-hidden">
+          <DialogHeader className="bg-sidebar text-sidebar-foreground shrink-0">
             <DialogTitle>Organization Chart</DialogTitle>
           </DialogHeader>
           {org.loading ? (
@@ -563,7 +581,7 @@ export default function AdminDashboardPage() {
               No Organization Data Found
             </div>
           ) : (
-            <div className="max-h-[65vh] overflow-auto p-2">
+            <div className="flex-1 min-h-0 overflow-auto p-2">
               <OrgTree node={org.data} />
             </div>
           )}

@@ -351,8 +351,16 @@ export function CallHistoryButton({
       </button>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-3xl">
-          <DialogHeader>
+        {/* ONE scroller. DialogContent's base is `max-h-[85vh] overflow-y-auto`,
+            so the table's own `max-h-[60vh] overflow-y-auto` used to sit inside a
+            panel that still scrolled — a wheel gesture ran the call list to its end
+            and then dragged the whole dialog, title and all. `overflow-hidden`
+            disarms the base (local/no-unscrollable-dialog-content permits it because
+            a scroll region remains beneath), and the body takes the leftover height
+            via `flex-1 min-h-0` instead of a fixed 60vh, so the list uses whatever
+            the viewport actually has. */}
+        <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col overflow-hidden">
+          <DialogHeader className="shrink-0">
             <DialogTitle className="text-base">
               Call History
               <span className="ml-1 text-sm font-normal text-muted-foreground">
@@ -361,7 +369,7 @@ export function CallHistoryButton({
             </DialogTitle>
           </DialogHeader>
 
-          <div className="max-h-[60vh] overflow-y-auto">
+          <div className="flex-1 min-h-0 overflow-y-auto">
             <CallHistoryTable items={items} loading={loading} error={error} />
           </div>
         </DialogContent>

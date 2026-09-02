@@ -534,8 +534,22 @@ export function PincodeListModal({
   return (
     // eslint-disable-next-line no-restricted-syntax -- read-only pincode viewer: no dirty state to guard
     <Dialog open={!!candidate} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-md" hideClose>
-        <DialogHeader>
+      {/* The pincode list is a deliberately BOUNDED region — `max-h-72` is a fixed
+          288px, not a viewport fraction — so it is not the modal-body-sized second
+          scroller the rule usually catches. It is still a direct child of a panel
+          that scrolled, though, and on a short viewport (header + filter + 288px +
+          footer past 85vh) that produced two live scrollers with the Close button
+          below the fold of the outer one.
+
+          Keeping the cap and losing the second scroller: the panel becomes a flex
+          column with `overflow-hidden`, and the list gets `flex-1 min-h-0` ALONGSIDE
+          its `max-h-72`. The cap still wins at normal heights; `min-h-0` lets the
+          list shrink below 288px when the viewport is short, so nothing is ever
+          clipped — which is the failure mode `overflow-hidden` would otherwise
+          introduce. The filter row and the count line are shrink-0 so they cannot be
+          squeezed instead. */}
+      <DialogContent className="max-w-md max-h-[85vh] flex flex-col overflow-hidden" hideClose>
+        <DialogHeader className="shrink-0">
           <DialogTitle className="flex items-center gap-2">
             Serviceable Pincodes
             {candidate && (
@@ -543,7 +557,7 @@ export function PincodeListModal({
             )}
           </DialogTitle>
         </DialogHeader>
-        <div className="relative">
+        <div className="relative shrink-0">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder="Filter pincodes…"
@@ -552,7 +566,7 @@ export function PincodeListModal({
             onChange={(e) => setFilter(e.target.value)}
           />
         </div>
-        <div className="mt-3 max-h-72 overflow-auto rounded border thin-scroll">
+        <div className="mt-3 flex-1 min-h-0 max-h-72 overflow-auto rounded border thin-scroll">
           {filtered.length === 0 ? (
             <div className="p-4 text-center text-sm text-muted-foreground">
               {list.length === 0 ? 'Not Available' : 'No pincodes match the filter.'}
@@ -565,10 +579,10 @@ export function PincodeListModal({
             </ol>
           )}
         </div>
-        <p className="mt-1 text-xs text-muted-foreground">
+        <p className="mt-1 shrink-0 text-xs text-muted-foreground">
           {filtered.length} of {list.length} pincode{list.length === 1 ? '' : 's'}
         </p>
-        <DialogFooter>
+        <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={onClose}>Close</Button>
         </DialogFooter>
       </DialogContent>

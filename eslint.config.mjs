@@ -420,6 +420,14 @@ const noRawTimeSlotRender = {
  * Bans a BARE `overflow-hidden` on <DialogContent> unless the modal's own
  * subtree provides a scroll region.
  *
+ * HALF OF A PAIR. local/dialog-single-scroller (defined just below) is the
+ * dual: this rule bans ZERO scrollers, that one bans TWO. Together they say
+ * "exactly one scroller, always". Their outer tests are exact negations —
+ * this one requires a bare `overflow-hidden` on the panel, that one requires
+ * its absence — so no DialogContent can ever trip both. Edit either and read
+ * the other first; they share SCROLLY_CLASS, hasBareOverflowHidden and
+ * literalTextIn below.
+ *
  * WHY THIS ISN'T A no-restricted-syntax SELECTOR. The condition is not
  * "does this attribute contain a string" — it is "does this attribute contain
  * a string AND does the subtree below it lack another one". ESQuery can't
@@ -469,6 +477,42 @@ const hasBareOverflowHidden = (text) => text.split(/\s+/).some((tok) => {
   return base === 'overflow-hidden';
 });
 
+/* Every string literal anywhere inside a JSX attribute value — covers
+ * className="…", className={`…`}, className={cn('…', x && '…')},
+ * className={'a ' + (c ? 'b' : 'c')} and conditional branches, without caring
+ * which shape it is. Module scope because BOTH dialog rules call it; a second
+ * copy is exactly the invisible drift the QS_COLORS_COPY staleness guard and
+ * the RAW_PALETTE sync note further down exist to complain about. It closes
+ * over nothing, so it is a plain function, not a per-run closure.
+ *
+ * It CONCATENATES every branch rather than evaluating one, so a className
+ * whose arms disagree (`compact ? 'p-0' : 'overflow-hidden p-0'`) reads as
+ * carrying every class any branch could emit. Both rules lean on that
+ * deliberately: it makes them quiet on ambiguous call sites instead of wrong
+ * on them.
+ */
+const literalTextIn = (node) => {
+  let out = '';
+  const walk = (n) => {
+    if (!n || typeof n !== 'object') return;
+    if (n.type === 'Literal' && typeof n.value === 'string') out += ' ' + n.value;
+    else if (n.type === 'TemplateElement') out += ' ' + (n.value.cooked ?? n.value.raw ?? '');
+    for (const k of Object.keys(n)) {
+      if (k === 'parent') continue;
+      const v = n[k];
+      if (Array.isArray(v)) v.forEach(walk);
+      else if (v && typeof v.type === 'string') walk(v);
+    }
+  };
+  walk(node);
+  return out;
+};
+
+/* The className attribute of a JSXOpeningElement, or undefined. */
+const classNameAttr = (opening) => (opening.attributes || []).find(
+  (a) => a.type === 'JSXAttribute' && a.name && a.name.name === 'className',
+);
+
 const noUnscrollableDialogContent = {
   meta: {
     type: 'problem',
@@ -488,32 +532,10 @@ const noUnscrollableDialogContent = {
   create(context) {
     const sc = context.sourceCode || context.getSourceCode();
 
-    /* Every string literal anywhere inside the attribute value — covers
-     * className="…", className={`…`}, className={cn('…', x && '…')} and
-     * conditional branches, without caring which shape it is. */
-    const literalTextIn = (node) => {
-      let out = '';
-      const walk = (n) => {
-        if (!n || typeof n !== 'object') return;
-        if (n.type === 'Literal' && typeof n.value === 'string') out += ' ' + n.value;
-        else if (n.type === 'TemplateElement') out += ' ' + (n.value.cooked ?? n.value.raw ?? '');
-        for (const k of Object.keys(n)) {
-          if (k === 'parent') continue;
-          const v = n[k];
-          if (Array.isArray(v)) v.forEach(walk);
-          else if (v && typeof v.type === 'string') walk(v);
-        }
-      };
-      walk(node);
-      return out;
-    };
-
     return {
       JSXOpeningElement(node) {
         if (!node.name || node.name.name !== 'DialogContent') return;
-        const classAttr = node.attributes.find(
-          (a) => a.type === 'JSXAttribute' && a.name && a.name.name === 'className',
-        );
+        const classAttr = classNameAttr(node);
         if (!classAttr || !classAttr.value) return;
         if (!hasBareOverflowHidden(literalTextIn(classAttr.value))) return;
 
@@ -533,11 +555,157 @@ const noUnscrollableDialogContent = {
   },
 };
 
+/* ───────────────────────────────────────────────────────────────────────────
+ * LOCAL RULE — local/dialog-single-scroller
+ *
+ * Bans a scrolling DIRECT CHILD inside a <DialogContent> that itself still
+ * scrolls. One modal, two nested scroll containers.
+ *
+ * THE DUAL OF local/no-unscrollable-dialog-content (directly above). That rule
+ * bans ZERO scrollers — a bare `overflow-hidden` with nothing beneath it to
+ * scroll. This one bans TWO. Together they say: exactly one scroller, always.
+ * The two outer tests are exact negations of each other, so a given
+ * DialogContent is always the business of at most one of them and a single
+ * layout mistake never produces two errors.
+ *
+ * WHY THIS ISN'T A no-restricted-syntax SELECTOR. Same reason as its dual: the
+ * condition is relational — this element's className AND a child's className —
+ * and ESQuery has no way to say "…and one of my children carries an attribute
+ * containing X". A selector matching only the child half would fire on all 17
+ * legitimately-nested scrollers (see DIRECT CHILD ONLY below).
+ *
+ * WHAT IT COSTS — MEASURED on the Manage Users modal, the defect that prompted
+ * the rule. Its DialogContent kept the base `max-h-[85vh] overflow-y-auto` and
+ * the body div added its own `max-h-[…] overflow-y-auto` on top:
+ *   · the inner band alone held 1419px of scroll content;
+ *   · the panel then scrolled a FURTHER 56px at 1400x900, and 86px at a
+ *     700px-tall viewport — two scrollbars, nested, and the outer one takes
+ *     the wheel as soon as the pointer leaves the inner band;
+ *   · the footer sat below the fold of that OUTER scroller, so the action row
+ *     was invisible until the user found the second scrollbar.
+ * The fix took the modal from 2 scrollers to 1.
+ *
+ * THE FIX, and the reference implementation. src/app/(authed)/settings/
+ * manage-roles/page.tsx (~line 1022) is the shape to copy:
+ *
+ *     <DialogContent className="… max-h-[85vh] flex flex-col overflow-hidden">
+ *       <DialogHeader className="shrink-0"> … </DialogHeader>
+ *       <div className="space-y-4 flex-1 min-h-0 overflow-y-auto pr-1"> … </div>
+ *       <DialogFooter className="shrink-0"> … </DialogFooter>
+ *     </DialogContent>
+ *
+ * `overflow-hidden` on the panel is what disarms the base scroller (the
+ * tailwind-merge conflict-group fact is documented on the dual above),
+ * `shrink-0` pins the bands so they cannot be squeezed, and `flex-1 min-h-0`
+ * is what makes the body — and only the body — the scroller. Deleting the
+ * child's scroll classes and letting the whole panel scroll as one is equally
+ * correct and a smaller diff; it is the right answer whenever the modal has no
+ * footer worth pinning.
+ *
+ * DIRECT CHILD ONLY, and that scope IS the design. A scroller further down —
+ * a bounded picker list inside a form section — is a deliberate sub-region and
+ * is correct. The audit counted 17 of those against 16 real violations, and 13
+ * of the 17 sit under a DialogContent that still scrolls, so a rule phrased as
+ * "any scrolling descendant" would have been wrong nearly as often as right on
+ * its very first run.
+ *
+ * WHAT COUNTS AS A DIRECT CHILD. In the DOM sense, not the AST sense: JSX
+ * expression containers and fragments are TRANSPARENT. `{cond ? <div …/> : <div
+ * …/>}`, `{rows.map((r) => <div …/>)}` and `<>…</>` all render children of
+ * DialogContent. So the walk descends through anything that is NOT a
+ * JSXElement and stops at the first one on each path. This is not academic:
+ * five of the sixteen violations (the QuickSight drill-down modals) live in the
+ * final arm of a four-way conditional chain and are invisible to a rule that
+ * reads only `node.children`.
+ *
+ * WHAT IT DELIBERATELY CANNOT SEE — skipped silently, never guessed:
+ *   · a child COMPONENT that owns its own overflow (`<ClickToCallTab />`,
+ *     `<ScrollArea>`) — the className lives in another file;
+ *   · a className assembled from a variable or a CSS module — no literal to
+ *     read, so `literalTextIn` returns nothing and the child is skipped;
+ *   · a DialogContent carrying BOTH `overflow-hidden` and an explicit
+ *     `overflow-y-auto`, which in practice means different arms of a ternary.
+ *     Which one tailwind-merge keeps depends on the order they are emitted in,
+ *     and "order" is not a property a conditional has. Ambiguous is not a
+ *     violation: the `hasBareOverflowHidden` bail below catches this case and
+ *     hands the site to nobody.
+ * A noisy rule gets disabled; a quiet one keeps working. Where the rule is
+ * wrong anyway, an eslint-disable-next-line with a one-line reason is the
+ * documented escape, same as the other rules in this file.
+ * ─────────────────────────────────────────────────────────────────────────── */
+const dialogSingleScroller = {
+  meta: {
+    type: 'problem',
+    docs: { description: 'Disallow a scrolling direct child inside a DialogContent that still scrolls.' },
+    schema: [],
+    messages: {
+      nested:
+        'This is a direct child of a <DialogContent> that STILL SCROLLS — the base is '
+        + '`max-h-[85vh] overflow-y-auto` and nothing on the panel disarms it — so the modal now has two '
+        + 'nested scroll containers. Measured on Manage Users: the inner band held 1419px of content and '
+        + 'the panel still scrolled a further 56px at 1400x900 (86px at a 700px-tall viewport), which put '
+        + 'the footer below the fold of the OUTER scroller — the action row was unreachable until you found '
+        + 'the second scrollbar. Two fixes, both correct: drop the scroll classes here and let the dialog '
+        + 'scroll as one panel; or commit to the pinned pattern — add `flex flex-col overflow-hidden` to the '
+        + 'DialogContent, `shrink-0` to the header and footer, and keep `flex-1 min-h-0 overflow-y-auto` on '
+        + 'this body. src/app/(authed)/settings/manage-roles/page.tsx is the reference implementation. If '
+        + 'this scroller is a deliberate bounded sub-region and not the modal body, add an '
+        + 'eslint-disable-next-line saying so.',
+    },
+  },
+  create(context) {
+    /* Direct children in the DOM sense (see WHAT COUNTS AS A DIRECT CHILD
+     * above): descend through fragments, `{…}` containers, ternary arms, `&&`
+     * guards and `.map()` callbacks, and stop at the first JSXElement on each
+     * path. Stopping there is precisely what keeps grandchildren — the 17
+     * legitimate bounded sub-regions — out of the result. */
+    const directChildElements = (jsxElement) => {
+      const out = [];
+      const walk = (n) => {
+        if (!n || typeof n !== 'object') return;
+        if (n.type === 'JSXElement') { out.push(n); return; }   // a child — do NOT descend
+        for (const k of Object.keys(n)) {
+          if (k === 'parent') continue;
+          const v = n[k];
+          if (Array.isArray(v)) v.forEach(walk);
+          else if (v && typeof v.type === 'string') walk(v);
+        }
+      };
+      (jsxElement.children || []).forEach(walk);
+      return out;
+    };
+
+    return {
+      JSXOpeningElement(node) {
+        if (!node.name || node.name.name !== 'DialogContent') return;
+
+        /* Does the PANEL still scroll? A missing className means yes — the base
+         * carries the scroll, and 27 of the 118 call sites pass no className at
+         * all, so "absent" must read as "scrolls" rather than "skip". A bare
+         * `overflow-hidden` means no: that panel belongs to the dual rule. */
+        const own = classNameAttr(node);
+        if (own && own.value && hasBareOverflowHidden(literalTextIn(own.value))) return;
+
+        for (const child of directChildElements(node.parent)) {
+          const attr = classNameAttr(child.openingElement);
+          if (!attr || !attr.value) continue;
+          /* SCROLLY_CLASS has no /g flag, so `.test()` carries no lastIndex
+           * between children. Do not add one — this loop calls it N times. */
+          if (!SCROLLY_CLASS.test(literalTextIn(attr.value))) continue;
+          // Reported on the CHILD's className: that is where the fix goes.
+          context.report({ node: attr, messageId: 'nested' });
+        }
+      },
+    };
+  },
+};
+
 const localPlugin = {
   rules: {
     'no-duplicate-chart-series-color': noDuplicateChartSeriesColor,
     'no-raw-time-slot-render': noRawTimeSlotRender,
     'no-unscrollable-dialog-content': noUnscrollableDialogContent,
+    'dialog-single-scroller': dialogSingleScroller,
   },
 };
 
@@ -591,6 +759,13 @@ const config = [
       // out-merges the base scroll and can hide a modal's own dismiss button.
       // Inert on files with no DialogContent.
       'local/no-unscrollable-dialog-content': 'error',
+      // The other half of that contract: a <DialogContent> that KEPT its base
+      // `overflow-y-auto` must not also hand a DIRECT child its own scroll
+      // region — two nested scrollbars, and the outer one takes the wheel while
+      // hiding the footer below its own fold. A scroller deeper than a direct
+      // child is a deliberate sub-region and is left alone. Inert on files with
+      // no DialogContent.
+      'local/dialog-single-scroller': 'error',
     },
   },
 

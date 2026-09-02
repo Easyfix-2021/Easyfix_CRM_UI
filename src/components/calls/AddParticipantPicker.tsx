@@ -203,8 +203,24 @@ export function AddParticipantPicker({
         The backdrop stays at z-50 on purpose — the call panel remains lit and
         usable above the dim while the operator picks, which is the point.
       */}
-      <DialogContent className="sm:max-w-md z-[9999] !gap-0" noPadding>
-        <DialogHeader className="!py-4 px-6">
+      {/*
+        PINNED HEADER AND FOOTER.
+
+        DialogContent scrolls the WHOLE panel by default (max-h-[85vh]
+        overflow-y-auto), so the roster band's own max-h-[60vh] made two nested
+        scrollers: a long roster filled the inner band and the panel still had
+        its own scrollbar left to travel, which pushed the Close row below the
+        fold of the OUTER scroller. Nothing tells an operator mid-call that
+        there is a second scrollbar to find.
+
+        flex column + overflow-hidden here, shrink-0 on the header and footer,
+        and one flex-1 middle that absorbs the overflow instead. min-h-0 on that
+        middle is load-bearing: a flex child defaults to min-height:auto and
+        refuses to shrink below its content, so without it the band would grow
+        the panel instead of scrolling and the pinning would do nothing.
+      */}
+      <DialogContent className="sm:max-w-md z-[9999] !gap-0 max-h-[85vh] flex flex-col overflow-hidden" noPadding>
+        <DialogHeader className="!py-4 px-6 shrink-0">
           <div className="flex items-center gap-3">
             <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-success/20 ring-1 ring-success/40 text-success-tint">
               <UserPlus className="h-4 w-4" />
@@ -218,7 +234,7 @@ export function AddParticipantPicker({
           </div>
         </DialogHeader>
 
-        <div className="px-6 py-4 space-y-3 max-h-[60vh] overflow-y-auto">
+        <div className="px-6 py-4 space-y-3 flex-1 min-h-0 overflow-y-auto">
           {/* ── The roster ─────────────────────────────────────────────── */}
           {roster.length === 0 ? (
             <p className="text-xs text-ink-500">
@@ -382,7 +398,7 @@ export function AddParticipantPicker({
           )}
         </div>
 
-        <div className="flex items-center justify-end gap-2 px-6 py-3 border-t bg-muted/30">
+        <div className="flex items-center justify-end gap-2 px-6 py-3 border-t bg-muted/30 shrink-0">
           <Button type="button" variant="outline" onClick={onCancel}>
             Close
           </Button>

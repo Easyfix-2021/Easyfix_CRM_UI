@@ -497,8 +497,22 @@ export default function OpenOrdersPage() {
         // eslint-disable-next-line no-restricted-syntax -- read-only drill-down modal — no form state to guard
         onOpenChange={(o) => !o && setDrill(null)}
       >
-        <DialogContent className="max-w-5xl">
-          <DialogHeader className="bg-sidebar text-sidebar-foreground">
+        {/* Pinned-panel layout, not the default scrolling panel — see
+          * src/app/(authed)/settings/manage-roles/page.tsx for the same shape.
+          * The drill-down table is unbounded (one row per open order for the
+          * selected PM), so leaving the base `max-h-[85vh] overflow-y-auto` on
+          * the panel AND a bounded band on the table gave the modal two nested
+          * scrollbars: the outer one took the wheel the moment the pointer left
+          * the table, and the Download button scrolled out of reach with it.
+          * `overflow-hidden` here disarms the base scroller (tailwind-merge puts
+          * it in the same conflict group as `overflow-y-auto`), `shrink-0` pins
+          * the title band and the download row, and `flex-1 min-h-0` below hands
+          * every remaining pixel — and the scrolling — to the table alone.
+          * min-h-0 is load-bearing: a flex child's default min-height:auto
+          * refuses to shrink below its content, so without it the table would
+          * grow the panel instead of scrolling and the pinning would do nothing. */}
+        <DialogContent className="max-w-5xl max-h-[85vh] flex flex-col overflow-hidden">
+          <DialogHeader className="shrink-0 bg-sidebar text-sidebar-foreground">
             <DialogTitle className="flex items-center justify-between gap-3">
               <span>
                 {drill?.pmName} — {drillData.data?.length ?? 0} Orders
@@ -506,7 +520,7 @@ export default function OpenOrdersPage() {
             </DialogTitle>
           </DialogHeader>
 
-          <div className="mb-3 flex justify-end">
+          <div className="mb-3 flex shrink-0 justify-end">
             <DownloadButton
               onClick={onDownloadDrill}
               disabled={drillDownloading || (drillData.data?.length ?? 0) === 0}
@@ -524,7 +538,11 @@ export default function OpenOrdersPage() {
           ) : (drillData.data?.length ?? 0) === 0 ? (
             <div className="p-8 text-center text-sm text-muted-foreground">No Jobs Found</div>
           ) : (
-            <div className="max-h-[60vh] overflow-auto rounded-md border border-border">
+            /* `overflow-auto`, not `overflow-y-auto`: seven columns of names
+             * (client, SPOC, city-mapped user) routinely overrun max-w-5xl, and
+             * the panel's own `overflow-x-hidden` would clip them with no way to
+             * reach the right-hand columns. */
+            <div className="flex-1 min-h-0 overflow-auto rounded-md border border-border">
               <table className="data-table">
                 <thead>
                   <tr>

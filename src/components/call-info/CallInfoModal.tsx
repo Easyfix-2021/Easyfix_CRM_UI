@@ -316,15 +316,30 @@ export function CallInfoModal({ open, onClose }: { open: boolean; onClose: () =>
   return (
     <Dialog open={open} onOpenChange={guardedOpenChange}>
       {/* `overflow-hidden` intentionally OMITTED on DialogContent so
-          the DateRangePopover (an absolute child inside the form) can
-          extend visually past the modal's bottom edge without
-          clipping. The inner table section retains its own
-          `overflow-y-auto` so the call-history table still scrolls
-          inside the modal. Keeping the popover in the modal's DOM
-          tree (no portal) means Radix's outside-click detector
-          correctly treats popover clicks as "inside the modal" —
-          previous portalled approach broke this and required brittle
-          onPointerDownOutside overrides. */}
+          the DateRangePopover (an absolute child inside the form)
+          stays REACHABLE. Keeping the popover in the modal's DOM tree
+          (no portal) means Radix's outside-click detector correctly
+          treats popover clicks as "inside the modal" — the previous
+          portalled approach broke this and required brittle
+          onPointerDownOutside overrides. The price of staying in-tree
+          is that the panel's overflow governs the calendar, and the
+          panel's base (dialog.tsx, 2026-08-13) is `max-h-[85vh]
+          overflow-y-auto overflow-x-hidden`.
+
+          CORRECTION (2026-09-01, measured). This comment used to claim
+          the omission let the calendar "extend visually past the
+          modal's bottom edge without clipping". That stopped being
+          true when the base gained `overflow-y-auto`: `auto` clips
+          exactly like `hidden` does, it just also scrolls. Static
+          repro of this modal's box model in headless Chrome, calendar
+          open with no rows fetched yet — panel box 274px, content
+          471px, so 197px of the day grid sits below the panel's bottom
+          edge at BOTH 1400x813 and 1400x613. What the omission
+          actually buys is that those 197px can be scrolled to. Swap in
+          `overflow-hidden` and the identical 197px is amputated
+          instead: most of the day cells become unclickable, with no
+          scrollbar to recover them (the popover has no flip-up
+          collision logic — see date-range-popover.tsx). */}
       {/* `gap-0` cancels the shared DialogContent's built-in `gap-4`
           (a 16 px flex/grid gap baked into the primitive). Without
           this override, every direct child of DialogContent — header,
@@ -333,7 +348,18 @@ export function CallInfoModal({ open, onClose }: { open: boolean; onClose: () =>
           mysterious empty band above the Date Range label and below
           the form. Our own padding on each section owns the spacing. */}
       <DialogContent className="!max-w-[1000px] w-[95vw] max-h-[85vh] flex flex-col p-0 gap-0">
-        <DialogHeader className="!mx-0 !mt-0 px-6 pt-6 pb-3 border-b">
+        {/* `shrink-0` on the header and the footer below is the half of
+            the pinned pattern this modal CAN take (the `overflow-hidden`
+            half is refused above, with measurements). Without it both
+            bands are `flex-shrink: 1` and get squeezed once the table
+            fills the panel: measured at 1400x613 with 200 rows, the
+            footer rendered 41px tall instead of its natural 52px — an
+            11px silent crush of the Close row. `flex-1 min-h-0` on the
+            body already absorbs every legitimate overflow, so pinning
+            these two costs nothing and never engages the outer
+            scroller (verified: panel scrollHeight 519 === clientHeight
+            519 in that same 200-row case). */}
+        <DialogHeader className="!mx-0 !mt-0 px-6 pt-6 pb-3 border-b shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <Phone className="h-5 w-5" />
             Call Info
@@ -510,6 +536,41 @@ export function CallInfoModal({ open, onClose }: { open: boolean; onClose: () =>
             before they hit the header — visible as a sliver of data
             peeking out above the sticky header. The search band
             above already provides the visual gap via `pb-2`. */}
+        {/* WHY THE RULE IS DISABLED HERE (2026-09-01, measured — do not
+            "fix" this by adding `overflow-hidden` to the DialogContent).
+
+            local/dialog-single-scroller is right that the panel is still
+            armed: nothing here cancels the base `overflow-y-auto`. It is
+            wrong that the two scrollers ever nest, and its prescribed fix
+            breaks the date picker. Static repro of this modal's exact box
+            model in headless Chrome, at 1400x813 and 1400x613:
+
+              calendar CLOSED, 1 row   → panel scrollHeight 274 === clientHeight 274
+              calendar CLOSED, 200 rows→ panel scrollHeight 519 === clientHeight 519,
+                                          body scrolls 4816px inside 296px
+              calendar OPEN,   200 rows→ panel scrollHeight 519 === clientHeight 519
+              calendar OPEN,   1 row   → panel 274px box, 471px content — the ONLY
+                                          case where the outer scroller engages
+
+            So the outer scroller never fights the body one. The single
+            thing that overflows the panel is the DateRangePopover, and
+            only while the table is short enough that the calendar clears
+            the modal's bottom edge — the Manage Users failure the rule
+            was built from (footer stranded below an outer fold) cannot
+            occur here, because the footer is `shrink-0` and the body's
+            `flex-1 min-h-0` swallows the table's 4816px.
+
+            The rule's own prescription would make that one case worse,
+            not better: `overflow-hidden` does not remove the 197px of
+            calendar hanging past the panel, it just stops you scrolling
+            to it. See the CORRECTION block on DialogContent above.
+
+            Header/footer `shrink-0` — the harmless half of the pinned
+            pattern — IS applied; only the `overflow-hidden` half is
+            refused. Re-check by reverting this comment's premises, not
+            by eyeballing the modal: the failing state needs the calendar
+            open AND the table empty. */}
+        {/* eslint-disable-next-line local/dialog-single-scroller */}
         <div className="flex-1 min-h-0 overflow-auto px-6 pt-0 pb-4">
           {loading && rows === null && (
             <div className="text-sm text-muted-foreground py-8 text-center">Loading today&apos;s calls…</div>
@@ -649,7 +710,7 @@ export function CallInfoModal({ open, onClose }: { open: boolean; onClose: () =>
             (the inner sections handle their own padding), those
             negatives would push the footer OUTSIDE the modal box —
             same workaround EscalatedJobsModal already uses. */}
-        <div className="px-6 py-3 border-t bg-muted/30 flex items-center justify-end gap-2">
+        <div className="px-6 py-3 border-t bg-muted/30 flex items-center justify-end gap-2 shrink-0">
           <Button variant="outline" onClick={onClose}>Close</Button>
         </div>
       </DialogContent>

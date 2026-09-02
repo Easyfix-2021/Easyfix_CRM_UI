@@ -1175,12 +1175,34 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
 
   return (
     <Dialog open={open} onOpenChange={guardedOpenChange}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
+      {/*
+        ONE SCROLLER. DialogContent's base is `max-h-[85vh] overflow-y-auto`,
+        so a body that ALSO declared `max-h-[75vh] overflow-y-auto` — as this
+        one did — put two scroll containers in the same chain: a wheel gesture
+        ran the form to its end and then lurched the whole panel, header and
+        all, through the remaining 10vh. Same defect and the same fix as the
+        Add/Edit User modal in settings/manage-users, where the two scroll
+        distances were measured in Chrome.
+
+        `overflow-hidden` deletes the base overflow via tailwind-merge, and
+        local/no-unscrollable-dialog-content permits it precisely because a
+        scroll region remains beneath it. `flex flex-col` gives the body a
+        track to fill; `flex-1 min-h-0` lets it shrink below its content so it
+        — and only it — scrolls. min-h-0 is load-bearing, not tidy-up: a flex
+        child defaults to min-height:auto and would grow the panel instead of
+        scrolling. There is no DialogFooter here on purpose; the actions stay
+        sticky-pinned inside this same scroller (see the note beside them).
+
+        The `max-h-[32vh] overflow-y-auto` list further down is NOT part of
+        this defect — it is a bounded sub-region nested well below this body,
+        not a second scroller stacked directly on the panel's own.
+      */}
+      <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col overflow-hidden">
+        <DialogHeader className="shrink-0">
           <DialogTitle className="truncate">{title}</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-3 max-h-[75vh] overflow-y-auto pr-1">
+        <div className="space-y-3 flex-1 min-h-0 overflow-y-auto pr-1">
           <div>
             <Label className="block mb-1" required>Course Name</Label>
             <Input
@@ -1475,7 +1497,7 @@ function CourseModal({ course, canManage, onClose, onSaved }: {
 
           {/*
             Pinned to the bottom of THIS scroller, not DialogContent's. The
-            modal keeps its actions inside the same `max-h-[75vh] overflow-y-auto`
+            modal keeps its actions inside the same `flex-1 min-h-0 overflow-y-auto`
             band as the fields, so DialogFooter's sticky footer never applied to
             it — the buttons simply scrolled off with the content. No negative
             margins here, so a plain `bottom-0` pins flush.
