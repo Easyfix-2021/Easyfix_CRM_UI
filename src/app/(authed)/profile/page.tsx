@@ -406,7 +406,14 @@ export default function MyProfilePage() {
   const empCode = details?.user_code ?? user?.user_code;
 
   return (
-    <div className="p-4 sm:p-6 space-y-4 max-w-4xl">
+    /*
+     * FULL WIDTH, like every other page in this app — manage-users, manage-roles
+     * and jobs all render edge to edge. `max-w-4xl` capped this one at 896px and
+     * left a third of a 1600px screen empty beside a column of half-empty rows.
+     * Widening also helps the MiniStat note below: its complaint was that three
+     * columns of a max-w-4xl page measure only 247px, and they no longer do.
+     */
+    <div className="p-4 sm:p-6 space-y-4">
       <BackLink fallback="/dashboard" />
 
       {/* ═══ 1. Identity band — the page's one focal element ═════════════ */}
@@ -466,7 +473,13 @@ export default function MyProfilePage() {
           </div>
 
           {/* At-a-glance identity facts, inline rather than in their own card. */}
-          <div className="mt-5 grid grid-cols-2 sm:grid-cols-3 gap-4 border-t border-border/60 pt-4">
+          {/* Four facts now, which is also what fills the band across a wide
+              screen. Personal Email sits with the other identifiers rather than
+              in the list below — it is the same KIND of fact as Official Email,
+              and the two read as a pair. It is not repeated below, for exactly
+              the reason Official Email never was: the same address twice in one
+              screenful reads as two different fields. */}
+          <div className="mt-5 grid grid-cols-2 lg:grid-cols-4 gap-4 border-t border-border/60 pt-4">
             <div>
               <div className="text-xs text-muted-foreground">Employee Code</div>
               <div className={`text-sm font-mono mt-0.5 ${empCode ? '' : 'text-muted-foreground'}`}>
@@ -479,9 +492,17 @@ export default function MyProfilePage() {
               <div className="text-xs text-muted-foreground">User ID</div>
               <div className="text-sm font-mono mt-0.5">{user?.user_id ?? '—'}</div>
             </div>
-            <div className="col-span-2 sm:col-span-1 min-w-0">
+            <div className="col-span-2 lg:col-span-1 min-w-0">
               <div className="text-xs text-muted-foreground">Official Email</div>
               <div className="text-sm mt-0.5 break-words">{user?.official_email || '—'}</div>
+            </div>
+            <div className="col-span-2 lg:col-span-1 min-w-0">
+              <div className="text-xs text-muted-foreground">Personal Email</div>
+              <div className="text-sm mt-0.5 break-words">
+                {detailsLoading && !details?.personal_email
+                  ? <span className="block h-4 w-32 rounded bg-muted animate-pulse" />
+                  : (details?.personal_email || <span className="text-muted-foreground">—</span>)}
+              </div>
             </div>
           </div>
         </div>
@@ -504,14 +525,29 @@ export default function MyProfilePage() {
         </Card>
       )}
 
+      {/*
+       * ONE SCREEN, TWO COLUMNS from xl up. Stacked, these five sections ran
+       * well past the fold on a 1600px screen while two thirds of the width sat
+       * empty — the operator scrolled through a narrow ribbon. The tall,
+       * editable sections take the 2/3 column; Access & Permissions and
+       * Appearance are short and read-only, so they fill the 1/3 beside them
+       * rather than pushing everything down.
+       *
+       * `items-start` so a short right column does not stretch to match the
+       * left one, which would leave a card of empty space under Appearance.
+       * Below xl it collapses back to the original single stack, in the original
+       * order.
+       */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 items-start">
+        <div className="xl:col-span-2 space-y-4">
+
       {/* ═══ 3. Personal & Contact Details ═══════════════════════════════ */}
       <Section title="Personal & Contact Details" icon={<Mail className="size-4" />}>
         {detailsLoading ? <PulseRows n={5} /> : (
           <div>
-            {/* Official Email is NOT repeated here — it sits in the identity
-                band ~130px above, and the same address twice in one screenful
-                reads as two different fields. */}
-            <ProfileRow label="Personal Email" value={details?.personal_email} />
+            {/* Neither email is repeated here. Both sit in the identity band
+                above, and the same address twice in one screenful reads as two
+                different fields. */}
 
             {/* Mobile Number — a request, whether it is a change or a first
                 add. There is no direct write route for it at all. */}
@@ -538,7 +574,6 @@ export default function MyProfilePage() {
               label="Alternate Number"
               value={details?.alternate_no ?? user?.alternate_no}
               mono
-              hint="You can change this yourself — it saves straight away, no approval needed."
             />
 
             {/* Date Of Birth — three states, each named on the row. */}
@@ -559,10 +594,13 @@ export default function MyProfilePage() {
                  a second, empty field rather than as "nothing on record". */
               hideValue={dobFirstSet}
               hint={
-                dobPending ? undefined
-                  : (!details?.date_of_birth && !details?.dob_locked)
-                    ? 'Not set yet. You can set it once yourself — after that it is locked and any correction needs HR approval.'
-                    : 'Set and locked. A correction needs HR approval before it takes effect.'
+                /* The "not set yet" state says nothing the row does not: the
+                   date input and its Set button are sitting right there. Only
+                   the LOCKED state still explains something the screen cannot —
+                   why the field the operator can see is not editable. */
+                dobPending || (!details?.date_of_birth && !details?.dob_locked)
+                  ? undefined
+                  : 'Set and locked. A correction needs HR approval before it takes effect.'
               }
             >
               {dobPending && (
@@ -670,6 +708,9 @@ export default function MyProfilePage() {
         )}
       </Section>
 
+        </div>
+
+        <div className="space-y-4">
       {/* ═══ 5. Access & Permissions — read-only, deliberately quiet ═════ */}
       <Section title="Access & Permissions" icon={<ShieldCheck className="size-4" />} muted>
         {/* Two columns before `lg`, three after. Three columns inside a
@@ -743,13 +784,15 @@ export default function MyProfilePage() {
         </div>
       </Section>
 
+      {/* ═══ Appearance — per-device, and the only thing here you can change ═ */}
+      <AppearanceSection />
+        </div>
+      </div>
+
       <p className="text-xs text-muted-foreground px-1">
         Your name, employee code, role, access and reporting line are maintained by HR and cannot
         be changed here. To correct any of them, contact HR.
       </p>
-
-      {/* ═══ Appearance — per-device, and the only thing here you can change ═ */}
-      <AppearanceSection />
 
       {editing && details && (
         <EditProfileDialog
