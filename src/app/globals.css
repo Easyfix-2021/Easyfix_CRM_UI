@@ -323,6 +323,45 @@
   background-color: hsl(var(--ink-500) / 0.55);
 }
 
+/*
+ * Dialogs scroll without a visible scrollbar.
+ *
+ * Every modal here is built to hold exactly ONE scroller — the panel itself
+ * when it is short enough, or the body band beneath a pinned header and
+ * footer when it is not. Two local lint rules hold that from both sides:
+ * no-unscrollable-dialog-content bans a dialog you cannot scroll at all, and
+ * dialog-single-scroller bans a second scroller competing for the same wheel
+ * gesture. Because the count is guaranteed, the bar is not carrying any
+ * information — there is never a question of WHICH region is about to move.
+ *
+ * So it is hidden. On macOS set to "show scroll bars: when scrolling" this
+ * changes nothing visible; with "always", and on Windows and Linux where the
+ * bar is permanent, it removes a 15px grey strip cutting down the side of a
+ * form for the whole time the modal is open.
+ *
+ * SCOPE — the dialog and its DIRECT children, which is exactly where the
+ * single-scroller contract puts the scroller. A scroller nested deeper is a
+ * bounded sub-region (a picker list inside a form section), and there the bar
+ * is the only cue that the little box moves at all, so it keeps it. Same
+ * depth rule the lint rule uses, for the same reason.
+ *
+ * `.thin-scroll` is excluded: it is an explicit opt-in to a visible-but-quiet
+ * bar, and an opt-in should outrank a blanket default rather than depend on
+ * which of the two happens to be written later in this file.
+ *
+ * Scrolling itself is untouched. Wheel, trackpad, keyboard and programmatic
+ * scrollIntoView behave exactly as before; only the paint is suppressed.
+ */
+[role='dialog']:not(.thin-scroll),
+[role='dialog'] > *:not(.thin-scroll) {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* legacy Edge */
+}
+[role='dialog']:not(.thin-scroll)::-webkit-scrollbar,
+[role='dialog'] > *:not(.thin-scroll)::-webkit-scrollbar {
+  display: none; /* Chrome / Safari */
+}
+
 /* ─── Notice Board theme motion ──────────────────────────────────────────
  * Keyframes for the notice card themes (see components/notice/noticeThemes.ts).
  * They live here rather than in a per-component <style> tag because four
