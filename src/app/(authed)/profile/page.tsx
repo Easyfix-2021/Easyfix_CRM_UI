@@ -58,7 +58,8 @@
  */
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { Mail, ShieldCheck, Users, Layers, Landmark, IdCard, Pencil } from 'lucide-react';
+import { Mail, ShieldCheck, Users, Layers, Landmark, IdCard, Pencil, Palette, Sun, Moon, Monitor } from 'lucide-react';
+import { useTheme, type Theme } from '@/lib/use-theme';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -108,6 +109,70 @@ function Section({
         {children}
       </CardContent>
     </Card>
+  );
+}
+
+/*
+ * Appearance — the only setting on this page the operator actually owns.
+ *
+ * The theming machinery has been in the app for a while (`easyfix.theme` in
+ * localStorage, the `dark` class toggled on <html>, THEME_INIT_SCRIPT in the
+ * root layout so there is no flash on first paint) but nothing ever called
+ * setTheme. The only ways to reach dark mode were to change the operating
+ * system or hand-edit localStorage. This is the switch.
+ *
+ * PER DEVICE, NOT PER ACCOUNT, and the copy says so. It is a localStorage key,
+ * not a column on tbl_user — it does not sync to another browser and it is not
+ * part of anyone's HR record. Everything else on this page is either HR-owned
+ * or an approval request, so an unqualified toggle here would read as a change
+ * that goes somewhere. It does not.
+ *
+ * Placed BELOW the "maintained by HR" footnote deliberately: that note says the
+ * sections above it cannot be changed here, which is exactly untrue of this one.
+ */
+function AppearanceSection() {
+  const { theme, resolved, setTheme } = useTheme();
+  const options: { value: Theme; label: string; icon: ReactNode; hint: string }[] = [
+    { value: 'light',  label: 'Light',  icon: <Sun className="size-4" />,     hint: 'Always Light' },
+    { value: 'dark',   label: 'Dark',   icon: <Moon className="size-4" />,    hint: 'Always Dark' },
+    { value: 'system', label: 'System', icon: <Monitor className="size-4" />, hint: 'Follow This Device' },
+  ];
+  return (
+    <Section title="Appearance" icon={<Palette className="size-4" />}>
+      {/* A radiogroup rather than three loose buttons: the options are mutually
+          exclusive and one is always chosen, which is what aria-checked on a
+          radio conveys and what a row of buttons does not. */}
+      <div role="radiogroup" aria-label="Colour Theme" className="flex flex-wrap gap-2">
+        {options.map((o) => {
+          const active = theme === o.value;
+          return (
+            <button
+              key={o.value}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              title={o.hint}
+              onClick={() => setTheme(o.value)}
+              className={`inline-flex items-center gap-2 rounded-md border h-9 px-3 text-sm transition-colors ${
+                active
+                  ? 'border-primary bg-primary text-primary-foreground'
+                  : 'border-input hover:bg-muted/60'
+              }`}
+            >
+              {o.icon}
+              {o.label}
+            </button>
+          );
+        })}
+      </div>
+      <p className="mt-3 text-xs text-muted-foreground">
+        Saved on this device only — not on your HR record, and it will not follow you to another
+        browser or machine.{' '}
+        {theme === 'system'
+          ? `System follows this device, which is currently ${resolved === 'dark' ? 'Dark' : 'Light'}.`
+          : 'Choose System to follow the device instead.'}
+      </p>
+    </Section>
   );
 }
 
@@ -680,6 +745,9 @@ export default function MyProfilePage() {
         Your name, employee code, role, access and reporting line are maintained by HR and cannot
         be changed here. To correct any of them, contact HR.
       </p>
+
+      {/* ═══ Appearance — per-device, and the only thing here you can change ═ */}
+      <AppearanceSection />
 
       {editing && details && (
         <EditProfileDialog
