@@ -131,7 +131,7 @@ function Section({
  * sections above it cannot be changed here, which is exactly untrue of this one.
  */
 function AppearanceSection() {
-  const { theme, resolved, setTheme } = useTheme();
+  const { theme, setTheme } = useTheme();
   const options: { value: Theme; label: string; icon: ReactNode; hint: string }[] = [
     { value: 'light',  label: 'Light',  icon: <Sun className="size-4" />,     hint: 'Always Light' },
     { value: 'dark',   label: 'Dark',   icon: <Moon className="size-4" />,    hint: 'Always Dark' },
@@ -165,12 +165,14 @@ function AppearanceSection() {
           );
         })}
       </div>
+      {/* ONE short sentence. This said three things — that the choice is
+          per-device, that it is not on the HR record, and which theme "System"
+          currently resolves to. All true, none of it what the reader needs:
+          "not on your HR record" answers a worry nobody has about a colour
+          scheme, and the live resolution readout is a fact about the device the
+          device is already showing them. */}
       <p className="mt-3 text-xs text-muted-foreground">
-        Saved on this device only — not on your HR record, and it will not follow you to another
-        browser or machine.{' '}
-        {theme === 'system'
-          ? `System follows this device, which is currently ${resolved === 'dark' ? 'Dark' : 'Light'}.`
-          : 'Choose System to follow the device instead.'}
+        Only changes how the CRM looks on this computer.
       </p>
     </Section>
   );

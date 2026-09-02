@@ -37,6 +37,7 @@ import {
 } from '@/components/ui/dialog';
 import { showToast } from '@/components/ui/toast';
 import { api, ApiError } from '@/lib/api';
+import { useMe } from '@/lib/auth-context';
 import { invalidateFetch } from '@/lib/hooks';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
@@ -568,8 +569,20 @@ export function ProfilePhoto({ initials, photoUrl }: {
     setDraft(null);
   }
 
-  /* photo_url now rides on the details payload, so THAT is what a write has to
-   * invalidate for the avatar to change. */
+  /*
+   * TWO caches hold the photo, and a write has to touch both.
+   *
+   * `/profile/details` is what THIS page renders. `/auth/me` is what the NAVBAR
+   * renders — Navbar reads `me?.user?.photo_url`. Invalidating only the first is
+   * why saving a photo left the old avatar (or the initials) sitting in the
+   * header until the operator reloaded: the page they were looking at updated,
+   * the corner of the screen did not, and nothing on screen explained why.
+   *
+   * useMe() is useContext over auth-context, so calling it here costs no extra
+   * request; refresh() re-fetches /auth/me once and every consumer of the
+   * session re-renders.
+   */
+  const { refresh: refreshSession } = useMe();
   const refreshDetails = () => invalidateFetch((k) => k.startsWith('/profile/details'));
 
   async function savePhoto() {
@@ -581,6 +594,7 @@ export function ProfilePhoto({ initials, photoUrl }: {
       await api.post('/profile/photo', fd);
       clearDraft();
       refreshDetails();
+      await refreshSession();   // the navbar avatar, see refreshDetails above
       showToast({ variant: 'success', message: 'Profile photo updated.' });
     } catch (e) {
       showToast({
@@ -606,6 +620,7 @@ export function ProfilePhoto({ initials, photoUrl }: {
     try {
       await api.delete('/profile/photo');
       refreshDetails();
+      await refreshSession();   // the navbar falls back to initials immediately
       showToast({ variant: 'success', message: 'Profile photo removed.' });
     } catch (e) {
       showToast({
@@ -667,9 +682,10 @@ export function ProfilePhoto({ initials, photoUrl }: {
           </>
         )}
       </div>
-      {draft && (
-        <p className="text-xs text-muted-foreground text-center max-w-[8rem]">Preview — Not Saved Yet</p>
-      )}
+      {/* No caption. "Preview — Not Saved Yet" restated what the tick and cross
+          sitting directly above it already say, in words ("preview", "not
+          saved yet") that describe the app's internal state rather than the
+          reader's next move. The two buttons are the message. */}
     </div>
   );
 }
