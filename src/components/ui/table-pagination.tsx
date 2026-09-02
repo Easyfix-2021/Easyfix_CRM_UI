@@ -3,6 +3,7 @@
 import * as React from 'react';
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { computePageView } from '@/lib/pagination';
 
 /*
  * TablePagination — canonical footer for paginated tables.
@@ -20,11 +21,18 @@ import { cn } from '@/lib/utils';
  * param like 100_000 rather than removing pagination entirely, so the
  * backend's LIMIT clause still caps a runaway query).
  *
- * Controlled component — owns no state. The parent holds `page`,
- * `pageSize`, and `total`; this component renders the controls and
- * fires callbacks. Keeping state in the parent means url-syncing,
- * server fetching, and reset-on-filter behaviour all stay where they
- * were and aren't duplicated inside this component.
+ * Controlled component — the parent holds `page`, `pageSize`, and
+ * `total`, so url-syncing, server fetching and reset-on-filter all
+ * stay where they were and aren't duplicated inside this component.
+ * (The only state here is the draft string in the page box, which is
+ * transient editor state and never leaves.)
+ *
+ * ONE EXCEPTION, and it matters if you are relying on the callback:
+ * `onPageChange` does NOT fire only from operator interaction. When the
+ * parent hands us a `page` past the last page — what a filter that
+ * shrinks the result set does — we fire it once, unprompted, with the
+ * clamped index. See the effect below. A callback with a non-idempotent
+ * side effect (an analytics event, an audit write) has to tolerate that.
  *
  * Page numbers are 0-INDEXED at the API boundary (offset = page *
  * pageSize) but DISPLAYED as 1-indexed inside the editable input,
@@ -72,10 +80,42 @@ export function TablePagination({
   className?: string;
 }) {
   const isAll = pageSize === 'all';
-  const effectiveSize = isAll ? total : pageSize;
-  const totalPages = isAll
-    ? 1
-    : Math.max(1, Math.ceil(total / Math.max(1, effectiveSize)));
+  /*
+   * `safePage` is `page` clamped into range. EVERYTHING below renders and
+   * navigates from it, never from the raw prop — a page index past the last
+   * page otherwise produces "Showing 21-1 of 1" and a box reading "3 / 1",
+   * which is what a filter that shrinks the result set does to an operator
+   * sitting on a later page. See lib/pagination.ts for the arithmetic.
+   */
+  const { totalPages, safePage, rangeStart, rangeEnd } = computePageView(page, pageSize, total);
+
+  /*
+   * Self-correct the PARENT when it hands us an out-of-range page.
+   *
+   * The clamp above only makes the footer coherent; the parent still holds the
+   * stale index and still fetches with it, so the body stays empty under a
+   * footer now confidently claiming "Showing 1-1 of 1" — a worse lie than the
+   * obviously-broken "21-1". So we tell it once.
+   *
+   * In an effect, never in render: calling a parent's setState during render is
+   * a side effect and re-enters. Here it cannot loop. The parent applies it,
+   * `page` comes back equal to `safePage`, and the guard is false forever after.
+   * A parent that IGNORES the callback doesn't loop either — nothing it renders
+   * changed, so there is no second commit to run the effect again.
+   *
+   * The `total > 0` guard is load-bearing: a list mid-fetch reports total 0, and
+   * clamping then would yank the operator off page 5 on every refresh. It does
+   * mean the correction is NOT unconditional — on a genuine empty result the
+   * parent keeps its stale index, uncorrected, until the next non-empty total.
+   * That is the deliberate trade: there is nothing to render either way, and
+   * guessing which zero is which would cost the common case.
+   *
+   * This is defence in depth, not the fix. Pages should still reset to page 0 in
+   * the handler that changes the filter, so the stale fetch never fires at all.
+   */
+  React.useEffect(() => {
+    if (total > 0 && page !== safePage) onPageChange(safePage);
+  }, [page, safePage, total, onPageChange]);
 
   /*
    * Editable page number. We track a draft string while the operator
@@ -83,15 +123,24 @@ export function TablePagination({
    * on Enter or blur. Clamping happens at commit time — typing "99"
    * with totalPages=12 lands on page 12.
    */
-  const [draft, setDraft] = React.useState<string>(String(page + 1));
+  const [draft, setDraft] = React.useState<string>(String(safePage + 1));
+  const inputRef = React.useRef<HTMLInputElement>(null);
   React.useEffect(() => {
-    setDraft(String(page + 1));
-  }, [page]);
+    /*
+     * Not while the operator is typing in this box. Keyed on `safePage` rather
+     * than `page`, this effect now also fires when `total` alone moves — a poll
+     * or a sibling refetch shrinking the page count re-clamps and would replace
+     * a half-typed "7" with "2" before Enter. Their draft wins until they
+     * commit or blur, at which point commitDraft() clamps it anyway.
+     */
+    if (inputRef.current && document.activeElement === inputRef.current) return;
+    setDraft(String(safePage + 1));
+  }, [safePage]);
 
   function commitDraft() {
     const n = Number(draft);
     if (!Number.isFinite(n)) {
-      setDraft(String(page + 1));
+      setDraft(String(safePage + 1));
       return;
     }
     const oneIndexed = Math.max(1, Math.min(totalPages, Math.floor(n)));
@@ -102,15 +151,8 @@ export function TablePagination({
 
   const first = 0;
   const last = totalPages - 1;
-  const prevDisabled = isAll || page <= first;
-  const nextDisabled = isAll || page >= last;
-
-  const rangeStart = total === 0 ? 0 : isAll ? 1 : page * (effectiveSize as number) + 1;
-  const rangeEnd = total === 0
-    ? 0
-    : isAll
-      ? total
-      : Math.min((page + 1) * (effectiveSize as number), total);
+  const prevDisabled = isAll || safePage <= first;
+  const nextDisabled = isAll || safePage >= last;
 
   return (
     <div
@@ -156,11 +198,12 @@ export function TablePagination({
         <NavBtn onClick={() => onPageChange(first)} disabled={prevDisabled} label="First page">
           <ChevronsLeft className="h-4 w-4" />
         </NavBtn>
-        <NavBtn onClick={() => onPageChange(page - 1)} disabled={prevDisabled} label="Previous page">
+        <NavBtn onClick={() => onPageChange(safePage - 1)} disabled={prevDisabled} label="Previous page">
           <ChevronLeft className="h-4 w-4" />
         </NavBtn>
         <div className="flex items-center gap-1 px-1 text-sm">
           <input
+            ref={inputRef}
             type="text"
             inputMode="numeric"
             value={draft}
@@ -172,7 +215,7 @@ export function TablePagination({
                 commitDraft();
                 (e.target as HTMLInputElement).blur();
               } else if (e.key === 'Escape') {
-                setDraft(String(page + 1));
+                setDraft(String(safePage + 1));
                 (e.target as HTMLInputElement).blur();
               }
             }}
@@ -183,7 +226,7 @@ export function TablePagination({
           <span className="text-muted-foreground">/</span>
           <span className="tabular-nums">{totalPages.toLocaleString('en-IN')}</span>
         </div>
-        <NavBtn onClick={() => onPageChange(page + 1)} disabled={nextDisabled} label="Next page">
+        <NavBtn onClick={() => onPageChange(safePage + 1)} disabled={nextDisabled} label="Next page">
           <ChevronRight className="h-4 w-4" />
         </NavBtn>
         <NavBtn onClick={() => onPageChange(last)} disabled={nextDisabled} label="Last page">

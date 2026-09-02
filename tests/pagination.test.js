@@ -1,0 +1,99 @@
+'use strict';
+
+/*
+ * pagination — the arithmetic behind the table footer (ui/table-pagination.tsx).
+ *
+ * The reported bug: an operator on page 3 of a list narrows a filter, the result
+ * set shrinks to one row, and the footer renders "Showing 21-1 of 1" beside a
+ * page box reading "3 / 1" over an empty table. Nothing throws, nothing fails a
+ * build, and it is invisible in development because you rarely page past 1 while
+ * building a screen. Hence a test rather than a look.
+ *
+ * The original defect was a HALF-applied clamp: rangeEnd was bounded by `total`
+ * (Math.min(..., total)) while rangeStart was computed from `page` alone, so the
+ * two ends crossed the moment the page index overshot. Every assertion below is
+ * about that invariant surviving.
+ */
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const { computePageView } = require('../.test-build/pagination.js');
+
+test('the exact reported case: page 2, size 10, total 1 does not render "21-1 of 1"', () => {
+  const v = computePageView(2, 10, 1);
+  assert.equal(v.totalPages, 1);
+  assert.equal(v.safePage, 0, 'page must be clamped onto the only page that exists');
+  assert.equal(v.rangeStart, 1);
+  assert.equal(v.rangeEnd, 1);
+  // The literal string the operator complained about, asserted as a string so a
+  // future refactor that reintroduces it fails here and not in production.
+  assert.notEqual(`${v.rangeStart}-${v.rangeEnd} of 1`, '21-1 of 1');
+});
+
+test('the range never runs backwards or past the data, at any page index', () => {
+  for (const total of [0, 1, 9, 10, 11, 234, 26_000]) {
+    for (const size of [10, 20, 50]) {
+      for (const page of [-5, 0, 1, 3, 99, 1e9]) {
+        const v = computePageView(page, size, total);
+        const at = `page ${page}, size ${size}, total ${total}`;
+        assert.ok(v.safePage >= 0, `safePage ${v.safePage} < 0 at ${at}`);
+        assert.ok(v.safePage < v.totalPages, `safePage ${v.safePage} >= totalPages ${v.totalPages} at ${at}`);
+        assert.ok(v.rangeStart <= v.rangeEnd, `range runs backwards (${v.rangeStart}-${v.rangeEnd}) at ${at}`);
+        assert.ok(v.rangeEnd <= total, `rangeEnd ${v.rangeEnd} > total ${total} at ${at}`);
+        if (total > 0) assert.ok(v.rangeStart >= 1, `rangeStart ${v.rangeStart} < 1 at ${at}`);
+      }
+    }
+  }
+});
+
+test('an in-range page is left exactly as it was — the clamp must not move anyone', () => {
+  // Regression guard for the opposite failure: a clamp that is too eager would
+  // silently pin every list to page 1.
+  const v = computePageView(1, 10, 234);
+  assert.equal(v.safePage, 1);
+  assert.equal(v.rangeStart, 11);
+  assert.equal(v.rangeEnd, 20);
+  assert.equal(v.totalPages, 24);
+});
+
+test('the last page reports a short range, not a full one', () => {
+  const v = computePageView(23, 10, 234);
+  assert.equal(v.safePage, 23);
+  assert.equal(v.rangeStart, 231);
+  assert.equal(v.rangeEnd, 234);
+});
+
+test('an empty list is one page showing 0-0, never "1-10 of 0"', () => {
+  const v = computePageView(4, 10, 0);
+  assert.equal(v.totalPages, 1, 'totalPages floors at 1 so the box reads "1 / 1", not "1 / 0"');
+  assert.equal(v.safePage, 0);
+  assert.equal(v.rangeStart, 0);
+  assert.equal(v.rangeEnd, 0);
+});
+
+test("'all' is a single page — a stale index cannot leave the box reading '3 / 1'", () => {
+  const v = computePageView(2, 'all', 7);
+  assert.equal(v.totalPages, 1);
+  assert.equal(v.safePage, 0);
+  assert.equal(v.rangeStart, 1);
+  assert.equal(v.rangeEnd, 7);
+});
+
+test("'all' on an empty list does not divide by zero", () => {
+  const v = computePageView(0, 'all', 0);
+  assert.equal(v.totalPages, 1);
+  assert.equal(v.rangeStart, 0);
+  assert.equal(v.rangeEnd, 0);
+});
+
+test('a NaN total from a failed fetch renders zeros, not "NaN-NaN of NaN"', () => {
+  // total comes straight from a parent's fetch state; a failed or in-flight one
+  // can hand us undefined -> NaN, which compares false against every guard and
+  // renders literally as "NaN".
+  const v = computePageView(3, 10, Number.NaN);
+  assert.equal(v.totalPages, 1);
+  assert.equal(v.safePage, 0);
+  assert.equal(v.rangeStart, 0);
+  assert.equal(v.rangeEnd, 0);
+});

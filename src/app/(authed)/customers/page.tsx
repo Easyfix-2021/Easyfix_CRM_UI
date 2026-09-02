@@ -21,6 +21,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { api, ApiError } from '@/lib/api';
+import { computePageView } from '@/lib/pagination';
 import { formatDate } from '@/lib/utils';
 import { formatServiceAddress } from '@/lib/format';
 import { CallableMobile } from '@/components/calls/CallButton';
@@ -85,7 +86,19 @@ export default function CustomersPage() {
     } finally { setViewLoading(false); }
   }
 
-  const totalPages = Math.max(1, Math.ceil(total / PAGE));
+  /*
+   * Everything the footer shows or navigates from is derived from `safePage`,
+   * never from raw `page` — the rule ui/table-pagination.tsx follows, for the
+   * same reason: a delete or a narrowed filter leaves `page` past the end, and
+   * the half-applied clamp this replaces rendered "Showing 31–30 of 30".
+   *
+   * The effect snaps `page` back so the next fetch stops sending the dead
+   * offset. It is not belt-and-braces here: the footer below is hidden at
+   * `totalPages > 1`, so a list that shrinks to one page unmounts the controls
+   * with the stale index still live and no Previous button left to escape with.
+   */
+  const { totalPages, safePage, rangeStart, rangeEnd } = computePageView(page, PAGE, total);
+  useEffect(() => { if (total > 0 && page !== safePage) setPage(safePage); }, [page, safePage, total]);
 
   return (
     <div className="space-y-4">
@@ -170,11 +183,11 @@ export default function CustomersPage() {
       {totalPages > 1 && (
         <div className="flex items-center justify-between text-sm">
           <span className="text-muted-foreground">
-            Showing {page * PAGE + 1}–{Math.min((page + 1) * PAGE, total)} of {total}
+            Showing {rangeStart}–{rangeEnd} of {total}
           </span>
           <div className="flex gap-1">
-            <Button size="sm" variant="outline" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>Previous</Button>
-            <Button size="sm" variant="outline" disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)}>Next</Button>
+            <Button size="sm" variant="outline" disabled={safePage === 0} onClick={() => setPage(safePage - 1)}>Previous</Button>
+            <Button size="sm" variant="outline" disabled={safePage >= totalPages - 1} onClick={() => setPage(safePage + 1)}>Next</Button>
           </div>
         </div>
       )}

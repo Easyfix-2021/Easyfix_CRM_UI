@@ -796,7 +796,13 @@ function JobsTable({ jobs }: { jobs: ScoredJob[] }) {
   );
 }
 
-function Results({ result, dimensions }: { result: TatResult; dimensions: Array<{ key: string; label: string }> }) {
+function Results({ result, dimensions, resetKey }: {
+  result: TatResult;
+  dimensions: Array<{ key: string; label: string }>;
+  /* The queryKey of the request that produced `result` — used only as a React
+     key on JobsTable, see below. */
+  resetKey: string;
+}) {
   const s = result.summary;
   const job = result.job;
   return (
@@ -870,7 +876,23 @@ function Results({ result, dimensions }: { result: TatResult; dimensions: Array<
           <SegmentTable segments={s.segments} />
           <VisitBreakdown summary={s} />
           <Rollups summary={s} dimensions={dimensions} />
-          <JobsTable jobs={result.jobs ?? []} />
+          {/*
+            * Remount JobsTable whenever a new computation is requested, so its
+            * internal `page` starts at 0 for the new result set.
+            *
+            * Why a key and not a reset effect: JobsTable owns `page` and is
+            * handed only `jobs`, so no filter handler up here can reach
+            * setPage. A key resets it in the SAME commit that changes the
+            * query — an effect inside JobsTable would render the stale page
+            * first, flashing "No completed jobs in this window." under a
+            * footer reading "Showing 21-1 of 1" before correcting itself.
+            *
+            * This is not the remount the surrounding code assumed it already
+            * got: useFetch keeps `loading` false and retains the previous
+            * `data` across a key change (lib/hooks.ts), so the guard around
+            * <Results> never goes false and nothing here unmounts on its own.
+            */}
+          <JobsTable key={resetKey} jobs={result.jobs ?? []} />
         </>
       )}
 
@@ -1166,7 +1188,7 @@ export default function TatCalculatorPage() {
               {result.data.windowLabel ? ` · ${result.data.windowLabel}` : ''}
             </div>
           )}
-          <Results result={result.data} dimensions={dimensions} />
+          <Results result={result.data} dimensions={dimensions} resetKey={queryKey ?? ''} />
         </>
       )}
 
