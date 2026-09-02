@@ -9,7 +9,7 @@
     "lint": "next lint",
     "lint:flat": "eslint . --max-warnings=0",
     "typecheck": "tsc --noEmit",
-    "test": "npm run brand:verify && npm run brand:roundtrip && npm run check:brand && npm run test:build && node --test tests/*.test.js",
+    "test": "npm run brand:verify && npm run brand:roundtrip && npm run check:brand && npm run test:build && node scripts/test-no-skips.js tests/*.test.js",
     "test:build": "tsc src/lib/job-slots.ts src/lib/job-age.ts src/lib/job-buckets.ts src/lib/job-stages.ts src/lib/format.ts src/lib/virtual-window.ts src/lib/call-legs.ts src/lib/easyfixer-lifecycle.ts src/lib/easyfixer-lifecycle-guide.ts src/lib/lms-assessment.ts src/lib/action-family.ts src/lib/emp-code.ts --outDir .test-build --rootDir src/lib --module commonjs --target es2020 --skipLibCheck",
     "brand:gen": "node scripts/gen-brand-css.mjs",
     "brand:verify": "node scripts/gen-brand-css.mjs --verify",
