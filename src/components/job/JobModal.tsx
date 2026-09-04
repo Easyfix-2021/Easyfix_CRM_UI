@@ -8926,31 +8926,13 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 Schedule below, so both flows behave the same way:
                 autocomplete pick repositions the marker, marker drag
                 reverse-geocodes back to PIN + city + address. */}
-            {/* Service Address (read-only) — live-assembled Building · Address ·
-                Landmark · City · Pincode preview, shown just above the editable
-                Complete Address so the operator can copy/paste or cross-check it
-                as the address fields are filled. Same field as Confirm & Schedule. */}
-            <div className="mb-3">
-              <Label className="text-xs text-muted-foreground">Service Address</Label>
-              <textarea
-                readOnly
-                disabled
-                value={(() => {
-                  // Book New Call Service Address = "Address" (Building/Floor →
-                  // building col), Landmark, then "City - Pincode". The "Search
-                  // Location on Map" text (address col) is the GPS anchor and is
-                  // intentionally NOT shown here.
-                  const cityName = f.city_id ? cityNameById.get(String(f.city_id)) : '';
-                  const cityPin = [cityName, f.pin_code].map((s) => String(s || '').trim()).filter(Boolean).join(' - ');
-                  return [f.building, f.landmark, cityPin]
-                    .map((s) => String(s || '').trim())
-                    .filter(Boolean)
-                    .join(', ') || '—';
-                })()}
-                rows={2}
-                className="mt-1 w-full rounded-md border border-input bg-ink-100 px-3 py-1.5 text-sm text-ink-700 resize-none"
-              />
-            </div>
+            {/* The read-only Service Address preview that used to sit here is
+                gone. It hand-assembled "building, landmark, city - pin", which
+                is NOT what the CRM displays for a job: formatServiceAddress
+                reads `address` ALONE. So it showed the operator one string
+                while every other screen would show another. The Service
+                Address is its own editable field below now, which is a better
+                answer than making the preview agree with it. */}
             <AddressPickerWithMap
               value={{
                 address: f.address || '',
@@ -8975,8 +8957,25 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
               }}
               cities={lk.toOpts.cities.map((o) => ({ value: String(o.value), label: String(o.label) }))}
               autoCreatePincode
-              addressLabel="Search Location on Map *"
-              buildingLabel="Address"
+              /*
+               * THE LABELS USED TO BE INVERTED HERE, and it was not cosmetic.
+               * In the default mode the Google autocomplete is bound to
+               * `address` and the plain input to `building` — so labelling them
+               * "Search Location on Map" and "Address" meant every booking
+               * wrote Google's formatted_address into `address` (the ONE column
+               * formatServiceAddress reads, i.e. the Service Address the whole
+               * CRM and the technician see) and the house/flat number into
+               * `building` (which per lib/format.ts is the repurposed map-search
+               * field). Exactly backwards, on the flow that creates jobs.
+               *
+               * Now identical to Confirm & Schedule and Edit Address:
+               *   Service Address        -> address       (what the CRM shows)
+               *   Search Location On Map -> building + gps_location (pin only)
+               *   Landmark               -> landmark
+               */
+              serviceAddressReadOnly
+              serviceAddressEditable
+              addressLabel="Service Address *"
             />
             </div>
             <div className="mt-4 flex justify-between">
