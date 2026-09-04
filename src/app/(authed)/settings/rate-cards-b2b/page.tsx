@@ -25,7 +25,7 @@ import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { api, ApiError } from '@/lib/api';
-import { computePageView } from '@/lib/pagination';
+import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useLookup } from '@/lib/use-lookup';
 import { useMe } from '@/lib/auth-context';
@@ -45,7 +45,24 @@ type ListResponse = { items: RateCard[]; total: number };
 type SortKey = 'crc_id' | 'crc_ratecard_name' | 'service_type_name' | 'service_catg_name' | 'status';
 type SortDir = 'asc' | 'desc';
 
-const PAGE_SIZE = 100;
+/*
+ * Page sizes offered here. 'All' is intentionally absent: this endpoint was
+ * built around the fixed limit=100 the retired footer always sent, and its Joi
+ * cap is not verifiable from this repo — pageSizeToLimit's 1000 default would
+ * be a guess that 400s if the cap is lower. Every value below is <= the 100
+ * this page has always sent, so none of them can be rejected. Raise the cap
+ * (and add 'All') only after reading the route's validator.
+ */
+const PAGE_SIZE_CHOICES: ReadonlyArray<{ value: TablePageSize; label: string }> = [
+  { value: 10,  label: '10' },
+  { value: 20,  label: '20' },
+  { value: 50,  label: '50' },
+  { value: 100, label: '100' },
+];
+/* Was `const PAGE_SIZE = 100` behind a fixed footer. Kept as the default so the
+   first paint shows the same 100 rows it always did. */
+const DEFAULT_PAGE_SIZE: TablePageSize = 100;
+const LIMIT_CAP = 100; // proven-safe max: what this page sent before the swap.
 
 export default function ManageRateCardsB2BPage() {
   const confirm = useConfirm();
@@ -62,6 +79,7 @@ export default function ManageRateCardsB2BPage() {
   const [typeFilter, setTypeFilter] = useState<number | ''>('');
   const [includeInactive, setIncludeInactive] = useState(false);
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState<TablePageSize>(DEFAULT_PAGE_SIZE);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<RateCard | null>(null);
@@ -89,7 +107,7 @@ export default function ManageRateCardsB2BPage() {
     return () => { if (tRef.current) clearTimeout(tRef.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, categoryFilter, typeFilter, includeInactive]);
-  useEffect(() => { void fetchList(); /* eslint-disable-next-line */ }, [page, sortBy, sortDir]);
+  useEffect(() => { void fetchList(); /* eslint-disable-next-line */ }, [page, pageSize, sortBy, sortDir]);
 
   async function fetchList() {
     setLoading(true); setError(null);
@@ -99,7 +117,9 @@ export default function ManageRateCardsB2BPage() {
       if (categoryFilter) p.set('serviceCatgId', String(categoryFilter));
       if (typeFilter)     p.set('serviceTypeId', String(typeFilter));
       if (includeInactive) p.set('includeInactive', 'true');
-      p.set('limit', String(PAGE_SIZE)); p.set('offset', String(page * PAGE_SIZE));
+      const limit = pageSizeToLimit(pageSize, LIMIT_CAP);
+      p.set('limit', String(limit));
+      p.set('offset', String(page * (pageSize === 'all' ? limit : Number(pageSize))));
       p.set('sortBy', sortBy); p.set('sortDir', sortDir);
       const data = await api.get<ListResponse>(`/admin/rate-cards-b2b?${p}`);
       setItems(data.items); setTotal(data.total);
@@ -120,18 +140,11 @@ export default function ManageRateCardsB2BPage() {
   }
 
   /*
-   * Everything the footer shows or navigates from is derived from `safePage`,
-   * never from raw `page` — the rule ui/table-pagination.tsx follows, for the
-   * same reason: a delete or a narrowed filter leaves `page` past the end, and
-   * the half-applied clamp this replaces rendered "Showing 31–30 of 30".
-   *
-   * The effect snaps `page` back so the next fetch stops sending the dead
-   * offset. It is not belt-and-braces here: the footer below is hidden at
-   * `totalPages > 1`, so a list that shrinks to one page unmounts the controls
-   * with the stale index still live and no Previous button left to escape with.
+   * The clamp + snap-back that used to live here now lives inside
+   * TablePagination, which fires onPageChange once with the clamped index when
+   * the parent's `page` overruns a shrunken result set. A second copy here
+   * would fight it.
    */
-  const { totalPages, safePage, rangeStart, rangeEnd } = computePageView(page, PAGE_SIZE, total);
-  useEffect(() => { if (total > 0 && page !== safePage) setPage(safePage); }, [page, safePage, total]);
 
   return (
     <div className="space-y-4">
@@ -256,17 +269,16 @@ export default function ManageRateCardsB2BPage() {
         </CardContent>
       </Card>
 
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-muted-foreground">
-            Showing {rangeStart}–{rangeEnd} of {total}
-          </span>
-          <div className="flex gap-1">
-            <Button size="sm" variant="outline" disabled={safePage === 0} onClick={() => setPage(safePage - 1)}>Previous</Button>
-            <Button size="sm" variant="outline" disabled={safePage >= totalPages - 1} onClick={() => setPage(safePage + 1)}>Next</Button>
-          </div>
-        </div>
-      )}
+      {/* Always rendered, unlike the `totalPages > 1` footer it replaces — the
+          page-size selector has to stay reachable on a single-page list. */}
+      <TablePagination
+        page={page}
+        pageSize={pageSize}
+        total={total}
+        onPageChange={setPage}
+        onPageSizeChange={(s) => { setPageSize(s); setPage(0); }}
+        pageSizeOptions={PAGE_SIZE_CHOICES}
+      />
 
       <RateCardFormModal
         open={modalOpen}

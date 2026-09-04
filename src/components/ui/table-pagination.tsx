@@ -39,7 +39,19 @@ import { computePageView } from '@/lib/pagination';
  * matching what an operator expects to type.
  */
 
-export type TablePageSize = 10 | 20 | 50 | 'all';
+/*
+ * 100 is in the union but deliberately NOT in PAGE_SIZE_OPTIONS below.
+ *
+ * The six settings lists (tools, verticals, document-types, skill-levels, both
+ * rate-cards) shipped hand-rolled footers with a fixed `const PAGE_SIZE = 100`.
+ * Retiring those onto this component has to keep 100 as their default, or every
+ * one of them silently halves what an operator sees on first paint. Widening the
+ * union is additive — the 47 existing consumers pass 10/20/50/'all' and are
+ * untouched — while leaving 100 out of the DEFAULT option list keeps their
+ * dropdowns exactly as they are. Pages that want 100 pass their own
+ * `pageSizeOptions` (see e.g. settings/tools).
+ */
+export type TablePageSize = 10 | 20 | 50 | 100 | 'all';
 export const PAGE_SIZE_OPTIONS: ReadonlyArray<{ value: TablePageSize; label: string }> = [
   { value: 10,    label: '10' },
   { value: 20,    label: '20' },

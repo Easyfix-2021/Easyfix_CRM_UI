@@ -33,7 +33,7 @@ test('the exact reported case: page 2, size 10, total 1 does not render "21-1 of
 
 test('the range never runs backwards or past the data, at any page index', () => {
   for (const total of [0, 1, 9, 10, 11, 234, 26_000]) {
-    for (const size of [10, 20, 50]) {
+    for (const size of [10, 20, 50, 100]) {
       for (const page of [-5, 0, 1, 3, 99, 1e9]) {
         const v = computePageView(page, size, total);
         const at = `page ${page}, size ${size}, total ${total}`;
@@ -45,6 +45,34 @@ test('the range never runs backwards or past the data, at any page index', () =>
       }
     }
   }
+});
+
+test('size 100 — the settings lists page at their inherited default, not at 50', () => {
+  /*
+   * The six settings lists (tools, verticals, document-types, skill-levels, both
+   * rate-cards) carried `const PAGE_SIZE = 100` in their own hand-rolled footers.
+   * When those were retired onto TablePagination, TablePageSize was widened from
+   * 10|20|50|'all' to include 100 so the default survived the move. Nothing in
+   * the type system notices if 100 stops being honoured — a size that silently
+   * fell back to 50 would still type-check, still render a plausible footer, and
+   * just show half the rows with double the pages. Hence arithmetic, not a type.
+   */
+  const v = computePageView(0, 100, 250);
+  assert.equal(v.totalPages, 3, '250 rows at 100/page is 3 pages, not 5');
+  assert.equal(v.rangeStart, 1);
+  assert.equal(v.rangeEnd, 100, 'first page must end at row 100, not 50');
+
+  // Second page — the offset the parent sends is page * 100, so the hint has to
+  // agree with it or the footer describes rows the fetch never asked for.
+  const p2 = computePageView(1, 100, 250);
+  assert.equal(p2.rangeStart, 101);
+  assert.equal(p2.rangeEnd, 200);
+
+  // Last page is short, and the clamp still holds one size up.
+  const p3 = computePageView(9, 100, 250);
+  assert.equal(p3.safePage, 2, 'a stale index past the end clamps at size 100 too');
+  assert.equal(p3.rangeStart, 201);
+  assert.equal(p3.rangeEnd, 250);
 });
 
 test('an in-range page is left exactly as it was — the clamp must not move anyone', () => {

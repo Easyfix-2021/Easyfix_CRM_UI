@@ -21,7 +21,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { api, ApiError } from '@/lib/api';
-import { computePageView } from '@/lib/pagination';
+import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
 import { formatDate } from '@/lib/utils';
 import { formatServiceAddress } from '@/lib/format';
 import { CallableMobile } from '@/components/calls/CallButton';
@@ -41,13 +41,28 @@ type CustomerDetail = CustomerRow & {
   addresses: Array<Record<string, unknown>>;
 };
 
-const PAGE = 50;
+/*
+ * 'All' is intentionally absent. /admin/customers caps `limit` at 500 and
+ * tbl_customer is far larger than that, so "All" would fetch 500 rows under a
+ * footer reading "Showing 1–<total> of <total>" and leave the operator with no
+ * control to reach the rest. The other three sizes are all below the cap.
+ */
+const CUSTOMERS_LIMIT_CAP = 500; // BE Joi cap on /admin/customers `limit`.
+const CUSTOMER_PAGE_SIZES: ReadonlyArray<{ value: TablePageSize; label: string }> = [
+  { value: 10, label: '10' },
+  { value: 20, label: '20' },
+  { value: 50, label: '50' },
+];
+/* Was `const PAGE = 50` behind a fixed footer — kept as the default so the
+   first paint shows the same 50 rows it always did. */
+const DEFAULT_PAGE_SIZE: TablePageSize = 50;
 
 export default function CustomersPage() {
   const [items, setItems] = useState<CustomerRow[]>([]);
   const [total, setTotal] = useState(0);
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState<TablePageSize>(DEFAULT_PAGE_SIZE);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [viewing, setViewing] = useState<CustomerDetail | null>(null);
@@ -60,15 +75,19 @@ export default function CustomersPage() {
     return () => { if (tRef.current) clearTimeout(tRef.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
-  useEffect(() => { void load(); /* eslint-disable-next-line */ }, [page]);
+  useEffect(() => { void load(); /* eslint-disable-next-line */ }, [page, pageSize]);
 
   async function load() {
     setLoading(true); setError(null);
     try {
       const p = new URLSearchParams();
       if (search.trim()) p.set('q', search.trim());
-      p.set('limit', String(PAGE));
-      p.set('offset', String(page * PAGE));
+      // 'all' is not offered here (see CUSTOMER_PAGE_SIZES), but the offset
+      // expression stays size-agnostic so adding it later can't silently
+      // multiply the page index by the wrong number.
+      const limit = pageSizeToLimit(pageSize, CUSTOMERS_LIMIT_CAP);
+      p.set('limit', String(limit));
+      p.set('offset', String(page * (pageSize === 'all' ? limit : Number(pageSize))));
       const data = await api.get<ListResponse>(`/admin/customers?${p}`);
       setItems(data.items); setTotal(data.total);
     } catch (e) {
@@ -87,18 +106,11 @@ export default function CustomersPage() {
   }
 
   /*
-   * Everything the footer shows or navigates from is derived from `safePage`,
-   * never from raw `page` — the rule ui/table-pagination.tsx follows, for the
-   * same reason: a delete or a narrowed filter leaves `page` past the end, and
-   * the half-applied clamp this replaces rendered "Showing 31–30 of 30".
-   *
-   * The effect snaps `page` back so the next fetch stops sending the dead
-   * offset. It is not belt-and-braces here: the footer below is hidden at
-   * `totalPages > 1`, so a list that shrinks to one page unmounts the controls
-   * with the stale index still live and no Previous button left to escape with.
+   * The clamp + snap-back that used to live here now lives inside
+   * TablePagination, which fires onPageChange once with the clamped index when
+   * the parent's `page` overruns a shrunken result set. A second copy here
+   * would fight it.
    */
-  const { totalPages, safePage, rangeStart, rangeEnd } = computePageView(page, PAGE, total);
-  useEffect(() => { if (total > 0 && page !== safePage) setPage(safePage); }, [page, safePage, total]);
 
   return (
     <div className="space-y-4">
@@ -180,17 +192,16 @@ export default function CustomersPage() {
         </CardContent>
       </Card>
 
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-muted-foreground">
-            Showing {rangeStart}–{rangeEnd} of {total}
-          </span>
-          <div className="flex gap-1">
-            <Button size="sm" variant="outline" disabled={safePage === 0} onClick={() => setPage(safePage - 1)}>Previous</Button>
-            <Button size="sm" variant="outline" disabled={safePage >= totalPages - 1} onClick={() => setPage(safePage + 1)}>Next</Button>
-          </div>
-        </div>
-      )}
+      {/* Always rendered, unlike the `totalPages > 1` footer it replaces — the
+          page-size selector has to stay reachable on a single-page list. */}
+      <TablePagination
+        page={page}
+        pageSize={pageSize}
+        total={total}
+        onPageChange={setPage}
+        onPageSizeChange={(s) => { setPageSize(s); setPage(0); }}
+        pageSizeOptions={CUSTOMER_PAGE_SIZES}
+      />
 
       <Dialog open={!!viewing} onOpenChange={(o) => !o && setViewing(null)}>
         <DialogContent>
