@@ -58,6 +58,12 @@ type Assessment = {
   max_attempts: number;
   status: number;          // 1 = Active, 0 = Retired
   question_count: number;
+  /* Both, and both nullable. `created_by` is the raw tbl_user id and is not
+   * rendered; `created_by_name` is the LEFT-joined name and is NULL twice over
+   * — for every assessment made before the column existed, and for one whose
+   * author has since been removed from tbl_user. */
+  created_by: number | null;
+  created_by_name: string | null;
 };
 type ListResponse = { rows: Assessment[]; total: number; limit: number; offset: number };
 
@@ -297,19 +303,22 @@ export function AssessmentsTab() {
           <table className="data-table w-full" style={{ tableLayout: 'fixed' }}>
             <colgroup>
               {/* Title */}
-              <col style={{ width: '44%' }} />
+              <col style={{ width: '34%' }} />
+              {/* Created By */}
+              <col style={{ width: '16%' }} />
               {/* Questions */}
-              <col style={{ width: '14%' }} />
+              <col style={{ width: '12%' }} />
               {/* Pass Mark */}
-              <col style={{ width: '14%' }} />
+              <col style={{ width: '12%' }} />
               {/* Attempts */}
-              <col style={{ width: '14%' }} />
+              <col style={{ width: '12%' }} />
               {/* Actions */}
               <col style={{ width: '14%' }} />
             </colgroup>
             <thead>
               <tr>
                 <th className="!text-left whitespace-nowrap">Title</th>
+                <th className="!text-left whitespace-nowrap">Created By</th>
                 <th className="!text-right whitespace-nowrap">Questions</th>
                 <th className="!text-right whitespace-nowrap">Pass Mark</th>
                 <th className="!text-right whitespace-nowrap">Attempts</th>
@@ -319,14 +328,14 @@ export function AssessmentsTab() {
             <tbody>
               {loading && Array.from({ length: 5 }).map((_, i) => (
                 <tr key={`sk-${i}`}>
-                  {Array.from({ length: 5 }).map((_, c) => (
+                  {Array.from({ length: 6 }).map((_, c) => (
                     <td key={c}><div className="h-3 w-24 rounded bg-muted animate-pulse" /></td>
                   ))}
                 </tr>
               ))}
               {!loading && rows.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="!text-center text-muted-foreground py-8">
+                  <td colSpan={6} className="!text-center text-muted-foreground py-8">
                     No assessments match the current search.
                   </td>
                 </tr>
@@ -347,6 +356,25 @@ export function AssessmentsTab() {
                       <div className="text-xs text-muted-foreground truncate" title={a.description}>
                         {a.description}
                       </div>
+                    )}
+                  </td>
+                  {/*
+                    An em dash, not a blank cell and not the raw id. Every
+                    assessment predating 2026-09-04 has no recorded author and
+                    no second source knows who made it, so the honest render is
+                    "unknown" — an empty cell reads as a rendering fault, and
+                    "17" is not something an operator can act on.
+                  */}
+                  <td className="!text-left">
+                    {a.created_by_name ? (
+                      <span className="truncate" title={a.created_by_name}>{a.created_by_name}</span>
+                    ) : (
+                      <span
+                        className="text-muted-foreground"
+                        title="Created before this was recorded, or by an account since removed"
+                      >
+                        —
+                      </span>
                     )}
                   </td>
                   {/*
