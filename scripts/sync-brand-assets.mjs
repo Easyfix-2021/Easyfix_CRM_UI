@@ -108,19 +108,52 @@ if (!existsSync(KIT)) {
   }
   const lock = JSON.parse(readFileSync(LOCK, 'utf8'));
   const bad = [];
-  for (const [rel, want] of Object.entries(lock.assets)) {
-    const abs = join(root, rel);
-    if (!existsSync(abs)) { bad.push(`${rel} — missing`); continue; }
-    const got = sha(readFileSync(abs));
+
+  /*
+   * ⚠ ITERATE `jobs`, NOT THE LOCK'S KEYS.
+   *
+   * The lock is a RECORD of what was synced; `jobs` is the CONTRACT — the files
+   * Logo.tsx and the manifest actually reference. Looping the record can only
+   * ever prove "what I wrote down is still true", and it structurally cannot
+   * see an asset that was never written down.
+   *
+   * Measured 2026-09-04, against the previous `Object.entries(lock.assets)`
+   * loop: deleting a vendored SVG *and* its lock entry — the exact state left
+   * by adding a variant to LOGO_SVGS and not re-running `brand:sync` — exited
+   * 0 and printed "18 assets match". The count came from the same wrong set, so
+   * the false pass read as thoroughly as a real one, and the file Logo.tsx
+   * renders would have 404'd in the production image.
+   *
+   * With no kit there is nothing else that could answer, so an asset the lock
+   * does not mention is UNKNOWN — and unknown means fail, never skip.
+   */
+  for (const { to } of jobs) {
+    const rel = relOf(to);
+    const want = lock.assets[rel];
+    if (!want) { bad.push(`${rel} — declared in this script but absent from the lock; never synced`); continue; }
+    if (!existsSync(to)) { bad.push(`${rel} — missing`); continue; }
+    const got = sha(readFileSync(to));
     if (got !== want) bad.push(`${rel} — sha256 ${got.slice(0, 12)}, expected ${want.slice(0, 12)}`);
   }
+
+  /*
+   * And the other direction. A lock entry no job declares is a vendored file
+   * that no longer tracks the kit and that nobody can tell is unused — the
+   * 32-orphan problem the eight-file list at the top exists to prevent.
+   */
+  const declared = new Set(jobs.map(({ to }) => relOf(to)));
+  for (const rel of Object.keys(lock.assets)) {
+    if (!declared.has(rel)) bad.push(`${rel} — in the lock but no longer declared here; re-run \`npm run brand:sync\``);
+  }
+
   if (bad.length) {
     console.error(`${bad.length} vendored asset(s) do not match ${relOf(LOCK)}:`);
     for (const b of bad) console.error(`  ${b}`);
-    console.error('A brand asset was edited in place. Re-sync from the kit instead.');
+    console.error('Either a brand asset was edited in place, or the vendored set and the');
+    console.error('lock have diverged. Re-sync from the kit rather than editing either.');
     process.exit(1);
   }
-  console.log(`brand:sync --check — ${Object.keys(lock.assets).length} assets match `
+  console.log(`brand:sync --check — all ${jobs.length} declared assets match `
     + `${relOf(LOCK)} (kit ${lock.kitCommit || 'unknown'}); kit absent, bytes not re-compared`);
   process.exit(0);
 }
