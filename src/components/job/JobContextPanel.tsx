@@ -38,7 +38,7 @@
 
 import { useEffect, useState } from 'react';
 import {
-  MapPin, Calendar, Loader2, Clock, ChevronDown,
+  MapPin, Calendar, Loader2, Clock, ChevronDown, Pencil,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { showToast } from '@/components/ui/toast';
@@ -51,6 +51,10 @@ import { displaySlot } from '@/lib/job-slots';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { JobRemarksView } from './JobRemarksView';
+/* The SAME dialog the job detail modal and the Unconfirmed transaction view
+   open, so Edit Address behaves identically wherever ops reach it. Importing
+   it here does NOT create a cycle: JobModal has no import of this panel. */
+import { JobAddressEditDialog } from './JobModal';
 
 export type JobServiceRow = {
   service_name: string | null;
@@ -166,6 +170,7 @@ export function JobContextPanel({
   rescheduling = false,
   pastBlocksAction = false,
   onSaveDetails,
+  onAddressSaved,
 }: {
   job: JobContextData | null;
   jobId: number | null;
@@ -194,6 +199,14 @@ export function JobContextPanel({
    */
   onSaveDetails?: (patch: { job_desc?: string; efr_special_notes?: string }) => Promise<void>;
   /*
+   * Opt-in EDITING of the service address, on the same terms as onSaveDetails:
+   * absent (the default) ⇒ the address is read-only, so Assign / Reassign —
+   * which share this panel — do not sprout a write affordance they never asked
+   * for. Fires AFTER a successful save so the host can re-run its own fetch;
+   * the dialog PATCHes by itself, so this really is refresh-only.
+   */
+  onAddressSaved?: () => void;
+  /*
    * Does a PAST appointment actually block this host modal's primary action?
    * true  → offering (the server 400s), so the notice is red + imperative.
    * false → assign / reassign, which the server permits on purpose, so the
@@ -216,6 +229,8 @@ export function JobContextPanel({
   // guard, so it must not be inferred from the host's identity.
   const { me } = useMe();
   const canEditDetails = !!onSaveDetails && hasAction(me, 'isJobEdit');
+  const canEditAddress = !!onAddressSaved && hasAction(me, 'isJobEdit');
+  const [addressOpen, setAddressOpen] = useState(false);
 
   return (
     <>
@@ -276,6 +291,17 @@ export function JobContextPanel({
                         (see lib/format.ts), so City is a separate field — it is
                         not folded into the address string. */}
                     <span>{formatServiceAddress(job)}</span>
+                    {canEditAddress && (
+                      <button
+                        type="button"
+                        onClick={() => setAddressOpen(true)}
+                        className="text-muted-foreground hover:text-primary shrink-0 mt-0.5"
+                        title="Edit Address"
+                        aria-label="Edit Address"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                   </span>
                 }
               />
@@ -546,6 +572,20 @@ export function JobContextPanel({
           push the list off-screen; the header carries the count so ops can tell
           at a glance whether it's worth opening. */}
       <JobRemarksView key={remarksReloadKey} jobId={jobId} collapsible defaultOpen={remarksDefaultOpen} />
+
+      {/* Mounted only while open so the form re-seeds from the CURRENT job on
+          every open — a persistently mounted dialog would keep the draft from
+          the previous open and quietly re-save stale values.
+          Cast through `unknown` for the same reason JobTransactionView does:
+          the dialog reads a handful of address fields, and this panel's job is
+          the /candidates subset rather than the full Job row. */}
+      {addressOpen && job && (
+        <JobAddressEditDialog
+          job={job as unknown as Parameters<typeof JobAddressEditDialog>[0]['job']}
+          onClose={() => setAddressOpen(false)}
+          onSaved={() => { setAddressOpen(false); onAddressSaved?.(); }}
+        />
+      )}
     </>
   );
 }

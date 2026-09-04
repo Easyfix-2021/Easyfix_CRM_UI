@@ -777,6 +777,20 @@ export function ScheduleAssignModal({
               // own row, so it needs to know too.
               onChanged?.();
             } : undefined}
+            /*
+             * Edit Address — same opt-in gate and the same refresh pairing. The
+             * dialog PATCHes on its own, so this callback only has to make the
+             * panel re-read: drop the candidates cache AND re-run the mounted
+             * hook, because invalidateFetch cannot re-run a live hook.
+             * Ranking is address-sensitive (zone eligibility is derived from
+             * the pin), so the Top-10 below genuinely has to be recomputed —
+             * this is not a cosmetic refresh.
+             */
+            onAddressSaved={jobId != null && !statusIneligible ? () => {
+              invalidateFetch((k) => k.startsWith(`/admin/jobs/${jobId}/candidates`));
+              top.refetch();
+              onChanged?.();
+            } : undefined}
           />
 
           {/* ───────── Offer history — live + rejected + expired — offer mode only ───────── */}
