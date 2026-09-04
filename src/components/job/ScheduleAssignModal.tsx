@@ -754,6 +754,29 @@ export function ScheduleAssignModal({
              * reschedule first — same condition as the button's own `disabled`.
              */
             pastBlocksAction={offerMode}
+            /*
+             * Job Description + Additional Comments are EDITABLE here (opt-in;
+             * the panel stays read-only for Assign / Reassign, which don't pass
+             * this). Withheld on a read-only open — same condition as the
+             * banner above and the commit button's own gate — so an order that
+             * has left Pending-for-Scheduling can't be edited from a modal that
+             * says it is read-only. The panel additionally requires isJobEdit.
+             */
+            onSaveDetails={jobId != null && !statusIneligible ? async (patch) => {
+              await api.patch(`/admin/jobs/${jobId}`, patch);
+              /*
+               * The panel's job object comes from the CANDIDATES response, not
+               * from /admin/jobs/:id — invalidating the detail key alone would
+               * leave the OLD text on screen. And invalidateFetch only DROPS
+               * the cache; the still-mounted Top-10 hook has to be re-run, the
+               * same pairing the reschedule onDone below already documents.
+               */
+              invalidateFetch((k) => k.startsWith(`/admin/jobs/${jobId}/candidates`));
+              top.refetch();
+              // The list behind the modal renders job_desc (truncated) in its
+              // own row, so it needs to know too.
+              onChanged?.();
+            } : undefined}
           />
 
           {/* ───────── Offer history — live + rejected + expired — offer mode only ───────── */}

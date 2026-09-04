@@ -24,6 +24,9 @@
  *     locked" helper text (Schedule & Assign only).
  *   - `rescheduling` — veils the schedule row with an "Updating…" spinner while
  *     a post-reschedule refetch is in flight (Schedule & Assign only).
+ *   - `onSaveDetails` — makes Job Description + Additional Comments EDITABLE
+ *     in place (Schedule & Assign only). Absent ⇒ both stay read-only, so
+ *     every other consumer is untouched.
  *
  * This component is PURELY PRESENTATIONAL for the job object: the host owns the
  * candidates fetch (the `/candidates` response carries `job`) and passes the
@@ -33,11 +36,15 @@
  * reschedule.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   MapPin, Calendar, Loader2, Clock, ChevronDown,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { showToast } from '@/components/ui/toast';
+import { formatApiError } from '@/lib/api-errors';
+import { useMe } from '@/lib/auth-context';
+import { hasAction } from '@/lib/permissions';
 import { formatServiceAddress } from '@/lib/format';
 import { formatDate, appointmentIsPast } from '@/lib/utils';
 import { displaySlot } from '@/lib/job-slots';
@@ -158,6 +165,7 @@ export function JobContextPanel({
   onReschedule,
   rescheduling = false,
   pastBlocksAction = false,
+  onSaveDetails,
 }: {
   job: JobContextData | null;
   jobId: number | null;
@@ -172,6 +180,19 @@ export function JobContextPanel({
   onReschedule?: () => void;
   /** Schedule & Assign only — veils the schedule row while a reschedule refetch runs. */
   rescheduling?: boolean;
+  /*
+   * Opt-in EDITING of Job Description + Additional Comments. Absent (the
+   * default) ⇒ both render read-only exactly as before — the panel is shared
+   * with Assign / Reassign and must not sprout write affordances there just
+   * because it sprouted them here.
+   *
+   * The host owns the PATCH *and the refetch*: the job object this panel
+   * renders comes from the host's `/candidates` response, and invalidateFetch
+   * only DROPS the cache — it cannot re-run a still-mounted hook. Only the host
+   * holds that hook, which is why this is a callback and not a fetch in here.
+   * Receives ONLY the changed fields.
+   */
+  onSaveDetails?: (patch: { job_desc?: string; efr_special_notes?: string }) => Promise<void>;
   /*
    * Does a PAST appointment actually block this host modal's primary action?
    * true  → offering (the server 400s), so the notice is red + imperative.
@@ -188,6 +209,13 @@ export function JobContextPanel({
   // open; collapsing is for reclaiming height once they've moved on to picking a
   // technician.
   const [jobDetailsOpen, setJobDetailsOpen] = useState(defaultDetailsOpen);
+
+  // Editing needs BOTH the host's opt-in and the same permission that gates the
+  // Description pencil in JobModal. hasAction fails CLOSED while /me loads, and
+  // the PATCH route itself carries no action check — this flag is the whole
+  // guard, so it must not be inferred from the host's identity.
+  const { me } = useMe();
+  const canEditDetails = !!onSaveDetails && hasAction(me, 'isJobEdit');
 
   return (
     <>
@@ -282,7 +310,13 @@ export function JobContextPanel({
                 is the technician-facing note ("Anything Handyman should keep
                 in mind?" in the Book-New-Call form) surfaced here as
                 "Additional Comments". */}
-            {(job.job_desc || job.efr_special_notes) && (
+            {canEditDetails && onSaveDetails ? (
+              /* ⚠ Rendered OUTSIDE the `job_desc || efr_special_notes` guard
+                 below: that guard hides the whole block when both are empty,
+                 which would make it impossible to ADD a description to a job
+                 that has none — the exact case an operator most needs. */
+              <EditableJobDetails job={job} onSave={onSaveDetails} />
+            ) : (job.job_desc || job.efr_special_notes) && (
               <div className="mt-3 pt-3 border-t grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 text-sm">
                 <ReadField label="Job Description" value={job.job_desc} />
                 <ReadField label="Additional Comments" value={job.efr_special_notes} />
@@ -524,6 +558,155 @@ function ReadField({ label, value }: { label: string; value: React.ReactNode }) 
       <dt className="text-xs uppercase tracking-wide text-muted-foreground">{label}</dt>
       <dd className="text-sm text-foreground break-words">
         {empty ? <span className="text-muted-foreground">—</span> : value}
+      </dd>
+    </div>
+  );
+}
+
+/* ── Editable Job Description + Additional Comments ──────────────────────────
+ *
+ * EXPLICIT save only — never on blur, never on keystroke. The host modal's
+ * primary action is "Offer to N Technicians"; a field that saved itself when
+ * the operator tabbed past it would be committed by accident on the way to a
+ * different button. The Save / Cancel row therefore appears only once a draft
+ * actually differs from the stored value, so an untouched panel reads exactly
+ * like the read-only one it replaced.
+ *
+ * Only CHANGED fields are sent. That is not just economy: `job_desc` is a
+ * STRUCTURAL column on the BE, and writing it re-stamps `created_date_time` —
+ * which this very panel prints two rows up as "Booked On". Sending an
+ * unchanged job_desc alongside a comments edit would silently move it.
+ */
+function EditableJobDetails({ job, onSave }: {
+  job: JobContextData;
+  onSave: (patch: { job_desc?: string; efr_special_notes?: string }) => Promise<void>;
+}) {
+  const storedDesc = job.job_desc ?? '';
+  const storedNotes = job.efr_special_notes ?? '';
+  const [desc, setDesc] = useState(storedDesc);
+  const [notes, setNotes] = useState(storedNotes);
+  const [saving, setSaving] = useState(false);
+  /*
+   * What the server is believed to hold — the baseline "dirty" is measured
+   * against. Seeded from the job, and advanced OPTIMISTICALLY on a successful
+   * save so the Save row clears at once instead of lingering for the whole
+   * candidates refetch (a ranking query that can take seconds), during which a
+   * Cancel would have thrown the just-saved text away.
+   */
+  const [saved, setSaved] = useState({ desc: storedDesc, notes: storedNotes });
+  /*
+   * Re-seed from the STORED values (and on a job swap). A failed save changes
+   * nothing stored, so this does not fire and the operator's text stays on
+   * screen — silently reverting to the old value is what makes a failure look
+   * like a success.
+   */
+  useEffect(() => {
+    setSaved({ desc: storedDesc, notes: storedNotes });
+    setDesc(storedDesc);
+    setNotes(storedNotes);
+  }, [job.job_id, storedDesc, storedNotes]);
+
+  const descDirty = desc !== saved.desc;
+  const notesDirty = notes !== saved.notes;
+
+  async function save() {
+    const patch: { job_desc?: string; efr_special_notes?: string } = {};
+    if (descDirty) patch.job_desc = desc.trim();
+    if (notesDirty) patch.efr_special_notes = notes.trim();
+    /*
+     * The BE's updateBody carries no `.allow('', null)` on either column, so an
+     * emptied field is a guaranteed 400. Say so here rather than firing a
+     * request we know is refused — and leave the operator's text untouched.
+     */
+    if (patch.job_desc === '' || patch.efr_special_notes === '') {
+      showToast({ variant: 'error', message: 'This field can’t be left blank. Enter some text, or use Cancel to restore the saved value.' });
+      return;
+    }
+    setSaving(true);
+    try {
+      await onSave(patch);
+      const nextDesc = patch.job_desc ?? saved.desc;
+      const nextNotes = patch.efr_special_notes ?? saved.notes;
+      setSaved({ desc: nextDesc, notes: nextNotes });
+      setDesc(nextDesc);
+      setNotes(nextNotes);
+      showToast({ variant: 'success', message: 'Job details saved.' });
+    } catch (e) {
+      // Visible failure, and the draft is deliberately NOT reverted.
+      showToast({ variant: 'error', message: formatApiError(e, { fallback: 'Could not save job details' }) });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 pt-3 border-t space-y-2">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 text-sm">
+        {/* Textareas, not inputs: job_desc runs to 5000 characters and
+            efr_special_notes to 2000 — the BE's own limits, so the counter and
+            the validator agree instead of the box truncating typing early. */}
+        <EditField
+          label="Job Description"
+          value={desc}
+          onChange={setDesc}
+          maxLength={5000}
+          disabled={saving}
+          placeholder="Describe the work to be done…"
+        />
+        <EditField
+          label="Additional Comments"
+          value={notes}
+          onChange={setNotes}
+          maxLength={2000}
+          disabled={saving}
+          placeholder="Anything the technician should keep in mind…"
+        />
+      </div>
+      {(descDirty || notesDirty) && (
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <span className="mr-auto text-xs font-medium text-warning-strong">Unsaved Changes</span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={saving}
+            onClick={() => { setDesc(saved.desc); setNotes(saved.notes); }}
+          >
+            Cancel
+          </Button>
+          <Button type="button" size="sm" disabled={saving} onClick={save}>
+            {saving ? 'Saving…' : 'Save'}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* Editable twin of <ReadField> — same label typography so the block still
+   reads as part of the Job Details grid. */
+function EditField({ label, value, onChange, maxLength, disabled, placeholder }: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  maxLength: number;
+  disabled: boolean;
+  placeholder: string;
+}) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-xs uppercase tracking-wide text-muted-foreground">{label}</dt>
+      <dd>
+        <textarea
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          disabled={disabled}
+          maxLength={maxLength}
+          placeholder={placeholder}
+          aria-label={label}
+          className="mt-0.5 w-full rounded border bg-background px-2 py-1 text-sm min-h-[72px] disabled:opacity-60"
+        />
+        <div className="text-right text-xs text-muted-foreground">{value.length} / {maxLength}</div>
       </dd>
     </div>
   );
