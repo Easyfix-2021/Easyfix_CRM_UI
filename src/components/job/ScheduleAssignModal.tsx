@@ -235,6 +235,29 @@ export function ScheduleAssignModal({
   // operator schedule/offer. Probe the real status; while it loads we don't block.
   const statusGate = useFetch<{ job_status?: number; job_reference_id?: string | null }>(open && jobId ? `/admin/jobs/${jobId}` : null);
   const statusIneligible = statusGate.data?.job_status != null && Number(statusGate.data.job_status) !== 0;
+  /*
+   * The list that opened this modal said the order was BOOKED and unassigned;
+   * the probe above just proved it is not. The list query is correct — status=0
+   * AND fk_easyfixter_id IS NULL, both applied server-side — so this is a race:
+   * a technician accepted (0 -> 1) between the rows rendering and the click.
+   *
+   * Reporting it read-only is right, but leaving the row sitting in "Pending for
+   * Scheduling" is not: the operator closes the modal, sees the same row, and
+   * clicks it again. The moment we LEARN the bucket is wrong, tell the host to
+   * refetch so the row leaves. onChanged clears the tab cache and forces a
+   * reload, so the 30s TTL cannot re-serve the stale page.
+   *
+   * Fires ONCE per job — refetching returns a list that no longer contains this
+   * row, which cannot re-trigger it, but the ref makes that independent of the
+   * list's contents rather than relying on it.
+   */
+  const staleBucketRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!statusIneligible || jobId == null) return;
+    if (staleBucketRef.current === jobId) return;
+    staleBucketRef.current = jobId;
+    onChanged?.();
+  }, [statusIneligible, jobId, onChanged]);
   const canCommit = hasAction(me, 'isJobAssign') && !statusIneligible;
   // Cancel Job mirrors JobModal's ActionBar gate (the destructive
   // `isJobCancel` key). Add Remarks is NOT permission-gated in JobModal
