@@ -83,3 +83,55 @@ test('formatServiceAddress still reads `address` alone — the premise of the ru
     );
   }
 });
+
+/*
+ * The public job-completion page (customer-facing, magic-link) does NOT use
+ * AddressPickerWithMap — it reimplements a pared-down widget against the
+ * /api/public/maps/* endpoints, so the call-site rule above cannot see it.
+ *
+ * Its equivalent switch is `mapOnly`. With it, the search box binds to
+ * `form.building` (the map-search column) and the booked Service Address is
+ * untouchable. WITHOUT it the box binds to `form.address` — so a customer
+ * searching for their own location would overwrite the Service Address the job
+ * was booked against, from a public page, with no operator watching.
+ *
+ * That branch is currently unreachable (the one call site passes mapOnly), and
+ * unreachable is not the same as removed: dropping the prop from that one call
+ * site is a one-word change that silently re-arms it.
+ */
+const PUBLIC_PAGE = 'src/app/public/job-completion/[token]/page.tsx';
+
+test('every public AddressMapWidget runs in mapOnly mode, so the search cannot rewrite the booked address', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', PUBLIC_PAGE), 'utf8');
+  const blocks = [];
+  let from = 0;
+  for (;;) {
+    const i = src.indexOf('<AddressMapWidget', from);
+    if (i === -1) break;
+    const end = src.indexOf('/>', i);
+    assert.ok(end > i, 'unterminated <AddressMapWidget');
+    blocks.push(src.slice(i, end));
+    from = end;
+  }
+  assert.ok(blocks.length > 0, `no <AddressMapWidget found in ${PUBLIC_PAGE} — did it move?`);
+  for (const block of blocks) {
+    assert.ok(
+      /\bmapOnly\b/.test(block),
+      'an <AddressMapWidget on the public page omits mapOnly, so its search box binds to '
+      + '`form.address` — a customer could overwrite the booked Service Address with a Google '
+      + 'string from a public page.',
+    );
+  }
+});
+
+test('mapOnly is still the switch that does the remap', () => {
+  // If this expression changes, the guard above is asserting the wrong prop and
+  // would keep passing while protecting nothing.
+  const src = fs.readFileSync(path.join(__dirname, '..', PUBLIC_PAGE), 'utf8');
+  assert.match(
+    src,
+    /const searchQuery = mapOnly \? form\.building : form\.address;/,
+    'the public widget no longer selects its bound column with `mapOnly` — the mapOnly guard '
+    + 'above is now meaningless and needs rewriting against whatever replaced it.',
+  );
+});
