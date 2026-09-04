@@ -92,6 +92,18 @@ type Props = {
    */
   serviceAddressReadOnly?: boolean;
   /*
+   * Only meaningful alongside `serviceAddressReadOnly`, whose real meaning is
+   * "the Google search lives on the `building` field, not on `address`".
+   *
+   * Confirm & Schedule leaves the Service Address alone entirely (the host
+   * shows it read-only above). The Edit Address dialog exists to change it, so
+   * it opts in here and gets a PLAIN text input for `address` — plain, not an
+   * autocomplete, because a Google pick would overwrite the operator's own
+   * service address with a formatted_address string, which is the exact mix-up
+   * this split is meant to end.
+   */
+  serviceAddressEditable?: boolean;
+  /*
    * Override the editable-mode field labels. Defaults preserve the historic
    * labels for the Edit-Address dialog and every other caller; Book New Call
    * passes "Search Location on Map *" / "Address" to reflect the column roles
@@ -138,7 +150,7 @@ type SharedMapCore = {
 };
 let sharedMapCore: SharedMapCore | null = null;
 
-export function AddressPickerWithMap({ value, onChange, cities, editable = true, autoCreatePincode = false, serviceAddressReadOnly = false, addressLabel = 'Complete Address *', buildingLabel = 'Building / Floor Number' }: Props) {
+export function AddressPickerWithMap({ value, onChange, cities, editable = true, autoCreatePincode = false, serviceAddressReadOnly = false, serviceAddressEditable = false, addressLabel = 'Complete Address *', buildingLabel = 'Building / Floor Number' }: Props) {
   const mapRef = React.useRef<HTMLDivElement | null>(null);
   // The map + marker types are minimal at the call site — we only
   // need .panTo / .setZoom on the map and .setPosition on the marker.
@@ -616,6 +628,26 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
         )}
         {serviceAddressReadOnly ? (
           <>
+            {/* The Service Address itself — `address`, the ONE column
+                formatServiceAddress reads, so this is what the whole CRM will
+                display for this job. Deliberately a plain input: an
+                autocomplete here would replace what the operator typed with
+                Google's formatted_address, which is how the Google string
+                ended up in the Service Address column in the first place. */}
+            {serviceAddressEditable && (
+              <div>
+                <Label className="text-xs">{addressLabel}</Label>
+                <Input
+                  value={value.address || ''}
+                  onChange={(e) => patch({ address: e.target.value })}
+                  placeholder="Flat / house, street, area — as the customer gave it"
+                  disabled={!editable}
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Shown as the Service Address everywhere in the CRM and to the technician.
+                </p>
+              </div>
+            )}
             {/* Google-Map SEARCH — the repurposed `building` field. Used ONLY to
                 set the GPS pin: picking a suggestion writes gps_location (+ pin/
                 city) and stores the searched text in `building`; it never touches

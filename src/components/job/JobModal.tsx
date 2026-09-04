@@ -1474,6 +1474,20 @@ export function JobAddressEditDialog({ job, onClose, onSaved }: {
               address_instruction: next.address_instruction || '',
             })}
             cities={lk.toOpts.cities.map((o) => ({ value: String(o.value), label: String(o.label) }))}
+            /*
+             * Same field split as Confirm & Schedule, so the two address
+             * surfaces finally agree on what each column means:
+             *   Service Address      -> `address`      (what the CRM displays)
+             *   Search Location On Map -> `building` + `gps_location` (pin only)
+             *   Landmark             -> `landmark`
+             * This dialog used ONE Google autocomplete bound to `address`, so
+             * every save replaced the real service address with Google's
+             * formatted_address and left `building` empty — the reason a job
+             * booked here reads back differently from one confirmed there.
+             */
+            serviceAddressReadOnly
+            serviceAddressEditable
+            addressLabel="Service Address *"
           />
         </div>
         <div className="px-4 py-3 border-t flex justify-end gap-2 shrink-0">
@@ -4109,6 +4123,31 @@ function CreateJobMobileGate({
  * outcome-only flows.
  */
 type JobFormSavedOpts = { closeAfter?: boolean; variant?: 'book' | 'enquiry' | 'unreachable' | 'draft' };
+/*
+ * THE address field set, in ONE place.
+ *
+ * Three handlers in the address picker below used to enumerate these by hand
+ * and had drifted apart: selecting a saved address copied SIX fields, "+ Add a
+ * new address" cleared FIVE, and deleting the selected address cleared THREE.
+ * So "add a new address" left the previous address's Landmark sitting in the
+ * form under an otherwise blank set — reported 2026-09-04 — and deleting the
+ * selected one left Building, Landmark and GPS behind as well.
+ *
+ * A partial clear is worse than no clear: the operator sees a mostly-empty
+ * form, has no reason to suspect one box is a leftover, and saves it onto a
+ * NEW address. Adding a field to the picker means adding it HERE, and every
+ * handler stays in step by construction.
+ */
+const BLANK_ADDRESS_FIELDS = {
+  address: '',
+  building: '',
+  landmark: '',
+  city_id: '',
+  pin_code: '',
+  gps_location: '',
+  address_instruction: '',
+};
+
 function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer, onFormDirty }: {
   mode: 'create' | 'edit' | 'confirm';
   initial: Job | null;
@@ -8754,6 +8793,12 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                               // gps_location — same as the preselect initializer.
                               setF((s) => ({
                                 ...s,
+                                // Blank FIRST, then copy: a saved address row
+                                // carries no address_instruction (the lookup
+                                // query doesn't select it), so without this the
+                                // previous address's instruction survives the
+                                // switch.
+                                ...BLANK_ADDRESS_FIELDS,
                                 address: a.address || '',
                                 building: a.building || '',
                                 landmark: a.landmark || '',
@@ -8814,7 +8859,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                               // we clear them).
                               if (isSelected) {
                                 setSelectedAddressId(null);
-                                setF((s) => ({ ...s, address: '', city_id: '', pin_code: '' }));
+                                setF((s) => ({ ...s, ...BLANK_ADDRESS_FIELDS }));
                               }
                               // eslint-disable-next-line @typescript-eslint/no-explicit-any
                               (prefillCustomer.addresses as any) =
@@ -8865,7 +8910,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                       className="text-xs text-primary hover:underline"
                       onClick={() => {
                         setSelectedAddressId(null);
-                        setF((s) => ({ ...s, address: '', city_id: '', pin_code: '', building: '', gps_location: '' }));
+                        setF((s) => ({ ...s, ...BLANK_ADDRESS_FIELDS }));
                       }}
                     >
                       + Add a new address (clears fields below)
