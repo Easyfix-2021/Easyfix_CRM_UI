@@ -539,6 +539,18 @@ export default function JobsPage() {
         if (seq === loadSeqRef.current) {
           setData(r);
           if (reset) setPage(0);
+          /*
+           * CLEAR THE BANNER ON SUCCESS. It was only ever set, never cleared —
+           * so one failed request left "Failed to load jobs: …" pinned above a
+           * grid that was, by then, showing correct rows from a later fetch
+           * that had worked. The operator sees results and an error at the same
+           * time and cannot tell which to believe; the only way out was the
+           * Dismiss link, which reads as "hide this" rather than "this is over".
+           *
+           * Inside the seq guard on purpose: a stale success that lost the race
+           * must not clear an error a NEWER request has just reported.
+           */
+          setErrorMsg(null);
         }
       } finally {
         // Only THIS call owns the entry it registered — the cache/dedupe
@@ -546,7 +558,16 @@ export default function JobsPage() {
         inflightRef.current.delete(key);
       }
     } catch (e) {
-      setErrorMsg(`Failed to load jobs: ${e instanceof Error ? e.message : 'Unknown error'}`);
+      /*
+       * Seq-gated for the mirror of the reason above: a STALE failure must not
+       * stamp an error over the results of a newer request that succeeded.
+       * Without this, narrowing a filter to something briefly invalid and then
+       * fixing it could leave the banner up over correct rows — the same
+       * end state, arrived at from the other side.
+       */
+      if (seq === loadSeqRef.current) {
+        setErrorMsg(`Failed to load jobs: ${e instanceof Error ? e.message : 'Unknown error'}`);
+      }
     } finally {
       if (seq === loadSeqRef.current) { setLoading(false); setRefreshing(false); }
     }
