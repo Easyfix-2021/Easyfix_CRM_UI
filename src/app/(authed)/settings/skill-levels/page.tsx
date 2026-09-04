@@ -225,6 +225,7 @@ export default function ManageSkillLevelsPage() {
         page={page}
         pageSize={pageSize}
         total={total}
+        loading={loading}
         onPageChange={setPage}
         onPageSizeChange={(s) => { setPageSize(s); setPage(0); }}
         pageSizeOptions={PAGE_SIZE_CHOICES}

@@ -198,6 +198,7 @@ export default function CustomersPage() {
         page={page}
         pageSize={pageSize}
         total={total}
+        loading={loading}
         onPageChange={setPage}
         onPageSizeChange={(s) => { setPageSize(s); setPage(0); }}
         pageSizeOptions={CUSTOMER_PAGE_SIZES}

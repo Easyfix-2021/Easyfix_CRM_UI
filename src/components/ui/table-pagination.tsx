@@ -65,6 +65,7 @@ export function TablePagination({
   total,
   onPageChange,
   onPageSizeChange,
+  loading = false,
   pageSizeOptions = PAGE_SIZE_OPTIONS,
   className,
 }: {
@@ -89,6 +90,29 @@ export function TablePagination({
    * (The standard pattern is: `onPageSizeChange={(s) => { setPageSize(s); setPage(0); }}`.)
    */
   onPageSizeChange: (next: TablePageSize) => void;
+  /*
+   * True while the list this footer belongs to is fetching.
+   *
+   * WHAT IT PREVENTS: without it the nav stays live during a request, so an
+   * operator on a slow list can click Next three times and queue three page
+   * changes against one in-flight fetch. Whichever response lands last wins,
+   * and the footer then reads a page number the rows do not match — the same
+   * end state as the stale-page bug this component already clamps for, arrived
+   * at from the other direction.
+   *
+   * The quicksight/admin-dashboard footer has always done this (`disabled={page
+   * <= 1 || loading}`); its ABSENCE here is the one capability that kept that
+   * page from being retired onto this component.
+   *
+   * DEFAULTS FALSE, so all 53 existing call sites are unchanged: a footer that
+   * is not told about loading behaves exactly as it did before.
+   *
+   * The page-size selector is deliberately NOT disabled. Changing size is a
+   * single considered action rather than something an impatient operator
+   * repeats, and freezing it mid-fetch on a slow list reads as a broken
+   * control rather than a protected one.
+   */
+  loading?: boolean;
   className?: string;
 }) {
   const isAll = pageSize === 'all';
@@ -163,8 +187,10 @@ export function TablePagination({
 
   const first = 0;
   const last = totalPages - 1;
-  const prevDisabled = isAll || safePage <= first;
-  const nextDisabled = isAll || safePage >= last;
+  /* `loading` joins the existing reasons a nav button is dead. It is OR-ed in
+     rather than checked at each call site so a future button cannot forget it. */
+  const prevDisabled = isAll || loading || safePage <= first;
+  const nextDisabled = isAll || loading || safePage >= last;
 
   return (
     <div
@@ -231,7 +257,7 @@ export function TablePagination({
                 (e.target as HTMLInputElement).blur();
               }
             }}
-            disabled={isAll}
+            disabled={isAll || loading}
             aria-label="Page number"
             className="h-8 w-12 rounded-md border border-input bg-background px-2 text-center text-sm tabular-nums focus:outline-none focus-visible:border-foreground/40 disabled:opacity-50 disabled:cursor-not-allowed"
           />

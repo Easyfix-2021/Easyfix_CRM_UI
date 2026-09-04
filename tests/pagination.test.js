@@ -125,3 +125,43 @@ test('a NaN total from a failed fetch renders zeros, not "NaN-NaN of NaN"', () =
   assert.equal(v.rangeStart, 0);
   assert.equal(v.rangeEnd, 0);
 });
+
+/*
+ * The `loading` prop — a STRUCTURAL assertion, because this suite reaches only
+ * pure modules (tests/*.test.js compile src/lib/* via test:build) and the
+ * disabled logic lives in the component's render.
+ *
+ * WHAT IT PROTECTS: without `loading` folded into the nav's disabled state, an
+ * operator on a slow list can click Next three times and queue three page
+ * changes against one in-flight fetch — whichever response lands last wins, and
+ * the footer then reads a page number the rows do not match.
+ *
+ * Each assertion carries its own control, because "the string is present"
+ * proves nothing on its own: a file that merely MENTIONS loading in a comment
+ * would satisfy a naive grep.
+ */
+test('TablePagination folds `loading` into the nav disabled state', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'components', 'ui', 'table-pagination.tsx'), 'utf8');
+
+  // The prop must exist on the type, and be optional so existing call sites
+  // keep compiling untouched.
+  assert.match(src, /loading\?:\s*boolean/, 'loading must be an OPTIONAL prop');
+  assert.match(src, /loading\s*=\s*false/, 'it must default to false, or 53 call sites change behaviour');
+
+  // Both nav directions must consult it — not just the one someone tested by hand.
+  const prev = src.match(/const prevDisabled = [^;]+;/);
+  const next = src.match(/const nextDisabled = [^;]+;/);
+  assert.ok(prev && next, 'the disabled derivations should still exist — renamed?');
+  assert.match(prev[0], /\bloading\b/, 'prevDisabled must consider loading');
+  assert.match(next[0], /\bloading\b/, 'nextDisabled must consider loading');
+
+  // CONTROL: those same derivations must STILL carry their original reasons.
+  // Without this, replacing the whole expression with `loading` alone would
+  // pass every assertion above while breaking the first/last page guards.
+  assert.match(prev[0], /safePage\s*<=\s*first/, 'CONTROL: prev must still guard the first page');
+  assert.match(next[0], /safePage\s*>=\s*last/, 'CONTROL: next must still guard the last page');
+  assert.match(prev[0], /isAll/, 'CONTROL: prev must still be dead under All');
+});
