@@ -1,65 +1,89 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { GripVertical, ChevronDown, ChevronRight } from 'lucide-react';
 import { useFetch } from '@/lib/hooks';
+import { buildJobsKey } from '@/lib/jobs-query';
+import { reorder } from '@/lib/reorder';
 import { StatusChip } from '@/components/ui/StatusChip';
-import { UnconfirmedJobsTable } from './UnconfirmedJobsTable';
+import {
+  TablePagination,
+  type TablePageSize,
+  pageSizeToLimit,
+} from '@/components/ui/table-pagination';
+import { UnconfirmedJobsTable, type UnconfirmedJobRow } from './UnconfirmedJobsTable';
 import type { ComponentProps } from 'react';
 
 /*
- * My Orders -> Unconfirmed, split into five sections on one page.
+ * My Orders -> Unconfirmed, split into five independently-paged sections.
  *
- * WHAT THIS IS NOT. It is not a rewrite of UnconfirmedJobsTable — that table
- * still owns every column, every sort header and every row action. This groups
- * the rows it is given and renders ONE table per section, so the twelve columns
- * and the Confirm gating have exactly one definition and cannot drift between
- * sections.
+ * WHAT CHANGED, AND WHY IT HAD TO. The first cut took the page's current page
+ * of rows and grouped them in the browser. That is wrong in a way a screenshot
+ * makes obvious: with 84 matching orders the headings read 0 / 0 / 2 / 8 / 0 —
+ * they summed to TEN, the page size, not to 84. A section was never showing
+ * "the Overdue jobs"; it was showing "the Overdue jobs that happened to fall on
+ * page 1", and paging the shared footer reshuffled every heading. Counts that
+ * look authoritative and are not are worse than no counts.
  *
- * MEMBERSHIP IS THE SERVER'S ANSWER, NOT THIS FILE'S. A job's section depends
- * on tbl_job_comment rows the browser never sees (a client request, an
- * unreachable outcome), so GET /admin/jobs/unconfirmed-sections classifies and
- * this renders. Re-deriving it here from `requested_date_time` alone would put
- * a job the client has actioned into a date bucket — the exact overlap ops
- * asked us to prevent.
+ * So each section now runs its OWN query against /admin/jobs with `section=`
+ * and its own limit/offset, exactly as PendingToStartView's three appointment
+ * buckets do. That buys three things the grouped version could not have:
+ *   - `total` is the section's real total, so the chip is the whole book;
+ *   - a section can page past what is on screen;
+ *   - the page's search box reaches every section and every page, because `q`
+ *     goes to the server rather than filtering an already-truncated array.
  *
- * ORDER IS THE OPERATOR'S, and it lives in localStorage: a per-viewer display
- * preference, wanted on the next visit, never needed by the server and never
- * worth a column. Reads are wrapped because localStorage THROWS in a private
- * window and in browsers with site data blocked — an unguarded read there takes
- * the whole page down to fix the order of some headings.
+ * MEMBERSHIP IS STILL THE SERVER'S. The predicate lives in
+ * client-request.service.js (sectionPredicate) beside the JS classifier it
+ * mirrors, and check:sections compares the two over the real book.
+ *
+ * ORDER AND COLLAPSE ARE THE OPERATOR'S, and live in localStorage: per-viewer
+ * display preferences, wanted next visit, never needed by the server. Reads are
+ * wrapped because localStorage THROWS in a private window and in browsers with
+ * site data blocked — an unguarded read there takes the page down to fix the
+ * order of some headings.
  */
+
+// `/admin/jobs` Joi caps limit at 500, so "All" must send 500 and not the
+// helper's 1000 default (which 400s). Same value as /my-orders and /jobs.
+const JOBS_MAX_LIMIT = 500;
 
 const ORDER_KEY = 'easyfix.crm.unconfirmed.sectionOrder.v1';
 /*
- * Collapsed state, stored SEPARATELY from the order.
- *
- * One combined blob would mean a future change to either shape invalidates
- * both, and an operator who had carefully arranged their order would lose it to
- * a change in how collapse is remembered. Two keys, two independent lifetimes.
+ * Collapsed state, stored SEPARATELY from the order. One combined blob would
+ * mean a change to either shape invalidates both, and an operator who had
+ * carefully arranged their order would lose it to a change in how collapse is
+ * remembered.
  *
  * The stored value is the COLLAPSED set, not the expanded one, because
  * everything is expanded by default: an absent key, a corrupt value and a
- * first-ever visit then all mean the same correct thing without special-casing.
- * Storing "expanded" would make a new section arrive collapsed and invisible.
+ * first-ever visit then all mean the same correct thing. Storing "expanded"
+ * would make a section added later arrive collapsed and invisible.
  */
 const COLLAPSED_KEY = 'easyfix.crm.unconfirmed.sectionCollapsed.v1';
 
+// How long a section takes to slide to its new place after a reorder.
+const REORDER_MS = 220;
+
 type Section = { key: string; label: string };
-type SectionsResp = { sections: Record<string, string>; meta: Section[]; today?: string };
+type MetaResp = { meta: Section[] };
+type Resp = { items: UnconfirmedJobRow[]; total: number; limit: number; offset: number };
 type TableProps = ComponentProps<typeof UnconfirmedJobsTable>;
+/*
+ * The tab's request shape, built ONCE by the page (status pin, owner scope,
+ * search, sort) and extended here with `section` + this section's page window.
+ * Passing the whole object rather than named props means a filter the page adds
+ * later reaches all five sections without touching this file.
+ */
+type JobsQuery = Record<string, string | number | undefined>;
 
 /*
  * Reconcile a saved order against the sections that actually exist.
  *
  * Not `stored ?? server` — a saved array is a snapshot of the sections that
  * existed the day it was saved. Trusting it wholesale means a section added
- * later never renders (it is in neither the saved list nor anything that
- * appends it), and a section removed later leaves an empty heading forever.
- * Both failures are silent, and the first one hides a whole bucket of jobs.
- *
- * So: keep the saved order for what still exists, drop what does not, and
- * APPEND anything new at the end where it is visible rather than dropping it.
+ * later never renders, and one removed later leaves an empty heading forever.
+ * Both failures are silent, and the first hides a whole bucket of jobs.
  */
 function reconcile(stored: unknown, meta: Section[]): Section[] {
   const known = new Map(meta.map((m) => [m.key, m]));
@@ -92,36 +116,35 @@ function loadOrder(meta: Section[]): Section[] {
     const raw = window.localStorage.getItem(ORDER_KEY);
     return reconcile(raw ? JSON.parse(raw) : null, meta);
   } catch {
-    // Private window, blocked site data, or corrupt JSON. The default order is
-    // a correct page; a thrown error is not.
     return meta;
   }
 }
 
 export function UnconfirmedSections({
-  rows, ...tableProps
-}: TableProps) {
+  query,
+  onMagicLinkSent,
+  ...tableProps
+}: Omit<TableProps, 'rows' | 'loading'> & { query: JobsQuery }) {
   /*
-   * Classify only the ids on screen. The endpoint caps at 1000 and this page
-   * pages well below that, so one call covers a page — and it is keyed on the
-   * id list, so paging or filtering refetches while sorting the same rows does
-   * not.
+   * The section LIST comes from the server so a sixth section is a backend
+   * change, not a frontend deploy. Sent without `ids`, which the endpoint
+   * answers from SECTION_META alone — no query, no rows.
    */
-  const ids = useMemo(
-    () => (rows || []).map((r) => r.job_id).filter(Boolean).join(','),
-    [rows],
-  );
-  const cls = useFetch<SectionsResp>(ids ? `/admin/jobs/unconfirmed-sections?ids=${ids}` : null);
+  const metaReq = useFetch<MetaResp>('/admin/jobs/unconfirmed-sections');
+  const meta = metaReq.data?.meta;
 
-  const meta = cls.data?.meta ?? [];
   const [order, setOrder] = useState<Section[]>([]);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
-  const dragKey = useRef<string | null>(null);
 
-  // Read once on mount — localStorage is only available in the browser, and
-  // reading it during render would differ between the server pass and the
-  // client one.
+  // Read once on mount — localStorage exists only in the browser, and reading
+  // it during render would differ between the server pass and the client one.
   useEffect(() => { setCollapsed(loadCollapsed()); }, []);
+
+  useEffect(() => {
+    if (meta?.length) {
+      setOrder((prev) => (prev.length ? reconcile(prev.map((s) => s.key), meta) : loadOrder(meta)));
+    }
+  }, [meta]);
 
   function toggle(key: string) {
     setCollapsed((prev) => {
@@ -129,145 +152,327 @@ export function UnconfirmedSections({
       if (next.has(key)) next.delete(key); else next.add(key);
       try {
         window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]));
-      } catch {
-        // Applies for this visit; just will not survive a reload.
-      }
+      } catch { /* applies for this visit; just will not survive a reload */ }
       return next;
     });
   }
-
-  // Seeded once the server has told us which sections exist, then owned here.
-  useEffect(() => {
-    if (meta.length) setOrder((prev) => (prev.length ? reconcile(prev.map((s) => s.key), meta) : loadOrder(meta)));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cls.data?.meta]);
 
   function persist(next: Section[]) {
     setOrder(next);
     try {
       window.localStorage.setItem(ORDER_KEY, JSON.stringify(next.map((s) => s.key)));
     } catch {
-      // Order still applies for this visit; it just will not survive a reload.
-      // Losing a preference is not worth failing the interaction over.
+      // Losing a display preference is not worth failing the interaction over.
     }
   }
 
-  function dropOn(targetKey: string) {
-    const from = dragKey.current;
-    dragKey.current = null;
-    if (!from || from === targetKey) return;
-    const next = order.filter((s) => s.key !== from);
-    const moved = order.find((s) => s.key === from);
-    const at = next.findIndex((s) => s.key === targetKey);
-    if (!moved || at < 0) return;
-    next.splice(at, 0, moved);
+  /* ── Reordering ──────────────────────────────────────────────────────
+   *
+   * THE BUG THIS REPLACES. The old handler inserted the dragged section at the
+   * index of whatever it was dropped on, with no adjustment:
+   *
+   *     const at = next.findIndex(s => s.key === targetKey);
+   *     next.splice(at, 0, moved);
+   *
+   * Two things are wrong there, and together they explain "sometimes it lands
+   * in the wrong place":
+   *
+   *   1. It always inserts BEFORE the target. Drag section 1 down onto section
+   *      3 and it lands at position 2 — before the thing you dropped it on.
+   *      Dragging UP behaves as expected, so the error is asymmetric, which is
+   *      exactly what makes it feel random rather than broken.
+   *   2. Removing the source first shifts every later index down by one, and
+   *      nothing compensated for that. So a downward move was off by one twice.
+   *
+   * The fix is to stop deriving the destination from "which element got the
+   * drop" and derive it from WHERE THE POINTER IS: above a card's midpoint
+   * means before it, below means after it. That index is then shown as a live
+   * insertion bar, so the landing place is visible during the drag rather than
+   * discovered after it.
+   */
+  const [dragKey, setDragKey] = useState<string | null>(null);
+  const [dropAt, setDropAt] = useState<number | null>(null);
+
+  // Live DOM nodes, for measuring the slide (below).
+  const nodes = useRef(new Map<string, HTMLElement>());
+  const firstTops = useRef<Map<string, number> | null>(null);
+
+  /*
+   * FLIP (First, Last, Invert, Play). Reordering an array remounts nothing and
+   * animates nothing — the cards simply appear in new places, and with five
+   * headings of similar shape it is genuinely hard to see WHICH one moved.
+   *
+   * So: record every card's y BEFORE the state change, let React lay the new
+   * order out, then translate each card back to where it was and release it.
+   * The browser animates the transform, so the cards slide past each other and
+   * the one that moved is obvious. Done with two style writes rather than a
+   * drag-and-drop dependency.
+   */
+  function measureBefore() {
+    const m = new Map<string, number>();
+    for (const [k, el] of nodes.current) m.set(k, el.getBoundingClientRect().top);
+    firstTops.current = m;
+  }
+
+  useLayoutEffect(() => {
+    const first = firstTops.current;
+    firstTops.current = null;
+    if (!first) return;
+    // Respect the OS setting: the reorder still happens, it just happens at once.
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+
+    // INVERT — put every card back where it was, with no transition, before
+    // the browser has painted the new layout.
+    const moved: HTMLElement[] = [];
+    for (const [k, el] of nodes.current) {
+      const was = first.get(k);
+      if (was == null) continue;
+      const delta = was - el.getBoundingClientRect().top;
+      if (!delta) continue;
+      el.style.transition = 'none';
+      el.style.transform = `translateY(${delta}px)`;
+      moved.push(el);
+    }
+    if (!moved.length) return;
+
+    // PLAY — next frame, release them.
+    const raf = requestAnimationFrame(() => {
+      for (const el of moved) {
+        el.style.transition = `transform ${REORDER_MS}ms cubic-bezier(0.2, 0.8, 0.2, 1)`;
+        el.style.transform = '';
+      }
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [order]);
+
+  /*
+   * `to` is an insertion index in the CURRENT order — the gap the bar is drawn
+   * in. The arithmetic itself lives in lib/reorder.ts, where it is unit-tested
+   * against the exact case that was broken; see the note there.
+   */
+  function move(fromKey: string, to: number) {
+    const from = order.findIndex((s) => s.key === fromKey);
+    const next = reorder(order, from, to);
+    // reorder() returns a copy either way; only animate and store a real move.
+    if (next.every((s, i) => s.key === order[i].key)) return;
+    measureBefore();
     persist(next);
   }
 
-  const bySection = useMemo(() => {
-    const map = new Map<string, TableProps['rows']>();
-    const assign = cls.data?.sections || {};
-    for (const r of rows || []) {
-      /*
-       * A row the classifier has not answered for yet (still loading, or an id
-       * the response missed) is held back rather than defaulted into a section.
-       * Defaulting would silently file a client-actioned job under a date, and
-       * the operator would have no way to tell that from the truth.
-       */
-      const key = assign[String(r.job_id)];
-      if (!key) continue;
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(r);
-    }
-    return map;
-  }, [rows, cls.data?.sections]);
+  function endDrag() { setDragKey(null); setDropAt(null); }
 
-  const unclassified = (rows || []).length - [...bySection.values()].reduce((n, v) => n + v.length, 0);
+  function onDrop() {
+    if (dragKey && dropAt != null) move(dragKey, dropAt);
+    endDrag();
+  }
+
+  /*
+   * Keyboard reordering, which the drag handle did not have. It is the
+   * accessible path, and it is also the precise one — the complaint that
+   * started this was about a drag landing somewhere unintended, and arrow keys
+   * cannot miss. Same move(), so the slide animates identically.
+   */
+  function onGripKey(e: React.KeyboardEvent, idx: number, key: string) {
+    const dir = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0;
+    if (!dir) return;
+    e.preventDefault();
+    // move() takes an insertion index: one step down is "past the next card",
+    // which is idx + 2 before the source is removed.
+    move(key, dir < 0 ? idx - 1 : idx + 2);
+  }
+
+  // A bar drawn where the section would land. Suppressed when the drop would be
+  // a no-op (either side of the dragged card), so it never promises a move that
+  // will not happen.
+  function Indicator({ at }: { at: number }) {
+    if (dragKey == null || dropAt !== at) return null;
+    const from = order.findIndex((s) => s.key === dragKey);
+    if (at === from || at === from + 1) return null;
+    return (
+      <div className="mx-3 mb-3 h-1 rounded-full bg-primary" aria-hidden />
+    );
+  }
+
+  if (metaReq.error) {
+    return (
+      <div className="px-4 py-3 text-xs text-warning-strong bg-warning-tint">
+        The section list could not be loaded, so Unconfirmed orders cannot be grouped.
+        Reload the page to try again.
+      </div>
+    );
+  }
 
   return (
-    // pt-3 so the first card is not flush against the toolbar above it; the
-    // cards carry their own mb-3, so the last one supplies the bottom gap.
-    <div className="flex flex-col pt-3">
-      {cls.error && (
-        <div className="px-4 py-2 text-xs text-warning-strong bg-warning-tint border-b border-ink-100">
-          Sections could not be loaded, so the list below is ungrouped. Every job is still shown.
+    // pt-3 so the first card is not flush against the toolbar above it; each
+    // card carries its own mb-3, so the last supplies the bottom gap.
+    <div
+      className="flex flex-col pt-3"
+      onDragOver={(e) => { if (dragKey) e.preventDefault(); }}
+      onDrop={onDrop}
+    >
+      {order.map((s, idx) => (
+        <div key={s.key}>
+          <Indicator at={idx} />
+          <SectionCard
+            section={s}
+            index={idx}
+            query={query}
+            collapsed={collapsed.has(s.key)}
+            onToggle={() => toggle(s.key)}
+            dragging={dragKey === s.key}
+            onDragStart={() => { setDragKey(s.key); setDropAt(idx); }}
+            onDragEnd={endDrag}
+            onDragOverCard={(after) => { if (dragKey) setDropAt(idx + (after ? 1 : 0)); }}
+            onGripKey={(e) => onGripKey(e, idx, s.key)}
+            registerNode={(el) => {
+              if (el) nodes.current.set(s.key, el); else nodes.current.delete(s.key);
+            }}
+            onMagicLinkSent={onMagicLinkSent}
+            tableProps={tableProps}
+          />
         </div>
-      )}
-
-      {/* Ungrouped fallback — a failed classify must never HIDE jobs. */}
-      {cls.error ? (
-        <UnconfirmedJobsTable rows={rows} {...tableProps} />
-      ) : (
-        order.map((s) => {
-          const list = bySection.get(s.key) || [];
-          return (
-            <section
-              key={s.key}
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={() => dropOn(s.key)}
-              /* A card per section rather than rows separated by a hairline.
-                 With a single border the five sections read as one long table
-                 with headings in it — which is what the first cut looked like
-                 and why this changed. */
-              className="mx-3 mb-3 rounded-lg border border-ink-100 overflow-hidden bg-surface"
-            >
-              <header
-                draggable
-                onDragStart={() => { dragKey.current = s.key; }}
-                onDragEnd={() => { dragKey.current = null; }}
-                className="flex items-center gap-2 px-3 py-2 bg-surface-alt select-none"
-              >
-                {/* The GRIP is the drag handle, and only the grip. Making the
-                    whole header draggable meant a click that moved a pixel
-                    started a drag instead of toggling — the two gestures were
-                    fighting for the same target. */}
-                <span
-                  className="cursor-grab active:cursor-grabbing text-ink-300 hover:text-ink-500"
-                  title="Drag to reorder this section"
-                  aria-hidden
-                >
-                  <GripVertical className="w-4 h-4" />
-                </span>
-                <button
-                  type="button"
-                  onClick={() => toggle(s.key)}
-                  aria-expanded={!collapsed.has(s.key)}
-                  className="flex items-center gap-1.5 flex-1 text-left"
-                  title={collapsed.has(s.key) ? 'Expand' : 'Collapse'}
-                >
-                  {collapsed.has(s.key)
-                    ? <ChevronRight className="w-4 h-4 text-ink-500" aria-hidden />
-                    : <ChevronDown className="w-4 h-4 text-ink-500" aria-hidden />}
-                  <span className="text-sm font-semibold text-ink-900">{s.label}</span>
-                  <StatusChip tone="info" size="sm">{String(list.length)}</StatusChip>
-                </button>
-              </header>
-              {collapsed.has(s.key) ? null : list.length ? (
-                <div className="overflow-x-auto">
-                  <UnconfirmedJobsTable rows={list} {...tableProps} />
-                </div>
-              ) : (
-                /*
-                 * Empty sections keep their heading. Hiding them would save a
-                 * line and cost two things: the operator cannot tell "no jobs
-                 * here" from "this section is gone", and the drag target
-                 * disappears, so an empty section can never be moved back into
-                 * the position someone wants it in.
-                 */
-                <p className="px-4 py-3 text-xs text-ink-500">No jobs in this section.</p>
-              )}
-            </section>
-          );
-        })
-      )}
-
-      {!cls.error && unclassified > 0 && (
-        <p className="px-4 py-2 text-xs text-ink-500">
-          {cls.loading
-            ? `Grouping ${unclassified} more job${unclassified === 1 ? '' : 's'}…`
-            : `${unclassified} job${unclassified === 1 ? '' : 's'} could not be grouped and are not shown above.`}
-        </p>
-      )}
+      ))}
+      <Indicator at={order.length} />
     </div>
+  );
+}
+
+/*
+ * One section: its own page window, its own query, its own footer.
+ *
+ * Split into a component because each section needs independent `page` /
+ * `pageSize` state, and hooks cannot be called in a loop inside the parent.
+ * Same reason PendingToStartView has a per-bucket component.
+ */
+function SectionCard({
+  section, index, query, collapsed, onToggle, dragging,
+  onDragStart, onDragEnd, onDragOverCard, onGripKey, registerNode,
+  onMagicLinkSent, tableProps,
+}: {
+  section: Section;
+  index: number;
+  query: JobsQuery;
+  collapsed: boolean;
+  onToggle: () => void;
+  dragging: boolean;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+  onDragOverCard: (after: boolean) => void;
+  onGripKey: (e: React.KeyboardEvent) => void;
+  registerNode: (el: HTMLElement | null) => void;
+  onMagicLinkSent?: TableProps['onMagicLinkSent'];
+  tableProps: Omit<TableProps, 'rows' | 'loading' | 'onMagicLinkSent'>;
+}) {
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState<TablePageSize>(10);
+  const limit = pageSizeToLimit(pageSize, JOBS_MAX_LIMIT);
+
+  /*
+   * A COLLAPSED section still needs its count — that is most of the point of
+   * collapsing one — but not its rows. limit=1 fetches the `total` the chip
+   * shows without pulling a page of records nothing will render. Expanding
+   * changes the key, so the real page is fetched then.
+   */
+  const key = buildJobsKey({
+    ...query,
+    section: section.key,
+    limit: collapsed ? 1 : limit,
+    offset: collapsed ? 0 : page * limit,
+  });
+  const { data, loading } = useFetch<Resp>(key);
+
+  /*
+   * A filter or search change makes the current page number meaningless — page
+   * 4 of a 60-row section is empty once a search narrows it to 8. Reset to the
+   * first page, but NOT on the initial render, which would fight the mount.
+   * Keyed on a serialised copy because `query` is a fresh object every render.
+   */
+  const queryKey = JSON.stringify(query);
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) { first.current = false; return; }
+    setPage(0);
+  }, [queryKey]);
+
+  const rows = data?.items ?? [];
+  const total = data?.total ?? 0;
+
+  return (
+    <section
+      ref={registerNode}
+      onDragOver={(e) => {
+        e.preventDefault();
+        const r = e.currentTarget.getBoundingClientRect();
+        // Which HALF the pointer is in decides before-or-after. Deriving it
+        // from the pointer rather than from the drop target is what makes a
+        // downward drag land where it looks like it will.
+        onDragOverCard(e.clientY > r.top + r.height / 2);
+      }}
+      className={`mx-3 mb-3 rounded-lg border border-ink-100 overflow-hidden bg-surface transition-opacity ${
+        dragging ? 'opacity-40' : ''
+      }`}
+    >
+      <header
+        draggable
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+        className="flex items-center gap-2 px-3 py-2 bg-surface-alt select-none"
+      >
+        {/* The GRIP is the drag handle, and only the grip. Making the whole
+            header draggable meant a click that moved a pixel started a drag
+            instead of toggling — the two gestures fought for one target.
+            It is a real button so it can be tabbed to and moved with arrows. */}
+        <button
+          type="button"
+          onKeyDown={onGripKey}
+          aria-label={`Reorder ${section.label}: press the up or down arrow key to move this section`}
+          title="Drag, or focus and use the arrow keys, to reorder"
+          className="cursor-grab active:cursor-grabbing text-ink-300 hover:text-ink-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded"
+        >
+          <GripVertical className="w-4 h-4" />
+        </button>
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={!collapsed}
+          className="flex items-center gap-1.5 flex-1 text-left"
+          title={collapsed ? 'Expand' : 'Collapse'}
+        >
+          {collapsed
+            ? <ChevronRight className="w-4 h-4 text-ink-500" aria-hidden />
+            : <ChevronDown className="w-4 h-4 text-ink-500" aria-hidden />}
+          <span className="text-sm font-semibold text-ink-900">{section.label}</span>
+          {/* An em dash while the count is unknown — a 0 that means "not
+              loaded yet" is indistinguishable from a 0 that means "empty". */}
+          <StatusChip tone="info" size="sm">{data ? String(total) : '—'}</StatusChip>
+        </button>
+        <span className="text-xs text-ink-400">{index + 1}</span>
+      </header>
+
+      {collapsed ? null : (
+        <>
+          <div className="overflow-x-auto">
+            <UnconfirmedJobsTable
+              rows={rows}
+              loading={loading}
+              onMagicLinkSent={onMagicLinkSent}
+              {...tableProps}
+            />
+          </div>
+          {/* Its own footer, over its own total — the whole point of the
+              change. Rendered only once a response has arrived so it never
+              shows "1 / 0" against an unknown total. */}
+          {data && total > 0 && (
+            <TablePagination
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onPageChange={setPage}
+              onPageSizeChange={(s) => { setPageSize(s); setPage(0); }}
+            />
+          )}
+        </>
+      )}
+    </section>
   );
 }

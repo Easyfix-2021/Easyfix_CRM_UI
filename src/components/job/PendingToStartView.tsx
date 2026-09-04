@@ -57,6 +57,7 @@ import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
 import { useFetch, invalidateFetch, useDebouncedValue } from '@/lib/hooks';
 import { formatJobAge, jobAgeTitle, type JobAgeFields } from '@/lib/job-age';
 import { useLookup } from '@/lib/use-lookup';
+import { buildJobsKey } from '@/lib/jobs-query';
 import { useJobActionParams } from '@/lib/job-action-url';
 import {
   formatDate,
@@ -162,17 +163,6 @@ function istBuckets(): { overDue: DateRange; actionToday: DateRange; future: Dat
   };
 }
 
-// Serialise a params object into a stable '/admin/jobs?…' key for useFetch,
-// dropping empty values. URLSearchParams encodes the '+' in the IST offset as
-// %2B (and ':' as %3A), which the backend decodes back before Joi parses it.
-function buildJobsKey(params: Record<string, string | number | undefined>): string {
-  const qs = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) {
-    if (v === undefined || v === null || v === '') continue;
-    qs.set(k, String(v));
-  }
-  return `/admin/jobs?${qs.toString()}`;
-}
 
 export type PendingToStartViewProps = {
   me: Me | null | undefined;

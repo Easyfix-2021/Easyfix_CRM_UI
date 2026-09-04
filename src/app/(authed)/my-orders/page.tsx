@@ -37,7 +37,7 @@ import { cycleSort, SortHeader, type SortDir } from '@/lib/use-sort';
 import { RefreshBar } from '@/components/ui/refresh-bar';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
-import { useDebouncedValue } from '@/lib/hooks';
+import { useDebouncedValue, invalidateFetch } from '@/lib/hooks';
 import { LiveLocationPopover } from '@/components/location/LiveLocationPopover';
 
 // `/admin/jobs` Joi caps limit at 500 — pass to pageSizeToLimit so
@@ -604,6 +604,12 @@ export default function MyOrdersPage() {
   // matching the legacy CRM. Rendered instead of the shared table below
   // (which stays untouched for the other ~9 tabs).
   const isPendingStart = tab === 'pending-start';
+  /*
+   * Unconfirmed renders five sections that each fetch and page THEMSELVES
+   * (UnconfirmedSections), so this page's own rows/footer do not drive it —
+   * same arrangement as Pending to Start.
+   */
+  const isUnconfirmed = tab === 'unconfirmed';
 
   /*
    * The local `jobAgeLabel(ts)` helper that used to live here was RETIRED
@@ -715,8 +721,20 @@ export default function MyOrdersPage() {
                column, sort header and row action still comes from
                UnconfirmedJobsTable, which it renders once per section. */
             <UnconfirmedSections
-              rows={sorted}
-              loading={loading}
+              /*
+               * The tab's request shape, built ONCE here and handed to all five
+               * sections, which add `section` and their own limit/offset. The
+               * search box therefore reaches every section AND every page of
+               * each, because `q` is applied by the server rather than to an
+               * already-truncated array.
+               */
+              query={{
+                status: TABS.find((t) => t.value === 'unconfirmed')?.status,
+                ownerId: scopedOwnerId,
+                q: serverQ || undefined,
+                sortBy: sortKey || undefined,
+                sortDir: sortKey ? sortDir : undefined,
+              }}
               // Confirm promotes an Unconfirmed order (status 9 → 0); gate it
               // by the stage-transition rule too, not just the permission.
               canConfirm={!!canJob.isJobConfirm && transitionAllowed(me?.allowedStages, 9, 0)}
@@ -734,9 +752,18 @@ export default function MyOrdersPage() {
               sortBy={sortKey}
               sortDir={sortDir}
               onSort={toggle}
-              // Force-refetch (skip TAB_CACHE) so the "Link Sent" pill
-              // appears immediately after the popup closes successfully.
-              onMagicLinkSent={() => load(false, true)}
+              /*
+               * Refresh so the "Link Sent" pill appears immediately after the
+               * popup closes. The sections own their own useFetch entries now,
+               * so evicting the page's cache alone would leave the pill stale
+               * until a tab change — hence the eviction of every /admin/jobs
+               * key as well as this page's own reload (which still feeds the
+               * "N matching orders" header).
+               */
+              onMagicLinkSent={() => {
+                invalidateFetch((k) => k.startsWith('/admin/jobs?'));
+                return load(false, true);
+              }}
             />
           ) : isPendingScheduling ? (
           /*
@@ -1189,9 +1216,11 @@ export default function MyOrdersPage() {
           : undefined}
       />
 
-      {/* Pending to Start renders its own per-section pagination inside
-          PendingToStartView; suppress the shared footer pagination there. */}
-      {data && !isPendingStart && (
+      {/* Pending to Start and Unconfirmed both render per-section pagination
+          inside their own views; a shared footer underneath would page a list
+          neither of them reads, and its "1 / 9" would contradict the five
+          section footers above it. */}
+      {data && !isPendingStart && !isUnconfirmed && (
         <TablePagination
           page={page}
           pageSize={pageSize}
