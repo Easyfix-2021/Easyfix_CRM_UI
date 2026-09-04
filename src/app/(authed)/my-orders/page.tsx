@@ -22,7 +22,7 @@ import {
 } from '@/lib/job-tabs';
 import { transitionAllowed } from '@/lib/job-stages';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
-import { UnconfirmedJobsTable } from '@/components/job/UnconfirmedJobsTable';
+import { UnconfirmedSections } from '@/components/job/UnconfirmedSections';
 import { PendingToStartView } from '@/components/job/PendingToStartView';
 import { AssignTechnicianModal, type AssignMode } from '@/components/job/AssignTechnicianModal';
 import { ScheduleAssignModal } from '@/components/job/ScheduleAssignModal';
@@ -710,7 +710,11 @@ export default function MyOrdersPage() {
         <RefreshBar active={refreshing} />
         <CardContent className="p-0 overflow-x-auto">
           {tab === 'unconfirmed' ? (
-            <UnconfirmedJobsTable
+            /* Same table, grouped into the five sections ops asked for. The
+               component owns the grouping and the drag order only; every
+               column, sort header and row action still comes from
+               UnconfirmedJobsTable, which it renders once per section. */
+            <UnconfirmedSections
               rows={sorted}
               loading={loading}
               // Confirm promotes an Unconfirmed order (status 9 → 0); gate it
