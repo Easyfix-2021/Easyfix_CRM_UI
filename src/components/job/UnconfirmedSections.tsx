@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { GripVertical, ChevronDown, ChevronRight } from 'lucide-react';
-import { useFetch } from '@/lib/hooks';
+import { useFetch, invalidateFetch } from '@/lib/hooks';
 import { buildJobsKey } from '@/lib/jobs-query';
 import { reorder } from '@/lib/reorder';
 import { StatusChip } from '@/components/ui/StatusChip';
@@ -135,6 +135,34 @@ export function UnconfirmedSections({
 
   const [order, setOrder] = useState<Section[]>([]);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+
+  /*
+   * Post-mutation refresh signal.
+   *
+   * ⚠ invalidateFetch ALONE DOES NOT REFRESH A MOUNTED SECTION, which is the
+   * trap this exists to close. It evicts the module-level cache and notifies
+   * `invalidationListeners` — but only useFetchOnce subscribes to those.
+   * useFetch re-runs on `[key, enabled, tick]`, and an eviction changes
+   * neither: the key is a pure function of the query, so after a magic-link
+   * send or a reschedule it is byte-identical and the effect never re-runs.
+   * Eviction only helps a LATER mount, and these sections never unmount.
+   *
+   * Before this component fetched its own rows, the page's own reload was
+   * enough — the rows on screen were the page's rows. Now they are not, so
+   * without this bump the "Link Sent" pill never appears (inviting a duplicate
+   * send) and a rescheduled job keeps its old date and stays in the wrong
+   * section until the operator changes page, search, sort or tab.
+   *
+   * PendingToStartView solves it exactly this way; see its bumpReload().
+   */
+  const [reloadKey, setReloadKey] = useState(0);
+  function handleMutation() {
+    invalidateFetch((k) => k.startsWith('/admin/jobs'));
+    setReloadKey((k) => k + 1);
+    // Still tell the page: its own query feeds the "N matching orders" header,
+    // and a mutation can change that count.
+    onMagicLinkSent?.();
+  }
 
   // Read once on mount — localStorage exists only in the browser, and reading
   // it during render would differ between the server pass and the client one.
@@ -327,7 +355,8 @@ export function UnconfirmedSections({
             registerNode={(el) => {
               if (el) nodes.current.set(s.key, el); else nodes.current.delete(s.key);
             }}
-            onMagicLinkSent={onMagicLinkSent}
+            reloadKey={reloadKey}
+            onMagicLinkSent={handleMutation}
             tableProps={tableProps}
           />
         </div>
@@ -347,7 +376,7 @@ export function UnconfirmedSections({
 function SectionCard({
   section, index, query, collapsed, onToggle, dragging,
   onDragStart, onDragEnd, onDragOverCard, onGripKey, registerNode,
-  onMagicLinkSent, tableProps,
+  reloadKey, onMagicLinkSent, tableProps,
 }: {
   section: Section;
   index: number;
@@ -360,6 +389,7 @@ function SectionCard({
   onDragOverCard: (after: boolean) => void;
   onGripKey: (e: React.KeyboardEvent) => void;
   registerNode: (el: HTMLElement | null) => void;
+  reloadKey: number;
   onMagicLinkSent?: TableProps['onMagicLinkSent'];
   tableProps: Omit<TableProps, 'rows' | 'loading' | 'onMagicLinkSent'>;
 }) {
@@ -379,7 +409,7 @@ function SectionCard({
     limit: collapsed ? 1 : limit,
     offset: collapsed ? 0 : page * limit,
   });
-  const { data, loading } = useFetch<Resp>(key);
+  const { data, loading, refetch } = useFetch<Resp>(key);
 
   /*
    * A filter or search change makes the current page number meaningless — page
@@ -393,6 +423,15 @@ function SectionCard({
     if (first.current) { first.current = false; return; }
     setPage(0);
   }, [queryKey]);
+
+  // Refetch when the parent signals a mutation. Skips the initial render,
+  // which the key-driven fetch above already covers.
+  const firstReload = useRef(true);
+  useEffect(() => {
+    if (firstReload.current) { firstReload.current = false; return; }
+    refetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reloadKey]);
 
   const rows = data?.items ?? [];
   const total = data?.total ?? 0;
