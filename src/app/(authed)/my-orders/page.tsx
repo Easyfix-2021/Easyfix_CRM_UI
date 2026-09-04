@@ -37,7 +37,7 @@ import { cycleSort, SortHeader, type SortDir } from '@/lib/use-sort';
 import { RefreshBar } from '@/components/ui/refresh-bar';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
-import { useDebouncedValue, invalidateFetch } from '@/lib/hooks';
+import { useDebouncedValue } from '@/lib/hooks';
 import { LiveLocationPopover } from '@/components/location/LiveLocationPopover';
 
 // `/admin/jobs` Joi caps limit at 500 — pass to pageSizeToLimit so
@@ -753,17 +753,13 @@ export default function MyOrdersPage() {
               sortDir={sortDir}
               onSort={toggle}
               /*
-               * Refresh so the "Link Sent" pill appears immediately after the
-               * popup closes. The sections own their own useFetch entries now,
-               * so evicting the page's cache alone would leave the pill stale
-               * until a tab change — hence the eviction of every /admin/jobs
-               * key as well as this page's own reload (which still feeds the
-               * "N matching orders" header).
+               * Refreshes the "N matching orders" header only. The ROWS live in
+               * the five section fetches, and UnconfirmedSections refreshes
+               * those itself — an eviction cannot, because useFetch does not
+               * subscribe to invalidation and these sections never unmount.
+               * See the note on its reloadKey.
                */
-              onMagicLinkSent={() => {
-                invalidateFetch((k) => k.startsWith('/admin/jobs?'));
-                return load(false, true);
-              }}
+              onMagicLinkSent={() => load(false, true)}
             />
           ) : isPendingScheduling ? (
           /*
