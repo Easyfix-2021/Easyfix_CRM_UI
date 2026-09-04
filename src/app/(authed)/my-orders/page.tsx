@@ -700,6 +700,7 @@ export default function MyOrdersPage() {
           me={me}
           isAdmin={isAdmin}
           canJob={canJob}
+          openView={openView}
           openCheckin={openCheckin}
           openReassign={openReassign}
           onShowLocation={(row) => setLocationJob(row)}
@@ -738,8 +739,14 @@ export default function MyOrdersPage() {
             * Pending-for-Scheduling custom layout. Distinct columns vs the
             * shared table: surfaces ticket age, service category, appointment
             * date + slot, and the open reason — the signals ops need to
-            * triage the scheduling queue. Sole row action is Schedule &
-            * Assign (no generic View — the modal shows full job detail).
+            * triage the scheduling queue.
+            *
+            * Row actions: View + Schedule & Assign. View was deliberately
+            * ABSENT until 2026-09-04 on the reasoning that Schedule & Assign
+            * already shows full job detail — true, but it is a WRITE modal, so
+            * "just look at this order" meant opening the thing that schedules
+            * it. Ops asked for the read-only viewer back here and on
+            * Pending-to-Start. Do not re-remove it on the old reasoning.
             */
           <table className="data-table">
             <thead>
@@ -870,7 +877,17 @@ export default function MyOrdersPage() {
                   <td className="max-w-[16rem] truncate" title={j.remarks ?? undefined}>{j.remarks || '—'}</td>
                   <td className="stick-col stick-right text-right whitespace-nowrap">
                     <div className="inline-flex items-center gap-1 justify-end">
-                      {/* Sole action: Schedule & Assign (no View — modal shows detail). */}
+                      {/* View — read-only, ungated, and FIRST so the icon order
+                          matches every other tab (Unconfirmed included). */}
+                      <button
+                        type="button"
+                        onClick={() => openView(j.job_id)}
+                        className="inline-flex items-center gap-1 text-primary text-xs hover:underline"
+                        title="View details"
+                        aria-label="View details"
+                      >
+                        <Eye className="h-3.5 w-3.5" />
+                      </button>
                       {canJob.isJobAssign && transitionAllowed(me?.allowedStages, j.job_status, 1) && (
                         <button
                           type="button"
@@ -973,12 +990,12 @@ export default function MyOrdersPage() {
                     {/* Row actions follow legacy Manage Jobs + our /jobs page convention */}
                     <div className="inline-flex items-center gap-1 justify-end">
                       {/*
-                        * Generic View (Eye) shows on every tab EXCEPT
-                        * Pending-for-Scheduling, whose Schedule & Assign
-                        * modal already surfaces full job detail. (That tab
-                        * also renders its own custom table above, so this
-                        * branch is unreached there — the guard documents the
-                        * intent and is defensive against future refactors.)
+                        * Generic View (Eye). Pending-for-Scheduling renders
+                        * its OWN table above and now carries its own View
+                        * button, so this branch is unreached for that tab
+                        * either way — the guard stays only to stop the two
+                        * from both firing if the custom table is ever folded
+                        * back into this one.
                         */}
                       {!isPendingScheduling && (
                         <button

@@ -39,7 +39,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Search, PlayCircle, RefreshCw, MapPin } from 'lucide-react';
+import { Search, PlayCircle, RefreshCw, MapPin, Eye } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -186,6 +186,8 @@ export type PendingToStartViewProps = {
    * so ops get the full detail / Billing & Charges workspace, titled "Checkin ·
    * Job #N" instead of the neutral viewer, and perform the check-in inside it.
    */
+  /* Read-only viewer, same page-owned modal the other tabs' Eye opens. */
+  openView: (jobId: number) => void;
   openCheckin: (jobId: number) => void;
   openReassign: (jobId: number) => void;
   // Opens the page-owned LiveLocationPopover for a row's assigned technician.
@@ -198,6 +200,7 @@ export function PendingToStartView({
   me,
   isAdmin,
   canJob,
+  openView,
   openCheckin,
   openReassign,
   onShowLocation,
@@ -378,6 +381,7 @@ export function PendingToStartView({
         isAdmin={isAdmin}
         canJob={canJob}
         onCheckin={openCheckin}
+        onView={openView}
         onReassign={openReassign}
         onShowLocation={onShowLocation}
       />
@@ -392,6 +396,7 @@ export function PendingToStartView({
         isAdmin={isAdmin}
         canJob={canJob}
         onCheckin={openCheckin}
+        onView={openView}
         onReassign={openReassign}
         onShowLocation={onShowLocation}
       />
@@ -406,6 +411,7 @@ export function PendingToStartView({
         isAdmin={isAdmin}
         canJob={canJob}
         onCheckin={openCheckin}
+        onView={openView}
         onReassign={openReassign}
         onShowLocation={onShowLocation}
       />
@@ -434,6 +440,7 @@ type PendingSectionProps = {
   reloadKey: number;
   isAdmin: boolean;
   canJob: Record<string, boolean>;
+  onView: (jobId: number) => void;
   onCheckin: (jobId: number) => void;
   onReassign: (jobId: number) => void;
   onShowLocation: (row: { job_id: number; easyfixer_name: string | null }) => void;
@@ -450,6 +457,7 @@ function PendingSection({
   reloadKey,
   isAdmin,
   canJob,
+  onView,
   onCheckin,
   onReassign,
   onShowLocation,
@@ -659,12 +667,25 @@ function PendingSection({
                           <MapPin className="h-3.5 w-3.5" />
                         </button>
                       )}
+                      {/* View — read-only, ungated, first in the row so the
+                          icon order matches the other tabs. Restored
+                          2026-09-04: it had been removed because Check-In and
+                          Reassign "both surface full job detail", which is true
+                          but makes LOOKING at an order require opening a WRITE
+                          modal. Do not re-remove it on that reasoning. */}
+                      <button
+                        type="button"
+                        onClick={() => onView(j.job_id)}
+                        className="inline-flex items-center gap-1 text-primary text-xs hover:underline"
+                        title="View details"
+                        aria-label="View details"
+                      >
+                        <Eye className="h-3.5 w-3.5" />
+                      </button>
                       {/*
                         * Check-In — opens the JobModal workspace (details +
                         * Billing & Charges) where ops review and perform the
-                        * actual check-in. The standalone "View Details" icon was
-                        * removed; the Reassign and Check-In workspaces both
-                        * surface full job detail.
+                        * actual check-in.
                         */}
                       {canJob.isJobStatusChange && (
                         <button
