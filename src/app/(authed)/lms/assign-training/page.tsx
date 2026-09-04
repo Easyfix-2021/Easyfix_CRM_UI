@@ -42,7 +42,7 @@ import { StatusChip } from '@/components/ui/StatusChip';
 import { SearchSelect, type SearchOption } from '@/components/ui/search-select';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
 import { TablePagination, type TablePageSize } from '@/components/ui/table-pagination';
-import { useFetch, useDebouncedValue, invalidateFetch } from '@/lib/hooks';
+import { useFetch, useFetchOnce, useDebouncedValue, invalidateFetch } from '@/lib/hooks';
 import { api, ApiError } from '@/lib/api';
 import { showToast, dismissToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -64,6 +64,9 @@ type Course = {
   assigned_count: number;
 };
 type CoursesResp = { rows: Course[]; total: number };
+
+/* Same bare-array lookup family as EasyfixerLite below. */
+type ServiceCategoryLite = { service_catg_id: number; service_catg_name: string };
 
 /* Bare array (NOT {rows,total}) — /shared/lookup/* returns the list directly. */
 type EasyfixerLite = {
@@ -424,7 +427,23 @@ export default function AssignTrainingPage() {
    * of `options` the moment the query changed, orphaning their chips (the
    * label lookup below would fall back to "Technician #123").
    */
-  const techFetch = useFetch<EasyfixerLite[]>(can.isLmsManage ? '/shared/lookup/easyfixers' : null);
+  /*
+   * Service-category narrowing for the picker. SERVER-side, because the
+   * technician lookup's projection carries no category — there is nothing to
+   * filter on in the browser. The predicate on the other end is the one
+   * candidate-ranking already uses to answer "who can work this category":
+   * an active repairing deep-skill mapping, retired skills excluded.
+   */
+  const [techCategory, setTechCategory] = React.useState<number | ''>('');
+  const categoriesFetch = useFetchOnce<ServiceCategoryLite[]>(
+    can.isLmsManage ? '/shared/lookup/service-categories' : '',
+  );
+
+  const techFetch = useFetch<EasyfixerLite[]>(
+    can.isLmsManage
+      ? `/shared/lookup/easyfixers${techCategory ? `?categoryId=${techCategory}` : ''}`
+      : null,
+  );
 
   const qs = new URLSearchParams();
   if (dq.trim()) qs.set('q', dq.trim());
@@ -465,6 +484,13 @@ export default function AssignTrainingPage() {
    * so trainee status is visible while assigning training.
    */
   const technicians = React.useMemo(() => techFetch.data ?? [], [techFetch.data]);
+  const categoryOptions = React.useMemo<SearchOption[]>(
+    () => (categoriesFetch.data ?? []).map((c) => ({
+      value: c.service_catg_id,
+      label: c.service_catg_name,
+    })),
+    [categoriesFetch.data],
+  );
   const techOptions = React.useMemo<SearchOption[]>(
     () => technicians.map((t) => ({
       value: t.efr_id,
@@ -472,10 +498,21 @@ export default function AssignTrainingPage() {
     })),
     [technicians],
   );
-  const techNameById = React.useMemo(
-    () => new Map(technicians.map((t) => [t.efr_id, formatEasyfixerName(t.efr_name)])),
-    [technicians],
-  );
+  /*
+   * ACCUMULATING, not derived — and this is the same hazard the comment above
+   * techFetch describes for `q`.
+   *
+   * Narrowing by category re-queries, so a technician selected under Air
+   * Conditioner is absent from `technicians` the moment the operator switches
+   * to Home Appliances. A map derived from the current response would then lose
+   * their name and their chip would read "Technician #123" — while still being
+   * in `selectedIds` and still about to be assigned. Remembering every name
+   * seen this session keeps the chips readable across category changes, which
+   * is what makes the filter a search aid rather than a reset.
+   */
+  const techNameRef = React.useRef(new Map<number, string>());
+  technicians.forEach((t) => techNameRef.current.set(t.efr_id, formatEasyfixerName(t.efr_name)));
+  const techNameById = techNameRef.current;
 
   /*
    * "Today" in IST, recomputed per render. Drives BOTH the due-date preview
@@ -621,6 +658,20 @@ export default function AssignTrainingPage() {
                   options={courseOptions}
                   placeholder={coursesFetch.loading ? 'Loading Courses…' : 'Select A Course…'}
                   emptyText="No Active Courses"
+                />
+              </div>
+
+              <div>
+                {/* The filter sits ABOVE the picker it narrows, and is not
+                    `required`: assigning to everyone is the normal case, and
+                    the category is only a way to find a subset faster. */}
+                <Label className="block mb-1">Service Category</Label>
+                <SearchSelect
+                  value={techCategory}
+                  onChange={(v) => setTechCategory(v ? Number(v) : '')}
+                  options={categoryOptions}
+                  placeholder={categoriesFetch.loading ? 'Loading Categories…' : 'All Categories'}
+                  emptyText="No Active Categories"
                 />
               </div>
 

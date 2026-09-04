@@ -544,7 +544,19 @@ function AssessmentModal({ target, onClose, onSaved }: {
       if (seededFor.current !== 0) { seededFor.current = 0; setDraft([newQuestion()]); }
       return;
     }
-    if (detail.data && seededFor.current !== editing.id) {
+    /*
+     * BOTH tests, and the second one is the bug fix.
+     *
+     * `seededFor` answers "have I already seeded for this id?". It never asked
+     * "does this payload BELONG to that id?" — and useFetch keeps the previous
+     * response in `data` while the next one is in flight. So switching from
+     * assessment A to B ran with `editing.id === B` and `detail.data` still
+     * holding A: the guard passed, B's editor was seeded with A's questions,
+     * and `seededFor` was stamped B, so the real payload was ignored when it
+     * landed. Every operator who opened a second assessment saw the first one's
+     * questions and could save them over it.
+     */
+    if (detail.data && detail.data.id === editing.id && seededFor.current !== editing.id) {
       seededFor.current = editing.id;
       /* `?? []` is not paranoia about a field that is always there: an
        * assessment created and then abandoned before its questions PUT
