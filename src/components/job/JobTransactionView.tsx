@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { Phone, Pencil } from 'lucide-react';
-import { api, ApiError } from '@/lib/api';
+import { useFetch } from '@/lib/hooks';
 import { formatDate, statusLabel, statusTone } from '@/lib/utils';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { maskMobile, formatServiceAddress } from '@/lib/format';
@@ -131,24 +131,20 @@ function Card({ children, dense = false }: { children: React.ReactNode; dense?: 
 }
 
 export function JobTransactionView({ jobId }: { jobId: number }) {
-  const [data, setData] = React.useState<TransactionResp | null>(null);
-  const [loading, setLoading] = React.useState(true);
-  const [error, setError] = React.useState<string | null>(null);
-  // Local refetch counter — bumped by the Edit Address dialog on Save so
-  // the page reflects the new address without forcing the operator to
-  // close + reopen the modal.
-  const [bump, setBump] = React.useState(0);
-  const refreshFn = React.useCallback(() => setBump((b) => b + 1), []);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    setLoading(true); setError(null);
-    api.get<TransactionResp>(`/admin/jobs/${jobId}/transaction`)
-      .then((d) => { if (!cancelled) setData(d); })
-      .catch((e) => { if (!cancelled) setError(e instanceof ApiError ? e.message : 'Failed to load'); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [jobId, bump]);
+  /*
+   * useFetch owns the read: the key carries jobId, so switching job refetches
+   * without an orchestration effect, and its own cancellation replaces the
+   * `cancelled` flag this used to carry.
+   *
+   * The bump counter is gone. It existed only to re-run the effect after the
+   * Edit Address dialog saved, which is exactly what `refetch()` does — and it
+   * has to be refetch() rather than invalidateFetch(), because invalidating a
+   * key does NOT re-run a useFetch that is already mounted.
+   */
+  const tx = useFetch<TransactionResp>(`/admin/jobs/${jobId}/transaction`);
+  const { data, loading, error } = tx;
+  const refetch = tx.refetch;
+  const refreshFn = React.useCallback(() => { refetch(); }, [refetch]);
 
   if (loading) {
     return <div className="p-8 text-center text-sm text-muted-foreground">Loading job transaction…</div>;

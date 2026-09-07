@@ -1100,6 +1100,11 @@ function AnalysisModal({ call, mode, onClose, onAnalysed }: {
     // Only append ?mode= when an override was actually chosen — omitting it lets
     // the backend resolve the global default AND serve the cache as-is.
     const q = mode ? `?mode=${encodeURIComponent(mode)}` : '';
+    // DEFERRED MIGRATION, not an exemption:
+    // this is a genuine keyed load and belongs in useFetch, but it also fires an
+    // onAnalysed callback on success, so moving it needs a watcher effect rather than
+    // a straight swap. Left as-is deliberately rather than half-migrated.
+    // eslint-disable-next-line no-restricted-syntax
     api.get<AnalysisResp>(`/admin/calls/${call.id}/analysis${q}`)
       .then((r) => {
         if (cancelled) return;

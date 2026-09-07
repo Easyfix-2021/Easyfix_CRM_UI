@@ -174,6 +174,11 @@ export function AddressAutocomplete({
         // session so the closing geocode(place_id) call below can bill it
         // as a single Places session.
         if (!sessionTokenRef.current) sessionTokenRef.current = crypto.randomUUID();
+        // not a data load: a keystroke
+        // typeahead with its own AbortController and a Places SESSION TOKEN that must span
+        // every call in one search to bill as a single session. useFetch cannot express
+        // that lifetime, and its cache would defeat the token.
+        // eslint-disable-next-line no-restricted-syntax
         const r = await api.get<{ items: Suggestion[] }>('/admin/maps/autocomplete', {
           q: value,
           sessionToken: sessionTokenRef.current,

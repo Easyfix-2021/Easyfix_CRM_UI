@@ -70,11 +70,29 @@ const RESTRICTED_DIALOG_ONOPENCHANGE = {
  * canonical migration target for any "load data on mount / when key
  * changes" pattern.
  *
- * The selector matches a CallExpression whose callee is the identifier
- * `useEffect`, with an arrow-function first argument whose body
- * synchronously contains a CallExpression on `api.<get|post|put|delete|patch>`
- * or a bare `fetch(...)`. It catches both `api.get(...)` direct and
- * `await api.get(...)` (still a CallExpression descendant).
+ * The selector matches an effect-hook CallExpression containing a
+ * CallExpression on `api.<get|post|put|delete|patch>` or a bare `fetch(...)`.
+ * It catches both `api.get(...)` direct and `await api.get(...)` (still a
+ * CallExpression descendant).
+ *
+ * BOTH CALL SPELLINGS, AND BOTH EFFECT HOOKS (widened 2026-09-07).
+ *
+ * The original selector was `CallExpression[callee.name="useEffect"]`.
+ * `callee.name` exists only when the callee is an Identifier, so a call
+ * written `React.useEffect(...)` — a MemberExpression callee — could never
+ * match and the rule silently did not apply. Measured that day: 117 call
+ * sites in src/ use the `React.useEffect(` spelling, i.e. the guard's headline
+ * rule was unenforced across a large part of the codebase while reporting
+ * clean. `EFFECT_HOOK_CALL` below covers both spellings.
+ *
+ * `useLayoutEffect` is included for the same reason the rule exists at all:
+ * Strict Mode double-fires it identically, so a data load written there
+ * doubles exactly as one written in `useEffect`. 7 sites use it today.
+ *
+ * A selector that cannot match is indistinguishable from a codebase with no
+ * violations — both report zero. That is why the positive control in
+ * tests/eslint-useeffect-guard.test.js asserts the rule FIRES, on each
+ * spelling, rather than asserting the codebase is clean.
  *
  * Side-effect call sites (e.g. an `api.post` fired from a save handler
  * declared inside `useEffect` only as a closure to be called later from
@@ -82,10 +100,23 @@ const RESTRICTED_DIALOG_ONOPENCHANGE = {
  * happens, the right escape is a targeted `// eslint-disable-next-line
  * no-restricted-syntax` comment with a one-line rationale.
  */
+/*
+ * Every way an effect hook can be called: bare `useEffect(...)` from a named
+ * import, and `React.useEffect(...)` / `Namespace.useEffect(...)` where the
+ * callee is a MemberExpression. Matching on `callee.property.name` deliberately
+ * ignores the object, so any namespace alias is covered rather than just the
+ * conventional `React`.
+ */
+const EFFECT_HOOK_CALL =
+  ':matches('
+  + 'CallExpression[callee.name=/^(useEffect|useLayoutEffect)$/],'
+  + 'CallExpression[callee.property.name=/^(useEffect|useLayoutEffect)$/]'
+  + ')';
+
 const RESTRICTED_USEEFFECT_API_CALL = {
   selector:
-    'CallExpression[callee.name="useEffect"] '
-    + 'CallExpression[callee.object.name="api"][callee.property.name=/^(get|post|put|delete|patch)$/]',
+    EFFECT_HOOK_CALL
+    + ' CallExpression[callee.object.name="api"][callee.property.name=/^(get|post|put|delete|patch)$/]',
   message:
     "Don't call `api.<verb>` inside `useEffect` — React 18 Strict Mode "
     + 'double-fires effects in dev, causing duplicate HTTP requests. Use '
@@ -97,8 +128,10 @@ const RESTRICTED_USEEFFECT_API_CALL = {
 };
 
 const RESTRICTED_USEEFFECT_FETCH = {
-  selector:
-    'CallExpression[callee.name="useEffect"] CallExpression[callee.name="fetch"]',
+  // `window.fetch(...)` is deliberately not matched: src/ has zero such call
+  // sites today, and a member-expression arm here would also catch every
+  // `something.fetch()` method on an unrelated object.
+  selector: EFFECT_HOOK_CALL + ' CallExpression[callee.name="fetch"]',
   message:
     "Don't call `fetch()` directly inside `useEffect` — use `useFetchOnce` "
     + "/ `useFetch` from '@/lib/hooks' (Strict-Mode-safe + dedupe + "

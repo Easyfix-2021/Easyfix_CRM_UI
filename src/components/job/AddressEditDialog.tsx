@@ -135,6 +135,11 @@ export function AddressEditDialog({
       if (cancelled) return;
       setGeocoding(true);
       try {
+        // not a data load: a debounced
+        // forward-geocode of text the operator is TYPING, keyed on nothing stable. The
+        // double-fire the rule guards against cannot happen — a repeat run is suppressed
+        // by lastGeocodedSearchRef before any request is made.
+        // eslint-disable-next-line no-restricted-syntax
         const r = await api.get<{ lat?: number; lng?: number }>(
           '/admin/maps/geocode', { address: text },
         );

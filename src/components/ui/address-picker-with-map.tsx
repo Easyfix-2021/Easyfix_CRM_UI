@@ -444,6 +444,10 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
       setPinEnsureState('validating');
       setPinEnsureMsg('');
       try {
+        // not a data load at all: this is a
+        // WRITE (api.post) that creates a pincode if it is missing. The hooks are read-side
+        // only; a mutation has no business in a fetch cache.
+        // eslint-disable-next-line no-restricted-syntax
         const r = await api.post<{
           pincode_id: number;
           pincode: string;

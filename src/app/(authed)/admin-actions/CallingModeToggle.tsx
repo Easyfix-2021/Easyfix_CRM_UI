@@ -23,7 +23,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { api } from '@/lib/api';
 import { formatApiError } from '@/lib/api-errors';
 import { showToast } from '@/components/ui/toast';
-import { invalidateFetch } from '@/lib/hooks';
+import { invalidateFetch, useFetch } from '@/lib/hooks';
 
 type Provider = '' | 'plivo' | 'kaleyra';
 type Cfg = { callMode?: 'web' | 'mobile'; enabledProviders?: string[]; defaultProviderRaw?: Provider };
@@ -44,18 +44,24 @@ export function CallingModeToggle() {
   const [defaultProvider, setDefaultProvider] = React.useState<Provider>('');
   const [saving, setSaving] = React.useState(false);
 
+  /*
+   * The config is a shared read — CallButton loads the same key — so it goes
+   * through useFetch, which dedupes the in-flight request and caches the
+   * result module-wide. The local state below is SEEDED from it rather than
+   * replaced by it: the two save handlers update mode/provider optimistically
+   * from their own responses, and a mounted useFetch is not refetched by
+   * invalidateFetch, so nothing overwrites that.
+   */
+  const cfgFetch = useFetch<Cfg>('/admin/calls/config');
+  const cfg = cfgFetch.data;
   React.useEffect(() => {
-    let alive = true;
-    api.get<Cfg>('/admin/calls/config')
-      .then((c) => {
-        if (!alive) return;
-        setMode(c.callMode ?? 'mobile');
-        setPlivoOn(Boolean(c.enabledProviders?.includes('plivo')));
-        setDefaultProvider((c.defaultProviderRaw ?? '') as Provider);
-      })
-      .catch(() => { if (alive) setMode('mobile'); });
-    return () => { alive = false; };
-  }, []);
+    if (cfgFetch.loading) return;
+    // Undefined data means the read failed; 'mobile' is the same fallback the
+    // previous .catch() applied, so a failed config load still renders.
+    setMode(cfg?.callMode ?? 'mobile');
+    setPlivoOn(Boolean(cfg?.enabledProviders?.includes('plivo')));
+    setDefaultProvider((cfg?.defaultProviderRaw ?? '') as Provider);
+  }, [cfg, cfgFetch.loading]);
 
   const chooseMode = async (next: 'web' | 'mobile') => {
     if (saving || next === mode) return;

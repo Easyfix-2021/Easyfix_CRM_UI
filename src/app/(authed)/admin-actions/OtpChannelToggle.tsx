@@ -16,6 +16,7 @@
  */
 
 import * as React from 'react';
+import { useFetch } from '@/lib/hooks';
 import { MessageCircle, MessageSquare, Layers, Loader2 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { api } from '@/lib/api';
@@ -37,18 +38,22 @@ export function OtpChannelToggle() {
   const [saving, setSaving] = React.useState(false);
   const [savingDual, setSavingDual] = React.useState(false);
 
+  /*
+   * Same shape as CallingModeToggle: useFetch owns the read (dedupe + cache),
+   * and the local state below is SEEDED from it. The save handlers update from
+   * their own responses, and a mounted useFetch is not refetched by
+   * invalidateFetch, so nothing overwrites an optimistic change.
+   */
+  const cfgFetch = useFetch<Cfg>('/admin/otp-channel');
+  const cfg = cfgFetch.data;
   React.useEffect(() => {
-    let alive = true;
-    api.get<Cfg>('/admin/otp-channel')
-      .then((c) => {
-        if (!alive) return;
-        setChannel((c.channel ?? 'whatsapp') as Channel);
-        setDualChannel(c.dualChannel === true);
-        setDualFromProperty(c.dualChannelFromProperty === true);
-      })
-      .catch(() => { if (alive) setChannel('whatsapp'); });
-    return () => { alive = false; };
-  }, []);
+    if (cfgFetch.loading) return;
+    // Undefined data means the read failed; 'whatsapp' is the same fallback the
+    // previous .catch() applied.
+    setChannel((cfg?.channel ?? 'whatsapp') as Channel);
+    setDualChannel(cfg?.dualChannel === true);
+    setDualFromProperty(cfg?.dualChannelFromProperty === true);
+  }, [cfg, cfgFetch.loading]);
 
   const chooseDual = async (next: boolean) => {
     if (savingDual || next === dualChannel) return;

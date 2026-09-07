@@ -51,6 +51,11 @@ export function CitySelect({
     if (!idStr) { setSelectedOpt(null); return; }
     if (selectedOpt && String(selectedOpt.value) === idStr) return;
     let cancelled = false;
+    // DEFERRED MIGRATION, not an exemption:
+    // resolving a preselected id to its label is a real load and useFetch with a null key
+    // when there is no value would express it. Not done here because this component is
+    // used across the CRM and there is no rendering harness to verify the change.
+    // eslint-disable-next-line no-restricted-syntax
     api
       .get<CityRow[]>('/shared/lookup/cities', { ids: idStr })
       .then((rows) => {
@@ -73,6 +78,11 @@ export function CitySelect({
     if (cached) { setResults(cached); return; }
     let cancelled = false;
     const t = setTimeout(() => {
+      // not a data load in the shared sense:
+      // a keystroke typeahead whose per-INSTANCE cache dies on unmount, so a freshly opened
+      // picker re-queries and sees newly added cities. useFetch's module-level cache would
+      // outlive the mount and hide them.
+      // eslint-disable-next-line no-restricted-syntax
       api
         .get<CityRow[]>('/shared/lookup/cities', { q, limit: 50, ...(stateId ? { stateId } : {}) })
         .then((rows) => {
