@@ -45,29 +45,75 @@ function propsBlocks(src) {
   return blocks;
 }
 
-test('every address picker puts the Google search on `building`, not on the Service Address', () => {
-  let checked = 0;
-  for (const file of CALL_SITE_FILES) {
-    const src = fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
-    const blocks = propsBlocks(src);
-    assert.ok(blocks.length > 0, `no <AddressPickerWithMap found in ${file} — did it move?`);
-    for (const block of blocks) {
-      checked += 1;
-      assert.ok(
-        block.includes('serviceAddressReadOnly'),
-        `an <AddressPickerWithMap in ${file} runs in DEFAULT mode, which binds the Google `
-        + 'autocomplete to `address` — every pick would overwrite the Service Address with '
-        + "Google's formatted_address. Pass serviceAddressReadOnly (+ serviceAddressEditable "
-        + 'when the address itself must be editable).',
-      );
-      assert.ok(
-        !block.includes('buildingLabel'),
-        `an <AddressPickerWithMap in ${file} passes buildingLabel, which only renders in the `
-        + 'inverted default mode. Relabelling that field cannot fix the column roles.',
-      );
-    }
+/*
+ * ─── THIS RULE IS NOW STRUCTURAL, NOT A CONVENTION ─────────────────────────
+ *
+ * This test used to assert that every <AddressPickerWithMap> call site passed
+ * `serviceAddressReadOnly`, because the component's DEFAULT mode bound the
+ * Google autocomplete to `address` and would overwrite the Service Address on
+ * every pick. That guard worked, but it protected a landmine rather than
+ * removing one: any new call site that forgot the flag got the old behaviour,
+ * and the inverted code sat there waiting.
+ *
+ * Mode A was deleted on 2026-09-07, along with the flag and `buildingLabel`.
+ * The search can only be on `building` now, so the assertion moved from "every
+ * caller opts out of the bad mode" to "the bad mode does not exist". A prop
+ * nobody can forget to pass is a stronger guarantee than a test that checks
+ * they remembered.
+ */
+test('the picker cannot bind its autocomplete to the Service Address', () => {
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'src/components/ui/address-picker-with-map.tsx'), 'utf8',
+  );
+
+  const autos = (src.match(/<AddressAutocomplete/g) || []).length;
+  assert.equal(
+    autos, 1,
+    `expected exactly ONE autocomplete in the picker (the map search on \`building\`), found ${autos}. `
+    + 'A second one is almost certainly mode A coming back.',
+  );
+
+  const i = src.indexOf('<AddressAutocomplete');
+  const block = src.slice(i, src.indexOf('/>', i));
+  assert.match(
+    block, /value=\{value\.building \|\| ''\}/,
+    'the picker\'s autocomplete must drive `building` — the map-search / GPS anchor',
+  );
+  assert.ok(
+    !/value=\{value\.address\}/.test(block),
+    'the autocomplete must NOT be bound to `address`, the Service Address the whole CRM displays',
+  );
+
+  /*
+   * Strip comments first. The docblock EXPLAINS that serviceAddressReadOnly was
+   * removed and why, so a raw scan reads the explanation as the thing it
+   * forbids — this test failed on its own documentation before the strip was
+   * added. Same fix as tests/map-no-fallback-centre.test.js; a guard has to
+   * distinguish code from prose about code.
+   */
+  const codeOnly = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+  // The deleted flag must not return: its presence would mean the two-mode
+  // shape is back, and with it the branch this test exists to prevent.
+  assert.ok(
+    !/serviceAddressReadOnly/.test(codeOnly),
+    'serviceAddressReadOnly is gone — the search lives on `building` unconditionally. '
+    + 'Reintroducing it means reintroducing the mode that binds it to `address`.',
+  );
+  assert.ok(
+    !/buildingLabel/.test(codeOnly),
+    'buildingLabel only ever labelled the mode-A field; its return implies mode A returned',
+  );
+});
+
+test('no call site still passes the removed props', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src/components/job/JobModal.tsx'), 'utf8');
+  const blocks = propsBlocks(src);
+  assert.equal(blocks.length, 3, `expected the 3 known call sites, found ${blocks.length}`);
+  for (const block of blocks) {
+    assert.ok(!block.includes('serviceAddressReadOnly'), 'removed prop still passed');
+    assert.ok(!block.includes('buildingLabel'), 'removed prop still passed');
   }
-  assert.equal(checked, 3, `expected the 3 known call sites, checked ${checked}`);
 });
 
 test('formatServiceAddress still reads `address` alone — the premise of the rule above', () => {

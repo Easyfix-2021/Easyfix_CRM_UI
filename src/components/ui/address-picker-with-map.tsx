@@ -4,16 +4,26 @@
  * AddressPickerWithMap — split-pane address editor used by both Book
  * New Call (create-mode) and Confirm & Schedule (confirm-mode).
  *
- * Left pane (form fields):
- *   - Complete Address (Google Places autocomplete; user can type freely)
- *   - Building / Floor Number
- *   - Landmark (optional)
- *   - City (auto-matched from autocomplete pick; falls back to a dropdown
- *     of EasyFix-active cities if the geocode city doesn't match any)
- *   - PIN (auto-filled from autocomplete or reverse-geocode; mandatory
- *     when not present)
- *   - GPS Coordinates (read-only, auto-from-map only)
+ * Left pane (form fields), in tbl_address column roles:
+ *   - Service Address -> `address`. A PLAIN input, and the ONE column
+ *     formatServiceAddress reads, so it is what the CRM and the technician
+ *     see. Rendered only when `serviceAddressEditable`; Confirm & Schedule
+ *     omits it because the host shows the address read-only above.
+ *   - Search Location On Map -> `building` + `gps_location`. THE autocomplete.
+ *     Sets the pin only; it never writes `address`.
+ *   - Landmark (optional) -> `landmark`
+ *   - City (auto-matched from a pick or reverse-geocode; blanked when the
+ *     geocoded city is not in the EasyFix master, never left stale)
+ *   - PIN (auto-filled from a pick or reverse-geocode; mandatory when absent)
+ *   - GPS Coordinates (paste-able; a manual edit reverse-geocodes)
  *   - Address Instructions (optional, persisted to tbl_address.address_instruction)
+ *
+ * THERE IS NO SECOND MODE. Until 2026-09-07 a `serviceAddressReadOnly` flag
+ * selected between this layout and one whose autocomplete was bound to
+ * `address` — so a pick, or a pin drag, replaced the operator's service
+ * address with Google's formatted_address. Every call site opted out of it,
+ * which meant the inverted branch was dead code that any new call site could
+ * resurrect by forgetting a prop. It and `buildingLabel` were deleted.
  *
  * Right pane (map):
  *   - Google Maps JS API loaded lazily on first mount.
@@ -90,10 +100,13 @@ type Props = {
    * When false (Book New Call / edit dialog) the picker is unchanged: `address`
    * is the editable Complete-Address autocomplete, `building` is Building/Floor.
    */
-  serviceAddressReadOnly?: boolean;
+
   /*
-   * Only meaningful alongside `serviceAddressReadOnly`, whose real meaning is
-   * "the Google search lives on the `building` field, not on `address`".
+   * The Google search ALWAYS lives on `building`, never on `address` — the
+   * mode that put it on `address` was deleted (2026-09-07), so that is now a
+   * structural property of this component rather than a per-call-site flag.
+   *
+   * This switch is only about whether the Service Address is EDITABLE here.
    *
    * Confirm & Schedule leaves the Service Address alone entirely (the host
    * shows it read-only above). The Edit Address dialog exists to change it, so
@@ -112,7 +125,7 @@ type Props = {
    * the other flows.
    */
   addressLabel?: string;
-  buildingLabel?: string;
+
 };
 
 /*
@@ -150,7 +163,7 @@ type SharedMapCore = {
 };
 let sharedMapCore: SharedMapCore | null = null;
 
-export function AddressPickerWithMap({ value, onChange, cities, editable = true, autoCreatePincode = false, serviceAddressReadOnly = false, serviceAddressEditable = false, addressLabel = 'Complete Address *', buildingLabel = 'Building / Floor Number' }: Props) {
+export function AddressPickerWithMap({ value, onChange, cities, editable = true, autoCreatePincode = false, serviceAddressEditable = false, addressLabel = 'Service Address *' }: Props) {
   const mapRef = React.useRef<HTMLDivElement | null>(null);
   // The map + marker types are minimal at the call site — we only
   // need .panTo / .setZoom on the map and .setPosition on the marker.
@@ -296,17 +309,13 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
         gps_location: `${lat.toFixed(6)},${lng.toFixed(6)}`,
       };
       if (r.formatted_address) {
-        if (serviceAddressReadOnly) {
-          // `building` is the map-search field; reflect the pinned location
-          // there. NEVER overwrite the read-only Service Address (`address`).
-          next.building = r.formatted_address;
-        } else {
-          next.address = r.formatted_address;
-          // Reverse-geocoded address is now the canonical "synced" one;
-          // record so the typed-address debounce doesn't immediately
-          // re-fire a forward-geocode for the same string.
-          lastGeocodedAddrRef.current = r.formatted_address;
-        }
+        // `building` is the map-search field; reflect the pinned location
+        // there. NEVER `address` — that is the Service Address the operator
+        // typed and the whole CRM displays. The branch that wrote it here was
+        // removed with mode A (2026-09-07): a pin drag silently replacing the
+        // service address with Google's formatted_address is the same
+        // inversion that was fixed at every call site.
+        next.building = r.formatted_address;
       }
       const comps = r.address_components || {};
       if (comps.postal_code) next.pin_code = comps.postal_code;
@@ -650,46 +659,7 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
       {/* Left pane — form fields. */}
       <div className="space-y-3">
-        {/* Complete-Address autocomplete — hidden in serviceAddressReadOnly mode
-            (Confirm & Schedule), where `address` is the non-editable Service
-            Address shown by the modal above and the Google search moves to the
-            `building` field below. Shown in Book New Call / edit dialog. */}
-        {!serviceAddressReadOnly && (
-        <div>
-          <Label className="text-xs">{addressLabel}</Label>
-          <AddressAutocomplete
-            value={value.address}
-            onChange={(v) => patch({ address: v })}
-            onPick={(p) => {
-              const pickedAddress = p.formatted_address || p.description;
-              const next: Partial<AddressValue> = { address: pickedAddress };
-              if (p.lat != null && p.lng != null) {
-                next.gps_location = `${p.lat.toFixed(6)},${p.lng.toFixed(6)}`;
-              }
-              if (p.components.postal_code) next.pin_code = p.components.postal_code;
-              if (p.components.city) {
-                const match = cityByName.get(p.components.city.toLowerCase());
-                // Blank out city_id when the picked place's city isn't
-                // in the EasyFix master list — operator sees an empty
-                // dropdown and picks manually rather than the stale
-                // previous selection silently carrying over. Same
-                // invariant as reverseGeocode / forward-geocode paths.
-                next.city_id = match || '';
-              }
-              // Pick already supplied lat/lng — record so the typed-
-              // address debounce skips this exact string and we don't
-              // burn a redundant /geocode call.
-              lastGeocodedAddrRef.current = pickedAddress;
-              patch(next);
-            }}
-            placeholder="Start typing — Google will suggest matches"
-            required
-            disabled={!editable}
-          />
-        </div>
-        )}
-        {serviceAddressReadOnly ? (
-          <>
+        <>
             {/* The Service Address itself — `address`, the ONE column
                 formatServiceAddress reads, so this is what the whole CRM will
                 display for this job. Deliberately a plain input: an
@@ -749,28 +719,6 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
               />
             </div>
           </>
-        ) : (
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label className="text-xs">{buildingLabel}</Label>
-              <Input
-                value={value.building || ''}
-                onChange={(e) => patch({ building: e.target.value })}
-                placeholder="House / flat / floor"
-                disabled={!editable}
-              />
-            </div>
-            <div>
-              <Label className="text-xs">Landmark</Label>
-              <Input
-                value={value.landmark || ''}
-                onChange={(e) => patch({ landmark: e.target.value })}
-                placeholder="Optional"
-                disabled={!editable}
-              />
-            </div>
-          </div>
-        )}
         <div className="grid grid-cols-2 gap-3">
           <div>
             <Label className="text-xs">City *</Label>

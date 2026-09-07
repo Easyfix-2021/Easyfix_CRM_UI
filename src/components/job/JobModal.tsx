@@ -14,7 +14,6 @@ import { SearchSelect } from '@/components/ui/search-select';
 import { DateTimeSlotPicker, TimeSelect } from '@/components/ui/date-time-slot-picker';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
 import { Switch } from '@/components/ui/switch';
-import { AddressAutocomplete } from '@/components/ui/address-autocomplete';
 import { AddressPickerWithMap, type AddressValue } from '@/components/ui/address-picker-with-map';
 import { AddressEditDialog, type EditableAddress } from './AddressEditDialog';
 import { JobTransactionView } from './JobTransactionView';
@@ -1485,7 +1484,6 @@ export function JobAddressEditDialog({ job, onClose, onSaved }: {
              * formatted_address and left `building` empty — the reason a job
              * booked here reads back differently from one confirmed there.
              */
-            serviceAddressReadOnly
             serviceAddressEditable
             addressLabel="Service Address *"
           />
@@ -7153,10 +7151,11 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 }}
                 cities={lk.toOpts.cities.map((o) => ({ value: String(o.value), label: String(o.label) }))}
                 autoCreatePincode
-                /* Confirm & Schedule: `address` is the non-editable Service
-                   Address (shown read-only above); the Google search moves to
-                   the `building` field and only sets GPS. */
-                serviceAddressReadOnly
+                /* Confirm & Schedule shows the Service Address read-only ITSELF,
+                   above this picker, so the picker hides its own copy — that is
+                   what omitting `serviceAddressEditable` means. The Google
+                   search is on `building` unconditionally now; the flag that
+                   used to select that was removed with mode A (2026-09-07). */
               />
             </div>
           </div>
@@ -8973,7 +8972,6 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                *   Search Location On Map -> building + gps_location (pin only)
                *   Landmark               -> landmark
                */
-              serviceAddressReadOnly
               serviceAddressEditable
               addressLabel="Service Address *"
             />
