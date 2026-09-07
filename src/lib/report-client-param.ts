@@ -1,5 +1,5 @@
 /*
- * `?clientId=` for the QuickSight reports — one parser, every report.
+ * The QuickSight reports' URL contract — `?clientId=` and `?period=`.
  *
  * WHY THIS EXISTS. The client profile's Reports section links to six reports
  * "for this client", and not one of them read a client id from the URL. The
@@ -55,4 +55,26 @@ export function clientIdsFromParams(getAll: (key: string) => string[]): number[]
 export function clientIdFromParams(getAll: (key: string) => string[]): string {
   const [first] = clientIdsFromParams(getAll);
   return first == null ? '' : String(first);
+}
+
+
+/* ─── ?period= ───────────────────────────────────────────────────────────── */
+
+/**
+ * The monthly/weekly window shared by the two performance reports.
+ *
+ * Both reports have always had this control; they just spelled it differently
+ * — client-performance sent `period`, city-performance sent `flag`, the name
+ * the legacy DTO used. One concept, two wire names, in sibling reports: a trap
+ * for whoever writes the third. `period` is now canonical on both.
+ *
+ * Anything unrecognised falls back to 'monthly', which is what both reports
+ * already defaulted to — so a stale or hand-edited link opens a working page
+ * rather than an empty one.
+ */
+export type ReportPeriod = 'monthly' | 'weekly';
+
+export function reportPeriodFromParams(get: (key: string) => string | null): ReportPeriod {
+  const raw = get('period');
+  return raw === 'weekly' || raw === 'monthly' ? raw : 'monthly';
 }

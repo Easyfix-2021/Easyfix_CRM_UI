@@ -9,12 +9,12 @@
  * table sits a TAT-summary highlights widget (cities meeting TAT >= 85 vs < 85)
  * the operator steps through period-by-period.
  *
- * Powered by TWO BE endpoints sharing the same flag + filter state:
+ * Powered by TWO BE endpoints sharing the same period + filter state:
  *   GET /admin/quicksight/city-performance            → paginated table
  *   GET /admin/quicksight/city-performance/tat-summary → highlights widget
  *
  * Conventions honoured:
- *   - Fetches ONLY via useFetch keyed on the serialized filter/flag/page state
+ *   - Fetches ONLY via useFetch keyed on the serialized filter/period/page state
  *     (mandatory fetch-hooks rule — no raw useEffect+api.get).
  *   - ReportPageScaffold for the header band + the four mutually-exclusive
  *     states; QuickSightFilterBar for the multi-select filters.
@@ -47,7 +47,7 @@ import { downloadXlsx } from '@/lib/download-xlsx';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { parseIstDateTime } from '@/lib/format';
-import { clientIdsFromParams } from '@/lib/report-client-param';
+import { clientIdsFromParams, reportPeriodFromParams } from '@/lib/report-client-param';
 import type { SearchOption } from '@/components/ui/search-select';
 
 const ACTION_KEY = 'isQuickSightCityPerformanceView';
@@ -55,7 +55,7 @@ const ACTION_KEY = 'isQuickSightCityPerformanceView';
 // Max pageSize the BE Joi schema accepts (city-performance.js tableSchema).
 const PAGE_SIZE_MAX = 200;
 
-type Flag = 'monthly' | 'weekly';
+type Period = 'monthly' | 'weekly';
 
 type CityPeriod = {
   detailsFor: string; // "JUNE" (monthly) | "Week 1" (weekly)
@@ -114,14 +114,14 @@ function fmtDateOnly(iso: string): string {
 }
 
 /* Group header: month name as-is (monthly); formatted week range (weekly). */
-function periodHeader(p: { detailsFor: string; startDate: string; endDate: string }, flag: Flag): string {
-  if (flag === 'monthly') return p.detailsFor;
+function periodHeader(p: { detailsFor: string; startDate: string; endDate: string }, period: Period): string {
+  if (period === 'monthly') return p.detailsFor;
   return `${fmtDateOnly(p.startDate)} - ${fmtDateOnly(p.endDate)}`;
 }
 
 /* Build the shared filter query string for the TABLE endpoint (all filters). */
 function buildTableQuery(
-  flag: Flag,
+  period: Period,
   page: number,
   pageSize: number,
   clients: Array<string | number>,
@@ -130,7 +130,7 @@ function buildTableQuery(
   zonalManagers: Array<string | number>,
 ): URLSearchParams {
   const qs = new URLSearchParams();
-  qs.set('flag', flag);
+  qs.set('period', period);
   qs.set('page', String(page));
   qs.set('pageSize', String(pageSize));
   clients.forEach((v) => qs.append('clientId', String(v)));
@@ -142,13 +142,13 @@ function buildTableQuery(
 
 /* TAT-summary query — NO verticalId (legacy asymmetry), NO pagination. */
 function buildSummaryQuery(
-  flag: Flag,
+  period: Period,
   clients: Array<string | number>,
   serviceCategories: Array<string | number>,
   zonalManagers: Array<string | number>,
 ): URLSearchParams {
   const qs = new URLSearchParams();
-  qs.set('flag', flag);
+  qs.set('period', period);
   clients.forEach((v) => qs.append('clientId', String(v)));
   serviceCategories.forEach((v) => qs.append('serviceCategoryId', String(v)));
   zonalManagers.forEach((v) => qs.append('zonalManagerId', String(v)));
@@ -191,11 +191,11 @@ function avgPct(values: Array<number | null | undefined>): number | null {
 function GraphicalView({
   rows,
   summaries,
-  flag,
+  period,
 }: {
   rows: CityRow[];
   summaries: TatSummary[];
-  flag: Flag;
+  period: Period;
 }) {
   // Drop the synthetic "No city" placeholder (cityId === null) from chart data.
   const realRows = useMemo(
@@ -224,14 +224,14 @@ function GraphicalView({
     const order = Array.from({ length: periodCount }, (_, i) => i).reverse(); // oldest first
     return order.map((idx) => {
       const sample = realRows[0]?.cityPerformanceDataDateWise[idx];
-      const label = sample ? periodHeader(sample, flag) : `Period ${idx + 1}`;
+      const label = sample ? periodHeader(sample, period) : `Period ${idx + 1}`;
       return {
         period: label,
         sda: avgPct(realRows.map((r) => r.cityPerformanceDataDateWise[idx]?.citySdaPercentage)),
         tat: avgPct(realRows.map((r) => r.cityPerformanceDataDateWise[idx]?.cityTatPercentage)),
       };
     });
-  }, [realRows, flag]);
+  }, [realRows, period]);
 
   // Latest-period totals (current page) for KPI tiles.
   const totals = useMemo(() => {
@@ -265,7 +265,7 @@ function GraphicalView({
 
   const latestLabel =
     realRows[0]?.cityPerformanceDataDateWise[LATEST]
-      ? periodHeader(realRows[0].cityPerformanceDataDateWise[LATEST], flag)
+      ? periodHeader(realRows[0].cityPerformanceDataDateWise[LATEST], period)
       : '';
 
   return (
@@ -358,7 +358,17 @@ export function CityPerformanceBody() {
   const flags = actionFlags(me, [ACTION_KEY]);
   const canView = flags[ACTION_KEY];
 
-  const [flag, setFlag] = useState<Flag>('monthly');
+  /*
+   * Seeded from `?period=` alongside ?clientId=, so a link can open this report
+   * on the window it means. Lazy and read-once for the same reason as the
+   * client filter: useSearchParams is stable at first render, and re-reading it
+   * would re-apply the URL over an operator who had just switched the toggle.
+   * An absent or unrecognised value yields 'monthly' — the value both reports
+   * already started from, so a bare visit is unchanged.
+   */
+  const [period, setPeriod] = useState<Period>(
+    () => reportPeriodFromParams((k) => searchParams.get(k)),
+  );
   /*
    * Client filter seeded from `?clientId=` so the client profile's Reports link
    * opens this city report already narrowed to that client. Read ONCE in a lazy
@@ -418,10 +428,10 @@ export function CityPerformanceBody() {
 
   const limit = pageSizeToLimit(pageSize, PAGE_SIZE_MAX);
 
-  // Table fetch — keyed on flag + every serialized filter + page/size.
+  // Table fetch — keyed on period + every serialized filter + page/size.
   const tableQuery = useMemo(
-    () => buildTableQuery(flag, page + 1, limit, clients, verticals, serviceCategories, zonalManagers).toString(),
-    [flag, page, limit, clients, verticals, serviceCategories, zonalManagers],
+    () => buildTableQuery(period, page + 1, limit, clients, verticals, serviceCategories, zonalManagers).toString(),
+    [period, page, limit, clients, verticals, serviceCategories, zonalManagers],
   );
   // stateId appended separately so the key still changes when states change.
   const stateQs = useMemo(() => states.map((v) => `stateId=${v}`).join('&'), [states]);
@@ -432,10 +442,10 @@ export function CityPerformanceBody() {
   const { data: tableData, loading: tableLoading, error: tableError } =
     useFetch<CityPerformancePayload>(tableKey);
 
-  // Highlights fetch — flag + the 3 filters the widget honours (NO vertical).
+  // Highlights fetch — period + the 3 filters the widget honours (NO vertical).
   const summaryQuery = useMemo(
-    () => buildSummaryQuery(flag, clients, serviceCategories, zonalManagers).toString(),
-    [flag, clients, serviceCategories, zonalManagers],
+    () => buildSummaryQuery(period, clients, serviceCategories, zonalManagers).toString(),
+    [period, clients, serviceCategories, zonalManagers],
   );
   const summaryStateQs = stateQs; // same stateId selection
   const summaryKey = canView
@@ -452,8 +462,8 @@ export function CityPerformanceBody() {
   // Period group headers (3 blocks) derived from the first row's periods.
   const periodHeaders = useMemo(() => {
     const sample = rows[0]?.cityPerformanceDataDateWise ?? [];
-    return sample.map((p) => periodHeader(p, flag));
-  }, [rows, flag]);
+    return sample.map((p) => periodHeader(p, period));
+  }, [rows, period]);
 
   // 403 → access panel. useFetch flattens the error to a string; the BE 403
   // messages all imply a denial. The static permission gate counts too.
@@ -471,12 +481,12 @@ export function CityPerformanceBody() {
   async function handleDownload() {
     setDownloading(true);
     try {
-      const qs = buildTableQuery(flag, 1, limit, clients, verticals, serviceCategories, zonalManagers);
+      const qs = buildTableQuery(period, 1, limit, clients, verticals, serviceCategories, zonalManagers);
       states.forEach((v) => qs.append('stateId', String(v)));
       qs.set('format', 'xlsx');
       await downloadXlsx({
         url: `/admin/quicksight/city-performance?${qs.toString()}`,
-        filename: `city-performance-${flag}-${new Date().toISOString().slice(0, 10)}.xlsx`,
+        filename: `city-performance-${period}-${new Date().toISOString().slice(0, 10)}.xlsx`,
       });
     } catch {
       showToast({ variant: 'error', message: 'Could not download the report. Please retry.' });
@@ -494,8 +504,8 @@ export function CityPerformanceBody() {
   const filters = (
     <div className="space-y-3">
       <Tabs
-        value={flag}
-        onValueChange={(v) => { setFlag(v as Flag); resetView(); }}
+        value={period}
+        onValueChange={(v) => { setPeriod(v as Period); resetView(); }}
       >
         <TabsList>
           <TabsTrigger value="monthly">Monthly</TabsTrigger>
@@ -547,12 +557,12 @@ export function CityPerformanceBody() {
       <div className="space-y-4">
         <TatHighlights
           summaries={summaries}
-          flag={flag}
+          period={period}
           index={tatIndex}
           onStep={setTatIndex}
         />
 
-        <GraphicalView rows={rows} summaries={summaries} flag={flag} />
+        <GraphicalView rows={rows} summaries={summaries} period={period} />
 
         <div className="overflow-x-auto rounded-md border">
           <table className="data-table w-full">
@@ -668,12 +678,12 @@ function StateFilter({
  */
 function TatHighlights({
   summaries,
-  flag,
+  period,
   index,
   onStep,
 }: {
   summaries: TatSummary[];
-  flag: Flag;
+  period: Period;
   index: number;
   onStep: (next: number) => void;
 }) {
@@ -682,7 +692,7 @@ function TatHighlights({
   const s = summaries[safeIndex];
   // TatSummary names the period field `summaryOf` (vs CityPeriod's `detailsFor`);
   // adapt to the shared periodHeader contract.
-  const header = periodHeader({ detailsFor: s.summaryOf, startDate: s.startDate, endDate: s.endDate }, flag);
+  const header = periodHeader({ detailsFor: s.summaryOf, startDate: s.startDate, endDate: s.endDate }, period);
 
   return (
     <Card>

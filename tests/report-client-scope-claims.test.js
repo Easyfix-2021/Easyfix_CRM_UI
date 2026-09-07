@@ -103,3 +103,41 @@ test('the guard is not vacuous — it can see the table and the pages', () => {
     assert.ok(sourcesFor(r.slug).length > 0, `no source found for /quicksight/${r.slug}`);
   }
 });
+
+/* ─── one concept, one wire name ────────────────────────────────────────── */
+
+test('both performance reports send the SAME parameter for the monthly/weekly window', () => {
+  /*
+   * They did not. client-performance sent `period`; city-performance sent
+   * `flag`, the name the legacy DTO used. One concept, two wire names, in
+   * sibling reports rendered side by side in the same Performance page — a trap
+   * for whoever writes the third, and the sort of thing that is invisible until
+   * someone tries to share a link between them.
+   *
+   * `period` is canonical on both now. The backend still ACCEPTS `flag` as a
+   * deprecated alias so the two repos can deploy in either order; this asserts
+   * the frontend has stopped sending it.
+   */
+  const bodies = {
+    'client-performance': 'ClientPerformanceBody.tsx',
+    'city-performance': 'CityPerformanceBody.tsx',
+  };
+  for (const [slug, file] of Object.entries(bodies)) {
+    const src = fs.readFileSync(path.join(QS, slug, file), 'utf8');
+    assert.match(src, /qs\.set\('period',/, `${slug} must send period`);
+    assert.doesNotMatch(src, /qs\.set\('flag',/,
+      `${slug} still sends the legacy 'flag' spelling`);
+    assert.doesNotMatch(src, /\bFlag\b/, `${slug} still has a Flag type`);
+  }
+});
+
+test('and both seed that window from ?period=', () => {
+  for (const [slug, file] of Object.entries({
+    'client-performance': 'ClientPerformanceBody.tsx',
+    'city-performance': 'CityPerformanceBody.tsx',
+  })) {
+    const src = fs.readFileSync(path.join(QS, slug, file), 'utf8');
+    assert.match(src, /reportPeriodFromParams\(/,
+      `${slug} must seed its window from the URL through the shared parser`);
+  }
+});

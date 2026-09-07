@@ -39,7 +39,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { showToast } from '@/components/ui/toast';
 import { useFetch } from '@/lib/hooks';
-import { clientIdsFromParams } from '@/lib/report-client-param';
+import { clientIdsFromParams, reportPeriodFromParams } from '@/lib/report-client-param';
 import { downloadXlsx } from '@/lib/download-xlsx';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
@@ -132,7 +132,17 @@ export function ClientPerformanceBody() {
   const flags = actionFlags(me, [ACTION_KEY]);
   const canView = flags[ACTION_KEY];
 
-  const [period, setPeriod] = useState<Period>('monthly');
+  /*
+   * Seeded from `?period=` alongside ?clientId=, so a link can open this report
+   * on the window it means. Lazy and read-once for the same reason as the
+   * client filter: useSearchParams is stable at first render, and re-reading it
+   * would re-apply the URL over an operator who had just switched the toggle.
+   * An absent or unrecognised value yields 'monthly' — the value both reports
+   * already started from, so a bare visit is unchanged.
+   */
+  const [period, setPeriod] = useState<Period>(
+    () => reportPeriodFromParams((k) => searchParams.get(k)),
+  );
   /*
    * Seeded from `?clientId=` so the client profile's Reports link opens this
    * report ON that client. Read ONCE in a lazy initialiser — useSearchParams is

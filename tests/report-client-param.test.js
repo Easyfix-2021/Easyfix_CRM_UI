@@ -49,3 +49,21 @@ test('duplicates collapse, order preserved', () => {
   assert.deepEqual(clientIdsFromParams(g(5, 5, 9, 5)), [5, 9],
     'a repeated id would otherwise appear twice in the picker');
 });
+
+/* ─── ?period= ──────────────────────────────────────────────────────────── */
+
+const { reportPeriodFromParams } = require('../.test-build/report-client-param.js');
+const one = (v) => (k) => (k === 'period' && v !== undefined ? String(v) : null);
+
+test('?period= seeds the two performance reports', () => {
+  assert.equal(reportPeriodFromParams(one('weekly')), 'weekly');
+  assert.equal(reportPeriodFromParams(one('monthly')), 'monthly');
+});
+
+test('anything unrecognised falls back to monthly — both reports already default there', () => {
+  // A stale or hand-edited link must open a working page, not an empty one.
+  for (const bad of ['Weekly', 'WEEKLY', 'daily', 'yearly', '', '1', 'null', undefined]) {
+    assert.equal(reportPeriodFromParams(one(bad)), 'monthly',
+      `period=${JSON.stringify(bad)} must fall back`);
+  }
+});
