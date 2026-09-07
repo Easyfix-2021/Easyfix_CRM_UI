@@ -209,6 +209,24 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
     onChange({ ...value, ...p });
   }
 
+  /*
+   * Flips true once THIS mount has a live Map + Marker. The re-centre effect
+   * below depends on it, and that dependency is the whole point:
+   *
+   * The build effect is async (`await loadGoogleMaps()`) and its dep array is
+   * `[flagsLoaded]` with exhaustive-deps disabled, so it CLOSES OVER whatever
+   * `initialLatLng` was when the flag resolved. If gps_location was not on
+   * `value` at that instant, the build centres on the Delhi fallback — and the
+   * re-centre effect had already run and bailed out on `!mapInstance.current`,
+   * because the map did not exist yet.
+   *
+   * Neither effect re-runs, so the map stays on Delhi while the GPS field
+   * shows the right coordinates. Reported 2026-09-07 against a Panchkula job
+   * whose map rendered Delhi landmarks. Waking the re-centre effect on
+   * mapReady fixes BOTH orderings without touching the build.
+   */
+  const [mapReady, setMapReady] = React.useState(false);
+
   // Parse "lat,lng" CSV into a numeric pair, tolerant of whitespace
   // and any leading + signs. Returns null on malformed input.
   const initialLatLng = React.useMemo(() => {
@@ -510,7 +528,9 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
           map.setZoom(zoom);
           map.setOptions({
             disableDefaultUI: !mapClickable,
-            gestureHandling: mapClickable ? 'auto' : 'none',
+            // ZOOM IS NOT AN EDIT. See the block on the fresh build below.
+            zoomControl: true,
+            gestureHandling: 'auto',
             clickableIcons: mapClickable,
           });
           marker.setPosition(center);
@@ -520,6 +540,7 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (maps as any).event.clearInstanceListeners(map);
           bindMapListeners(map, marker);
+          setMapReady(true);
           return;
         }
 
@@ -536,10 +557,28 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
         const map = new maps.Map(containerEl, {
           center,
           zoom,
-          // Flag off → strip zoom/UI + block pan/zoom gestures so the map is a
-          // static preview; flag on → unchanged from before.
+          /*
+           * ZOOM IS NOT AN EDIT (2026-09-07).
+           *
+           * `ui.map.clickable=false` used to set gestureHandling:'none', which
+           * blocks EVERY gesture — including wheel and pinch zoom — and
+           * disableDefaultUI, which removes the +/- buttons. So a read-only map
+           * became an unreadable one: an operator could see a pin but never get
+           * close enough to tell which building it was on.
+           *
+           * The flag governs EDITING, and zoom edits nothing. It is the pin
+           * that must stay put, which it does: the marker is not draggable, the
+           * map click listener is not bound, and POI clicks stay off. Panning
+           * comes along with gestureHandling:'auto' and is likewise viewport
+           * only — it moves the camera, never the marker.
+           *
+           * zoomControl is set explicitly because it has to survive
+           * disableDefaultUI, which is still on to keep the read-only map free
+           * of map-type / street-view / fullscreen chrome.
+           */
           disableDefaultUI: !mapClickable,
-          gestureHandling: mapClickable ? 'auto' : 'none',
+          zoomControl: true,
+          gestureHandling: 'auto',
           clickableIcons: mapClickable,
           mapTypeControl: false,
           streetViewControl: false,
@@ -552,6 +591,7 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
         });
         markerInstance.current = marker;
         bindMapListeners(map, marker);
+        setMapReady(true);
         // Only the first-ever build becomes the page's reusable instance. If
         // we're here because a prior instance was still claimed, this one-off
         // map is intentionally NOT stored back — it stays private to this
@@ -582,7 +622,10 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
     markerInstance.current.setPosition(initialLatLng);
     mapInstance.current.panTo(initialLatLng);
     mapInstance.current.setZoom(16);
-  }, [initialLatLng]);
+    // `mapReady` is not read in the body — it is here to RE-RUN this effect
+    // once the async build finishes, which is what rescues a map that was
+    // centred on the Delhi fallback before gps_location arrived.
+  }, [initialLatLng, mapReady]);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">

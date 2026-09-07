@@ -1728,7 +1728,9 @@ function AddressMapWidget({
           map.setZoom(zoom);
           map.setOptions({
             disableDefaultUI: !mapClickable,
-            gestureHandling: mapClickable ? 'auto' : 'none',
+            // ZOOM IS NOT AN EDIT — see the fresh build below.
+            zoomControl: true,
+            gestureHandling: 'auto',
             clickableIcons: mapClickable,
           });
           marker.setPosition(initial);
@@ -1758,9 +1760,23 @@ function AddressMapWidget({
         const map = new maps.Map(containerEl, {
           center: initial, zoom,
           mapTypeControl: false, streetViewControl: false,
-          // Flag off → static preview: no zoom/UI, gestures + marker drag off.
+          /*
+           * ZOOM IS NOT AN EDIT (2026-09-07). Matches the same change in
+           * components/ui/address-picker-with-map.tsx.
+           *
+           * `ui.map.clickable=false` used to set gestureHandling:'none', which
+           * blocks wheel and pinch zoom along with everything else, and
+           * disableDefaultUI removed the +/- buttons — leaving a technician
+           * looking at a pin they could not zoom in on to identify the
+           * building. The flag governs EDITING, and zoom edits nothing.
+           *
+           * The pin still cannot move: marker not draggable, no map click
+           * listener bound, POI clicks off. Panning arrives with
+           * gestureHandling:'auto' and is viewport-only.
+           */
           disableDefaultUI: !mapClickable,
-          gestureHandling: mapClickable ? 'auto' : 'none',
+          zoomControl: true,
+          gestureHandling: 'auto',
           clickableIcons: mapClickable,
         });
         mapInstance.current = map;
