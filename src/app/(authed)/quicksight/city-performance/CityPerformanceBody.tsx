@@ -30,6 +30,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { Building2, ChevronLeft, ChevronRight, Ticket, FolderOpen, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { ReportPageScaffold } from '@/components/quicksight/ReportPageScaffold';
 import { QuickSightFilterBar } from '@/components/quicksight/QuickSightFilterBar';
@@ -46,6 +47,7 @@ import { downloadXlsx } from '@/lib/download-xlsx';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { parseIstDateTime } from '@/lib/format';
+import { clientIdsFromParams } from '@/lib/report-client-param';
 import type { SearchOption } from '@/components/ui/search-select';
 
 const ACTION_KEY = 'isQuickSightCityPerformanceView';
@@ -357,7 +359,19 @@ export function CityPerformanceBody() {
   const canView = flags[ACTION_KEY];
 
   const [flag, setFlag] = useState<Flag>('monthly');
-  const [clients, setClients] = useState<Array<string | number>>([]);
+  /*
+   * Client filter seeded from `?clientId=` so the client profile's Reports link
+   * opens this city report already narrowed to that client. Read ONCE in a lazy
+   * initialiser: useSearchParams is stable from first render, and re-reading it
+   * in an effect would re-apply the URL over an operator who had cleared or
+   * changed the picker. Nothing writes back — the deep link is read-only. With
+   * no param the helper returns [], the value this filter already started at,
+   * so a bare visit behaves exactly as before.
+   */
+  const searchParams = useSearchParams();
+  const [clients, setClients] = useState<Array<string | number>>(
+    () => clientIdsFromParams((k) => searchParams.getAll(k)),
+  );
   const [verticals, setVerticals] = useState<Array<string | number>>([]);
   const [serviceCategories, setServiceCategories] = useState<Array<string | number>>([]);
   const [zonalManagers, setZonalManagers] = useState<Array<string | number>>([]);

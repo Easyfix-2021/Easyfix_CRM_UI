@@ -23,6 +23,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { Gauge, Ticket, IndianRupee, Receipt, Users } from 'lucide-react';
 import { ReportPageScaffold } from '@/components/quicksight/ReportPageScaffold';
 import { QuickSightFilterBar } from '@/components/quicksight/QuickSightFilterBar';
@@ -38,6 +39,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { showToast } from '@/components/ui/toast';
 import { useFetch } from '@/lib/hooks';
+import { clientIdsFromParams } from '@/lib/report-client-param';
 import { downloadXlsx } from '@/lib/download-xlsx';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
@@ -131,7 +133,20 @@ export function ClientPerformanceBody() {
   const canView = flags[ACTION_KEY];
 
   const [period, setPeriod] = useState<Period>('monthly');
-  const [clients, setClients] = useState<Array<string | number>>([]);
+  /*
+   * Seeded from `?clientId=` so the client profile's Reports link opens this
+   * report ON that client. Read ONCE in a lazy initialiser — useSearchParams is
+   * stable at first render, and re-reading it later would fight the operator's
+   * own picking, re-applying the URL after they clear the filter. Nothing writes
+   * back to the URL; this is a read-only deep link.
+   *
+   * An absent or invalid param yields [], the empty selection this page already
+   * starts from, so a bare visit is unchanged.
+   */
+  const searchParams = useSearchParams();
+  const [clients, setClients] = useState<Array<string | number>>(
+    () => clientIdsFromParams((k) => searchParams.getAll(k)),
+  );
   const [verticals, setVerticals] = useState<Array<string | number>>([]);
   const [serviceCategories, setServiceCategories] = useState<Array<string | number>>([]);
   const [zonalManagers, setZonalManagers] = useState<Array<string | number>>([]);

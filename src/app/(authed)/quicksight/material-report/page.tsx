@@ -35,6 +35,7 @@
  */
 
 import { useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { PackageOpen } from 'lucide-react';
 
 import { ReportPageScaffold } from '@/components/quicksight/ReportPageScaffold';
@@ -42,6 +43,7 @@ import { MaterialReportCharts } from './MaterialReportCharts';
 import { Button } from '@/components/ui/button';
 import { SearchSelect } from '@/components/ui/search-select';
 import { useFetch } from '@/lib/hooks';
+import { clientIdFromParams } from '@/lib/report-client-param';
 import { downloadXlsx } from '@/lib/download-xlsx';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
@@ -157,7 +159,19 @@ export default function MaterialReportPage() {
   const today = useMemo(() => todayStr(), []);
 
   // ── Draft (editing) vs applied (drives the fetch) filter state ──────────
-  const [clientId, setClientId] = useState<string>('');
+  /*
+   * Seeded from `?clientId=` so the client profile's Reports link opens this
+   * report ON that client. Read ONCE in a lazy initialiser — useSearchParams is
+   * stable at first render, and re-reading it later would fight the operator's
+   * own picking. Nothing writes back to the URL; this is a read-only deep link.
+   *
+   * An absent or invalid param yields '', which is exactly the "nothing picked"
+   * value this page already starts from, so a bare visit is unchanged.
+   */
+  const searchParams = useSearchParams();
+  const [clientId, setClientId] = useState<string>(
+    () => clientIdFromParams((k) => searchParams.getAll(k)),
+  );
   const [from, setFrom] = useState<string>('');
   const [to, setTo] = useState<string>('');
   const [applied, setApplied] = useState<{ clientId: string; from: string; to: string } | null>(null);

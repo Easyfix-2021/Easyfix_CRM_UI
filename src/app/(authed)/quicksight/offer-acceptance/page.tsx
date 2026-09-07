@@ -19,11 +19,13 @@
  */
 
 import { useCallback, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { Handshake, CheckCircle2, XCircle, Clock, Hourglass, Timer, Percent } from 'lucide-react';
 
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { usePostFetch, useFetch } from '@/lib/hooks';
+import { clientIdsFromParams } from '@/lib/report-client-param';
 import { useLookup } from '@/lib/use-lookup';
 
 import { ReportPageScaffold } from '@/components/quicksight/ReportPageScaffold';
@@ -186,7 +188,20 @@ export default function OfferAcceptancePage() {
 
   // Draft (user edits) vs applied (live query). Clients/verticals/categories come
   // from the shared filter bar; offered-by + date ranges + source are report-specific.
-  const [clientId, setClientId] = useState<number[]>([]);
+  /*
+   * Seeded from `?clientId=` so the client profile's Reports link opens this
+   * report ON that client. Read ONCE in a lazy initialiser — useSearchParams is
+   * stable at first render, and re-reading it later would fight the operator's
+   * own picking, re-applying the URL after they clear the filter. Nothing writes
+   * back to the URL; this is a read-only deep link.
+   *
+   * An absent or invalid param yields [], the empty selection this page already
+   * starts from, so a bare visit is unchanged.
+   */
+  const searchParams = useSearchParams();
+  const [clientId, setClientId] = useState<number[]>(
+    () => clientIdsFromParams((k) => searchParams.getAll(k)),
+  );
   const [verticalId, setVerticalId] = useState<number[]>([]);
   const [serviceCategoryId, setServiceCategoryId] = useState<number[]>([]);
   const [offeredById, setOfferedById] = useState<number[]>([]);
@@ -195,9 +210,17 @@ export default function OfferAcceptancePage() {
   const [respondedFrom, setRespondedFrom] = useState('');
   const [respondedTo, setRespondedTo] = useState('');
   const [source, setSource] = useState<Source>('');
-  // Seed the live query with today's offered-date range so the report loads
-  // scoped to TODAY by default (not the full offer history).
-  const [applied, setApplied] = useState<FilterBody>({ ...emptyFilter, dateFrom: today, dateTo: today });
+  /*
+   * Seed the live query with today's offered-date range so the report loads
+   * scoped to TODAY by default (not the full offer history) — and with the
+   * deep-linked client, because this page fetches on mount from `applied`: a
+   * draft-only seed would show the client chip over UNFILTERED data until
+   * someone pressed Apply. Also lazy, and with no `?clientId=` this is [] —
+   * exactly the value it already started from.
+   */
+  const [applied, setApplied] = useState<FilterBody>(
+    () => ({ ...emptyFilter, clientId, dateFrom: today, dateTo: today }),
+  );
 
   const buildDraft = useCallback((): FilterBody => {
     const body: FilterBody = { clientId, verticalId, serviceCategoryId, offeredById };

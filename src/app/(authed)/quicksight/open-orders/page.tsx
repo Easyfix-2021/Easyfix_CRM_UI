@@ -25,6 +25,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import {
   ClipboardList,
   Flame,
@@ -38,6 +39,7 @@ import {
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { usePostFetch, useFetch } from '@/lib/hooks';
+import { clientIdsFromParams } from '@/lib/report-client-param';
 import type { SearchOption } from '@/components/ui/search-select';
 
 import { ReportPageScaffold } from '@/components/quicksight/ReportPageScaffold';
@@ -143,13 +145,24 @@ export default function OpenOrdersPage() {
 
   /* ── Filter state (applied vs draft) ───────────────────────────────
    * The dropdowns edit `draft`; Filter copies draft→applied (which re-keys
-   * the fetch). Mirrors the legacy submit/reset model. */
-  const [draft, setDraft] = useState<FilterBody>({
-    clientId: [],
+   * the fetch). Mirrors the legacy submit/reset model.
+   *
+   * `clientId` is seeded from `?clientId=` so the client profile's Reports
+   * link opens this report ON that client. Read ONCE in a lazy initialiser —
+   * useSearchParams is stable at first render, and re-reading it later would
+   * fight the operator's own picking and re-apply the URL after they clear the
+   * filter. Nothing writes back to the URL; this is a read-only deep link.
+   *
+   * An absent or invalid param yields [], which is exactly the "nothing
+   * picked" value this draft already started from, so a bare visit is
+   * unchanged — including `applied`, which copies the draft below. */
+  const searchParams = useSearchParams();
+  const [draft, setDraft] = useState<FilterBody>(() => ({
+    clientId: clientIdsFromParams((k) => searchParams.getAll(k)),
     verticalId: [],
     zonalManagerId: [],
     serviceCategoryId: [],
-  });
+  }));
   const [applied, setApplied] = useState<FilterBody>(draft);
 
   /* Zonal-manager options — scoped to the selected Client/Vertical. We pull the
