@@ -135,3 +135,57 @@ test('mapOnly is still the switch that does the remap', () => {
     + 'above is now meaningless and needs rewriting against whatever replaced it.',
   );
 });
+
+/*
+ * ─── THE SURFACE THIS FILE ORIGINALLY MISSED ───────────────────────────────
+ *
+ * Everything above scans <AddressPickerWithMap> CALL SITES. AddressEditDialog
+ * does not use that component — it wires AddressAutocomplete directly — so it
+ * was invisible to the guard and kept the inverted roles for three days after
+ * every other surface was converted. Reported 2026-09-07.
+ *
+ * The lesson is about the guard, not the dialog: a rule scoped to one
+ * component only protects the surfaces that happen to use it. Anything that
+ * reaches for the same primitive underneath needs its own check.
+ */
+
+const EDIT_DIALOG = 'src/components/job/AddressEditDialog.tsx';
+const readSrc = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
+
+test('AddressEditDialog binds the autocomplete to the map-search field, not the Service Address', () => {
+  const src = readSrc(EDIT_DIALOG);
+  const i = src.indexOf('<AddressAutocomplete');
+  assert.notEqual(i, -1, `no <AddressAutocomplete found in ${EDIT_DIALOG} — did it move?`);
+  const block = src.slice(i, src.indexOf('/>', i));
+  assert.match(
+    block, /value=\{f\.building\}/,
+    'the autocomplete must drive `building` (the map-search / GPS anchor). Bound to '
+    + '`f.address` it overwrites the operator\'s Service Address with Google\'s '
+    + 'formatted_address on every pick — the inversion fixed everywhere else.',
+  );
+  assert.ok(
+    !/value=\{f\.address\}/.test(block),
+    'the autocomplete must NOT be bound to `address`',
+  );
+  // Only ONE autocomplete in this dialog; a second would almost certainly be a
+  // re-inverted Service Address field.
+  assert.equal(
+    (src.match(/<AddressAutocomplete/g) || []).length, 1,
+    'expected exactly one autocomplete in this dialog',
+  );
+});
+
+test('AddressEditDialog re-syncs GPS when the search text is typed, not only picked', () => {
+  const src = readSrc(EDIT_DIALOG);
+  assert.match(
+    src, /maps\/geocode/,
+    'the dialog must forward-geocode a typed search. GPS is read-only here, so '
+    + 'without this a hand-edited address saves against the PREVIOUS coordinates '
+    + 'and nothing on screen admits the two disagree.',
+  );
+  assert.match(src, /lastGeocodedSearchRef/, 'the watcher needs its dedupe ref');
+  assert.match(
+    src, /\}, \[f\.building, open\]\);/,
+    'the watcher must key on the search field so a typed edit re-runs it',
+  );
+});
