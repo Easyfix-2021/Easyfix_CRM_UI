@@ -34,6 +34,7 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import {
   Timer, ArrowLeft, ChevronDown, Search, AlertTriangle, Info,
   CheckCircle2, XCircle, HelpCircle, Minus, Gauge, Building2, TrendingDown,
@@ -47,6 +48,11 @@ import { SearchSelect } from '@/components/ui/search-select';
 import { ClientPicker } from '@/components/ui/client-picker';
 import { CitySelect } from '@/components/ui/city-select';
 import { useLookup } from '@/lib/use-lookup';
+import {
+  TAT_DIMENSION_MODES,
+  tatKeyFor,
+  tatSeedFromParams,
+} from '@/lib/tat-calculator-url';
 import { TechnicianPicker, type EasyfixerLite } from '@/components/ui/technician-picker';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
@@ -907,11 +913,27 @@ export default function TatCalculatorPage() {
   const { me } = useMe();
   const can = actionFlags(me, ['isTatCalculatorView']);
 
-  const [mode, setMode] = useState<string>('job');
+  /*
+   * DEEP LINK IN. The client profile links here as
+   * `?mode=client&clientId=N&days=30`, and until now this page imported no
+   * useSearchParams at all — so that link opened the calculator in JOB mode
+   * with nothing selected, while the profile told the operator it was "the one
+   * genuinely client-scoped link".
+   *
+   * Seeded ONCE, in a lazy initialiser, because useSearchParams is stable at
+   * first render in the App Router and re-reading it later would fight the
+   * operator's own edits. Nothing writes back to the URL — this is a read-only
+   * deep link, so the write-effect dependency trap that bites the list pages
+   * does not arise here.
+   */
+  const searchParams = useSearchParams();
+  const [seed] = useState(() => tatSeedFromParams((k) => searchParams.get(k)));
+
+  const [mode, setMode] = useState<string>(seed.mode);
   // The four dimension modes share one id box — they differ only in which
   // lookup feeds them, and adding a bespoke picker per dimension would be four
   // near-identical components for a diagnostic page.
-  const [dimId, setDimId] = useState('');
+  const [dimId, setDimId] = useState(seed.dimId);
   const lk = useLookup();
   /* Project managers are the one dimension useLookup does NOT preload, and the
    * endpoint is admin-gated — so it is fetched here and only when that tab is
@@ -921,13 +943,16 @@ export default function TatCalculatorPage() {
     mode === 'project-manager' ? '/shared/lookup/project-managers' : null,
   );
   const [downloading, setDownloading] = useState(false);
-  const [jobId, setJobId] = useState('');
-  const [clientId, setClientId] = useState<number | ''>('');
+  const [jobId, setJobId] = useState(seed.jobId);
+  const [clientId, setClientId] = useState<number | ''>(seed.clientId);
   const [tech, setTech] = useState<EasyfixerLite | null>(null);
-  const [days, setDays] = useState('90');
+  const [days, setDays] = useState(seed.days);
   // The key is only set on Compute, so typing an id doesn't fire a request per
   // keystroke against a lifetime-scan endpoint.
-  const [queryKey, setQueryKey] = useState<string | null>(null);
+  // Non-null only when the URL carried a COMPLETE selection, so arriving by
+  // deep link computes on landing while a bare visit still waits for Compute —
+  // the endpoint scans a lifetime of jobs and must not fire per keystroke.
+  const [queryKey, setQueryKey] = useState<string | null>(seed.key);
 
   // null key = no request. The early-return below happens AFTER hooks run, so
   // a permissionless visitor must not fire either fetch.
@@ -958,16 +983,14 @@ export default function TatCalculatorPage() {
     );
   }
 
-  const DIMENSION_MODES = ['city', 'category', 'project-manager', 'vertical'];
+  const DIMENSION_MODES = TAT_DIMENSION_MODES as readonly string[];
   const isDimension = DIMENSION_MODES.includes(mode);
 
-  const currentKey = () => {
-    if (mode === 'job' && jobId.trim()) return `/admin/tat/job/${jobId.trim()}`;
-    if (mode === 'client' && clientId) return `/admin/tat/client/${clientId}?days=${days || 90}`;
-    if (mode === 'technician' && tech) return `/admin/tat/technician/${tech.efr_id}`;
-    if (isDimension && dimId.trim()) return `/admin/tat/${mode}/${dimId.trim()}?days=${days || 90}`;
-    return null;
-  };
+  // ONE definition of the key, shared with the deep-link seed above — a second
+  // copy here would let a link compute a different query than the form it fills.
+  const currentKey = () => tatKeyFor({
+    mode, jobId, clientId, techId: tech?.efr_id ?? null, dimId, days,
+  });
 
   const compute = () => setQueryKey(currentKey());
 

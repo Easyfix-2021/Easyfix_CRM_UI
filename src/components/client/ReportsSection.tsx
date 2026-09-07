@@ -17,7 +17,16 @@
  *
  * The one genuinely client-scoped link is the TAT Calculator, which takes a
  * client as its subject — and it is also the source of the SLA-breach figure
- * in this page's headline strip, so the two agree by construction.
+ * in this page's headline strip.
+ *
+ * "The two agree by construction" was asserted here before either half was
+ * true. The calculator imported no useSearchParams, so `?mode=client&clientId=`
+ * was ignored and the link opened in JOB mode with nothing selected; and even
+ * once it read the param, the calculator defaults to a 90-day lookback while
+ * the headline KPI above is 30. Both are fixed: the page seeds its state from
+ * the URL (src/lib/tat-calculator-url.ts), and this link now carries days=30 so
+ * the window matches the number the operator just clicked away from. Change one
+ * and you must change the other — that is what "by construction" costs.
  */
 
 import Link from 'next/link';
@@ -48,7 +57,11 @@ export function ReportsSection({ clientId, clientName }: { clientId: number; cli
             </p>
           </div>
           <Link
-            href={`/admin-actions/tat-calculator?mode=client&clientId=${clientId}`}
+            /* days=30 pins the SAME window as the SLA-breach KPI at the top of
+               this page (clients/[id]/page.tsx fetches ?days=30). Without it the
+               calculator opens on its own 90-day default and shows a different
+               number than the one that sent the operator here. */
+            href={`/admin-actions/tat-calculator?mode=client&clientId=${clientId}&days=30`}
             className="text-sm text-primary hover:underline inline-flex items-center gap-1 shrink-0"
           >
             Open <ExternalLink className="size-3.5" />
