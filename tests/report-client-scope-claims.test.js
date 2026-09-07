@@ -92,7 +92,13 @@ test('the guard is not vacuous — it can see the table and the pages', () => {
   const reports = declaredReports();
   assert.ok(reports.length >= 5, `only ${reports.length} reports parsed from the sender`);
   assert.ok(reports.some((r) => r.scoped), 'at least one must be client-scoped');
-  assert.ok(reports.some((r) => !r.scoped), 'priority-jobs is expected to remain unscoped');
+  /*
+   * NOT "at least one must be unscoped". That was here while Priority Jobs had
+   * no client filter, and it failed the moment the report gained one — a test
+   * asserting a temporary fact as an invariant. The `scoped` flag is allowed to
+   * be all-true; what must hold is that it MATCHES each page, which the two
+   * tests above check in both directions.
+   */
   for (const r of reports) {
     assert.ok(sourcesFor(r.slug).length > 0, `no source found for /quicksight/${r.slug}`);
   }

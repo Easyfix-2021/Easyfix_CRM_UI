@@ -32,11 +32,13 @@
  */
 
 import { useCallback, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { Flame, ExternalLink, Loader2, AlertTriangle, FileQuestion, MapPin } from 'lucide-react';
 
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { usePostFetch } from '@/lib/hooks';
+import { clientIdsFromParams } from '@/lib/report-client-param';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { JobRefLink } from '@/components/job/JobRefLink';
 import { useLookup } from '@/lib/use-lookup';
@@ -109,6 +111,7 @@ type CityJob = {
 
 /* The filter body shape the grid/export endpoints accept. */
 type FilterBody = {
+  clientId: number[];
   serviceCategoryId: number[];
   stateId: number[];
   cityId: number[];
@@ -153,6 +156,7 @@ async function downloadXlsxPost(path: string, body: unknown, filename: string) {
 }
 
 const EMPTY_FILTERS: FilterBody = {
+  clientId: [],
   serviceCategoryId: [],
   stateId: [],
   cityId: [],
@@ -167,8 +171,28 @@ export default function PriorityJobsPage() {
   /* ── Filter state (applied vs draft) ───────────────────────────────
    * The dropdowns edit `draft`; Filter copies draft→applied (which re-keys
    * the fetch). Mirrors the legacy submit/reset model. */
-  const [draft, setDraft] = useState<FilterBody>(EMPTY_FILTERS);
-  const [applied, setApplied] = useState<FilterBody>(EMPTY_FILTERS);
+  /*
+   * Seeded from `?clientId=` so the client profile's Reports link opens this
+   * report already narrowed to that client — it was the one report of six that
+   * could not honour that link, because it had no client filter at all.
+   *
+   * Read ONCE, lazily: useSearchParams is stable at first render, and
+   * re-reading it in an effect would re-apply the URL over an operator who had
+   * just cleared the picker. Nothing writes back; the deep link is read-only.
+   *
+   * `applied` is seeded from the SAME value, not from EMPTY_FILTERS, so the
+   * report ARRIVES filtered rather than merely pre-filled — a page that shows
+   * the whole book under a heading naming one client is the thing this was
+   * meant to fix. With no param the helper returns [], so a bare visit is
+   * exactly as before.
+   */
+  const searchParams = useSearchParams();
+  const [seeded] = useState<FilterBody>(() => ({
+    ...EMPTY_FILTERS,
+    clientId: clientIdsFromParams((k) => searchParams.getAll(k)),
+  }));
+  const [draft, setDraft] = useState<FilterBody>(seeded);
+  const [applied, setApplied] = useState<FilterBody>(seeded);
 
   /* ── Server-side pagination (per-city-row) ─────────────────────────── */
   const [page, setPage] = useState(0); // 0-indexed
@@ -191,6 +215,7 @@ export default function PriorityJobsPage() {
   const stateOpts = lookup.toOpts.states;
   const cityOpts = lookup.toOpts.cities;
   const ownerOpts = lookup.toOpts.adminUsers;
+  const clientOpts = lookup.toOpts.clients;
 
   /* The body the grid endpoint receives (applied filters + pagination). */
   const gridBody = useMemo(
@@ -335,6 +360,16 @@ export default function PriorityJobsPage() {
       filters={
         <div className="space-y-3">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <Field label="Client">
+              <SearchMultiSelect
+                value={draft.clientId}
+                onChange={(v) => setDraft((d) => ({ ...d, clientId: toNums(v) }))}
+                options={clientOpts}
+                placeholder="All Clients"
+                selectedLabel="clients"
+                disabled={grid.loading}
+              />
+            </Field>
             <Field label="Category Name">
               <SearchMultiSelect
                 value={draft.serviceCategoryId}

@@ -13,13 +13,15 @@
  * parser, because the reports hold that filter in three different shapes and a
  * per-page Number() would drift silently.
  *
- * ⚠ PRIORITY JOBS IS THE EXCEPTION, and it is a real one rather than an
- * oversight: that report has NO client filter at all. It renders a clientName
- * COLUMN and nothing to narrow by. Adding one is a feature on that page, not a
- * link change, so its card says plainly that it opens unfiltered. `scoped` on
- * each entry below is what decides — flip it only once the page can honour it,
- * because a link that claims a filter it never applied is worse than one that
- * admits it cannot.
+ * ALL SIX ARE SCOPED NOW. Priority Jobs was the holdout — it had no client
+ * filter at all, only a clientName COLUMN — and it has since been given one
+ * (its endpoint already ACCEPTED clientId through the shared jobFilterBase and
+ * silently dropped it, which is the same failure in the other direction).
+ *
+ * `scoped` on each entry below still decides whether the param is sent. Flip it
+ * only once the page can honour it: a link that claims a filter it never
+ * applied is worse than one that admits it cannot, and
+ * tests/report-client-scope-claims.test.js fails either way round.
  *
  * The one genuinely client-scoped link is the TAT Calculator, which takes a
  * client as its subject — and it is also the source of the SLA-breach figure
@@ -43,7 +45,7 @@ import { SectionShell } from '@/components/client/SectionShell';
 const REPORTS: Array<{ href: string; label: string; note: string; scoped: boolean }> = [
   { href: '/quicksight/client-performance', label: 'Client Performance', note: 'Orders, revenue, SLA and FTFR by client.',      scoped: true  },
   { href: '/quicksight/open-orders',        label: 'Open Orders',        note: 'Everything still in flight, by age.',           scoped: true  },
-  { href: '/quicksight/priority-jobs',      label: 'Priority Jobs',      note: 'Escalated and ageing work.',                    scoped: false },
+  { href: '/quicksight/priority-jobs',      label: 'Priority Jobs',      note: 'Escalated and ageing work.',                    scoped: true  },
   { href: '/quicksight/city-performance',   label: 'City Performance',   note: 'The same numbers cut by city.',                 scoped: true  },
   { href: '/quicksight/material-report',    label: 'Material Report',    note: 'Parts and materials consumed.',                 scoped: true  },
   { href: '/quicksight/offer-acceptance',   label: 'Offer Acceptance',   note: 'How readily technicians accept this work.',     scoped: true  },
