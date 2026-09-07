@@ -243,9 +243,20 @@ type StatusCountsResp = {
    * Lifecycle bucket, not one of the six legacy status buckets — it filters
    * on `lifecycleStatus=TRAINING_PENDING` rather than `status=<n>`. Comes back
    * as 0 on an environment without the lifecycle migration, and the strip
-   * hides a zero, so it simply does not render there.
+   * renders it at zero like every other bucket — only Status Drift below
+   * hides itself when empty, because it is an alarm rather than a bucket.
    */
   training_pending: number;
+  /*
+   * Technicians whose two status columns contradict each other: `efr_status`
+   * (what the legacy Java CRM reads and writes) versus `lifecycle_status`
+   * (what the chip in this table renders). The backend writes both together,
+   * so a disagreement means an outside tool wrote one of them alone — and the
+   * technician is then invisible to job assignment while ops sees Active.
+   * 0 both when nothing has drifted and on an environment with no lifecycle
+   * columns to drift; the strip hides the entry either way.
+   */
+  status_drift: number;
   total: number;
 };
 
@@ -264,6 +275,7 @@ const DEFAULT_FILTERS = {
   efAccount: '',         // under_master | master | individual
   status: '1',           // Active default per screenshot
   lifecycleStatus: '',   // '' = All (no filter) | UPPER_SNAKE lifecycle status
+  statusDrift: '',       // '' = off | '1' = only rows whose status columns disagree
   stateId: '',
   cityId: '',
   serviceCategory: '',
@@ -322,6 +334,10 @@ function buildQuery(f: Filters, extras: Record<string, string | number | undefin
   // `status` bucket param above. Suppressed for an id lookup for the same
   // reason as the bucket — see the note at the top of this function.
   if (!idLookup && f.lifecycleStatus) q.lifecycleStatus = f.lifecycleStatus;
+  // Third status dimension: not a bucket and not a lifecycle value, but a
+  // filter on the DISAGREEMENT between the two. Suppressed for an id lookup
+  // for the same reason as the other two — see the note above.
+  if (!idLookup && f.statusDrift) q.statusDrift = 'true';
   if (f.stateId) q.stateId = f.stateId;
   if (f.cityId) q.cityId = f.cityId;
   if (f.serviceCategory) q.serviceCategory = f.serviceCategory;
@@ -1178,13 +1194,14 @@ export default function EasyfixersPage() {
               counts={statusCounts}
               activeStatus={filters.status}
               activeLifecycleStatus={filters.lifecycleStatus}
-              onPick={({ status, lifecycleStatus }) => {
+              activeStatusDrift={filters.statusDrift}
+              onPick={({ status, lifecycleStatus, statusDrift }) => {
                 // Legacy status bucket and the lifecycle-status filter are the
                 // same dimension — picking one clears the other (else the
                 // backend ANDs them, e.g. Active + Blacklisted → zero rows).
                 // Each strip entry carries both fields with the unused one
                 // blank, so applying them together IS the mutual exclusion.
-                const next = { ...filters, status, lifecycleStatus };
+                const next = { ...filters, status, lifecycleStatus, statusDrift };
                 setFilters(next);
                 setPage(0);
                 load(true, next, 0);
@@ -1283,6 +1300,13 @@ export default function EasyfixersPage() {
                    * "All", and it is the only value that filters nothing.
                    */
                   status: v ? '' : '0',
+                  /*
+                   * Drift is the third face of this same dimension, so it
+                   * clears here for the reason the bucket does: whatever the
+                   * one control labelled Status says must be the whole truth
+                   * about what is filtering the list.
+                   */
+                  statusDrift: '',
                 })}
                 options={LIFECYCLE_STATUS_OPTS}
               />
@@ -2094,6 +2118,7 @@ function StatusCountsStrip({
   counts,
   activeStatus,
   activeLifecycleStatus,
+  activeStatusDrift,
   onPick,
 }: {
   counts: StatusCountsResp;
@@ -2107,7 +2132,9 @@ function StatusCountsStrip({
   activeStatus: string;
   /* Same idea for the lifecycle dimension (UPPER_SNAKE, '' = none). */
   activeLifecycleStatus: string;
-  onPick: (next: { status: string; lifecycleStatus: string }) => void;
+  /* And for the drift drill-down ('1' = on, '' = off). */
+  activeStatusDrift: string;
+  onPick: (next: { status: string; lifecycleStatus: string; statusDrift: string }) => void;
 }) {
   /*
    * Each entry drives exactly ONE filter dimension and blanks the other:
@@ -2128,16 +2155,19 @@ function StatusCountsStrip({
     label: string;
     status: string;
     lifecycleStatus: string;
+    statusDrift: string;
     dot: string;
     ring: string;
+    /* Entries that are alarms rather than buckets render only when non-zero. */
+    hideAtZero?: boolean;
   };
   const allItems: StripItem[] = [
-    { key: 'active',          label: 'Active',                   status: '1', lifecycleStatus: '', dot: 'bg-success', ring: 'ring-success/30' },
-    { key: 'inactive',        label: 'Inactive',                 status: '2', lifecycleStatus: '', dot: 'bg-ink-500',   ring: 'ring-ink-500/30' },
-    { key: 'idle',            label: 'Idle',                     status: '3', lifecycleStatus: '', dot: 'bg-ink-300',   ring: 'ring-ink-300/30' },
-    { key: 'not_eligible',    label: 'Not Eligible',             status: '4', lifecycleStatus: '', dot: 'bg-destructive',     ring: 'ring-urgent/30' },
-    { key: 'not_suitable',    label: 'Not Suitable',             status: '5', lifecycleStatus: '', dot: 'bg-warning',   ring: 'ring-warning/30' },
-    { key: 'reg_in_progress', label: 'Registration In Progress', status: '6', lifecycleStatus: '', dot: 'bg-info',        ring: 'ring-info/30' },
+    { key: 'active',          label: 'Active',                   status: '1', lifecycleStatus: '', statusDrift: '', dot: 'bg-success', ring: 'ring-success/30' },
+    { key: 'inactive',        label: 'Inactive',                 status: '2', lifecycleStatus: '', statusDrift: '', dot: 'bg-ink-500',   ring: 'ring-ink-500/30' },
+    { key: 'idle',            label: 'Idle',                     status: '3', lifecycleStatus: '', statusDrift: '', dot: 'bg-ink-300',   ring: 'ring-ink-300/30' },
+    { key: 'not_eligible',    label: 'Not Eligible',             status: '4', lifecycleStatus: '', statusDrift: '', dot: 'bg-destructive',     ring: 'ring-urgent/30' },
+    { key: 'not_suitable',    label: 'Not Suitable',             status: '5', lifecycleStatus: '', statusDrift: '', dot: 'bg-warning',   ring: 'ring-warning/30' },
+    { key: 'reg_in_progress', label: 'Registration In Progress', status: '6', lifecycleStatus: '', statusDrift: '', dot: 'bg-info',        ring: 'ring-info/30' },
     /*
      * Training Pending (2026-08-13). Earns a place here because the LMS made
      * it actionable: completing the assigned videos now advances a technician
@@ -2150,7 +2180,21 @@ function StatusCountsStrip({
      * two identical dots would defeat the one-line scannability this strip
      * exists for. The chip inside the table keeps the canonical tone.
      */
-    { key: 'training_pending', label: 'Training Pending', status: '', lifecycleStatus: 'TRAINING_PENDING', dot: 'bg-gold', ring: 'ring-gold/30' },
+    { key: 'training_pending', label: 'Training Pending', status: '', lifecycleStatus: 'TRAINING_PENDING', statusDrift: '', dot: 'bg-gold', ring: 'ring-gold/30' },
+    /*
+     * Status Drift — an alarm, not a bucket, and the only entry that hides at
+     * zero. The six buckets above are worth reading at zero because zero is a
+     * fact about the roster. Zero drift is the ABSENCE of a defect, and parking
+     * a permanent zero for an impossible state trains the eye to skip exactly
+     * the number that must be noticed the day it moves.
+     *
+     * Urgent red because the cost is silent: these technicians receive no job
+     * offers (work eligibility ANDs both status columns) while every screen ops
+     * uses reads Active. The daily heal clears them, so a non-zero here is
+     * either same-day drift or a row the heal deliberately left — a blacklisted
+     * technician the legacy CRM tried to reactivate.
+     */
+    { key: 'status_drift', label: 'Status Drift', status: '', lifecycleStatus: '', statusDrift: '1', dot: 'bg-destructive', ring: 'ring-urgent/30', hideAtZero: true },
   ];
 
   /*
@@ -2163,20 +2207,22 @@ function StatusCountsStrip({
    * a manual CRM transition. The count becomes meaningful once something
    * assigns the state on registration.
    */
-  const items = allItems;
+  const items = allItems.filter((it) => !it.hideAtZero || Number(counts[it.key]) > 0);
 
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground mt-1">
       {items.map((it, i) => {
-        const isActive = it.lifecycleStatus
-          ? activeLifecycleStatus === it.lifecycleStatus
-          : activeStatus === it.status && !activeLifecycleStatus;
+        const isActive = it.statusDrift
+          ? activeStatusDrift === it.statusDrift
+          : it.lifecycleStatus
+            ? activeLifecycleStatus === it.lifecycleStatus && !activeStatusDrift
+            : activeStatus === it.status && !activeLifecycleStatus && !activeStatusDrift;
         return (
           <span key={it.key} className="inline-flex items-center gap-2">
             {i > 0 && <span className="text-muted-foreground/50">·</span>}
             <button
               type="button"
-              onClick={() => onPick({ status: it.status, lifecycleStatus: it.lifecycleStatus })}
+              onClick={() => onPick({ status: it.status, lifecycleStatus: it.lifecycleStatus, statusDrift: it.statusDrift })}
               /*
                * Active state — bold text + slightly enlarged solid dot
                * with a subtle ring halo. Inactive entries keep the
