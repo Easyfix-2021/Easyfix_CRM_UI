@@ -498,19 +498,35 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
   // calling `new maps.Map` again (see the `sharedMapCore` docblock above).
   // Only builds a fresh Map/Marker pair when no reusable instance exists yet.
   React.useEffect(() => {
-    // Wait for the ui.map.clickable flag before building — otherwise a map
-    // meant to be read-only could mount interactive for a frame. Build once.
-    if (mapBuiltRef.current || !flagsLoaded) return;
+    /*
+     * THERE IS NO FALLBACK CENTRE, DELIBERATELY (2026-09-07).
+     *
+     * This used to centre on {28.6139, 77.2090} — Delhi — whenever
+     * initialLatLng was falsy, and that is how a Panchkula job came to render
+     * Delhi landmarks under a GPS field reading 30.70,76.85. The build is
+     * async and was keyed on [flagsLoaded] alone, so it closed over a null
+     * initialLatLng whenever coordinates arrived a tick later, and nothing
+     * ever moved it.
+     *
+     * A fallback cannot be right — it can only be wrong in a way that looks
+     * deliberate. A pin on the wrong city reads as data, not as absence, and
+     * an operator has no way to tell the difference. So the map now WAITS.
+     * `initialLatLng` is a build precondition and is in the dep array, so the
+     * effect re-runs and builds the moment real coordinates exist; until then
+     * the pane shows an explicit "no location yet" placeholder.
+     *
+     * Taking longer to show the right place beats instantly showing the wrong
+     * one. mapBuiltRef still makes this build-once.
+     */
+    if (mapBuiltRef.current || !flagsLoaded || !initialLatLng) return;
     mapBuiltRef.current = true;
     let cancelled = false;
     (async () => {
       try {
         const maps = await loadGoogleMaps();
         if (cancelled || !mapRef.current) return;
-        // Default to Delhi if no GPS — operators almost always pan
-        // anyway, but it stops the map staring at the Pacific Ocean.
-        const center = initialLatLng || { lat: 28.6139, lng: 77.2090 };
-        const zoom = initialLatLng ? 16 : 11;
+        const center = initialLatLng;
+        const zoom = 16;
 
         if (sharedMapCore && sharedMapCore.ownerId === null) {
           // REUSE — claim the existing instance instead of paying for a new
@@ -612,8 +628,11 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
         sharedMapCore.ownerId = null;
       }
     };
+    // `initialLatLng` is a BUILD PRECONDITION, not just a value read inside:
+    // without it here the effect would never re-run when coordinates arrive
+    // and the map would never build at all. mapBuiltRef keeps it build-once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flagsLoaded]);
+  }, [flagsLoaded, initialLatLng]);
 
   // Keep the marker + map view in sync when an autocomplete pick or
   // external change updates gps_location.
@@ -864,7 +883,22 @@ export function AddressPickerWithMap({ value, onChange, cities, editable = true,
               </div>
             </div>
           ) : (
-            <div ref={mapRef} className="w-full h-full" />
+            <>
+              <div ref={mapRef} className="w-full h-full" />
+              {/* Overlaid, NOT swapped: the build re-parents the shared map
+                  into `mapRef`, so that div has to stay mounted. */}
+              {!initialLatLng && (
+                <div className="absolute inset-0 grid place-items-center bg-ink-50 text-xs text-muted-foreground p-4 text-center">
+                  <div>
+                    <div className="font-medium">No Location Yet</div>
+                    <div className="mt-1 leading-snug">
+                      Search a place above, or pick a saved address. The map opens on the
+                      real location once there is one — it never guesses a city.
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
         <p className="text-xs text-muted-foreground mt-1">

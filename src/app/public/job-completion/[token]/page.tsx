@@ -1709,8 +1709,15 @@ function AddressMapWidget({
         if (!cfg.apiKey) { setMapsError('Map unavailable — fill the address manually.'); return; }
         const maps = await loadGoogleMaps(cfg.apiKey);
         if (cancelled || !mapRef.current) return;
-        const initial = parseLatLng(form.gps_location) || { lat: 28.6139, lng: 77.2090 };
-        const zoom = form.gps_location ? 16 : 11;
+        const initial = parseLatLng(form.gps_location);
+        // NO FALLBACK CENTRE (2026-09-07) — same rule as
+        // components/ui/address-picker-with-map.tsx. This used to default to
+        // Delhi, which put a technician's pin in the wrong city while looking
+        // exactly like real data. Bail instead; the effect re-runs when
+        // coordinates exist, and the pane shows a "no location yet" note
+        // meanwhile.
+        if (!initial) return;
+        const zoom = 16;
 
         if (sharedMapCore && sharedMapCore.ownerId === null) {
           // REUSE — claim the existing instance instead of paying for a new
@@ -1807,8 +1814,11 @@ function AddressMapWidget({
         sharedMapCore.ownerId = null;
       }
     };
+    // `form.gps_location` is a BUILD PRECONDITION now, so it has to be here:
+    // with `[]` the effect ran once at mount, closed over whatever
+    // gps_location held then, and never rebuilt when coordinates arrived.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [form.gps_location]);
 
   // Debounced autocomplete — 1s after the last keystroke, fire if length ≥ 3.
   React.useEffect(() => {
@@ -2022,7 +2032,22 @@ function AddressMapWidget({
               </div>
             </div>
           ) : (
-            <div ref={mapRef} className="w-full h-full" />
+            <>
+              {/* Overlaid, NOT swapped — the build re-parents the shared map
+                  into `mapRef`, so the div must stay mounted. */}
+              <div ref={mapRef} className="w-full h-full" />
+              {!parseLatLng(form.gps_location) && (
+                <div className="absolute inset-0 grid place-items-center bg-ink-50 text-xs text-ink-500 p-4 text-center">
+                  <div>
+                    <div className="font-medium">No Location Yet</div>
+                    <div className="mt-1 leading-snug">
+                      Search for a place above to set the pin. The map opens on the real
+                      location once there is one — it never guesses a city.
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
         {!mapsError && (
