@@ -54,6 +54,7 @@ import {
 } from '@/components/ui/table-pagination';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
+import { ResendPinButton, RESEND_PIN_ACTION } from '@/components/job/ResendPinButton';
 import { useFetch, invalidateFetch, useDebouncedValue } from '@/lib/hooks';
 import { formatJobAge, jobAgeTitle, type JobAgeFields } from '@/lib/job-age';
 import { useLookup } from '@/lib/use-lookup';
@@ -92,6 +93,13 @@ type PendingJobRow = JobAgeFields & {
   easyfixer_mobile: string | null;
   city_name: string | null;
   client_name: string | null;
+  // Customer identity — already on the shared /admin/jobs LIST projection
+  // (JOB_CUSTOMER_NAME_EXPR AS customer_name, cu.customer_mob_no). Not rendered
+  // as a column here; read only for the Resend Customer PIN confirmation copy,
+  // so the operator sees WHO is about to be texted. The mobile arrives masked
+  // (first-4-then-bullets) from middleware/mask-mobile.js.
+  customer_name: string | null;
+  customer_mob_no: string | null;
   address: string | null;
   scheduled_date_time: string | null;
   requested_date_time: string | null;
@@ -697,6 +705,22 @@ function PendingSection({
                           <RefreshCw className="h-3.5 w-3.5" />
                         </button>
                       )}
+                      {/*
+                        * Resend Customer PIN — last icon in the row, matching
+                        * /my-orders. The technician's escape hatch when the
+                        * customer never got (or lost) the closing code. Same
+                        * row-icon grammar as its neighbours; gated on its own
+                        * permission, confirms before texting a real customer,
+                        * and never reveals the code to staff. It self-gates on
+                        * job_status too, so no status test is duplicated here.
+                        */}
+                      <ResendPinButton
+                        jobId={j.job_id}
+                        jobStatus={j.job_status}
+                        customerName={j.customer_name}
+                        customerMobile={j.customer_mob_no}
+                        allowed={!!canJob[RESEND_PIN_ACTION]}
+                      />
                     </div>
                   </td>
                 </tr>

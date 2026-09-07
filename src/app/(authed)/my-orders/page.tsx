@@ -33,6 +33,7 @@ import {
 } from '@/components/job/PendingSchedulingFilters';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
+import { ResendPinButton, RESEND_PIN_ACTION } from '@/components/job/ResendPinButton';
 import { cycleSort, SortHeader, type SortDir } from '@/lib/use-sort';
 import { RefreshBar } from '@/components/ui/refresh-bar';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -201,6 +202,11 @@ export default function MyOrdersPage() {
     // Gates the Trigger/Retrigger button on the Unconfirmed tab — see
     // the parallel block in (authed)/jobs/page.tsx for the rationale.
     'isJobMagicLinkSend',
+    // Resend the customer's 4-digit closing PIN (never shown to staff). Its
+    // own permission because it messages a customer directly — an operator who
+    // may change a job's status is not automatically an operator who may text
+    // that job's customer. Key declared in ResendPinButton.
+    RESEND_PIN_ACTION,
   ]);
   // Read the URL's ?tab=<slug> synchronously so the FIRST load fires with the
   // right filter. Previously tab initialised to 'all', and a follow-up
@@ -1158,6 +1164,25 @@ export default function MyOrdersPage() {
                           <CheckCircle2 className="h-3.5 w-3.5" />
                         </button>
                       )}
+                      {/*
+                        * Resend Customer PIN — last icon in the row, matching
+                        * PendingToStartView.
+                        *
+                        * Rendered UNCONDITIONALLY here on purpose: the
+                        * component self-gates on job_status (1 / 2 / 20 — the
+                        * window where a technician is holding the order) and on
+                        * the permission, so the status predicate lives in one
+                        * place instead of being restated at every call site.
+                        * This is the branch that matters most — status 2/20 is
+                        * "Pending to Close", where the PIN is now the gate.
+                        */}
+                      <ResendPinButton
+                        jobId={j.job_id}
+                        jobStatus={j.job_status}
+                        customerName={j.customer_name}
+                        customerMobile={j.customer_mob_no}
+                        allowed={!!canJob[RESEND_PIN_ACTION]}
+                      />
                     </div>
                   </td>
                 </tr>
