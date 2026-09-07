@@ -155,6 +155,16 @@ const ASSIGN_PAGE_SIZES: ReadonlyArray<{ value: TablePageSize; label: string }> 
 ];
 
 /*
+ * Every field's label row is the SAME fixed height, chip or no chip. A
+ * StatusChip is 22px tall (12px text + py-0.5 + border) against a bare
+ * `leading-none` label's 14px, so the one field that carries a chip used to
+ * push its own control ~8px below the controls beside it in the grid row.
+ * Pinning the row at h-6 (24px, clears the chip) makes the label block a
+ * constant, so adding or removing a chip can never move a control again.
+ */
+const LABEL_ROW = 'flex items-center gap-2 mb-1 h-6';
+
+/*
  * Mirrors the BE Joi bounds on the duration pair. Both are allowed to be 0
  * individually — it is only the 0/0 COMBINATION the API rejects, because an
  * assignment with no due date is never reminded on and never enforced.
@@ -640,7 +650,7 @@ export default function AssignTrainingPage() {
           <CardContent className="p-4 space-y-3">
             <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
               <div>
-                <div className="flex items-center gap-2 mb-1">
+                <div className={LABEL_ROW}>
                   <Label required>Course</Label>
                   {selectedCourse && (
                     // Red, not amber — with the 409 in place an empty course is
@@ -665,7 +675,9 @@ export default function AssignTrainingPage() {
                 {/* The filter sits ABOVE the picker it narrows, and is not
                     `required`: assigning to everyone is the normal case, and
                     the category is only a way to find a subset faster. */}
-                <Label className="block mb-1">Service Category</Label>
+                <div className={LABEL_ROW}>
+                  <Label>Service Category</Label>
+                </div>
                 <SearchSelect
                   value={techCategory}
                   onChange={(v) => setTechCategory(v ? Number(v) : '')}
@@ -676,7 +688,9 @@ export default function AssignTrainingPage() {
               </div>
 
               <div>
-                <Label className="block mb-1" required>Technicians</Label>
+                <div className={LABEL_ROW}>
+                  <Label required>Technicians</Label>
+                </div>
                 <SearchMultiSelect
                   value={selectedIds}
                   onChange={(next) => setSelectedIds(next.map(Number))}
@@ -699,7 +713,9 @@ export default function AssignTrainingPage() {
                 * month arm is calendar-clamped (31 Jan + 1 Month = 28 Feb).
                 */}
               <div>
-                <Label className="block mb-1" required>Completion Window</Label>
+                <div className={LABEL_ROW}>
+                  <Label required>Completion Window</Label>
+                </div>
                 <DurationFields
                   idPrefix="duration"
                   ariaPrefix="Completion Window"
