@@ -27,8 +27,11 @@ const path = require('path');
  */
 
 const ROOT = path.join(__dirname, '..');
-const PAGE = path.join(ROOT, 'src', 'app', '(authed)', 'hrms', 'certificates', 'page.tsx');
+const CERT_DIR = path.join(ROOT, 'src', 'app', '(authed)', 'hrms', 'certificates');
+const PAGE = path.join(CERT_DIR, 'page.tsx');
+const FACES = path.join(CERT_DIR, 'certificate-faces.ts');
 const LAYOUT = path.join(ROOT, 'src', 'brand', 'certificate-layout.json');
+const PALETTE = path.join(ROOT, 'src', 'brand', 'palette.ts');
 const URL_MAP = path.join(ROOT, 'src', 'lib', 'legacy-url-map.ts');
 
 const src = fs.readFileSync(PAGE, 'utf8');
@@ -133,6 +136,239 @@ test('the fit still matches the renderer it is previewing', () => {
     !/textLength=/.test(codeOnly),
     'text must be shrunk by font-size, never squeezed with textLength',
   );
+
+  /*
+   * Case is applied BEFORE the first measurement. Caps are ~12% wider, so
+   * uppercasing after the fit sizes a string nobody draws — the renderer's own
+   * comment says as much, and its `upper` flag lives in STYLE for that reason.
+   */
+  const fit = /function fitRun\([\s\S]*?\n\}/.exec(codeOnly);
+  assert.ok(fit, 'fitRun must exist');
+  const body = fit[0];
+  /*
+   * PRESENCE FIRST, THEN ORDER. `indexOf` returns -1 for a string that is not
+   * there, and -1 is less than every real index — so an ordering assertion
+   * written as `indexOf(a) < indexOf(b)` is SATISFIED by deleting `a`
+   * altogether, which is the worse regression of the two. Caught by the
+   * control: removing the uppercasing outright left this test green.
+   */
+  const upperAt = body.indexOf('.toUpperCase()');
+  const measureAt = body.indexOf('const natural = measure(');
+  assert.ok(upperAt !== -1, 'fitRun must apply STYLE.upper — the flag is read nowhere else');
+  assert.ok(measureAt !== -1, 'fitRun must take a first width measurement');
+  assert.ok(
+    upperAt < measureAt,
+    'the run must be uppercased before it is measured, not after it is fitted',
+  );
+
+  /*
+   * The truncation loop, transcribed. The renderer measures `out + '…'` and
+   * appends the ellipsis once the loop ends; a loop that breaks with the
+   * ellipsis already written keeps one character more than the renderer does.
+   */
+  assert.match(body, /while \(out\.length > 1 && measure\(`\$\{out\}…`\) > maxW\) out = out\.slice\(0, -1\);/);
+  assert.match(body, /out \+= '…';/);
+
+  /*
+   * Centring is the PLAN's decision, made once from the width the fitter
+   * measured — not re-derived at draw time. `text-anchor: middle` would
+   * re-centre from the browser's own width, which counts a trailing
+   * letter-spacing unit that pdfkit's does not.
+   */
+  assert.match(body, /el\.setAttribute\('x', String\(run\.rect\.x \+ Math\.max\(0, \(maxW - width\) \/ 2\)\)\)/);
+  assert.ok(!/textAnchor/.test(codeOnly), 'x must be computed, never delegated to text-anchor');
+  assert.match(codeOnly, /function trailingSpacingUnits\(/,
+    'the trailing letter-spacing unit must be measured from the engine, not assumed');
+  assert.match(body, /const trail = trailing \* st\.tracking;/);
+
+  // The baseline uses THIS face's metrics, not one set shared by all four.
+  assert.match(body, /run\.rect\.h - face\.lineHeight \* size/);
+  assert.match(body, /top \+ face\.ascender \* size/);
+});
+
+/*
+ * ─── THE STYLE TABLE ────────────────────────────────────────────────────────
+ *
+ * The renderer's `STYLE` is the certificate's typography: one face, size,
+ * colour, tracking and case per region. It was rewritten (grey sans heading →
+ * red serif; the recipient name uppercased; a script signatory) and the preview
+ * did not follow, so an operator previewed one document and downloaded another.
+ *
+ * The expectations below are the renderer's table, restated once. That IS a
+ * second copy — unavoidable, because the two live in different repos and node
+ * cannot import across them — but a copy in a test fails loudly on the next
+ * divergence, whereas the copy in the page fails silently. The point of pinning
+ * it here is that changing the page alone can no longer be enough.
+ */
+const RENDERER_STYLE = {
+  //                    face          pt   colour     tracking  upper
+  heading: ['serifBold', 30, 'brandRed', 8, false],
+  eyebrowPresentedTo: ['sans', 9, 'muted', 3, false],
+  recipientName: ['sansBold', 31, 'ink', 0, true],
+  eyebrowFor: ['sans', 9, 'muted', 3, false],
+  title: ['sansBold', 25, 'deepRed', 0, false],
+  dateValue: ['sans', 12, 'ink', 0, false],
+  dateLabel: ['sans', 8, 'muted', 2, false],
+  signatoryName: ['script', 20, 'ink', 0, false],
+  signatoryTitle: ['sans', 8, 'muted', 2, true],
+  certificateIdLine: ['sans', 8, 'muted', 0.5, false],
+};
+
+/*
+ * Returns the reasons `source` disagrees with the renderer's table — empty when
+ * it agrees. A function rather than a loop of bare asserts so the SAME scan can
+ * be pointed at deliberately-wrong input in the control below: a scan that has
+ * never been shown to reject anything is not evidence that the page is right.
+ */
+function styleDrift(source) {
+  const bad = [];
+  for (const [region, [face, size, ink, tracking, upper]] of Object.entries(RENDERER_STYLE)) {
+    const row = new RegExp(`^\\s*${region}:\\s*\\{(.*)\\},?$`, 'm').exec(source);
+    if (!row) { bad.push(`${region} — no row in the STYLE table`); continue; }
+    const decl = row[1];
+    const want = (re, why) => { if (!re.test(decl)) bad.push(`${region} — ${why}`); };
+
+    want(new RegExp(`face:\\s*'${face}'`), `must be set in the '${face}' face`);
+    want(new RegExp(`size:\\s*${String(size).replace('.', '\\.')}\\s*\\*\\s*SCALE\\b`),
+      `must be ${size}pt, converted onto the canvas by SCALE`);
+    want(new RegExp(`color:\\s*certificateInk\\.${ink}\\b`), `must be drawn in certificateInk.${ink}`);
+    want(new RegExp(`tracking:\\s*${String(tracking).replace('.', '\\.')}(\\s*\\*\\s*SCALE)?\\b`),
+      `must track ${tracking}`);
+    if (/\bupper:\s*true/.test(decl) !== upper) {
+      bad.push(`${region} — ${upper ? 'must be UPPERCASED' : 'must not be uppercased'}; case is measured, so it changes the fit`);
+    }
+  }
+  return bad;
+}
+
+test('every run is set in the face, size, colour, tracking and case the renderer uses', () => {
+  assert.deepEqual(styleDrift(codeOnly), [], 'the preview\'s type must be the renderer\'s type');
+});
+
+test('positive control — the style scan rejects each kind of drift', () => {
+  /*
+   * One mutation per axis, each the actual regression this page shipped with:
+   * the heading in grey sans instead of red serif, the recipient name left in
+   * the case the operator typed, the title in the old navy, the tracked eyebrow
+   * untracked, and a size that no longer matches the renderer's point value.
+   * If any mutation still passes, the corresponding assertion above is
+   * decorative and the page is unguarded on that axis.
+   */
+  const mutations = {
+    face: [/heading: \{ face: 'serifBold'/, "heading: { face: 'sans'"],
+    size: [/size: 30 \* SCALE/, 'size: 15 * SCALE'],
+    colour: [/color: certificateInk\.deepRed/, 'color: certificateInk.muted'],
+    tracking: [/eyebrowPresentedTo: \{ face: 'sans', size: 9 \* SCALE, color: certificateInk\.muted, tracking: 3 \* SCALE \}/,
+      "eyebrowPresentedTo: { face: 'sans', size: 9 * SCALE, color: certificateInk.muted, tracking: 0 }"],
+    case: [/, upper: true \}(,?)\n(\s*)eyebrowFor/, ' }$1\n$2eyebrowFor'],
+  };
+
+  for (const [axis, [find, replace]] of Object.entries(mutations)) {
+    assert.match(codeOnly, find, `the control's ${axis} mutation must have something to mutate`);
+    const drift = styleDrift(codeOnly.replace(find, replace));
+    assert.ok(drift.length > 0, `the scan failed to notice a ${axis} change: ${JSON.stringify(drift)}`);
+  }
+
+  // And the unmutated source really is clean, so the control is measuring the
+  // mutation rather than a scan that reports drift on everything.
+  assert.deepEqual(styleDrift(codeOnly), []);
+});
+
+test('the certificate ink is the renderer\'s, to the hex', () => {
+  /*
+   * The colours the page names have to BE the renderer's, not merely exist.
+   * `certificateInk` is the one place in the CRM allowed a colour literal, and
+   * it holds these four solely so the preview can mirror a document this repo
+   * does not own.
+   */
+  const ink = fs.readFileSync(PALETTE, 'utf8');
+  const block = ink.slice(ink.indexOf('export const certificateInk'));
+  for (const [key, hex] of Object.entries({
+    brandRed: '#C42430', deepRed: '#8E1B24', ink: '#111111', muted: '#5A5A5A',
+  })) {
+    assert.match(block, new RegExp(`${key}:\\s*'${hex}'`, 'i'),
+      `certificateInk.${key} must be ${hex}, the renderer's own value`);
+  }
+});
+
+test('the fixed strings are the renderer\'s, including the footer it composes', () => {
+  /*
+   * The operator types none of these, so the preview is the only thing that can
+   * get them wrong. The eyebrow was re-worded ("PRESENTED TO" →
+   * "THIS CERTIFICATE IS PROUDLY PRESENTED TO") and the footer became one
+   * composed caption rather than a bare id.
+   */
+  assert.match(codeOnly, /PRESENTED_TO = 'THIS CERTIFICATE IS PROUDLY PRESENTED TO'/);
+  assert.match(codeOnly, /DEFAULT_HEADING = 'CERTIFICATE OF COMPLETION'/);
+  assert.match(codeOnly, /DEFAULT_EYEBROW = 'FOR SUCCESSFULLY COMPLETING THE TRAINING'/);
+  assert.match(codeOnly, /SITE = 'www\.easyfix\.in'/);
+
+  // Composed here, exactly as `planCertificate` composes it — and dropped WHOLE
+  // when there is no id, never printed as an empty or half caption.
+  assert.match(
+    codeOnly,
+    /\['certificateIdLine', v\.certificateId \? `Certificate ID: \$\{v\.certificateId\} · \$\{SITE\}` : ''\]/,
+    'the footer must be the renderer\'s composed line, suppressed entirely without an id',
+  );
+});
+
+test('the type is the renderer\'s own font files, and nothing may fall back', () => {
+  const faces = strip(fs.readFileSync(FACES, 'utf8'));
+
+  /*
+   * NOT `next/font/google`. Two independent reasons, and either alone is
+   * disqualifying: the Google release of Playfair Display is the variable v2,
+   * whose advances differ from the static Bold the renderer embeds — so the
+   * fitter would shrink long runs to a different size than the PDF — and
+   * `next/font/google` fetches at BUILD time, which has already taken a Prod
+   * deploy down once (see src/app/layout.tsx).
+   */
+  assert.ok(!/next\/font\/google/.test(faces), 'the certificate faces must not come from Google Fonts');
+  assert.match(faces, /import localFont from 'next\/font\/local'/);
+
+  // The three display faces are vendored; the sans face reuses the CRM's own.
+  for (const file of ['PlayfairDisplay-Bold.ttf', 'IBMPlexSans-Bold.ttf', 'GreatVibes-Regular.ttf']) {
+    assert.ok(fs.existsSync(path.join(CERT_DIR, 'fonts', file)), `${file} must be vendored beside the page`);
+    assert.match(faces, new RegExp(`src: '\\./fonts/${file.replace('.', '\\.')}'`));
+  }
+  assert.match(faces, /src: '\.\.\/\.\.\/\.\.\/fonts\/ibm-plex-sans-400\.woff2'/,
+    'the sans face must reuse the CRM\'s existing woff2 rather than a fourth copy of the bytes');
+
+  /*
+   * A synthesised fallback would draw the wrong shapes on a document about to
+   * be shipped, and would make `style.fontFamily` a list the readiness check
+   * has to pick apart. Off on every face.
+   */
+  assert.equal(
+    (faces.match(/adjustFontFallback: false/g) || []).length, 4,
+    'every face must disable next/font\'s synthetic fallback',
+  );
+  assert.equal((faces.match(/display: 'block'/g) || []).length, 4, 'and none may paint a substitute while loading');
+
+  /*
+   * Every face's metrics are the renderer's, read off the same files. These are
+   * ascent/unitsPerEm and (ascent - descent)/unitsPerEm — what pdfkit uses for
+   * `_font.ascender` and `currentLineHeight()`. The page used to carry
+   * Helvetica's 0.718/0.925 for all four, which puts the recipient name's
+   * baseline ~19 canvas units high.
+   */
+  for (const [face, ascender, lineHeight] of [
+    ['sans', '1.025', '1.3'], ['sansBold', '1.025', '1.3'],
+    ['serifBold', '1.082', '1.333'], ['script', '0.851', '1.252'],
+  ]) {
+    assert.match(
+      faces,
+      new RegExp(`${face}:\\s*\\{[^}]*ascender:\\s*${ascender.replace('.', '\\.')},\\s*lineHeight:\\s*${lineHeight.replace('.', '\\.')}`),
+      `${face} must carry its own ascender/lineHeight, not another face's`,
+    );
+  }
+  assert.ok(!/0\.718|0\.925/.test(codeOnly + faces), 'Helvetica\'s metrics must be gone from both files');
+
+  // And the page must refuse to draw until they are confirmed loaded.
+  assert.match(codeOnly, /fonts\.load\(spec, FACE_SAMPLE\)/);
+  assert.match(codeOnly, /fonts\.check\(spec, FACE_SAMPLE\)/,
+    'load() resolves for a face that 404s — only check() answers whether it is usable');
+  assert.match(codeOnly, /\{facesReady && runs\.map\(/, 'no run may be drawn before the faces are ready');
 });
 
 test('a bare calendar date is never given a timezone', () => {

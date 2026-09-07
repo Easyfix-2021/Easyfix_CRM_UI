@@ -93,20 +93,25 @@ export const tricolour = {
  * certificate preview. A rebrand that changes them has to change the backend
  * in the same commit or the preview and the download drift apart.
  *
- * ⚠ KEY NAMES HERE MUST NOT COLLIDE WITH A KEY IN `palette`.
- * `scripts/check-brand-roundtrip.mjs` reads this file with a line regex —
- * every two-space-indented `key: '#RRGGBB'` in the WHOLE file, whichever
- * export it belongs to — and folds them into one flat map, last one winning.
- * A `gold` key here therefore shadows `palette.gold` and the roundtrip check
- * fails claiming the generated `--gold` token is wrong. Measured: it did.
- * The backend's GOLD is deliberately absent below for that reason and because
- * the preview never needs it — the rules on the certificate are part of the
- * artwork, not something this page draws.
+ * ⚠ KEY NAMES HERE SHOULD STILL NOT COLLIDE WITH A KEY IN `palette`.
+ * `scripts/check-brand-roundtrip.mjs` used to read this file with a line regex
+ * that took every two-space-indented `key: '#RRGGBB'` in the WHOLE file,
+ * whichever export it belonged to, and folded them into one flat map with the
+ * last one winning — so a `gold` key here shadowed `palette.gold` and the
+ * roundtrip check failed claiming the generated `--gold` token was wrong.
+ * Measured: it did. The check now scopes the map to the `palette` export and
+ * reports a shared name as its own diagnostic instead, so a collision no longer
+ * breaks the build — but it still makes two different colours answer to one
+ * word in a file whose entire job is being unambiguous. Keep the names distinct.
+ *
+ * The backend's GOLD is absent because the preview never needs it: the rules on
+ * the certificate are part of the artwork, not something this page draws.
  */
 export const certificateInk = {
-  navy: '#12305B', // the title run
-  ink: '#1A1A1A', // recipient name, date value, signatory name
-  muted: '#5A5A5A', // headings, eyebrows, labels, the certificate-id line
+  brandRed: '#C42430', // the heading — the red the frame's own bands are printed in
+  deepRed: '#8E1B24', // the title, one step darker so it reads as subordinate
+  ink: '#111111', // recipient name, date value, signatory name
+  muted: '#5A5A5A', // eyebrows, labels, the certificate-id line
 } as const;
 
 export type PaletteColor = keyof typeof palette;

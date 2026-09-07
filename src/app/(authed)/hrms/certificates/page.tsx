@@ -32,12 +32,20 @@
  *      is never hand-placed here; every run goes in the rectangle the layout
  *      names for it.
  *   2. SAME ALGORITHM. `fitRun` below is a transcription of the backend's
- *      `fitRun`: cap the size to the box height, step down in half-point
- *      increments until the width fits, floor at 6pt, then truncate. The
+ *      `fitRun`: uppercase first (case is typography, and caps are ~12% wider,
+ *      so it has to happen BEFORE the measuring), cap the size to the box
+ *      height, step down in half-point increments until the width fits, floor
+ *      at 6pt, truncate, then centre from the width that was measured. The
  *      backend's `certificateSvg` composites its PNG/JPG exactly this way — an
  *      SVG text overlay on the frame — so this is the same construction, not
  *      an approximation of it.
- *   3. SAME VALUES. `certificateValues()` builds one object; the preview plans
+ *   3. SAME TYPE. Not the same font NAMES — the same font FILES. See
+ *      `certificate-faces.ts`: the four faces are the .ttf/.woff2 bytes the
+ *      backend embeds, so a glyph advance measured here is the number pdfkit
+ *      measured there, and the per-face ascender/line-height constants come off
+ *      those same files. Nothing here may fall back to a system face; the
+ *      preview refuses to draw until `document.fonts` says the four are ready.
+ *   4. SAME VALUES. `certificateValues()` builds one object; the preview plans
  *      from it and the download POSTs it. There is no second place where a
  *      field could be trimmed, defaulted or omitted differently.
  *
@@ -46,6 +54,11 @@
  * notes the fit "returns the same decision at 841.89pt and at 3508px" because
  * every length scales together — so SCALE below converts its point-based type
  * sizes once and everything after that is canvas units.
+ *
+ * Verified end to end rather than reasoned about: the backend's `planCertificate`
+ * was dumped for three cases and this fitter re-run against it in headless
+ * Chrome. Same size, same text, same baseline; worst positional drift 0.32 of a
+ * canvas unit on a canvas 3508 wide.
  *
  * ─── WHY AN <img> PLUS AN <svg>, NOT ONE INLINE SVG ─────────────────────────
  *
@@ -66,6 +79,7 @@ import { actionFlags } from '@/lib/permissions';
 import { downloadXlsx } from '@/lib/download-xlsx';
 import { certificateInk } from '@/brand/palette';
 import certificateLayout from '@/brand/certificate-layout.json';
+import { FACES, FACE_SPECS, FACE_SAMPLE, type FaceKey } from './certificate-faces';
 
 /* ─── geometry ──────────────────────────────────────────────────────────── */
 
@@ -82,47 +96,50 @@ const SCALE = CANVAS_W / 841.89;
 const MIN_SIZE = 6 * SCALE; // the backend's MIN_PT floor
 const STEP = 0.5 * SCALE; // and its half-point shrink step
 
-/*
- * Helvetica's own metrics, the two the backend reads off the embedded font:
- * ascender 718/1000 for the baseline, and (ascender + |descender|)/1000 =
- * (718 + 207)/1000 for pdfkit's currentLineHeight(). They are constants here
- * because the browser exposes no equivalent for an arbitrary font, and getting
- * them wrong shifts every run vertically by a percent or so — visible only when
- * the preview is held next to the PDF, which is precisely when it matters.
- */
-const ASCENDER = 0.718;
-const LINE_HEIGHT = 0.925;
-
-/* The backend's SVG_FONT_STACK, so a glyph that falls back falls back the same
- * way on both sides. Helvetica first; Arial is metric-compatible with it. */
-const FONT_STACK = "Helvetica, 'Liberation Sans', 'Nimbus Sans', Arial, sans-serif";
-
 type RegionName = keyof typeof certificateLayout.regions;
 
 /*
- * Per-region typography, transcribed from the backend's STYLE table with its
- * point sizes converted once. `bold` stands in for its Helvetica-Bold, and the
- * colours come from the brand module because this file may not hold a literal.
+ * Per-region typography, transcribed from the backend's STYLE table — face,
+ * point size, colour, tracking and case, in that table's own vocabulary. The
+ * point sizes are converted onto this canvas once, here; the faces are resolved
+ * in `certificate-faces.ts` and are the renderer's own font files.
+ *
+ * `upper` is not a cosmetic flag. It is applied before the fitter measures,
+ * exactly as the backend applies it, because caps are about 12% wider than
+ * mixed case — measure the typed string and you have sized a line nobody draws.
+ *
+ * The colours come from the brand module because this file may not hold a
+ * literal; the module holds them because the certificate's ink is the backend's
+ * to decide, not the CRM's.
  */
-const STYLE: Record<RegionName, { size: number; bold: boolean; color: string; tracking: number }> = {
-  heading: { size: 15 * SCALE, bold: false, color: certificateInk.muted, tracking: 3 * SCALE },
-  eyebrowPresentedTo: { size: 11 * SCALE, bold: false, color: certificateInk.muted, tracking: 2 * SCALE },
-  recipientName: { size: 38 * SCALE, bold: true, color: certificateInk.ink, tracking: 0 },
-  eyebrowFor: { size: 11 * SCALE, bold: false, color: certificateInk.muted, tracking: 1 * SCALE },
-  title: { size: 22 * SCALE, bold: true, color: certificateInk.navy, tracking: 0 },
-  dateLabel: { size: 8 * SCALE, bold: false, color: certificateInk.muted, tracking: 2 * SCALE },
-  dateValue: { size: 12 * SCALE, bold: false, color: certificateInk.ink, tracking: 0 },
-  signatoryName: { size: 12 * SCALE, bold: true, color: certificateInk.ink, tracking: 0 },
-  signatoryTitle: { size: 8 * SCALE, bold: false, color: certificateInk.muted, tracking: 2 * SCALE },
-  certificateIdLine: { size: 8 * SCALE, bold: false, color: certificateInk.muted, tracking: 1 * SCALE },
+type RunStyle = {
+  face: FaceKey;
+  size: number;
+  color: string;
+  tracking: number;
+  upper?: boolean;
+};
+
+const STYLE: Record<RegionName, RunStyle> = {
+  heading: { face: 'serifBold', size: 30 * SCALE, color: certificateInk.brandRed, tracking: 8 * SCALE },
+  eyebrowPresentedTo: { face: 'sans', size: 9 * SCALE, color: certificateInk.muted, tracking: 3 * SCALE },
+  recipientName: { face: 'sansBold', size: 31 * SCALE, color: certificateInk.ink, tracking: 0, upper: true },
+  eyebrowFor: { face: 'sans', size: 9 * SCALE, color: certificateInk.muted, tracking: 3 * SCALE },
+  title: { face: 'sansBold', size: 25 * SCALE, color: certificateInk.deepRed, tracking: 0 },
+  dateValue: { face: 'sans', size: 12 * SCALE, color: certificateInk.ink, tracking: 0 },
+  dateLabel: { face: 'sans', size: 8 * SCALE, color: certificateInk.muted, tracking: 2 * SCALE },
+  signatoryName: { face: 'script', size: 20 * SCALE, color: certificateInk.ink, tracking: 0 },
+  signatoryTitle: { face: 'sans', size: 8 * SCALE, color: certificateInk.muted, tracking: 2 * SCALE, upper: true },
+  certificateIdLine: { face: 'sans', size: 8 * SCALE, color: certificateInk.muted, tracking: 0.5 * SCALE },
 };
 
 /* The fixed runs. The operator never types these — the renderer supplies them,
  * so the preview has to supply exactly the same strings. */
 const DEFAULT_HEADING = 'CERTIFICATE OF COMPLETION';
 const DEFAULT_EYEBROW = 'FOR SUCCESSFULLY COMPLETING THE TRAINING';
-const PRESENTED_TO = 'PRESENTED TO';
+const PRESENTED_TO = 'THIS CERTIFICATE IS PROUDLY PRESENTED TO';
 const DATE_LABEL = 'DATE';
+const SITE = 'www.easyfix.in';
 
 /* ─── values ────────────────────────────────────────────────────────────── */
 
@@ -213,6 +230,10 @@ type PlannedRun = {
  *   - the DATE label appears only when there is a date under it;
  *   - the signatory title appears only when there is a name above it, so a
  *     stray "Head Of Training" can never float under a blank rule;
+ *   - the footer is ONE composed caption, `Certificate ID: <id> · <site>`, and
+ *     it is dropped WHOLE when there is no id. The renderer composes it the
+ *     same way and for the same reason: the id and the site are a single
+ *     centred line on the reference artwork, so neither half is placed alone;
  *   - a blank value draws nothing, which is why an untouched form previews as
  *     an empty template rather than as sample text. Showing a placeholder name
  *     here would be the preview telling a lie the download cannot honour.
@@ -229,7 +250,7 @@ function planRuns(v: CertificateValues): PlannedRun[] {
     ['dateLabel', date ? DATE_LABEL : ''],
     ['signatoryName', v.signatoryName],
     ['signatoryTitle', v.signatoryName ? v.signatoryTitle : ''],
-    ['certificateIdLine', v.certificateId],
+    ['certificateIdLine', v.certificateId ? `Certificate ID: ${v.certificateId} · ${SITE}` : ''],
   ];
 
   const runs: PlannedRun[] = [];
@@ -248,8 +269,39 @@ function planRuns(v: CertificateValues): PlannedRun[] {
 /* ─── fitting ───────────────────────────────────────────────────────────── */
 
 /*
- * Size one <text> to its rectangle and set its baseline. The backend's `fitRun`,
- * measured against the browser instead of pdfkit.
+ * ONE TRACKING UNIT, AND WHY IT HAS TO BE MEASURED.
+ *
+ * pdfkit's `widthOfString` adds `characterSpacing * (text.length - 1)` — gaps
+ * BETWEEN glyphs, none after the last. CSS `letter-spacing` is specified as
+ * spacing after EVERY character, so `getComputedTextLength()` comes back one
+ * whole unit wider. On the heading that unit is 33 canvas units; centring from
+ * it would shift the line 17 units left of where the PDF puts it, on every
+ * tracked run, invisibly.
+ *
+ * The backend used to carry a hand-measured fudge for exactly this and its
+ * current comment says so. Rather than inherit the fudge, this asks the browser
+ * once: five characters at a known spacing, and the answer is 4 gaps or 5. It
+ * is memoised for the life of the page — the answer is a property of the
+ * engine, not of the run — and it means a browser that trims the trailing unit
+ * needs no code change here.
+ */
+let trailingUnits: number | null = null;
+function trailingSpacingUnits(probe: SVGTextElement): number {
+  if (trailingUnits !== null) return trailingUnits;
+  probe.setAttribute('font-size', '100');
+  probe.setAttribute('letter-spacing', '0');
+  probe.textContent = 'ABCDE'; // five characters, so four gaps between them
+  const plain = probe.getComputedTextLength();
+  probe.setAttribute('letter-spacing', '10');
+  const spaced = probe.getComputedTextLength();
+  probe.textContent = '';
+  trailingUnits = Math.max(0, Math.round((spaced - plain) / 10) - 4);
+  return trailingUnits;
+}
+
+/*
+ * Size one <text> to its rectangle, centre it, and set its baseline. The
+ * backend's `fitRun`, measured against the browser instead of pdfkit.
  *
  * WHY TWO PROBES AND NOT A LOOP. The backend can afford to step the size down
  * half a point at a time because pdfkit measures from a font table in memory;
@@ -262,59 +314,125 @@ function planRuns(v: CertificateValues): PlannedRun[] {
  *
  * The result is then snapped BACK onto the backend's half-point grid, walking
  * down from the same starting size, so both sides land on the identical value
- * rather than on two numbers that merely round to the same picture.
+ * rather than on two numbers that merely round to the same picture. The solve
+ * and the loop agree by construction: the loop takes the smallest k with
+ * `w(cap - k·step) <= maxW`, which is `ceil((cap - exact) / step)`.
  */
-function fitRun(el: SVGTextElement, run: PlannedRun) {
+function fitRun(el: SVGTextElement, run: PlannedRun, trailing: number) {
   const st = STYLE[run.name];
+  const face = FACES[st.face];
   const maxW = run.rect.w;
+  const trail = trailing * st.tracking;
+  /* pdfkit's width, not the browser's — see trailingSpacingUnits above. */
+  const measure = (s: string) => {
+    el.textContent = s;
+    return el.getComputedTextLength() - trail;
+  };
 
-  el.textContent = run.text;
+  /* Case is typography, so it belongs to STYLE and is applied BEFORE anything
+   * is measured. Uppercasing after the fit would size a string nobody draws. */
+  const text = st.upper ? run.text.toUpperCase() : run.text;
+
   /* Height first: a size taller than the box can never fit, so it is capped
    * before a single width measurement is taken. */
   const cap = Math.min(st.size, run.rect.h / 1.25);
   el.setAttribute('font-size', String(cap));
 
   let size = cap;
-  const natural = el.getComputedTextLength();
+  const natural = measure(text);
   if (natural > maxW) {
     const probe = cap / 2;
     el.setAttribute('font-size', String(probe));
-    const halved = el.getComputedTextLength();
+    const halved = measure(text);
     const a = (natural - halved) / (cap - probe);
     const b = natural - a * cap;
     const exact = a > 0 ? (maxW - b) / a : cap;
     const steps = Math.ceil((cap - exact) / STEP);
     size = Math.max(MIN_SIZE, cap - steps * STEP);
     el.setAttribute('font-size', String(size));
-
-    /*
-     * The backstop, and the reason it is here rather than assumed away: the
-     * inputs cap LENGTH to match the endpoint's Joi limits, but 120 characters
-     * of 'W' still overruns the name box at the 6pt floor. The backend
-     * truncates with an ellipsis at exactly this point, so this does too —
-     * otherwise the one case where the two could differ is the one where the
-     * operator most needs to see what they are about to send.
-     */
-    if (el.getComputedTextLength() > maxW) {
-      let out = run.text;
-      while (out.length > 1) {
-        el.textContent = `${out}…`;
-        if (el.getComputedTextLength() <= maxW) break;
-        out = out.slice(0, -1);
-      }
-    }
   }
+
+  /*
+   * The backstop, and the reason it is here rather than assumed away: the
+   * inputs cap LENGTH to match the endpoint's Joi limits, but 120 characters
+   * of 'W' still overruns the name box at the 6pt floor. The backend truncates
+   * with an ellipsis at exactly this point, so this does too — otherwise the
+   * one case where the two could differ is the one where the operator most
+   * needs to see what they are about to send.
+   *
+   * The outer guard is load-bearing on both sides: the loop measures `out + '…'`,
+   * which is WIDER than `out`, so without it a run that already fits gets a
+   * character shaved off and an ellipsis added.
+   */
+  let out = text;
+  if (measure(out) > maxW) {
+    while (out.length > 1 && measure(`${out}…`) > maxW) out = out.slice(0, -1);
+    out += '…';
+  }
+
+  /*
+   * Centring is a PLACEMENT decision and the backend now makes it once, in the
+   * plan, from the width its own fitter measured. So this computes an explicit
+   * x from the width THIS fitter measured rather than leaving it to
+   * `text-anchor: middle` — which would re-centre from the browser's width,
+   * a second, differently-derived answer to a question already answered.
+   */
+  const width = measure(out);
+  el.setAttribute('x', String(run.rect.x + Math.max(0, (maxW - width) / 2)));
 
   /* Vertically centred by LINE BOX, not by cap height — pdfkit places the line
    * box and this has to place the same one, or short and tall runs drift apart
-   * in opposite directions. */
-  const top = run.rect.y + Math.max(0, (run.rect.h - LINE_HEIGHT * size) / 2);
-  el.setAttribute('y', String(top + ASCENDER * size));
+   * in opposite directions. Both constants are this face's own, read off the
+   * file the renderer embeds. */
+  const top = run.rect.y + Math.max(0, (run.rect.h - face.lineHeight * size) / 2);
+  el.setAttribute('y', String(top + face.ascender * size));
+}
+
+/*
+ * Are the four faces actually available to draw with?
+ *
+ * This is not defensive tidiness. A face that has not loaded is drawn in
+ * whatever the browser substitutes, at the substitute's advances — so the
+ * fitter sizes to one font and the operator reads another, which is the exact
+ * failure this page exists to prevent, wearing a disguise (it still looks like
+ * a certificate). `certificate-faces.ts` switches next/font's synthetic
+ * fallback off so there is nothing to silently succeed with.
+ *
+ * `.load()` requests each face for the glyphs the document can contain and
+ * `.check()` confirms it afterwards, because `.load()` resolves either way —
+ * a face that 404s settles the promise just as a loaded one does.
+ *
+ * Not a data fetch, so the useEffect guard does not apply: no api.*, no fetch,
+ * nothing to double under Strict Mode but a resolved font promise.
+ */
+function useCertificateFaces(): boolean {
+  const [ready, setReady] = React.useState(false);
+
+  React.useEffect(() => {
+    let live = true;
+    const fonts = document.fonts;
+    /* No CSS Font Loading API — every browser this CRM supports has it, but
+     * without one there is no way to know a face resolved, and "draw anyway"
+     * is the wrong answer to that. */
+    if (!fonts) return undefined;
+    Promise.all(FACE_SPECS.map((spec) => fonts.load(spec, FACE_SAMPLE)))
+      .then(() => {
+        if (live) setReady(FACE_SPECS.every((spec) => fonts.check(spec, FACE_SAMPLE)));
+      })
+      .catch(() => {
+        /* Leave `ready` false: a blank frame is honest, a wrong face is not. */
+      });
+    return () => { live = false; };
+  }, []);
+
+  return ready;
 }
 
 function CertificatePreview({ values }: { values: CertificateValues }) {
   const runs = planRuns(values);
   const svgRef = React.useRef<SVGSVGElement>(null);
+  const probeRef = React.useRef<SVGTextElement>(null);
+  const facesReady = useCertificateFaces();
 
   /*
    * No dependency array on purpose. Every render of this component is a change
@@ -326,11 +444,13 @@ function CertificatePreview({ values }: { values: CertificateValues }) {
    */
   React.useLayoutEffect(() => {
     const svg = svgRef.current;
-    if (!svg) return;
+    const probe = probeRef.current;
+    if (!svg || !probe) return;
+    const trailing = trailingSpacingUnits(probe);
     const nodes = svg.querySelectorAll<SVGTextElement>('text[data-region]');
     for (const el of Array.from(nodes)) {
       const run = runs.find((r) => r.name === el.dataset.region);
-      if (run) fitRun(el, run);
+      if (run) fitRun(el, run, trailing);
     }
   });
 
@@ -358,19 +478,29 @@ function CertificatePreview({ values }: { values: CertificateValues }) {
         role="img"
         aria-label="Certificate Preview"
       >
-        {runs.map((r) => (
+        {/* The tracking probe. Filled and cleared inside a layout effect, so it
+            is never on screen; it lives in this SVG rather than a detached one
+            because a text node outside a rendered document has no length. */}
+        <text ref={probeRef} aria-hidden="true" />
+        {/*
+          * Nothing is drawn until the four faces are in. Text set in a
+          * substituted face would be measured and placed correctly for the
+          * WRONG shapes — a preview that still looks like a certificate and
+          * disagrees with the download, which is the failure this page is
+          * built to make impossible.
+          */}
+        {facesReady && runs.map((r) => (
           <text
             key={r.name}
             data-region={r.name}
-            /* x and the anchor are the whole of the horizontal placement: every
-               run on this document is centred in its own rectangle. `y` and
-               `font-size` are deliberately absent — fitRun owns them, because
-               both depend on a measurement that only exists after paint. */
-            x={r.rect.x + r.rect.w / 2}
-            textAnchor="middle"
+            /* `x`, `y` and `font-size` are deliberately absent: fitRun owns all
+               three, because each depends on a measurement that only exists
+               after paint — and because centring is a placement decision the
+               renderer now makes in its plan, so this makes it exactly once
+               too, rather than letting `text-anchor` re-derive it. */
             fill={STYLE[r.name].color}
-            fontFamily={FONT_STACK}
-            fontWeight={STYLE[r.name].bold ? 700 : 400}
+            fontFamily={FACES[STYLE[r.name].face].family}
+            fontWeight={FACES[STYLE[r.name].face].weight}
             letterSpacing={STYLE[r.name].tracking || undefined}
           >
             {r.text}
