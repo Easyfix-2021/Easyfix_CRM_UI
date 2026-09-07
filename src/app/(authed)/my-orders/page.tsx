@@ -360,7 +360,21 @@ export default function MyOrdersPage() {
            * the other tabs send exactly the request shape they always did.
            */
           ...(psActive ? psQueryParams(psFilters) : {}),
-          limit, offset: off,
+          /*
+           * Unconfirmed renders per-section tables that fetch their own rows,
+           * so this request exists ONLY to produce the "N matching orders"
+           * header — a page of rows nothing displays is pure waste. limit=1
+           * still yields the same `total`, which is computed by a separate
+           * COUNT.
+           *
+           * It is kept rather than dropped because that total is INDEPENDENT of
+           * the section queries. Deriving the header by summing the sections
+           * instead would save nothing and would make them agree by
+           * construction, retiring the one check that has caught this page
+           * being wrong twice (see lib/section-totals.ts).
+           */
+          limit: tab === 'unconfirmed' ? 1 : limit,
+          offset: tab === 'unconfirmed' ? 0 : off,
           // Server-side sort (whitelisted BE-side); absent → BE default job_id DESC.
           sortBy: sortKey || undefined,
           sortDir: sortKey ? sortDir : undefined,
@@ -728,6 +742,8 @@ export default function MyOrdersPage() {
                * each, because `q` is applied by the server rather than to an
                * already-truncated array.
                */
+              /* The independent total the sections are checked against. */
+              pageTotal={data?.total ?? null}
               query={{
                 status: TABS.find((t) => t.value === 'unconfirmed')?.status,
                 ownerId: scopedOwnerId,

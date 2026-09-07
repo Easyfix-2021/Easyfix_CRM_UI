@@ -5,6 +5,7 @@ import { GripVertical, ChevronDown, ChevronRight } from 'lucide-react';
 import { useFetch, invalidateFetch } from '@/lib/hooks';
 import { buildJobsKey } from '@/lib/jobs-query';
 import { reorder } from '@/lib/reorder';
+import { reconcileSectionTotals } from '@/lib/section-totals';
 import { StatusChip } from '@/components/ui/StatusChip';
 import {
   TablePagination,
@@ -55,10 +56,15 @@ const ORDER_KEY = 'easyfix.crm.unconfirmed.sectionOrder.v1';
  * carefully arranged their order would lose it to a change in how collapse is
  * remembered.
  *
- * The stored value is the COLLAPSED set, not the expanded one, because
- * everything is expanded by default: an absent key, a corrupt value and a
- * first-ever visit then all mean the same correct thing. Storing "expanded"
- * would make a section added later arrive collapsed and invisible.
+ * What is stored is the operator's EXPLICIT choices only — a map of
+ * key -> collapsed. A section with no entry is on AUTO: open if it has jobs,
+ * shut if it does not. That is the difference between "the operator closed
+ * this" and "there is nothing in it", and only the first should survive the
+ * day a section fills up.
+ *
+ * v1 stored a bare ARRAY of collapsed keys, which could not express that
+ * distinction. It is read and converted rather than discarded, so nobody's
+ * arrangement resets on deploy.
  */
 const COLLAPSED_KEY = 'easyfix.crm.unconfirmed.sectionCollapsed.v1';
 
@@ -99,15 +105,27 @@ function reconcile(stored: unknown, meta: Section[]): Section[] {
   return out;
 }
 
-function loadCollapsed(): Set<string> {
+type Choices = Record<string, boolean>;   // key -> collapsed; absent = auto
+
+function loadCollapsed(): Choices {
   try {
     const raw = window.localStorage.getItem(COLLAPSED_KEY);
-    const arr = raw ? JSON.parse(raw) : null;
-    return new Set(Array.isArray(arr) ? arr.filter((k) => typeof k === 'string') : []);
+    const v = raw ? JSON.parse(raw) : null;
+    // v1 shape: a bare array of collapsed keys. Convert rather than discard —
+    // those were deliberate choices and should not reset on deploy.
+    if (Array.isArray(v)) {
+      return Object.fromEntries(v.filter((k) => typeof k === 'string').map((k) => [k, true]));
+    }
+    if (v && typeof v === 'object') {
+      const out: Choices = {};
+      for (const [k, val] of Object.entries(v)) if (typeof val === 'boolean') out[k] = val;
+      return out;
+    }
+    return {};
   } catch {
-    // Private window, blocked site data, corrupt JSON — all expanded, which is
-    // the documented default and a correct page.
-    return new Set();
+    // Private window, blocked site data, corrupt JSON — everything falls back
+    // to auto, which is a correct page.
+    return {};
   }
 }
 
@@ -122,9 +140,10 @@ function loadOrder(meta: Section[]): Section[] {
 
 export function UnconfirmedSections({
   query,
+  pageTotal,
   onMagicLinkSent,
   ...tableProps
-}: Omit<TableProps, 'rows' | 'loading'> & { query: JobsQuery }) {
+}: Omit<TableProps, 'rows' | 'loading'> & { query: JobsQuery; pageTotal: number | null }) {
   /*
    * The section LIST comes from the server so a sixth section is a backend
    * change, not a frontend deploy. Sent without `ids`, which the endpoint
@@ -134,7 +153,9 @@ export function UnconfirmedSections({
   const meta = metaReq.data?.meta;
 
   const [order, setOrder] = useState<Section[]>([]);
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const [choices, setChoices] = useState<Choices>({});
+  // Each section reports its own total up so they can be added together.
+  const [totals, setTotals] = useState<Record<string, number>>({});
 
   /*
    * Post-mutation refresh signal.
@@ -166,7 +187,7 @@ export function UnconfirmedSections({
 
   // Read once on mount — localStorage exists only in the browser, and reading
   // it during render would differ between the server pass and the client one.
-  useEffect(() => { setCollapsed(loadCollapsed()); }, []);
+  useEffect(() => { setChoices(loadCollapsed()); }, []);
 
   useEffect(() => {
     if (meta?.length) {
@@ -174,16 +195,37 @@ export function UnconfirmedSections({
     }
   }, [meta]);
 
-  function toggle(key: string) {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key); else next.add(key);
+  /*
+   * A click records an EXPLICIT choice and pins it. Once an operator has opened
+   * or shut a section by hand, the auto rule stops applying to it — otherwise a
+   * section they deliberately closed would spring open the moment a job landed
+   * in it, and one they deliberately opened would shut when it emptied.
+   */
+  function toggle(key: string, nextCollapsed: boolean) {
+    setChoices((prev) => {
+      const next = { ...prev, [key]: nextCollapsed };
       try {
-        window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]));
+        window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify(next));
       } catch { /* applies for this visit; just will not survive a reload */ }
       return next;
     });
   }
+
+  // Reported by each section as its count arrives. Guarded so a repeat of the
+  // same number is not a state write, which would re-render on every refetch.
+  function reportTotal(key: string, total: number) {
+    setTotals((prev) => (prev[key] === total ? prev : { ...prev, [key]: total }));
+  }
+
+  /*
+   * THE ARITHMETIC THAT CATCHES WHAT NO SINGLE SECTION CAN. Both times this
+   * page has been wrong, every section looked individually plausible and the
+   * headings simply did not add up to the tab total. See lib/section-totals.ts.
+   */
+  const reconciliation = reconcileSectionTotals({
+    totals: order.map((sec) => (sec.key in totals ? totals[sec.key] : null)),
+    pageTotal,
+  });
 
   function persist(next: Section[]) {
     setOrder(next);
@@ -338,6 +380,21 @@ export function UnconfirmedSections({
       onDragOver={(e) => { if (dragKey) e.preventDefault(); }}
       onDrop={onDrop}
     >
+      {/*
+        * Said out loud, on the page, rather than logged. Both times these
+        * sections have been wrong the screen looked entirely reasonable — the
+        * only tell was that the headings did not sum to the tab total.
+        */}
+      {reconciliation.status === 'mismatch' && (
+        <div
+          role="status"
+          className="mx-3 mb-3 rounded-lg border border-warning bg-warning-tint px-3 py-2 text-xs text-warning-strong"
+        >
+          <strong className="font-semibold">These groupings are not trustworthy.</strong>{' '}
+          {reconciliation.message}
+        </div>
+      )}
+
       {order.map((s, idx) => (
         <div key={s.key}>
           <Indicator at={idx} />
@@ -345,8 +402,9 @@ export function UnconfirmedSections({
             section={s}
             index={idx}
             query={query}
-            collapsed={collapsed.has(s.key)}
-            onToggle={() => toggle(s.key)}
+            explicitCollapsed={s.key in choices ? choices[s.key] : undefined}
+            onToggle={(next) => toggle(s.key, next)}
+            onTotal={(t) => reportTotal(s.key, t)}
             dragging={dragKey === s.key}
             onDragStart={() => { setDragKey(s.key); setDropAt(idx); }}
             onDragEnd={endDrag}
@@ -374,15 +432,17 @@ export function UnconfirmedSections({
  * Same reason PendingToStartView has a per-bucket component.
  */
 function SectionCard({
-  section, index, query, collapsed, onToggle, dragging,
+  section, index, query, explicitCollapsed, onToggle, onTotal, dragging,
   onDragStart, onDragEnd, onDragOverCard, onGripKey, registerNode,
   reloadKey, onMagicLinkSent, tableProps,
 }: {
   section: Section;
   index: number;
   query: JobsQuery;
-  collapsed: boolean;
-  onToggle: () => void;
+  /** The operator's pinned choice, or undefined to let the count decide. */
+  explicitCollapsed: boolean | undefined;
+  onToggle: (nextCollapsed: boolean) => void;
+  onTotal: (total: number) => void;
   dragging: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
@@ -403,11 +463,18 @@ function SectionCard({
    * shows without pulling a page of records nothing will render. Expanding
    * changes the key, so the real page is fetched then.
    */
+  /*
+   * Only an EXPLICITLY shut section fetches count-only. A section on auto has
+   * to fetch its rows regardless — it cannot know whether to open until the
+   * count arrives, and fetching 1 row now and 10 a moment later would double
+   * the requests and flash the table in.
+   */
+  const countOnly = explicitCollapsed === true;
   const key = buildJobsKey({
     ...query,
     section: section.key,
-    limit: collapsed ? 1 : limit,
-    offset: collapsed ? 0 : page * limit,
+    limit: countOnly ? 1 : limit,
+    offset: countOnly ? 0 : page * limit,
   });
   const { data, loading, refetch } = useFetch<Resp>(key);
 
@@ -435,6 +502,20 @@ function SectionCard({
 
   const rows = data?.items ?? [];
   const total = data?.total ?? 0;
+
+  // Report upward so the parent can add the sections together.
+  useEffect(() => {
+    if (data) onTotal(data.total);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
+
+  /*
+   * AUTO: open when it has jobs, shut when it does not — an operator scanning
+   * five headings should not have to open three empty ones to learn they are
+   * empty. An explicit click wins forever after (see toggle() in the parent).
+   * While the count is unknown it stays OPEN, so the table never flashes shut.
+   */
+  const collapsed = explicitCollapsed ?? (data ? total === 0 : false);
 
   return (
     <section
@@ -472,7 +553,7 @@ function SectionCard({
         </button>
         <button
           type="button"
-          onClick={onToggle}
+          onClick={() => onToggle(!collapsed)}
           aria-expanded={!collapsed}
           className="flex items-center gap-1.5 flex-1 text-left"
           title={collapsed ? 'Expand' : 'Collapse'}
