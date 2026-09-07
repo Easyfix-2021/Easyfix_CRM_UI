@@ -6,7 +6,8 @@
  * Backed by:
  *   GET /admin/clients/:clientId/rate-cards
  *   PUT /admin/clients/:clientId/rate-cards   (bulk upsert)
- *   DELETE /admin/clients/rate-cards/:id
+ *   DELETE /admin/clients/rate-cards/:clientServiceId   (soft-deletes the
+ *     client's own tbl_client_service row; never the shared catalog)
  *
  * Perf design:
  *   - Single GET on mount; merged with the (cached) /service-types
@@ -41,7 +42,19 @@ import { useFetch, useFetchOnce, invalidateFetch } from '@/lib/hooks';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
 type RateCardRow = {
-  rate_card_id?: number;            // absent for unsaved (locally-added) rows
+  /*
+   * The PK of the client's OWN tbl_client_service row, and the only id that
+   * identifies "this client's rate card". Absent on locally-added stubs, which
+   * is what distinguishes a persisted row from one that has never been saved.
+   */
+  client_service_id?: number;
+  /*
+   * FK into tbl_client_rate_card — a CATALOG SHARED ACROSS CLIENTS. Useful as a
+   * name, never as a delete target: removing the catalog row blanks that rate
+   * card's name for every other client using it. It is also nullable on
+   * persisted rows, so it cannot stand in for "has this been saved".
+   */
+  rate_card_id?: number;
   client_id?: number;
   service_type_id: number;
   service_type_name?: string | null;
@@ -174,7 +187,15 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
   }
 
   async function removeRow(row: RateCardRow) {
-    if (row.rate_card_id) {
+    /*
+     * Keyed on client_service_id, not rate_card_id, for two reasons. It is the
+     * client's OWN row — the server soft-deletes that and never touches the
+     * shared catalog. And rate_card_id is NULLABLE on a persisted row, so the
+     * old check sent any saved-but-unlinked row down the "local stub" branch
+     * below: it vanished from the grid without a request and came straight back
+     * on the next refetch.
+     */
+    if (row.client_service_id) {
       // Persisted — confirm + DELETE.
       const ok = await confirm({
         title: 'Remove Rate Card',
@@ -184,7 +205,7 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
       });
       if (!ok) return;
       try {
-        await api.delete<{ deleted: boolean }>(`/admin/clients/rate-cards/${row.rate_card_id}`);
+        await api.delete<{ deleted: boolean }>(`/admin/clients/rate-cards/${row.client_service_id}`);
         setDraft((d) => (d ?? []).filter((r) => r.service_type_id !== row.service_type_id));
         invalidateFetch((k) => k === listKey);
         refetch();
@@ -359,7 +380,7 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
                 const clTip   = `Variable: ₹${fmt2(split.breakdown.cVarAmt)}  •  Fixed: ₹${fmt2(split.breakdown.cFixAmt)}`;
                 const fxrTip  = 'Residual after all three layers (Easyfix Direct → Overhead → Client Share)';
                 return (
-                <tr key={r.rate_card_id ?? `new-${r.service_type_id}-${idx}`}>
+                <tr key={r.client_service_id ?? `new-${r.service_type_id}-${idx}`}>
                   <td className="!text-left sticky left-0 bg-card z-10 font-medium border-r border-border">
                     {r.service_type_name ?? `#${r.service_type_id}`}
                   </td>
