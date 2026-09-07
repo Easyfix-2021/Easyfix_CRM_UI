@@ -66,6 +66,15 @@ type ScheduledJob = {
   testable?: boolean;
   testSourceLabel?: string | null;
   testSourceHelp?: string | null;
+  /*
+   * What this job's test actually DOES, which decides the modal's shape.
+   *   'message' — dispatches one message to a mobile the operator types.
+   *   'action'  — runs the job's real work for ONE row and sends nothing to
+   *               a typed number, so a mobile field would be a lie.
+   * Absent on an older backend; treated as 'message', which is what the
+   * modal assumed for every job before 2026-09-07.
+   */
+  testKind?: 'message' | 'action' | null;
   lastTestAt?: string | null;
   lastTestDurationMs?: number | null;
   lastTestResult?: unknown;
@@ -629,13 +638,30 @@ function TestJobModal({
   }, [target?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const open = !!target;
+  /*
+   * ACTION tests send nothing to a typed number, so the mobile field is not
+   * merely unnecessary — it was actively misleading. Six of the nine testable
+   * jobs are this kind (auto-reactivation, status-drift repair, the two
+   * reminders' dry-runs, rewards, conference reaper); every one of them
+   * demanded a number it then discarded, and one worked around the forced
+   * field by labelling it "Not required".
+   *
+   * The source id swaps polarity with the kind: optional for a message (it
+   * only borrows real content into the text) and REQUIRED for an action (it
+   * names the single row the job will actually operate on).
+   */
+  const isAction = target?.testKind === 'action';
+  const needsSource = isAction && !!target?.testSourceLabel;
   const trimmedMobile = mobile.trim();
   const cleanedDigits = trimmedMobile.replace(/\D/g, '');
   const mobileValid = cleanedDigits.length === 10
     || (cleanedDigits.length === 12 && cleanedDigits.startsWith('91'));
   const sourceIdLooksValid =
     sourceId.trim() === '' || /^\d+$/.test(sourceId.trim());
-  const canSubmit = mobileValid && sourceIdLooksValid && !submitting;
+  const canSubmit = (isAction ? true : mobileValid)
+    && sourceIdLooksValid
+    && (!needsSource || sourceId.trim() !== '')
+    && !submitting;
 
   // Discard-changes guard for Esc / X / overlay-click. Project-wide ESLint
   // rule forbids inline `onOpenChange` on Dialog because it bypasses this
@@ -644,7 +670,7 @@ function TestJobModal({
   // prompt while a submit is in flight — that close path is already a
   // success that's tearing down the modal.
   const guardedOpenChange = useFormDirtyGuard(onClose, {
-    isDirty: trimmedMobile !== '' || sourceId.trim() !== '',
+    isDirty: (!isAction && trimmedMobile !== '') || sourceId.trim() !== '',
     when: () => !submitting,
   });
 
@@ -659,13 +685,15 @@ function TestJobModal({
       await api.post(
         `/admin/scheduled-jobs/${encodeURIComponent(target.id)}/test`,
         {
-          mobile: trimmedMobile,
+          mobile: isAction ? undefined : trimmedMobile,
           sourceId: sourceId.trim() === '' ? undefined : sourceId.trim(),
         },
       );
       showToast({
         variant: 'success',
-        message: `Test message dispatched to ${trimmedMobile}.`,
+        message: isAction
+          ? `Test run completed for ${target.name}.`
+          : `Test message dispatched to ${trimmedMobile}.`,
       });
       onSuccess();
       onClose();
@@ -689,14 +717,31 @@ function TestJobModal({
             * of this dialog is "real recipient is NEVER contacted",
             * surface that visibly.
             */}
-          <div className="rounded-md border border-warning/30 bg-warning-tint text-warning-strong px-3 py-2 text-xs leading-relaxed">
-            <strong>Safety rule:</strong> the test WhatsApp is sent to the
-            mobile number you enter below — and <strong>only</strong> to that
-            number. Even if you provide an existing {target.testSourceLabel || 'source ID'}{' '}
-            below, that record&apos;s real owner will <strong>not</strong> receive
-            the message.
-          </div>
+          {/*
+            * Two different promises, because these are two different tests.
+            * A MESSAGE test's guarantee is about who does not get contacted.
+            * An ACTION test has no such guarantee to give — it changes one
+            * real row for real — so saying nothing would be safer than
+            * reusing the WhatsApp wording, and saying THIS is safer still.
+            */}
+          {isAction ? (
+            <div className="rounded-md border border-info/30 bg-info-tint text-info-strong px-3 py-2 text-xs leading-relaxed">
+              <strong>This runs for real.</strong> No message is sent to you —
+              the job performs its normal work on the single{' '}
+              {target.testSourceLabel ? 'record' : 'run'} below, exactly as the
+              nightly schedule would, and the change is saved.
+            </div>
+          ) : (
+            <div className="rounded-md border border-warning/30 bg-warning-tint text-warning-strong px-3 py-2 text-xs leading-relaxed">
+              <strong>Safety rule:</strong> the test WhatsApp is sent to the
+              mobile number you enter below — and <strong>only</strong> to that
+              number. Even if you provide an existing {target.testSourceLabel || 'source ID'}{' '}
+              below, that record&apos;s real owner will <strong>not</strong> receive
+              the message.
+            </div>
+          )}
 
+          {!isAction && (
           <div>
             <label className="text-sm font-medium block mb-1">
               Mobile Number <span className="text-urgent">*</span>
@@ -719,18 +764,27 @@ function TestJobModal({
               </p>
             )}
           </div>
+          )}
 
+          {(!isAction || needsSource) && (
           <div>
             <label className="text-sm font-medium block mb-1">
               {target.testSourceLabel || 'Source ID'}{' '}
-              <span className="text-muted-foreground text-xs font-normal">(optional)</span>
+              {needsSource ? (
+                <span className="text-urgent">*</span>
+              ) : (
+                <span className="text-muted-foreground text-xs font-normal">(optional)</span>
+              )}
             </label>
             <Input
               type="text"
               inputMode="numeric"
               value={sourceId}
               onChange={(e) => setSourceId(e.target.value)}
-              placeholder="Leave blank to use dummy details"
+              placeholder={needsSource
+                ? 'The one record this test will act on'
+                : 'Leave blank to use dummy details'}
+              autoFocus={isAction}
             />
             {target.testSourceHelp && (
               <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
@@ -743,6 +797,7 @@ function TestJobModal({
               </p>
             )}
           </div>
+          )}
 
           {inlineError && (
             <div className="rounded-md border border-destructive/40 bg-destructive/5 text-destructive text-xs px-3 py-2">
@@ -766,7 +821,9 @@ function TestJobModal({
               disabled={!canSubmit}
             >
               <Send className="h-3.5 w-3.5 mr-1" />
-              {submitting ? 'Sending…' : 'Send Test Message'}
+              {isAction
+                ? (submitting ? 'Running…' : 'Run Test')
+                : (submitting ? 'Sending…' : 'Send Test Message')}
             </Button>
           </DialogFooter>
         </form>
