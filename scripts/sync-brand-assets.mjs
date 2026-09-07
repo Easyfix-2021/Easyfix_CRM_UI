@@ -80,9 +80,36 @@ const WEB_ASSETS = [
   'icon-maskable-192.png', 'icon-maskable-512.png', 'og-image.png',
 ];
 
+/*
+ * The certificate template — HRMS → Certificates renders the frame and overlays
+ * the operator's text on it.
+ *
+ * TWO FILES, AND NEITHER IS OPTIONAL. The frame is empty artwork; the layout
+ * names the rectangle each text run goes in, normalised 0..1 of a 3508x2480
+ * canvas. Vendoring the SVG without the JSON leaves a page that can draw the
+ * border and has to guess where the name goes, which is the one failure this
+ * feature cannot tolerate: the preview would stop agreeing with the PDF the
+ * backend renders from the SAME layout file, and a preview that disagrees with
+ * its download is worse than no preview.
+ *
+ * They come from two different places in the kit — `master/svg/` and the kit
+ * ROOT — because the layout is generated per-kit rather than per-surface, so
+ * this list carries full relative paths instead of a shared prefix.
+ *
+ * The JSON lands in `src/` rather than `public/` on purpose: it is geometry the
+ * page needs at first paint, so importing it makes the rectangles a build-time
+ * constant instead of a fetch with a loading state in front of the preview. The
+ * SVG stays in `public/` — it is 32KB of artwork referenced by an <img>.
+ */
+const CERTIFICATE = [
+  { from: 'master/svg/easyfix-certificate-frame.svg', to: 'public/brand/easyfix-certificate-frame.svg' },
+  { from: 'certificate-layout.json', to: 'src/brand/certificate-layout.json' },
+];
+
 const jobs = [
   ...LOGO_SVGS.map((f) => ({ from: join(KIT, 'apps/crm/svg', f), to: join(root, 'public/brand', f) })),
   ...WEB_ASSETS.map((f) => ({ from: join(KIT, 'apps/crm/web', f), to: join(root, 'public', f) })),
+  ...CERTIFICATE.map(({ from, to }) => ({ from: join(KIT, from), to: join(root, to) })),
 ];
 
 const check = process.argv.includes('--check');
@@ -158,8 +185,6 @@ if (!existsSync(KIT)) {
   process.exit(0);
 }
 
-mkdirSync(join(root, 'public/brand'), { recursive: true });
-
 let changed = 0;
 const missing = [];
 const drifted = [];
@@ -170,6 +195,12 @@ for (const { from, to } of jobs) {
   const cur = existsSync(to) ? readFileSync(to) : null;
   if (cur && src.equals(cur)) continue;
   if (check) { drifted.push(to.replace(root + '/', '')); continue; }
+  /*
+   * Per-destination rather than one mkdir of public/brand: the jobs list now
+   * writes to three different directories, and a hardcoded one silently makes
+   * every job outside it an ENOENT the moment a new destination is added.
+   */
+  mkdirSync(dirname(to), { recursive: true });
   writeFileSync(to, src);
   changed += 1;
 }

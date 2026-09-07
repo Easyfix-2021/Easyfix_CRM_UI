@@ -35,6 +35,18 @@ export interface DownloadXlsxOptions {
    * call sites that want `.xlsx` should include it.
    */
   filename: string;
+  /*
+   * Optional JSON request body. Absent → GET (every existing caller).
+   * Present → POST with `Content-Type: application/json`.
+   *
+   * Added for POST /admin/certificates/render, which takes the certificate
+   * text as a body and streams a PDF back. That is the same recipe as every
+   * other caller here — authed fetch → blob → anchor → deferred revoke — with
+   * only the verb different, so it belongs in this helper rather than in a
+   * seventh hand-rolled copy of it. `api.post` cannot serve it: that wrapper
+   * parses the response as JSON, which is fatal for a byte stream.
+   */
+  body?: Record<string, unknown>;
 }
 
 /**
@@ -49,7 +61,7 @@ export interface DownloadXlsxOptions {
  * is revoked 500ms later — enough headroom for the browser to start
  * the download stream while the anchor is still alive.
  */
-export async function downloadXlsx({ url, filename }: DownloadXlsxOptions): Promise<void> {
+export async function downloadXlsx({ url, filename, body }: DownloadXlsxOptions): Promise<void> {
   const base = process.env.NEXT_PUBLIC_API_URL || '/api';
   // Absolute URLs (https://…) or already-prefixed (/api/…) pass
   // through unchanged. A bare path like `/admin/jobs/export.xlsx?…`
@@ -60,9 +72,13 @@ export async function downloadXlsx({ url, filename }: DownloadXlsxOptions): Prom
 
   const token = typeof window !== 'undefined' ? localStorage.getItem('crm_auth_token') : null;
   const resp = await fetch(finalUrl, {
-    method: 'GET',
+    method: body === undefined ? 'GET' : 'POST',
     credentials: 'include',
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
     cache: 'no-store',
   });
   if (!resp.ok) {

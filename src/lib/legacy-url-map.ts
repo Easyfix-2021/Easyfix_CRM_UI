@@ -140,6 +140,24 @@ export const URL_MAP: Record<string, string> = {
    * seeds the token, this map is the half that resolves it.
    */
   'hrmsApprovals':         '/hrms/approvals',
+  /*
+   * HRMS → Certificates (2026-09-07). The certificate TEMPLATE, filled in by
+   * hand and downloaded — not a register. Nothing about a certificate is
+   * stored on either side of this screen, so there is no list to read and no
+   * row to gate: the whole page is the write, and it carries one key
+   * (isCertificateIssue) rather than a view/act pair.
+   *
+   * It sits under HRMS rather than LMS because the LMS already issues its own
+   * certificates automatically on course completion. This is the manual
+   * counterpart — a long-service award, a partner accreditation, a
+   * replacement for training that predates the LMS — and those are HR's, not
+   * the training team's.
+   *
+   * Same halves as every other leaf: the migration seeds the tbl_menu token,
+   * this entry resolves it. Without it the sidebar link falls through to
+   * /coming-soon whatever the SQL says.
+   */
+  'hrmsCertificates':      '/hrms/certificates',
   // Master-data settings ported from legacy CRM.
   'servicecategory':       '/settings/service-categories',
   'servicetype':           '/settings/service-types',

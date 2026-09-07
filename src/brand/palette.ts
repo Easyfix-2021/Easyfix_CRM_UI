@@ -75,4 +75,38 @@ export const tricolour = {
   green: '#138808',
 } as const;
 
+/**
+ * The certificate document's ink — the second documented exception, and the
+ * same shape as the tricolour above: colours this CRM does not own, admitted
+ * only so a preview can mirror something rendered elsewhere.
+ *
+ * THESE ARE NOT CRM TOKENS AND MUST NEVER BECOME ONE. They are a verbatim copy
+ * of the `STYLE` table in EasyFix_Backend `utils/pdf-certificate.js`, which is
+ * the sole authority on what a certificate looks like: it rasterises the PNG
+ * and JPG and writes the PDF. HRMS → Certificates draws a live preview of that
+ * document, and a preview whose colours are "close" is a preview that lies —
+ * so the values are copied rather than approximated, and they belong here
+ * because this is the only module allowed to hold a colour literal.
+ *
+ * Kept OUT of `palette` for the tricolour's reason: nothing in the token
+ * generator may pick these up, and no component may reach them except the
+ * certificate preview. A rebrand that changes them has to change the backend
+ * in the same commit or the preview and the download drift apart.
+ *
+ * ⚠ KEY NAMES HERE MUST NOT COLLIDE WITH A KEY IN `palette`.
+ * `scripts/check-brand-roundtrip.mjs` reads this file with a line regex —
+ * every two-space-indented `key: '#RRGGBB'` in the WHOLE file, whichever
+ * export it belongs to — and folds them into one flat map, last one winning.
+ * A `gold` key here therefore shadows `palette.gold` and the roundtrip check
+ * fails claiming the generated `--gold` token is wrong. Measured: it did.
+ * The backend's GOLD is deliberately absent below for that reason and because
+ * the preview never needs it — the rules on the certificate are part of the
+ * artwork, not something this page draws.
+ */
+export const certificateInk = {
+  navy: '#12305B', // the title run
+  ink: '#1A1A1A', // recipient name, date value, signatory name
+  muted: '#5A5A5A', // headings, eyebrows, labels, the certificate-id line
+} as const;
+
 export type PaletteColor = keyof typeof palette;
