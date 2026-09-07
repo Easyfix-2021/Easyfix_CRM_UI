@@ -7,12 +7,18 @@
  * name and a title, watch the certificate fill in, download it as PDF, PNG or
  * JPG. That is the entire feature.
  *
- * ─── NOTHING IS STORED, AND THAT IS THE DESIGN ──────────────────────────────
+ * ─── THE NUMBER IS ISSUED, THE REST IS STILL A PURE FORM ────────────────────
  *
- * There is no certificate table, no issued_on, no revoke, no list. POST
- * /admin/certificates/render turns a request body into bytes and forgets it, so
- * this page has no read side at all — no fetch, no pagination, no row actions.
- * It is a form and a picture of what the form will produce.
+ * POST /admin/certificates/render RECORDS the issuance (tbl_certificate, added
+ * 2026-09-07) and returns bytes. The record exists so a Certificate ID can be
+ * validated later; it is not a list, and this page still has no read side —
+ * no fetch, no pagination, no row actions. It is a form and a picture of what
+ * the form will produce.
+ *
+ * The number itself is SERVER-ISSUED and deliberately not an input. A typed
+ * number looks official and validates as unknown, and nothing would stop two
+ * certificates sharing one. The consequence for this page is that the ID
+ * cannot appear in the preview — see planRuns().
  *
  * That is why this replaced two earlier screens rather than joining them: an
  * "LMS → Certificates" register had nothing to register (the LMS generates a
@@ -148,14 +154,13 @@ type FormState = {
   title: string;
   heading: string;
   dateYmd: string;
-  certificateId: string;
   signatoryName: string;
   signatoryTitle: string;
 };
 
 const EMPTY_FORM: FormState = {
   recipientName: '', title: '', heading: '', dateYmd: '',
-  certificateId: '', signatoryName: '', signatoryTitle: '',
+  signatoryName: '', signatoryTitle: '',
 };
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
@@ -207,7 +212,6 @@ function certificateValues(f: FormState) {
     title: f.title.trim(),
     heading: opt(f.heading),
     dateText: f.dateYmd ? formatCertificateDate(f.dateYmd) : undefined,
-    certificateId: opt(f.certificateId),
     signatoryName: opt(f.signatoryName),
     signatoryTitle: opt(f.signatoryTitle),
   };
@@ -250,7 +254,18 @@ function planRuns(v: CertificateValues): PlannedRun[] {
     ['dateLabel', date ? DATE_LABEL : ''],
     ['signatoryName', v.signatoryName],
     ['signatoryTitle', v.signatoryName ? v.signatoryTitle : ''],
-    ['certificateIdLine', v.certificateId ? `Certificate ID: ${v.certificateId} · ${SITE}` : ''],
+    /*
+     * NO footer run. The Certificate ID is allocated by the server when the
+     * document is issued, so at preview time it does not exist yet — and the
+     * downloaded file ALWAYS carries the line.
+     *
+     * That is a preview which omits something, which is not the same as one
+     * that lies: showing a placeholder or a fabricated number here would put
+     * text on screen that the file will not contain, which is the rule this
+     * page exists to keep. The caption under the Download buttons says the
+     * number is issued on download, so the omission is stated rather than
+     * silent.
+     */
   ];
 
   const runs: PlannedRun[] = [];
@@ -520,8 +535,9 @@ function PageHeading() {
         <Award className="size-6" /> Certificates
       </h1>
       <p className="text-sm text-muted-foreground">
-        Fill in the certificate and download it. Nothing is stored — the file is generated on
-        each download and never saved, so keep the copy you download.
+        Fill in the certificate and download it. A Certificate ID is issued on download and
+        recorded, so the number on the file can be checked later — it is not shown in the
+        preview because it does not exist until then.
       </p>
     </div>
   );
@@ -658,16 +674,6 @@ export default function CertificatesPage() {
                   certificate carries today's date in IST, which is what the
                   preview is already showing. */}
               <Input type="date" value={form.dateYmd} onChange={set('dateYmd')} />
-            </div>
-
-            <div>
-              <Label className="mb-1 block">Certificate ID</Label>
-              <Input
-                value={form.certificateId}
-                onChange={set('certificateId')}
-                maxLength={40}
-                placeholder="Optional Reference"
-              />
             </div>
 
             <div>

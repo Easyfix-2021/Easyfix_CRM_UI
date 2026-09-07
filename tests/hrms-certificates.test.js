@@ -79,12 +79,29 @@ test('every region the layout declares is actually placed', () => {
    * artefact and the page is joined against it — which also means this test
    * needs no copy of the region list to fall out of date.
    */
+  /*
+   * ONE documented exception, listed here rather than skipped silently.
+   *
+   * certificateIdLine is declared by the layout and drawn by the RENDERER, but
+   * cannot be drawn by the preview: the number is issued by the server when the
+   * document is created, so at preview time it does not exist. Placing a
+   * placeholder would be the lie this whole file guards against.
+   *
+   * It stays an explicit entry so the join above keeps its value — a region the
+   * Brand Kit adds tomorrow and the page ignores still fails this test.
+   */
+  const NOT_PREVIEWED = new Set(['certificateIdLine']);
+
   const regions = Object.keys(JSON.parse(fs.readFileSync(LAYOUT, 'utf8')).regions);
   assert.ok(regions.length >= 10, `expected the layout to declare regions, got ${regions.length}`);
+  for (const name of NOT_PREVIEWED) {
+    assert.ok(regions.includes(name), `${name} is exempted but the layout no longer declares it`);
+  }
 
   const wanted = codeOnly.match(/const wanted: \[RegionName, string \| undefined\]\[\] = \[[\s\S]*?\n  \];/);
   assert.ok(wanted, 'the run plan must exist');
   for (const name of regions) {
+    if (NOT_PREVIEWED.has(name)) continue;
     assert.ok(
       wanted[0].includes(`'${name}'`),
       `region '${name}' is declared by the layout but never placed by the page`,
@@ -303,12 +320,29 @@ test('the fixed strings are the renderer\'s, including the footer it composes', 
   assert.match(codeOnly, /DEFAULT_EYEBROW = 'FOR SUCCESSFULLY COMPLETING THE TRAINING'/);
   assert.match(codeOnly, /SITE = 'www\.easyfix\.in'/);
 
-  // Composed here, exactly as `planCertificate` composes it — and dropped WHOLE
-  // when there is no id, never printed as an empty or half caption.
-  assert.match(
+  /*
+   * The footer is NOT drawn in the preview, and that is the assertion now.
+   *
+   * The Certificate ID became server-issued on 2026-09-07, so at preview time
+   * it does not exist — while the downloaded file always carries the line.
+   * Omitting it is honest; inventing a placeholder would put text on screen
+   * that the file will not contain, which is the one thing this preview must
+   * never do. The caption under the Download buttons states the omission.
+   */
+  assert.doesNotMatch(
     codeOnly,
-    /\['certificateIdLine', v\.certificateId \? `Certificate ID: \$\{v\.certificateId\} · \$\{SITE\}` : ''\]/,
-    'the footer must be the renderer\'s composed line, suppressed entirely without an id',
+    /certificateId(?!Line)/,
+    'the operator must not be able to type a Certificate ID — it is issued by the server',
+  );
+  assert.doesNotMatch(
+    codeOnly,
+    /\['certificateIdLine',\s*[^\]]*`/,
+    'the preview must not compose a Certificate ID line it cannot know',
+  );
+  assert.match(
+    src,
+    /issued on download/i,
+    'and the page must SAY the number is issued on download, so the gap is stated not silent',
   );
 });
 
