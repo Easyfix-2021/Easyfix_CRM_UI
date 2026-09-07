@@ -19,12 +19,14 @@
  *
  * ─── THE FOUR NAMES ─────────────────────────────────────────────────────────
  * client_name is the master/legal name. The other three are presentation:
- *   display_name   how it reads in the CRM
- *   billing_name   how it reads on an invoice (PRE-EXISTING legacy column —
- *                  ClientDaoImpl writes it, the invoice module reads it as
- *                  invoiceName; this screen did not introduce it)
+ *   display_name   how it reads in the CRM            — edited here
+ *   billing_name   how it reads on an invoice         — SHOWN here, edited in
+ *                  Account & Payment. It belongs to the billing block that
+ *                  billing_raised switches off as a unit, and a form that does
+ *                  not know about that switch must not write one third of it.
+ *                  It therefore does NOT follow client_name either.
  *   tech_app_name  how it reads on a technician's phone, where a job card has
- *                  very little width
+ *                  very little width                  — edited here
  * display_name and tech_app_name arrive with
  * migrations/executed/2026-08-25-client-profile-names.sql. Until it is applied
  * the detail payload has no such KEYS at all (the endpoint SELECTs *), so the
@@ -172,8 +174,13 @@ export function ProfileOverviewSection({
         ...f,
         clientName: value,
         displayName: follows(f.displayName) ? value : f.displayName,
-        billingName: follows(f.billingName) ? value : f.billingName,
         techAppName: follows(f.techAppName) ? value : f.techAppName,
+        /*
+         * billingName deliberately does NOT follow any more. This form no
+         * longer writes it (see save()), and auto-filling a value the form
+         * cannot save is worse than not filling it: the operator watches the
+         * box change, saves, and it silently reverts.
+         */
       };
     });
   }
@@ -209,7 +216,22 @@ export function ProfileOverviewSection({
       cinNumber:     form.cinNumber,
       panNumber:     form.panNumber,
       mouContact:    form.mouContact,
-      billingName:   form.billingName,
+      /*
+       * ⚠ billingName and collectedBy are ABSENT ON PURPOSE — Account & Payment
+       * owns them, and this form must not send them.
+       *
+       * billing_raised is a MASTER SWITCH: turning it off there NULLs
+       * billing_name, billing_cycle and billing_start_date together, mirroring
+       * ClientDaoImpl. This form knew nothing about that switch and sent
+       * billingName unconditionally from its own snapshot — so editing anything
+       * here (an address, a pincode) and saving RESURRECTED a billing name the
+       * switch had deliberately cleared. collected_by had the milder version of
+       * the same problem: whichever form saved last won, with whatever value it
+       * had loaded, silently reverting the other.
+       *
+       * Both are still SHOWN below, read-only, so the page still tells the whole
+       * story — it just has one writer.
+       */
       monthlyRevenue: form.monthlyRevenue.trim() === '' ? null : Number(form.monthlyRevenue),
     };
     if (hasDisplayName) payload.displayName = form.displayName;
@@ -221,7 +243,6 @@ export function ProfileOverviewSection({
       if (Number.isFinite(n)) payload[key] = n;
     };
     num('bookingCutOff', form.bookingCutOff);
-    num('collectedBy', form.collectedBy);
     num('cityId', form.cityId);
     num('travelDistance', form.travelDistance);
     num('maxOrders', form.maxOrders);
@@ -262,9 +283,8 @@ export function ProfileOverviewSection({
                   onChange={(e) => set('displayName', e.target.value)} />
               </Field>
             )}
-            <Field label="Billing Name" hint="The name printed on invoices.">
-              <Input value={form.billingName} disabled={ro} maxLength={255}
-                onChange={(e) => set('billingName', e.target.value)} />
+            <Field label="Billing Name" hint="The name printed on invoices. Edited in Account &amp; Payment, where the billing master switch lives.">
+              <Input value={form.billingName} disabled readOnly maxLength={255} />
             </Field>
           </Row>
 
@@ -340,12 +360,11 @@ export function ProfileOverviewSection({
               <Input type="number" min={0} max={48} value={form.bookingCutOff} disabled={ro}
                 onChange={(e) => set('bookingCutOff', e.target.value)} />
             </Field>
-            <Field label="Collected By" hint="Which party collects payment on a job.">
+            <Field label="Collected By" hint="Which party collects payment on a job. Edited in Account &amp; Payment.">
               <select
                 className="border rounded h-9 px-2 text-sm w-full bg-background disabled:opacity-60"
                 value={form.collectedBy}
-                disabled={ro}
-                onChange={(e) => set('collectedBy', e.target.value)}
+                disabled
               >
                 <option value="">— Not Set —</option>
                 {COLLECTED_BY_OPTIONS.map((o) => (
