@@ -126,10 +126,20 @@ test('one values object feeds BOTH the preview and the request body', () => {
     /<CertificatePreview values=\{values\}/,
     'the preview must render from the same values object',
   );
-  assert.match(
-    codeOnly,
-    /body: \{ \.\.\.values, format \}/,
-    'the request body must be that same object plus the format',
+  /*
+   * The body is `values` plus exactly two NON-DOCUMENT keys: `format`, which
+   * chooses the encoding, and `issueKey`, which identifies the act of issuing.
+   * Neither describes the certificate, which is why neither may come from
+   * certificateValues() — and the enumeration is closed on purpose, so a
+   * document field added to the body but not to `values` still fails here.
+   */
+  const body = codeOnly.match(/body: \{ \.\.\.values,([^}]*)\}/);
+  assert.ok(body, 'the request body must spread the same values object');
+  const extras = body[1].split(',').map((k) => k.trim()).filter(Boolean);
+  assert.deepEqual(
+    extras.sort(),
+    ['format', 'issueKey'],
+    `only format and issueKey may be added to the body, found: ${extras.join(', ')}`,
   );
   // Exactly one place converts the form, so there is no second set of rules.
   assert.equal(
@@ -444,6 +454,39 @@ test('the URL map resolves the new page and has dropped the retired one', () => 
     !/lmsCertificates/.test(map),
     'the retired LMS certificates leaf must be gone, or the sidebar keeps offering it',
   );
+});
+
+test('one issuance per form — the key is minted from the values, not per click', () => {
+  /*
+   * Reported 2026-09-08: one filled form, a click on PDF then on PNG, and the
+   * backend recorded two certificate numbers for one award. Pressing a second
+   * FORMAT button is not issuing a second document, and only this page knows
+   * where one issuance ends — so it mints the key.
+   */
+  assert.match(
+    codeOnly,
+    /const issueKey = React\.useMemo\(/,
+    'the page must mint an issue key',
+  );
+  assert.match(
+    codeOnly,
+    /\[JSON\.stringify\(values\)\]/,
+    'keyed on the SERIALISED values — `values` is rebuilt every render, so identity would mint a new key per keystroke',
+  );
+  assert.match(
+    codeOnly,
+    /body: \{ \.\.\.values, format, issueKey \}/,
+    'and send it with every download',
+  );
+
+  /*
+   * It must NOT reach the preview. The preview draws the document; this is
+   * bookkeeping about the act of issuing one, and a value that appears in both
+   * is a value that can end up printed.
+   */
+  const planRuns = codeOnly.slice(codeOnly.indexOf('function planRuns'));
+  const planBody = planRuns.slice(0, planRuns.indexOf('\n}'));
+  assert.doesNotMatch(planBody, /issueKey/, 'the key must never reach the preview');
 });
 
 test('positive control — the comment stripper actually removes prose', () => {

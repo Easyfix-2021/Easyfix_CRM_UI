@@ -566,6 +566,34 @@ export default function CertificatesPage() {
    * a round trip that teaches them nothing. */
   const ready = values.recipientName !== '' && values.title !== '';
 
+  /*
+   * ONE ISSUANCE PER FORM, NOT PER DOWNLOAD.
+   *
+   * Reported 2026-09-08: an operator filled this in once, clicked PDF and then
+   * PNG, and the backend recorded EF-GEN-2026-0001 and -0002 — two numbers for
+   * one award, and nothing to say which a later lookup should trust. Pressing a
+   * second FORMAT button is not issuing a second document.
+   *
+   * So the page decides what "one issuance" means, because only the page knows:
+   * a key minted on mount and re-minted whenever any value changes. Three
+   * formats of one form share it; an edit, or a reload, starts a new one. The
+   * server keys the record on it.
+   *
+   * Keyed on the SERIALISED values, not on `values` itself — that object is
+   * rebuilt every render, so identity would mint a fresh key on every keystroke
+   * and the same certificate would still be recorded twice.
+   *
+   * The key is never rendered, so there is no hydration concern; the fallback
+   * exists only for a context where randomUUID is unavailable.
+   */
+  const issueKey = React.useMemo(
+    () => (typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `k-${Date.now()}-${Math.random().toString(36).slice(2)}`),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [JSON.stringify(values)],
+  );
+
   async function download(format: Format) {
     setBusy(format);
     const toastId = showToast({ variant: 'loading', message: 'Generating Certificate…' });
@@ -579,7 +607,12 @@ export default function CertificatesPage() {
       await downloadXlsx({
         url: '/admin/certificates/render',
         filename: `${certificateFilename(values)}.${format}`,
-        body: { ...values, format },
+        /*
+         * issueKey rides with the body but is NOT part of `values`, so it can
+         * never reach the preview — the preview draws the document, and this is
+         * bookkeeping about the act of issuing it.
+         */
+        body: { ...values, format, issueKey },
       });
       dismissToast(toastId);
       showToast({ variant: 'success', message: 'Certificate Downloaded' });
