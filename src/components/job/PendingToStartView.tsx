@@ -228,17 +228,25 @@ export function PendingToStartView({
     setReloadKey((k) => k + 1);
   };
 
-  // Reassign and Check-In both open a page-owned modal — ?action=reassign for
-  // reassign, ?action=view for Check-In (the icon now opens the JobModal
-  // workspace where ops actually check in). When any of those close, the row
-  // may have left this bucket (a reassign committed, or a check-in flipped the
-  // job to In-Progress inside the workspace), so refetch when the action param
-  // clears from one of them.
+  /*
+   * Every row action here opens a page-owned modal: ?action=reassign,
+   * ?action=checkin (the PlayCircle — the JobModal workspace whose footer
+   * carries the Check In action), or ?action=view (the read-only Eye). When one
+   * of those closes the row may have left this bucket — a reassign committed, or
+   * a check-in flipped the job to In-Progress — so refetch as the action param
+   * clears.
+   *
+   * 'checkin' was MISSING from this set until 2026-09-08, which is precisely the
+   * action that moves a row out of Pending-to-Start: closing the check-in
+   * workspace left the three buckets showing the job as still pending. Any
+   * action added to the row must be added here too.
+   */
   const { action } = useJobActionParams();
   const prevAction = useRef<typeof action>(action);
   useEffect(() => {
     if (
-      (prevAction.current === 'reassign' || prevAction.current === 'assign' || prevAction.current === 'view') &&
+      (prevAction.current === 'reassign' || prevAction.current === 'assign'
+        || prevAction.current === 'checkin' || prevAction.current === 'view') &&
       action !== prevAction.current
     ) {
       bumpReload();

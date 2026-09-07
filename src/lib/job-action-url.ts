@@ -37,15 +37,28 @@ import { useCallback, useMemo } from 'react';
  */
 
 /*
- * `checkin` opens the SAME workspace as `view` (JobModal maps it to the view
- * layout) — it exists purely so the Pending-to-Start Check-In entry can label
- * itself "Checkin · Job #N" and drop the status/type sub-line, while opening
- * the same job from the Jobs list stays the neutral "Job #N" viewer.
+ * `checkin` and `audit` both open the SAME workspace as `view` (JobModal folds
+ * them into the view layout) — they exist so an entry point can name the job it
+ * is opening for, while opening the same job from a list stays the neutral
+ * "Job #N" viewer:
+ *   checkin — Pending-to-Start "Check-In"; titles "Checkin · Job #N", drops the
+ *             status/type sub-line, and surfaces the footer Check In action.
+ *   audit   — Audit & Complete (status 3 / 5); titles "Audit · Job #N" and is
+ *             pushed with `{ tab: 'billing' }` so it lands on Billing & Charges,
+ *             where the audit actions (service approval, charge approvals,
+ *             advances, documents) live.
+ *
+ * ADDING AN ACTION IS A MULTI-FILE EDIT. The union and KNOWN_ACTIONS below are
+ * only the first two; see JobModalHost's JOBMODAL_ACTIONS, JobModal's
+ * JobModalMode + effectiveMode fold + guardedClose read-only skip, and each list
+ * page's `modal` memo. Miss one and the action silently falls through to an
+ * empty modal instead of erroring. tests/my-orders-checkin-audit.test.js pins
+ * every one of them.
  */
-export type JobAction = 'create' | 'view' | 'checkin' | 'edit' | 'confirm' | 'assign' | 'reassign' | 'schedule';
+export type JobAction = 'create' | 'view' | 'checkin' | 'audit' | 'edit' | 'confirm' | 'assign' | 'reassign' | 'schedule';
 
 const KNOWN_ACTIONS: ReadonlySet<JobAction> = new Set<JobAction>([
-  'create', 'view', 'checkin', 'edit', 'confirm', 'assign', 'reassign', 'schedule',
+  'create', 'view', 'checkin', 'audit', 'edit', 'confirm', 'assign', 'reassign', 'schedule',
 ]);
 
 export interface JobActionParams {

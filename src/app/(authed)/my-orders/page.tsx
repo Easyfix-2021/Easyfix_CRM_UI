@@ -5,7 +5,7 @@ import { useJobActionParams, useJobActionNav } from '@/lib/job-action-url';
 import {
   Search, Eye,
   CalendarClock, PlayCircle, CheckCircle2, CalendarCheck,
-  RefreshCw, MapPin,
+  RefreshCw, MapPin, ClipboardCheck,
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
@@ -208,6 +208,18 @@ export default function MyOrdersPage() {
     // that job's customer. Key declared in ResendPinButton.
     RESEND_PIN_ACTION,
   ]);
+  /*
+   * Audit entry point gate. `canManageJobCharges` is a STANDALONE boolean on
+   * /auth/me — not an actionFlags key — and it is what makes JobModal render the
+   * Billing & Charges tab at all (fail-closed; see ViewBody's KNOWN_TABS).
+   *
+   * The audit icon is hidden when it is false rather than opening a workspace
+   * whose audit tab isn't there: without the flag the tab is absent and the
+   * ?viewTab=billing deep link falls back to Summary, so the icon would be an
+   * exact duplicate of the Eye beside it. Two identical buttons is a worse
+   * failure than one missing one, because it reads as working.
+   */
+  const canAudit = me?.canManageJobCharges === true;
   // Read the URL's ?tab=<slug> synchronously so the FIRST load fires with the
   // right filter. Previously tab initialised to 'all', and a follow-up
   // useEffect read the URL after mount — so the initial fetch returned every
@@ -479,9 +491,13 @@ export default function MyOrdersPage() {
   const { jobId: urlJobId, action: urlAction } = useJobActionParams();
   const { openJobAction, closeJobAction } = useJobActionNav();
 
-  // JobModal opens for view / edit / confirm / create. Assign &
-  // Reassign open AssignTechDialog instead — derived separately
-  // from the same URL state below.
+  /*
+   * JobModal opens for view / checkin / audit / edit / confirm / create — the
+   * action token is passed through as the mode, so a new JobModal-backed action
+   * needs no edit here PROVIDED it is absent from the exclusion list below and
+   * present in JobModalMode. Assign & Reassign open AssignTechDialog instead and
+   * are excluded; they are derived separately from the same URL state below.
+   */
   const modal = useMemo<{ open: boolean; mode: JobModalMode; id?: number }>(() => {
     if (!urlAction || urlAction === 'assign' || urlAction === 'reassign') {
       return { open: false, mode: 'create' };
@@ -516,6 +532,16 @@ export default function MyOrdersPage() {
   // Pending-to-Start Check-In — same JobModal workspace as view, opened under
   // ?action=checkin so it titles itself "Checkin · Job #N" (see JobModalMode).
   function openCheckin(id: number)     { openJobAction('checkin',  id); }
+  /*
+   * Audit & Complete (status 3 / 5) — the SAME JobModal workspace again, opened
+   * under ?action=audit so it titles itself "Audit · Job #N", and deep-linked
+   * straight to Billing & Charges via the existing `{ tab }` sub-state (which
+   * the nav helper writes as ?viewTab=). That is where every audit action lives:
+   * service approval, charge approval toggles, advances and documents.
+   *
+   * Deliberately NOT a new page — jobs/[id] is a redirect stub and stays one.
+   */
+  function openAudit(id: number)       { openJobAction('audit',    id, { tab: 'billing' }); }
   // Unconfirmed orders open the dedicated confirm form (edit layout +
   // services basket + "Confirm & Schedule" footer), mirroring the
   // legacy addEditJob flow.
@@ -1054,6 +1080,27 @@ export default function MyOrdersPage() {
                           title="View details"
                         >
                           <Eye className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                      {/*
+                        * Audit (Audit & Complete — statuses 3 / 5). Opens the
+                        * SAME workspace the Eye does, titled "Audit · Job #N"
+                        * and landed on Billing & Charges, where the audit
+                        * actions live. Gated on the STATUS, not the tab, so it
+                        * behaves the same on the 'all' list — matching every
+                        * other row action in this cluster — and on
+                        * canManageJobCharges, without which that tab does not
+                        * render (see the canAudit note above).
+                        */}
+                      {(j.job_status === 3 || j.job_status === 5) && canAudit && (
+                        <button
+                          type="button"
+                          onClick={() => openAudit(j.job_id)}
+                          className="inline-flex items-center gap-1 text-primary text-xs hover:underline"
+                          title="Audit — open Billing &amp; Charges to review approvals, charges and documents"
+                          aria-label="Audit"
+                        >
+                          <ClipboardCheck className="h-3.5 w-3.5" />
                         </button>
                       )}
                       {/*

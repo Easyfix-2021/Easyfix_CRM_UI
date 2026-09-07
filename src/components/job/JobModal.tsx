@@ -64,6 +64,7 @@ import { CallableMobile } from '@/components/calls/CallButton';
 import { CallHistoryTable, type CallRow } from '@/components/calls/CallHistoryButton';
 import { showToast, dismissToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { transitionAllowed } from '@/lib/job-stages';
@@ -117,8 +118,18 @@ const canAssign         = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.ENQUIRY, S
  * editing them back to a workable state.
  */
 const isJobClosed = (s: number) => [ST.COMPLETED, ST.COMPLETED_ALT].includes(s as never);
-// canStart removed 2026-07-28 — the "Start" (check-in → In-Progress) action is
-// done by the technician from the app, not by ops on the web.
+/*
+ * canCheckIn — ops-side check-in (SCHEDULED → IN_PROGRESS).
+ *
+ * This was removed on 2026-07-28 on the reasoning that only the technician
+ * checks in, from the app. That decision was OVERRIDDEN 2026-09-08: ops need a
+ * check-in when the technician cannot do it themselves. It is not the plain
+ * status PATCH — that writes job_status alone and leaves checkin_date_time
+ * (the TAT anchor) null — so the button posts to /admin/jobs/:id/checkin, which
+ * writes the check-in columns, and demands a REASON recording why ops checked in
+ * rather than the technician.
+ */
+const canCheckIn        = (s: number) => s === ST.SCHEDULED;
 const canComplete       = (s: number) => s === ST.IN_PROGRESS;
 const canCancel         = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.IN_PROGRESS, ST.ENQUIRY, ST.REVISIT].includes(s as never);
 const canMarkIncomplete = (s: number) => [ST.COMPLETED, ST.COMPLETED_ALT].includes(s as never);
@@ -137,13 +148,15 @@ const canMarkIncomplete = (s: number) => [ST.COMPLETED, ST.COMPLETED_ALT].includ
  *             modal used on the Unconfirmed Orders queue.
  */
 /*
- * `checkin` is the VIEW workspace under a different name — same body, tabs and
- * footer. It exists only so the Pending-to-Start Check-In entry reads as a
- * check-in ("Checkin · Job #N", no status/type sub-line) while the generic
- * viewer opened from a list stays neutral. Everything downstream keys off
- * `effectiveMode`, which folds checkin → view.
+ * `checkin` and `audit` are the VIEW workspace under a different name — same
+ * body, tabs and footer. They exist so the entry point that opened the modal
+ * reads on the title, while the generic viewer opened from a list stays neutral:
+ *   checkin — Pending-to-Start ("Checkin · Job #N", no status/type sub-line).
+ *   audit   — Audit & Complete ("Audit · Job #N"), pushed with ?viewTab=billing
+ *             so it lands on Billing & Charges where the audit actions live.
+ * Everything downstream keys off `effectiveMode`, which folds BOTH → view.
  */
-export type JobModalMode = 'create' | 'edit' | 'view' | 'checkin' | 'confirm';
+export type JobModalMode = 'create' | 'edit' | 'view' | 'checkin' | 'audit' | 'confirm';
 
 type Job = Record<string, unknown> & {
   job_id: number; job_status: number;
@@ -246,8 +259,10 @@ export function JobModal({
      * input occurred) which would otherwise produce a phantom
      * "Discard Unsaved Changes?" prompt on a pure-read flow.
      */
-    // checkin is the same pure-read workspace as view — no dirty-check either.
-    if (mode === 'view' || mode === 'checkin') {
+    // checkin and audit are the same pure-read workspace as view — no
+    // dirty-check either. Any mode that folds to view in `effectiveMode` MUST
+    // be listed here too, or its close fires the phantom prompt described above.
+    if (mode === 'view' || mode === 'checkin' || mode === 'audit') {
       hasUnsavedQtyRef.current = false;
       hasUnsavedFormRef.current = false;
       onClose();
@@ -430,14 +445,15 @@ export function JobModal({
   // open the full Confirm & Schedule flow with all its actions. While the job is
   // still loading (job null) confirm stays so the loader shows; a genuine
   // unconfirmed job is unaffected. create/edit/view are never downgraded.
-  // checkin folds into view FIRST so every layout branch below (body, tabs,
-  // footer) is the view workspace; only the title + header sub-line differ.
-  const effectiveMode = mode === 'checkin' ? 'view'
+  // checkin / audit fold into view FIRST so every layout branch below (body,
+  // tabs, footer) is the view workspace; only the title + header sub-line differ.
+  const effectiveMode = (mode === 'checkin' || mode === 'audit') ? 'view'
     : (mode === 'confirm' && job && Number(job.job_status) !== 9) ? 'view' : mode;
   const title = effectiveMode === 'create'  ? 'Book New Call'
              : effectiveMode === 'edit'    ? `Edit Job #${jobId}`
              : effectiveMode === 'confirm' ? `Confirm & Schedule · Job #${jobId}`
              : mode === 'checkin'           ? `Checkin · Job #${jobId}`
+             : mode === 'audit'             ? `Audit · Job #${jobId}`
              : job                          ? `Job #${job.job_id}`
              :                                'Job';
 
@@ -863,6 +879,8 @@ function ActionBar({ job, jobId, onChanged }: {
   //  far-left Cancel button drive those now.)
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
+  // Ops-side check-in (SCHEDULED → In Progress) — see canCheckIn above.
+  const [checkinOpen, setCheckinOpen] = useState(false);
 
   // Modal-internal permission gates. Each button maps to a legacy
   // Constants.actionPermissions key so the seeded role_menu_action rows
@@ -943,8 +961,18 @@ function ActionBar({ job, jobId, onChanged }: {
           before the work is done, which legacy operators flagged as
           mistake-prone. */}
       {can.isJobEdit && (isJobClosed(s) || s === ST.CANCELLED) && <Button size="sm" variant="outline" onClick={() => setFeedbackOpen(true)}>Feedback</Button>}
-      {/* Start button removed 2026-07-28 — check-in to In-Progress is done by
-          the technician from the app, not by ops on the web. */}
+      {/* Check In (SCHEDULED → In Progress). Restored 2026-09-08, replacing the
+          2026-07-28 "Start button removed — check-in is done by the technician
+          from the app" decision, which the owner has overridden: ops need a
+          check-in for the calls where the technician can't do it themselves.
+          Unlike the retired Start, it does NOT go through the status PATCH —
+          POST /admin/jobs/:id/checkin writes checkin_date_time (the TAT anchor)
+          as well as the status, and requires a reason. Gated exactly like every
+          other lifecycle button here: status predicate + permission + Job Stage
+          Access. */}
+      {canCheckIn(s) && can.isJobStatusChange && transitionAllowed(me?.allowedStages, s, ST.IN_PROGRESS) && (
+        <Button size="sm" variant="outline" onClick={() => setCheckinOpen(true)}>Check In</Button>
+      )}
       {/* Complete (In Progress → Completed) and Mark InComplete (Completed →
           Revisit) are stage transitions — gate by Job Stage Access too, so a
           stage-restricted user only sees the moves their stages permit. */}
@@ -991,6 +1019,16 @@ function ActionBar({ job, jobId, onChanged }: {
         open={feedbackOpen} onClose={() => setFeedbackOpen(false)}
         jobId={jobId}
         onSaved={() => { setFeedbackOpen(false); onChanged(); }}
+      />
+      {/* Ops-side check-in. POST /admin/jobs/:id/checkin writes the check-in
+          COLUMNS (checkin_date_time — the TAT anchor) alongside the status, so
+          it deliberately does NOT reuse doStatus()'s PATCH /status. 409 comes
+          back when no technician is assigned or the job has left status 1; the
+          dialog surfaces the backend's own message rather than guessing. */}
+      <CheckInWithReasonDialog
+        open={checkinOpen} onClose={() => setCheckinOpen(false)}
+        jobId={jobId}
+        onDone={() => { setCheckinOpen(false); onChanged(); }}
       />
     </div>
   );
@@ -11263,6 +11301,85 @@ function ChangeDescriptionDialog({ open, onClose, initialDesc, onSubmit }: {
           <div className="flex justify-end gap-2 pt-2">
             <CancelButton onCancel={onClose} disabled={loading} />
             <Button onClick={go} disabled={loading}>{loading ? 'Saving…' : 'Save'}</Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/*
+ * CheckInWithReasonDialog — ops-side check-in (SCHEDULED → In Progress).
+ *
+ * The reason is MANDATORY and is the whole point of the dialog: a check-in
+ * performed from the web is by definition one the technician did not perform
+ * from the app, and the audit trail has to say why. Free text (not the
+ * action_taken_reason dropdown) because there is no seeded reason list for this
+ * action — the backend takes `reason` as a required string, max 500.
+ *
+ * Submit posts to /admin/jobs/:id/checkin rather than the generic status PATCH:
+ * that endpoint writes checkin_date_time (the TAT anchor) and the rest of the
+ * check-in columns, which PATCH /status does not. A 409 (no technician assigned,
+ * or the job is no longer status 1) is rendered verbatim from the backend.
+ */
+function CheckInWithReasonDialog({ open, onClose, jobId, onDone }: {
+  open: boolean; onClose: () => void; jobId: number; onDone: () => void;
+}) {
+  const [reason, setReason] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (open) { setReason(''); setErr(null); }
+  }, [open]);
+  const trimmed = reason.trim();
+  /*
+   * House rule: no inline onOpenChange. The guard routes Esc / X /
+   * overlay-click through the shared discard prompt, and skips it while the
+   * POST is in flight (the modal is about to unmount anyway) or when nothing
+   * has been typed.
+   */
+  const guardedOpenChange = useFormDirtyGuard(onClose, {
+    isDirty: () => trimmed.length > 0,
+    when: () => !loading,
+  });
+  async function go() {
+    if (!trimmed) { setErr('A reason is required.'); return; }
+    setLoading(true); setErr(null);
+    try {
+      await api.post(`/admin/jobs/${jobId}/checkin`, { reason: trimmed });
+      showToast({ variant: 'success', message: 'Checked In' });
+      onDone();
+    } catch (e) {
+      setErr(formatApiError(e, { fallback: 'Check-in failed' }));
+    } finally { setLoading(false); }
+  }
+  return (
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
+      <DialogContent>
+        <DialogHeader><DialogTitle>Check In · Job #{jobId}</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            This moves the order to In Progress and stamps the check-in time.
+            Check-in is normally done by the technician from the app — record why
+            it is being done here.
+          </p>
+          <div>
+            <Label className="text-sm font-medium block mb-1">Reason</Label>
+            <textarea
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              className="w-full border rounded px-2 py-1 text-sm bg-background min-h-[110px]"
+              placeholder="e.g. technician on site but unable to check in from the app…"
+              maxLength={500}
+            />
+            <div className="text-xs text-muted-foreground text-right">{reason.length} / 500</div>
+          </div>
+          {err && <div className="text-sm text-urgent-strong">{err}</div>}
+          <div className="flex justify-end gap-2 pt-2">
+            <CancelButton onCancel={onClose} disabled={loading} />
+            <Button onClick={go} disabled={loading || !trimmed}>
+              {loading ? 'Checking In…' : 'Check In'}
+            </Button>
           </div>
         </div>
       </DialogContent>

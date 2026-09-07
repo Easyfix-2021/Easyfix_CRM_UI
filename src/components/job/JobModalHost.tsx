@@ -24,7 +24,7 @@ import { useJobActionParams, useJobActionNav, type JobAction } from '@/lib/job-a
  * modals on /jobs, so the host ignores them (a page that needs those mounts its
  * own) — this host only ever opens the JobModal-backed actions.
  */
-const JOBMODAL_ACTIONS = new Set<JobAction>(['create', 'view', 'checkin', 'edit', 'confirm']);
+const JOBMODAL_ACTIONS = new Set<JobAction>(['create', 'view', 'checkin', 'audit', 'edit', 'confirm']);
 
 export function JobModalHost({ onSaved }: { onSaved?: () => void }) {
   const { jobId, action } = useJobActionParams();
