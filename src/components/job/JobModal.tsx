@@ -1075,6 +1075,68 @@ function SiblingCategoryTabs({ siblings }: { siblings: Array<{ job_id: number; s
   );
 }
 
+/*
+ * LAYOUT TOGGLE (2026-09-09, ops request) — "Tabs" or "Single Page".
+ *
+ * Lives in ViewBody, which is the ONE body rendered for `view`, `checkin` and
+ * `audit` (see effectiveMode: the latter two fold into 'view'). Putting it here
+ * rather than in the modal header is what makes it appear on the View Job
+ * Details modal and the Audit modal without threading a prop through either.
+ *
+ * The preference is per-viewer sugar, so localStorage — read in an effect, not
+ * in the useState initializer: this file is 'use client' but still prerenders,
+ * and touching localStorage during render is a hydration mismatch (and throws
+ * outright where site data is blocked). Default 'tabs' means a failed read
+ * lands on today's behaviour.
+ */
+type JobViewLayout = 'tabs' | 'single';
+const JOB_VIEW_LAYOUT_KEY = 'jobmodal-layout';
+
+function LayoutToggle({ value, onChange }: { value: JobViewLayout; onChange: (v: JobViewLayout) => void }) {
+  // Same shape as TabsList (bg-muted p-1, active = bg-background shadow) so the
+  // control reads as a sibling of the tab strip rather than a stray button pair.
+  return (
+    <div className="inline-flex h-9 shrink-0 items-center rounded-md bg-muted p-1 text-muted-foreground" role="group" aria-label="Layout">
+      {([['tabs', 'Tabs'], ['single', 'Single Page']] as const).map(([v, label]) => (
+        <button
+          key={v}
+          type="button"
+          onClick={() => onChange(v)}
+          aria-pressed={value === v}
+          className={
+            'inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1 text-sm font-medium transition-all '
+            + (value === v ? 'bg-background text-foreground shadow' : 'hover:text-foreground')
+          }
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/*
+ * One panel, rendered as a tab panel or as a stacked section. Wrapping instead
+ * of duplicating the nine panel bodies is deliberate: two copies of this JSX
+ * would drift, and the Schedule tab has already been rearranged twice.
+ *
+ * Single-page mounts EVERY panel at once, so the tabs that fetch on mount
+ * (Comments, Materials, Quotations, Questionnaire, Billing) all fire together
+ * instead of on first visit. That is the cost of the mode and the reason it is
+ * opt-in rather than the default.
+ */
+function Panel({ value, label, layout, children }: { value: string; label: string; layout: JobViewLayout; children: React.ReactNode }) {
+  if (layout === 'single') {
+    return (
+      <section className="mt-8 first:mt-4 scroll-mt-4" aria-label={label}>
+        <h3 className="mb-3 border-b pb-1.5 text-sm font-semibold text-foreground">{label}</h3>
+        {children}
+      </section>
+    );
+  }
+  return <TabsContent value={value}>{children}</TabsContent>;
+}
+
 function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKey = 0, pendingComments = [], onCommentsLoaded, onEditDescription }: { job: Job; onRefresh?: () => void; initialTab?: string; onDirtyChange?: (dirty: boolean) => void; commentsRefreshKey?: number; pendingComments?: Array<JobComment & { _pending?: true }>; onCommentsLoaded?: () => void; onEditDescription?: () => void }) {
   const images = Array.isArray((job as Record<string, unknown>).images)
     ? ((job as Record<string, unknown>).images as Array<Record<string, unknown>>)
@@ -1102,9 +1164,26 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
     ...(canManageJobCharges ? ['billing'] : []),
   ]);
   const startingTab = initialTab && KNOWN_TABS.has(initialTab) ? initialTab : 'summary';
-  return (
-    <Tabs defaultValue={startingTab}>
-      <TabsList>
+
+  const [layout, setLayout] = useState<JobViewLayout>('tabs');
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(JOB_VIEW_LAYOUT_KEY) === 'single') setLayout('single');
+    } catch { /* private window / site data blocked — keep the default */ }
+  }, []);
+  const chooseLayout = (v: JobViewLayout) => {
+    setLayout(v);
+    try { localStorage.setItem(JOB_VIEW_LAYOUT_KEY, v); } catch { /* non-fatal */ }
+  };
+  // CONTROLLED, not defaultValue: switching to Single Page and back unmounts
+  // the Tabs root, and an uncontrolled one would come back on Summary having
+  // silently dropped whichever tab the operator was reading.
+  const [activeTab, setActiveTab] = useState(startingTab);
+
+  const header = (
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      {layout === 'tabs' ? (
+        <TabsList className="flex-wrap h-auto">
         <TabsTrigger value="summary">Summary</TabsTrigger>
         <TabsTrigger value="services">Services ({Array.isArray(job.services) ? job.services.length : 0})</TabsTrigger>
         <TabsTrigger value="schedule">Schedule</TabsTrigger>
@@ -1115,9 +1194,18 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
         <TabsTrigger value="quotations">Quotations</TabsTrigger>
         {/* Billing & Charges — hidden unless me.canManageJobCharges (fail-closed). */}
         {canManageJobCharges && <TabsTrigger value="billing">Billing &amp; Charges</TabsTrigger>}
-      </TabsList>
+        </TabsList>
+      ) : (
+        <div className="text-sm font-medium text-muted-foreground">All Details</div>
+      )}
+      <LayoutToggle value={layout} onChange={chooseLayout} />
+    </div>
+  );
 
-      <TabsContent value="summary">
+  const panels = (
+    <>
+
+      <Panel value="summary" label="Summary" layout={layout}>
         {/* Customer Cancel/Reschedule requests — attention banner pinned
             to the top of the Summary tab so ops action pending asks
             before anything else. Renders nothing when there are none. */}
@@ -1289,20 +1377,27 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
         </div>
         <JobRescheduleHistory jobId={Number(job.job_id)} />
         <JobCallHistory jobId={Number(job.job_id)} />
-      </TabsContent>
+      </Panel>
 
-      <TabsContent value="services">
+      <Panel value="services" label={`Services (${Array.isArray(job.services) ? job.services.length : 0})`} layout={layout}>
         <ServicesTabBody job={job} onMutated={onRefresh} onDirtyChange={onDirtyChange} />
-      </TabsContent>
+      </Panel>
 
-      <TabsContent value="schedule">
+      <Panel value="schedule" label="Schedule" layout={layout}>
         {/*
-          * ONE card now. The Assignment card was retired here on 2026-09-09 —
-          * its technician rows moved to Summary's Job Meta and Time slot into
-          * Timeline below — so the grid keeps md:grid-cols-2 and Timeline sits
-          * in the first column at its natural width rather than stretching.
+          * FLEX-WRAP, NOT A FIXED GRID. `md:grid-cols-2` holding a single card
+          * left the right half of the modal blank — and the selfie tile below
+          * did the same on its own row. Both short cards now share one row.
+          *
+          * The reason this is flex and not `grid-cols-2` is the empty case:
+          * TechnicianSelfieTile renders NOTHING for a job with no selfie (and
+          * that is decided by a fetch, so the parent cannot know up front). A
+          * grid track stays reserved and the hole comes back; `flex-1` lets
+          * Timeline take the whole row when it is alone. `basis-[380px]` is
+          * what makes them wrap to one per line on a narrow modal instead of
+          * squeezing.
           */}
-        <div className="grid md:grid-cols-2 gap-5">
+        <div className="flex flex-wrap gap-5 [&>*]:flex-1 [&>*]:basis-[380px]">
           <DlCard title="Timeline" rows={[
             ['Requested', formatDate(job.requested_date_time as string)],
             ['Scheduled', formatDate(job.scheduled_date_time as string)],
@@ -1319,15 +1414,17 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
             ['Cancelled', formatDate(job.cancel_date_time   as string)],
             ['Last update', formatDate(job.last_update_time as string)],
           ]}/>
+          {/* Reached-location selfie (proof of arrival). Renders nothing when
+              the job has no selfie — see TechnicianSelfieTile. Moved INSIDE
+              the row so it sits beside Timeline instead of under it. */}
+          <TechnicianSelfieTile
+            jobId={Number(job.job_id)}
+            selfieId={(job as Record<string, unknown>).tx_selfie_id}
+          />
         </div>
-        {/* Reached-location selfie (proof of arrival). Renders nothing when the
-            job has no selfie — see TechnicianSelfieTile. */}
-        <TechnicianSelfieTile
-          jobId={Number(job.job_id)}
-          selfieId={(job as Record<string, unknown>).tx_selfie_id}
-        />
+        {/* Histories stay full width — they are 4-column tables. */}
         <JobSchedulingHistory jobId={Number(job.job_id)} />
-      </TabsContent>
+      </Panel>
 
       {/*
         * Images tab — legacy `jobImg.vm` + `jobImageList.vm`. Data already
@@ -1336,7 +1433,7 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
         * Nginx under `/easydoc/upload_jobs/<filename>` per CLAUDE.md's
         * file-storage table.
         */}
-      <TabsContent value="images">
+      <Panel value="images" label={`Images (${images.length})`} layout={layout}>
         {/*
          * onChanged is forwarded so the X-delete on each tile can ask the
          * parent to re-fetch the job after a successful DELETE — making
@@ -1356,20 +1453,20 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
           images={images}
           onChanged={[3, 5, 6, 7].includes(Number(job.job_status)) ? undefined : onRefresh}
         />
-      </TabsContent>
+      </Panel>
 
       {/*
         * Questionnaire Answers tab — legacy `jobQuestionaireAnswerList.vm`.
         * Backend: GET /admin/questionnaires/answers/:jobId.
         */}
-      <TabsContent value="questionnaire">
+      <Panel value="questionnaire" label="Questionnaire" layout={layout}>
         <JobQuestionnaireTab jobId={job.job_id as number} />
-      </TabsContent>
+      </Panel>
 
       {/* Comments tab — legacy `jobComment.vm` + `jobCommentList.vm`.
           Backend: GET/POST /admin/jobs/:id/comments (tbl_job_comment).
           comment_on stages: 1=created, 2=check_in, 3=check_out, 4=in_progress. */}
-      <TabsContent value="comments">
+      <Panel value="comments" label="Comments" layout={layout}>
         <JobCommentsTab
           jobId={job.job_id as number}
           refreshKey={commentsRefreshKey}
@@ -1384,21 +1481,21 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
             instantly at the top of the list with a "Sending…" pill — once
             the refetch completes, `onCommentsLoaded` fires and the parent
             clears pendings so they're replaced by the canonical rows. */}
-      </TabsContent>
+      </Panel>
 
       {/* Materials tab — legacy `material.vm` + MaterialAction.java.
           Backend: GET /admin/aux/materials/job/:jobId, POST /admin/aux/materials,
           DELETE /admin/aux/materials/:id (job_material table). */}
-      <TabsContent value="materials">
+      <Panel value="materials" label="Materials" layout={layout}>
         <JobMaterialsTab jobId={job.job_id as number} jobStatus={Number(job.job_status)} />
-      </TabsContent>
+      </Panel>
 
       {/* Quotations tab — read-only list of product+material quotations against
           this job. Backend: GET /admin/quotations?jobId=… (quotation_details table).
           Create/edit deferred — typical flow is technician submits via mobile app. */}
-      <TabsContent value="quotations">
+      <Panel value="quotations" label="Quotations" layout={layout}>
         <JobQuotationsTab jobId={job.job_id as number} />
-      </TabsContent>
+      </Panel>
 
       {/* Billing & Charges tab — legacy CheckIn-detail right-column
           actions (Travel/Incentive/Penalty charges, advance requests,
@@ -1406,16 +1503,28 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
           Rendered only when me.canManageJobCharges is true; canManage is
           threaded so every mutating control also respects the flag. */}
       {canManageJobCharges && (
-        <TabsContent value="billing">
+        <Panel value="billing" label="Billing & Charges" layout={layout}>
           <BillingChargesTab
             jobId={Number(job.job_id)}
             clientId={(job as Record<string, unknown>).fk_client_id != null ? Number((job as Record<string, unknown>).fk_client_id) : null}
             efrId={job.fk_easyfixter_id != null ? Number(job.fk_easyfixter_id) : null}
             canManage={canManageJobCharges}
           />
-        </TabsContent>
+        </Panel>
       )}
-    </Tabs>
+    </>
+  );
+
+  /*
+   * Single Page drops the Tabs root entirely rather than hiding the tab strip:
+   * a Radix TabsContent mounts only for the active value, so keeping the root
+   * would still show one panel, not all nine. Panel renders a plain <section>
+   * in that mode, which needs no Tabs context.
+   */
+  return layout === 'single' ? (
+    <div>{header}{panels}</div>
+  ) : (
+    <Tabs value={activeTab} onValueChange={setActiveTab}>{header}{panels}</Tabs>
   );
 }
 
@@ -11735,7 +11844,13 @@ function TechnicianSelfieTile({ jobId, selfieId }: { jobId: number; selfieId: un
   const url = data?.url ?? null;
   if (!loading && !error && !url) return null;
   return (
-    <div className="rounded-lg border bg-card mt-5 max-w-md">
+    /*
+     * No `mt-5 max-w-md` any more: this now sits in the Schedule tab's card
+     * row beside Timeline, so spacing and width come from that row. Capping it
+     * here made it a narrow card on its own line with the rest of the modal
+     * blank to its right — the whitespace the tab was reported for.
+     */
+    <div className="rounded-lg border bg-card">
       <div className="px-5 py-3 border-b bg-muted/30"><h3 className="text-sm font-semibold">Technician Selfie</h3></div>
       <div className="p-5">
         <p className="text-xs text-muted-foreground mb-3">Reached-location proof of arrival</p>
