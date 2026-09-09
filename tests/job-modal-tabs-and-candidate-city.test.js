@@ -207,10 +207,18 @@ test('the Assignment card is gone and its rows landed in Summary', () => {
     !/<DlCard title="Assignment"/.test(modal),
     'the Assignment card must be retired from the Schedule tab',
   );
-  const jobMeta = modal.slice(modal.indexOf('<DlCard title="Job Meta"'), modal.indexOf('<DlCard title="Audit & History"'));
-  assert.ok(jobMeta.length > 0, 'positive control: the Job Meta card must be locatable');
+  /*
+   * The invariant is that these rows are on SUMMARY, not on the Schedule tab.
+   * They first landed in Job Meta; on 2026-09-09 they moved again, into a
+   * Technician card of their own, because Job Meta had grown to thirteen rows
+   * beside a five-row Customer and the grid's tallest cell was setting the row
+   * height. This guard pinned the intermediate LOCATION rather than the
+   * invariant, so it went red on a change that preserved what it protects.
+   */
+  const techCard = modal.slice(modal.indexOf('<DlCard title="Technician"'), modal.indexOf('<DlCard title="Job Meta"'));
+  assert.ok(techCard.length > 0, 'positive control: the Technician card must be locatable');
   for (const row of ["['Technician'", "['Tech mobile'", "['Helper Req'"]) {
-    assert.ok(jobMeta.includes(row), `${row} must now live on Summary's Job Meta card`);
+    assert.ok(techCard.includes(row), `${row} must live on Summary, in the Technician card`);
   }
 });
 

@@ -1162,23 +1162,19 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
                 />
               : (job.client_spoc as string | null)],
           ]}/>
-          <DlCard title="Job Meta" rows={[
-            // No ⓘ popup here — the modal's inline "Calling History" section
-            // (JobCallHistory below) already shows the full party-aware log.
-            ['Job ID', job.job_id],
-            ['Reference', job.job_reference_id],
-            /*
-             * Age — the same server-computed reading the job LISTS show, so a
-             * row and its detail can never disagree. Measured ticket-created →
-             * terminal event (checkout / cancel / enquiry), or → now while the
-             * job is open; see lib/job-age.ts. Renders an em-dash (never "NaN"
-             * or a misleading "0") if the payload predates the field.
-             */
-            ['Age', <span key="job-age" title={jobAgeTitle(job)}>{formatJobAge(job)}</span>],
-            ['Type', job.job_type],
-            ['Appointment', formatDate(job.requested_date_time as string)],
-            ['Source', job.source_type],
-            ['Owner', job.owner_name],
+          {/*
+            * Technician — its own card since 2026-09-09. These rows were folded
+            * into Job Meta when they moved off the Schedule tab, which grew that
+            * card to thirteen rows beside a five-row Customer and a four-row
+            * Client. In a `grid` the tallest cell sets the row height, so the two
+            * short cards were rendering a block of dead space underneath them —
+            * the imbalance was the whole complaint, not the length.
+            *
+            * Ordered so each ROW holds cards of similar height: Customer /
+            * Client / Technician are all four-to-five rows, and Job Meta pairs
+            * with the address block below.
+            */}
+          <DlCard title="Technician" rows={[
             /*
              * Technician details live HERE, not on the Schedule tab (2026-09-09,
              * per ops). They answer "who is this job's", the same question as
@@ -1201,28 +1197,8 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
                 />
               : (job.easyfixer_mobile as string | null)],
             ['Helper Req', job.helper_req ? 'Yes' : 'No'],
-            // Description carries an inline pencil (gated on isJobEdit) that
-            // opens the same ChangeDescriptionDialog the old footer "Edit
-            // Description" button used — now hosted at the modal root.
-            ['Description', (
-              <span className="inline-flex items-start justify-end gap-1.5 max-w-full">
-                <span className="break-all">{String(job.job_desc ?? '') || '—'}</span>
-                {canEditJob && onEditDescription && (
-                  <button
-                    type="button"
-                    onClick={onEditDescription}
-                    title="Edit Description"
-                    aria-label="Edit Description"
-                    className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                  </button>
-                )}
-              </span>
-            )],
-            // Additional Comments / technician-facing notes (efr_special_notes) —
-            // captured on booking (Client Dashboard "Notes for technician") but
-            // previously never rendered in the read view.
+            // Technician-facing notes captured at booking (efr_special_notes).
+            ['Handyman Notes', String(job.efr_special_notes ?? '') || '—'],
             /*
              * Customer PIN — DISPLAY ONLY, and only while it is operationally
              * live: Pending to Start (1) and Pending to Close (2 / 20), the two
@@ -1249,7 +1225,46 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
                   ? <span key="job-otp" className="font-mono tracking-widest">{String(job.otp)}</span>
                   : null] as [string, React.ReactNode]]
               : []),
-            ['Handyman Notes', String(job.efr_special_notes ?? '') || '—'],
+          ]}/>
+          <DlCard title="Job Meta" rows={[
+            // No ⓘ popup here — the modal's inline "Calling History" section
+            // (JobCallHistory below) already shows the full party-aware log.
+            ['Job ID', job.job_id],
+            ['Reference', job.job_reference_id],
+            /*
+             * Age — the same server-computed reading the job LISTS show, so a
+             * row and its detail can never disagree. Measured ticket-created →
+             * terminal event (checkout / cancel / enquiry), or → now while the
+             * job is open; see lib/job-age.ts. Renders an em-dash (never "NaN"
+             * or a misleading "0") if the payload predates the field.
+             */
+            ['Age', <span key="job-age" title={jobAgeTitle(job)}>{formatJobAge(job)}</span>],
+            ['Type', job.job_type],
+            ['Appointment', formatDate(job.requested_date_time as string)],
+            ['Source', job.source_type],
+            ['Owner', job.owner_name],
+            // Description carries an inline pencil (gated on isJobEdit) that
+            // opens the same ChangeDescriptionDialog the old footer "Edit
+            // Description" button used — now hosted at the modal root.
+            ['Description', (
+              <span className="inline-flex items-start justify-end gap-1.5 max-w-full">
+                <span className="break-all">{String(job.job_desc ?? '') || '—'}</span>
+                {canEditJob && onEditDescription && (
+                  <button
+                    type="button"
+                    onClick={onEditDescription}
+                    title="Edit Description"
+                    aria-label="Edit Description"
+                    className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </span>
+            )],
+            // Additional Comments / technician-facing notes (efr_special_notes) —
+            // captured on booking (Client Dashboard "Notes for technician") but
+            // previously never rendered in the read view.
           ]}/>
           {/* Address — full-width because the address line is long and
               wraps awkwardly inside a one-third column. Includes an
