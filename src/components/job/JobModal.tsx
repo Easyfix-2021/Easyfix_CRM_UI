@@ -4,7 +4,7 @@ import * as React from 'react';
 import { useSlotRecommendations, SlotAdvisory } from '@/components/job/SlotRecommendations';
 import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import { useFetch, useUiFlags } from '@/lib/hooks';
-import { Sparkles, Search, CalendarCheck, History, Eye, Plus, X, Pencil, CalendarPlus, CheckCircle2, BarChart3, Trash2, RotateCcw } from 'lucide-react';
+import { Sparkles, Search, CalendarCheck, History, Eye, Plus, X, Pencil, CalendarPlus, CheckCircle2, BarChart3, Trash2, RotateCcw, AlertTriangle } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
@@ -11719,6 +11719,10 @@ function Spinner() {
  */
 function TechnicianSelfieTile({ jobId, selfieId }: { jobId: number; selfieId: unknown }) {
   const has = selfieId != null && selfieId !== '' && Number(selfieId) > 0;
+  // Reset per job, so reopening the modal on another job retries rather than
+  // inheriting the previous one's failure.
+  const [broken, setBroken] = useState(false);
+  useEffect(() => { setBroken(false); }, [jobId, selfieId]);
   const { data, loading, error } = useFetch<{ url: string | null }>(
     has ? `/admin/jobs/${jobId}/selfie-url` : null,
   );
@@ -11739,12 +11743,28 @@ function TechnicianSelfieTile({ jobId, selfieId }: { jobId: number; selfieId: un
           <div className="text-xs text-muted-foreground">Loading…</div>
         ) : error ? (
           <div className="text-xs text-destructive">Could not load selfie</div>
-        ) : url ? (
+        ) : url && !broken ? (
+          /*
+             * onError added 2026-09-09. A resolved URL is not a loadable one —
+             * the endpoint presigns an S3 key without checking the object
+             * exists, and legacy rows point at the old file host — so this
+             * rendered the browser's raw broken-image glyph beside its own alt
+             * text. The Images tab has shown a proper empty state for the same
+             * failure all along; this is the same treatment, and it also covers
+             * an expired presign (5-minute TTL) on a long-open modal.
+             */
           <img
             src={url}
             alt="Technician arrival selfie"
             className="rounded-md border max-h-64 object-contain"
+            onError={() => setBroken(true)}
           />
+        ) : url ? (
+          <div className="flex flex-col items-center justify-center gap-1 rounded-md border border-dashed py-6 text-muted-foreground">
+            <AlertTriangle className="h-5 w-5 text-warning-strong" />
+            <span className="text-xs">Selfie not found</span>
+            <span className="text-xs">The file is missing from storage</span>
+          </div>
         ) : null}
       </div>
     </div>
