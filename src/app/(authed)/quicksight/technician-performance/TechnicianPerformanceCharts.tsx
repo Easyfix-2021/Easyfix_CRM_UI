@@ -8,10 +8,20 @@
  * shared QuickSight chart kit so this report stays visually consistent with
  * the other 10 native reports.
  *
- * Each technician row carries 3 period blocks; the "latest" period is the
- * FIRST entry of technicianPerformanceDataDateWise (matching the table's
- * left-to-right block order). Per-technician charts use that latest block so
- * the visuals line up with the leftmost numeric columns in the table.
+ * Each technician row carries 3 period blocks. The latest is the LAST entry of
+ * technicianPerformanceDataDateWise, not the first.
+ *
+ * This file used to say the opposite and read [0]. The service builds the
+ * buckets oldest -> newest — services/quicksight/_shared.js::computeLastThreeWeeks
+ * loops `for (let i = 2; i >= 0; i--)` and pushes, so index 0 is the OLDEST
+ * week — and the report's own XLSX branch reads `dw[dw.length - 1]` with a
+ * comment saying so. So the KPI tiles and every chart here summed the oldest of
+ * three periods while the download, one click away, showed the newest. Same
+ * filters, two answers, and nothing on screen to suggest which was which.
+ *
+ * The table below renders all three blocks left-to-right, so the "matching the
+ * table's block order" argument was true and irrelevant: the leftmost column is
+ * the oldest period there too.
  */
 
 import { useMemo } from 'react';
@@ -77,7 +87,8 @@ export function TechnicianPerformanceCharts({
   // Real technicians only (drop the synthetic txId=null "No Technician" row).
   const techs = useMemo(() => rows.filter((r) => r.txId != null), [rows]);
 
-  // Latest period (first block) per technician + page-wide totals.
+  // Latest period (LAST block — the service returns oldest -> newest) per
+  // technician, plus page-wide totals.
   const { kpis, ticketBars, qualityBars, attendance } = useMemo(() => {
     let totalTickets = 0;
     let totalCompleted = 0;
@@ -85,7 +96,8 @@ export function TechnicianPerformanceCharts({
     let activeCount = 0;
 
     const withLatest = techs.map((t) => {
-      const p = t.technicianPerformanceDataDateWise[0];
+      const dw = t.technicianPerformanceDataDateWise;
+      const p = dw[dw.length - 1];
       const tickets = p?.txTktCreated ?? 0;
       const completed = p?.txCompletedOrder ?? 0;
       const open = p?.txOpenOrder ?? 0;

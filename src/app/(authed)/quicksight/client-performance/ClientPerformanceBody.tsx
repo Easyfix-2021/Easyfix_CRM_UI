@@ -263,12 +263,23 @@ export function ClientPerformanceBody() {
     [periodHeaders, period],
   );
 
-  // Index of the "current" period — the LAST bucket the BE returns (most
-  // recent), used for the headline KPIs and the per-client bar chart.
-  const currentIdx = useMemo(
-    () => Math.max(0, (sortedRows[0]?.periods.length ?? 0) - 1),
-    [sortedRows],
-  );
+  /*
+   * Index of the "current" period — bucket 0, because THIS service returns
+   * most-recent FIRST (quicksight-client-performance.service.js: `.reverse()
+   * // most-recent first`, and `periods[0].endDate` is commented "most-recent
+   * end").
+   *
+   * It used to read length - 1, which is the OLDEST bucket, under a comment
+   * asserting the opposite. The KPI tiles, the top-clients chart and the
+   * "Current Period: ..." caption all reported a period three weeks stale while
+   * this report's own XLSX showed the right one.
+   *
+   * Note the trap: the sibling Technician Performance report orders its buckets
+   * the OTHER way (oldest -> newest) and its screen has the mirror-image bug.
+   * Neither ordering is wrong; having each screen GUESS is. Both are pinned in
+   * tests/quicksight-latest-period.test.js against their services.
+   */
+  const currentIdx = 0;
 
   // Headline KPI totals for the current period across all rows.
   const kpis = useMemo(() => {
