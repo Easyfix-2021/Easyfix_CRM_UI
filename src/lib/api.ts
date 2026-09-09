@@ -244,8 +244,25 @@ export type JobCharge = {
 export type JobChargeService = {
   job_service_id: number;
   service_name: string | null;
+  /**
+   * PER-UNIT, despite the name — the writers store `Math.round(unitPrice)`
+   * here. Multiplying it by `quantity` yourself is NOT the fix; use
+   * `client_charge` below, which is the line total from the rate-card cascade
+   * and also survives this column being 0, which it usually is on older rows.
+   */
   total_charge: number | null;
   quantity: number | null;
+  /**
+   * Line totals (per-unit x quantity) from the rate-card cascade — the same
+   * numbers the Services tab shows, computed by one shared backend helper so
+   * the two tabs cannot disagree. `client_charge` is what the client is billed;
+   * `tx_charge` is the technician's residual. tx <= client by construction.
+   *
+   * null (never 0) when the line's rate card could not be resolved: 0 is a
+   * price, null is "not known", and they must render differently.
+   */
+  client_charge: number | null;
+  tx_charge: number | null;
   approval_by_client: number | boolean | null;
   is_approved_by_pm: number | boolean | null;
 };

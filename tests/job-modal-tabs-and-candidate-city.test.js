@@ -268,6 +268,58 @@ test('COLS matches the real header count — a stale span only shows when the li
   assert.equal(Number(decl[2]), ths - 1, 'without it, one fewer');
 });
 
+// ── 6. The Billing tab's Services row, same source as the Services tab ──
+
+/*
+ * It rendered `{ label: 'Services', client: Σ total_charge, tx: 0 }` — a
+ * hardcoded zero with a comment saying the backend offered nothing better, and
+ * a client figure that summed a PER-UNIT column without multiplying by
+ * quantity. Both now come from client_charge / tx_charge, line totals the
+ * backend computes with the same helper the Services tab renders.
+ *
+ * Guarded on the FE as well as the BE because the zero lived HERE. A contract
+ * that offers the right fields does not stop a consumer ignoring them, and this
+ * one ignored them for months behind a comment that explained why.
+ */
+
+const billing = strip(read('components', 'job', 'BillingChargesTab.tsx'));
+
+test('the Services row reads the computed line totals, not total_charge and a zero', () => {
+  assert.match(
+    billing,
+    /const servicesClient = services\.reduce\(\(s, r\) => s \+ n\(r\.client_charge\), 0\);/,
+    'the client figure must come from client_charge — total_charge is per-unit and usually 0',
+  );
+  assert.match(
+    billing,
+    /const servicesTx = services\.reduce\(\(s, r\) => s \+ n\(r\.tx_charge\), 0\);/,
+    'and the technician figure from tx_charge',
+  );
+  assert.match(
+    billing,
+    /\{ label: 'Services', client: servicesClient, tx: servicesTx \}/,
+    'both must reach the matrix row',
+  );
+  assert.ok(
+    !/\{ label: 'Services', client: [^}]*tx: 0 \}/.test(billing),
+    'the hardcoded zero must be gone — it made every service read as pure margin',
+  );
+});
+
+test('the widened contract is declared, so a consumer cannot silently ignore it', () => {
+  const api = strip(read('lib', 'api.ts'));
+  const type = api.slice(api.indexOf('export type JobChargeService = {'), api.indexOf('};', api.indexOf('export type JobChargeService = {')));
+  assert.ok(type.length > 0, 'positive control: the type must be locatable');
+  for (const field of ['client_charge', 'tx_charge']) {
+    assert.match(type, new RegExp(`${field}: number \\| null;`), `${field} must be on JobChargeService, nullable`);
+  }
+  /*
+   * Nullable on purpose. A line whose rate card cannot be resolved has no
+   * price — which is not the same as a price of zero, and typing it non-null
+   * would push a consumer toward `?? 0` and straight back to "free".
+   */
+});
+
 // ── Controls ─────────────────────────────────────────────────────────
 
 test('positive control — the comment stripper actually removes prose', () => {

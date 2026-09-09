@@ -106,12 +106,19 @@ export function BillingChargesTab({
 
   /*
    * Job Summary matrix. Travel / Incentive / Penalty / Material rows are
-   * bucketed from the `materials` line items (each carries tx + client
-   * charge). The Services row is derived from the `services` array —
-   * the contract exposes only `total_charge` per service (the client
-   * charge), with no per-service tx split, so Tx Charge for services
-   * shows 0 and its margin equals its client charge. (Assumption noted;
-   * the BE owns the true figures.)
+   * bucketed from the `materials` line items (each carries tx + client charge).
+   *
+   * The Services row used to read `{ client: Σ total_charge, tx: 0 }`, and was
+   * wrong twice (2026-09-09):
+   *
+   *   tx     hardcoded 0, so every service read as pure margin.
+   *   client summed `total_charge`, which is a PER-UNIT column despite its name
+   *          and was never multiplied by quantity — a qty-3 line counted once —
+   *          and which is 0 on most older rows anyway.
+   *
+   * Both now come from `client_charge` / `tx_charge`, line totals the backend
+   * computes with the SAME helper the Services tab renders. One source, so the
+   * two tabs of this modal cannot quote different money for one job.
    */
   const matrix = useMemo(() => {
     const bucket = {
@@ -128,9 +135,13 @@ export function BillingChargesTab({
         bucket[key as keyof typeof bucket].client += n(m.client_charge);
       }
     }
-    const servicesClient = services.reduce((s, r) => s + n(r.total_charge), 0);
+    // A line whose rate card could not be resolved contributes nothing rather
+    // than a zero-priced row: n() coerces null to 0, which is right for a SUM
+    // but would be wrong if it were ever rendered as a per-line figure.
+    const servicesClient = services.reduce((s, r) => s + n(r.client_charge), 0);
+    const servicesTx = services.reduce((s, r) => s + n(r.tx_charge), 0);
     const rows = [
-      { label: 'Services', client: servicesClient, tx: 0 },
+      { label: 'Services', client: servicesClient, tx: servicesTx },
       { label: 'Material', client: bucket.material.client, tx: bucket.material.tx },
       { label: 'Travel', client: bucket.travel.client, tx: bucket.travel.tx },
       { label: 'Incentive', client: bucket.incentive.client, tx: bucket.incentive.tx },
