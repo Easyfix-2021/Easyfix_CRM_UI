@@ -1179,6 +1179,28 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
             ['Appointment', formatDate(job.requested_date_time as string)],
             ['Source', job.source_type],
             ['Owner', job.owner_name],
+            /*
+             * Technician details live HERE, not on the Schedule tab (2026-09-09,
+             * per ops). They answer "who is this job's", the same question as
+             * Owner directly above, and an operator reading Summary should not
+             * have to change tab to learn who is going. Schedule now answers
+             * "when, and how did it get there".
+             */
+            ['Technician', job.easyfixer_name ? formatEasyfixerName(String(job.easyfixer_name)) : null],
+            // Tech mobile dials through tbl_easyfixer.efr_no. fk_easyfixter_id is
+            // the FK column (typo preserved per backend CLAUDE.md). Unassigned
+            // shows a static dash via DlCard's falsy fallback. DlCard passes React
+            // elements through unchanged, so CallableMobile survives the move —
+            // the Client card above already hosts one.
+            ['Tech mobile', job.fk_easyfixter_id
+              ? <CallableMobile
+                  key="tech-mob"
+                  efrId={Number(job.fk_easyfixter_id)}
+                  jobContextId={Number(job.job_id)}
+                  mobile={job.easyfixer_mobile as string | null}
+                />
+              : (job.easyfixer_mobile as string | null)],
+            ['Helper Req', job.helper_req ? 'Yes' : 'No'],
             // Description carries an inline pencil (gated on isJobEdit) that
             // opens the same ChangeDescriptionDialog the old footer "Edit
             // Description" button used — now hosted at the modal root.
@@ -1233,37 +1255,28 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
       </TabsContent>
 
       <TabsContent value="schedule">
+        {/*
+          * ONE card now. The Assignment card was retired here on 2026-09-09 —
+          * its technician rows moved to Summary's Job Meta and Time slot into
+          * Timeline below — so the grid keeps md:grid-cols-2 and Timeline sits
+          * in the first column at its natural width rather than stretching.
+          */}
         <div className="grid md:grid-cols-2 gap-5">
           <DlCard title="Timeline" rows={[
             ['Requested', formatDate(job.requested_date_time as string)],
             ['Scheduled', formatDate(job.scheduled_date_time as string)],
+            /*
+             * Time slot stays on this tab — it is WHEN, not WHO — but moved into
+             * Timeline when the Assignment card was retired. `displaySlot` = the
+             * instant wins; the stored label (canonicalised for spelling) only
+             * for a date-only job. Echoing job.time_slot raw made this card
+             * contradict itself — "Requested: 5:30 AM" over "Time slot: 3pm to 7pm".
+             */
+            ['Time slot', displaySlot(job.requested_date_time, job.time_slot) || null],
             ['Check-in',  formatDate(job.checkin_date_time  as string)],
             ['Check-out', formatDate(job.checkout_date_time as string)],
             ['Cancelled', formatDate(job.cancel_date_time   as string)],
             ['Last update', formatDate(job.last_update_time as string)],
-          ]}/>
-          <DlCard title="Assignment" rows={[
-            ['Technician',   job.easyfixer_name ? formatEasyfixerName(String(job.easyfixer_name)) : null],
-            // Tech mobile calls dial through tbl_easyfixer.efr_no.
-            // fk_easyfixter_id is the FK column (typo preserved per
-            // backend CLAUDE.md). When unassigned, the cell shows a
-            // static dash via the falsy fallback inside DlCard.
-            ['Tech mobile', job.fk_easyfixter_id
-              ? <CallableMobile
-                  key="tech-mob"
-                  efrId={Number(job.fk_easyfixter_id)}
-                  jobContextId={Number(job.job_id)}
-                  mobile={job.easyfixer_mobile as string | null}
-                />
-              : (job.easyfixer_mobile as string | null)],
-            ['Helper req',   job.helper_req ? 'Yes' : 'No'],
-            /*
-             * `displaySlot` = the instant wins; the stored label (canonicalised
-             * for spelling) only for a date-only job. Echoing `job.time_slot`
-             * raw meant this read-only card contradicted the Timeline card
-             * beside it — "Requested: 5:30 AM" next to "Time slot: 3pm to 7pm".
-             */
-            ['Time slot', displaySlot(job.requested_date_time, job.time_slot) || null],
           ]}/>
         </div>
         {/* Reached-location selfie (proof of arrival). Renders nothing when the
@@ -1272,6 +1285,7 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
           jobId={Number(job.job_id)}
           selfieId={(job as Record<string, unknown>).tx_selfie_id}
         />
+        <JobSchedulingHistory jobId={Number(job.job_id)} />
       </TabsContent>
 
       {/*
@@ -1732,6 +1746,98 @@ function JobCustomerRequests({ jobId, jobStatus, onJobChanged }: { jobId: number
   );
 }
 
+/*
+ * JobSchedulingHistory — every (re)scheduling event on the job, on the Schedule
+ * tab (2026-09-09, per ops: "TX details will go in the summary. Here will show
+ * scheduling history").
+ *
+ * SOURCE. The `scheduling_history` table, which four live paths write on every
+ * assignment, unassignment, reschedule and magic-link auto-reschedule
+ * (services/job.service.js:5412 / :5528 / :6182, job-magic-link.service.js:790).
+ * It is the current record, not a legacy artefact — the "legacy" note on that
+ * table concerns its DDL, not its population.
+ *
+ * NO NEW ENDPOINT. GET /admin/reports/job-tracking?jobId= already returns exactly
+ * this, chronologically, with efr_name joined (routes/admin/reports.js:170). The
+ * standalone Job Tracking page has rendered it for a while; this is the same
+ * data where the operator already is.
+ *
+ * NOT the same thing as JobRescheduleHistory on the Summary tab, which reads
+ * tbl_job_comment for appointment changes an operator narrated. That one is the
+ * commentary; this is the record. Both are worth having, and neither is derivable
+ * from the other — a reschedule with no comment appears only here.
+ */
+function JobSchedulingHistory({ jobId }: { jobId: number }) {
+  type ScheduleRow = {
+    id: number;
+    easyfixer_id: number | null;
+    efr_name: string | null;
+    schedule_time: string | null;
+    reason_id: number | null;
+    reschedule_reason: string | null;
+  };
+  // Shared hook per the repo's fetch rules — never a raw useEffect + api.get.
+  const { data, loading, error } = useFetch<ScheduleRow[]>(`/admin/reports/job-tracking?jobId=${jobId}`);
+  const rows = useMemo(() => (Array.isArray(data) ? data : []), [data]);
+
+  // Hidden on failure rather than shown broken, matching JobCallHistory: this is
+  // supporting history, and an error card on a read-only tab helps nobody.
+  if (error) return null;
+  return (
+    <div className="mt-5">
+      <div className="font-medium text-sm mb-1">Scheduling History</div>
+      {loading && rows.length === 0 ? (
+        <div className="text-xs text-muted-foreground rounded border border-dashed px-3 py-2">
+          Loading…
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="text-xs text-muted-foreground rounded border border-dashed px-3 py-2">
+          No scheduling events recorded.
+        </div>
+      ) : (
+        <div className="rounded-lg border bg-card overflow-hidden">
+          <table className="data-table w-full">
+            <thead>
+              <tr>
+                <th className="!text-center">#</th>
+                <th className="!text-left">Technician</th>
+                <th className="!text-left">Scheduled For</th>
+                <th className="!text-left">Reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((h, i) => (
+                <tr key={h.id}>
+                  <td className="!text-center font-mono text-xs text-muted-foreground">{i + 1}</td>
+                  <td className="text-xs">
+                    {h.efr_name
+                      ? formatEasyfixerName(h.efr_name)
+                      : <span className="text-muted-foreground">— Unassigned —</span>}
+                    {h.easyfixer_id != null && (
+                      <span className="ml-1.5 text-muted-foreground font-mono">#{h.easyfixer_id}</span>
+                    )}
+                  </td>
+                  <td className="text-xs">{h.schedule_time ? formatDate(h.schedule_time) : '—'}</td>
+                  <td className="text-xs">
+                    {/*
+                      * An initial assignment carries no reschedule reason — that
+                      * is a fact about the row, not a missing value, so it reads
+                      * as its own label rather than a dash.
+                      */}
+                    {h.reschedule_reason
+                      ? <span className="bg-warning-tint text-warning-strong rounded px-1.5 py-0.5">{h.reschedule_reason}</span>
+                      : <span className="text-muted-foreground italic">Initial Assignment</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function JobRescheduleHistory({ jobId }: { jobId: number }) {
   type JobComment = Record<string, unknown> & {
     comment_id?: number;
@@ -2105,7 +2211,19 @@ function ServicesTabBody({ job, onMutated, onDirtyChange }: { job: Job; onMutate
   const catalog: ClientService[] = useMemo(() => (
     Array.isArray(catalogRaw) ? catalogRaw : ((catalogRaw as { items?: ClientService[] } | null)?.items ?? [])
   ), [catalogRaw]);
-  const [addCatgId, setAddCatgId] = useState<string>('');
+  /*
+   * Pre-selected from the JOB, like Job Type beside it (2026-09-09, per ops).
+   * This was a hard-coded '' — the only category data in scope was
+   * `addCategories`, the client's rate-card option LIST, which says which
+   * categories are AVAILABLE and never which one this job is. tbl_job carries
+   * the answer: a job has exactly one category (Book New Call POSTs one job per
+   * category, sharing a client_ref_id), so fk_service_catg_id is canonical.
+   * Falls back to '' for a job with no category set, which restores the old
+   * "pick one first" behaviour rather than guessing.
+   */
+  const [addCatgId, setAddCatgId] = useState<string>(
+    () => (job.fk_service_catg_id != null ? String(job.fk_service_catg_id) : ''),
+  );
   const [addTypeIds, setAddTypeIds] = useState<string[]>([]);
   const [addBusy, setAddBusy] = useState(false);
   // Synchronous re-entrancy guard. `addBusy` is React state, so a fast
@@ -2211,7 +2329,10 @@ function ServicesTabBody({ job, onMutated, onDirtyChange }: { job: Job; onMutate
         });
         // Clear the panel selections only when at least one row landed —
         // otherwise the operator likely wants to retry the same picks.
-        setAddCatgId('');
+        // Re-seed, not blank: the category is a property of the JOB, so a
+        // successful add must leave it selected. Blanking here is what made
+        // the control look unset even when the job plainly had a category.
+        setAddCatgId(job.fk_service_catg_id != null ? String(job.fk_service_catg_id) : '');
         setAddTypeIds([]);
         setAddRows([]);
         onMutated?.();
@@ -2279,6 +2400,22 @@ function ServicesTabBody({ job, onMutated, onDirtyChange }: { job: Job; onMutate
   const [openLineId, setOpenLineId] = useState<number | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
   const confirm = useConfirm();
+  /*
+   * The Client / TX / EF-margin columns are always visible, so the breakdown can
+   * no longer wait for a Show Breakdown click. Opens instantly from the module
+   * cache when warm; otherwise one round-trip that fills the three columns.
+   *
+   * Not one of the src/lib/hooks fetchers on purpose: this data has a
+   * module-level cache with explicit invalidation on every mutating action
+   * below (remove / restore / qty), which the shared hooks do not model. The
+   * house rule's target — a raw api.<verb> inline in an effect — is not what
+   * this is; ensureBreakdown owns the request, its loading flag and its cache.
+   */
+  useEffect(() => {
+    void ensureBreakdown();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job.job_id]);
+
   async function ensureBreakdown(force = false) {
     if (!force && breakdown) return;
     if (bdLoading) return;
@@ -2511,18 +2648,35 @@ function ServicesTabBody({ job, onMutated, onDirtyChange }: { job: Job; onMutate
         <table className="data-table">
           <thead>
             <tr>
+              {/*
+                * 2026-09-09, per ops. Two columns left and three arrived.
+                *
+                * Service Category went because a job HAS one category — Book New
+                * Call posts one job per category — so it repeated the same value
+                * on every row and cost the table a horizontal scroll.
+                *
+                * Status went because Active/Inactive is a property of a row you
+                * can already see: an inactive row is dimmed AND now carries an
+                * inline chip in Service Name, so the state survives without a
+                * column of its own. "Show Inactive (N)" above stays — it is the
+                * only route to Restore.
+                *
+                * The three money columns come from the service breakdown, which
+                * is now loaded eagerly rather than on the Show Breakdown click.
+                */}
               <th>Job#</th>
               <th>Service Name</th>
               <th>Service Type</th>
-              <th>Service Category</th>
               <th>Qty</th>
-              <th>Status</th>
+              <th className="!text-right">Client ₹</th>
+              <th className="!text-right">TX ₹</th>
+              <th className="!text-right">EF Margin %</th>
               <th className="!text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
             {visible.length === 0 && (
-              <tr><td colSpan={7} className="text-center text-muted-foreground py-8">No services on this job</td></tr>
+              <tr><td colSpan={8} className="text-center text-muted-foreground py-8">No services on this job</td></tr>
             )}
             {visible.map((s, i) => {
               const sr = s as Record<string, unknown>;
@@ -2545,11 +2699,18 @@ function ServicesTabBody({ job, onMutated, onDirtyChange }: { job: Job; onMutate
                     (isActive ? '' : 'opacity-60')
                     + (isDirty ? ' bg-warning-tint' : '')
                   }>
-                    {/* Column order: Job# · Service Name · Service Type · Service Category */}
+                    {/* Column order: Job# · Service Name · Service Type · Qty · money */}
                     <td className="text-xs text-muted-foreground">{String(sr.job_service_id ?? '')}</td>
-                    <td>{sr.service_name ? String(sr.service_name) : '—'}</td>
+                    <td>
+                      {sr.service_name ? String(sr.service_name) : '—'}
+                      {/* The retired Status column, inline and only when it says
+                          something. Dimming the row is a difference in degree;
+                          this is the words. Zero column width when active. */}
+                      {!isActive && (
+                        <StatusChip tone="slate" size="sm" className="ml-1.5">Inactive</StatusChip>
+                      )}
+                    </td>
                     <td>{String(sr.service_type_name ?? '—')}</td>
-                    <td>{String(sr.service_catg_name ?? '—')}</td>
                     <td>
                       {qtyEditable ? (
                         <div className="inline-flex items-center gap-1.5">
@@ -2608,14 +2769,52 @@ function ServicesTabBody({ job, onMutated, onDirtyChange }: { job: Job; onMutate
                         </span>
                       )}
                     </td>
-                    <td>
-                      {/* Colored chip instead of plain text — emerald =
-                          active/live, slate = soft-deleted/inactive.
-                          Uses the shared StatusChip primitive for parity
-                          with the rest of the app's status badges. */}
-                      <StatusChip tone={isActive ? 'emerald' : 'slate'} size="sm">
-                        {isActive ? 'Active' : 'Inactive'}
-                      </StatusChip>
+                    {/*
+                      * Client / TX / EF margin, from the L1-L4 rate-card cascade
+                      * (utils/rate-card-calc.js). The names in the payload do NOT
+                      * read the way they look, so they are mapped here once:
+                      *
+                      *   totalCharge  the rate-card price — what the client is
+                      *                billed. The top of the cascade; everything
+                      *                below is carved OUT of it.
+                      *   remainder    the L4 residual, stored as
+                      *                tbl_job_services.easyfixer_charge and
+                      *                commented "technician's residual" — TX.
+                      *
+                      * MARGIN = client − TX, matching the Billing & Charges tab in
+                      * this same modal (BillingChargesTab: `inr(r.client - r.tx)`).
+                      * Deliberately NOT easyfixDirect + overhead, which is EasyFix's
+                      * own two layers and is the more literal reading: two tabs of
+                      * one modal showing different margins for one job is the defect
+                      * this codebase keeps paying for elsewhere, and consistency with
+                      * the surface ops already reads beats a purer definition.
+                      *
+                      * The two differ by exactly the L3 clientShare layer — the
+                      * operator true-up bucket, which the worked example in
+                      * utils/rate-card-calc.js puts at 0%. If a rate card ever sets
+                      * it non-zero, both tabs move together, which is the point.
+                      *
+                      * `clientShare` is NOT the client's bill — it is that bucket,
+                      * carved out last. Reading it as the client charge would put a
+                      * plausible wrong number on an operator's screen.
+                      *
+                      * Em-dash while the breakdown is still in flight, when the
+                      * job has no rate card, and for a soft-deleted row — the
+                      * breakdown query excludes job_service_status = 0, so an
+                      * inactive service genuinely has no charge to show. Never a
+                      * 0, which would read as free rather than as unknown.
+                      */}
+                    <td className="!text-right font-mono text-xs">
+                      {line ? `₹${line.lineTotal.totalCharge.toFixed(2)}` : '—'}
+                    </td>
+                    <td className="!text-right font-mono text-xs">
+                      {line ? `₹${line.lineTotal.remainder.toFixed(2)}` : '—'}
+                    </td>
+                    <td className="!text-right font-mono text-xs">
+                      {line && line.lineTotal.totalCharge > 0
+                        ? `${(((line.lineTotal.totalCharge - line.lineTotal.remainder)
+                            / line.lineTotal.totalCharge) * 100).toFixed(1)}%`
+                        : '—'}
                     </td>
                     <td className="!text-right">
                       {/* Icon action cluster — Show/Hide Breakdown is always
@@ -2690,14 +2889,14 @@ function ServicesTabBody({ job, onMutated, onDirtyChange }: { job: Job; onMutate
                   </tr>
                   {isOpen && line && (
                     <tr>
-                      <td colSpan={6} className="bg-ink-50 p-3">
+                      <td colSpan={8} className="bg-ink-50 p-3">
                         <BreakdownTable line={line} />
                       </td>
                     </tr>
                   )}
                   {isOpen && !line && breakdown && (
                     <tr>
-                      <td colSpan={6} className="bg-ink-50 p-3 text-xs text-muted-foreground italic">
+                      <td colSpan={8} className="bg-ink-50 p-3 text-xs text-muted-foreground italic">
                         No rate-card cost data available for this service.
                       </td>
                     </tr>

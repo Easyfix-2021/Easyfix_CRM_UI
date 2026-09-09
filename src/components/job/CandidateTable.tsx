@@ -60,6 +60,13 @@ export type ScheduleCandidate = {
   efr_name: string;
   /** Already masked by the BE mask-mobile middleware. */
   mobile: string | null;
+  /**
+   * The technician's HOME city (tbl_easyfixer.efr_cityId → tbl_city), not the
+   * job's. Already returned by both candidate endpoints — l1Eligibility and the
+   * search query each join tbl_city, and buildCandidateRow returns city_name —
+   * so surfacing it needed no backend change.
+   */
+  city_name: string | null;
   current_pincode: string | null;
   zone_name: string | null;
   serviceable_pincodes: string[];
@@ -124,7 +131,12 @@ export function CandidateTable({
 }) {
   // +1 column when the operator can commit: the select control (checkbox in
   // offer mode, radio in direct-assign mode).
-  const COLS = canCommit ? 17 : 16;
+  //
+  // KEEP IN STEP WITH THE <thead> BELOW. This only spans the empty / loading /
+  // error rows, so a stale count is invisible until the list happens to come
+  // back empty — it does not break the populated table it was counted for.
+  // 17 = City + the 16 that preceded it (2026-09-09).
+  const COLS = canCommit ? 18 : 17;
   // Multiple job dialogs can remain mounted at once. React's instance-scoped
   // id prevents aria-describedby collisions for the same technician id.
   const tableInstanceId = useId();
@@ -168,6 +180,14 @@ export function CandidateTable({
             </th>
             <th className="!text-left min-w-[190px]">Technician Status</th>
             <th className="!text-center">Attendance for Job Date</th>
+            {/*
+              * City sits before the pincode columns on purpose: a six-digit
+              * pincode does not read as a PLACE when an operator is scanning ten
+              * rows, and the search box has always matched on city
+              * (candidate-ranking.service.js: `OR c.city_name LIKE ?`) without the
+              * table ever showing what it matched.
+              */}
+            <th className="!text-left min-w-[120px]">City</th>
             <th className="!text-center">Current Pincode</th>
             <th className="!text-left min-w-[150px]">Distance Criteria</th>
             <th className="!text-left min-w-[160px]">Serviceable Pincodes</th>
@@ -344,6 +364,11 @@ export function CandidateTable({
                 {c.attendance_for_job_date
                   ? <CheckCircle2 className="inline h-4 w-4 text-success-strong" aria-label="Present on job date" />
                   : <XCircle className="inline h-4 w-4 text-urgent" aria-label="No attendance for job date" />}
+              </td>
+
+              {/* City — the technician's home city. */}
+              <td className="!text-left">
+                {c.city_name || <span className="text-muted-foreground">—</span>}
               </td>
 
               {/* Current Pincode. */}
