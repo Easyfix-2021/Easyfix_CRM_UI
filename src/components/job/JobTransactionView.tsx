@@ -161,10 +161,24 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
   // Total no. of products = sum of service quantities (legacy semantic).
   const totalProducts = (j.services || []).reduce((s, r) => s + Number(r.quantity || 0), 0);
 
-  // Job-Total derivation from services rows. Service/material charges
-  // are per-row; total_charge is what legacy persists. Sum across rows
-  // for the page-level grand total.
-  const jobTotal = (j.services || []).reduce((s, r) => s + Number(r.total_charge || 0), 0);
+  /*
+   * Job Total — the same definition the backend uses everywhere else
+   * (services/job-line-total.js): total_charge x quantity + material_charge.
+   *
+   * It used to be `sum(total_charge)`, which was wrong twice over and visibly
+   * so. total_charge is a PER-UNIT column despite its name, so a qty-3 line
+   * counted once; and the sum ignored material_charge, which the table beside
+   * it renders as its own column. An operator therefore saw a Service Charge
+   * column, a Material Charge column, and a Total that was neither of them and
+   * not their sum — arithmetic that does not add up on screen.
+   *
+   * The Service Charge column is fixed with it: it rendered easyfix_charge,
+   * which is EasyFix's own margin layer, under a heading that says what the
+   * client is charged for the service.
+   */
+  const serviceCharge = (r: ServiceRow) => Number(r.total_charge || 0) * Number(r.quantity || 1);
+  const materialCharge = (r: ServiceRow) => Number(r.material_charge || 0);
+  const jobTotal = (j.services || []).reduce((s, r) => s + serviceCharge(r) + materialCharge(r), 0);
 
   return (
     <div className="space-y-4 text-sm text-ink-900">
@@ -291,8 +305,10 @@ export function JobTransactionView({ jobId }: { jobId: number }) {
               ) : (j.services || []).map((s, i) => (
                 <tr key={s.job_service_id ?? i} className="border-t border-ink-100">
                   <td className="px-3 py-2">{fmt(s.service_type_name)}</td>
-                  <td className="px-3 py-2 tabular-nums">{Number(s.easyfix_charge || 0).toLocaleString('en-IN')}</td>
-                  <td className="px-3 py-2 tabular-nums">{Number(s.material_charge || 0).toLocaleString('en-IN')}</td>
+                  {/* total_charge x quantity, not easyfix_charge — that column
+                      is EasyFix's margin layer, not what the service costs. */}
+                  <td className="px-3 py-2 tabular-nums">{serviceCharge(s).toLocaleString('en-IN')}</td>
+                  <td className="px-3 py-2 tabular-nums">{materialCharge(s).toLocaleString('en-IN')}</td>
                   <td className="px-3 py-2 text-xs text-muted-foreground">{fmt(s.service_charge_description)}</td>
                 </tr>
               ))}

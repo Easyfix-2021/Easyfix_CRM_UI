@@ -33,9 +33,21 @@ const {
  * actually act on.
  */
 let backend = null;
-try {
-  backend = require(path.join(__dirname, '..', '..', 'EasyFix_Backend', 'lib', 'emp-code'));
-} catch { /* fixture mode — see below */ }
+/*
+ * EASYFIX_BACKEND_DIR first (2026-09-09). CI clones the backend into
+ * RUNNER_TEMP and points that variable at it — NOT as a sibling — so this
+ * resolved to nothing there and quietly ran the weaker fixture mode on every
+ * CI run, which is the one place the docblock above says LIVE mode earns its
+ * keep. The sibling path stays as the developer-machine fallback.
+ *
+ * Silent degradation, not a failure: that is the point of the try/catch, and it
+ * is also why the gap survived. A guard that downgrades itself reports the same
+ * green as one that ran.
+ */
+for (const root of [process.env.EASYFIX_BACKEND_DIR, path.join(__dirname, '..', '..', 'EasyFix_Backend')]) {
+  if (!root || backend) continue;
+  try { backend = require(path.join(root, 'lib', 'emp-code')); } catch { /* try the next root */ }
+}
 
 /*
  * The endpoint, stubbed at the seam that matters: what the DB currently holds.
