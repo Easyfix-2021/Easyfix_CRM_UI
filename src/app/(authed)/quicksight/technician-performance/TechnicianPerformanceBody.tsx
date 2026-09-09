@@ -81,6 +81,14 @@ type TechnicianPerfPayload = {
   page: number;
   pageSize: number;
   totalRecords: number;
+  /*
+   * Added 2026-09-09. The server now says which bucket is current and what it
+   * is called, so no screen has to infer it — the technician report orders
+   * oldest -> newest while the sibling client report reverses, and both pages
+   * used to guess, wrongly and in opposite directions. Optional so a frontend
+   * ahead of the backend still renders.
+   */
+  rollup?: { latestPeriodIndex: number; latestPeriodLabel: string };
   totalPages: number;
 };
 
@@ -255,6 +263,7 @@ export function TechnicianPerformanceBody() {
 
   const rows = data?.data ?? [];
   const totalRecords = data?.totalRecords ?? 0;
+  const rollup = data?.rollup;
 
   // The BE emits a synthetic "No Technician" row (txId=null) when nothing
   // matches — treat that as empty for the scaffold's empty-state.
@@ -395,7 +404,16 @@ export function TechnicianPerformanceBody() {
       downloading={downloading}
     >
       <div className="space-y-4">
-        <TechnicianPerformanceCharts rows={rows} periodLabel={periodHeaders[0] ?? ''} />
+        {/*
+          * periodHeaders[0] is the OLDEST bucket — the charts sum the newest,
+          * so this caption used to name a different period than the numbers
+          * under it. Server-supplied label first; the local fallback picks the
+          * LAST header, matching this service's oldest -> newest ordering.
+          */}
+        <TechnicianPerformanceCharts
+          rows={rows}
+          periodLabel={rollup?.latestPeriodLabel || periodHeaders[periodHeaders.length - 1] || ''}
+        />
 
         <div className="overflow-x-auto rounded-md border">
           <table className="data-table w-full">

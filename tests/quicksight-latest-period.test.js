@@ -141,16 +141,19 @@ test('the technician screen reads the LAST bucket, matching its own XLSX', () =>
     'reading [0] is the OLDEST period — the bug this file exists for',
   );
 
-  // The export branch is the reference implementation; it must not drift either.
-  // Guarded rather than skipped, so the UI assertions above still run in a
-  // checkout without the backend — those are the ones that catch a regression
-  // in THIS repo, and they must never depend on a second one being present.
+  /*
+   * The reference implementation moved: the rollup used to live in the route's
+   * xlsx branch and now lives in the service, shipped on both branches. So the
+   * agreement is asserted against the SERVICE. Guarded rather than skipped, so
+   * the UI assertions above still run in a checkout without the backend —
+   * those catch a regression in THIS repo and must never need a second one.
+   */
   if (!beAvailable) return;
-  const route = strip(readBe('routes', 'admin', 'quicksight', 'technician-performance.js'));
+  const svc = strip(readBe('services', 'quicksight', 'quicksight-technician-performance.service.js'));
   assert.match(
-    route,
-    /const latest = dw\[dw\.length - 1\];/,
-    'the XLSX rollup must still agree with the screen',
+    svc,
+    /const idx = dw\.length - 1;/,
+    'the service rollup must still take the newest bucket, which is what the screen renders',
   );
 });
 
@@ -173,7 +176,11 @@ test('client-performance reverses to most-recent-first, so bucket 0 is current',
 
 test('the client screen reads bucket 0, matching its service', () => {
   const body = strip(readUi('app', '(authed)', 'quicksight', 'client-performance', 'ClientPerformanceBody.tsx'));
-  assert.match(body, /const currentIdx = 0;/, 'the current period is bucket 0 for THIS report');
+  assert.match(
+    body,
+    /const currentIdx = rollup\?\.currentPeriodIndex \?\? 0;/,
+    'the current period comes from the server, with 0 — this report\'s correct answer — as the fallback',
+  );
   assert.ok(
     !/currentIdx = useMemo\([\s\S]{0,160}?periods\.length \?\? 0\) - 1/.test(body),
     'reading length - 1 is the OLDEST period here — the mirror-image bug',
@@ -184,6 +191,54 @@ test('the client screen reads bucket 0, matching its service', () => {
     /Current Period: \{periodHeaders\[currentIdx\] \?\? '—'\}/,
     'the caption must be driven by the same index the KPIs sum, or it can disagree with them',
   );
+});
+
+// ── The rollup now ships on the JSON branch (2026-09-09) ─────────────
+
+test('neither screen infers the ordering any more — the server states it', () => {
+  /*
+   * The structural half of the fix. Correcting the two indices stopped today's
+   * wrong numbers; this stops the NEXT screen from having to guess. Both pages
+   * read a server-supplied index and keep their (correct) literal only as a
+   * fallback for a backend that predates it.
+   */
+  const tech = strip(readUi('app', '(authed)', 'quicksight', 'technician-performance', 'TechnicianPerformanceBody.tsx'));
+  assert.match(tech, /rollup\?: \{ latestPeriodIndex: number; latestPeriodLabel: string \}/,
+    'the technician payload type must carry the rollup');
+  assert.match(tech, /rollup\?\.latestPeriodLabel \|\| periodHeaders\[periodHeaders\.length - 1\]/,
+    'the chart caption must prefer the server label, and fall back to the LAST header, not the first');
+
+  const client = strip(readUi('app', '(authed)', 'quicksight', 'client-performance', 'ClientPerformanceBody.tsx'));
+  assert.match(client, /const currentIdx = rollup\?\.currentPeriodIndex \?\? 0;/,
+    'the client page must read the server index');
+  assert.match(client, /Array\.isArray\(data\) \? data : \(data\?\.rows \?\? \[\]\)/,
+    'and tolerate BOTH payload shapes, so the repos can deploy in either order');
+});
+
+test('the export branches read the same rollup the JSON branch ships', { skip: skipNoBackend }, () => {
+  /*
+   * The point of moving it. If an export recomputes its own totals the two can
+   * disagree again — which is exactly the state this whole file documents.
+   */
+  const techRoute = strip(readBe('routes', 'admin', 'quicksight', 'technician-performance.js'));
+  assert.match(techRoute, /= payload\.rollup;/, 'the technician export must read the service rollup');
+  assert.ok(
+    !/for \(const tx of list\)/.test(techRoute),
+    'and must not keep its own summing loop',
+  );
+
+  const clientRoute = strip(readBe('routes', 'admin', 'quicksight', 'client-performance.js'));
+  assert.match(clientRoute, /service\.rollupCurrentPeriod\(rows\)/, 'the client export must call the service rollup');
+  assert.match(clientRoute, /rollup: service\.rollupCurrentPeriod\(rows\)/, 'and the JSON branch must ship it');
+});
+
+test('each service rollup reads the end its OWN ordering makes current', { skip: skipNoBackend }, () => {
+  const techSvc = strip(readBe('services', 'quicksight', 'quicksight-technician-performance.service.js'));
+  assert.match(techSvc, /const idx = dw\.length - 1;/, 'oldest -> newest: current is LAST');
+
+  const clientSvc = strip(readBe('services', 'quicksight', 'quicksight-client-performance.service.js'));
+  assert.match(clientSvc, /const current = r\.periods && r\.periods\[0\];/, 'most-recent-first: current is FIRST');
+  assert.match(clientSvc, /currentPeriodIndex: 0/, 'and it must SAY so rather than leave it inferred');
 });
 
 // ── The property that makes both correct at once ─────────────────────

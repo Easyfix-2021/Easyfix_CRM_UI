@@ -216,9 +216,17 @@ export function ClientPerformanceBody() {
   );
   const fetchKey = canView ? `/admin/quicksight/client-performance?${queryString}` : null;
 
-  const { data, loading, error } = useFetch<ClientPerfRow[]>(fetchKey);
+  /*
+   * The payload gained a `rollup` on 2026-09-09 and became
+   * `{ rows, rollup }` — previously a bare array. BOTH shapes are read so the
+   * two repos can deploy in either order without a broken window; the union
+   * disappears once the backend change is everywhere.
+   */
+  type ClientPerfPayload = ClientPerfRow[] | { rows: ClientPerfRow[]; rollup?: { currentPeriodIndex: number } };
+  const { data, loading, error } = useFetch<ClientPerfPayload>(fetchKey);
 
-  const rows = data ?? [];
+  const rows = Array.isArray(data) ? data : (data?.rows ?? []);
+  const rollup = Array.isArray(data) ? undefined : data?.rollup;
 
   // Sort by Project Manager for the rowspan grouping (legacy sortField). Stable
   // secondary sort by client name keeps the grouped block deterministic.
@@ -279,7 +287,17 @@ export function ClientPerformanceBody() {
    * Neither ordering is wrong; having each screen GUESS is. Both are pinned in
    * tests/quicksight-latest-period.test.js against their services.
    */
-  const currentIdx = 0;
+  /*
+   * The server now SAYS which bucket is current, so nothing here has to know
+   * that this report orders most-recent-first while its sibling
+   * (technician-performance) orders oldest -> newest. Both screens used to
+   * infer it and both inferred it wrong, in opposite directions.
+   *
+   * The literal 0 remains only as the fallback for a backend that predates the
+   * rollup — and it is this report's correct answer, so the fallback is not a
+   * guess, it is the same value pinned by tests/quicksight-latest-period.test.js.
+   */
+  const currentIdx = rollup?.currentPeriodIndex ?? 0;
 
   // Headline KPI totals for the current period across all rows.
   const kpis = useMemo(() => {
