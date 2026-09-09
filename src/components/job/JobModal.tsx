@@ -21,6 +21,7 @@ import { SkillImageLightbox, type SkillImageLightboxValue } from '@/components/e
 import { CustomerSubmissionPanel } from './CustomerSubmissionPanel';
 import { AddRemarksDialog } from './AddRemarksDialog';
 import { CancelWithReasonDialog } from './CancelWithReasonDialog';
+import { CheckInWithReasonDialog } from './CheckInWithReasonDialog';
 import { BillingChargesTab } from './BillingChargesTab';
 // Audited reschedule dialog (PATCH /admin/jobs/:id/reschedule → job.reschedule:
 // offer-expiry + scheduling_history). Kept aliased for a descriptive name;
@@ -68,6 +69,7 @@ import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { transitionAllowed } from '@/lib/job-stages';
+import type { JobModalAction } from '@/lib/job-action-url';
 import { candidateJobOfferEligibility } from '@/lib/easyfixer-lifecycle';
 import { parseIstDateTime } from '@/lib/format';
 
@@ -156,7 +158,14 @@ const canMarkIncomplete = (s: number) => [ST.COMPLETED, ST.COMPLETED_ALT].includ
  *             so it lands on Billing & Charges where the audit actions live.
  * Everything downstream keys off `effectiveMode`, which folds BOTH → view.
  */
-export type JobModalMode = 'create' | 'edit' | 'view' | 'checkin' | 'audit' | 'confirm';
+/*
+ * An ALIAS, not a parallel union: the modes JobModal renders and the URL actions
+ * that open it are one vocabulary, and keeping two hand-synced copies is what
+ * let `?action=schedule` cast into a mode with no branch. Adding a mode means
+ * adding it to JOBMODAL_ACTIONS; anything else is a compile error at the call
+ * site rather than an empty dialog at runtime.
+ */
+export type JobModalMode = JobModalAction;
 
 type Job = Record<string, unknown> & {
   job_id: number; job_status: number;
@@ -11308,84 +11317,6 @@ function ChangeDescriptionDialog({ open, onClose, initialDesc, onSubmit }: {
   );
 }
 
-/*
- * CheckInWithReasonDialog — ops-side check-in (SCHEDULED → In Progress).
- *
- * The reason is MANDATORY and is the whole point of the dialog: a check-in
- * performed from the web is by definition one the technician did not perform
- * from the app, and the audit trail has to say why. Free text (not the
- * action_taken_reason dropdown) because there is no seeded reason list for this
- * action — the backend takes `reason` as a required string, max 500.
- *
- * Submit posts to /admin/jobs/:id/checkin rather than the generic status PATCH:
- * that endpoint writes checkin_date_time (the TAT anchor) and the rest of the
- * check-in columns, which PATCH /status does not. A 409 (no technician assigned,
- * or the job is no longer status 1) is rendered verbatim from the backend.
- */
-function CheckInWithReasonDialog({ open, onClose, jobId, onDone }: {
-  open: boolean; onClose: () => void; jobId: number; onDone: () => void;
-}) {
-  const [reason, setReason] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  useEffect(() => {
-    if (open) { setReason(''); setErr(null); }
-  }, [open]);
-  const trimmed = reason.trim();
-  /*
-   * House rule: no inline onOpenChange. The guard routes Esc / X /
-   * overlay-click through the shared discard prompt, and skips it while the
-   * POST is in flight (the modal is about to unmount anyway) or when nothing
-   * has been typed.
-   */
-  const guardedOpenChange = useFormDirtyGuard(onClose, {
-    isDirty: () => trimmed.length > 0,
-    when: () => !loading,
-  });
-  async function go() {
-    if (!trimmed) { setErr('A reason is required.'); return; }
-    setLoading(true); setErr(null);
-    try {
-      await api.post(`/admin/jobs/${jobId}/checkin`, { reason: trimmed });
-      showToast({ variant: 'success', message: 'Checked In' });
-      onDone();
-    } catch (e) {
-      setErr(formatApiError(e, { fallback: 'Check-in failed' }));
-    } finally { setLoading(false); }
-  }
-  return (
-    <Dialog open={open} onOpenChange={guardedOpenChange}>
-      <DialogContent>
-        <DialogHeader><DialogTitle>Check In · Job #{jobId}</DialogTitle></DialogHeader>
-        <div className="space-y-3">
-          <p className="text-sm text-muted-foreground">
-            This moves the order to In Progress and stamps the check-in time.
-            Check-in is normally done by the technician from the app — record why
-            it is being done here.
-          </p>
-          <div>
-            <Label className="text-sm font-medium block mb-1">Reason</Label>
-            <textarea
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              className="w-full border rounded px-2 py-1 text-sm bg-background min-h-[110px]"
-              placeholder="e.g. technician on site but unable to check in from the app…"
-              maxLength={500}
-            />
-            <div className="text-xs text-muted-foreground text-right">{reason.length} / 500</div>
-          </div>
-          {err && <div className="text-sm text-urgent-strong">{err}</div>}
-          <div className="flex justify-end gap-2 pt-2">
-            <CancelButton onCancel={onClose} disabled={loading} />
-            <Button onClick={go} disabled={loading || !trimmed}>
-              {loading ? 'Checking In…' : 'Check In'}
-            </Button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 /*
  * AddRemarksDialog + the shared reason-dropdown cache (fetchReasonsCached)

@@ -52,12 +52,16 @@ const pendingSrc = read('components', 'job', 'PendingToStartView.tsx');
 const urlSrc = read('lib', 'job-action-url.ts');
 const hostSrc = read('components', 'job', 'JobModalHost.tsx');
 const pageSrc = read('app', '(authed)', 'my-orders', 'page.tsx');
+const jobsSrc = read('app', '(authed)', 'jobs', 'page.tsx');
+const dialogSrc = read('components', 'job', 'CheckInWithReasonDialog.tsx');
 
 const modal = strip(modalSrc);
 const pending = strip(pendingSrc);
 const url = strip(urlSrc);
 const host = strip(hostSrc);
 const page = strip(pageSrc);
+const jobsPage = strip(jobsSrc);
+const dialog = strip(dialogSrc);
 
 // ── A. The ops Check-In action ──────────────────────────────────────
 
@@ -91,21 +95,18 @@ test('Check In posts to the check-in endpoint, never the status PATCH', () => {
    * are written only by the dedicated endpoint. A "fix" that reused doStatus()
    * would look identical in the UI and leave the anchor null.
    */
-  const dialog = modal.match(/function CheckInWithReasonDialog\([\s\S]*?\n\}\n/);
-  assert.ok(dialog, 'CheckInWithReasonDialog must exist');
   assert.match(
-    dialog[0],
+    dialog,
     /api\.post\(`\/admin\/jobs\/\$\{jobId\}\/checkin`, \{ reason: trimmed \}\)/,
     'it must POST /admin/jobs/:id/checkin with the reason',
   );
   assert.ok(
-    !/\/status`/.test(dialog[0]),
+    !/\/status`/.test(dialog),
     'it must not fall back to the status PATCH, which writes no check-in columns',
   );
 });
 
 test('the reason is mandatory and capped at the wire limit', () => {
-  const dialog = modal.match(/function CheckInWithReasonDialog\([\s\S]*?\n\}\n/)[0];
   assert.match(dialog, /maxLength=\{500\}/, 'the textarea must cap at the backend max');
   assert.match(
     dialog,
@@ -120,7 +121,6 @@ test('the reason is mandatory and capped at the wire limit', () => {
 });
 
 test('the check-in dialog uses the shared dirty guard, not an inline onOpenChange', () => {
-  const dialog = modal.match(/function CheckInWithReasonDialog\([\s\S]*?\n\}\n/)[0];
   assert.match(dialog, /useFormDirtyGuard\(onClose, \{/, 'house rule: Esc / X / overlay close routes through useFormDirtyGuard');
   assert.match(dialog, /<Dialog open=\{open\} onOpenChange=\{guardedOpenChange\}>/);
   assert.ok(
@@ -179,37 +179,69 @@ test('point 1 — job-action-url registers audit in BOTH the union and the set',
   assert.ok(union, 'the JobAction union must be found');
   assert.match(union[0], /'audit'/, "the union must carry 'audit'");
 
-  const known = url.match(/const KNOWN_ACTIONS: ReadonlySet<JobAction> = new Set<JobAction>\(\[[\s\S]*?\]\);/);
+  const known = url.match(/const KNOWN_ACTIONS: ReadonlySet<JobAction> = new Set<JobAction>\(\[[^\]]*\]\);/);
   assert.ok(known, 'KNOWN_ACTIONS must be found');
   assert.match(known[0], /'audit'/, "KNOWN_ACTIONS must carry 'audit' — the union alone does not parse the URL");
 });
 
-test('point 2 — JobModalHost routes audit to JobModal', () => {
-  const set = host.match(/const JOBMODAL_ACTIONS = new Set<JobAction>\(\[[^\]]*\]\)/);
-  assert.ok(set, 'JOBMODAL_ACTIONS must be found');
+test('point 2 — the JOBMODAL_ACTIONS allow-list carries audit, and every consumer reads it', () => {
+  /*
+   * Moved out of JobModalHost on 2026-09-09 (see section F): the host, /jobs and
+   * /my-orders each spelled this rule themselves, and only the host spelled it
+   * as an allow-list. There is now one list, in the module that owns JobAction.
+   */
+  const set = url.match(/export const JOBMODAL_ACTIONS = \[[^\]]*\] as const satisfies readonly JobAction\[\];/);
+  assert.ok(set, 'JOBMODAL_ACTIONS must live in job-action-url');
   assert.match(set[0], /'audit'/);
   assert.match(set[0], /'checkin'/, 'and must not have lost checkin while audit was added');
+  assert.match(host, /const supported = isJobModalAction\(action\);/, 'the host must consume the shared list');
 });
 
-test('point 3 — the page memo passes audit through instead of excluding it', () => {
-  const memo = page.match(/const modal = useMemo<\{ open: boolean; mode: JobModalMode; id\?: number \}>\(\(\) => \{[\s\S]*?\}, \[urlAction, urlJobId\]\);/);
-  assert.ok(memo, "the my-orders `modal` memo must be found");
-  const earlyReturn = memo[0].match(/if \(!urlAction \|\|[^)]*\) \{/);
-  assert.ok(earlyReturn, 'the exclusion list must be found');
-  assert.ok(
-    !earlyReturn[0].includes("'audit'"),
-    'audit must NOT be excluded — exclusion is what routes an action away from JobModal',
-  );
-  assert.ok(
-    !earlyReturn[0].includes("'checkin'"),
-    'checkin must stay unexcluded too',
-  );
+const MEMO = /const modal = useMemo<\{ open: boolean; mode: JobModalMode; id\?: number \}>\(\(\) => \{[\s\S]*?\}, \[urlAction, urlJobId\]\);/;
+
+test('point 3 — both page memos narrow through the allow-list, with no cast', () => {
+  /*
+   * These memos used to name the actions they REFUSED and cast the survivors.
+   * `audit` reached JobModal because nobody had excluded it — the same reason
+   * `schedule` reached it (section F). Narrowing inverts that: an action reaches
+   * JobModal because it is on the list, not because nobody thought to bar it.
+   */
+  for (const [name, src] of [['my-orders', page], ['jobs', jobsPage]]) {
+    const memo = src.match(MEMO);
+    assert.ok(memo, `the ${name} \`modal\` memo must be found`);
+    assert.match(
+      memo[0],
+      /if \(!isJobModalAction\(urlAction\)\) return \{ open: false, mode: 'create' \};/,
+      `${name} must gate on the shared allow-list`,
+    );
+    assert.match(
+      memo[0],
+      /return \{ open: true, mode: urlAction, id: urlJobId \};/,
+      `${name} must pass the NARROWED action through — an \`as JobModalMode\` here is the bug`,
+    );
+    assert.ok(
+      !/as JobModalMode/.test(memo[0]),
+      `${name} must not cast: the cast is what let an unregistered action reach JobModal`,
+    );
+  }
 });
 
 test('point 4 — JobModal folds audit into the view workspace and titles it', () => {
-  const modeUnion = modal.match(/export type JobModalMode = [^;]+;/);
-  assert.ok(modeUnion, 'JobModalMode must be found');
-  assert.match(modeUnion[0], /'audit'/, "JobModalMode must carry 'audit' or the page memo's cast lands on an unhandled mode");
+  /*
+   * JobModalMode is an ALIAS of JobModalAction now, so "does it carry audit"
+   * is asked of the one list both sides derive from. Two hand-synced unions is
+   * precisely what let ?action=schedule name a mode with no branch.
+   */
+  assert.match(
+    modal,
+    /export type JobModalMode = JobModalAction;/,
+    'JobModalMode must stay an alias — a re-forked union reopens the drift',
+  );
+  assert.match(
+    url.match(/export const JOBMODAL_ACTIONS = \[[^\]]*\] as const/)[0],
+    /'audit'/,
+    "the shared list must carry 'audit', or the page memo cannot narrow to it",
+  );
 
   assert.match(
     modal,
@@ -293,6 +325,121 @@ test('the Billing & Charges tab is still gated by the same flag it is entered on
   );
 });
 
+// ── F. The two defects this registration cost surfaced (2026-09-09) ──
+
+/*
+ * Both are the same shape as the audit work above, found while doing it, and
+ * both are invisible to every gate this repo runs.
+ *
+ * F1. `schedule` was added to JobAction and to nobody's exclusion list, so
+ *     ?action=schedule&jobId=N fell through both page memos and was cast into a
+ *     JobModalMode with no body branch and no footer branch: a titled, empty
+ *     Dialog. On /my-orders that opened UNDER the real ScheduleAssignModal on
+ *     every Schedule & Assign click; on /jobs, which mounts no such modal, the
+ *     empty dialog was the whole result of a shared link. `as JobModalMode` is
+ *     what hid it from tsc.
+ *
+ * F2. The row-level "Check in" buttons on both pages still called
+ *     quickStatusChange(id, 2) — PATCH /admin/jobs/:id/status, which writes
+ *     job_status and none of the check-in columns. So the SAME job reached
+ *     IN_PROGRESS with checkin_date_time set or null depending on which button
+ *     ops pressed, and TAT reporting could not tell the two apart.
+ */
+
+test('F1 — schedule is not in the allow-list, so it can never open JobModal', () => {
+  const set = url.match(/export const JOBMODAL_ACTIONS = \[[^\]]*\] as const/)[0];
+  for (const other of ['schedule', 'assign', 'reassign']) {
+    assert.ok(
+      !set.includes(`'${other}'`),
+      `'${other}' has its own dialog and must stay off the JobModal allow-list`,
+    );
+  }
+  // Positive control: it is still a real, parseable action — the fix routes it
+  // away from JobModal, it does not delete it.
+  assert.match(url.match(/export type JobAction = [^;]+;/)[0], /'schedule'/);
+  assert.match(
+    url.match(/const KNOWN_ACTIONS: ReadonlySet<JobAction> = new Set<JobAction>\(\[[^\]]*\]\);/)[0],
+    /'schedule'/,
+    'schedule must still parse out of the URL, or ScheduleAssignModal stops opening',
+  );
+});
+
+test('F1 — the page that owns ?action=schedule still derives its real modal from it', () => {
+  /*
+   * The failure mode of over-correcting: excluding schedule from JobModal while
+   * also breaking the modal it actually belongs to would swap an empty dialog
+   * for no dialog, which is harder to notice.
+   */
+  assert.match(
+    page,
+    /const scheduleModal = useMemo<\{ open: boolean; jobId: number \| null \}>\(\(\) => \{[\s\S]*?urlAction === 'schedule'[\s\S]*?\}, \[urlAction, urlJobId\]\);/,
+    'my-orders must still derive ScheduleAssignModal from ?action=schedule',
+  );
+  assert.match(page, /<ScheduleAssignModal\n\s*open=\{scheduleModal\.open\}/);
+});
+
+test('F2 — neither row Check-In goes through the status PATCH any more', () => {
+  for (const [name, src] of [['my-orders', page], ['jobs', jobsPage]]) {
+    assert.ok(
+      !/quickStatusChange\(j\.job_id, 2, 'Check in'\)/.test(src),
+      `${name}: the row check-in must not PATCH /status — it writes no checkin_date_time`,
+    );
+    assert.match(
+      src,
+      /onClick=\{\(\) => setCheckinJobId\(j\.job_id\)\}/,
+      `${name}: the row check-in must open the shared reason dialog`,
+    );
+    assert.match(
+      src,
+      /<CheckInWithReasonDialog\n\s*open=\{checkinJobId != null\}/,
+      `${name}: and must actually mount it`,
+    );
+  }
+});
+
+test('F2 — check-out is untouched: it has no columns of its own to write', () => {
+  /*
+   * quickStatusChange is SHARED with the status-3 "Check out & complete" action.
+   * Routing check-in away from it must not take that caller with it, and a
+   * regex sweep for the helper would have.
+   */
+  for (const [name, src] of [['my-orders', page], ['jobs', jobsPage]]) {
+    assert.match(
+      src,
+      /quickStatusChange\(j\.job_id, 3, 'Check out & complete'\)/,
+      `${name}: check-out must still use the shared quick-status helper`,
+    );
+  }
+  assert.match(
+    read('lib', 'job-tabs.ts'),
+    /opts\.api\.patch\(`\/admin\/jobs\/\$\{jobId\}\/status`, \{ status: toStatus \}\)/,
+    'makeQuickStatusChange itself must be unchanged',
+  );
+});
+
+test('F2 — the dialog is ONE component with three mount points, not three copies', () => {
+  /*
+   * The reason this is an extraction and not a copy. Three inlined dialogs would
+   * fix the reported defect and reintroduce it the next time the endpoint, the
+   * 500-char cap or the 409 copy changes in only two of them.
+   */
+  assert.match(dialog, /export function CheckInWithReasonDialog\(/, 'it must be its own module');
+  assert.ok(
+    !/function CheckInWithReasonDialog\(/.test(modal),
+    'JobModal must import it, not keep a private copy',
+  );
+  const posts = (str) => (str.match(/\/checkin`/g) || []).length;
+  assert.equal(posts(dialog), 1, 'exactly one call site for the endpoint');
+  for (const [name, src] of [['JobModal', modal], ['my-orders', page], ['jobs', jobsPage]]) {
+    assert.equal(posts(src), 0, `${name} must not POST the check-in endpoint itself`);
+    assert.match(
+      src,
+      /import \{ CheckInWithReasonDialog \}/,
+      `${name} must import the shared dialog`,
+    );
+  }
+});
+
 // ── E. Controls ─────────────────────────────────────────────────────
 
 test('positive control — the comment stripper actually removes prose', () => {
@@ -346,14 +493,20 @@ test('differential control — each guard fails on a source with its subject del
     [
       "'audit' in KNOWN_ACTIONS",
       url.replace(/'checkin', 'audit',/, "'checkin',"),
-      /const KNOWN_ACTIONS: ReadonlySet<JobAction> = new Set<JobAction>\(\[[\s\S]*?'audit'[\s\S]*?\]\);/,
+      /const KNOWN_ACTIONS: ReadonlySet<JobAction> = new Set<JobAction>\(\[[^\]]*'audit'[^\]]*\]\);/,
       url,
     ],
     [
       "'audit' in JOBMODAL_ACTIONS",
-      host.replace(/'checkin', 'audit',/, "'checkin',"),
-      /const JOBMODAL_ACTIONS = new Set<JobAction>\(\[[^\]]*'audit'[^\]]*\]\)/,
-      host,
+      url.replace(/(export const JOBMODAL_ACTIONS = \[[\s\S]*?)'audit', /, '$1'),
+      /export const JOBMODAL_ACTIONS = \[[^\]]*'audit'[^\]]*\] as const/,
+      url,
+    ],
+    [
+      'the allow-list gate in the my-orders memo',
+      page.replace(/if \(!isJobModalAction\(urlAction\)\) return \{ open: false, mode: 'create' \};/, ''),
+      /if \(!isJobModalAction\(urlAction\)\) return \{ open: false, mode: 'create' \};/,
+      page,
     ],
     [
       'the audit row action',

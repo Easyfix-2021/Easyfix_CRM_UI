@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { buildStatusParams, jobStageOptionsFor } from '@/lib/job-buckets';
 import Link from 'next/link';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
-import { useJobActionParams, useJobActionNav } from '@/lib/job-action-url';
+import { useJobActionParams, useJobActionNav, isJobModalAction } from '@/lib/job-action-url';
 import { useDebouncedValue, useFetchOnce } from '@/lib/hooks';
 import {
   Plus, Upload, ChevronDown, ChevronUp, Repeat, Globe,
@@ -52,6 +52,7 @@ import { useVirtualRows, VirtualPad } from '@/components/ui/virtual-rows';
 import { Checkbox } from '@/components/ui/checkbox';
 import { RefreshBar } from '@/components/ui/refresh-bar';
 import { LiveLocationPopover } from '@/components/location/LiveLocationPopover';
+import { CheckInWithReasonDialog } from '@/components/job/CheckInWithReasonDialog';
 
 // `/admin/jobs` Joi caps limit at 500 — pass to pageSizeToLimit so
 // "All" sends 500 instead of the default 1000 (which would 400).
@@ -711,15 +712,18 @@ export default function JobsPage() {
   // (`searchParams`/`router`/`pathname` are declared up in the state block.)
   const { jobId: urlJobId, action: urlAction } = useJobActionParams();
   const { openJobAction, closeJobAction } = useJobActionNav();
+  /*
+   * ALLOW-LIST (isJobModalAction), not an exclusion list. This memo used to
+   * exclude assign / reassign by name and cast the rest with `as JobModalMode`.
+   * `schedule` matched neither arm, so a pasted ?action=schedule link opened an
+   * empty titled dialog here — /jobs mounts no ScheduleAssignModal, so that
+   * empty modal was the entire result. An unregistered action now opens nothing.
+   */
   const modal = useMemo<{ open: boolean; mode: JobModalMode; id?: number }>(() => {
-    if (!urlAction || urlAction === 'assign' || urlAction === 'reassign') {
-      // Assign / reassign open a different dialog (AssignTechDialog),
-      // not JobModal — handled separately below. Hide JobModal here.
-      return { open: false, mode: 'create' };
-    }
-    if (urlAction === 'create') return { open: true, mode: 'create' };
-    if (urlJobId == null)        return { open: false, mode: 'create' };
-    return { open: true, mode: urlAction as JobModalMode, id: urlJobId };
+    if (!isJobModalAction(urlAction)) return { open: false, mode: 'create' };
+    if (urlAction === 'create')       return { open: true, mode: 'create' };
+    if (urlJobId == null)             return { open: false, mode: 'create' };
+    return { open: true, mode: urlAction, id: urlJobId };
   }, [urlAction, urlJobId]);
 
   /*
@@ -887,6 +891,13 @@ export default function JobsPage() {
   // (null = closed). Shown for "Pending App Ack" (status 0, assigned) and
   // "Pending to Close" (status 2/20) rows, which always carry a tech.
   const [locationJob, setLocationJob] = useState<JobRow | null>(null);
+  /*
+   * Row-level ops check-in. NOT quickStatusChange: that PATCHes /status, which
+   * writes job_status alone and leaves checkin_date_time — the TAT anchor —
+   * null. The dialog POSTs /admin/jobs/:id/checkin, the same endpoint the
+   * workspace's Check In button uses.
+   */
+  const [checkinJobId, setCheckinJobId] = useState<number | null>(null);
   const confirmAction = useConfirm();
   // Shared factory (lib/job-tabs.ts). /jobs keeps the short confirm copy and
   // refreshes the dashboard counts after reload (afterReload: refreshCounts).
@@ -1426,7 +1437,22 @@ export default function JobsPage() {
                     consistency. The outline Reset to its left + the
                     emerald Export on the right give it a clear
                     visual shelf without a custom hue. */}
-                {canJob.isTransferJobOwnership && (
+                {/* Ops check-in from a row — same dialog, same endpoint as the workspace's
+          Check In button. Reload mirrors quickStatusChange's success path,
+          counts included, so the status pills stay coherent. */}
+      <CheckInWithReasonDialog
+        open={checkinJobId != null}
+        onClose={() => setCheckinJobId(null)}
+        jobId={checkinJobId ?? 0}
+        onDone={async () => {
+          setCheckinJobId(null);
+          cacheRef.current.clear();
+          await load(false, true);
+          refreshCounts();
+        }}
+      />
+
+      {canJob.isTransferJobOwnership && (
                   <>
                     <Button
                       type="button"
@@ -1764,11 +1790,13 @@ export default function JobsPage() {
                     {/*
                       * Status-driven row actions — mirrors legacy jobList.vm:
                       *   status 0     → View + Schedule (opens modal for auto/manual pick)
-                      *   status 1     → View + Check-In (direct status 1→2)
+                      *   status 1     → View + Check-In (reason dialog → POST /checkin)
                       *   status 2, 20 → View + Check-Out (direct status 2→3)
                       *   others       → View only
-                      * The quickStatusChange() handler confirms + PATCHes /status
-                      * + refreshes both list + counts so badges stay coherent.
+                      * Check-Out goes through quickStatusChange() (confirm + PATCH
+                      * /status + refresh list and counts). Check-In does NOT: it
+                      * needs the check-in columns, so it opens the shared
+                      * CheckInWithReasonDialog and refreshes the same way.
                       */}
                     <div className="inline-flex items-center gap-0.5 justify-end">
                       <IconButton
@@ -1829,8 +1857,7 @@ export default function JobsPage() {
                           icon={PlayCircle}
                           intent="primary"
                           label="Check-In — technician on-site, move to In Progress"
-                          busy={rowBusy === j.job_id}
-                          onClick={() => quickStatusChange(j.job_id, 2, 'Check in')}
+                          onClick={() => setCheckinJobId(j.job_id)}
                         />
                       )}
                       {(j.job_status === 2 || j.job_status === 20) && canJob.isJobStatusChange && transitionAllowed(me?.allowedStages, j.job_status, 3) && (

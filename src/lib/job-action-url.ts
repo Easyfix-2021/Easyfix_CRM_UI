@@ -49,17 +49,44 @@ import { useCallback, useMemo } from 'react';
  *             advances, documents) live.
  *
  * ADDING AN ACTION IS A MULTI-FILE EDIT. The union and KNOWN_ACTIONS below are
- * only the first two; see JobModalHost's JOBMODAL_ACTIONS, JobModal's
- * JobModalMode + effectiveMode fold + guardedClose read-only skip, and each list
- * page's `modal` memo. Miss one and the action silently falls through to an
- * empty modal instead of erroring. tests/my-orders-checkin-audit.test.js pins
- * every one of them.
+ * only the first two; see JOBMODAL_ACTIONS just under them, JobModal's
+ * effectiveMode fold + guardedClose read-only skip, and each list page's `modal`
+ * memo. tests/my-orders-checkin-audit.test.js pins every one of them.
  */
 export type JobAction = 'create' | 'view' | 'checkin' | 'audit' | 'edit' | 'confirm' | 'assign' | 'reassign' | 'schedule';
 
 const KNOWN_ACTIONS: ReadonlySet<JobAction> = new Set<JobAction>([
   'create', 'view', 'checkin', 'audit', 'edit', 'confirm', 'assign', 'reassign', 'schedule',
 ]);
+
+/*
+ * The subset JobModal itself renders. The other three actions each belong to
+ * their own dialog — assign/reassign to AssignTechnicianModal, schedule to
+ * ScheduleAssignModal — and are derived separately by the pages that mount them.
+ *
+ * WHY THIS EXISTS (bug, 2026-09-09). Every consumer used to spell the rule as an
+ * EXCLUSION list (`action === 'assign' || action === 'reassign'`) and then cast
+ * whatever survived with `as JobModalMode`. `schedule` was added to JobAction and
+ * to nobody's exclusion list, so `?action=schedule&jobId=N` cast cleanly to a
+ * mode JobModal has no branch for and opened a titled, empty dialog — on
+ * /my-orders underneath the real ScheduleAssignModal, on /jobs on its own.
+ *
+ * An allow-list inverts the failure: a new action renders nothing until it is
+ * added here, instead of rendering an empty modal. `JobModalMode` is an alias of
+ * JobModalAction, so the cast that hid this from tsc is gone entirely.
+ */
+export const JOBMODAL_ACTIONS = [
+  'create', 'view', 'checkin', 'audit', 'edit', 'confirm',
+] as const satisfies readonly JobAction[];
+
+export type JobModalAction = (typeof JOBMODAL_ACTIONS)[number];
+
+const JOBMODAL_ACTION_SET: ReadonlySet<string> = new Set(JOBMODAL_ACTIONS);
+
+/** Narrows a URL action to one JobModal can actually render. */
+export function isJobModalAction(action: JobAction | null | undefined): action is JobModalAction {
+  return action != null && JOBMODAL_ACTION_SET.has(action);
+}
 
 export interface JobActionParams {
   /** Numeric job id when present; null otherwise (create / no-modal). */

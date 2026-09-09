@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
-import { useJobActionParams, useJobActionNav } from '@/lib/job-action-url';
+import { useJobActionParams, useJobActionNav, isJobModalAction } from '@/lib/job-action-url';
 import {
   Search, Eye,
   CalendarClock, PlayCircle, CheckCircle2, CalendarCheck,
@@ -26,6 +26,7 @@ import { UnconfirmedSections } from '@/components/job/UnconfirmedSections';
 import { PendingToStartView } from '@/components/job/PendingToStartView';
 import { AssignTechnicianModal, type AssignMode } from '@/components/job/AssignTechnicianModal';
 import { ScheduleAssignModal } from '@/components/job/ScheduleAssignModal';
+import { CheckInWithReasonDialog } from '@/components/job/CheckInWithReasonDialog';
 import { OfferHoverCard } from '@/components/job/OfferHoverCard';
 import {
   PendingSchedulingFilters, psFiltersFromParams, writePsFilterParams,
@@ -492,19 +493,22 @@ export default function MyOrdersPage() {
   const { openJobAction, closeJobAction } = useJobActionNav();
 
   /*
-   * JobModal opens for view / checkin / audit / edit / confirm / create — the
-   * action token is passed through as the mode, so a new JobModal-backed action
-   * needs no edit here PROVIDED it is absent from the exclusion list below and
-   * present in JobModalMode. Assign & Reassign open AssignTechDialog instead and
-   * are excluded; they are derived separately from the same URL state below.
+   * JobModal opens for the actions in JOBMODAL_ACTIONS (create / view / checkin
+   * / audit / edit / confirm). Assign, Reassign and Schedule drive their own
+   * dialogs and are derived separately from the same URL state below.
+   *
+   * ALLOW-LIST, not an exclusion list. This memo used to exclude assign and
+   * reassign by name and cast whatever survived with `as JobModalMode`; when
+   * `schedule` was added it matched neither arm, so ?action=schedule&jobId=N
+   * cast cleanly into a mode JobModal has no branch for and opened an empty
+   * dialog UNDER the real ScheduleAssignModal. isJobModalAction narrows instead
+   * of casting, so an unregistered action now opens nothing.
    */
   const modal = useMemo<{ open: boolean; mode: JobModalMode; id?: number }>(() => {
-    if (!urlAction || urlAction === 'assign' || urlAction === 'reassign') {
-      return { open: false, mode: 'create' };
-    }
-    if (urlAction === 'create') return { open: true, mode: 'create' };
-    if (urlJobId == null)        return { open: false, mode: 'create' };
-    return { open: true, mode: urlAction as JobModalMode, id: urlJobId };
+    if (!isJobModalAction(urlAction)) return { open: false, mode: 'create' };
+    if (urlAction === 'create')       return { open: true, mode: 'create' };
+    if (urlJobId == null)             return { open: false, mode: 'create' };
+    return { open: true, mode: urlAction, id: urlJobId };
   }, [urlAction, urlJobId]);
 
   // AssignTechDialog state — derived from `?action=assign|reassign`.
@@ -563,6 +567,14 @@ export default function MyOrdersPage() {
   // table's MapPin call site) and PendingToStartView's PendingJobRow, so both
   // call sites type-check without importing each other's row type.
   const [locationJob, setLocationJob] = useState<{ job_id: number; easyfixer_name: string | null } | null>(null);
+  /*
+   * Row-level ops check-in. NOT quickStatusChange: that PATCHes /status, which
+   * writes job_status alone and leaves checkin_date_time — the TAT anchor —
+   * null. The dialog POSTs /admin/jobs/:id/checkin, the same endpoint the
+   * workspace's Check In button uses, so a row check-in and a workspace
+   * check-in are now indistinguishable in the data.
+   */
+  const [checkinJobId, setCheckinJobId] = useState<number | null>(null);
   const confirmAction = useConfirm();
   // Shared factory (lib/job-tabs.ts). /my-orders keeps its longer "continue
   // working" confirm copy and does NOT refresh counts (no pill bar here — see
@@ -1175,8 +1187,7 @@ export default function MyOrdersPage() {
                           {canJob.isJobStatusChange && transitionAllowed(me?.allowedStages, j.job_status, 2) && (
                             <button
                               type="button"
-                              disabled={rowBusy === j.job_id}
-                              onClick={() => quickStatusChange(j.job_id, 2, 'Check in')}
+                              onClick={() => setCheckinJobId(j.job_id)}
                               className="inline-flex items-center gap-1 text-warning-strong text-xs hover:underline disabled:opacity-50"
                               title="Check-In — technician on-site, move to In Progress"
                             >
@@ -1283,6 +1294,20 @@ export default function MyOrdersPage() {
         // Cancel Job (non-assign) also mutates the list — same in-place refresh
         // as onAssigned so the cancelled row drops out without a skeleton flash.
         onChanged={() => { cacheRef.current.clear(); load(false, true); }}
+      />
+
+      {/* Ops check-in from a generic-table row — same dialog, same endpoint as
+          the workspace's Check In button. Reload mirrors quickStatusChange's
+          success path so the row leaves its bucket. */}
+      <CheckInWithReasonDialog
+        open={checkinJobId != null}
+        onClose={() => setCheckinJobId(null)}
+        jobId={checkinJobId ?? 0}
+        onDone={() => {
+          setCheckinJobId(null);
+          cacheRef.current.clear();
+          void load(false, true);
+        }}
       />
 
       {/*

@@ -16,29 +16,27 @@
 
 import { useSearchParams } from 'next/navigation';
 
-import { JobModal, type JobModalMode } from '@/components/job/JobModal';
-import { useJobActionParams, useJobActionNav, type JobAction } from '@/lib/job-action-url';
-
-/*
- * Actions JobModal itself renders. assign / reassign / schedule are SEPARATE
- * modals on /jobs, so the host ignores them (a page that needs those mounts its
- * own) — this host only ever opens the JobModal-backed actions.
- */
-const JOBMODAL_ACTIONS = new Set<JobAction>(['create', 'view', 'checkin', 'audit', 'edit', 'confirm']);
+import { JobModal } from '@/components/job/JobModal';
+import { useJobActionParams, useJobActionNav, isJobModalAction } from '@/lib/job-action-url';
 
 export function JobModalHost({ onSaved }: { onSaved?: () => void }) {
   const { jobId, action } = useJobActionParams();
   const { closeJobAction } = useJobActionNav();
   const viewTab = useSearchParams().get('viewTab') || undefined;
 
-  const supported = action != null && JOBMODAL_ACTIONS.has(action);
+  /*
+   * assign / reassign / schedule are SEPARATE modals on /jobs, so the host
+   * ignores them (a page that needs those mounts its own) — isJobModalAction is
+   * the single allow-list, shared with both list pages.
+   */
+  const supported = isJobModalAction(action);
   // `create` is the only supported action valid without a jobId.
   const open = supported && (action === 'create' || jobId != null);
 
   return (
     <JobModal
       open={open}
-      mode={(open ? action : 'view') as JobModalMode}
+      mode={supported ? action : 'view'}
       jobId={jobId ?? undefined}
       onClose={closeJobAction}
       onSaved={onSaved}
