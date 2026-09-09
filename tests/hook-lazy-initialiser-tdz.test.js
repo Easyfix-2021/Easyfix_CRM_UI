@@ -172,3 +172,34 @@ test('the two reports that carried the outage declare searchParams first', () =>
       + 'dead zone — the whole page renders "Application error" instead.');
   }
 });
+
+/* ─── the blast radius, not just the fault ─────────────────────────────── */
+
+test('the authed route group keeps an error boundary', () => {
+  /*
+   * The TDZ bug took down the WHOLE page — sidebar, navbar, every other tab —
+   * because there was no error.tsx anywhere under src/app, so one component's
+   * throw reached Next's root fallback and replaced the entire document.
+   *
+   * The boundary at (authed)/error.tsx is what makes the next render fault a
+   * broken panel instead of a broken CRM: it replaces only what the layout
+   * renders into <main>, leaving navigation usable. Deleting it, or dropping
+   * its 'use client' directive (an error boundary MUST be a client component —
+   * without the directive Next fails the build, but a future refactor that
+   * moves the file could lose it quietly), restores the outage's blast radius
+   * without breaking anything a reviewer would notice.
+   */
+  const p = path.join(ROOT, 'src/app/(authed)/error.tsx');
+  assert.ok(fs.existsSync(p),
+    'src/app/(authed)/error.tsx is missing — without it a single component throwing '
+    + 'blanks every authenticated screen, which is exactly what happened on 2026-09-09');
+
+  const src = fs.readFileSync(p, 'utf8');
+  assert.match(src.split('\n').slice(0, 3).join('\n'), /^'use client'/,
+    "an error boundary must be a client component — 'use client' must be the first statement");
+  assert.match(src, /export default function/, 'Next requires a default export');
+  assert.match(src, /\breset\b/, 'the boundary must offer reset() — otherwise the panel is a dead end');
+  assert.match(src, /digest/,
+    'the boundary must surface error.digest: production bundles are minified, so the digest is '
+    + 'the only handle tying what a user saw to what the logs recorded');
+});
