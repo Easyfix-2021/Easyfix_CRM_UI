@@ -596,6 +596,7 @@ function CityFormModal({
   onSaved: () => void;
 }) {
   const isEdit = !!editing;
+  const isPending = !!editing && editing.city_status === 2;
   const [name,    setName]    = useState('');
   const [stateId, setStateId] = useState<number | ''>('');
   const [district, setDistrict] = useState('');
@@ -648,7 +649,9 @@ function CityFormModal({
           district:  district || null,
           tier:      tier || null,
           reference_pincode: refPin || null,
-          is_active: active,
+          // Omitted for a pending city — sending it at all is what retired
+          // one. Everything else on the row stays editable before a decision.
+          ...(isPending ? {} : { is_active: active }),
         });
       } else {
         await api.post('/admin/cities', {
@@ -746,11 +749,28 @@ function CityFormModal({
             </div>
           </div>
 
-          {isEdit && (
+          {/*
+            * No Active toggle for a PENDING city. `active` initialises from
+            * `city_status === 1`, which is false for a pending city (2), so
+            * opening one just to fix its district and saving used to send
+            * is_active:false — retiring it to 0 with no merge. It would then
+            * be gone from the approval queue for good: never approved, never
+            * rejected, with its pincodes and addresses still pointing at it.
+            * Approval is what promotes a pending city; the backend now
+            * refuses the flag here too (409).
+            */}
+          {isEdit && !isPending && (
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
               <span>Active</span>
             </label>
+          )}
+          {isEdit && isPending && (
+            <p className="text-sm text-muted-foreground">
+              This city is awaiting approval. Use the{' '}
+              <span className="font-medium text-foreground">Pending Approval</span> tab to
+              approve it, or to reject it and choose the city its records should merge into.
+            </p>
           )}
 
           {error && (
