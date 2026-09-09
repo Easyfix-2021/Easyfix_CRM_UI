@@ -359,6 +359,24 @@ export function CityPerformanceBody() {
   const canView = flags[ACTION_KEY];
 
   /*
+   * DECLARED FIRST, and it must stay first. Both useState calls below pass a
+   * LAZY INITIALISER that calls searchParams — and React runs a lazy
+   * initialiser SYNCHRONOUSLY during the first render. With this line below
+   * them, the const was still in its temporal dead zone when the initialiser
+   * ran, so every first mount threw
+   * `ReferenceError: Cannot access 'searchParams' before initialization`
+   * and the whole page rendered Next's "Application error" instead.
+   *
+   * Nothing caught it: TypeScript's ts(2448) only fires on a DIRECT
+   * use-before-declare, not on one inside a closure; eslint's
+   * no-use-before-define permits references from nested functions because it
+   * cannot know when they run; and `next build` CSR-bails any client component
+   * using useSearchParams, so the page is never rendered at build time. Only
+   * mounting it in a browser shows the fault.
+   */
+  const searchParams = useSearchParams();
+
+  /*
    * Seeded from `?period=` alongside ?clientId=, so a link can open this report
    * on the window it means. Lazy and read-once for the same reason as the
    * client filter: useSearchParams is stable at first render, and re-reading it
@@ -378,7 +396,6 @@ export function CityPerformanceBody() {
    * no param the helper returns [], the value this filter already started at,
    * so a bare visit behaves exactly as before.
    */
-  const searchParams = useSearchParams();
   const [clients, setClients] = useState<Array<string | number>>(
     () => clientIdsFromParams((k) => searchParams.getAll(k)),
   );
