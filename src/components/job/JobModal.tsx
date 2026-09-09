@@ -1223,6 +1223,32 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
             // Additional Comments / technician-facing notes (efr_special_notes) —
             // captured on booking (Client Dashboard "Notes for technician") but
             // previously never rendered in the read view.
+            /*
+             * Customer PIN — DISPLAY ONLY, and only while it is operationally
+             * live: Pending to Start (1) and Pending to Close (2 / 20), the two
+             * buckets ops is looking at when a technician calls unable to
+             * proceed. Hidden elsewhere because a completed job's PIN is spent
+             * and a booked one may not be minted yet.
+             *
+             * NO backend change was needed: getByIdCore selects `j.*`, so
+             * tbl_job.otp has been on the wire to every CRM user since the
+             * column shipped. This surfaces what was already sent rather than
+             * exposing anything new.
+             *
+             * The PIN gates CHECK-OUT, not check-in (changed 2026-09-07) — the
+             * label says so, because "OTP" beside a job Pending to Start reads
+             * as the thing needed to start it, which is exactly what it stopped
+             * being.
+             *
+             * `otp` is absent on deploys predating the column (the backend
+             * probes with hasOtpColumn), so a missing value renders as a dash
+             * rather than an empty cell that reads like "no PIN was set".
+             */
+            ...([1, 2, 20].includes(Number(job.job_status))
+              ? [['Customer PIN (Closes the Job)', job.otp
+                  ? <span key="job-otp" className="font-mono tracking-widest">{String(job.otp)}</span>
+                  : null] as [string, React.ReactNode]]
+              : []),
             ['Handyman Notes', String(job.efr_special_notes ?? '') || '—'],
           ]}/>
           {/* Address — full-width because the address line is long and
