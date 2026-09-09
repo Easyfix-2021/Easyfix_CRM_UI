@@ -23,7 +23,9 @@ import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
 import { CancelButton } from '@/components/ui/cancel-button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
+import { PendingCitiesTab, type PendingListResponse } from './PendingCitiesTab';
 import { api, ApiError } from '@/lib/api';
 import { useFetch, useDebouncedValue, invalidateFetch } from '@/lib/hooks';
 import { useSort, SortHeader } from '@/lib/use-sort';
@@ -66,11 +68,17 @@ export default function ManageCitiesPage() {
   const lookup = useLookup();
   const { me } = useMe();
   // Permission gating mirrors legacy CRM Constants.actionPermissions:
-  //   - isCityAddNew : Add City button visibility.
-  //   - isCityEdit   : Edit + Deactivate per-row buttons.
+  //   - isCityAddNew  : Add City button visibility.
+  //   - isCityEdit    : Edit + Deactivate per-row buttons.
+  //   - isCityApprove : the whole Pending Approval tab — its trigger, its
+  //                     list and its two actions. Gating the tab is what
+  //                     gates the actions: without the key there is no tab
+  //                     bar at all and the page renders exactly as before.
+  //                     The backend enforces the same key on approve/reject
+  //                     (403), so this is a render hint, not the boundary.
   // Legacy also has isCityUpload for the bulk upload screen; we don't have
   // a city upload page yet — gate that one when it ships.
-  const can = actionFlags(me, ['isCityAddNew', 'isCityEdit']);
+  const can = actionFlags(me, ['isCityAddNew', 'isCityEdit', 'isCityApprove']);
 
   const [search, setSearch] = useState('');
   const [stateFilter, setStateFilter] = useState<number | ''>('');
@@ -123,10 +131,42 @@ export default function ManageCitiesPage() {
   // preserves the BE's default city_name-ASC order.
   const { sorted, sortKey, sortDir, toggle } = useSort<City>(items);
 
-  // Invalidate the 30s module cache for ALL city list pages, then refetch.
+  /*
+   * Approval queue — GET /admin/cities/pending. Lives HERE rather than inside
+   * <PendingCitiesTab> because the tab TRIGGER carries the backlog count, and
+   * Radix unmounts an inactive TabsContent: a fetch owned by the tab body
+   * would not run until someone clicked the tab, which is precisely the click
+   * the badge exists to prompt. One fetch feeds both the badge and the list.
+   *
+   * `enabled` is the permission — a user without isCityApprove never issues
+   * the request at all.
+   */
+  const [pendingPage, setPendingPage] = useState(0);
+  const [pendingPageSize, setPendingPageSize] = useState<TablePageSize>(50);
+  const pendingLimit  = pageSizeToLimit(pendingPageSize, CITIES_LIMIT_CAP);
+  const pendingOffset = pendingPage * (pendingPageSize === 'all' ? pendingLimit : Number(pendingPageSize));
+  const {
+    data: pendingData, loading: pendingLoading, error: pendingError, refetch: refetchPending,
+  } = useFetch<PendingListResponse>(
+    `/admin/cities/pending?limit=${pendingLimit}&offset=${pendingOffset}`,
+    { enabled: can.isCityApprove },
+  );
+  const pendingItems = pendingData?.items ?? [];
+  const pendingTotal = pendingData?.total ?? 0;
+
+  /*
+   * Invalidate the 30s module cache for ALL city list pages, then refetch.
+   *
+   * Both refetches are required and neither is redundant: invalidateFetch only
+   * EVICTS (plus notifies useFetchOnce subscribers), so a useFetch that is
+   * already mounted — which both of these are — keeps rendering its last
+   * response until its own refetch() bumps the hook's tick. An approve changes
+   * both lists, so both get refetched.
+   */
   function refreshList() {
     invalidateFetch((k) => k.startsWith('/admin/cities'));
     refetch();
+    refetchPending();
   }
 
   async function handleDeactivate(c: City) {
@@ -221,11 +261,48 @@ export default function ManageCitiesPage() {
                   brings it back so you can reactivate.
                 </p>
               </section>
+              {can.isCityApprove && (
+                <section>
+                  <h3 className="font-semibold text-foreground mb-1">5. Pending approval</h3>
+                  <p>
+                    Six automatic paths create a city — three of them without any login
+                    (public website booking, a technician&rsquo;s magic-link profile form,
+                    transcript extraction). Those cities land as <em>pending</em> and stay
+                    out of every city picker until someone decides here. Approving makes
+                    the city selectable. <strong>Rejecting is a merge, not a delete</strong>:
+                    it repoints every address, pincode, technician, client and zone mapping
+                    onto a replacement city you must choose, then retires the rejected one.
+                  </p>
+                </section>
+              )}
             </div>
           )}
         </CardContent>
       </Card>
 
+      {/*
+        * Two tabs, but the tab BAR only renders for an approver. Without
+        * isCityApprove there is no second tab to switch to, so a lone
+        * "All Cities" trigger would be chrome with nothing behind it — the
+        * page then looks exactly as it did before this queue existed.
+        * <Tabs> itself always mounts so defaultValue still selects the list.
+        */}
+      <Tabs defaultValue="all" className="space-y-4">
+        {can.isCityApprove && (
+          <TabsList>
+            <TabsTrigger value="all">All Cities</TabsTrigger>
+            <TabsTrigger value="pending">
+              Pending Approval
+              {pendingTotal > 0 && (
+                <span className="ml-2 inline-block rounded-full bg-warning-tint text-warning-strong px-1.5 py-0.5 text-xs font-medium">
+                  {pendingTotal}
+                </span>
+              )}
+            </TabsTrigger>
+          </TabsList>
+        )}
+
+        <TabsContent value="all" className="space-y-4">
       {/* Filters */}
       <Card>
         <CardContent className="p-3 flex items-center gap-2 flex-wrap">
@@ -476,6 +553,26 @@ export default function ManageCitiesPage() {
           </div>
         </CardContent>
       </Card>
+        </TabsContent>
+
+        {can.isCityApprove && (
+          <TabsContent value="pending">
+            <PendingCitiesTab
+              items={pendingItems}
+              total={pendingTotal}
+              loading={pendingLoading}
+              error={pendingError}
+              page={pendingPage}
+              pageSize={pendingPageSize}
+              onPageChange={setPendingPage}
+              onPageSizeChange={(s) => { setPendingPageSize(s); setPendingPage(0); }}
+              /* Refreshes the queue AND the All Cities list behind it — an
+                 approved city has to appear there in the same beat. */
+              onDecided={refreshList}
+            />
+          </TabsContent>
+        )}
+      </Tabs>
 
       <CityFormModal
         open={modalOpen}
