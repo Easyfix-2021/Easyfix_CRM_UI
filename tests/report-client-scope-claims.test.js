@@ -23,13 +23,45 @@ const ROOT = path.join(__dirname, '..');
 const SENDER = path.join(ROOT, 'src/components/client/ReportsSection.tsx');
 const QS = path.join(ROOT, 'src/app/(authed)/quicksight');
 
-/** The REPORTS table, read from the sender — not re-typed here. */
+/**
+ * The REPORTS table, read from the sender — not re-typed here.
+ *
+ * READ THE BOUNDS BEFORE LOOSENING THEM (2026-09-09). This parser used two
+ * unbounded lazy runs and both could leave the region they meant to describe:
+ *
+ *   /const REPORTS[\s\S]*?\n\];/            — the run can cross `];`
+ *   /href: '…'[\s\S]*?scoped:(true|false)/  — the run can cross `}`
+ *
+ * The second is the dangerous one. An entry with no literal `scoped:` key, or
+ * one that spells `scoped` BEFORE `href`, does not simply fail to match — the
+ * run walks into the NEXT entry and pairs this report's slug with its
+ * neighbour's flag. The test then asserts a scoping claim against the wrong
+ * report and passes, which is worse than not running at all.
+ *
+ * So each entry is matched as a whole object literal (`[^{}]` cannot leave it),
+ * the two keys are read out of that entry independently — order no longer
+ * matters — and a missing flag is a NAMED failure rather than a silent
+ * omission. The cardinality assert below catches an entry the scanner dropped.
+ */
 function declaredReports() {
   const src = fs.readFileSync(SENDER, 'utf8');
-  const block = /const REPORTS[\s\S]*?\n\];/.exec(src);
+  const block = /const REPORTS[^\]]*\n\];/.exec(src);
   assert.ok(block, 'the REPORTS table must exist in ReportsSection');
-  return [...block[0].matchAll(/href:\s*'\/quicksight\/([^']+)'[\s\S]*?scoped:\s*(true|false)/g)]
-    .map((m) => ({ slug: m[1], scoped: m[2] === 'true' }));
+
+  const entries = (block[0].match(/\{[^{}]*\}/g) || [])
+    .filter((e) => /href:\s*'\/quicksight\//.test(e));
+  const declared = (block[0].match(/href:\s*'\/quicksight\//g) || []).length;
+  assert.equal(
+    entries.length, declared,
+    'an entry was swallowed by the scanner — every /quicksight/ href must land in its own object literal',
+  );
+
+  return entries.map((entry) => {
+    const slug = /href:\s*'\/quicksight\/([^']+)'/.exec(entry)[1];
+    const scoped = /scoped:\s*(true|false)/.exec(entry);
+    assert.ok(scoped, `REPORTS entry ${slug} declares no literal scoped: flag`);
+    return { slug, scoped: scoped[1] === 'true' };
+  });
 }
 
 /*

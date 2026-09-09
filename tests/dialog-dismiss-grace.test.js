@@ -81,7 +81,14 @@ test('the stamp lives INSIDE the portal, where mounting means opening', () => {
   assert.ok(!/mountedAtRef/.test(wrapper),
     'the stamp must NOT be in the DialogContent wrapper — that runs at page '
     + 'load for every persistently-rendered dialog, which is a silent no-op');
-  assert.ok(/<DialogPortal>[\s\S]*<DialogContentBody/.test(wrapper),
+  /*
+   * Containment, not textual order. `<DialogPortal>[\s\S]*<DialogContentBody`
+   * is satisfied by a body that appears anywhere AFTER the portal — including
+   * hoisted out of it, which is the exact regression this line guards. The
+   * tempered run stops at </DialogPortal>, so the match proves the body is
+   * INSIDE.
+   */
+  assert.ok(/<DialogPortal>(?:(?!<\/DialogPortal>)[\s\S])*<DialogContentBody/.test(wrapper),
     'the body must be rendered inside DialogPortal, or it mounts while closed');
 });
 

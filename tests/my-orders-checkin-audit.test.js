@@ -197,7 +197,16 @@ test('point 2 — the JOBMODAL_ACTIONS allow-list carries audit, and every consu
   assert.match(host, /const supported = isJobModalAction\(action\);/, 'the host must consume the shared list');
 });
 
-const MEMO = /const modal = useMemo<\{ open: boolean; mode: JobModalMode; id\?: number \}>\(\(\) => \{[\s\S]*?\}, \[urlAction, urlJobId\]\);/;
+/*
+ * TEMPERED, not lazy (2026-09-09). my-orders/page.tsx has THREE blocks ending
+ * in the exact terminator `}, [urlAction, urlJobId]);` — modal, assignModal and
+ * scheduleModal — so a plain [\s\S]*? that failed to stop at the first would
+ * silently swallow the next memo and satisfy every assertion below against the
+ * WRONG one. A memo body never contains the word `useMemo`, so tempering on it
+ * makes the run unable to cross into a sibling: the guard then fails loudly
+ * with "the memo must be found" instead of quietly widening.
+ */
+const MEMO = /const modal = useMemo<\{ open: boolean; mode: JobModalMode; id\?: number \}>\(\(\) => \{(?:(?!useMemo)[\s\S])*?\}, \[urlAction, urlJobId\]\);/;
 
 test('point 3 — both page memos narrow through the allow-list, with no cast', () => {
   /*
@@ -372,7 +381,9 @@ test('F1 — the page that owns ?action=schedule still derives its real modal fr
    */
   assert.match(
     page,
-    /const scheduleModal = useMemo<\{ open: boolean; jobId: number \| null \}>\(\(\) => \{[\s\S]*?urlAction === 'schedule'[\s\S]*?\}, \[urlAction, urlJobId\]\);/,
+    // Tempered for the same reason as MEMO above — three memos share this
+    // terminator, and BOTH runs here could cross into a sibling.
+    /const scheduleModal = useMemo<\{ open: boolean; jobId: number \| null \}>\(\(\) => \{(?:(?!useMemo)[\s\S])*?urlAction === 'schedule'(?:(?!useMemo)[\s\S])*?\}, \[urlAction, urlJobId\]\);/,
     'my-orders must still derive ScheduleAssignModal from ?action=schedule',
   );
   assert.match(page, /<ScheduleAssignModal\n\s*open=\{scheduleModal\.open\}/);
@@ -498,7 +509,10 @@ test('differential control — each guard fails on a source with its subject del
     ],
     [
       "'audit' in JOBMODAL_ACTIONS",
-      url.replace(/(export const JOBMODAL_ACTIONS = \[[\s\S]*?)'audit', /, '$1'),
+      // [^\]] so the mutation cannot leave the array: if 'audit' were ever
+      // dropped from this list, an unbounded run would walk out and delete the
+      // word somewhere else, silently mutating an unrelated line instead.
+      url.replace(/(export const JOBMODAL_ACTIONS = \[[^\]]*?)'audit', /, '$1'),
       /export const JOBMODAL_ACTIONS = \[[^\]]*'audit'[^\]]*\] as const/,
       url,
     ],

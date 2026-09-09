@@ -98,7 +98,14 @@ test('every region the layout declares is actually placed', () => {
     assert.ok(regions.includes(name), `${name} is exempted but the layout no longer declares it`);
   }
 
-  const wanted = codeOnly.match(/const wanted: \[RegionName, string \| undefined\]\[\] = \[[\s\S]*?\n  \];/);
+  /*
+   * [^;] rather than [\s\S]: the run must not be able to leave the array. The
+   * terminator `\n  ];` is two-space-indented and so is nothing inside a tuple
+   * list, but that is an accident of today's formatting, not a bound. A future
+   * entry containing a semicolon makes this MISS — a loud failure — instead of
+   * silently capturing half the file.
+   */
+  const wanted = codeOnly.match(/const wanted: \[RegionName, string \| undefined\]\[\] = \[[^;]*?\n  \];/);
   assert.ok(wanted, 'the run plan must exist');
   for (const name of regions) {
     if (NOT_PREVIEWED.has(name)) continue;
@@ -168,6 +175,14 @@ test('the fit still matches the renderer it is previewing', () => {
    * Case is applied BEFORE the first measurement. Caps are ~12% wider, so
    * uppercasing after the fit sizes a string nobody draws — the renderer's own
    * comment says as much, and its `upper` flag lives in STYLE for that reason.
+   */
+  /*
+   * MEASURED SAFE, 2026-09-09, and left alone deliberately. `\n}` is a column-0
+   * brace, so this run over-runs the function whenever fitRun is indented —
+   * but fitRun is declared at column 0 and its own closing brace is the first
+   * column-0 brace after it (capture ends exactly one char past that offset).
+   * If fitRun is ever nested, this capture silently grows into whatever follows
+   * and the assertions below start passing on unrelated code.
    */
   const fit = /function fitRun\([\s\S]*?\n\}/.exec(codeOnly);
   assert.ok(fit, 'fitRun must exist');
