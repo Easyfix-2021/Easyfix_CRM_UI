@@ -1126,15 +1126,91 @@ function LayoutToggle({ value, onChange }: { value: JobViewLayout; onChange: (v:
  * opt-in rather than the default.
  */
 function Panel({ value, label, layout, children }: { value: string; label: string; layout: JobViewLayout; children: React.ReactNode }) {
-  if (layout === 'single') {
-    return (
-      <section className="mt-8 first:mt-4 scroll-mt-4" aria-label={label}>
-        <h3 className="mb-3 border-b pb-1.5 text-sm font-semibold text-foreground">{label}</h3>
-        {children}
-      </section>
-    );
-  }
+  // No hooks here: this component switches between two different subtrees, and
+  // a hook called in only one branch changes hook order when `layout` flips.
+  // The observer lives in LazySection, which is only ever mounted in one mode.
+  if (layout === 'single') return <LazySection label={label}>{children}</LazySection>;
   return <TabsContent value={value}>{children}</TabsContent>;
+}
+
+/*
+ * A Single Page section that does not mount its body until it is near the
+ * viewport.
+ *
+ * Without this, Single Page mounted all nine panels on open and fired ~11 GETs
+ * at once — against a shared MySQL pool, on a backend that has already been
+ * taken down once by concurrent modal opens. Tabs mode never had the problem
+ * because only the active panel is mounted.
+ *
+ * THE PLACEHOLDER'S HEIGHT IS THE MECHANISM, not styling. With a zero-height
+ * placeholder every unmounted section collapses to the same scroll position,
+ * so all nine sit inside the viewport at once, all nine intersect, and all nine
+ * mount — the lazy wrapper would be pure overhead. A placeholder tall enough to
+ * space the sections out is what keeps the ones further down out of view.
+ *
+ * `children` is still constructed on every render; that is only a React element
+ * descriptor. Nothing fetches until it is actually mounted.
+ */
+function LazySection({ label, children }: { label: string; children: React.ReactNode }) {
+  const ref = useRef<HTMLElement | null>(null);
+  const [shown, setShown] = useState(false);
+
+  useEffect(() => {
+    if (shown) return;
+    const el = ref.current;
+    if (!el) return;
+    // Degrade to eager rendering where the API is missing (older browser, a
+    // test renderer) rather than showing a page of permanent placeholders —
+    // failing closed here would hide the content entirely.
+    if (typeof IntersectionObserver === 'undefined') { setShown(true); return; }
+
+    /*
+     * FAIL OPEN IF THE OBSERVER NEVER SPEAKS. An IntersectionObserver always
+     * delivers an initial callback per target shortly after observe() — with
+     * isIntersecting false when the target is off-screen. So "no callback at
+     * all" is not "not visible yet", it is an environment where intersection
+     * cannot be computed: a hidden tab, a zero-sized viewport, a container
+     * that never lays out. There the sections would stay placeholders forever
+     * and the operator would see an empty page.
+     *
+     * Found by measuring: this exact state (visibilityState 'hidden',
+     * innerHeight 0) is what a background render surface reports, and a
+     * control observer with rootMargin 9999px on an on-screen element still
+     * never fired. Checking `typeof IntersectionObserver` alone does not catch
+     * it — the constructor is present and working, it simply has nothing to
+     * measure against.
+     *
+     * The timer is armed only until the FIRST callback of any kind, so a
+     * working observer keeps full laziness; it is a liveness probe, not a
+     * deadline on visibility.
+     */
+    let spoke = false;
+    const bail = setTimeout(() => { if (!spoke) setShown(true); }, 1500);
+
+    const io = new IntersectionObserver(
+      (entries) => {
+        spoke = true;
+        clearTimeout(bail);
+        if (entries.some((e) => e.isIntersecting)) { setShown(true); io.disconnect(); }
+      },
+      // root:null is the viewport, which is correct even though the modal body
+      // is its own scroll container: the intersection is computed against every
+      // ancestor clip rect, so a section scrolled out of the modal does not
+      // count as visible. rootMargin starts the fetch just before it is needed.
+      { root: null, rootMargin: '200px 0px' },
+    );
+    io.observe(el);
+    return () => { clearTimeout(bail); io.disconnect(); };
+  }, [shown]);
+
+  return (
+    <section ref={ref} className="mt-8 first:mt-4 scroll-mt-4" aria-label={label}>
+      <h3 className="mb-3 border-b pb-1.5 text-sm font-semibold text-foreground">{label}</h3>
+      {shown ? children : (
+        <div className="min-h-[320px] rounded-lg border border-dashed bg-muted/20" aria-hidden="true" />
+      )}
+    </section>
+  );
 }
 
 function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKey = 0, pendingComments = [], onCommentsLoaded, onEditDescription }: { job: Job; onRefresh?: () => void; initialTab?: string; onDirtyChange?: (dirty: boolean) => void; commentsRefreshKey?: number; pendingComments?: Array<JobComment & { _pending?: true }>; onCommentsLoaded?: () => void; onEditDescription?: () => void }) {
@@ -3194,22 +3270,22 @@ function JobMaterialsTab({ jobId, jobStatus }: { jobId: number; jobStatus: numbe
   // Until-closed gate (2026-05-25 per ops): once the job is in a
   // terminal completed state (3 or 5), no more material edits.
   const canEdit = !isJobClosed(jobStatus);
-  const [items, setItems] = useState<JobMaterial[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const confirmDialog = useConfirm();
 
-  async function load() {
-    setLoading(true); setError(null);
-    try {
-      const data = await api.get<JobMaterial[]>(`/admin/aux/materials/job/${jobId}`);
-      setItems(Array.isArray(data) ? data : []);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Failed to load materials');
-    } finally { setLoading(false); }
-  }
-  useEffect(() => { void load(); /* eslint-disable-next-line */ }, [jobId]);
+  /*
+   * useFetch (feedback_crm_ui_fetch_hooks). `refetch()` EVICTS this key from
+   * the module cache before re-firing, so a refresh straight after a mutation
+   * is a real round-trip and not the 30s-cached pre-mutation snapshot — that
+   * is the reason it is safe to replace `await load()` with a fire-and-forget
+   * refetch here. It also swaps silently (`refreshing`, not `loading`), so the
+   * list no longer blanks to "Loading…" after every add or delete.
+   */
+  const { data, loading, error: loadError, refetch } = useFetch<JobMaterial[]>(`/admin/aux/materials/job/${jobId}`);
+  const items = useMemo(() => (Array.isArray(data) ? data : []), [data]);
+  // Mutation failures are this component's own; the hook owns load errors only.
+  const [mutError, setMutError] = useState<string | null>(null);
+  const error = mutError ?? loadError;
 
   async function deleteItem(id: number) {
     // Migrated from native window.confirm to the shared useConfirm()
@@ -3223,11 +3299,12 @@ function JobMaterialsTab({ jobId, jobStatus }: { jobId: number; jobStatus: numbe
     if (!ok) return;
     try {
       await api.delete(`/admin/aux/materials/${id}`);
-      await load();
+      setMutError(null);
+      refetch();
       showToast({ variant: 'success', message: 'Material Removed' });
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : 'Delete failed';
-      setError(msg);
+      setMutError(msg);
       showToast({ variant: 'error', message: msg });
     }
   }
@@ -3292,7 +3369,7 @@ function JobMaterialsTab({ jobId, jobStatus }: { jobId: number; jobStatus: numbe
         onSubmit={async (payload) => {
           await api.post('/admin/aux/materials', { jobId, ...payload });
           setAddOpen(false);
-          await load();
+          refetch();
         }}
       />
     </div>
@@ -3479,9 +3556,16 @@ const COMMENT_STAGE_LABEL: Record<number, string> = {
 };
 
 function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded }: { jobId: number; refreshKey?: number; pendingComments?: Array<JobComment & { _pending?: true }>; onLoaded?: () => void }) {
-  const [comments, setComments] = useState<JobComment[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  /*
+   * useFetch (feedback_crm_ui_fetch_hooks). refetch() evicts the key before
+   * re-firing, so a refresh right after POSTing a comment is a real round-trip
+   * rather than the 30s-cached pre-comment list.
+   */
+  const { data, loading, error: loadError, refetch } = useFetch<JobComment[]>(`/admin/jobs/${jobId}/comments`);
+  const comments = useMemo(() => (Array.isArray(data) ? data : []), [data]);
+  // POST failures belong to this component; the hook owns load errors only.
+  const [mutError, setMutError] = useState<string | null>(null);
+  const error = mutError ?? loadError;
   const [draft, setDraft] = useState('');
   const [stage, setStage] = useState<number>(4);
   const [posting, setPosting] = useState(false);
@@ -3493,24 +3577,37 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
   const { me: currentMeForTab } = useMe();
   const currentUserName = (currentMeForTab?.user?.user_name || currentMeForTab?.user?.official_email || 'You') as string;
 
-  async function load() {
-    setLoading(true); setError(null);
-    try {
-      const data = await api.get<JobComment[]>(`/admin/jobs/${jobId}/comments`);
-      setComments(Array.isArray(data) ? data : []);
-      // Reconciliation hook — parent uses this to clear its pendings
-      // (the canonical rows are now in `comments`, so the optimistic
-      // placeholders are redundant).
-      onLoaded?.();
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Failed to load comments');
-    } finally { setLoading(false); }
-  }
-  // Refetch on mount, on jobId change, AND whenever the parent bumps
-  // `refreshKey` (e.g. after AddRemarksDialog saves a remark from the
-  // view-mode footer — the dialog lives outside this component's tree
-  // so a parent-driven trigger is the only way the new row reaches us).
-  useEffect(() => { void load(); /* eslint-disable-next-line */ }, [jobId, refreshKey]);
+  // Kept in a ref so the reconciliation effect below does not have to list an
+  // inline-arrow prop in its deps, which changes identity every render.
+  const onLoadedRef = useRef(onLoaded);
+  useEffect(() => { onLoadedRef.current = onLoaded; });
+
+  /*
+   * The parent bumps `refreshKey` after AddRemarksDialog saves from the
+   * view-mode footer — that dialog lives outside this tree, so a parent-driven
+   * trigger is the only way the new row reaches us. Mount and jobId changes are
+   * already handled by the hook's key, so this effect must SKIP its first run
+   * or every open would fire a second, redundant request.
+   */
+  const seenRefreshKey = useRef(refreshKey);
+  useEffect(() => {
+    if (seenRefreshKey.current === refreshKey) return;
+    seenRefreshKey.current = refreshKey;
+    refetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey]);
+
+  /*
+   * Reconciliation. Optimistic placeholders are redundant the moment the
+   * canonical rows exist, so this is keyed on `data` arriving rather than on
+   * an awaited load() returning: refetch() is fire-and-forget, so dropping the
+   * pendings at call time would blank the row until the response landed.
+   */
+  useEffect(() => {
+    if (data == null) return;
+    setLocalPending([]);
+    onLoadedRef.current?.();
+  }, [data]);
 
   async function postComment() {
     const text = draft.trim();
@@ -3537,18 +3634,18 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
     };
     setLocalPending((prev) => [optimistic, ...prev]);
     setDraft('');
-    setPosting(true); setError(null);
+    setPosting(true); setMutError(null);
     try {
       await api.post(`/admin/jobs/${jobId}/comments`, { comments: text, comment_on: stage });
-      await load();
-      // Drop the matching pending now that the canonical row is in the list.
-      setLocalPending((prev) => prev.filter((c) => c.id !== tempId));
+      // The pending row is dropped by the reconciliation effect when the fresh
+      // list arrives — not here, or it would vanish before its replacement.
+      refetch();
     } catch (e) {
       // POST rejected — pull the pending row so the operator isn't left
       // with a phantom comment, and surface the error.
       setLocalPending((prev) => prev.filter((c) => c.id !== tempId));
       const msg = e instanceof ApiError ? e.message : 'Failed to post comment';
-      setError(msg);
+      setMutError(msg);
       showToast({ variant: 'error', message: msg });
     } finally { setPosting(false); }
   }
@@ -4220,25 +4317,15 @@ type QAnswer = {
 };
 
 function JobQuestionnaireTab({ jobId }: { jobId: number }) {
-  const [answers, setAnswers] = useState<QAnswer[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error,   setError]   = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setLoading(true); setError(null);
-      try {
-        const data = await api.get<QAnswer[]>(`/admin/questionnaires/answers/${jobId}`);
-        if (!cancelled) setAnswers(Array.isArray(data) ? data : []);
-      } catch (e) {
-        if (!cancelled) setError(e instanceof ApiError ? e.message : 'Failed to load questionnaire answers');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [jobId]);
+  /*
+   * useFetch, not useEffect + api.get (feedback_crm_ui_fetch_hooks). The hand
+   * -rolled version re-implemented what the hook already owns: the cancelled
+   * flag, the Strict-Mode double-mount guard, and the error formatting. It also
+   * missed the module-level dedupe, so two panels asking for the same key
+   * issued two requests — which Single Page mode now makes reachable.
+   */
+  const { data, loading, error } = useFetch<QAnswer[]>(`/admin/questionnaires/answers/${jobId}`);
+  const answers = useMemo(() => (Array.isArray(data) ? data : []), [data]);
 
   if (loading) return <div className="text-sm text-muted-foreground py-6 text-center">Loading…</div>;
   if (error)   return <div className="text-sm text-urgent-strong py-3">{error}</div>;
