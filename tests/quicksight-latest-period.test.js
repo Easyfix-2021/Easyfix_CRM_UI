@@ -43,34 +43,72 @@ const fs = require('fs');
 const path = require('path');
 
 const UI = path.join(__dirname, '..', 'src');
-const BE = path.join(__dirname, '..', '..', 'EasyFix_Backend');
-
 const readUi = (...p) => fs.readFileSync(path.join(UI, ...p), 'utf8');
 
 /*
- * The backend is a sibling checkout, not a dependency. If it is absent (a CI
- * job that clones this repo alone), the backend halves cannot run — but they
- * must SKIP LOUDLY rather than silently pass, which is the failure mode that
- * lets a cross-repo guard rot into decoration.
+ * WHERE THE BACKEND IS, and why this is not a sibling path (2026-09-09).
+ *
+ * Written as `../../EasyFix_Backend` with a hard assert that it exists, this
+ * file passed locally and FAILED THE DEPLOY on QA and Production — five of six
+ * tests red — because CI does not lay the repos out as siblings. It shallow-
+ * clones the backend into RUNNER_TEMP, deliberately outside the workspace (see
+ * .github/workflows/deploy.yml: inside it, `eslint .` would lint the backend
+ * with this repo's config), and points EASYFIX_BACKEND_DIR at it.
+ *
+ * tests/message-literals.test.js already resolved this exact problem and this
+ * is its resolver, deliberately identical. The lesson is not the path: it is
+ * that a cross-repo guard has a deployment-shaped failure mode that a green
+ * local run cannot show, and that the convention for it already existed one
+ * directory away.
+ *
+ *   EASYFIX_BACKEND_DIR   CI, and any layout that sets it.
+ *   ../EasyFix_Backend    a developer machine, where the repos are siblings.
+ *
+ * Absent and unset: the backend halves SKIP rather than fail. Skipping is a
+ * local convenience only — if EASYFIX_BACKEND_DIR is set but the tree is not
+ * there, that is a broken fetch step and it fails loudly.
  */
-const beAvailable = fs.existsSync(BE);
+function resolveBackend() {
+  const roots = [
+    process.env.EASYFIX_BACKEND_DIR,
+    path.join(__dirname, '..', '..', 'EasyFix_Backend'),
+  ];
+  for (const r of roots) {
+    if (r && fs.existsSync(path.join(r, 'services', 'quicksight', '_shared.js'))) return r;
+  }
+  return null;
+}
+
+const BE = resolveBackend();
+const beAvailable = BE != null;
 const readBe = (...p) => fs.readFileSync(path.join(BE, ...p), 'utf8');
+/* node:test skips on a truthy `skip`, so this reads as a reason when it fires. */
+const skipNoBackend = beAvailable
+  ? false
+  : 'backend checkout not found (set EASYFIX_BACKEND_DIR or clone it beside this repo)';
 
 const strip = (text) => text
   .replace(/\/\*[\s\S]*?\*\//g, '')
   .replace(/^\s*\/\/.*$/gm, '');
 
-test('the backend checkout is present, or these guards are not running', () => {
+test('a CI run that was POINTED at the backend must actually find it', () => {
+  /*
+   * The narrow case where absence is a real failure rather than a local
+   * convenience: the variable is set, so something meant to provide the tree,
+   * and it is not there. That is a broken fetch step, not a developer without
+   * a second checkout.
+   */
+  if (!process.env.EASYFIX_BACKEND_DIR) return;
   assert.ok(
     beAvailable,
-    `EasyFix_Backend not found at ${BE} — the ordering half of this file cannot run. `
-    + 'Clone it beside this repo; a skipped cross-repo guard is indistinguishable from a passing one.',
+    `EASYFIX_BACKEND_DIR is set to ${process.env.EASYFIX_BACKEND_DIR} but no backend tree is there — `
+    + 'the fetch step did not do what it claims.',
   );
 });
 
 // ── Technician Performance: service is oldest -> newest ──────────────
 
-test('computeLastThreeWeeks builds oldest -> newest, so the LAST bucket is current', () => {
+test('computeLastThreeWeeks builds oldest -> newest, so the LAST bucket is current', { skip: skipNoBackend }, () => {
   const shared = strip(readBe('services', 'quicksight', '_shared.js'));
   /*
    * Asserted on the LOOP, not on the comment beside it. A docblock claiming an
@@ -104,6 +142,10 @@ test('the technician screen reads the LAST bucket, matching its own XLSX', () =>
   );
 
   // The export branch is the reference implementation; it must not drift either.
+  // Guarded rather than skipped, so the UI assertions above still run in a
+  // checkout without the backend — those are the ones that catch a regression
+  // in THIS repo, and they must never depend on a second one being present.
+  if (!beAvailable) return;
   const route = strip(readBe('routes', 'admin', 'quicksight', 'technician-performance.js'));
   assert.match(
     route,
@@ -114,7 +156,7 @@ test('the technician screen reads the LAST bucket, matching its own XLSX', () =>
 
 // ── Client Performance: service is most-recent FIRST ─────────────────
 
-test('client-performance reverses to most-recent-first, so bucket 0 is current', () => {
+test('client-performance reverses to most-recent-first, so bucket 0 is current', { skip: skipNoBackend }, () => {
   const svc = strip(readBe('services', 'quicksight', 'quicksight-client-performance.service.js'));
   assert.match(svc, /\.reverse\(\)/, 'the service must still reverse its buckets');
   assert.match(
@@ -146,7 +188,7 @@ test('the client screen reads bucket 0, matching its service', () => {
 
 // ── The property that makes both correct at once ─────────────────────
 
-test('the two reports order their buckets DIFFERENTLY — that is the trap', () => {
+test('the two reports order their buckets DIFFERENTLY — that is the trap', { skip: skipNoBackend }, () => {
   /*
    * Recorded as an assertion rather than a comment, because the natural
    * "cleanup" here is to make one screen match the other. Doing that fixes
