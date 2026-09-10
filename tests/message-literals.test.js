@@ -56,13 +56,15 @@ function resolveAudit() {
 test('no retired value is named in prose, and no owned value is spelt out', (t) => {
   const audit = resolveAudit();
   if (!audit) {
-    if (process.env.CI) {
-      assert.fail('the message-literal audit is missing in CI. The "Fetch the shared '
-        + 'message-literal audit" workflow step must clone EasyFix_Backend and set '
-        + 'EASYFIX_BACKEND_DIR. This must never degrade to a silent skip here — that '
-        + 'is how a guard ends up committed, green, and never run.');
-    }
-    t.skip('EasyFix_Backend not checked out beside this repo — audit unavailable');
+    // FAIL, NEVER SKIP — no longer conditional on CI (2026-09-10). See the note
+    // in tests/wire-contract.test.js for the incident that changed this.
+    assert.fail('the shared message-literal audit was not found, so this repo was NOT audited. '
+      + 'That must never degrade to a silent skip — it is how a guard ends up committed, '
+      + 'green, and never run.'
+      + '\n  FIX IT ONE OF TWO WAYS:'
+      + '\n    git clone --depth 1 https://github.com/Easyfix-2021/Easyfix_Backend.git ../EasyFix_Backend'
+      + '\n    …or point EASYFIX_BACKEND_DIR at an existing checkout.'
+      + '\n  Both repos are public, so the clone needs no token — CI does exactly this.');
     return;
   }
   const root = path.join(__dirname, '..');

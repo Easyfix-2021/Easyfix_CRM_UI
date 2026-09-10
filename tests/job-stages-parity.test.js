@@ -98,12 +98,13 @@ function grantPopulation(keys) {
 test('the two stage TABLES are numerically identical', (t) => {
   const modPath = backendModulePath();
   if (!modPath) {
-    if (process.env.CI) {
-      assert.fail('EasyFix_Backend is missing in CI. The workflow must clone it and set '
-        + 'EASYFIX_BACKEND_DIR — cross-repo parity must never degrade to a silent skip '
-        + 'in the run that gates the deploy.');
-    }
-    t.skip('EasyFix_Backend not found beside this repo — stage parity NOT verified');
+    // FAIL, NEVER SKIP — not conditional on CI. A stage-table divergence that
+    // this file cannot see is exactly the defect it was written for.
+    assert.fail('EasyFix_Backend was not found, so BE/FE stage parity was NOT verified.'
+      + '\n  FIX IT ONE OF TWO WAYS:'
+      + '\n    git clone --depth 1 https://github.com/Easyfix-2021/Easyfix_Backend.git ../EasyFix_Backend'
+      + '\n    …or point EASYFIX_BACKEND_DIR at an existing checkout.'
+      + '\n  Both repos are public, so the clone needs no token — CI does exactly this.');
     return;
   }
   const BE = require(modPath);
@@ -128,10 +129,13 @@ test('the two stage TABLES are numerically identical', (t) => {
 test('transitionAllowed agrees on EVERY (grant, source, target) triple', (t) => {
   const modPath = backendModulePath();
   if (!modPath) {
-    if (process.env.CI) {
-      assert.fail('EasyFix_Backend is missing in CI — see the note in the table test above.');
-    }
-    t.skip('EasyFix_Backend not found beside this repo — stage parity NOT verified');
+    // FAIL, NEVER SKIP — not conditional on CI. A stage-table divergence that
+    // this file cannot see is exactly the defect it was written for.
+    assert.fail('EasyFix_Backend was not found, so BE/FE stage parity was NOT verified.'
+      + '\n  FIX IT ONE OF TWO WAYS:'
+      + '\n    git clone --depth 1 https://github.com/Easyfix-2021/Easyfix_Backend.git ../EasyFix_Backend'
+      + '\n    …or point EASYFIX_BACKEND_DIR at an existing checkout.'
+      + '\n  Both repos are public, so the clone needs no token — CI does exactly this.');
     return;
   }
   const BE = require(modPath);
@@ -201,10 +205,13 @@ test('transitionAllowed agrees on EVERY (grant, source, target) triple', (t) => 
 test('stageVisible agrees on every (grant, status) pair', (t) => {
   const modPath = backendModulePath();
   if (!modPath) {
-    if (process.env.CI) {
-      assert.fail('EasyFix_Backend is missing in CI — see the note in the table test above.');
-    }
-    t.skip('EasyFix_Backend not found beside this repo — stage parity NOT verified');
+    // FAIL, NEVER SKIP — not conditional on CI. A stage-table divergence that
+    // this file cannot see is exactly the defect it was written for.
+    assert.fail('EasyFix_Backend was not found, so BE/FE stage parity was NOT verified.'
+      + '\n  FIX IT ONE OF TWO WAYS:'
+      + '\n    git clone --depth 1 https://github.com/Easyfix-2021/Easyfix_Backend.git ../EasyFix_Backend'
+      + '\n    …or point EASYFIX_BACKEND_DIR at an existing checkout.'
+      + '\n  Both repos are public, so the clone needs no token — CI does exactly this.');
     return;
   }
   const BE = require(modPath);

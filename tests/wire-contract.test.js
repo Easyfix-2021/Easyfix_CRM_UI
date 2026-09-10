@@ -102,19 +102,25 @@ test('the backend copy of the contract is byte-identical', (t) => {
   const sibling = siblingContract();
   if (!sibling) {
     /*
-     * SKIPPED, NOT PASSED — and only ever locally. This used to skip in CI too,
-     * because only one repo was checked out there, which meant cross-repo parity
-     * was never once verified by the thing that gates the deploy. CI now fetches
-     * the backend into RUNNER_TEMP and points EASYFIX_BACKEND_DIR at it (see the
-     * "Fetch the shared message-literal audit" step), so an absence HERE can
-     * only mean that step broke — a failure, not a shrug.
+     * FAIL, NEVER SKIP — and no longer only under CI (2026-09-10).
+     *
+     * This used to fail in CI and skip everywhere else, which put the guard's
+     * strength behind an environment variable nobody sets locally: the run that
+     * reported nothing was the one made ON the change. On 2026-09-10 a session
+     * working from a tree with no sibling checkout got exactly that silence and
+     * shipped a half-landed cross-repo change; the branch went red for everyone
+     * else afterwards.
+     *
+     * `npm test` already refuses a skipped test (scripts/test-no-skips.js), so a
+     * skip was never survivable — it just arrived later as a generic
+     * "N tests SKIPPED" instead of the sentence below. Same verdict, with the
+     * remediation attached.
      */
-    if (process.env.CI) {
-      assert.fail('EasyFix_Backend is missing in CI. The workflow must clone it and set '
-        + 'EASYFIX_BACKEND_DIR — cross-repo parity must never degrade to a silent skip '
-        + 'in the run that gates the deploy.');
-    }
-    t.skip('EasyFix_Backend not found beside this repo — cross-repo parity NOT verified');
+    assert.fail('EasyFix_Backend was not found, so cross-repo parity was NOT verified.'
+      + '\n  FIX IT ONE OF TWO WAYS:'
+      + '\n    git clone --depth 1 https://github.com/Easyfix-2021/Easyfix_Backend.git ../EasyFix_Backend'
+      + '\n    …or point EASYFIX_BACKEND_DIR at an existing checkout.'
+      + '\n  Both repos are public, so the clone needs no token — CI does exactly this.');
     return;
   }
   const mine = fs.readFileSync(CONTRACT_PATH);

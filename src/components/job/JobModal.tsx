@@ -136,7 +136,6 @@ const isJobClosed = (s: number) => [ST.COMPLETED, ST.COMPLETED_ALT].includes(s a
 const canCheckIn        = (s: number) => s === ST.SCHEDULED;
 const canComplete       = (s: number) => s === ST.IN_PROGRESS;
 const canCancel         = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.IN_PROGRESS, ST.ENQUIRY, ST.REVISIT].includes(s as never);
-const canMarkIncomplete = (s: number) => [ST.COMPLETED, ST.COMPLETED_ALT].includes(s as never);
 // NOTE: Confirm & Schedule for Unconfirmed orders (status 9 → 0) is handled
 // via JobModal's dedicated `'confirm'` mode, launched from the row-level
 // CalendarCheck icon — no predicate needed here.
@@ -1014,9 +1013,39 @@ function ActionBar({ job, jobId, onChanged }: {
       {/* Complete (In Progress → Completed) and Mark InComplete (Completed →
           Revisit) are stage transitions — gate by Job Stage Access too, so a
           stage-restricted user only sees the moves their stages permit. */}
-      {canComplete(s)       && can.isJobStatusChange && transitionAllowed(me?.allowedStages, s, ST.COMPLETED) && <LoadBtn size="sm" variant="outline" loading={busy === 'complete'}   onClick={() => doStatus('complete', ST.COMPLETED)}>Complete</LoadBtn>}
+      {/*
+        * CHECK OUT, not Complete — and it sends ST.REVISIT (10 = Under Audit),
+        * not ST.COMPLETED (3). canComplete(s) is s === IN_PROGRESS, and
+        * pending-close's only forward target is 10; 3 is reached FROM 10 by the
+        * audit step, never directly from 2. The old wiring skipped Under Audit
+        * silently for every unrestricted operator. The label changed with the
+        * target: a button that says "Complete" and lands the job in an audit
+        * queue is the kind of mismatch nobody reports as a bug.
+        */}
+      {canComplete(s)       && can.isJobStatusChange && transitionAllowed(me?.allowedStages, s, ST.REVISIT) && <LoadBtn size="sm" variant="outline" loading={busy === 'complete'}   onClick={() => doStatus('complete', ST.REVISIT)}>Check Out</LoadBtn>}
       {/* Cancel lifted to the footer's far-left zone (2026-07-28). */}
-      {canMarkIncomplete(s) && can.isJobStatusChange && transitionAllowed(me?.allowedStages, s, ST.REVISIT) && <LoadBtn size="sm" variant="outline" loading={busy === 'incomplete'} onClick={() => doStatus('incomplete', ST.REVISIT, undefined, 'Marked incomplete from CRM')}>Mark InComplete</LoadBtn>}
+      {/*
+        * "MARK INCOMPLETE" REMOVED (2026-09-10) — it had no legal target left.
+        *
+        * It moved a job from COMPLETED (3) or COMPLETED_ALT (5) to REVISIT (10).
+        * After the stage realignment neither source permits that:
+        *   pending-feedback  visible [3]  targets [5, 6]
+        *   completed         visible [5]  targets []      <- terminal
+        * so 3 -> 10 and 5 -> 10 are both moves the stage model says cannot exist.
+        *
+        * It was not merely dead. transitionAllowed returns TRUE for every
+        * UNRESTRICTED operator, so the button kept working for almost everyone
+        * and quietly performed a transition the model forbids — while
+        * disappearing for the few users who hold explicit stage rows. Broken in
+        * two different directions at once, and silent in both.
+        *
+        * IF OPS GENUINELY NEEDS TO REOPEN A COMPLETED JOB, the fix is to give
+        * the completed (or pending-feedback) stage a real target in
+        * lib/job-stages.js and let it mirror to src/lib/job-stages.ts — NOT to
+        * reinstate a button that routes around the table.
+        * tests/job-status-actions.test.js pins every remaining action against
+        * that table.
+        */}
 
       <AssignDialog
         open={assignOpen} onClose={() => setAssignOpen(false)}

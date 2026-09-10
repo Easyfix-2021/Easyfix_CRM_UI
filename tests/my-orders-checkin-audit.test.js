@@ -431,14 +431,23 @@ test('F2 — neither row Check-In goes through the status PATCH any more', () =>
 
 test('F2 — check-out is untouched: it has no columns of its own to write', () => {
   /*
-   * quickStatusChange is SHARED with the status-3 "Check out & complete" action.
-   * Routing check-in away from it must not take that caller with it, and a
-   * regex sweep for the helper would have.
+   * quickStatusChange is SHARED with the row Check-Out action. Routing check-in
+   * away from it must not take that caller with it, and a regex sweep for the
+   * helper would have.
+   *
+   * PINS THE HELPER, NOT THE STATUS. This used to match the whole call
+   * verbatim — `quickStatusChange(j.job_id, 3, 'Check out & complete')` —
+   * which froze two facts this test has no opinion about: the target status and
+   * the button's wording. When Check-Out was corrected from 3 to 10 (2/20's
+   * only legal target; 3 skipped the Under Audit queue) this test failed while
+   * the thing it actually guards was untouched. The target now belongs to
+   * tests/job-status-actions.test.js, which checks it against the stage table
+   * instead of against a copy of itself.
    */
   for (const [name, src] of [['my-orders', page], ['jobs', jobsPage]]) {
     assert.match(
       src,
-      /quickStatusChange\(j\.job_id, 3, 'Check out & complete'\)/,
+      /quickStatusChange\(j\.job_id,\s*\d+,\s*'Check out/,
       `${name}: check-out must still use the shared quick-status helper`,
     );
   }

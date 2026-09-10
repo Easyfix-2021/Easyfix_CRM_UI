@@ -1237,13 +1237,28 @@ export default function MyOrdersPage() {
                           )}
                         </>
                       )}
-                      {(j.job_status === 2 || j.job_status === 20) && canJob.isJobStatusChange && transitionAllowed(me?.allowedStages, j.job_status, 3) && (
+                      {/*
+                        * CHECK-OUT SENDS 10 (Under Audit), NOT 3 (Completed).
+                        *
+                        * Pending to Close is statuses [2, 20] and its ONLY forward target is
+                        * 10 — the lifecycle is
+                        *   2/20 → 10 Under Audit → 3 Pending for Feedback → 5 Completed
+                        * (lib/job-stages.js, mirrored in src/lib/job-stages.ts).
+                        *
+                        * This used to send 3, which pending-close does not list as a target at
+                        * all: it skipped the Under Audit queue outright. It never failed
+                        * loudly, because transitionAllowed returns TRUE for every UNRESTRICTED
+                        * operator — the stage guard only bites users holding explicit stage
+                        * rows. So the bypass was invisible to almost everyone, and for the few
+                        * it did bite the button simply disappeared.
+                        */}
+                      {(j.job_status === 2 || j.job_status === 20) && canJob.isJobStatusChange && transitionAllowed(me?.allowedStages, j.job_status, 10) && (
                         <button
                           type="button"
                           disabled={rowBusy === j.job_id}
-                          onClick={() => quickStatusChange(j.job_id, 3, 'Check out & complete')}
+                          onClick={() => quickStatusChange(j.job_id, 10, 'Check out')}
                           className="inline-flex items-center gap-1 text-success-strong text-xs hover:underline disabled:opacity-50"
-                          title="Check-Out — close the job"
+                          title="Check-Out — close the job and send it to Under Audit"
                         >
                           <CheckCircle2 className="h-3.5 w-3.5" />
                         </button>
