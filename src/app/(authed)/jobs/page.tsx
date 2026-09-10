@@ -1877,13 +1877,26 @@ export default function JobsPage() {
                         * Reassign Technician (status=1). Gate: isJobReassign ONLY.
                         *
                         * NO transitionAllowed here, unlike every other action on this
-                        * page — and that is deliberate, not an omission. A reassign
-                        * leaves the job at status 1, so the pair would be (1 → 1);
-                        * transitionAllowed answers false unless some stage lists 1 as
-                        * both a visible status and a transition target, which none does.
-                        * Adding it would hide this button from exactly the restricted
-                        * operators who reported it missing. My Orders gates it the same
-                        * way (my-orders/page.tsx:1202).
+                        * page — deliberate, not an omission. A reassign leaves the job
+                        * at status 1, so the pair would be (1 → 1), and THIS
+                        * frontend helper answers false for it: src/lib/job-stages.ts
+                        * requires some stage to list 1 as both a visible status and a
+                        * transition target, and none does. Adding the call would hide
+                        * this button from exactly the restricted operators who reported
+                        * it missing. My Orders gates it the same way
+                        * (my-orders/page.tsx:1202).
+                        *
+                        * The FRONTEND is the one that answers false, and that matters:
+                        * the backend's copy (EasyFix_Backend/lib/job-stages.js, the same-stage branch) has
+                        * an explicit same-stage branch —
+                        *     if (targetStage && targetStage === sourceStage) return true;
+                        * — which this file lacks, though both headers claim to mirror
+                        * each other. So the server would ALLOW (1 → 1) while the client
+                        * hides it. Unreachable today (only pending-start holders see
+                        * status-1 rows, and the two agree for them) but a landmine for
+                        * the next same-status action. Do not "fix the inconsistency"
+                        * here by adding the call; the divergence is the thing to fix,
+                        * and it belongs in job-stages.ts with its own tests.
                         */}
                       {j.job_status === 1 && canJob.isJobReassign && (
                         <IconButton
