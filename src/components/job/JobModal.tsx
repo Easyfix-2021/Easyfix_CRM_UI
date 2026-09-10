@@ -1351,6 +1351,20 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
              * "when, and how did it get there".
              */
             ['Technician', job.easyfixer_name ? formatEasyfixerName(String(job.easyfixer_name)) : null],
+            /*
+             * Technician Id (2026-09-10, per ops) — ops quote this to the
+             * technician and to support, so reading it off the job beats
+             * opening Manage Easyfixers to look it up.
+             *
+             * Rendered #<id> in mono to match how the same id already appears in
+             * Scheduling History (see JobRescheduleHistory's sibling table), not
+             * as a new format. It is fk_easyfixter_id — the FK column, typo and
+             * all, per the backend's own note — and DlCard's falsy fallback
+             * shows the em dash when the job is unassigned.
+             */
+            ['Technician Id', job.fk_easyfixter_id != null
+              ? <span className="font-mono">#{String(job.fk_easyfixter_id)}</span>
+              : null],
             // Tech mobile dials through tbl_easyfixer.efr_no. fk_easyfixter_id is
             // the FK column (typo preserved per backend CLAUDE.md). Unassigned
             // shows a static dash via DlCard's falsy fallback. DlCard passes React
