@@ -32,6 +32,40 @@
  *   Action Today → today 00:00:00 IST <= requested_date_time <= today 23:59:59 IST
  *   Future       → requested_date_time >= tomorrow 00:00:00 IST   (unbounded future)
  *
+ * ─── THE FOURTH SECTION: TECHNICIAN REQUESTS (top of the page) ───────────
+ *
+ * A technician can ask, from the mobile app, for a pending order to be
+ * CANCELLED or its appointment MOVED. Neither ask changes job_status, so the
+ * row keeps sitting in whichever appointment bucket its CURRENT appointment
+ * puts it in — a request raised on a job due next month lands at the bottom of
+ * Future and nobody sees it. The three buckets answer "when is this due"; a
+ * request is the question of whether it is due at all, so it needs its own
+ * section, and it renders FIRST because it is the only thing on this page that
+ * is waiting on an operator rather than on a clock. The predicate and the
+ * cancel-vs-reschedule discrimination live in `@/lib/job-app-request` (tested;
+ * see tests/job-app-request.test.js) — this file only renders them.
+ *
+ * It is the SAME <PendingSection/> as the three buckets, under `appRequests`,
+ * because the row grammar (icons, click-to-call, chips, pagination) has to be
+ * identical to the buckets below it — a second table would drift.
+ *
+ * TWO WAYS IT DIFFERS, both forced by the backend:
+ *
+ *   1. NO DATE WINDOW. A request is orthogonal to the appointment date, so the
+ *      section queries every pending order and narrows client-side.
+ *   2. CLIENT-SIDE FILTER AND PAGINATION. `/admin/jobs` projects the request
+ *      flags but has no filter for them (no entry in the service's WHERE
+ *      builder, and none in SORTABLE_COLUMNS either), so `total` and the page
+ *      slice are computed here over one bounded page of rows.
+ *
+ * CEILING, stated plainly: that bounded page is JOBS_MAX_LIMIT (500) rows —
+ * `/admin/jobs`'s own Joi cap — ordered by appointment ascending. Production
+ * carries ~19 pending requests against a pending-to-start queue well inside
+ * 500, so the window holds today; if that queue ever exceeds 500 rows, the
+ * requests sitting on the LATEST appointments fall outside it and stop being
+ * listed. The fix is a server-side filter (an `appRequest` LIST param beside
+ * `offerState`), not a bigger limit here.
+ *
  * Reuses (never re-implements): the parent's openView / openReassign /
  * quickStatusChange handlers + canJob permission flags, the shared fetch hooks
  * (useFetch / useFetchOnce), SearchMultiSelect, StatusChip + statusLabel/statusTone,
@@ -39,7 +73,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Search, PlayCircle, RefreshCw, MapPin, Eye } from 'lucide-react';
+import { Search, PlayCircle, RefreshCw, MapPin, Eye, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -55,8 +89,11 @@ import {
 import { CallableMobile } from '@/components/calls/CallButton';
 import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
 import { ResendPinButton, RESEND_PIN_ACTION } from '@/components/job/ResendPinButton';
+import { ShareChip } from '@/components/job/JobShareControls';
 import { useFetch, invalidateFetch, useDebouncedValue } from '@/lib/hooks';
 import { formatJobAge, jobAgeTitle, type JobAgeFields } from '@/lib/job-age';
+import { appRequestOf, type AppRequestFields } from '@/lib/job-app-request';
+import type { JobShare } from '@/lib/job-share';
 import { useLookup } from '@/lib/use-lookup';
 import { buildJobsKey } from '@/lib/jobs-query';
 import { useJobActionParams } from '@/lib/job-action-url';
@@ -77,9 +114,18 @@ const JOBS_MAX_LIMIT = 500;
 // Row projection — the subset of the shared LIST columns this view renders.
 // Kept local (not imported from the page) to avoid a circular import; the
 // fields all come from the same /admin/jobs LIST projection.
-type PendingJobRow = JobAgeFields & {
+type PendingJobRow = JobAgeFields & AppRequestFields & {
   job_id: number;
   job_status: number;
+  /*
+   * Delegation. `fk_easyfixter_id` NEVER moves on a share, so every technician
+   * column below keeps naming the original while somebody else does the work —
+   * the chip is the only thing on the row that says so. Optional: a BE deploy
+   * predating the share feature simply yields no chip. Same shape and the same
+   * `<ShareChip share={j.share} className="ml-1" />` placement as /my-orders,
+   * /jobs and JobModal.
+   */
+  share?: JobShare | null;
   // Family reference shared across sibling jobs of a multi-category booking —
   // already on the shared /admin/jobs LIST projection; surfaced so ops can spot
   // linked orders. Optional so older API responses don't break the type narrow.
@@ -153,6 +199,11 @@ function shiftYmd(ymd: string, days: number): string {
 }
 
 type DateRange = { startDate?: string; endDate?: string };
+
+/* The requests section is orthogonal to the appointment date, so it sends no
+ * window at all. Module-level so the identity is stable — `filters`/`q` drive a
+ * page-reset effect and a fresh `{}` on every render would retrigger it. */
+const NO_DATE_RANGE: DateRange = {};
 
 // Compute the three appointment buckets' inclusive IST boundaries as ISO
 // strings carrying the +05:30 offset (see the file header for why the offset
@@ -375,6 +426,28 @@ export function PendingToStartView({
         </CardContent>
       </Card>
 
+      {/*
+        * ── Technician requests, ABOVE the buckets ─────────────────
+        * Renders nothing at all when there are none (see PendingSection's
+        * `appRequests` branch), so an empty queue costs no vertical space.
+        */}
+      <PendingSection
+        appRequests
+        title="Technician Requests"
+        subtitle="Cancellation or reschedule raised from the app"
+        dateRange={NO_DATE_RANGE}
+        filters={applied}
+        q={debouncedSearch}
+        ownerId={ownerId}
+        reloadKey={reloadKey}
+        isAdmin={isAdmin}
+        canJob={canJob}
+        onCheckin={openCheckin}
+        onView={openView}
+        onReassign={openReassign}
+        onShowLocation={onShowLocation}
+      />
+
       {/* ── Three appointment buckets ─────────────────────────────── */}
       <PendingSection
         title="Over Due"
@@ -437,6 +510,15 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 type PendingSectionProps = {
+  /*
+   * The technician-requests variant. ONE flag because it is ONE concept —
+   * "this section lists app requests rather than an appointment window" — and
+   * every difference below follows from it: no date window on the query, a
+   * client-side filter + page slice (the endpoint cannot filter on the flags),
+   * the extra Request column, the attention styling, and rendering nothing at
+   * all when the set is empty. See the file header for the ceiling.
+   */
+  appRequests?: boolean;
   title: string;
   subtitle: string;
   dateRange: DateRange;
@@ -454,6 +536,7 @@ type PendingSectionProps = {
 
 // One appointment bucket — its OWN /admin/jobs?status=1 call + pagination.
 function PendingSection({
+  appRequests = false,
   title,
   subtitle,
   dateRange,
@@ -475,9 +558,12 @@ function PendingSection({
 
   const key = buildJobsKey({
     status: 1,
-    dateType: 'requested',
-    startDate: dateRange.startDate,
-    endDate: dateRange.endDate,
+    // No window on the requests section — a request is orthogonal to the
+    // appointment date. buildJobsKey drops undefined, so the three params
+    // simply never reach the query string.
+    dateType: appRequests ? undefined : 'requested',
+    startDate: appRequests ? undefined : dateRange.startDate,
+    endDate: appRequests ? undefined : dateRange.endDate,
     // Multi-select → comma-separated string; empty selection omits the param
     // (buildJobsKey drops undefined). The BE splits the CSV into an IN (...).
     clientId: filters.clientId.length ? filters.clientId.join(',') : undefined,
@@ -490,8 +576,11 @@ function PendingSection({
     // Soonest appointment first within each bucket — the order ops triage in.
     sortBy: 'requested_date_time',
     sortDir: 'asc',
-    limit,
-    offset,
+    // The requests section filters client-side, so it pulls ONE bounded page
+    // and pages within it — the server's limit/offset would slice the wrong
+    // population. See the file header for what "bounded" costs.
+    limit: appRequests ? JOBS_MAX_LIMIT : limit,
+    offset: appRequests ? 0 : offset,
   });
 
   const { data, loading, refreshing, refetch } = useFetch<Resp>(key);
@@ -518,20 +607,55 @@ function PendingSection({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reloadKey]);
 
-  const rows = data?.items ?? [];
-  const total = data?.total ?? 0;
+  /*
+   * The requests section derives BOTH its count and its page slice from the
+   * same appRequestOf() call the row renders through, so the number in the
+   * header and the rows under it can never describe different sets. An
+   * appointment bucket keeps the server's own paging untouched.
+   */
+  const items = data?.items ?? [];
+  const matched = appRequests ? items.filter((j) => appRequestOf(j) !== null) : items;
+  const rows = appRequests ? matched.slice(offset, offset + limit) : matched;
+  const total = appRequests ? matched.length : (data?.total ?? 0);
+
+  /*
+   * An empty requests section occupies NO space — not a header, not an empty
+   * state. It is an exception queue: on most days it is empty, and a permanent
+   * "no requests" card above Over Due would be a standing distraction. This
+   * also covers the first paint (no data yet → no matches → nothing), so the
+   * section appears only once there is something to action.
+   */
+  if (appRequests && total === 0) return null;
+
+  /* Column count — the Request column exists only on the requests section, and
+   * the skeleton and the empty-state colSpan both have to agree with <thead>. */
+  const colCount = appRequests ? 13 : 12;
 
   return (
-    <Card>
+    <Card className={appRequests ? 'border-warning/40' : undefined}>
       {/* pb-3 adds breathing room between the section header (title + subtitle)
-          and the table below it. */}
-      <div className="flex items-center justify-between px-4 pt-3 pb-3">
-        <div>
-          <h2 className="text-sm font-semibold">{title}</h2>
-          <p className="text-xs text-muted-foreground">
-            {subtitle} · {data ? total.toLocaleString() : '…'} order
-            {total === 1 ? '' : 's'}
-          </p>
+          and the table below it. The requests variant tints the whole header
+          strip: `bg-warning-tint` / `text-warning-strong` is the estate's
+          attention pair (StatusChip's `warning` tone, the bulk-upload and
+          auto-allocation notices), and the two tokens SWAP lightness between
+          the light and dark themes — so it stays a dark-on-light block in one
+          and a light-on-dark block in the other, never a 1.08-contrast smear
+          the way an `ink` surface with fixed white text would. */}
+      <div
+        className={
+          'flex items-center justify-between px-4 pt-3 pb-3'
+          + (appRequests ? ' bg-warning-tint text-warning-strong rounded-t-lg' : '')
+        }
+      >
+        <div className="flex items-start gap-2">
+          {appRequests && <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />}
+          <div>
+            <h2 className="text-sm font-semibold">{title}</h2>
+            <p className={appRequests ? 'text-xs' : 'text-xs text-muted-foreground'}>
+              {subtitle} · {data ? total.toLocaleString() : '…'} order
+              {total === 1 ? '' : 's'}
+            </p>
+          </div>
         </div>
       </div>
       <RefreshBar active={refreshing} />
@@ -540,6 +664,9 @@ function PendingSection({
           <thead>
             <tr>
               <th className="stick-col-head stick-left">Job ID</th>
+              {/* Request — the reason this row is in this section, so it reads
+                  immediately after the Job ID rather than at the far right. */}
+              {appRequests && <th>Request</th>}
               {/* Age — read-only here. This view has NO sort state: each of the
                   three appointment buckets pins sortBy=requested_date_time asc
                   ("soonest appointment first" is the order ops triage in), so a
@@ -561,7 +688,7 @@ function PendingSection({
             {loading &&
               Array.from({ length: 4 }).map((_, i) => (
                 <tr key={`sk-${i}`}>
-                  {Array.from({ length: 12 }).map((_, c) => (
+                  {Array.from({ length: colCount }).map((_, c) => (
                     <td key={c}>
                       <div className="h-3 w-24 rounded bg-muted animate-pulse" />
                     </td>
@@ -570,13 +697,17 @@ function PendingSection({
               ))}
             {!loading && rows.length === 0 && (
               <tr>
-                <td colSpan={12} className="text-center text-muted-foreground py-8">
+                <td colSpan={colCount} className="text-center text-muted-foreground py-8">
                   No orders in this bucket{!isAdmin ? ' owned by you' : ''}.
                 </td>
               </tr>
             )}
             {!loading &&
-              rows.map((j) => (
+              rows.map((j) => {
+              /* Same call that filtered and counted this row — never a second
+                 reading of the flags. Null on an appointment bucket's rows. */
+              const req = appRequests ? appRequestOf(j) : null;
+              return (
                 <tr key={j.job_id} className="hover:bg-muted/40">
                   <td className="stick-col stick-left font-medium">
                     <span className="inline-flex items-center gap-1">
@@ -584,6 +715,28 @@ function PendingSection({
                       <CallHistoryButton jobId={j.job_id} />
                     </span>
                   </td>
+                  {/*
+                   * The request itself: WHAT was asked (chip), WHY (the
+                   * resolved action_taken_reason description) and WHEN it was
+                   * raised. The requested new appointment is deliberately NOT
+                   * here — it belongs beside the live appointment, three
+                   * columns along, where ops can compare the two.
+                   */}
+                  {appRequests && (
+                    <td className="min-w-[13rem] max-w-[20rem] align-top">
+                      {req ? (
+                        <div className="space-y-0.5">
+                          <StatusChip tone={req.tone} size="sm">{req.label}</StatusChip>
+                          <div className="text-xs break-words">{req.reason ?? 'No reason given'}</div>
+                          <div className="text-xs text-muted-foreground whitespace-nowrap">
+                            Raised {formatDate(req.raisedAt)}
+                          </div>
+                        </div>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
+                  )}
                   <td className="text-xs whitespace-nowrap tabular-nums align-top" title={jobAgeTitle(j)}>
                     {formatJobAge(j)}
                   </td>
@@ -633,11 +786,29 @@ function PendingSection({
                   </td>
                   <td className="text-xs whitespace-nowrap">
                     {j.requested_date_time ? formatDate(j.requested_date_time) : '—'}
+                    {/*
+                     * The reschedule ask, directly under the appointment it
+                     * would replace — the comparison is the decision, so the
+                     * two dates have to be one glance apart. A cancellation
+                     * proposes no new time, so requestedFor is null there and
+                     * this line never renders.
+                     */}
+                    {req?.requestedFor && (
+                      <div className="mt-0.5">
+                        <span className="rounded bg-warning-tint px-1.5 py-0.5 text-warning-strong">
+                          Requested: {formatDate(req.requestedFor)}
+                        </span>
+                      </div>
+                    )}
                   </td>
                   <td>
                     <StatusChip tone={statusTone(j.job_status)}>
                       {statusLabel(j.job_status, { assigned: j.fk_easyfixter_id != null })}
                     </StatusChip>
+                    {/* Delegation pill — same component, same placement as
+                        /my-orders, /jobs and JobModal. Renders nothing unless a
+                        share is LIVE, so no surrounding guard. */}
+                    <ShareChip share={j.share} className="ml-1" />
                   </td>
                   {/*
                    * Client SPOC — client_spoc IS the SPOC's mobile (a raw string
@@ -732,7 +903,8 @@ function PendingSection({
                     </div>
                   </td>
                 </tr>
-              ))}
+              );
+              })}
           </tbody>
         </table>
       </CardContent>
