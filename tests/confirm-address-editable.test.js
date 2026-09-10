@@ -89,3 +89,42 @@ test('the confirm block renders no SECOND Service Address control', () => {
   assert.match(picker, /\{serviceAddressEditable && \(\s*\n\s*<div>\s*\n\s*<Label className="text-xs">\{addressLabel\}<\/Label>\s*\n\s*<Input/,
     'the Service Address must stay a plain <Input>, not become an autocomplete');
 });
+
+/* ─── clearing it is refused, not silently discarded ───────────────────── */
+
+test('a CLEARED Service Address is blocked on every submit variant', () => {
+  /*
+   * The hazard the field becoming typeable created. pickIf drops '' before the
+   * confirm PATCH is assembled, so no `address` key is sent, the stored value
+   * survives, and the modal reseeds the old text on reopen — the edit appears to
+   * save and then revert. Sending an explicit '' is not the alternative:
+   * updateBody.address.address is the one key in that block without
+   * `.allow('')`, so it would 400.
+   *
+   * Book Call was already covered by the mandatory-fields gate. Save Draft
+   * DELIBERATELY bypasses that gate, which is exactly where a cleared address
+   * would report success over the unchanged value — so the guard has to sit with
+   * the alt-number check, which also runs for all variants, not inside the
+   * book-only block.
+   */
+  const src = read(JOB_MODAL);
+  const guard = src.match(/if \(isConfirm\s*\n\s*&& !String\(f\.address \|\| ''\)\.trim\(\)\s*\n\s*&& String\(\(initial as unknown as Record<string, unknown>\)\?\.address \|\| ''\)\.trim\(\)\) \{/);
+  assert.ok(guard, 'the cleared-address guard must be present');
+  const guardAt = src.indexOf(guard[0]);
+  const bookOnlyAt = src.search(/if \(isConfirm && submitVariant === 'book' &&/);
+  assert.ok(bookOnlyAt > -1, 'the book-only mandatory gate must still exist');
+  assert.ok(guardAt < bookOnlyAt,
+    'the guard must run BEFORE the book-only gate, or Save Draft skips it — which is the one '
+    + 'variant where the silent discard actually happens');
+});
+
+test('and it is gated on the job HAVING an address, so a blank legacy row stays savable', () => {
+  /*
+   * Without this half, a legacy job whose tbl_address.address is genuinely
+   * blank could never be draft-saved again — a new blocker introduced by a
+   * guard meant to prevent a silent discard.
+   */
+  const src = read(JOB_MODAL);
+  assert.match(src, /String\(\(initial as unknown as Record<string, unknown>\)\?\.address \|\| ''\)\.trim\(\)/,
+    'the guard must compare against the job row, not fire on any empty field');
+});

@@ -5739,6 +5739,34 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
       setSubmitting(false);
       return;
     }
+    /*
+     * A CLEARED Service Address is DISCARDED, not saved — and silently.
+     * pickIf below drops '' before the PATCH is assembled, so no `address` key
+     * is sent and the stored value survives; the modal then reseeds the old
+     * text on reopen, so the edit appears to save and then revert. (Sending an
+     * explicit '' is not the alternative: `updateBody.address.address` is the
+     * one key in that block without `.allow('')`, so it would 400.)
+     *
+     * Reachable only since 2026-09-10, when this field became typeable — before
+     * that the address could not be cleared at all. Book Call is covered by the
+     * mandatory-fields gate below; Save Draft deliberately bypasses that gate,
+     * which is exactly where a cleared address would report success over the
+     * unchanged value. So this runs for ALL variants, like the alt-number check
+     * above it.
+     *
+     * Blocking rather than allowing a blank: tbl_address.address is what the
+     * CRM and the technician's job card both render, so an empty one is never a
+     * valid end state — which is why the validator refuses '' in the first
+     * place. Gated on the job ALREADY having an address, so a legacy row that
+     * genuinely stores a blank one is not made unsavable.
+     */
+    if (isConfirm
+        && !String(f.address || '').trim()
+        && String((initial as unknown as Record<string, unknown>)?.address || '').trim()) {
+      setError('Service Address is required — clearing it would be discarded, not saved.');
+      setSubmitting(false);
+      return;
+    }
     // Save Draft (submitVariant === 'draft') intentionally bypasses this
     // mandatory-fields gate — the whole point of draft is to persist
     // partial progress. Only the 'book' variant is gated.
