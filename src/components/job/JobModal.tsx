@@ -2069,13 +2069,25 @@ function JobSchedulingHistory({ jobId }: { jobId: number }) {
 }
 
 function JobRescheduleHistory({ jobId }: { jobId: number }) {
-  type JobComment = Record<string, unknown> & {
-    comment_id?: number;
-    appointment_on?: string | null;
-    comments?: string | null;
-    commented_by_name?: string | null;
-    created_on?: string | null;
-  };
+  /*
+   * Uses the SHARED JobComment from ./jobTypes — which is the entire reason
+   * that file exists ("so components can reference the SAME JobComment shape
+   * without re-declaring it").
+   *
+   * This component used to declare its own local type of the same name,
+   * shadowing the import, and got two field names wrong against the real API
+   * (services/job-comment.service.js::shapeRow):
+   *   commented_by_name  → the API sends `user_name`; the "By" column rendered
+   *                        "—" for every reschedule, always.
+   *   comment_id         → the API sends `id`; the React key silently fell back
+   *                        to the array index.
+   *
+   * Neither could be caught by the type checker, and that is the lesson rather
+   * than the typo: the local type was `Record<string, unknown> & {...}`, whose
+   * index signature makes EVERY property access legal, and both bad fields were
+   * declared OPTIONAL, so `undefined` was a valid value. A hand-rolled optional
+   * field is an assertion that the API sends it — tsc will believe you.
+   */
   const { data } = useFetch<JobComment[] | { items?: JobComment[] }>(`/admin/jobs/${jobId}/comments`);
   const rows: JobComment[] = useMemo(() => {
     const arr = Array.isArray(data) ? data : (data?.items ?? []);
@@ -2101,9 +2113,9 @@ function JobRescheduleHistory({ jobId }: { jobId: number }) {
             </thead>
             <tbody>
               {rows.map((r, i) => (
-                <tr key={r.comment_id ?? i}>
+                <tr key={r.id ?? i}>
                   <td className="text-xs">{formatDate(r.appointment_on as string)}</td>
-                  <td className="text-xs">{r.commented_by_name ?? '—'}</td>
+                  <td className="text-xs">{r.user_name ?? '—'}</td>
                   <td className="text-xs">{formatDate(r.created_on as string)}</td>
                   <td className="text-xs">{r.comments ?? '—'}</td>
                 </tr>
