@@ -38,6 +38,36 @@ const ROOT = path.join(__dirname, '..');
 const PAGE = path.join(ROOT, 'src/app/(authed)/jobs/page.tsx');
 const src = fs.readFileSync(PAGE, 'utf8');
 
+/*
+ * WHERE THE BACKEND CHECKOUT IS — the repo's own resolution order, copied from
+ * tests/emp-code-roundtrip.test.js and tests/message-literals.test.js rather
+ * than reinvented.
+ *
+ * EASYFIX_BACKEND_DIR FIRST: CI shallow-clones the backend into RUNNER_TEMP and
+ * points that variable at it, NOT as a sibling. The sibling path is the
+ * developer-machine fallback.
+ *
+ * The first version of this file read an ABSOLUTE PATH on the author's laptop.
+ * It passed locally for exactly that reason, then failed the QA and Production
+ * deploys with ENOENT. A test that can only pass on one machine is worse than
+ * no test: it reports green everywhere it is meaningless and red only where it
+ * runs for real.
+ *
+ * THROWS rather than skipping, deliberately. This is the cross-repo half of the
+ * sort contract; message-literals.test.js records the same rule, that a guard
+ * which downgrades itself reports the same green as one that ran. The repo also
+ * runs scripts/test-no-skips.js, which treats a skip as a failure anyway.
+ */
+function backendRoot() {
+  for (const root of [process.env.EASYFIX_BACKEND_DIR,
+    path.join(__dirname, '..', '..', 'EasyFix_Backend')]) {
+    if (root && fs.existsSync(path.join(root, 'services/job.service.js'))) return root;
+  }
+  throw new Error('EasyFix_Backend checkout not found — set EASYFIX_BACKEND_DIR or clone it '
+    + 'beside this repo. This is the cross-repo half of the sort contract and must not '
+    + 'degrade to a pass.');
+}
+
 const thead = src.slice(src.indexOf('                <thead>'), src.indexOf('                </thead>'));
 const tbody = src.slice(src.indexOf('                <tbody ref={vJobs.bodyRef}>'), src.indexOf('                </tbody>'));
 
@@ -112,8 +142,7 @@ test('every sort header names a key the backend whitelists', () => {
    * degrade to the default order: validators/job.validator.js derives its
    * valid() list from this map, so the request 400s and the grid is empty.
    */
-  const beSrc = fs.readFileSync(
-    '/Users/harshit/Documents/GitHub/EasyFix_Backend/services/job.service.js', 'utf8');
+  const beSrc = fs.readFileSync(path.join(backendRoot(), 'services/job.service.js'), 'utf8');
   const map = beSrc.slice(beSrc.indexOf('const SORTABLE_COLUMNS = {'));
   const allowed = new Set([...map.slice(0, map.indexOf('\n};')).matchAll(/^\s{2}([a-z_]+):/gm)].map((m) => m[1]));
   assert.ok(allowed.size >= 20, `expected the BE whitelist, parsed ${allowed.size} keys`);
