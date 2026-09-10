@@ -7,8 +7,9 @@
  * Left pane (form fields), in tbl_address column roles:
  *   - Service Address -> `address`. A PLAIN input, and the ONE column
  *     formatServiceAddress reads, so it is what the CRM and the technician
- *     see. Rendered only when `serviceAddressEditable`; Confirm & Schedule
- *     omits it because the host shows the address read-only above.
+ *     see. Rendered only when `serviceAddressEditable`, which all three call
+ *     sites now pass (Confirm & Schedule opted in 2026-09-10, replacing the
+ *     grey read-only copy its host used to render above).
  *   - Search Location On Map -> `building` + `gps_location`. THE autocomplete.
  *     Sets the pin only; it never writes `address`.
  *   - Landmark (optional) -> `landmark`
@@ -108,9 +109,14 @@ type Props = {
    *
    * This switch is only about whether the Service Address is EDITABLE here.
    *
-   * Confirm & Schedule leaves the Service Address alone entirely (the host
-   * shows it read-only above). The Edit Address dialog exists to change it, so
-   * it opts in here and gets a PLAIN text input for `address` — plain, not an
+   * Every call site opts in as of 2026-09-10 — Edit Address and Book New Call
+   * always did, and Confirm & Schedule joined them (it used to render its own
+   * grey read-only copy above this picker, which left the address unfixable by
+   * keyboard at exactly the moment an operator reads it back to the customer).
+   * The default stays FALSE so a future read-only host does not have to know to
+   * ask for one.
+   *
+   * The opted-in field is a PLAIN text input for `address` — plain, not an
    * autocomplete, because a Google pick would overwrite the operator's own
    * service address with a formatted_address string, which is the exact mix-up
    * this split is meant to end.

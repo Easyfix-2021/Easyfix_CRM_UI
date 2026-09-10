@@ -7749,26 +7749,13 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 </p>
               </div>
             )}
-            {/* Service Address (read-only) — the actual booking address
-                (tbl_address.address). Non-editable here: the operator sets GPS
-                via the "Search Location On Map" (building) field in the picker
-                below, which never changes this address. */}
-            <div className="col-span-1 md:col-span-3 mb-3">
-              <Label className="text-xs text-muted-foreground">Service Address</Label>
-              <textarea
-                readOnly
-                disabled
-                value={formatServiceAddress({
-                  building: f.building,
-                  address: f.address,
-                  landmark: f.landmark,
-                  city_name: f.city_id ? cityNameById.get(String(f.city_id)) : null,
-                  pin_code: f.pin_code,
-                }, { fallback: '—' })}
-                rows={2}
-                className="mt-1 w-full rounded-md border border-input bg-ink-100 px-3 py-1.5 text-sm text-ink-700 resize-none"
-              />
-            </div>
+            {/* The grey read-only Service Address that used to sit here is
+                GONE, replaced by the picker's own editable field below. Keeping
+                both would render two controls labelled "Service Address" bound
+                to the same `f.address`, one greyed out directly above the live
+                one. Same reason Book New Call deleted its own preview
+                (2026-09-07): a second rendering of one column can only agree
+                with the first by accident. */}
             <div className="col-span-1 md:col-span-3">
               <AddressPickerWithMap
                 value={{
@@ -7791,11 +7778,20 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 }}
                 cities={lk.toOpts.cities.map((o) => ({ value: String(o.value), label: String(o.label) }))}
                 autoCreatePincode
-                /* Confirm & Schedule shows the Service Address read-only ITSELF,
-                   above this picker, so the picker hides its own copy — that is
-                   what omitting `serviceAddressEditable` means. The Google
-                   search is on `building` unconditionally now; the flag that
-                   used to select that was removed with mode A (2026-09-07). */
+                /*
+                 * EDITABLE, as it already is in Edit Address and Book New Call
+                 * (the other two call sites — 3 of 3 now opt in). Confirming an
+                 * order is the moment the operator reads the address back to the
+                 * customer, so a typo caught there had no keyboard fix: the only
+                 * way to change it was to pick a different SAVED address, and
+                 * `Search Location On Map` deliberately never touches `address`.
+                 *
+                 * No new server capability: the confirm PATCH has always sent
+                 * `address.address` (updateBody accepts it, job.service writes
+                 * it) — picking a saved address already wrote this column. This
+                 * only makes the existing write reachable by typing.
+                 */
+                serviceAddressEditable
               />
             </div>
           </div>
