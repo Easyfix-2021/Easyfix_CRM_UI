@@ -3564,6 +3564,11 @@ function AddMaterialDialog({ open, onClose, onSubmit }: {
 // JobComment type moved to ./jobTypes (imported at top) so the extracted
 // AddRemarksDialog can share the exact same shape.
 
+// Mirrors legacy jobComment.vm's "Open Due To" radios and the values
+// /admin/jobs/comment-reasons filters on (Customer 1 / Client 2 / EasyFix 3 /
+// Technician 4). Same list AddRemarksDialog uses.
+const COMMENT_DUE_TO_OPTIONS = ['Customer', 'Client', 'EasyFix', 'Technician'] as const;
+
 const COMMENT_STAGE_LABEL: Record<number, string> = {
   1: 'On Creation',
   2: 'On Check-In',
@@ -3584,6 +3589,39 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
   const error = mutError ?? loadError;
   const [draft, setDraft] = useState('');
   const [stage, setStage] = useState<number>(4);
+  /*
+   * Open Due To + Reason, inline (2026-09-10 per ops).
+   *
+   * Legacy jobComment.vm was a POPUP with these two fields, both required, and
+   * AddRemarksDialog already reproduces it faithfully for the footer button.
+   * This tab grew a SECOND, simpler form that posted `enum_reason_id: null`, so
+   * every comment filed from here was reason-less and the Reason column in
+   * Rescheduling History had nothing to show for them.
+   *
+   * Ops asked for the fields here rather than a popup, so the controls move in
+   * and the stage picker stays — legacy had no user-facing stage choice
+   * (commentedOn was a hidden field), so keeping it is additive, not parity.
+   */
+  const [dueTo, setDueTo] = useState<string>('Customer');
+  const [reasonId, setReasonId] = useState<string>('');
+  const [reasons, setReasons] = useState<Array<{ id: number; label: string }>>([]);
+  const [reasonsLoading, setReasonsLoading] = useState(false);
+
+  // Refetch whenever the radio changes — the endpoint filters by user_type.
+  // fetchReasonsCached holds a shared 60s module cache, so flipping the radio
+  // back and forth costs one request per option, not one per click.
+  useEffect(() => {
+    let cancelled = false;
+    setReasonsLoading(true);
+    setReasonId('');
+    fetchReasonsCached('/admin/jobs/comment-reasons', { dueTo: dueTo.toLowerCase() })
+      .then((rows) => {
+        if (cancelled) return;
+        setReasons((rows || []).filter((r) => r.id != null).map((r) => ({ id: Number(r.id), label: r.label })));
+      })
+      .finally(() => { if (!cancelled) setReasonsLoading(false); });
+    return () => { cancelled = true; };
+  }, [dueTo]);
   const [posting, setPosting] = useState(false);
   // Local optimistic state for THIS tab's inline textarea. Parent-supplied
   // pendings (from AddRemarksDialog) come via `pendingComments` prop;
@@ -3644,7 +3682,7 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
       commented_by: null,
       user_name: currentUserName,
       efr_id: null,
-      enum_reason_id: null,
+      enum_reason_id: reasonId ? Number(reasonId) : null,
       enum_desc: null,
       _pending: true,
     };
@@ -3652,7 +3690,11 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
     setDraft('');
     setPosting(true); setMutError(null);
     try {
-      await api.post(`/admin/jobs/${jobId}/comments`, { comments: text, comment_on: stage });
+      await api.post(`/admin/jobs/${jobId}/comments`, {
+        comments: text,
+        comment_on: stage,
+        enum_reason_id: reasonId ? Number(reasonId) : null,
+      });
       // The pending row is dropped by the reconciliation effect when the fresh
       // list arrives — not here, or it would vanish before its replacement.
       refetch();
@@ -3688,17 +3730,46 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
           placeholder="Note about the job, check-in observation, customer remark…"
           maxLength={2000}
         />
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm text-muted-foreground">Open Due To</span>
+          {COMMENT_DUE_TO_OPTIONS.map((opt) => (
+            <label key={opt} className="inline-flex items-center gap-1.5 text-sm">
+              <input
+                type="radio"
+                name="comment-due-to"
+                value={opt}
+                checked={dueTo === opt}
+                onChange={() => setDueTo(opt)}
+              />
+              {opt === 'Customer' ? 'By Customer' : opt}
+            </label>
+          ))}
+        </div>
         <div className="flex items-center justify-between gap-2 flex-wrap">
-          <select
-            value={stage}
-            onChange={(e) => setStage(Number(e.target.value))}
-            className="border rounded h-9 px-2 text-sm bg-background"
-          >
-            {Object.entries(COMMENT_STAGE_LABEL).map(([v, label]) => (
-              <option key={v} value={v}>{label}</option>
-            ))}
-          </select>
-          <Button size="sm" onClick={postComment} disabled={posting || !draft.trim()}>
+          <div className="flex items-center gap-2 flex-wrap">
+            <select
+              value={stage}
+              onChange={(e) => setStage(Number(e.target.value))}
+              className="border rounded h-9 px-2 text-sm bg-background"
+            >
+              {Object.entries(COMMENT_STAGE_LABEL).map(([v, label]) => (
+                <option key={v} value={v}>{label}</option>
+              ))}
+            </select>
+            <div className="min-w-[240px]">
+              <SearchSelect
+                value={reasonId}
+                onChange={setReasonId}
+                options={reasons.map((r) => ({ value: String(r.id), label: r.label }))}
+                placeholder={reasonsLoading ? 'Loading Reasons…' : 'Select Reason'}
+                disabled={reasonsLoading}
+                required
+              />
+            </div>
+          </div>
+          {/* Reason is REQUIRED, as it was in legacy jobComment.vm — a
+              reason-less comment is the defect this change exists to close. */}
+          <Button size="sm" onClick={postComment} disabled={posting || !draft.trim() || !reasonId}>
             {posting ? 'Posting…' : 'Post Comment'}
           </Button>
         </div>
