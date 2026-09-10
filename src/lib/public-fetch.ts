@@ -6,7 +6,7 @@
  *   - throws a typed `{ status, code, message }` so pages can dispatch on HTTP
  *     status (410/401) without ApiError class checks.
  *
- * Shared by the job-completion and shared-job public pages.
+ * Used by the job-completion public page. (shared-job was retired with job delegation, 2026-09-10.)
  */
 export async function publicFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const apiBase = process.env.NEXT_PUBLIC_API_URL || '/api';

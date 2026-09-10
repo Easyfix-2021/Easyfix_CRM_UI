@@ -8,7 +8,7 @@ import { X } from 'lucide-react';
  * responsive card — deliberately NOT the CRM `Dialog` (which would drag in
  * auth-coupled shared code). Bottom-sheet on mobile (full-width, rounded top),
  * centered max-w-md card on desktop; click-outside to dismiss. Shared by
- * job-completion and shared-job.
+ * job-completion. (The shared-job page it also served was retired with job delegation, 2026-09-10.)
  */
 export function OverlayShell({
   title, onClose, busy, children,

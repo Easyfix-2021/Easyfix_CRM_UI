@@ -32,6 +32,8 @@ import type { JobComment } from './jobTypes';
 import { JobRemarksView } from './JobRemarksView';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { StatusChip } from '@/components/ui/StatusChip';
+import { ShareChip, ReleaseShareButton, SHARE_RELEASE_ACTION } from '@/components/job/JobShareControls';
+import type { JobShare } from '@/lib/job-share';
 import { api, ApiError } from '@/lib/api';
 import { formatApiError } from '@/lib/api-errors';
 import { resolveParentAddressId, buildJobAddressPayload } from '@/lib/job-address';
@@ -170,6 +172,11 @@ export type JobModalMode = JobModalAction;
 type Job = Record<string, unknown> & {
   job_id: number; job_status: number;
   services?: unknown[]; images?: unknown[];
+  /*
+   * Live delegation, when there is one — see @/lib/job-share. Optional: a BE
+   * deploy predating the share feature simply omits it and no chip renders.
+   */
+  share?: JobShare | null;
   // Customer-shared videos via the WhatsApp conversational order-confirmation
   // flow. Lives in tbl_job_media (separate from tbl_job_image because that
   // table is image-only). Backend includes it in /admin/jobs/:id; absent on
@@ -343,7 +350,7 @@ export function JobModal({
   const [descOpen, setDescOpen] = useState(false);
   // isJobCancel gates the destructive Cancel button (same permission key
   // ActionBar used before Cancel was lifted here).
-  const footerCan = actionFlags(currentMe, ['isJobCancel']);
+  const footerCan = actionFlags(currentMe, ['isJobCancel', SHARE_RELEASE_ACTION]);
   /*
    * `compact` shrinks the modal to fit-to-content while the create-flow
    * mobile gate is showing. Once the operator submits the mobile and
@@ -521,6 +528,12 @@ export function JobModal({
                     <StatusChip tone={statusTone(Number(job.job_status))}>
                       {statusLabel(Number(job.job_status), { assigned: job.fk_easyfixter_id != null })}
                     </StatusChip>
+                    {/* Delegation pill — same component as the jobs list. It
+                        qualifies the status chip beside it: while a share is
+                        live the technician this job is ASSIGNED to is refused
+                        every mutating route, and the named delegate has them
+                        instead. Renders nothing when no share is live. */}
+                    <ShareChip share={job.share} />
                     <span className="text-xs">{String(job.job_type ?? '')}</span>
                   </DialogDescription>
                 )}
@@ -715,6 +728,22 @@ export function JobModal({
                 then Close. Change Owner was removed from ActionBar entirely
                 (2026-07-29). */}
             <div className="flex items-center gap-2 flex-wrap justify-end">
+              {/*
+               * Ops release. Once the delegate has STARTED, the sharer's own
+               * cancel window is closed and this endpoint is the ONLY way the
+               * delegation ends — so it has to be findable, which is why it
+               * sits in the lifecycle cluster next to Cancel rather than
+               * behind a settings page. Self-gates on the permission AND on a
+               * live share, so it is invisible on every ordinary job.
+               */}
+              {!loading && job && (
+                <ReleaseShareButton
+                  jobId={Number(resolvedJobId)}
+                  share={job.share}
+                  allowed={!!footerCan[SHARE_RELEASE_ACTION]}
+                  onReleased={() => { refresh(); onSaved?.(); }}
+                />
+              )}
               {!loading && job && canCancel(Number(job.job_status)) && footerCan.isJobCancel
                 && transitionAllowed(currentMe?.allowedStages, Number(job.job_status), ST.CANCELLED) && (
                 <Button variant="destructive" onClick={() => setCancelOpen(true)}>Cancel</Button>

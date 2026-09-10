@@ -3,7 +3,7 @@ import * as React from 'react';
 /*
  * Generic card shell for the public pages — mirrors <Section>'s
  * bg-card/rounded/border look but adds a small tinted leading icon and a
- * free-form (non-grid) body. Shared by job-completion and shared-job.
+ * free-form (non-grid) body. Used by job-completion. (The shared-job page it also served was retired with job delegation, 2026-09-10.)
  */
 export function InfoCard({
   icon, title, action, children, bodyClassName,

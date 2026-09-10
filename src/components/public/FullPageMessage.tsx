@@ -5,7 +5,7 @@ import * as React from 'react';
 /*
  * Full-page status card for the public pages — loading / invalid / expired /
  * error / submitted states. Optional helpline + retry. Shared by
- * job-completion and shared-job.
+ * job-completion. (The shared-job page it also served was retired with job delegation, 2026-09-10.)
  */
 export function FullPageMessage({
   title, message, helpline, retry,

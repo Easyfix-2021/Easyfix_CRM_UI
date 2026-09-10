@@ -49,7 +49,7 @@ import { CallLegsPreview } from '@/components/ui/CallLegsPreview';
 // public page). Used for every button on the page so size/font/padding match;
 // colour is differentiated via `variant` + `className`, NOT by `size`.
 import { Button } from '@/components/ui/button';
-// Extracted shared public-page building blocks (also used by the shared-job
+// Extracted shared public-page building blocks (they also served the shared-job
 // page). Behaviour-identical to the former inline definitions.
 import { publicFetch } from '@/lib/public-fetch';
 import { InfoCard } from '@/components/public/InfoCard';

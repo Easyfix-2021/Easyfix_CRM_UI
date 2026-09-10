@@ -18,6 +18,8 @@ import { SearchSelect } from '@/components/ui/search-select';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
 import { CitySelect } from '@/components/ui/city-select';
 import { StatusChip } from '@/components/ui/StatusChip';
+import { ShareChip } from '@/components/job/JobShareControls';
+import type { JobShare } from '@/lib/job-share';
 import { DownloadButton } from '@/components/ui/download-button';
 import { downloadXlsx } from '@/lib/download-xlsx';
 import { api } from '@/lib/api';
@@ -112,6 +114,14 @@ type JobRow = JobAgeFields & {
   // last_update_time already used by the Unconfirmed Draft pill — keep
   // here for the row type completeness in case other indicators need it.
   last_update_time?: string | null;
+  /*
+   * Live delegation, when there is one. The row's own technician columns keep
+   * naming the ORIGINAL technician (fk_easyfixter_id never moves on a share),
+   * so without this the list cannot show that somebody else is holding the
+   * job. Optional: absent on any deploy whose BE list projection predates the
+   * share feature → treated as "no share" and no chip renders.
+   */
+  share?: JobShare | null;
 };
 type Resp = { items: JobRow[]; total: number; limit: number; offset: number };
 
@@ -1753,6 +1763,14 @@ export default function JobsPage() {
                     <StatusChip tone={statusTone(j.job_status)}>
                       {statusLabel(j.job_status, { assigned: j.fk_easyfixter_id != null })}
                     </StatusChip>
+                    {/*
+                     * Delegation pill. Sits beside the status chip because it
+                     * QUALIFIES the status: a "Scheduled" job with a live share
+                     * is scheduled to a technician who is locked out of it. It
+                     * renders nothing when there is no live share, so untouched
+                     * rows are visually unchanged.
+                     */}
+                    <ShareChip share={j.share} className="ml-1" />
                     {/*
                      * "No Services" pill (added 2026-05-28). Surfaces the
                      * legacy data-quality gap where a BOOKED job has zero

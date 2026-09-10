@@ -16,6 +16,8 @@ import { formatDate, formatEasyfixerName, statusLabel, statusTone } from '@/lib/
 import { formatJobAge, jobAgeTitle, JOB_AGE_SORT_KEY, type JobAgeFields } from '@/lib/job-age';
 import { displaySlot } from '@/lib/job-slots';
 import { StatusChip } from '@/components/ui/StatusChip';
+import { ShareChip } from '@/components/job/JobShareControls';
+import type { JobShare } from '@/lib/job-share';
 import {
   TABS, filterJobRows, filterTabsForStages, makeQuickStatusChange,
   JOB_SEARCH_PLACEHOLDER, JOB_SEARCH_HINT,
@@ -117,6 +119,13 @@ type JobRow = JobAgeFields & {
    * below for why the FE must not compute this itself.
    */
   offer_state?: 'offered' | 'expired' | 'pending' | 'none' | null;
+  /*
+   * Live delegation, when there is one. `fk_easyfixter_id` never moves on a
+   * share, so `easyfixer_name` above keeps naming the ORIGINAL technician while
+   * somebody else holds the job — this is the only field that says so.
+   * Optional: absent on a BE deploy predating the share feature → no chip.
+   */
+  share?: JobShare | null;
 };
 type Resp = { items: JobRow[]; total: number; limit: number; offset: number };
 
@@ -1048,6 +1057,9 @@ export default function MyOrdersPage() {
                     <StatusChip tone={statusTone(j.job_status)}>
                       {statusLabel(j.job_status, { assigned: j.fk_easyfixter_id != null })}
                     </StatusChip>
+                    {/* Delegation pill — same component and placement as /jobs.
+                        Renders nothing unless a share is LIVE. */}
+                    <ShareChip share={j.share} className="ml-1" />
                     {/*
                      * "No Services" pill — shared anomaly indicator for
                      * BOOKED jobs with zero active services (counts only
