@@ -494,7 +494,19 @@ export default function JobsPage() {
          * `q` (job_id, reference id, client ref, customer name + mobile), so
          * this is a wiring fix, not a new capability.
          */
-        q: serverQ || undefined,
+        /*
+         * jobIds, not q (2026-09-10, per ops). `q` matches eleven columns, so
+         * typing a job id returned the job PLUS every row whose customer,
+         * mobile, client or technician happened to contain those digits —
+         * six results for one id. This box now means the id.
+         *
+         * `q` is deliberately still sent by My Orders, which relies on the
+         * multi-field search; narrowing it server-side would have changed both
+         * pages when only this one was asked about. The backend exposes jobIds
+         * on listQuery and services/job.service.js already built
+         * `j.job_id IN (...)` from it — the capability existed, unexposed.
+         */
+        jobIds: serverQ || undefined,
         /*
          * status / statuses / assigned — derived once by buildStatusParams and
          * spread, never re-implemented here. Export and the bulk-action prop
@@ -995,7 +1007,13 @@ export default function JobsPage() {
   // server-paginated) page — shared filterJobRows in lib/job-tabs.ts. Sorting
   // itself is now server-side (see below), so this only narrows what's already
   // ordered; it preserves the server's row order.
-  const filteredItems = useMemo(() => filterJobRows(data?.items ?? [], q), [data, q]);
+  /*
+   * No client-side filter pass any more. filterJobRows matches a SUPERSET of
+   * the old `q` fields, so leaving it in would re-introduce exactly what this
+   * change removes: the server would return the one job and the client would
+   * then also keep rows whose customer or mobile contained those digits.
+   */
+  const filteredItems = data?.items ?? [];
   // Server-side sort — sortKey/sortDir state is declared up in the state block
   // (load()/the poll effect depend on it); here we wire the header-click cycle.
   const toggle = (col: string) => {
@@ -1246,12 +1264,20 @@ export default function JobsPage() {
                     filterJobRows still runs over the loaded rows for instant
                     feedback during the 300ms debounce; it matches a superset of
                     the backend's fields, so it never hides a server match. */}
-                <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Quick Search</label>
+                <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Job Id</label>
                 <Input
-                  placeholder={JOB_SEARCH_PLACEHOLDER}
-                  title={JOB_SEARCH_HINT}
+                  inputMode="numeric"
+                  placeholder="e.g. 500043"
+                  title="Search by Job Id. Use Customer Name / No., Client or EFR ID for the other fields."
                   value={q}
-                  onChange={(e) => setQ(e.target.value)}
+                  /*
+                   * Digits only. The backend rejects anything else outright, and
+                   * a 400 behind a table that deliberately keeps its previous
+                   * rows on error reads as "nothing happened" — the same silent
+                   * failure a too-small CSV limit caused on this page before.
+                   * Strip at the input so the request is never malformed.
+                   */
+                  onChange={(e) => setQ(e.target.value.replace(/[^0-9,]/g, ''))}
                 />
               </div>
               <div>
