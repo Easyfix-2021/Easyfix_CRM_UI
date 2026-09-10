@@ -16,7 +16,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
   ShieldCheck, Webhook, FileSpreadsheet, ShieldAlert, Workflow, Database, FileText, Trash2, Activity, Sparkles, AudioLines,
-  Timer, KeyRound, Fingerprint,
+  Timer, KeyRound, Fingerprint, LifeBuoy,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -39,6 +39,20 @@ import { FieldRekeyDialog } from './FieldRekeyDialog';
 import { RecoveryKeyDialog } from './RecoveryKeyDialog';
 
 const ACTIONS = [
+  {
+    href: '/admin-actions/issues',
+    icon: LifeBuoy,
+    title: 'Reported Issues',
+    blurb: 'Triage issues CRM users report in-app: read the detail and screenshot, reply, and close.',
+    /*
+     * Reached only from this grid — deliberately no tbl_menu row, no
+     * tbl_role.menu_ids append and no visible-menu-ids edit. That trio is
+     * where menus go wrong: a row can exist and stay invisible because the
+     * grant was forgotten, which cost three rounds of manual SQL on the
+     * Completed menu. One action key, one gate, nothing to forget.
+     */
+    actionKey: 'isIssueManage',
+  },
   {
     href: '/jobs/upload',
     icon: FileSpreadsheet,

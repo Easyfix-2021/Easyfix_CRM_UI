@@ -14,6 +14,7 @@ import { AppViewPanelHost } from '@/components/easyfixer/AppViewPanel';
 import { WebCallProvider } from '@/components/calls/WebCallContext';
 import { WebCallPanel } from '@/components/calls/WebCallPanel';
 import { NoticeFlash } from '@/components/notice/NoticeFlash';
+import { IssueReporter } from '@/components/issue/IssueReporter';
 
 /*
  * Client-side auth gate.
@@ -94,6 +95,19 @@ export default function AuthedLayout({ children }: { children: React.ReactNode }
               survives page changes; it renders nothing when there is nothing
               unread. See components/notice/NoticeFlash.tsx. */}
           <NoticeFlash />
+          {/*
+            * In-app issue reporter — a floating button on every authed page.
+            * Must sit INSIDE AuthProvider and ConfirmDialogProvider: it reads
+            * useMe() for the isIssueManage gate and useConfirm() to confirm a
+            * close, and useConfirm throws outside its provider. This slot
+            * satisfies both.
+            *
+            * It fetches NOTHING until opened. A widget mounted on every page
+            * that requests on render multiplies by headcount — the bill
+            * NoticeFlash already paid once (its recheck went 60s to 5 min for
+            * exactly that reason).
+            */}
+          <IssueReporter />
          </WebCallProvider>
         </LiveCallProvider>
       </ConfirmDialogProvider>
