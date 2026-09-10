@@ -1257,8 +1257,12 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
   const [activeTab, setActiveTab] = useState(startingTab);
 
   const header = (
-    <div className="flex flex-wrap items-center justify-between gap-3">
-      {layout === 'tabs' ? (
+    // ml-auto on the toggle rather than justify-between on the row: Single Page
+    // has no tab strip, so with only one child justify-between parks the toggle
+    // on the LEFT. This keeps it right-aligned in both modes without needing a
+    // filler element on the other side.
+    <div className="flex flex-wrap items-center gap-3">
+      {layout === 'tabs' && (
         <TabsList className="flex-wrap h-auto">
         <TabsTrigger value="summary">Summary</TabsTrigger>
         <TabsTrigger value="services">Services ({Array.isArray(job.services) ? job.services.length : 0})</TabsTrigger>
@@ -1271,10 +1275,10 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
         {/* Billing & Charges — hidden unless me.canManageJobCharges (fail-closed). */}
         {canManageJobCharges && <TabsTrigger value="billing">Billing &amp; Charges</TabsTrigger>}
         </TabsList>
-      ) : (
-        <div className="text-sm font-medium text-muted-foreground">All Details</div>
       )}
-      <LayoutToggle value={layout} onChange={chooseLayout} />
+      <div className="ml-auto">
+        <LayoutToggle value={layout} onChange={chooseLayout} />
+      </div>
     </div>
   );
 
