@@ -49,7 +49,13 @@ export type CallRow = {
   caller_name: string | null;
   receiver_name: string | null;
   provider: string | null;
-  recording: string | null;
+  /*
+   * has_recording, not the URL — the list no longer projects jci.recording raw.
+   * This reader only ever used it as a HINT for whether a Play button can
+   * appear (playback already goes through the guarded endpoint below), so the
+   * boolean is all it needed. MySQL returns 1/0.
+   */
+  has_recording: number | boolean | null;
   start_time: string | null;
   inserted_time: string | null;
   // Counterparty classification added by the backend when scoped to a job.
@@ -140,7 +146,7 @@ function RecordingCell({ row }: { row: CallRow }) {
   // Kaleyra rows carry an https recording URL; Plivo rows only *might* have one
   // (recorded + connected) — the endpoint 404s cleanly when there's none.
   const isPlivo = String(row.provider ?? '').toLowerCase() === 'plivo';
-  const canPlay = !!row.recording || (isPlivo && (row.duration ?? 0) > 0);
+  const canPlay = !!row.has_recording || (isPlivo && (row.duration ?? 0) > 0);
   if (!canPlay) {
     // A Plivo call with no duration never connected → there is no recording to
     // fetch. Label it so operators don't expect a Play button that can't appear.

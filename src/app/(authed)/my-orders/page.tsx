@@ -22,7 +22,7 @@ import {
   TABS, filterJobRows, filterTabsForStages, makeQuickStatusChange,
   JOB_SEARCH_PLACEHOLDER, JOB_SEARCH_HINT,
 } from '@/lib/job-tabs';
-import { transitionAllowed } from '@/lib/job-stages';
+import { transitionAllowed, STAGES } from '@/lib/job-stages';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { UnconfirmedSections } from '@/components/job/UnconfirmedSections';
 import { PendingToStartView } from '@/components/job/PendingToStartView';
@@ -196,6 +196,20 @@ function offerState(j: JobRow): 'offered' | 'expired' | 'none' {
 // Operator-controlled via the TablePagination footer. "All" maps to
 // JOBS_MAX_LIMIT (the BE Joi cap on /admin/jobs).
 const DEFAULT_PAGE_SIZE: TablePageSize = 10;
+
+/*
+ * Which statuses the Audit action belongs on — DERIVED from the stage map.
+ *
+ * This was hardcoded as (3 || 5), which was right when those two WERE
+ * "Audit & Complete". The 2026-09-10 realignment split that stage: 10 is Under
+ * Audit, 3 became Pending for Feedback and 5 became Completed. So the button
+ * moved to the two buckets where auditing has already happened and vanished
+ * from the one where it happens — the same defect as a hardcoded status list
+ * anywhere else, and the fourth of its kind this week.
+ *
+ * Reading visibleStatuses means the next realignment carries this with it.
+ */
+const AUDIT_STATUSES: number[] = STAGES['audit-complete'].visibleStatuses;
 
 export default function MyOrdersPage() {
   const { me } = useMe();
@@ -1116,7 +1130,7 @@ export default function MyOrdersPage() {
                         * canManageJobCharges, without which that tab does not
                         * render (see the canAudit note above).
                         */}
-                      {(j.job_status === 3 || j.job_status === 5) && canAudit && (
+                      {AUDIT_STATUSES.includes(j.job_status) && canAudit && (
                         <button
                           type="button"
                           onClick={() => openAudit(j.job_id)}

@@ -8,9 +8,13 @@ import { useDebouncedValue, useFetchOnce } from '@/lib/hooks';
 import {
   Plus, Upload, ChevronDown, ChevronUp, Repeat, Globe,
   // Row-level quick-action icons (mirror the legacy Manage Jobs action column)
-  Eye, CalendarClock, PlayCircle, CheckCircle2, CalendarCheck, MapPin,
+  Eye, CalendarClock, PlayCircle, CheckCircle2, CalendarCheck, MapPin, RefreshCw,
+  ClipboardCheck,
 } from 'lucide-react';
 import { IconButton } from '@/components/ui/icon-button';
+import { AssignTechnicianModal, type AssignMode } from '@/components/job/AssignTechnicianModal';
+import { ScheduleAssignModal } from '@/components/job/ScheduleAssignModal';
+import { ResendPinButton, RESEND_PIN_ACTION } from '@/components/job/ResendPinButton';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
@@ -161,6 +165,11 @@ export default function JobsPage() {
   const canJob = actionFlags(me, [
     'isJobConfirm',
     'isJobAssign',
+    // Reassign is its OWN permission, deliberately: ops often grant assign
+    // without reassign. Manage Jobs never requested this key, so the action it
+    // gates could not render here even for operators who hold it — the button
+    // was missing from the page, not denied by RBAC.
+    'isJobReassign',
     'isJobStatusChange',
     // Drives the "Transfer Job Ownership" button gating. The BE
     // bulk-transfer route is roleByName(['Admin']); we use the
@@ -172,7 +181,21 @@ export default function JobsPage() {
     // (role 2) + Executive Supply (role 3). Combines with the row's
     // `client_opted_in` flag inside UnconfirmedJobsTable.
     'isJobMagicLinkSend',
+    // Resend the customer's 4-digit closing PIN. Its own permission because it
+    // messages a customer directly. Key declared in ResendPinButton and
+    // requested HERE for the same reason isJobReassign now is: actionFlags only
+    // resolves the keys it is asked for, so a button gated on an unrequested
+    // key is invisible to every operator, permission or not.
+    RESEND_PIN_ACTION,
   ]);
+  /*
+   * Audit entry point gate. `canManageJobCharges` is a STANDALONE boolean on
+   * /auth/me — NOT an actionFlags key — and it is what makes JobModal render the
+   * Billing & Charges tab at all. Without it the ?viewTab=billing deep link
+   * falls back to Summary, so the icon would be an exact duplicate of the Eye
+   * beside it. Same gate /my-orders uses (my-orders/page.tsx:223).
+   */
+  const canAudit = me?.canManageJobCharges === true;
   // Declared up here (ahead of the state block) so the `q`/`sort` state
   // lazy-initializers below can hydrate from the URL, and the write-effect
   // can persist them back. useSearchParams() is stable at first render in
@@ -726,8 +749,11 @@ export default function JobsPage() {
    * ALLOW-LIST (isJobModalAction), not an exclusion list. This memo used to
    * exclude assign / reassign by name and cast the rest with `as JobModalMode`.
    * `schedule` matched neither arm, so a pasted ?action=schedule link opened an
-   * empty titled dialog here — /jobs mounts no ScheduleAssignModal, so that
-   * empty modal was the entire result. An unregistered action now opens nothing.
+   * empty titled dialog here — and at the time /jobs mounted no
+   * ScheduleAssignModal, so that empty modal was the entire result. An
+   * unregistered action now opens nothing; `schedule` IS mounted here now (see
+   * the scheduleModal memo below) and is derived separately, exactly like
+   * assign / reassign.
    */
   const modal = useMemo<{ open: boolean; mode: JobModalMode; id?: number }>(() => {
     if (!isJobModalAction(urlAction)) return { open: false, mode: 'create' };
@@ -779,6 +805,49 @@ export default function JobsPage() {
   function openCreate() { openJobAction('create'); }
   function openView(id: number, siblings?: Array<{ job_id: number; service_category: string | null }>)    { setFamilySiblings(siblings ?? null); openJobAction('view',    id); }
   function openConfirm(id: number, siblings?: Array<{ job_id: number; service_category: string | null }>) { setFamilySiblings(siblings ?? null); openJobAction('confirm', id); }
+  function openReassign(id: number) { openJobAction('reassign', id); }
+  // Pending-for-Scheduling rows → the combined Schedule & Assign modal.
+  function openSchedule(id: number) { openJobAction('schedule', id); }
+  /*
+   * Audit & Complete (status 3 / 5) — the SAME JobModal workspace the Eye
+   * opens, titled "Audit · Job #N" and deep-linked to Billing & Charges via the
+   * existing `{ tab }` sub-state (written as ?viewTab=). That is where every
+   * audit action lives: service approval, charge approvals, advances, documents.
+   */
+  function openAudit(id: number) { openJobAction('audit', id, { tab: 'billing' }); }
+
+  /*
+   * AssignTechnicianModal state, derived from `?action=reassign` — mirroring
+   * My Orders, which is where this flow already worked.
+   *
+   * `reassign` is deliberately NOT in JOBMODAL_ACTIONS, so the `modal` memo
+   * above ignores it and only this modal opens. That allow-list is what makes
+   * adding an action here safe: an unknown action falls back to Summary rather
+   * than rendering an empty JobModal.
+   */
+  const assignModal = useMemo<{ open: boolean; jobId: number | null; mode: AssignMode }>(() => {
+    if (urlAction === 'reassign' && urlJobId != null) {
+      return { open: true, jobId: urlJobId, mode: 'reassign' };
+    }
+    return { open: false, jobId: null, mode: 'reassign' };
+  }, [urlAction, urlJobId]);
+
+  /*
+   * ScheduleAssignModal state, derived from `?action=schedule` — the
+   * Pending-for-Scheduling flow (status 0, unassigned): pick a date + slot AND
+   * a technician in one atomic step. Same derivation /my-orders uses.
+   *
+   * `schedule` is not in JOBMODAL_ACTIONS either, so the `modal` memo ignores
+   * it. Until this modal was mounted here, a pasted ?action=schedule link on
+   * /jobs opened nothing at all — the allow-list did its job, but the action had
+   * no dialog on this page to land on.
+   */
+  const scheduleModal = useMemo<{ open: boolean; jobId: number | null }>(() => {
+    if (urlAction === 'schedule' && urlJobId != null) {
+      return { open: true, jobId: urlJobId };
+    }
+    return { open: false, jobId: null };
+  }, [urlAction, urlJobId]);
 
   /*
    * Filter-respecting XLSX export. Mirrors the EscalatedJobsModal
@@ -890,10 +959,10 @@ export default function JobsPage() {
    * a job through the flow (Check-In, Check-Out) without opening the modal.
    * Mirrors the legacy Manage Jobs page's inline icon actions.
    *
-   * Schedule (status 0 → assign tech) is NOT handled here — it needs
-   * operator choice, so clicking the calendar icon on a row opens the
-   * modal and the operator uses the Auto-assign / Manual pick buttons
-   * inside. That keeps the tech-selection flow in one place.
+   * Schedule (status 0 → assign tech) is NOT handled here — it needs operator
+   * choice, so the calendar icon on a row opens ScheduleAssignModal, where the
+   * date/slot and the technician are picked in one atomic step. That keeps the
+   * tech-selection flow in one place.
    */
   const [rowBusy, setRowBusy] = useState<number | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -953,8 +1022,9 @@ export default function JobsPage() {
    * currently is.
    */
   // 18 after the 2026-09-02 merge of Mobile into Customer (the Technician
-  // mobile was never its own column, so only ONE column was removed).
-  const jobCols = canJob.isTransferJobOwnership ? 19 : 18;
+  // mobile was never its own column, so only ONE column was removed), 19 since
+  // Technician Id was split out beside it.
+  const jobCols = canJob.isTransferJobOwnership ? 20 : 19;
 
   /*
    * ── Selection derivations ─────────────────────────────────────────
@@ -1649,6 +1719,16 @@ export default function JobsPage() {
                     <SortHeader col="job_type"           sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Type</SortHeader>
                     <SortHeader col="source_type"        sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Source</SortHeader>
                     <SortHeader col="easyfixer_name"     sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Technician</SortHeader>
+                    {/* Technician Id — the efr_id ops quote on calls and paste
+                        into the Easyfixer search. Rendered as its own column
+                        (not a third line in the cell above) so it stays
+                        copy-pasteable and scannable down the page.
+                        NOT a SortHeader: fk_easyfixter_id is absent from the
+                        backend's SORTABLE_COLUMNS whitelist, so a clickable
+                        header would send a key the BE silently drops back to
+                        its job_id DESC default — a sort control that does
+                        nothing reads as a broken sort. */}
+                    <th>Technician Id</th>
                     <SortHeader col="owner_name"         sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Owner</SortHeader>
                     <SortHeader col="created_date_time"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Created</SortHeader>
                     <SortHeader col="requested_date_time" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Requested</SortHeader>
@@ -1766,6 +1846,14 @@ export default function JobsPage() {
                       </>
                     ) : <span className="text-muted-foreground">unassigned</span>}
                   </td>
+                  {/* Same `#<id>` mono treatment JobModal's Scheduling History
+                      gives this exact field, so the id an operator reads in the
+                      list and the one in the modal are visibly one value.
+                      Asks fk_easyfixter_id — the assignment key the Technician
+                      cell and the StatusChip both ask — not the joined name. */}
+                  <td className="text-xs font-mono text-muted-foreground whitespace-nowrap">
+                    {j.fk_easyfixter_id != null ? `#${j.fk_easyfixter_id}` : '—'}
+                  </td>
                   <td className="text-xs text-muted-foreground whitespace-nowrap">{j.owner_name ?? '—'}</td>
                   <td className="text-xs whitespace-nowrap">{formatDate(j.created_date_time)}</td>
                   <td className="text-xs whitespace-nowrap">{formatDate(j.requested_date_time)}</td>
@@ -1819,10 +1907,13 @@ export default function JobsPage() {
                   </td>
                   <td className="stick-col stick-right text-right whitespace-nowrap">
                     {/*
-                      * Status-driven row actions — mirrors legacy jobList.vm:
-                      *   status 0     → View + Schedule (opens modal for auto/manual pick)
-                      *   status 1     → View + Check-In (reason dialog → POST /checkin)
-                      *   status 2, 20 → View + Check-Out (direct status 2→3)
+                      * Status-driven row actions — the SAME per-bucket set
+                      * /my-orders offers, so muscle memory carries across:
+                      *   status 9     → View + Confirm & Schedule
+                      *   status 0     → View + Schedule & Assign (date/slot + tech, atomic)
+                      *   status 1     → View + Check-In + Reassign + Resend PIN
+                      *   status 2, 20 → View + Check-Out + Resend PIN
+                      *   status 3, 5  → View + Audit (Billing & Charges)
                       *   others       → View only
                       * Check-Out goes through quickStatusChange() (confirm + PATCH
                       * /status + refresh list and counts). Check-In does NOT: it
@@ -1871,14 +1962,58 @@ export default function JobsPage() {
                           onClick={() => openConfirm(j.job_id)}
                         />
                       )}
-                      {/* Schedule (status=0): assign a technician. Gate: isJobAssign
-                          AND the 0→1 stage transition. */}
+                      {/*
+                        * Schedule & Assign (status=0). Gate: isJobAssign AND the
+                        * 0→1 stage transition — a genuine stage transition, so
+                        * transitionAllowed belongs here (unlike Reassign below).
+                        * Identical predicate to /my-orders (my-orders/page.tsx:1175).
+                        *
+                        * Opens ScheduleAssignModal, which sets the Job Date/Slot
+                        * AND picks a technician atomically. It used to call
+                        * openView — the SAME handler as the Eye two icons to the
+                        * left, so status-0 rows carried two buttons doing one
+                        * thing, and the ScheduleAssignModal flow ops actually use
+                        * was reachable only from My Orders.
+                        */}
                       {j.job_status === 0 && canJob.isJobAssign && transitionAllowed(me?.allowedStages, j.job_status, 1) && (
                         <IconButton
                           icon={CalendarClock}
                           intent="primary"
-                          label="Schedule — opens modal to assign a technician"
-                          onClick={() => openView(j.job_id)}
+                          label="Schedule & Assign — set the date/slot and pick a technician"
+                          onClick={() => openSchedule(j.job_id)}
+                        />
+                      )}
+                      {/*
+                        * Reassign Technician (status=1). Gate: isJobReassign ONLY.
+                        *
+                        * NO transitionAllowed here, unlike every other action on this
+                        * page — deliberate, not an omission. A reassign leaves the job
+                        * at status 1, so the pair would be (1 → 1), and THIS
+                        * frontend helper answers false for it: src/lib/job-stages.ts
+                        * requires some stage to list 1 as both a visible status and a
+                        * transition target, and none does. Adding the call would hide
+                        * this button from exactly the restricted operators who reported
+                        * it missing. My Orders gates it the same way
+                        * (my-orders/page.tsx:1202).
+                        *
+                        * The FRONTEND is the one that answers false, and that matters:
+                        * the backend's copy (EasyFix_Backend/lib/job-stages.js, the same-stage branch) has
+                        * an explicit same-stage branch —
+                        *     if (targetStage && targetStage === sourceStage) return true;
+                        * — which this file lacks, though both headers claim to mirror
+                        * each other. So the server would ALLOW (1 → 1) while the client
+                        * hides it. Unreachable today (only pending-start holders see
+                        * status-1 rows, and the two agree for them) but a landmine for
+                        * the next same-status action. Do not "fix the inconsistency"
+                        * here by adding the call; the divergence is the thing to fix,
+                        * and it belongs in job-stages.ts with its own tests.
+                        */}
+                      {j.job_status === 1 && canJob.isJobReassign && (
+                        <IconButton
+                          icon={RefreshCw}
+                          intent="primary"
+                          label="Reassign Technician — pick a different tech from the ranked list"
+                          onClick={() => openReassign(j.job_id)}
                         />
                       )}
                       {/* Check-In + Check-Out are status mutations → isJobStatusChange,
@@ -1900,6 +2035,45 @@ export default function JobsPage() {
                           onClick={() => quickStatusChange(j.job_id, 3, 'Check out & complete')}
                         />
                       )}
+                      {/*
+                        * Audit (Audit & Complete — statuses 3 / 5). Opens the
+                        * same workspace the Eye does, landed on Billing &
+                        * Charges. Gated on the STATUS, not the tab, so it
+                        * behaves the same on the 'all' list — and on canAudit,
+                        * WITHOUT which that tab does not render at all.
+                        *
+                        * No transitionAllowed: this opens a read/approve
+                        * workspace and moves nothing between stages. The
+                        * completion it leads to is performed inside the modal,
+                        * which carries its own gates.
+                        */}
+                      {(j.job_status === 3 || j.job_status === 5) && canAudit && (
+                        <IconButton
+                          icon={ClipboardCheck}
+                          intent="primary"
+                          label="Audit — open Billing & Charges to review approvals, charges and documents"
+                          onClick={() => openAudit(j.job_id)}
+                        />
+                      )}
+                      {/*
+                        * Resend Customer PIN — last icon in the row, matching
+                        * /my-orders and PendingToStartView.
+                        *
+                        * Rendered UNCONDITIONALLY on purpose: the component
+                        * self-gates on job_status (1 / 2 / 20 — the window where
+                        * a technician is holding the order) and on the
+                        * permission flag passed in, so the status predicate
+                        * lives in one place instead of being restated at every
+                        * call site. It keeps its own bare-button styling; it is
+                        * a shared component, not an IconButton call site.
+                        */}
+                      <ResendPinButton
+                        jobId={j.job_id}
+                        jobStatus={j.job_status}
+                        customerName={j.customer_name}
+                        customerMobile={j.customer_mob_no}
+                        allowed={!!canJob[RESEND_PIN_ACTION]}
+                      />
                     </div>
                   </td>
                 </tr>
@@ -1923,6 +2097,31 @@ export default function JobsPage() {
         // deep-link) can land the operator straight on a specific tab.
         // See useJobActionNav.openJobAction(_, _, { tab }).
         initialTab={searchParams.get('viewTab') || undefined}
+      />
+
+      <AssignTechnicianModal
+        open={assignModal.open}
+        jobId={assignModal.jobId}
+        mode={assignModal.mode}
+        onClose={() => closeJobAction()}
+        onAssigned={() => { cacheRef.current.clear(); load(false, true); refreshCounts(); }}
+      />
+
+      {/*
+        * Schedule & Assign — the Pending-for-Scheduling combined flow. Sets the
+        * Job Date/Slot and assigns a technician in one atomic step, then
+        * refreshes so the row moves to "Pending App Ack". Counts are refreshed
+        * too (unlike /my-orders, which has no badge bar) — the row leaves one
+        * bucket for another, so two tab badges are wrong until they are.
+        */}
+      <ScheduleAssignModal
+        open={scheduleModal.open}
+        jobId={scheduleModal.jobId}
+        onClose={() => closeJobAction()}
+        onAssigned={() => { cacheRef.current.clear(); load(false, true); refreshCounts(); }}
+        // Cancel Job (non-assign) also mutates the list — same in-place refresh
+        // as onAssigned so the cancelled row drops out without a skeleton flash.
+        onChanged={() => { cacheRef.current.clear(); load(false, true); refreshCounts(); }}
       />
 
       {/*

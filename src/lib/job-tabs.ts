@@ -57,8 +57,15 @@ export const TABS: TabDef[] = [
   // table. Kept here so /jobs counts + deep-links still resolve the slug.
   { value: 'pending-app-ack',     label: 'Pending App Ack',         status: 0, assigned: true },
   { value: 'pending-close',       label: 'Pending to Close',        statuses: [2, 20] },
-  { value: 'audit-complete',      label: 'Audit & Complete',        statuses: [3, 5] },
-  { value: 'pending-feedback',    label: 'Pending for Feedback',    status: 10 },
+  /*
+   * Sequence is the lifecycle order ops work in:
+   *   Under Audit (10) -> Pending for Feedback (3) -> Completed (5).
+   * Slugs unchanged on purpose; only labels and statuses moved. See
+   * lib/job-stages.ts for why 3 and 10 swapped.
+   */
+  { value: 'audit-complete',      label: 'Under Audit',             status: 10 },
+  { value: 'pending-feedback',    label: 'Pending for Feedback',    status: 3 },
+  { value: 'completed',           label: 'Completed',               status: 5 },
   { value: 'onhold',              label: 'Orders in Followup',      status: 21 },
   { value: 'estimate-pending',    label: 'Estimate Pending',        status: 15 },
   // Dashboard AttentionSummary drill-downs (2026-05-22). These tabs are

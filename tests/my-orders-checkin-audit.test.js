@@ -295,10 +295,31 @@ test('the audit entry point opens the workspace on Billing & Charges', () => {
 });
 
 test('the audit row action is gated on the status AND on canManageJobCharges', () => {
+  /*
+   * RAISED TO THE INVARIANT (2026-09-10). This used to pin the literal
+   * `(j.job_status === 3 || j.job_status === 5)`, and that literal is exactly
+   * what went stale: the stage realignment made 10 Under Audit, moved 3 to
+   * Pending for Feedback and 5 to Completed, so the Audit button appeared on
+   * the two buckets where auditing had already happened and vanished from the
+   * one where it happens. The guard could not see that, because the shape it
+   * pinned was still present and still wrong.
+   *
+   * So it now pins the RULE — the statuses come from the stage map, and the
+   * gate uses them — rather than the numbers. That survives the next
+   * realignment, which a literal cannot.
+   */
+  assert.match(
+    page,
+    /const AUDIT_STATUSES: number\[\] = STAGES\['audit-complete'\]\.visibleStatuses;/,
+    'the audit statuses must be DERIVED from the stage map, never typed as literals',
+  );
+  assert.match(page, /import \{[^}]*STAGES[^}]*\} from '@\/lib\/job-stages';/,
+    'STAGES must be imported for that derivation to be real');
+
   // Anchored on the closing </button> — a lazy window would stop at the first
   // `)}` inside the JSX (the onClick arrow) and never reach the icon.
-  const button = page.match(/\{\(j\.job_status === 3 \|\| j\.job_status === 5\) && canAudit && \([\s\S]{0,900}?<\/button>/);
-  assert.ok(button, 'the audit row action must be gated on statuses 3 / 5 and canAudit');
+  const button = page.match(/\{AUDIT_STATUSES\.includes\(j\.job_status\) && canAudit && \([\s\S]{0,900}?<\/button>/);
+  assert.ok(button, 'the audit row action must be gated on the audit stage statuses and canAudit');
   assert.match(button[0], /onClick=\{\(\) => openAudit\(j\.job_id\)\}/);
   assert.match(button[0], /<ClipboardCheck /, 'it must be its own icon, distinguishable from the Eye');
 
@@ -524,8 +545,8 @@ test('differential control — each guard fails on a source with its subject del
     ],
     [
       'the audit row action',
-      page.replace(/\(j\.job_status === 3 \|\| j\.job_status === 5\) && canAudit/, 'false'),
-      /\(j\.job_status === 3 \|\| j\.job_status === 5\) && canAudit/,
+      page.replace(/AUDIT_STATUSES\.includes\(j\.job_status\) && canAudit/, 'false'),
+      /AUDIT_STATUSES\.includes\(j\.job_status\) && canAudit/,
       page,
     ],
   ];

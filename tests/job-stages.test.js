@@ -40,13 +40,27 @@ const only = (...stages) => ({ mode: 'list', stages });
  * check STAGES would be vacuous. These codes are the backend's job_status
  * vocabulary, so a silent edit here is a cross-repo contract break.
  */
+/*
+ * REPINNED 2026-09-10 against EasyFix_Backend/lib/job-stages.js after the stage
+ * realignment. The previous table had 'audit-complete' as [3, 5] and
+ * 'pending-feedback' as [10]; the realignment SPLIT that stage, so 10 is now
+ * Under Audit, 3 is Pending for Feedback, and 5 became a new 'completed'.
+ *
+ * Every visible/targets value below was READ OUT OF the backend module, not
+ * transcribed — hand-copying a contract is how a pin drifts into agreeing with
+ * whatever it is meant to be checking. Verified before repinning that
+ * src/lib/job-stages.ts and the backend already agree on all ten stages: this
+ * pin was the only stale copy, which is exactly the cross-repo break it exists
+ * to catch. Labels are UI text and come from the frontend.
+ */
 const EXPECTED = {
   'unconfirmed':        { visible: [9],     targets: [0, 6],           label: 'Unconfirmed Orders' },
   'pending-scheduling': { visible: [0],     targets: [1, 6, 9],        label: 'Pending for Scheduling' },
   'pending-start':      { visible: [1],     targets: [2, 20, 21, 6],   label: 'Pending to Start' },
-  'pending-close':      { visible: [2, 20], targets: [3, 5, 21, 6],    label: 'Pending to Close' },
-  'audit-complete':     { visible: [3, 5],  targets: [10],             label: 'Audit & Complete' },
-  'pending-feedback':   { visible: [10],    targets: [],               label: 'Pending for Feedback' },
+  'pending-close':      { visible: [2, 20], targets: [10, 21, 6],      label: 'Pending to Close' },
+  'audit-complete':     { visible: [10],    targets: [3, 5, 6],        label: 'Under Audit' },
+  'pending-feedback':   { visible: [3],     targets: [5, 6],           label: 'Pending for Feedback' },
+  'completed':          { visible: [5],     targets: [],               label: 'Completed' },
   'onhold':             { visible: [21],    targets: [1, 6],           label: 'Orders in Followup' },
   'estimate-pending':   { visible: [15],    targets: [0, 1, 6],        label: 'Estimate Pending' },
   'cancelled':          { visible: [6],     targets: [],               label: 'Cancelled' },
@@ -166,10 +180,38 @@ test('transitionAllowed will not COMPOSE a move across two granted stages', () =
    * checked "is the source visible?" and "is the target reachable?" as two
    * independent questions would wave this through.
    */
-  const g = only('pending-scheduling', 'pending-close');
-  assert.equal(S.stageVisible(g, 0), true, 'source is visible…');
-  assert.ok(S.STAGES['pending-close'].transitionTargets.includes(3), '…and 3 is reachable from the other stage');
-  assert.equal(S.transitionAllowed(g, 0, 3), false, 'but 0 → 3 must still be refused');
+  /*
+   * The PAIR is derived (2026-09-10). This named pending-scheduling +
+   * pending-close and asserted 3 was reachable from pending-close — true until
+   * the stage realignment moved pending-close's targets to [10, 21, 6]. The
+   * test then failed on its own PREMISE, not on the rule it protects.
+   *
+   * Find any two stages where A owns a source, B permits a target A cannot
+   * reach, and B cannot see A's source. That is exactly the composite shape,
+   * whatever the current numbers are.
+   */
+  const pair = (() => {
+    for (const a of S.STAGE_KEYS) {
+      for (const b of S.STAGE_KEYS) {
+        if (a === b) continue;
+        const src = S.STAGES[a].visibleStatuses[0];
+        if (src == null) continue;
+        if (S.STAGES[b].visibleStatuses.includes(src)) continue;   // B must not own the source
+        const tgt = S.STAGES[b].transitionTargets.find((t) => !S.STAGES[a].transitionTargets.includes(t));
+        if (tgt != null) return { a, b, src, tgt };
+      }
+    }
+    return null;
+  })();
+  assert.ok(pair, 'positive control: no composable pair exists, so this test would prove nothing');
+
+  const g = only(pair.a, pair.b);
+  assert.equal(S.stageVisible(g, pair.src), true, 'source is visible…');
+  assert.ok(S.STAGES[pair.b].transitionTargets.includes(pair.tgt), '…and the target is reachable from the other stage');
+  assert.equal(
+    S.transitionAllowed(g, pair.src, pair.tgt), false,
+    `but ${pair.src} → ${pair.tgt} must still be refused (${pair.a} owns the source, ${pair.b} permits the target)`,
+  );
 });
 
 test('an empty list grant permits no transition at all', () => {
@@ -178,7 +220,15 @@ test('an empty list grant permits no transition at all', () => {
 });
 
 test('a terminal stage grants no outward transition', () => {
-  for (const key of ['cancelled', 'pending-feedback']) {
+  /*
+   * Terminal stages are DERIVED, not named. This listed 'pending-feedback',
+   * which stopped being terminal in the realignment — it now targets [5, 6] —
+   * so the test asserted no-outward-transition about a stage that legitimately
+   * has one.
+   */
+  const terminal = S.STAGE_KEYS.filter((k) => S.STAGES[k].transitionTargets.length === 0);
+  assert.ok(terminal.length > 0, 'positive control: no terminal stage exists, so this test would prove nothing');
+  for (const key of terminal) {
     const g = only(key);
     for (const target of [0, 1, 2, 3, 5, 6, 9, 10, 20, 21]) {
       const source = S.STAGES[key].visibleStatuses[0];

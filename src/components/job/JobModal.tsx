@@ -4,7 +4,7 @@ import * as React from 'react';
 import { useSlotRecommendations, SlotAdvisory } from '@/components/job/SlotRecommendations';
 import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import { useFetch, useUiFlags } from '@/lib/hooks';
-import { Sparkles, Search, CalendarCheck, History, Eye, Plus, X, Pencil, CalendarPlus, CheckCircle2, BarChart3, Trash2, RotateCcw } from 'lucide-react';
+import { Sparkles, Search, CalendarCheck, History, Eye, Plus, X, Pencil, CalendarPlus, CheckCircle2, BarChart3, Trash2, RotateCcw, AlertTriangle, FileText } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
@@ -1104,6 +1104,144 @@ function SiblingCategoryTabs({ siblings }: { siblings: Array<{ job_id: number; s
   );
 }
 
+/*
+ * LAYOUT TOGGLE (2026-09-09, ops request) — "Tabs" or "Single Page".
+ *
+ * Lives in ViewBody, which is the ONE body rendered for `view`, `checkin` and
+ * `audit` (see effectiveMode: the latter two fold into 'view'). Putting it here
+ * rather than in the modal header is what makes it appear on the View Job
+ * Details modal and the Audit modal without threading a prop through either.
+ *
+ * The preference is per-viewer sugar, so localStorage — read in an effect, not
+ * in the useState initializer: this file is 'use client' but still prerenders,
+ * and touching localStorage during render is a hydration mismatch (and throws
+ * outright where site data is blocked). Default 'tabs' means a failed read
+ * lands on today's behaviour.
+ */
+type JobViewLayout = 'tabs' | 'single';
+const JOB_VIEW_LAYOUT_KEY = 'jobmodal-layout';
+
+function LayoutToggle({ value, onChange }: { value: JobViewLayout; onChange: (v: JobViewLayout) => void }) {
+  // Same shape as TabsList (bg-muted p-1, active = bg-background shadow) so the
+  // control reads as a sibling of the tab strip rather than a stray button pair.
+  return (
+    <div className="inline-flex h-9 shrink-0 items-center rounded-md bg-muted p-1 text-muted-foreground" role="group" aria-label="Layout">
+      {([['tabs', 'Tabs'], ['single', 'Single Page']] as const).map(([v, label]) => (
+        <button
+          key={v}
+          type="button"
+          onClick={() => onChange(v)}
+          aria-pressed={value === v}
+          className={
+            'inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1 text-sm font-medium transition-all '
+            + (value === v ? 'bg-background text-foreground shadow' : 'hover:text-foreground')
+          }
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/*
+ * One panel, rendered as a tab panel or as a stacked section. Wrapping instead
+ * of duplicating the nine panel bodies is deliberate: two copies of this JSX
+ * would drift, and the Schedule tab has already been rearranged twice.
+ *
+ * Single-page mounts EVERY panel at once, so the tabs that fetch on mount
+ * (Comments, Materials, Quotations, Questionnaire, Billing) all fire together
+ * instead of on first visit. That is the cost of the mode and the reason it is
+ * opt-in rather than the default.
+ */
+function Panel({ value, label, layout, children }: { value: string; label: string; layout: JobViewLayout; children: React.ReactNode }) {
+  // No hooks here: this component switches between two different subtrees, and
+  // a hook called in only one branch changes hook order when `layout` flips.
+  // The observer lives in LazySection, which is only ever mounted in one mode.
+  if (layout === 'single') return <LazySection label={label}>{children}</LazySection>;
+  return <TabsContent value={value}>{children}</TabsContent>;
+}
+
+/*
+ * A Single Page section that does not mount its body until it is near the
+ * viewport.
+ *
+ * Without this, Single Page mounted all nine panels on open and fired ~11 GETs
+ * at once — against a shared MySQL pool, on a backend that has already been
+ * taken down once by concurrent modal opens. Tabs mode never had the problem
+ * because only the active panel is mounted.
+ *
+ * THE PLACEHOLDER'S HEIGHT IS THE MECHANISM, not styling. With a zero-height
+ * placeholder every unmounted section collapses to the same scroll position,
+ * so all nine sit inside the viewport at once, all nine intersect, and all nine
+ * mount — the lazy wrapper would be pure overhead. A placeholder tall enough to
+ * space the sections out is what keeps the ones further down out of view.
+ *
+ * `children` is still constructed on every render; that is only a React element
+ * descriptor. Nothing fetches until it is actually mounted.
+ */
+function LazySection({ label, children }: { label: string; children: React.ReactNode }) {
+  const ref = useRef<HTMLElement | null>(null);
+  const [shown, setShown] = useState(false);
+
+  useEffect(() => {
+    if (shown) return;
+    const el = ref.current;
+    if (!el) return;
+    // Degrade to eager rendering where the API is missing (older browser, a
+    // test renderer) rather than showing a page of permanent placeholders —
+    // failing closed here would hide the content entirely.
+    if (typeof IntersectionObserver === 'undefined') { setShown(true); return; }
+
+    /*
+     * FAIL OPEN IF THE OBSERVER NEVER SPEAKS. An IntersectionObserver always
+     * delivers an initial callback per target shortly after observe() — with
+     * isIntersecting false when the target is off-screen. So "no callback at
+     * all" is not "not visible yet", it is an environment where intersection
+     * cannot be computed: a hidden tab, a zero-sized viewport, a container
+     * that never lays out. There the sections would stay placeholders forever
+     * and the operator would see an empty page.
+     *
+     * Found by measuring: this exact state (visibilityState 'hidden',
+     * innerHeight 0) is what a background render surface reports, and a
+     * control observer with rootMargin 9999px on an on-screen element still
+     * never fired. Checking `typeof IntersectionObserver` alone does not catch
+     * it — the constructor is present and working, it simply has nothing to
+     * measure against.
+     *
+     * The timer is armed only until the FIRST callback of any kind, so a
+     * working observer keeps full laziness; it is a liveness probe, not a
+     * deadline on visibility.
+     */
+    let spoke = false;
+    const bail = setTimeout(() => { if (!spoke) setShown(true); }, 1500);
+
+    const io = new IntersectionObserver(
+      (entries) => {
+        spoke = true;
+        clearTimeout(bail);
+        if (entries.some((e) => e.isIntersecting)) { setShown(true); io.disconnect(); }
+      },
+      // root:null is the viewport, which is correct even though the modal body
+      // is its own scroll container: the intersection is computed against every
+      // ancestor clip rect, so a section scrolled out of the modal does not
+      // count as visible. rootMargin starts the fetch just before it is needed.
+      { root: null, rootMargin: '200px 0px' },
+    );
+    io.observe(el);
+    return () => { clearTimeout(bail); io.disconnect(); };
+  }, [shown]);
+
+  return (
+    <section ref={ref} className="mt-8 first:mt-4 scroll-mt-4" aria-label={label}>
+      <h3 className="mb-3 border-b pb-1.5 text-sm font-semibold text-foreground">{label}</h3>
+      {shown ? children : (
+        <div className="min-h-[320px] rounded-lg border border-dashed bg-muted/20" aria-hidden="true" />
+      )}
+    </section>
+  );
+}
+
 function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKey = 0, pendingComments = [], onCommentsLoaded, onEditDescription }: { job: Job; onRefresh?: () => void; initialTab?: string; onDirtyChange?: (dirty: boolean) => void; commentsRefreshKey?: number; pendingComments?: Array<JobComment & { _pending?: true }>; onCommentsLoaded?: () => void; onEditDescription?: () => void }) {
   const images = Array.isArray((job as Record<string, unknown>).images)
     ? ((job as Record<string, unknown>).images as Array<Record<string, unknown>>)
@@ -1131,9 +1269,30 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
     ...(canManageJobCharges ? ['billing'] : []),
   ]);
   const startingTab = initialTab && KNOWN_TABS.has(initialTab) ? initialTab : 'summary';
-  return (
-    <Tabs defaultValue={startingTab}>
-      <TabsList>
+
+  const [layout, setLayout] = useState<JobViewLayout>('tabs');
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(JOB_VIEW_LAYOUT_KEY) === 'single') setLayout('single');
+    } catch { /* private window / site data blocked — keep the default */ }
+  }, []);
+  const chooseLayout = (v: JobViewLayout) => {
+    setLayout(v);
+    try { localStorage.setItem(JOB_VIEW_LAYOUT_KEY, v); } catch { /* non-fatal */ }
+  };
+  // CONTROLLED, not defaultValue: switching to Single Page and back unmounts
+  // the Tabs root, and an uncontrolled one would come back on Summary having
+  // silently dropped whichever tab the operator was reading.
+  const [activeTab, setActiveTab] = useState(startingTab);
+
+  const header = (
+    // ml-auto on the toggle rather than justify-between on the row: Single Page
+    // has no tab strip, so with only one child justify-between parks the toggle
+    // on the LEFT. This keeps it right-aligned in both modes without needing a
+    // filler element on the other side.
+    <div className="flex flex-wrap items-center gap-3">
+      {layout === 'tabs' && (
+        <TabsList className="flex-wrap h-auto">
         <TabsTrigger value="summary">Summary</TabsTrigger>
         <TabsTrigger value="services">Services ({Array.isArray(job.services) ? job.services.length : 0})</TabsTrigger>
         <TabsTrigger value="schedule">Schedule</TabsTrigger>
@@ -1144,9 +1303,18 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
         <TabsTrigger value="quotations">Quotations</TabsTrigger>
         {/* Billing & Charges — hidden unless me.canManageJobCharges (fail-closed). */}
         {canManageJobCharges && <TabsTrigger value="billing">Billing &amp; Charges</TabsTrigger>}
-      </TabsList>
+        </TabsList>
+      )}
+      <div className="ml-auto">
+        <LayoutToggle value={layout} onChange={chooseLayout} />
+      </div>
+    </div>
+  );
 
-      <TabsContent value="summary">
+  const panels = (
+    <>
+
+      <Panel value="summary" label="Summary" layout={layout}>
         {/* Customer Cancel/Reschedule requests — attention banner pinned
             to the top of the Summary tab so ops action pending asks
             before anything else. Renders nothing when there are none. */}
@@ -1191,23 +1359,19 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
                 />
               : (job.client_spoc as string | null)],
           ]}/>
-          <DlCard title="Job Meta" rows={[
-            // No ⓘ popup here — the modal's inline "Calling History" section
-            // (JobCallHistory below) already shows the full party-aware log.
-            ['Job ID', job.job_id],
-            ['Reference', job.job_reference_id],
-            /*
-             * Age — the same server-computed reading the job LISTS show, so a
-             * row and its detail can never disagree. Measured ticket-created →
-             * terminal event (checkout / cancel / enquiry), or → now while the
-             * job is open; see lib/job-age.ts. Renders an em-dash (never "NaN"
-             * or a misleading "0") if the payload predates the field.
-             */
-            ['Age', <span key="job-age" title={jobAgeTitle(job)}>{formatJobAge(job)}</span>],
-            ['Type', job.job_type],
-            ['Appointment', formatDate(job.requested_date_time as string)],
-            ['Source', job.source_type],
-            ['Owner', job.owner_name],
+          {/*
+            * Technician — its own card since 2026-09-09. These rows were folded
+            * into Job Meta when they moved off the Schedule tab, which grew that
+            * card to thirteen rows beside a five-row Customer and a four-row
+            * Client. In a `grid` the tallest cell sets the row height, so the two
+            * short cards were rendering a block of dead space underneath them —
+            * the imbalance was the whole complaint, not the length.
+            *
+            * Ordered so each ROW holds cards of similar height: Customer /
+            * Client / Technician are all four-to-five rows, and Job Meta pairs
+            * with the address block below.
+            */}
+          <DlCard title="Technician" rows={[
             /*
              * Technician details live HERE, not on the Schedule tab (2026-09-09,
              * per ops). They answer "who is this job's", the same question as
@@ -1216,6 +1380,20 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
              * "when, and how did it get there".
              */
             ['Technician', job.easyfixer_name ? formatEasyfixerName(String(job.easyfixer_name)) : null],
+            /*
+             * Technician Id (2026-09-10, per ops) — ops quote this to the
+             * technician and to support, so reading it off the job beats
+             * opening Manage Easyfixers to look it up.
+             *
+             * Rendered #<id> in mono to match how the same id already appears in
+             * Scheduling History (see JobRescheduleHistory's sibling table), not
+             * as a new format. It is fk_easyfixter_id — the FK column, typo and
+             * all, per the backend's own note — and DlCard's falsy fallback
+             * shows the em dash when the job is unassigned.
+             */
+            ['Technician Id', job.fk_easyfixter_id != null
+              ? <span className="font-mono">#{String(job.fk_easyfixter_id)}</span>
+              : null],
             // Tech mobile dials through tbl_easyfixer.efr_no. fk_easyfixter_id is
             // the FK column (typo preserved per backend CLAUDE.md). Unassigned
             // shows a static dash via DlCard's falsy fallback. DlCard passes React
@@ -1230,28 +1408,8 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
                 />
               : (job.easyfixer_mobile as string | null)],
             ['Helper Req', job.helper_req ? 'Yes' : 'No'],
-            // Description carries an inline pencil (gated on isJobEdit) that
-            // opens the same ChangeDescriptionDialog the old footer "Edit
-            // Description" button used — now hosted at the modal root.
-            ['Description', (
-              <span className="inline-flex items-start justify-end gap-1.5 max-w-full">
-                <span className="break-all">{String(job.job_desc ?? '') || '—'}</span>
-                {canEditJob && onEditDescription && (
-                  <button
-                    type="button"
-                    onClick={onEditDescription}
-                    title="Edit Description"
-                    aria-label="Edit Description"
-                    className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                  </button>
-                )}
-              </span>
-            )],
-            // Additional Comments / technician-facing notes (efr_special_notes) —
-            // captured on booking (Client Dashboard "Notes for technician") but
-            // previously never rendered in the read view.
+            // Technician-facing notes captured at booking (efr_special_notes).
+            ['Handyman Notes', String(job.efr_special_notes ?? '') || '—'],
             /*
              * Customer PIN — DISPLAY ONLY, and only while it is operationally
              * live: Pending to Start (1) and Pending to Close (2 / 20), the two
@@ -1278,7 +1436,46 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
                   ? <span key="job-otp" className="font-mono tracking-widest">{String(job.otp)}</span>
                   : null] as [string, React.ReactNode]]
               : []),
-            ['Handyman Notes', String(job.efr_special_notes ?? '') || '—'],
+          ]}/>
+          <DlCard title="Job Meta" rows={[
+            // No ⓘ popup here — the modal's inline "Calling History" section
+            // (JobCallHistory below) already shows the full party-aware log.
+            ['Job ID', job.job_id],
+            ['Reference', job.job_reference_id],
+            /*
+             * Age — the same server-computed reading the job LISTS show, so a
+             * row and its detail can never disagree. Measured ticket-created →
+             * terminal event (checkout / cancel / enquiry), or → now while the
+             * job is open; see lib/job-age.ts. Renders an em-dash (never "NaN"
+             * or a misleading "0") if the payload predates the field.
+             */
+            ['Age', <span key="job-age" title={jobAgeTitle(job)}>{formatJobAge(job)}</span>],
+            ['Type', job.job_type],
+            ['Appointment', formatDate(job.requested_date_time as string)],
+            ['Source', job.source_type],
+            ['Owner', job.owner_name],
+            // Description carries an inline pencil (gated on isJobEdit) that
+            // opens the same ChangeDescriptionDialog the old footer "Edit
+            // Description" button used — now hosted at the modal root.
+            ['Description', (
+              <span className="inline-flex items-start justify-end gap-1.5 max-w-full">
+                <span className="break-all">{String(job.job_desc ?? '') || '—'}</span>
+                {canEditJob && onEditDescription && (
+                  <button
+                    type="button"
+                    onClick={onEditDescription}
+                    title="Edit Description"
+                    aria-label="Edit Description"
+                    className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </span>
+            )],
+            // Additional Comments / technician-facing notes (efr_special_notes) —
+            // captured on booking (Client Dashboard "Notes for technician") but
+            // previously never rendered in the read view.
           ]}/>
           {/* Address — full-width because the address line is long and
               wraps awkwardly inside a one-third column. Includes an
@@ -1303,20 +1500,27 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
         </div>
         <JobRescheduleHistory jobId={Number(job.job_id)} />
         <JobCallHistory jobId={Number(job.job_id)} />
-      </TabsContent>
+      </Panel>
 
-      <TabsContent value="services">
+      <Panel value="services" label={`Services (${Array.isArray(job.services) ? job.services.length : 0})`} layout={layout}>
         <ServicesTabBody job={job} onMutated={onRefresh} onDirtyChange={onDirtyChange} />
-      </TabsContent>
+      </Panel>
 
-      <TabsContent value="schedule">
+      <Panel value="schedule" label="Schedule" layout={layout}>
         {/*
-          * ONE card now. The Assignment card was retired here on 2026-09-09 —
-          * its technician rows moved to Summary's Job Meta and Time slot into
-          * Timeline below — so the grid keeps md:grid-cols-2 and Timeline sits
-          * in the first column at its natural width rather than stretching.
+          * FLEX-WRAP, NOT A FIXED GRID. `md:grid-cols-2` holding a single card
+          * left the right half of the modal blank — and the selfie tile below
+          * did the same on its own row. Both short cards now share one row.
+          *
+          * The reason this is flex and not `grid-cols-2` is the empty case:
+          * TechnicianSelfieTile renders NOTHING for a job with no selfie (and
+          * that is decided by a fetch, so the parent cannot know up front). A
+          * grid track stays reserved and the hole comes back; `flex-1` lets
+          * Timeline take the whole row when it is alone. `basis-[380px]` is
+          * what makes them wrap to one per line on a narrow modal instead of
+          * squeezing.
           */}
-        <div className="grid md:grid-cols-2 gap-5">
+        <div className="flex flex-wrap gap-5 [&>*]:flex-1 [&>*]:basis-[380px]">
           <DlCard title="Timeline" rows={[
             ['Requested', formatDate(job.requested_date_time as string)],
             ['Scheduled', formatDate(job.scheduled_date_time as string)],
@@ -1333,15 +1537,17 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
             ['Cancelled', formatDate(job.cancel_date_time   as string)],
             ['Last update', formatDate(job.last_update_time as string)],
           ]}/>
+          {/* Reached-location selfie (proof of arrival). Renders nothing when
+              the job has no selfie — see TechnicianSelfieTile. Moved INSIDE
+              the row so it sits beside Timeline instead of under it. */}
+          <TechnicianSelfieTile
+            jobId={Number(job.job_id)}
+            selfieId={(job as Record<string, unknown>).tx_selfie_id}
+          />
         </div>
-        {/* Reached-location selfie (proof of arrival). Renders nothing when the
-            job has no selfie — see TechnicianSelfieTile. */}
-        <TechnicianSelfieTile
-          jobId={Number(job.job_id)}
-          selfieId={(job as Record<string, unknown>).tx_selfie_id}
-        />
+        {/* Histories stay full width — they are 4-column tables. */}
         <JobSchedulingHistory jobId={Number(job.job_id)} />
-      </TabsContent>
+      </Panel>
 
       {/*
         * Images tab — legacy `jobImg.vm` + `jobImageList.vm`. Data already
@@ -1350,7 +1556,7 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
         * Nginx under `/easydoc/upload_jobs/<filename>` per CLAUDE.md's
         * file-storage table.
         */}
-      <TabsContent value="images">
+      <Panel value="images" label={`Images (${images.length})`} layout={layout}>
         {/*
          * onChanged is forwarded so the X-delete on each tile can ask the
          * parent to re-fetch the job after a successful DELETE — making
@@ -1370,20 +1576,20 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
           images={images}
           onChanged={[3, 5, 6, 7].includes(Number(job.job_status)) ? undefined : onRefresh}
         />
-      </TabsContent>
+      </Panel>
 
       {/*
         * Questionnaire Answers tab — legacy `jobQuestionaireAnswerList.vm`.
         * Backend: GET /admin/questionnaires/answers/:jobId.
         */}
-      <TabsContent value="questionnaire">
+      <Panel value="questionnaire" label="Questionnaire" layout={layout}>
         <JobQuestionnaireTab jobId={job.job_id as number} />
-      </TabsContent>
+      </Panel>
 
       {/* Comments tab — legacy `jobComment.vm` + `jobCommentList.vm`.
           Backend: GET/POST /admin/jobs/:id/comments (tbl_job_comment).
           comment_on stages: 1=created, 2=check_in, 3=check_out, 4=in_progress. */}
-      <TabsContent value="comments">
+      <Panel value="comments" label="Comments" layout={layout}>
         <JobCommentsTab
           jobId={job.job_id as number}
           refreshKey={commentsRefreshKey}
@@ -1398,21 +1604,21 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
             instantly at the top of the list with a "Sending…" pill — once
             the refetch completes, `onCommentsLoaded` fires and the parent
             clears pendings so they're replaced by the canonical rows. */}
-      </TabsContent>
+      </Panel>
 
       {/* Materials tab — legacy `material.vm` + MaterialAction.java.
           Backend: GET /admin/aux/materials/job/:jobId, POST /admin/aux/materials,
           DELETE /admin/aux/materials/:id (job_material table). */}
-      <TabsContent value="materials">
+      <Panel value="materials" label="Materials" layout={layout}>
         <JobMaterialsTab jobId={job.job_id as number} jobStatus={Number(job.job_status)} />
-      </TabsContent>
+      </Panel>
 
       {/* Quotations tab — read-only list of product+material quotations against
           this job. Backend: GET /admin/quotations?jobId=… (quotation_details table).
           Create/edit deferred — typical flow is technician submits via mobile app. */}
-      <TabsContent value="quotations">
+      <Panel value="quotations" label="Quotations" layout={layout}>
         <JobQuotationsTab jobId={job.job_id as number} />
-      </TabsContent>
+      </Panel>
 
       {/* Billing & Charges tab — legacy CheckIn-detail right-column
           actions (Travel/Incentive/Penalty charges, advance requests,
@@ -1420,16 +1626,28 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
           Rendered only when me.canManageJobCharges is true; canManage is
           threaded so every mutating control also respects the flag. */}
       {canManageJobCharges && (
-        <TabsContent value="billing">
+        <Panel value="billing" label="Billing & Charges" layout={layout}>
           <BillingChargesTab
             jobId={Number(job.job_id)}
             clientId={(job as Record<string, unknown>).fk_client_id != null ? Number((job as Record<string, unknown>).fk_client_id) : null}
             efrId={job.fk_easyfixter_id != null ? Number(job.fk_easyfixter_id) : null}
             canManage={canManageJobCharges}
           />
-        </TabsContent>
+        </Panel>
       )}
-    </Tabs>
+    </>
+  );
+
+  /*
+   * Single Page drops the Tabs root entirely rather than hiding the tab strip:
+   * a Radix TabsContent mounts only for the active value, so keeping the root
+   * would still show one panel, not all nine. Panel renders a plain <section>
+   * in that mode, which needs no Tabs context.
+   */
+  return layout === 'single' ? (
+    <div>{header}{panels}</div>
+  ) : (
+    <Tabs value={activeTab} onValueChange={setActiveTab}>{header}{panels}</Tabs>
   );
 }
 
@@ -1894,13 +2112,25 @@ function JobSchedulingHistory({ jobId }: { jobId: number }) {
 }
 
 function JobRescheduleHistory({ jobId }: { jobId: number }) {
-  type JobComment = Record<string, unknown> & {
-    comment_id?: number;
-    appointment_on?: string | null;
-    comments?: string | null;
-    commented_by_name?: string | null;
-    created_on?: string | null;
-  };
+  /*
+   * Uses the SHARED JobComment from ./jobTypes — which is the entire reason
+   * that file exists ("so components can reference the SAME JobComment shape
+   * without re-declaring it").
+   *
+   * This component used to declare its own local type of the same name,
+   * shadowing the import, and got two field names wrong against the real API
+   * (services/job-comment.service.js::shapeRow):
+   *   commented_by_name  → the API sends `user_name`; the "By" column rendered
+   *                        "—" for every reschedule, always.
+   *   comment_id         → the API sends `id`; the React key silently fell back
+   *                        to the array index.
+   *
+   * Neither could be caught by the type checker, and that is the lesson rather
+   * than the typo: the local type was `Record<string, unknown> & {...}`, whose
+   * index signature makes EVERY property access legal, and both bad fields were
+   * declared OPTIONAL, so `undefined` was a valid value. A hand-rolled optional
+   * field is an assertion that the API sends it — tsc will believe you.
+   */
   const { data } = useFetch<JobComment[] | { items?: JobComment[] }>(`/admin/jobs/${jobId}/comments`);
   const rows: JobComment[] = useMemo(() => {
     const arr = Array.isArray(data) ? data : (data?.items ?? []);
@@ -1926,9 +2156,9 @@ function JobRescheduleHistory({ jobId }: { jobId: number }) {
             </thead>
             <tbody>
               {rows.map((r, i) => (
-                <tr key={r.comment_id ?? i}>
+                <tr key={r.id ?? i}>
                   <td className="text-xs">{formatDate(r.appointment_on as string)}</td>
-                  <td className="text-xs">{r.commented_by_name ?? '—'}</td>
+                  <td className="text-xs">{r.user_name ?? '—'}</td>
                   <td className="text-xs">{formatDate(r.created_on as string)}</td>
                   <td className="text-xs">{r.comments ?? '—'}</td>
                 </tr>
@@ -3099,22 +3329,22 @@ function JobMaterialsTab({ jobId, jobStatus }: { jobId: number; jobStatus: numbe
   // Until-closed gate (2026-05-25 per ops): once the job is in a
   // terminal completed state (3 or 5), no more material edits.
   const canEdit = !isJobClosed(jobStatus);
-  const [items, setItems] = useState<JobMaterial[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const confirmDialog = useConfirm();
 
-  async function load() {
-    setLoading(true); setError(null);
-    try {
-      const data = await api.get<JobMaterial[]>(`/admin/aux/materials/job/${jobId}`);
-      setItems(Array.isArray(data) ? data : []);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Failed to load materials');
-    } finally { setLoading(false); }
-  }
-  useEffect(() => { void load(); /* eslint-disable-next-line */ }, [jobId]);
+  /*
+   * useFetch (feedback_crm_ui_fetch_hooks). `refetch()` EVICTS this key from
+   * the module cache before re-firing, so a refresh straight after a mutation
+   * is a real round-trip and not the 30s-cached pre-mutation snapshot — that
+   * is the reason it is safe to replace `await load()` with a fire-and-forget
+   * refetch here. It also swaps silently (`refreshing`, not `loading`), so the
+   * list no longer blanks to "Loading…" after every add or delete.
+   */
+  const { data, loading, error: loadError, refetch } = useFetch<JobMaterial[]>(`/admin/aux/materials/job/${jobId}`);
+  const items = useMemo(() => (Array.isArray(data) ? data : []), [data]);
+  // Mutation failures are this component's own; the hook owns load errors only.
+  const [mutError, setMutError] = useState<string | null>(null);
+  const error = mutError ?? loadError;
 
   async function deleteItem(id: number) {
     // Migrated from native window.confirm to the shared useConfirm()
@@ -3128,11 +3358,12 @@ function JobMaterialsTab({ jobId, jobStatus }: { jobId: number; jobStatus: numbe
     if (!ok) return;
     try {
       await api.delete(`/admin/aux/materials/${id}`);
-      await load();
+      setMutError(null);
+      refetch();
       showToast({ variant: 'success', message: 'Material Removed' });
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : 'Delete failed';
-      setError(msg);
+      setMutError(msg);
       showToast({ variant: 'error', message: msg });
     }
   }
@@ -3197,7 +3428,7 @@ function JobMaterialsTab({ jobId, jobStatus }: { jobId: number; jobStatus: numbe
         onSubmit={async (payload) => {
           await api.post('/admin/aux/materials', { jobId, ...payload });
           setAddOpen(false);
-          await load();
+          refetch();
         }}
       />
     </div>
@@ -3376,6 +3607,11 @@ function AddMaterialDialog({ open, onClose, onSubmit }: {
 // JobComment type moved to ./jobTypes (imported at top) so the extracted
 // AddRemarksDialog can share the exact same shape.
 
+// Mirrors legacy jobComment.vm's "Open Due To" radios and the values
+// /admin/jobs/comment-reasons filters on (Customer 1 / Client 2 / EasyFix 3 /
+// Technician 4). Same list AddRemarksDialog uses.
+const COMMENT_DUE_TO_OPTIONS = ['Customer', 'Client', 'EasyFix', 'Technician'] as const;
+
 const COMMENT_STAGE_LABEL: Record<number, string> = {
   1: 'On Creation',
   2: 'On Check-In',
@@ -3384,11 +3620,51 @@ const COMMENT_STAGE_LABEL: Record<number, string> = {
 };
 
 function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded }: { jobId: number; refreshKey?: number; pendingComments?: Array<JobComment & { _pending?: true }>; onLoaded?: () => void }) {
-  const [comments, setComments] = useState<JobComment[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  /*
+   * useFetch (feedback_crm_ui_fetch_hooks). refetch() evicts the key before
+   * re-firing, so a refresh right after POSTing a comment is a real round-trip
+   * rather than the 30s-cached pre-comment list.
+   */
+  const { data, loading, error: loadError, refetch } = useFetch<JobComment[]>(`/admin/jobs/${jobId}/comments`);
+  const comments = useMemo(() => (Array.isArray(data) ? data : []), [data]);
+  // POST failures belong to this component; the hook owns load errors only.
+  const [mutError, setMutError] = useState<string | null>(null);
+  const error = mutError ?? loadError;
   const [draft, setDraft] = useState('');
   const [stage, setStage] = useState<number>(4);
+  /*
+   * Open Due To + Reason, inline (2026-09-10 per ops).
+   *
+   * Legacy jobComment.vm was a POPUP with these two fields, both required, and
+   * AddRemarksDialog already reproduces it faithfully for the footer button.
+   * This tab grew a SECOND, simpler form that posted `enum_reason_id: null`, so
+   * every comment filed from here was reason-less and the Reason column in
+   * Rescheduling History had nothing to show for them.
+   *
+   * Ops asked for the fields here rather than a popup, so the controls move in
+   * and the stage picker stays — legacy had no user-facing stage choice
+   * (commentedOn was a hidden field), so keeping it is additive, not parity.
+   */
+  const [dueTo, setDueTo] = useState<string>('Customer');
+  const [reasonId, setReasonId] = useState<string>('');
+  const [reasons, setReasons] = useState<Array<{ id: number; label: string }>>([]);
+  const [reasonsLoading, setReasonsLoading] = useState(false);
+
+  // Refetch whenever the radio changes — the endpoint filters by user_type.
+  // fetchReasonsCached holds a shared 60s module cache, so flipping the radio
+  // back and forth costs one request per option, not one per click.
+  useEffect(() => {
+    let cancelled = false;
+    setReasonsLoading(true);
+    setReasonId('');
+    fetchReasonsCached('/admin/jobs/comment-reasons', { dueTo: dueTo.toLowerCase() })
+      .then((rows) => {
+        if (cancelled) return;
+        setReasons((rows || []).filter((r) => r.id != null).map((r) => ({ id: Number(r.id), label: r.label })));
+      })
+      .finally(() => { if (!cancelled) setReasonsLoading(false); });
+    return () => { cancelled = true; };
+  }, [dueTo]);
   const [posting, setPosting] = useState(false);
   // Local optimistic state for THIS tab's inline textarea. Parent-supplied
   // pendings (from AddRemarksDialog) come via `pendingComments` prop;
@@ -3398,24 +3674,37 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
   const { me: currentMeForTab } = useMe();
   const currentUserName = (currentMeForTab?.user?.user_name || currentMeForTab?.user?.official_email || 'You') as string;
 
-  async function load() {
-    setLoading(true); setError(null);
-    try {
-      const data = await api.get<JobComment[]>(`/admin/jobs/${jobId}/comments`);
-      setComments(Array.isArray(data) ? data : []);
-      // Reconciliation hook — parent uses this to clear its pendings
-      // (the canonical rows are now in `comments`, so the optimistic
-      // placeholders are redundant).
-      onLoaded?.();
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Failed to load comments');
-    } finally { setLoading(false); }
-  }
-  // Refetch on mount, on jobId change, AND whenever the parent bumps
-  // `refreshKey` (e.g. after AddRemarksDialog saves a remark from the
-  // view-mode footer — the dialog lives outside this component's tree
-  // so a parent-driven trigger is the only way the new row reaches us).
-  useEffect(() => { void load(); /* eslint-disable-next-line */ }, [jobId, refreshKey]);
+  // Kept in a ref so the reconciliation effect below does not have to list an
+  // inline-arrow prop in its deps, which changes identity every render.
+  const onLoadedRef = useRef(onLoaded);
+  useEffect(() => { onLoadedRef.current = onLoaded; });
+
+  /*
+   * The parent bumps `refreshKey` after AddRemarksDialog saves from the
+   * view-mode footer — that dialog lives outside this tree, so a parent-driven
+   * trigger is the only way the new row reaches us. Mount and jobId changes are
+   * already handled by the hook's key, so this effect must SKIP its first run
+   * or every open would fire a second, redundant request.
+   */
+  const seenRefreshKey = useRef(refreshKey);
+  useEffect(() => {
+    if (seenRefreshKey.current === refreshKey) return;
+    seenRefreshKey.current = refreshKey;
+    refetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey]);
+
+  /*
+   * Reconciliation. Optimistic placeholders are redundant the moment the
+   * canonical rows exist, so this is keyed on `data` arriving rather than on
+   * an awaited load() returning: refetch() is fire-and-forget, so dropping the
+   * pendings at call time would blank the row until the response landed.
+   */
+  useEffect(() => {
+    if (data == null) return;
+    setLocalPending([]);
+    onLoadedRef.current?.();
+  }, [data]);
 
   async function postComment() {
     const text = draft.trim();
@@ -3436,24 +3725,28 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
       commented_by: null,
       user_name: currentUserName,
       efr_id: null,
-      enum_reason_id: null,
+      enum_reason_id: reasonId ? Number(reasonId) : null,
       enum_desc: null,
       _pending: true,
     };
     setLocalPending((prev) => [optimistic, ...prev]);
     setDraft('');
-    setPosting(true); setError(null);
+    setPosting(true); setMutError(null);
     try {
-      await api.post(`/admin/jobs/${jobId}/comments`, { comments: text, comment_on: stage });
-      await load();
-      // Drop the matching pending now that the canonical row is in the list.
-      setLocalPending((prev) => prev.filter((c) => c.id !== tempId));
+      await api.post(`/admin/jobs/${jobId}/comments`, {
+        comments: text,
+        comment_on: stage,
+        enum_reason_id: reasonId ? Number(reasonId) : null,
+      });
+      // The pending row is dropped by the reconciliation effect when the fresh
+      // list arrives — not here, or it would vanish before its replacement.
+      refetch();
     } catch (e) {
       // POST rejected — pull the pending row so the operator isn't left
       // with a phantom comment, and surface the error.
       setLocalPending((prev) => prev.filter((c) => c.id !== tempId));
       const msg = e instanceof ApiError ? e.message : 'Failed to post comment';
-      setError(msg);
+      setMutError(msg);
       showToast({ variant: 'error', message: msg });
     } finally { setPosting(false); }
   }
@@ -3480,17 +3773,46 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
           placeholder="Note about the job, check-in observation, customer remark…"
           maxLength={2000}
         />
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm text-muted-foreground">Open Due To</span>
+          {COMMENT_DUE_TO_OPTIONS.map((opt) => (
+            <label key={opt} className="inline-flex items-center gap-1.5 text-sm">
+              <input
+                type="radio"
+                name="comment-due-to"
+                value={opt}
+                checked={dueTo === opt}
+                onChange={() => setDueTo(opt)}
+              />
+              {opt === 'Customer' ? 'By Customer' : opt}
+            </label>
+          ))}
+        </div>
         <div className="flex items-center justify-between gap-2 flex-wrap">
-          <select
-            value={stage}
-            onChange={(e) => setStage(Number(e.target.value))}
-            className="border rounded h-9 px-2 text-sm bg-background"
-          >
-            {Object.entries(COMMENT_STAGE_LABEL).map(([v, label]) => (
-              <option key={v} value={v}>{label}</option>
-            ))}
-          </select>
-          <Button size="sm" onClick={postComment} disabled={posting || !draft.trim()}>
+          <div className="flex items-center gap-2 flex-wrap">
+            <select
+              value={stage}
+              onChange={(e) => setStage(Number(e.target.value))}
+              className="border rounded h-9 px-2 text-sm bg-background"
+            >
+              {Object.entries(COMMENT_STAGE_LABEL).map(([v, label]) => (
+                <option key={v} value={v}>{label}</option>
+              ))}
+            </select>
+            <div className="min-w-[240px]">
+              <SearchSelect
+                value={reasonId}
+                onChange={setReasonId}
+                options={reasons.map((r) => ({ value: String(r.id), label: r.label }))}
+                placeholder={reasonsLoading ? 'Loading Reasons…' : 'Select Reason'}
+                disabled={reasonsLoading}
+                required
+              />
+            </div>
+          </div>
+          {/* Reason is REQUIRED, as it was in legacy jobComment.vm — a
+              reason-less comment is the defect this change exists to close. */}
+          <Button size="sm" onClick={postComment} disabled={posting || !draft.trim() || !reasonId}>
             {posting ? 'Posting…' : 'Post Comment'}
           </Button>
         </div>
@@ -3612,9 +3934,22 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
  * `onError` flips to the "Image not found" empty state when the BE
  * responds 404 (image lost from S3 AND local disk, or imageId stale).
  */
-function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pendingDelete, onView }: {
+function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pendingDelete, onView, isPdf }: {
   id: string;
   url: string;
+  /*
+   * The row is a PDF, not an image (2026-09-10). tbl_job_image holds the
+   * feedback PDF alongside the photos — job 530707 has six .jpg and one
+   * feedback<jobId>.pdf — and rendering it through <img> could never work: a
+   * PDF is not an image type, so Chrome's Opaque Response Blocking refuses the
+   * response and reports net::ERR_BLOCKED_BY_ORB with no status and zero bytes.
+   * That looked like a broken file and was a broken RENDERER; the backend
+   * resolves it correctly to /easydoc/feedback_jobs/<name>.pdf, 200.
+   *
+   * PDF tiles show a document affordance and OPEN on click, bypassing the image
+   * lightbox — which cannot display a PDF either.
+   */
+  isPdf?: boolean;
   label: string;
   tooltip: string;
   /* When provided, clicking the thumbnail opens an in-app ENLARGE lightbox
@@ -3674,10 +4009,15 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pe
           href={authedUrl}
           target="_blank"
           rel="noopener noreferrer"
-          onClick={(e) => { if (onView) { e.preventDefault(); onView({ url: authedUrl, name: label }); } }}
+          onClick={(e) => { if (onView && !isPdf) { e.preventDefault(); onView({ url: authedUrl, name: label }); } }}
           className="block w-full h-full"
         >
-          {broken ? (
+          {isPdf ? (
+            <div className="w-full h-full flex flex-col items-center justify-center gap-0.5 text-muted-foreground">
+              <FileText className="h-5 w-5" />
+              <span className="text-xs">PDF</span>
+            </div>
+          ) : broken ? (
             <div className="w-full h-full flex flex-col items-center justify-center text-xs text-muted-foreground p-1 text-center">
               <span className="text-base leading-none">⚠️</span>
               <span className="mt-0.5">Lost</span>
@@ -3753,11 +4093,16 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pe
         href={authedUrl}
         target="_blank"
         rel="noopener noreferrer"
-        onClick={(e) => { if (onView) { e.preventDefault(); onView({ url: authedUrl, name: label }); } }}
+        onClick={(e) => { if (onView && !isPdf) { e.preventDefault(); onView({ url: authedUrl, name: label }); } }}
         className="block border rounded-md overflow-hidden hover:shadow-sm transition-shadow"
         title={tooltip}
       >
-        {broken ? (
+        {isPdf ? (
+          <div className="flex h-32 w-full flex-col items-center justify-center gap-1 bg-muted text-muted-foreground">
+            <FileText className="h-7 w-7" />
+            <span className="text-xs">Open PDF</span>
+          </div>
+        ) : broken ? (
           <div className="flex h-32 w-full flex-col items-center justify-center gap-1 bg-muted text-xs text-muted-foreground">
             <span className="text-base">⚠️</span>
             <span>Image not found</span>
@@ -3975,6 +4320,10 @@ function JobImagesTab({ images, onChanged, compact, onImageDeleted, deferDelete,
             // set. Drives the strikethrough overlay + undo arrow on
             // the corner button.
             pendingDelete={pendingDeleteIds?.has(id) ?? false}
+            // Detected from the STORED filename, not the category: the feedback
+            // PDF sits in tbl_job_image beside the photos and carries no marker
+            // distinguishing it beyond its extension.
+            isPdf={/\.pdf$/i.test(stored)}
             onView={setLightbox}
           />
         );
@@ -4125,25 +4474,15 @@ type QAnswer = {
 };
 
 function JobQuestionnaireTab({ jobId }: { jobId: number }) {
-  const [answers, setAnswers] = useState<QAnswer[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error,   setError]   = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setLoading(true); setError(null);
-      try {
-        const data = await api.get<QAnswer[]>(`/admin/questionnaires/answers/${jobId}`);
-        if (!cancelled) setAnswers(Array.isArray(data) ? data : []);
-      } catch (e) {
-        if (!cancelled) setError(e instanceof ApiError ? e.message : 'Failed to load questionnaire answers');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [jobId]);
+  /*
+   * useFetch, not useEffect + api.get (feedback_crm_ui_fetch_hooks). The hand
+   * -rolled version re-implemented what the hook already owns: the cancelled
+   * flag, the Strict-Mode double-mount guard, and the error formatting. It also
+   * missed the module-level dedupe, so two panels asking for the same key
+   * issued two requests — which Single Page mode now makes reachable.
+   */
+  const { data, loading, error } = useFetch<QAnswer[]>(`/admin/questionnaires/answers/${jobId}`);
+  const answers = useMemo(() => (Array.isArray(data) ? data : []), [data]);
 
   if (loading) return <div className="text-sm text-muted-foreground py-6 text-center">Loading…</div>;
   if (error)   return <div className="text-sm text-urgent-strong py-3">{error}</div>;
@@ -11733,6 +12072,10 @@ function Spinner() {
  */
 function TechnicianSelfieTile({ jobId, selfieId }: { jobId: number; selfieId: unknown }) {
   const has = selfieId != null && selfieId !== '' && Number(selfieId) > 0;
+  // Reset per job, so reopening the modal on another job retries rather than
+  // inheriting the previous one's failure.
+  const [broken, setBroken] = useState(false);
+  useEffect(() => { setBroken(false); }, [jobId, selfieId]);
   const { data, loading, error } = useFetch<{ url: string | null }>(
     has ? `/admin/jobs/${jobId}/selfie-url` : null,
   );
@@ -11745,7 +12088,13 @@ function TechnicianSelfieTile({ jobId, selfieId }: { jobId: number; selfieId: un
   const url = data?.url ?? null;
   if (!loading && !error && !url) return null;
   return (
-    <div className="rounded-lg border bg-card mt-5 max-w-md">
+    /*
+     * No `mt-5 max-w-md` any more: this now sits in the Schedule tab's card
+     * row beside Timeline, so spacing and width come from that row. Capping it
+     * here made it a narrow card on its own line with the rest of the modal
+     * blank to its right — the whitespace the tab was reported for.
+     */
+    <div className="rounded-lg border bg-card">
       <div className="px-5 py-3 border-b bg-muted/30"><h3 className="text-sm font-semibold">Technician Selfie</h3></div>
       <div className="p-5">
         <p className="text-xs text-muted-foreground mb-3">Reached-location proof of arrival</p>
@@ -11753,12 +12102,28 @@ function TechnicianSelfieTile({ jobId, selfieId }: { jobId: number; selfieId: un
           <div className="text-xs text-muted-foreground">Loading…</div>
         ) : error ? (
           <div className="text-xs text-destructive">Could not load selfie</div>
-        ) : url ? (
+        ) : url && !broken ? (
+          /*
+             * onError added 2026-09-09. A resolved URL is not a loadable one —
+             * the endpoint presigns an S3 key without checking the object
+             * exists, and legacy rows point at the old file host — so this
+             * rendered the browser's raw broken-image glyph beside its own alt
+             * text. The Images tab has shown a proper empty state for the same
+             * failure all along; this is the same treatment, and it also covers
+             * an expired presign (5-minute TTL) on a long-open modal.
+             */
           <img
             src={url}
             alt="Technician arrival selfie"
             className="rounded-md border max-h-64 object-contain"
+            onError={() => setBroken(true)}
           />
+        ) : url ? (
+          <div className="flex flex-col items-center justify-center gap-1 rounded-md border border-dashed py-6 text-muted-foreground">
+            <AlertTriangle className="h-5 w-5 text-warning-strong" />
+            <span className="text-xs">Selfie not found</span>
+            <span className="text-xs">The file is missing from storage</span>
+          </div>
         ) : null}
       </div>
     </div>

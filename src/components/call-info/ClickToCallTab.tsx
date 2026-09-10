@@ -53,6 +53,8 @@ import { maskMobile } from '@/lib/format';
 import { callLegSearchText, groupCallRows, type CallLeg } from '@/lib/call-legs';
 import { CallLegsRow, ConferenceBadge } from '@/components/calls/CallLegList';
 import { TablePagination, PAGE_SIZE_OPTIONS, pageSizeToLimit, type TablePageSize } from '@/components/ui/table-pagination';
+import { CallRecordingAudio } from '@/components/ui/call-recording-audio';
+import { api } from '@/lib/api';
 
 type CallRow = {
   id: number;
@@ -70,7 +72,15 @@ type CallRow = {
   duration: number | null;
   caller_status: string | null;
   receiver_status: string | null;
-  recording: string | null;
+  /*
+   * has_recording, not the URL (2026-09-10). The list used to project
+   * jci.recording RAW, and for Kaleyra rows that column holds a plain https
+   * URL — so this tab linked straight to the audio and never touched the
+   * authorised endpoint. The LIST was a wider path to customer conversations
+   * than the endpoint being guarded, which made guarding it theatre.
+   * MySQL returns 1/0 for the boolean expression.
+   */
+  has_recording: number | boolean | null;
   location: string | null;
   provider: string | null;
   inserted_time: string | null;
@@ -133,6 +143,50 @@ function fmtDuration(sec: number | null): string {
   const m = Math.floor(sec / 60);
   const s = sec % 60;
   return `${m}m ${String(s).padStart(2, '0')}s`;
+}
+
+/*
+ * Fetches the recording URL through the AUTHORISED endpoint, on click.
+ *
+ * Mirrors the flow in components/calls/CallHistoryButton.tsx rather than
+ * inventing a second one: GET /admin/calls/:id/recording mints a short-lived
+ * URL after checking the caller may hear this call, and CallRecordingAudio
+ * downmixes Plivo's 2-channel (agent | customer) audio so the customer is not
+ * audible only on the right.
+ *
+ * Lazy on click, never on render: a list page that pre-fetched a URL per row
+ * would issue one authorised request per row and defeat the point of a
+ * short-lived link.
+ */
+function RecordingCell({ id, hasRecording }: { id: number; hasRecording: boolean }) {
+  const [url, setUrl] = React.useState<string | null>(null);
+  const [loading, setLoading] = React.useState(false);
+  const [err, setErr] = React.useState<string | null>(null);
+
+  if (!hasRecording) return <span className="text-muted-foreground">—</span>;
+  if (url) return <CallRecordingAudio src={url} autoPlay className="h-7 w-40" />;
+  if (err) return <span className="text-xs text-muted-foreground" title={err}>Unavailable</span>;
+
+  return (
+    <button
+      type="button"
+      disabled={loading}
+      onClick={async () => {
+        setLoading(true); setErr(null);
+        try {
+          const r = await api.get<{ url: string }>(`/admin/calls/${id}/recording`);
+          if (r?.url) setUrl(r.url); else setErr('No recording returned');
+        } catch (e) {
+          // 403 here is the guard doing its job — the operator may not hear
+          // this call. Say so plainly rather than showing a dead Play button.
+          setErr(e instanceof Error ? e.message : 'Could not load recording');
+        } finally { setLoading(false); }
+      }}
+      className="inline-flex items-center gap-1 text-primary hover:underline text-xs disabled:opacity-50"
+    >
+      <PlayCircle className="h-3.5 w-3.5" /> {loading ? 'Loading…' : 'Play'}
+    </button>
+  );
 }
 
 export function ClickToCallTab({ from, to }: { from: string; to: string }) {
@@ -323,11 +377,7 @@ export function ClickToCallTab({ from, to }: { from: string; to: string }) {
                       : <span className="text-warning-strong text-xs">Pending sync</span>}
                   </td>
                   <td className="px-3 py-2">
-                    {r.recording
-                      ? <a href={r.recording} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline text-xs">
-                          <PlayCircle className="h-3.5 w-3.5" /> Play
-                        </a>
-                      : '—'}
+                    <RecordingCell id={r.id} hasRecording={!!r.has_recording} />
                   </td>
                   <td className="px-3 py-2 text-xs">
                     {(() => {
