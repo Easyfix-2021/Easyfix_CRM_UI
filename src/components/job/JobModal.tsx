@@ -4,7 +4,7 @@ import * as React from 'react';
 import { useSlotRecommendations, SlotAdvisory } from '@/components/job/SlotRecommendations';
 import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import { useFetch, useUiFlags } from '@/lib/hooks';
-import { Sparkles, Search, CalendarCheck, History, Eye, Plus, X, Pencil, CalendarPlus, CheckCircle2, BarChart3, Trash2, RotateCcw, AlertTriangle } from 'lucide-react';
+import { Sparkles, Search, CalendarCheck, History, Eye, Plus, X, Pencil, CalendarPlus, CheckCircle2, BarChart3, Trash2, RotateCcw, AlertTriangle, FileText } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
@@ -3891,9 +3891,22 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
  * `onError` flips to the "Image not found" empty state when the BE
  * responds 404 (image lost from S3 AND local disk, or imageId stale).
  */
-function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pendingDelete, onView }: {
+function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pendingDelete, onView, isPdf }: {
   id: string;
   url: string;
+  /*
+   * The row is a PDF, not an image (2026-09-10). tbl_job_image holds the
+   * feedback PDF alongside the photos — job 530707 has six .jpg and one
+   * feedback<jobId>.pdf — and rendering it through <img> could never work: a
+   * PDF is not an image type, so Chrome's Opaque Response Blocking refuses the
+   * response and reports net::ERR_BLOCKED_BY_ORB with no status and zero bytes.
+   * That looked like a broken file and was a broken RENDERER; the backend
+   * resolves it correctly to /easydoc/feedback_jobs/<name>.pdf, 200.
+   *
+   * PDF tiles show a document affordance and OPEN on click, bypassing the image
+   * lightbox — which cannot display a PDF either.
+   */
+  isPdf?: boolean;
   label: string;
   tooltip: string;
   /* When provided, clicking the thumbnail opens an in-app ENLARGE lightbox
@@ -3953,10 +3966,15 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pe
           href={authedUrl}
           target="_blank"
           rel="noopener noreferrer"
-          onClick={(e) => { if (onView) { e.preventDefault(); onView({ url: authedUrl, name: label }); } }}
+          onClick={(e) => { if (onView && !isPdf) { e.preventDefault(); onView({ url: authedUrl, name: label }); } }}
           className="block w-full h-full"
         >
-          {broken ? (
+          {isPdf ? (
+            <div className="w-full h-full flex flex-col items-center justify-center gap-0.5 text-muted-foreground">
+              <FileText className="h-5 w-5" />
+              <span className="text-xs">PDF</span>
+            </div>
+          ) : broken ? (
             <div className="w-full h-full flex flex-col items-center justify-center text-xs text-muted-foreground p-1 text-center">
               <span className="text-base leading-none">⚠️</span>
               <span className="mt-0.5">Lost</span>
@@ -4032,11 +4050,16 @@ function JobImageTile({ id, url, label, tooltip, onDelete, deleting, compact, pe
         href={authedUrl}
         target="_blank"
         rel="noopener noreferrer"
-        onClick={(e) => { if (onView) { e.preventDefault(); onView({ url: authedUrl, name: label }); } }}
+        onClick={(e) => { if (onView && !isPdf) { e.preventDefault(); onView({ url: authedUrl, name: label }); } }}
         className="block border rounded-md overflow-hidden hover:shadow-sm transition-shadow"
         title={tooltip}
       >
-        {broken ? (
+        {isPdf ? (
+          <div className="flex h-32 w-full flex-col items-center justify-center gap-1 bg-muted text-muted-foreground">
+            <FileText className="h-7 w-7" />
+            <span className="text-xs">Open PDF</span>
+          </div>
+        ) : broken ? (
           <div className="flex h-32 w-full flex-col items-center justify-center gap-1 bg-muted text-xs text-muted-foreground">
             <span className="text-base">⚠️</span>
             <span>Image not found</span>
@@ -4254,6 +4277,10 @@ function JobImagesTab({ images, onChanged, compact, onImageDeleted, deferDelete,
             // set. Drives the strikethrough overlay + undo arrow on
             // the corner button.
             pendingDelete={pendingDeleteIds?.has(id) ?? false}
+            // Detected from the STORED filename, not the category: the feedback
+            // PDF sits in tbl_job_image beside the photos and carries no marker
+            // distinguishing it beyond its extension.
+            isPdf={/\.pdf$/i.test(stored)}
             onView={setLightbox}
           />
         );
