@@ -233,7 +233,22 @@ export function ScheduleAssignModal({
   // for ANY jobId. Scheduling/offering is only valid for a BOOKED (0) job; a
   // tampered link to any other status (e.g. a completed job) must NOT let the
   // operator schedule/offer. Probe the real status; while it loads we don't block.
-  const statusGate = useFetch<{ job_status?: number; job_reference_id?: string | null }>(open && jobId ? `/admin/jobs/${jobId}` : null);
+  const statusGate = useFetch<{
+    job_status?: number;
+    job_reference_id?: string | null;
+    /*
+     * The OWNER, read off the probe we already issue. A BOOKED job can still
+     * carry one (the legacy Java CRM's assign wrote fk_easyfixter_id and left
+     * job_status = 0), and offering such a job now RELEASES that technician
+     * server-side — so the confirm dialog has to say so before the operator
+     * commits. Free: `GET /admin/jobs/:id` projects `j.*` plus efr_name.
+     */
+    fk_easyfixter_id?: number | null;
+    easyfixer_name?: string | null;
+  }>(open && jobId ? `/admin/jobs/${jobId}` : null);
+  const staleOwnerName = statusGate.data?.fk_easyfixter_id != null
+    ? (statusGate.data.easyfixer_name || `Efr #${statusGate.data.fk_easyfixter_id}`)
+    : null;
   const statusIneligible = statusGate.data?.job_status != null && Number(statusGate.data.job_status) !== 0;
   /*
    * The list that opened this modal said the order was BOOKED and unassigned;
@@ -614,6 +629,14 @@ export function ScheduleAssignModal({
             Job <b>#{jobId}</b> will be offered to <b>{techLabel}</b>.
           </p>
           <ul className="space-y-1.5 text-sm">
+            {/* Shown ONLY for the legacy BOOKED-but-owned rows. Offering one
+                releases the standing owner (job.service releases before it
+                offers, or the offer would meet its own JOB_NOT_OFFERABLE
+                guard), and an operator must not learn that from the job
+                afterwards. */}
+            {staleOwnerName && (
+              <li>• <b>{staleOwnerName}</b> is currently assigned and <b>will be released</b></li>
+            )}
             <li>• Offered to <b>{techLabel}</b></li>
             <li>• Each gets a <b>push notification</b></li>
             <li>• <b>First to accept</b> is assigned the job</li>
