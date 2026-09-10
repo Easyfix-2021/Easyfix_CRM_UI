@@ -160,6 +160,18 @@ type CandidatesResponse = {
   limit?: number;
   /** BE's effective offer-flow gate. TRUE → offer-pool; FALSE → direct-assign. */
   offerFlowEnabled?: boolean;
+  /*
+   * Server-computed OFFERABILITY, from the SAME predicate the offer guard
+   * enforces (job.jobOfferability in services/job.service.js). Present on this
+   * payload rather than the detail probe because it belongs beside
+   * offerFlowEnabled — the other half of "what will the commit button do".
+   *
+   * ABSENT on an older BE, which is why every read of it falls back rather than
+   * treating undefined as false.
+   */
+  offerable?: boolean;
+  /** Why not, when offerable is false. Currently only 'not_booked'. */
+  offerBlockReason?: string | null;
   /** Diagnostics for the empty state: why the Top-10 came back empty. */
   note?: string | null;
   l1Count?: number;
@@ -234,6 +246,8 @@ export function ScheduleAssignModal({
   // tampered link to any other status (e.g. a completed job) must NOT let the
   // operator schedule/offer. Probe the real status; while it loads we don't block.
   const statusGate = useFetch<{
+    /* Needed for the identity guard below — getByIdCore selects `j.*`. */
+    job_id?: number;
     job_status?: number;
     job_reference_id?: string | null;
     /*
@@ -246,10 +260,39 @@ export function ScheduleAssignModal({
     fk_easyfixter_id?: number | null;
     easyfixer_name?: string | null;
   }>(open && jobId ? `/admin/jobs/${jobId}` : null);
-  const staleOwnerName = statusGate.data?.fk_easyfixter_id != null
-    ? (statusGate.data.easyfixer_name || `Efr #${statusGate.data.fk_easyfixter_id}`)
+  /*
+   * ⚠ IDENTITY-GUARDED, exactly as `topData` is (see its own comment below).
+   * useFetch RETAINS the previous key's payload — on a key change it sets
+   * `refreshing`, not `loading`, and on `key = null` (this modal closing) its
+   * effect early-returns without clearing anything. The modal itself never
+   * unmounts: both hosts render it unconditionally with no `key`, and closing is
+   * a query-only router.replace. So working down a list, the PREVIOUS job's row
+   * stays live for the whole of the next job's probe — and this probe is the
+   * full getById, the slowest read on the page.
+   *
+   * Everything derived from it was therefore answering about the wrong job for
+   * about a second: the read-only banner, the reference id in the title, and —
+   * durably — the once-per-job staleBucket effect, which would fire onChanged()
+   * for job B off job A's status and set staleBucketRef to B, permanently
+   * disarming B's own genuine bucket signal for the life of the page.
+   */
+  const probe = statusGate.data && Number(statusGate.data.job_id) === Number(jobId)
+    ? statusGate.data
     : null;
-  const statusIneligible = statusGate.data?.job_status != null && Number(statusGate.data.job_status) !== 0;
+  const staleOwnerName = probe?.fk_easyfixter_id != null
+    ? (probe.easyfixer_name || `Efr #${probe.fk_easyfixter_id}`)
+    : null;
+  /*
+   * The probe's own verdict — "this order is not BOOKED" — and nothing more.
+   * It answers TWO different questions that happened to share one expression:
+   * it is the LOCAL FALLBACK for offerability (see `offerable`, declared beside
+   * offerMode once the candidates payload exists) and, separately, the signal
+   * that this row has left the host list's "Pending for Scheduling" bucket.
+   * The server now answers the first; only the second is legitimately ours,
+   * because it is a claim about the HOST'S QUERY (lib/job-tabs.ts: status 0 AND
+   * assigned false), not about the offer rule.
+   */
+  const notBookedPerProbe = probe?.job_status != null && Number(probe.job_status) !== 0;
   /*
    * The list that opened this modal said the order was BOOKED and unassigned;
    * the probe above just proved it is not. The list query is correct — status=0
@@ -268,12 +311,15 @@ export function ScheduleAssignModal({
    */
   const staleBucketRef = useRef<number | null>(null);
   useEffect(() => {
-    if (!statusIneligible || jobId == null) return;
+    if (!notBookedPerProbe || jobId == null) return;
     if (staleBucketRef.current === jobId) return;
     staleBucketRef.current = jobId;
     onChanged?.();
-  }, [statusIneligible, jobId, onChanged]);
-  const canCommit = hasAction(me, 'isJobAssign') && !statusIneligible;
+  }, [notBookedPerProbe, jobId, onChanged]);
+  // canCommit now lives beside `offerable` (below, next to offerMode): it reads
+  // the server's verdict, which arrives on the candidates payload declared
+  // further down. Declaring it here would put that const in its own temporal
+  // dead zone on first render.
   // Cancel Job mirrors JobModal's ActionBar gate (the destructive
   // `isJobCancel` key). Add Remarks is NOT permission-gated in JobModal
   // (status-gated only), so we render it unconditionally here too.
@@ -499,6 +545,33 @@ export function ScheduleAssignModal({
   //   OFF → direct assign: single-select, "Assign" → PATCH /assign (→ SCHEDULED).
   // Defaults to offer mode if the field is absent (older BE) to preserve prior UI.
   const offerMode = topData?.offerFlowEnabled ?? true;
+
+  /*
+   * OFFERABILITY — the SERVER's answer, not ours.
+   *
+   * This gate used to be `job_status !== 0`, read off the detail probe: a strict
+   * SUBSET of the fields the offer guard refuses on (`job_status !== BOOKED ||
+   * fk_easyfixter_id != null`). A gate reading fewer inputs than its guard is
+   * not a weaker gate, it is a DIFFERENT one, and the difference is exactly the
+   * set of states in which this modal offered a commit the server could only
+   * 409. Production job 534947 sat in that set — BOOKED, but still owned by a
+   * legacy direct assignment — so the modal opened, populated, let the operator
+   * pick a technician, and returned 409 on all 16 attempts by two operators.
+   *
+   * GET /:id/candidates now sends the verdict computed by that very predicate
+   * (job.jobOfferability). Fail-OPEN only when the field is ABSENT — an older
+   * BE, or the payload not in yet — falling back to the old local rule; a
+   * PRESENT `false` always wins. Same shape as offerMode's `?? true` and as the
+   * per-technician contract in lib/easyfixer-lifecycle.ts.
+   *
+   * Deliberately NOT the whole story: the past-appointment gate (offer-only,
+   * mirrored at the commit button) and the job-stage transition check (mirrored
+   * only by the row icons) are separate server rules. Hence a reason code
+   * rather than a bare boolean — "unavailable" has more than one cause.
+   */
+  const offerable = topData?.offerable ?? !notBookedPerProbe;
+  const offerBlockReason = topData?.offerBlockReason ?? null;
+  const canCommit = hasAction(me, 'isJobAssign') && offerable;
 
   // (c) SEARCH — debounced via the box; keyed so it re-fires on schedule
   // edits too (computed columns must match the proposed schedule).
@@ -768,16 +841,24 @@ export function ScheduleAssignModal({
           <DialogTitle className="flex items-center gap-2">
             Schedule &amp; Assign
             {jobId && <span className="text-sm font-normal text-ink-300">· Job #{jobId}</span>}
-            {statusGate.data?.job_reference_id && (
-              <span className="text-sm font-normal text-ink-300">· {statusGate.data.job_reference_id}</span>
+            {probe?.job_reference_id && (
+              <span className="text-sm font-normal text-ink-300">· {probe.job_reference_id}</span>
             )}
           </DialogTitle>
         </DialogHeader>
 
         <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-4 space-y-5">
-          {statusIneligible && (
+          {!offerable && (
             <div className="rounded-md border border-warning bg-warning-tint px-4 py-2 text-sm text-warning-strong">
-              This order isn’t in the “Pending for Scheduling” status — opened read-only. Schedule &amp; Assign is only available for booked, unassigned orders.
+              {/* Driven by the server's reason code. The previous copy said this
+                  order "isn’t in the Pending for Scheduling status … only
+                  available for booked, UNASSIGNED orders" — describing the host
+                  list's bucket, not the offer rule, and wrong now that a booked
+                  order with a stale owner is offerable (the server releases the
+                  owner first). */}
+              {offerBlockReason === 'not_booked'
+                ? <>This order is no longer booked — opened read-only. Only a booked order can be scheduled or offered.</>
+                : <>This order can’t be scheduled or offered right now — opened read-only.</>}
             </div>
           )}
           {/* ───────── (a) COMPLETE JOB DETAILS + read-only schedule + remarks ─────────
@@ -808,7 +889,7 @@ export function ScheduleAssignModal({
              * has left Pending-for-Scheduling can't be edited from a modal that
              * says it is read-only. The panel additionally requires isJobEdit.
              */
-            onSaveDetails={jobId != null && !statusIneligible ? async (patch) => {
+            onSaveDetails={jobId != null && offerable ? async (patch) => {
               await api.patch(`/admin/jobs/${jobId}`, patch);
               /*
                * The panel's job object comes from the CANDIDATES response, not
@@ -832,7 +913,7 @@ export function ScheduleAssignModal({
              * the pin), so the Top-10 below genuinely has to be recomputed —
              * this is not a cosmetic refresh.
              */
-            onAddressSaved={jobId != null && !statusIneligible ? () => {
+            onAddressSaved={jobId != null && offerable ? () => {
               invalidateFetch((k) => k.startsWith(`/admin/jobs/${jobId}/candidates`));
               top.refetch();
               onChanged?.();
