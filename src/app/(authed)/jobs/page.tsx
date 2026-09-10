@@ -8,9 +8,10 @@ import { useDebouncedValue, useFetchOnce } from '@/lib/hooks';
 import {
   Plus, Upload, ChevronDown, ChevronUp, Repeat, Globe,
   // Row-level quick-action icons (mirror the legacy Manage Jobs action column)
-  Eye, CalendarClock, PlayCircle, CheckCircle2, CalendarCheck, MapPin,
+  Eye, CalendarClock, PlayCircle, CheckCircle2, CalendarCheck, MapPin, RefreshCw,
 } from 'lucide-react';
 import { IconButton } from '@/components/ui/icon-button';
+import { AssignTechnicianModal, type AssignMode } from '@/components/job/AssignTechnicianModal';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
@@ -151,6 +152,11 @@ export default function JobsPage() {
   const canJob = actionFlags(me, [
     'isJobConfirm',
     'isJobAssign',
+    // Reassign is its OWN permission, deliberately: ops often grant assign
+    // without reassign. Manage Jobs never requested this key, so the action it
+    // gates could not render here even for operators who hold it — the button
+    // was missing from the page, not denied by RBAC.
+    'isJobReassign',
     'isJobStatusChange',
     // Drives the "Transfer Job Ownership" button gating. The BE
     // bulk-transfer route is roleByName(['Admin']); we use the
@@ -769,6 +775,23 @@ export default function JobsPage() {
   function openCreate() { openJobAction('create'); }
   function openView(id: number, siblings?: Array<{ job_id: number; service_category: string | null }>)    { setFamilySiblings(siblings ?? null); openJobAction('view',    id); }
   function openConfirm(id: number, siblings?: Array<{ job_id: number; service_category: string | null }>) { setFamilySiblings(siblings ?? null); openJobAction('confirm', id); }
+  function openReassign(id: number) { openJobAction('reassign', id); }
+
+  /*
+   * AssignTechnicianModal state, derived from `?action=reassign` — mirroring
+   * My Orders, which is where this flow already worked.
+   *
+   * `reassign` is deliberately NOT in JOBMODAL_ACTIONS, so the `modal` memo
+   * above ignores it and only this modal opens. That allow-list is what makes
+   * adding an action here safe: an unknown action falls back to Summary rather
+   * than rendering an empty JobModal.
+   */
+  const assignModal = useMemo<{ open: boolean; jobId: number | null; mode: AssignMode }>(() => {
+    if (urlAction === 'reassign' && urlJobId != null) {
+      return { open: true, jobId: urlJobId, mode: 'reassign' };
+    }
+    return { open: false, jobId: null, mode: 'reassign' };
+  }, [urlAction, urlJobId]);
 
   /*
    * Filter-respecting XLSX export. Mirrors the EscalatedJobsModal
@@ -1850,6 +1873,26 @@ export default function JobsPage() {
                           onClick={() => openView(j.job_id)}
                         />
                       )}
+                      {/*
+                        * Reassign Technician (status=1). Gate: isJobReassign ONLY.
+                        *
+                        * NO transitionAllowed here, unlike every other action on this
+                        * page — and that is deliberate, not an omission. A reassign
+                        * leaves the job at status 1, so the pair would be (1 → 1);
+                        * transitionAllowed answers false unless some stage lists 1 as
+                        * both a visible status and a transition target, which none does.
+                        * Adding it would hide this button from exactly the restricted
+                        * operators who reported it missing. My Orders gates it the same
+                        * way (my-orders/page.tsx:1202).
+                        */}
+                      {j.job_status === 1 && canJob.isJobReassign && (
+                        <IconButton
+                          icon={RefreshCw}
+                          intent="primary"
+                          label="Reassign Technician — pick a different tech from the ranked list"
+                          onClick={() => openReassign(j.job_id)}
+                        />
+                      )}
                       {/* Check-In + Check-Out are status mutations → isJobStatusChange,
                           also gated by the stage-transition rule (1→2 / →3). */}
                       {j.job_status === 1 && canJob.isJobStatusChange && transitionAllowed(me?.allowedStages, j.job_status, 2) && (
@@ -1892,6 +1935,14 @@ export default function JobsPage() {
         // deep-link) can land the operator straight on a specific tab.
         // See useJobActionNav.openJobAction(_, _, { tab }).
         initialTab={searchParams.get('viewTab') || undefined}
+      />
+
+      <AssignTechnicianModal
+        open={assignModal.open}
+        jobId={assignModal.jobId}
+        mode={assignModal.mode}
+        onClose={() => closeJobAction()}
+        onAssigned={() => { cacheRef.current.clear(); load(false, true); refreshCounts(); }}
       />
 
       {/*
