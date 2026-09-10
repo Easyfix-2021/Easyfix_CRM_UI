@@ -67,6 +67,18 @@ import { RescheduleDialog } from './RescheduleDialog';
 type CandidatesResponse = {
   job: JobContextData;
   alreadyAssigned?: boolean;
+  /*
+   * Server-computed ASSIGNABILITY, from job.jobAssignability — the predicate
+   * PATCH /admin/jobs/:id/assign actually enforces. NOT `offerable`: /offer
+   * requires BOOKED while /assign refuses only the closed states, so a
+   * SCHEDULED job (every reassign) is assignable and never offerable. Reading
+   * the offer flag here would make every reassign look refused.
+   *
+   * ABSENT on an older BE, hence the fallback at every read.
+   */
+  assignable?: boolean;
+  /** Why not, when assignable is false. Currently 'job_closed' / 'unknown_status'. */
+  assignBlockReason?: string | null;
   note?: 'no_deep_skill_match' | 'no_eligible_techs' | string | null;
   l1Count?: number;
   l2Count?: number;
@@ -110,12 +122,30 @@ export function AssignTechnicianModal({
   // for a SCHEDULED (1) job — a tampered link to any other status (e.g. a
   // completed job) must NOT let the operator (re)assign. Probe the real status;
   // while it loads (status unknown) we don't block — the modal shows its loader.
-  const statusGate = useFetch<{ job_status?: number }>(open && jobId ? `/admin/jobs/${jobId}` : null);
+  const statusGate = useFetch<{ job_id?: number; job_status?: number }>(open && jobId ? `/admin/jobs/${jobId}` : null);
+  /*
+   * ⚠ IDENTITY-GUARDED, like `topData` below. useFetch RETAINS the previous
+   * key's payload (a key change sets `refreshing`, not `loading`; `key = null`
+   * makes its effect early-return without clearing) and this modal never
+   * unmounts, so working down a list the PREVIOUS job's row stays live for the
+   * whole of the next job's request — and this probe is the full getById, the
+   * slowest read on the page. Unguarded, the read-only banner answered about
+   * the wrong job for about a second.
+   */
+  const probe = statusGate.data && Number(statusGate.data.job_id) === Number(jobId)
+    ? statusGate.data
+    : null;
+  /*
+   * The MODE rule, and it stays local on purpose: Assign applies to a BOOKED
+   * job and Reassign to a SCHEDULED one. That is a product decision about which
+   * entry point applies, and it is STRICTER than the server — /assign itself
+   * refuses only the closed states, so it would happily reassign an IN_PROGRESS
+   * job. Widening this to match the server would be a product change nobody
+   * asked for, so the narrowing stays; what it must not do is stand in for the
+   * server's own refusal, which is what `assignable` below supplies.
+   */
   const allowedStatus = mode === 'reassign' ? 1 : 0;
-  const statusIneligible = statusGate.data?.job_status != null && Number(statusGate.data.job_status) !== allowedStatus;
-  const canCommit = (mode === 'reassign'
-    ? hasAction(me, 'isJobReassign')
-    : hasAction(me, 'isJobAssign')) && !statusIneligible;
+  const wrongStatusForMode = probe?.job_status != null && Number(probe.job_status) !== allowedStatus;
   const confirmAction = useConfirm();
 
   const [search, setSearch] = useState('');
@@ -179,6 +209,20 @@ export function AssignTechnicianModal({
   // payload while a new key loads, so on a jobId swap `top.data` briefly holds
   // the old job (see the same guard in ScheduleAssignModal).
   const topData = top.data && Number(top.data.job?.job_id) === Number(jobId) ? top.data : null;
+
+  /*
+   * The SERVER's refusal, from the same predicate PATCH /assign enforces.
+   * Fail-OPEN only when the field is ABSENT (older BE, payload not in yet) — a
+   * present `false` wins, the shape lib/easyfixer-lifecycle.ts already uses for
+   * per-technician eligibility. Declared here rather than beside the probe
+   * because it reads a payload that is only declared on the line above.
+   */
+  const serverAssignable = topData?.assignable ?? true;
+  const assignBlockReason = topData?.assignBlockReason ?? null;
+  const commitBlocked = wrongStatusForMode || !serverAssignable;
+  const canCommit = (mode === 'reassign'
+    ? hasAction(me, 'isJobReassign')
+    : hasAction(me, 'isJobAssign')) && !commitBlocked;
 
   // Clear the post-reschedule veil once the candidate refetch has both STARTED
   // (top.refreshing went true) and SETTLED (back to false) — so the new date +
@@ -350,9 +394,16 @@ export function AssignTechnicianModal({
         </DialogHeader>
 
         <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-4 space-y-4">
-          {statusIneligible && (
+          {commitBlocked && (
             <div className="rounded-md border border-warning bg-warning-tint px-4 py-2 text-sm text-warning-strong">
-              This order isn’t in the required status for {mode === 'reassign' ? 'reassignment' : 'assignment'} — opened read-only.
+              {/* Two different refusals wore one sentence. A completed or
+                  cancelled job is not "the wrong status for reassignment", it
+                  is closed — and that is the server's reason, not ours. */}
+              {!serverAssignable && assignBlockReason === 'job_closed'
+                ? <>This order is completed or cancelled — opened read-only. A closed order can’t be {mode === 'reassign' ? 'reassigned' : 'assigned'}.</>
+                : !serverAssignable
+                  ? <>This order can’t be {mode === 'reassign' ? 'reassigned' : 'assigned'} right now — opened read-only.</>
+                  : <>This order isn’t in the required status for {mode === 'reassign' ? 'reassignment' : 'assignment'} — opened read-only.</>}
             </div>
           )}
 
