@@ -1737,6 +1737,19 @@ export default function JobsPage() {
                   <td className="whitespace-nowrap">
                     {j.fk_easyfixter_id != null ? (
                       <>
+                        {/*
+                          * Technician Id ABOVE the name (2026-09-10, per ops):
+                          * ops quote this id to the technician and to support,
+                          * so it reads off the row instead of costing a trip to
+                          * Manage Easyfixers.
+                          *
+                          * In this cell rather than a column of its own — the
+                          * table is already wide enough to scroll, and the id
+                          * belongs to the name beside it. Mono #<id> matches how
+                          * the same id renders in JobModal's Scheduling History,
+                          * so the two surfaces agree.
+                          */}
+                        <div className="font-mono text-xs text-muted-foreground">#{j.fk_easyfixter_id}</div>
                         {formatEasyfixerName(j.easyfixer_name) || '—'}
                         {/* Second line only when the tech HAS a number — an
                             assigned tech with a blank efr_no shows the name
