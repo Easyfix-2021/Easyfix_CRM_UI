@@ -104,7 +104,6 @@ const ACTIONS = [
 
 export default function AdminActionsPage() {
   const { me } = useMe();
-  const visible = ACTIONS.filter((a) => !a.actionKey || hasAction(me, a.actionKey));
   // RBAC for Generate Invoice — gated on either the read-side
   // (`isFinanceView`) or the dedicated write flag (`isInvoiceGenerate`).
   // No `|| true` short-circuit — users without either flag don't see
@@ -116,7 +115,7 @@ export default function AdminActionsPage() {
   // by a per-user easyfix_properties allowlist, NOT the user's role/RBAC. The BE
   // enforces the same allowlist on every gated route; these flags only show/hide
   // the cards. GET /admin/access/features → { canSwitchCallMode, canDeleteEntities }.
-  const featureAccess = useFetchOnce<{ canSwitchCallMode: boolean; canDeleteEntities: boolean; canValidateFlows: boolean; canBuildSkillMatrix: boolean; canSwitchOtpChannel: boolean; canManageSecrets: boolean }>(
+  const featureAccess = useFetchOnce<{ canSwitchCallMode: boolean; canDeleteEntities: boolean; canValidateFlows: boolean; canBuildSkillMatrix: boolean; canSwitchOtpChannel: boolean; canManageSecrets: boolean; canManageIssues: boolean }>(
     '/admin/access/features',
   );
   const canSwitchCallMode = featureAccess.data?.canSwitchCallMode === true;
@@ -134,6 +133,24 @@ export default function AdminActionsPage() {
    */
   const canManageSecrets = featureAccess.data?.canManageSecrets === true;
   const canSwitchOtpChannel = featureAccess.data?.canSwitchOtpChannel === true;
+  /*
+   * Reported Issues is gated TWICE and both must pass, same arrangement as
+   * Secrets Manager: isIssueManage says the screen exists, access.issues.emails
+   * says who may reach it. The queue carries screenshots taken from other
+   * people's CRM sessions, so the reach follows a person rather than a role.
+   * `=== true` so an in-flight or failed fetch reads as DENY.
+   */
+  const canManageIssues = featureAccess.data?.canManageIssues === true;
+
+  /*
+   * The card list. Computed HERE, below the flags, and not beside `me` — the
+   * second gate reads featureAccess, and a const cannot be read above its own
+   * declaration. Cards with no second lock pass through unchanged.
+   */
+  const visible = ACTIONS.filter(
+    (a) => (!a.actionKey || hasAction(me, a.actionKey))
+      && (a.actionKey !== 'isIssueManage' || canManageIssues),
+  );
   // Call-recording backfill — gated on the same isClickToCall action the BE
   // endpoint requires (requireClickToCallAction on /admin/calls/recordings/backfill).
   const canBackfillRecordings = hasAction(me, 'isClickToCall');

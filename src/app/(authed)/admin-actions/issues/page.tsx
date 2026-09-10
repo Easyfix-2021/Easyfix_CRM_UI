@@ -18,12 +18,14 @@
  * BACKEND (routes/admin/issues.js + services/issue.service.js):
  *   GET   /admin/issues?scope=&status=&limit=&offset=
  *           → { items, total, limit, offset }; each item carries
- *             has_screenshot (boolean) and NEVER a key or a URL.
- *   GET   /admin/issues/:id      → detail + comments + screenshot_url
+ *             screenshot_count (number) and NEVER a key or a URL.
+ *   GET   /admin/issues/:id      → detail + comments + screenshot_urls[]
  *   POST  /admin/issues/:id/comments   { comment_text }
  *   PATCH /admin/issues/:id/close      { close_note? }   → 409 if already closed
  *
- * RBAC — the WHOLE page is isIssueManage, and the gate fails CLOSED.
+ * RBAC — the WHOLE page needs BOTH locks (isIssueManage AND the
+ * access.issues.emails allowlist, as canManageIssues), and the gate fails
+ * CLOSED on either.
  * `scope=all` and `close` are the two manager-only operations in the service,
  * and this page is nothing but those two, so there is no second flag to check:
  * past the gate, canManage is true by construction. Everyone can FILE an issue
@@ -67,7 +69,7 @@ type IssueRow = {
   reported_by: number;
   created_on: string | null;
   closed_on: string | null;
-  has_screenshot: boolean;
+  screenshot_count: number;
   comment_count: number;
 };
 type ListResp = { items: IssueRow[]; total: number; limit: number; offset: number };
@@ -89,8 +91,11 @@ type IssueDetail = {
   closed_by: number | null;
   closed_on: string | null;
   close_note: string | null;
-  has_screenshot: boolean;
-  screenshot_url: string | null;
+  screenshot_count: number;
+  /* Presigned for 15 minutes each. May be SHORTER than screenshot_count — a key
+   * that failed to sign is dropped rather than returned as a null hole, so the
+   * two differing is how a partial failure shows up. */
+  screenshot_urls: string[];
   comments: IssueComment[];
 };
 
@@ -133,14 +138,26 @@ function filterChipClass(active: boolean): string {
 export default function IssueQueuePage() {
   const router = useRouter();
   const { me, loading: meLoading } = useMe();
-  const canManage = hasAction(me, 'isIssueManage');
+  /*
+   * Two locks, matching services/issue.service.js resolveActor exactly: the
+   * RBAC key says the screen exists, the easyfix_properties allowlist says who
+   * may reach it. Deduped module-wide with the Navbar icon and the reporter
+   * widget, so this page adds no extra round trip.
+   */
+  const gatedFeatures = useFetchOnce<{ canManageIssues?: boolean }>('/admin/access/features');
+  const canManage =
+    hasAction(me, 'isIssueManage') && gatedFeatures.data?.canManageIssues === true;
 
-  /* Fail CLOSED — bounce anyone without the key once we KNOW their
-   * permissions, never while auth is still loading (hasAction returns false
-   * for a null `me`, so an early redirect would eject every user). */
+  /* Fail CLOSED — bounce anyone without BOTH locks once we KNOW the answer to
+   * both, never while either is still loading. hasAction returns false for a
+   * null `me` and the flag is undefined mid-flight, so redirecting before both
+   * settle would eject every user, including the ones who do have access. A
+   * FAILED flag fetch leaves loading false and data undefined, which redirects
+   * — that is the fail-closed direction and is intended. */
+  const gateSettled = !meLoading && !gatedFeatures.loading;
   useEffect(() => {
-    if (!meLoading && !canManage) router.replace('/dashboard');
-  }, [meLoading, canManage, router]);
+    if (gateSettled && !canManage) router.replace('/dashboard');
+  }, [gateSettled, canManage, router]);
 
   const [status, setStatus] = useState('');
   const [scope, setScope] = useState<'all' | 'mine'>('all');
@@ -269,9 +286,12 @@ export default function IssueQueuePage() {
                       <td className="!text-left text-xs">{formatDate(r.created_on)}</td>
                       <td className="!text-center font-mono text-xs">{r.comment_count}</td>
                       <td className="!text-center">
-                        {r.has_screenshot
-                          ? <ImageIcon className="inline size-4 text-muted-foreground" aria-label="Has Screenshot" />
-                          : <span className="text-muted-foreground">—</span>}
+                        {r.screenshot_count > 0 ? (
+                          <span className="inline-flex items-center gap-1 text-muted-foreground" title={`${r.screenshot_count} Screenshot(s)`}>
+                            <ImageIcon className="size-4" aria-label="Has Screenshots" />
+                            {r.screenshot_count > 1 ? <span className="font-mono text-xs">{r.screenshot_count}</span> : null}
+                          </span>
+                        ) : <span className="text-muted-foreground">—</span>}
                       </td>
                       <td className="!text-center"><StatusChip tone={meta.tone} size="sm">{meta.label}</StatusChip></td>
                       <td className="!text-right whitespace-nowrap">
@@ -445,12 +465,31 @@ function IssueDetailDialog({ issueId, nameOf, onClose, onChanged }: {
               </div>
             )}
 
-            {data.has_screenshot && (
+            {data.screenshot_count > 0 && (
               <div>
-                <h3 className="mb-1 text-sm font-medium">Screenshot</h3>
-                {/* key: a new presigned URL is a new panel, which clears any
-                    prior expiry state without an effect. */}
-                <ScreenshotPanel key={data.screenshot_url ?? 'none'} url={data.screenshot_url} onReload={refetch} />
+                <h3 className="mb-1 text-sm font-medium">
+                  {data.screenshot_count === 1 ? 'Screenshot' : `Screenshots (${data.screenshot_count})`}
+                </h3>
+                {data.screenshot_urls.length === 0 ? (
+                  /* Attached, but none could be signed — the panel's own
+                     "Attachment Unavailable" state says so and offers a reload. */
+                  <ScreenshotPanel url={null} onReload={refetch} />
+                ) : (
+                  <>
+                    {data.screenshot_urls.length < data.screenshot_count && (
+                      <p className="mb-1 text-xs text-muted-foreground">
+                        Showing {data.screenshot_urls.length} Of {data.screenshot_count} — The Rest Could Not Be Signed For Viewing.
+                      </p>
+                    )}
+                    <div className={data.screenshot_urls.length > 1 ? 'grid gap-2 sm:grid-cols-2' : ''}>
+                      {data.screenshot_urls.map((u) => (
+                        /* key on the URL: a new presigned URL is a new panel,
+                           which clears any prior expiry state without an effect. */
+                        <ScreenshotPanel key={u} url={u} onReload={refetch} />
+                      ))}
+                    </div>
+                  </>
+                )}
               </div>
             )}
 

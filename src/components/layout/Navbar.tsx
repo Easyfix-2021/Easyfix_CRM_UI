@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
-import { Bell, LogOut, Menu, Info, AlertTriangle, Plus } from 'lucide-react';
+import { Bell, Bug, LogOut, Menu, Info, AlertTriangle, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { api } from '@/lib/api';
 import { useFetchOnce } from '@/lib/hooks';
@@ -39,6 +39,25 @@ export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
    * Without dedupe each /jobs route load fired this twice in dev.
    */
   const inbox = useFetchOnce<{ unread: number }>('/admin/notifications/inbox/count');
+  /*
+   * Reported Issues shortcut. Two locks, exactly as the backend resolves them
+   * (services/issue.service.js resolveActor): the RBAC action key says the
+   * screen exists, and the easyfix_properties allowlist behind
+   * canManageIssues says this person may reach it. BOTH, so the icon never
+   * offers a page that answers 403.
+   *
+   * `=== true` and not a truthiness check: while the request is in flight
+   * data is undefined, and an icon that appears and then vanishes on every
+   * page load is worse than one that appears a beat late. Display only — the
+   * page and every issue route re-enforce both locks server-side.
+   *
+   * useFetchOnce dedupes module-wide for 30s, so this shares one round trip
+   * with the Admin Actions page and the issue reporter widget rather than
+   * adding a third.
+   */
+  const gatedFeatures = useFetchOnce<{ canManageIssues?: boolean }>('/admin/access/features');
+  const canReachIssues =
+    gatedFeatures.data?.canManageIssues === true && hasAction(me, 'isIssueManage');
   const counts = useFetchOnce<{ escalated?: number }>('/admin/jobs/counts');
   const unread = inbox.data?.unread ?? 0;
   const escalatedCount = counts.data ? (counts.data.escalated ?? 0) : null;
@@ -181,6 +200,16 @@ export function Navbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
       </nav>
       )}
       <div className="flex-1" />
+      {canReachIssues && (
+        <button
+          onClick={() => router.push('/admin-actions/issues')}
+          className="relative rounded p-2 hover:bg-muted"
+          aria-label="Reported Issues"
+          title="Reported Issues"
+        >
+          <Bug className="h-5 w-5" />
+        </button>
+      )}
       <button
         onClick={() => router.push('/notifications')}
         className="relative rounded p-2 hover:bg-muted"

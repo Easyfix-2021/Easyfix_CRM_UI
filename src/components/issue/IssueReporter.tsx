@@ -40,10 +40,16 @@
  *
  * ─── THE "ALL TICKETS" TAB FAILS CLOSED ────────────────────────────────────
  *
- * It is rendered only when the caller holds `isIssueManage`, read through
- * actionFlags() like every other action gate in the CRM. actionFlags returns
- * false for a missing `me`, a missing permissions block and a missing key
- * alike, so a still-loading session shows two tabs, not three. The server
+ * It is rendered only when the caller passes BOTH locks the backend applies in
+ * services/issue.service.js resolveActor: the `isIssueManage` action key, read
+ * through actionFlags() like every other action gate in the CRM, AND the
+ * `access.issues.emails` allowlist, read as canManageIssues from
+ * GET /admin/access/features.
+ *
+ * Both halves fail closed. actionFlags returns false for a missing `me`, a
+ * missing permissions block and a missing key alike; the feature flag is
+ * compared `=== true`, so an in-flight or failed fetch is undefined and denies.
+ * A still-loading session therefore shows two tabs, not three. The server
  * refuses scope=all anyway; this only keeps the UI from offering a control
  * that would 403.
  */
@@ -53,7 +59,7 @@ import { usePathname } from 'next/navigation';
 import { ArrowLeft, Bug, Loader2, Paperclip, Send, X } from 'lucide-react';
 
 import { api, ApiError } from '@/lib/api';
-import { useFetch, invalidateFetch } from '@/lib/hooks';
+import { useFetch, useFetchOnce, invalidateFetch } from '@/lib/hooks';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { parseIstDateTime } from '@/lib/format';
@@ -74,6 +80,10 @@ const MANAGE_ACTION = 'isIssueManage';
  */
 const MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024;
 const ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+
+/** Mirrors MAX_SCREENSHOTS in routes/admin/issues.js. Enforced here so the
+ *  sixth attachment is refused with a sentence rather than a 400. */
+const MAX_SCREENSHOTS = 5;
 
 /** Joi bounds from validators/issue.validator.js — kept in step so a typo is a
  *  field-level stop here rather than a 400 after a round trip. */
@@ -99,7 +109,7 @@ type IssueListItem = {
   reported_by: number;
   created_on: string;
   closed_on: string | null;
-  has_screenshot: boolean;
+  screenshot_count: number;
   comment_count: number;
 };
 
@@ -128,10 +138,13 @@ type IssueDetail = {
   closed_by: number | null;
   closed_on: string | null;
   close_note: string | null;
-  has_screenshot: boolean;
-  /** Presigned, 15 minutes, minted by GET /admin/issues/:id only. null means
-   *  "nothing to show" — no screenshot, no S3, or a signing failure alike. */
-  screenshot_url: string | null;
+  screenshot_count: number;
+  /** Presigned, 15 minutes each, minted by GET /admin/issues/:id only. An EMPTY
+   *  array means "nothing to show" — no screenshots, no S3, or every signature
+   *  failed alike. It can be SHORTER than screenshot_count: a key that fails to
+   *  sign is dropped rather than returned as a null hole, so length is always
+   *  the number the reader can actually open. */
+  screenshot_urls: string[];
   comments: IssueComment[];
 };
 
@@ -190,7 +203,9 @@ function IssueRow({ issue, onOpen }: { issue: IssueListItem; onOpen: (id: number
         <span>#{issue.id}</span>
         <span>{fmtWhen(issue.created_on)}</span>
         {issue.comment_count > 0 ? <span>{issue.comment_count} Comments</span> : null}
-        {issue.has_screenshot ? <span>Screenshot</span> : null}
+        {issue.screenshot_count > 0 ? (
+          <span>{issue.screenshot_count === 1 ? 'Screenshot' : `${issue.screenshot_count} Screenshots`}</span>
+        ) : null}
       </div>
       {issue.page_path ? (
         <div className="mt-1 truncate text-xs text-muted-foreground">{issue.page_path}</div>
@@ -230,7 +245,14 @@ export function IssueReporter() {
   const { me } = useMe();
   const confirm = useConfirm();
 
-  const canManage = actionFlags(me, [MANAGE_ACTION])[MANAGE_ACTION] === true;
+  /*
+   * Shares one round trip with the Navbar's Reported Issues icon and the Admin
+   * Actions page — useFetchOnce dedupes module-wide for 30s.
+   */
+  const gatedFeatures = useFetchOnce<{ canManageIssues?: boolean }>('/admin/access/features');
+  const canManage =
+    actionFlags(me, [MANAGE_ACTION])[MANAGE_ACTION] === true
+    && gatedFeatures.data?.canManageIssues === true;
 
   const [open, setOpen] = React.useState(false);
   const [tab, setTab] = React.useState<TabKey>('report');
@@ -244,8 +266,8 @@ export function IssueReporter() {
   // Report form.
   const [title, setTitle] = React.useState('');
   const [description, setDescription] = React.useState('');
-  const [file, setFile] = React.useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = React.useState<string | null>(null);
+  const [files, setFiles] = React.useState<File[]>([]);
+  const [previewUrls, setPreviewUrls] = React.useState<string[]>([]);
   const [submitting, setSubmitting] = React.useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
@@ -271,50 +293,95 @@ export function IssueReporter() {
     open && selectedId != null ? `${LIST_PREFIX}/${selectedId}` : null,
   );
 
-  /* Local preview only — revoked on replace/clear so a long session that pastes
-   * a dozen screenshots does not pin a dozen blobs in memory. */
+  /* Local previews only — every URL is revoked when the set changes, so a long
+   * session that pastes a dozen screenshots does not pin a dozen blobs in
+   * memory. The whole list is rebuilt rather than diffed: createObjectURL is
+   * free next to the render it triggers, and a diff here would be a cache with
+   * an invalidation bug waiting in it. */
   React.useEffect(() => {
-    if (!file) {
-      setPreviewUrl(null);
+    if (!files.length) {
+      setPreviewUrls([]);
       return;
     }
-    const url = URL.createObjectURL(file);
-    setPreviewUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [file]);
+    const urls = files.map((f) => URL.createObjectURL(f));
+    setPreviewUrls(urls);
+    return () => urls.forEach((u) => URL.revokeObjectURL(u));
+  }, [files]);
 
-  function acceptFile(candidate: File | null | undefined) {
-    if (!candidate) return;
-    if (!ALLOWED_MIME.has(candidate.type)) {
+  /*
+   * APPENDS. Picking files twice, or pasting twice, adds to the set rather
+   * than replacing it — the two capture routes below are used together (paste
+   * the screen, then browse for the log), and a picker that silently discarded
+   * the first attachment was the whole complaint.
+   *
+   * Each rejection reason is reported separately and the acceptable files in
+   * the same batch are still kept: dropping four good screenshots because the
+   * fifth was a PDF is not a helpful reading of "one of these is wrong".
+   */
+  function acceptFiles(candidates: ArrayLike<File> | null | undefined) {
+    const incoming = Array.from(candidates ?? []);
+    if (!incoming.length) return;
+
+    const wrongType = incoming.filter((f) => !ALLOWED_MIME.has(f.type));
+    const tooBig = incoming.filter((f) => ALLOWED_MIME.has(f.type) && f.size > MAX_SCREENSHOT_BYTES);
+    const ok = incoming.filter((f) => ALLOWED_MIME.has(f.type) && f.size <= MAX_SCREENSHOT_BYTES);
+
+    if (wrongType.length) {
       showToast({ variant: 'error', message: 'Only PNG, JPEG, WEBP Or GIF Screenshots Are Accepted.' });
-      return;
     }
-    if (candidate.size > MAX_SCREENSHOT_BYTES) {
-      showToast({ variant: 'error', message: 'Screenshot Exceeds The 5 MB Limit.' });
-      return;
+    if (tooBig.length) {
+      showToast({ variant: 'error', message: 'Each Screenshot Must Be Under 5 MB.' });
     }
-    setFile(candidate);
+    if (!ok.length) return;
+
+    setFiles((prev) => {
+      const room = MAX_SCREENSHOTS - prev.length;
+      if (room <= 0) {
+        showToast({ variant: 'error', message: `You Can Attach Up To ${MAX_SCREENSHOTS} Screenshots.` });
+        return prev;
+      }
+      if (ok.length > room) {
+        showToast({ variant: 'error', message: `Only ${room} More Screenshot${room === 1 ? '' : 's'} Can Be Attached.` });
+      }
+      return [...prev, ...ok.slice(0, room)];
+    });
   }
 
   /* Route two: the clipboard. Win+Shift+S / Cmd+Ctrl+Shift+4 put the capture
    * here and nowhere else, so a paste anywhere in the form attaches it. */
   function onPaste(e: React.ClipboardEvent<HTMLFormElement>) {
     const items = Array.from(e.clipboardData?.items ?? []);
-    const image = items.find((it) => it.kind === 'file' && it.type.startsWith('image/'));
-    if (!image) return;
+    // EVERY image on the clipboard, not just the first — a multi-image paste is
+    // one gesture and should not silently lose all but one of them.
+    const images = items
+      .filter((it) => it.kind === 'file' && it.type.startsWith('image/'))
+      .map((it) => it.getAsFile())
+      .filter((f): f is File => f != null);
+    if (!images.length) return;
     e.preventDefault();
-    acceptFile(image.getAsFile());
+    acceptFiles(images);
   }
 
-  function clearScreenshot() {
-    setFile(null);
+  function clearScreenshots() {
+    setFiles([]);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }
+
+  /*
+   * Removing ONE keeps the rest. The input's value is cleared too: without it
+   * the browser treats re-picking the same file as "no change" and fires no
+   * change event, so a screenshot removed by mistake could not be re-added
+   * without picking something else first.
+   */
+  function removeScreenshotAt(index: number) {
+    setFiles((prev) => prev.filter((_, i) => i !== index));
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
   function resetForm() {
     setTitle('');
     setDescription('');
-    clearScreenshot();
+    clearScreenshots();
   }
 
   /* A create changes both queues. useFetch's cache is module-level and lives
@@ -337,12 +404,15 @@ export function IssueReporter() {
     }
     setSubmitting(true);
     try {
-      if (file) {
+      if (files.length) {
         const fd = new FormData();
         fd.append('title', t);
         fd.append('description', d);
         fd.append('page_path', pathname ?? '');
-        fd.append('screenshot', file);
+        // Repeated under ONE field name — multer's .array('screenshot') on the
+        // route collects them into req.files in this order, which becomes
+        // tbl_crm_issue_image.sort_order.
+        for (const f of files) fd.append('screenshot', f);
         await api.post(LIST_PREFIX, fd);
       } else {
         await api.post(LIST_PREFIX, { title: t, description: d, page_path: pathname ?? '' });
@@ -461,18 +531,25 @@ export function IssueReporter() {
 
                   <p className="whitespace-pre-wrap text-sm text-foreground">{issue.description}</p>
 
-                  {issue.screenshot_url ? (
-                    <a href={issue.screenshot_url} target="_blank" rel="noreferrer">
-                      {/* eslint-disable-next-line @next/next/no-img-element -- short-lived
-                          presigned S3 URL; next/image would need the bucket host in
-                          next.config.mjs remotePatterns and buys nothing for a
-                          one-off screenshot. */}
-                      <img
-                        src={issue.screenshot_url}
-                        alt="Issue Screenshot"
-                        className="max-h-48 w-full rounded-md border border-border object-contain"
-                      />
-                    </a>
+                  {issue.screenshot_urls.length ? (
+                    <div className={cn(
+                      'grid gap-2',
+                      issue.screenshot_urls.length === 1 ? 'grid-cols-1' : 'grid-cols-2',
+                    )}>
+                      {issue.screenshot_urls.map((url, i) => (
+                        <a key={url} href={url} target="_blank" rel="noreferrer" title={`Screenshot ${i + 1}`}>
+                          {/* eslint-disable-next-line @next/next/no-img-element -- short-lived
+                              presigned S3 URL; next/image would need the bucket host in
+                              next.config.mjs remotePatterns and buys nothing for a
+                              one-off screenshot. */}
+                          <img
+                            src={url}
+                            alt={`Issue Screenshot ${i + 1}`}
+                            className="max-h-48 w-full rounded-md border border-border object-contain"
+                          />
+                        </a>
+                      ))}
+                    </div>
                   ) : null}
 
                   {issue.status === 'closed' && issue.close_note ? (
@@ -560,44 +637,64 @@ export function IssueReporter() {
                     </div>
 
                     <div className="flex flex-col gap-2">
-                      <span className="text-xs font-medium text-muted-foreground">Screenshot (Optional)</span>
+                      <span className="text-xs font-medium text-muted-foreground">
+                        Screenshots (Optional) {files.length ? `— ${files.length} Of ${MAX_SCREENSHOTS}` : ''}
+                      </span>
                       <input
                         ref={fileInputRef}
                         type="file"
+                        // multiple: the picker is one of the two capture routes, and the
+                        // other (paste) already handles a batch. Selecting three files
+                        // in one pass should not mean three trips through the dialog.
+                        multiple
                         accept="image/png,image/jpeg,image/webp,image/gif"
                         className="hidden"
-                        onChange={(e) => acceptFile(e.target.files?.[0])}
+                        onChange={(e) => acceptFiles(e.target.files)}
                       />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="gap-1 self-start"
-                        onClick={() => fileInputRef.current?.click()}
-                      >
-                        <Paperclip className="h-4 w-4" aria-hidden="true" />
-                        Choose A File
-                      </Button>
-                      <p className="text-xs text-muted-foreground">Or Paste A Screenshot Anywhere In This Form.</p>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="gap-1 self-start"
+                          disabled={files.length >= MAX_SCREENSHOTS}
+                          onClick={() => fileInputRef.current?.click()}
+                        >
+                          <Paperclip className="h-4 w-4" aria-hidden="true" />
+                          {files.length ? 'Add More' : 'Choose Files'}
+                        </Button>
+                        {files.length > 1 ? (
+                          <Button type="button" variant="ghost" size="sm" onClick={clearScreenshots}>
+                            Remove All
+                          </Button>
+                        ) : null}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Or Paste Screenshots Anywhere In This Form. Up To {MAX_SCREENSHOTS}, 5 MB Each.
+                      </p>
 
-                      {previewUrl ? (
-                        <div className="relative">
-                          {/* eslint-disable-next-line @next/next/no-img-element -- local
-                              blob: preview of a file that never leaves the browser until
-                              submit; next/image cannot take an object URL. */}
-                          <img
-                            src={previewUrl}
-                            alt="Screenshot Preview"
-                            className="max-h-40 w-full rounded-md border border-border object-contain"
-                          />
-                          <button
-                            type="button"
-                            onClick={clearScreenshot}
-                            aria-label="Remove Screenshot"
-                            className="absolute right-1 top-1 rounded-full bg-card p-1 text-foreground shadow-sm transition-colors hover:bg-muted"
-                          >
-                            <X className="h-4 w-4" aria-hidden="true" />
-                          </button>
+                      {previewUrls.length ? (
+                        <div className="grid grid-cols-2 gap-2">
+                          {previewUrls.map((url, i) => (
+                            <div key={url} className="relative">
+                              {/* eslint-disable-next-line @next/next/no-img-element -- local
+                                  blob: preview of a file that never leaves the browser until
+                                  submit; next/image cannot take an object URL. */}
+                              <img
+                                src={url}
+                                alt={`Screenshot Preview ${i + 1}`}
+                                className="max-h-40 w-full rounded-md border border-border object-contain"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => removeScreenshotAt(i)}
+                                aria-label={`Remove Screenshot ${i + 1}`}
+                                className="absolute right-1 top-1 rounded-full bg-card p-1 text-foreground shadow-sm transition-colors hover:bg-muted"
+                              >
+                                <X className="h-4 w-4" aria-hidden="true" />
+                              </button>
+                            </div>
+                          ))}
                         </div>
                       ) : null}
 
