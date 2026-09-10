@@ -427,6 +427,14 @@ export type JobOffer = {
  */
 export type JobOffersResponse = {
   items: JobOffer[];
+  /*
+   * Which expiry regime the BACKEND is in — `job.offer_expiry.enabled` in
+   * easyfix_properties. Optional so a frontend ahead of the backend still
+   * renders; treat `undefined` as "unknown" rather than as either regime,
+   * because the caption's whole job is to stop asserting a rule that may not
+   * be in force.
+   */
+  offer_expiry_enabled?: boolean;
 };
 
 /*

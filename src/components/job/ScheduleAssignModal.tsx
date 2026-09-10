@@ -825,10 +825,40 @@ export function ScheduleAssignModal({
                   {offers.data!.items.length}
                 </span>
               </h3>
+              {/*
+                * The caption is CONDITIONAL on the backend's expiry regime,
+                * because it used to assert "open offers expire after 30
+                * minutes" unconditionally and production has
+                * `job.offer_expiry.enabled = 'false'` — nothing times an offer
+                * out there at all.
+                *
+                * It also stops calling every closed offer "expired". EXPIRED is
+                * written by nine backend paths and only one is the 30-minute
+                * sweep; the rest fire when the job is assigned, rescheduled,
+                * released, withdrawn, or superseded by a sibling accepting.
+                * Reported 2026-09-10 on job 538177: two offers showed EXPIRED
+                * after 22 hours with the sweep switched off, closed in the same
+                * second a re-offer went out. Reading that as "the technician
+                * ignored it" is a claim about a person, and it was wrong —
+                * which is exactly the conclusion the old caption invited.
+                *
+                * `undefined` (a backend that predates the field) gets the
+                * neutral wording rather than either promise.
+                */}
               <p className="mb-2 text-xs text-muted-foreground">
-                Technicians this job has been offered to — including those who
-                declined or whose offer expired. Whoever accepts first on the app
-                is assigned; open offers expire after 30 minutes.
+                Technicians this job has been offered to — including those who declined,
+                and those whose offer was closed without an answer. Whoever accepts first
+                on the app is assigned.{' '}
+                {offers.data?.offer_expiry_enabled === true ? (
+                  <>An open offer expires 30 minutes after it is made.</>
+                ) : offers.data?.offer_expiry_enabled === false ? (
+                  <>
+                    Open offers do not time out. An <span className="font-medium">Expired</span>{' '}
+                    offer here was closed by a later action on the job — a re-offer,
+                    assignment, reschedule, or another technician accepting — not by the
+                    technician failing to respond.
+                  </>
+                ) : null}
               </p>
               {/* Table rather than chips: a chip row wrapped unpredictably and
                   had no room for the mobile number ops needs to chase an offer.
