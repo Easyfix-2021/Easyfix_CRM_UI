@@ -49,8 +49,9 @@
  * `/admin/jobs` LIST projection (customer_submitted_at, magic_link_sent_at,
  * easyfixer_mobile, …) — that projection aliases columns as themselves and
  * resolves an action_taken_reason description as `<x>_reason_name`, which is
- * where cancel_reason_name / reschedule_reason_name come from (see
- * services/job.service.js, cancel_reason_name on the DETAIL projection).
+ * where app_request_reason comes from (see services/job.service.js: one
+ * COALESCE resolving job_cancel_reason_id_by_easyfixer, else
+ * reschedule_reason_id, against action_taken_reason).
  *
  * Every field is OPTIONAL. The CRM ships independently of the backend, so a
  * deploy that predates the projection change must render the rest of the row
@@ -70,15 +71,17 @@ export type AppRequestFields = {
   job_status?: number | string | null;
   is_cancelled_by_app?: AppRequestFlag;
   is_rescheduled_by_app?: AppRequestFlag;
-  /* Cancellation: when the technician raised it, and the resolved reason. */
+  /* Cancellation: when the technician raised it. */
   cancel_date_time?: string | null;
-  cancel_reason_name?: string | null;
   /* Reschedule: when it was raised (tbl_job.reschedule_at_app — stamped by
    * the app's own POST /mobile/jobs/:id/reschedule), the appointment the
    * technician is ASKING for, and the resolved reason. */
   reschedule_at_app?: string | null;
   reschedule_date_time_app?: string | null;
-  reschedule_reason_name?: string | null;
+  /* The ask's reason text, already resolved and disambiguated server-side:
+   * ONE column for both kinds, because a job carrying both flags must not let
+   * the FE pick a different winner than the SQL did. */
+  app_request_reason?: string | null;
 };
 
 export type AppRequestKind = 'cancel' | 'reschedule';
@@ -124,7 +127,7 @@ export function appRequestOf(row: AppRequestFields | null | undefined): AppReque
       kind: 'cancel',
       label: 'Cancellation Requested',
       tone: 'urgent',
-      reason: text(row.cancel_reason_name),
+      reason: text(row.app_request_reason),
       raisedAt: text(row.cancel_date_time),
       requestedFor: null,
     };
@@ -135,7 +138,7 @@ export function appRequestOf(row: AppRequestFields | null | undefined): AppReque
       kind: 'reschedule',
       label: 'Reschedule Requested',
       tone: 'warning',
-      reason: text(row.reschedule_reason_name),
+      reason: text(row.app_request_reason),
       raisedAt: text(row.reschedule_at_app),
       requestedFor: text(row.reschedule_date_time_app),
     };

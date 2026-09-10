@@ -151,9 +151,10 @@ test('cancellation outranks reschedule when a row carries BOTH flags', () => {
     ...plain(),
     is_cancelled_by_app: 1,
     is_rescheduled_by_app: 1,
-    cancel_reason_name: 'Self installed by customer',
+    /* The BE's COALESCE already resolved the winner; the FE's job is only to
+     * agree about the KIND, so this is the cancel reason. */
+    app_request_reason: 'Self installed by customer',
     cancel_date_time: '2026-05-05 09:12',
-    reschedule_reason_name: 'Customer want a reschedule',
     reschedule_date_time_app: '2026-05-06 17:30',
   };
   const req = R.appRequestOf(both);
@@ -163,15 +164,14 @@ test('cancellation outranks reschedule when a row carries BOTH flags', () => {
     'a cancellation proposes no new appointment — the comparison line must not render');
 });
 
-test('each kind reads its OWN raised-at stamp and reason', () => {
+test('each kind reads its OWN raised-at stamp', () => {
   const cancel = R.appRequestOf({
     ...plain(),
     is_cancelled_by_app: 1,
     cancel_date_time: '2026-05-05 09:12',
-    cancel_reason_name: 'Self installed by customer',
+    app_request_reason: 'Self installed by customer',
     /* Present but belonging to the other kind — must not leak across. */
     reschedule_at_app: '2026-04-01 08:00',
-    reschedule_reason_name: 'Customer want a reschedule',
     reschedule_date_time_app: '2026-05-06 17:30',
   });
   assert.equal(cancel.raisedAt, '2026-05-05 09:12');
@@ -181,10 +181,10 @@ test('each kind reads its OWN raised-at stamp and reason', () => {
     ...plain(),
     is_rescheduled_by_app: 1,
     reschedule_at_app: '2026-05-05 14:40',
-    reschedule_reason_name: 'Customer want a reschedule',
+    app_request_reason: 'Customer want a reschedule',
     reschedule_date_time_app: '2026-05-06 17:30',
+    /* The other kind's stamp, present and must not leak into raisedAt. */
     cancel_date_time: '2026-01-01 00:00',
-    cancel_reason_name: 'Self installed by customer',
   });
   assert.equal(resch.raisedAt, '2026-05-05 14:40');
   assert.equal(resch.reason, 'Customer want a reschedule');
@@ -204,7 +204,7 @@ test('blank strings collapse to null so the UI has ONE falsy case', () => {
   const req = R.appRequestOf({
     ...plain(),
     is_rescheduled_by_app: 1,
-    reschedule_reason_name: '   ',
+    app_request_reason: '   ',
     reschedule_date_time_app: '',
   });
   assert.equal(req.reason, null);
