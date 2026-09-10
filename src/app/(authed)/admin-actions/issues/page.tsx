@@ -51,7 +51,7 @@ import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
 import { StatusChip, type StatusChipTone } from '@/components/ui/StatusChip';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
+import { TablePagination, type TablePageSize, pageSizeToLimit, PAGE_SIZE_OPTIONS } from '@/components/ui/table-pagination';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { showToast, dismissToast } from '@/components/ui/toast';
 import { api, ApiError } from '@/lib/api';
@@ -104,6 +104,19 @@ type UserLite = { user_id: number; user_name: string };
 /* Joi `limit.max()` on issueListQuery — TablePagination's "All" must not ask
  * for more than the endpoint will accept, or the page 400s at the top size. */
 const LIMIT_CAP = 200;
+
+/*
+ * Page sizes offered here — deliberately WITHOUT "All", same reasoning as
+ * components/call-info/ClickToCallTab.tsx and the same 200 cap.
+ *
+ * The cap above already stops "All" from 400ing. What it cannot stop is the
+ * LIE: <TablePagination> renders 'all' as ONE page with every nav control
+ * disabled and a hint reading "Showing 1–<total> of <total>". Past 200 issues
+ * that claims every row is on screen when 200 are, and leaves rows 201+
+ * unreachable without changing the page size back. 10/20/50 page through the
+ * whole queue honestly, so "All" is strictly worse than every other option.
+ */
+const ISSUE_PAGE_SIZES = PAGE_SIZE_OPTIONS.filter((o) => o.value !== 'all');
 
 /* The lookup that turns reported_by / commented_by (tbl_user ids — the list
  * endpoint returns ids, never names) into something readable. Admin-group only
@@ -308,6 +321,7 @@ export default function IssueQueuePage() {
               page={page}
               pageSize={pageSize}
               total={total}
+              pageSizeOptions={ISSUE_PAGE_SIZES}
               onPageChange={setPage}
               onPageSizeChange={(s) => { setPageSize(s); setPage(0); }}
             />

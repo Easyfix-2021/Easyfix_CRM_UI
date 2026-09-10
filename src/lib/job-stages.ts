@@ -129,10 +129,13 @@ export function stageVisible(allowed: AllowedStages | undefined | null, source: 
  * May a user with `allowed` stages move a job from `source` → `target`?
  * Unrestricted → always true.
  *
- * Restricted: there must exist an allowed stage that (a) OWNS the source
- * status (source ∈ its visibleStatuses) AND (b) permits the target
- * (target ∈ its transitionTargets). This encodes "only from a stage I can
- * see, and only to a target that stage's lifecycle allows".
+ * Restricted: there must exist an allowed stage that OWNS the source status
+ * (source ∈ its visibleStatuses) AND either permits the target
+ * (target ∈ its transitionTargets) OR ALSO owns the target — a same-stage
+ * move (2 ↔ 20 inside pending-close, or a reassign that leaves a job at 1)
+ * is not a stage change and is always permitted. This encodes "only from a
+ * stage I can see, and only to a target that stage's lifecycle allows, plus
+ * moves that stay put", and it is the backend rule verbatim.
  */
 export function transitionAllowed(
   allowed: AllowedStages | undefined | null,
@@ -143,7 +146,24 @@ export function transitionAllowed(
   for (const k of allowed!.stages) {
     const def = STAGES[k as StageKey];
     if (!def) continue;
-    if (def.visibleStatuses.includes(source) && def.transitionTargets.includes(target)) {
+    /*
+     * The second half is `visible OR target`, not just `target`, because a
+     * SAME-STAGE move is permitted outright: the job never leaves the stage,
+     * so it never leaves the user's view. Mirrors the backend branch in
+     * EasyFix_Backend/lib/job-stages.js:
+     *     if (targetStage && targetStage === sourceStage) return true;
+     * The live case is Reassign: PATCH /admin/jobs/:id/assign is guarded with
+     * target SCHEDULED(1) and a reassign leaves the job AT 1, so a
+     * `pending-start` holder needs (1 -> 1) — which pending-start's
+     * transitionTargets [2,20,21,6] does not list. Without this the client hid
+     * a control the server allows (6,656 of 147,600 grant/source/target
+     * triples disagreed, always client-stricter).
+     * `visibleStatuses.includes(target)` IS "same stage" because visible
+     * statuses are disjoint across stages — pinned by the "every status
+     * belongs to exactly one stage" test in tests/job-stages.test.js.
+     */
+    if (def.visibleStatuses.includes(source)
+      && (def.visibleStatuses.includes(target) || def.transitionTargets.includes(target))) {
       return true;
     }
   }

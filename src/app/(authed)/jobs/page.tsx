@@ -126,7 +126,59 @@ type JobRow = JobAgeFields & {
    * share feature → treated as "no share" and no chip renders.
    */
   share?: JobShare | null;
+  /*
+   * ── Manage Jobs view (view=manage) ──
+   * All optional: the request that carries `view=manage` gets them, and an
+   * older BE gets none, in which case every cell below renders its em-dash
+   * rather than throwing.
+   */
+  pin_code?: string | null;
+  /* Bucket / Bucket Status — DERIVED SERVER-SIDE from the legacy 43-label state
+     machine (services/job-export.service.js homeJobStatus / jobCurrentStatus,
+     ports of UtilityFunctions). Strings, deliberately: re-deriving them here
+     would be a second implementation of the same machine, and the XLSX sheet
+     renders the first one. */
+  bucket?: string | null;
+  bucket_status?: string | null;
+  /* The latest tbl_job_comment on the job — NOT j.remarks, which only one of
+     the platform's comment writers mirrors into. */
+  last_comment?: string | null;
+  /* The accountable PARTY on the open reason (EasyFix / Technician / Customer /
+     Client), not the reason text. */
+  due_to_type?: string | null;
+  customer_rating?: number | null;
+  easyfix_spoc?: string | null;
+  service_category?: string | null;
+  /* Master / Under Master, from tbl_easyfixer's self-reference plus "does
+     anyone report to me". See txTier(). */
+  efr_manager_id?: number | null;
+  efr_team_count?: number | null;
+  /* escalated_by_name is escu.user_name — escalated_by resolved through
+     tbl_user, which is better than the denormalised varchar legacy printed. */
+  escalated_by_name?: string | null;
+  escalated_time?: string | null;
 };
+
+/*
+ * Master / Under Master / Individual, from tbl_easyfixer.efr_manager_id (a
+ * self-reference) and the count of technicians reporting to this one.
+ *
+ * ⚠ DELIBERATE DIVERGENCE FROM LEGACY. jobList.vm has three branches — team AND
+ * a manager -> Under Master; a team and NO manager -> Master; neither -> the
+ * literal Individual — and no branch at all for the commonest case, a LEAF
+ * technician who has a manager and no team. That row rendered blank. Reporting
+ * "Under Master" for anyone who has a manager is what the label plainly means,
+ * so the fall-through is not reproduced; recorded here because a reader
+ * comparing the two screens will see the difference.
+ */
+function txTier(row: JobRow): string | null {
+  if (row.fk_easyfixter_id == null) return null;
+  const hasTeam = (row.efr_team_count ?? 0) > 0;
+  const hasManager = (row.efr_manager_id ?? 0) > 0;
+  if (hasManager) return 'Under Master';
+  if (hasTeam) return 'Master';
+  return 'Individual';
+}
 type Resp = { items: JobRow[]; total: number; limit: number; offset: number };
 
 // TABS / TabDef / CountsResp / countFor now live in lib/job-tabs.ts and are
@@ -306,8 +358,17 @@ export default function JobsPage() {
   // Server-side sort state (whitelisted BE-side) — declared here with the other
   // query state so load() and the poll effect can depend on it. `toggle` + the
   // sort refetch effect live near the render below.
+  /*
+   * Default sort is AGE DESC — oldest orders first (2026-09-10, per ops).
+   * Previously null, which let the backend fall back to job_id DESC. The
+   * legacy screen LOOKED age-sorted but was not: manageJob.vm hardcodes a
+   * fa-sort-down icon inside that header regardless of state, so the arrow was
+   * decoration. This makes the real order match what the arrow implied.
+   * A ?sort= in the URL still wins, so shared links are unaffected.
+   */
   const [sortKey, setSortKey] = useState<string | null>(() => {
-    const s = searchParams.get('sort'); return s ? (s.split(':')[0] || null) : null;
+    const s = searchParams.get('sort');
+    return s ? (s.split(':')[0] || null) : JOB_AGE_SORT_KEY;
   });
   const [sortDir, setSortDir] = useState<SortDir>(() => {
     const s = searchParams.get('sort'); return s && s.split(':')[1] === 'asc' ? 'asc' : 'desc';
@@ -507,6 +568,15 @@ export default function JobsPage() {
          * `j.job_id IN (...)` from it — the capability existed, unexposed.
          */
         jobIds: serverQ || undefined,
+        /*
+         * Asks for the Manage Jobs PROJECTION, not a filter: three extra joins,
+         * eight scalar subqueries and the two derived bucket labels. Opt-in so
+         * the dozen other callers of the same service function keep the payload
+         * they have. Declared on listQuery — validate() runs with
+         * stripUnknown, so an undeclared key would be dropped and every new
+         * cell would render blank with no error anywhere.
+         */
+        view: 'manage',
         /*
          * status / statuses / assigned — derived once by buildStatusParams and
          * spread, never re-implemented here. Export and the bulk-action prop
@@ -1042,7 +1112,11 @@ export default function JobsPage() {
   // 18 after the 2026-09-02 merge of Mobile into Customer (the Technician
   // mobile was never its own column, so only ONE column was removed), 19 since
   // Technician Id was split out beside it.
-  const jobCols = canJob.isTransferJobOwnership ? 20 : 19;
+  // 20 data columns (the legacy Manage Jobs set), plus the bulk-select column
+  // when the operator can actually transfer ownership. ONE constant: three
+  // colSpans read it, and two hand-written numbers in one <thead> disagreed
+  // the last time this table changed shape.
+  const jobCols = canJob.isTransferJobOwnership ? 21 : 20;
 
   /*
    * ── Selection derivations ─────────────────────────────────────────
@@ -1714,54 +1788,55 @@ export default function JobsPage() {
                         />
                       </th>
                     )}
-                    <SortHeader col="job_id"             sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="stick-col-head stick-left">Job #</SortHeader>
-                    {/* Age — ticket-created → terminal event (or now, while open).
-                        Server-computed + server-sorted; the header sends the
-                        shared JOB_AGE_SORT_KEY so ordering is by PRECISE age
-                        (seconds), never the floored day label. Kept adjacent to
-                        the pinned Job # so it stays readable without scrolling
-                        this 18-column table sideways. */}
-                    <SortHeader col={JOB_AGE_SORT_KEY} sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="w-16">Age</SortHeader>
-                    <SortHeader col="job_reference_id"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Job Ref</SortHeader>
-                    <SortHeader col="client_ref_id"      sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Client Ref</SortHeader>
-                    <SortHeader col="client_name"        sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Client</SortHeader>
-                    {/* Customer and Technician each carry their mobile on a
-                        second line. That retires the standalone Mobile column
-                        (one column removed — the tech number never had one),
-                        so the table is 18 columns, 19 with selection.
-                        A merged column can only sort on ONE key: both use the
-                        NAME key (customer_name / easyfixer_name). Sorting by
-                        customer_mob_no is no longer reachable from the header.
-                        The filter covering "find by number" for a CUSTOMER is
-                        "Customer Name / No." (filters.customerQ) — NOT EFR
-                        Mobile, which is the TECHNICIAN's number and searches
-                        tbl_easyfixer.efr_no, so it could never have stood in for
-                        this. customer_mob_no is still in the backend's
-                        SORTABLE_COLUMNS, so a saved URL carrying
-                        ?sortBy=customer_mob_no still sorts correctly; it simply
-                        has no header left to click. */}
-                    <SortHeader col="customer_name"      sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Customer</SortHeader>
-                    <SortHeader col="city_name"          sortBy={sortKey} sortDir={sortDir} onSort={toggle}>City</SortHeader>
-                    <SortHeader col="job_type"           sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Type</SortHeader>
-                    <SortHeader col="source_type"        sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Source</SortHeader>
-                    <SortHeader col="easyfixer_name"     sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Technician</SortHeader>
-                    {/* Technician Id — the efr_id ops quote on calls and paste
-                        into the Easyfixer search. Rendered as its own column
-                        (not a third line in the cell above) so it stays
-                        copy-pasteable and scannable down the page.
-                        NOT a SortHeader: fk_easyfixter_id is absent from the
-                        backend's SORTABLE_COLUMNS whitelist, so a clickable
-                        header would send a key the BE silently drops back to
-                        its job_id DESC default — a sort control that does
-                        nothing reads as a broken sort. */}
-                    <th>Technician Id</th>
-                    <SortHeader col="owner_name"         sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Owner</SortHeader>
-                    <SortHeader col="created_date_time"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Created</SortHeader>
-                    <SortHeader col="requested_date_time" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Requested</SortHeader>
-                    <SortHeader col="scheduled_date_time" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Scheduled</SortHeader>
-                    <SortHeader col="checkin_date_time"  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Check-in</SortHeader>
-                    <SortHeader col="checkout_date_time" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Check-out</SortHeader>
-                    <SortHeader col="job_status"         sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Status</SortHeader>
+                    {/* ─────────────────────────────────────────────────────────
+                        THE 20 COLUMNS, IN THE LEGACY ORDER (2026-09-10).
+                        Header text and sequence are the legacy Manage Jobs
+                        screen's verbatim — EasyFix_CRM manageJob.vm:778-797,
+                        rows bound by jobList.vm — including its "Escalted By"
+                        spelling, so an operator moving between the two screens
+                        reads the same words in the same places.
+
+                        A header is a sort header only when its key is in the
+                        backend's SORTABLE_COLUMNS. An unwhitelisted key is not
+                        ignored — validators/job.validator.js derives its
+                        valid() list from that map, so it 400s and BLANKS THE
+                        GRID. tests/wire-contract.test.js in the backend repo
+                        checks every col= on this page against that map.
+                        ───────────────────────────────────────────────────── */}
+                    <SortHeader col="job_reference_id"        sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="stick-col-head stick-left">Job booking reference id</SortHeader>
+                    <SortHeader col="job_id"                  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Job Id</SortHeader>
+                    {/* Age — ticket-created → terminal event (or now, while
+                        open). Server-computed AND server-sorted on the seconds
+                        expression, never the floored day label, so same-day
+                        jobs do not tie. This is the table's DEFAULT sort. */}
+                    <SortHeader col={JOB_AGE_SORT_KEY}        sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="w-16">Age</SortHeader>
+                    <SortHeader col="customer_name"           sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Cx Name &amp; Number</SortHeader>
+                    {/* Remark / Open Due to — no sort key. Remark is a
+                        correlated subquery and Open Due to hangs off an
+                        opt-in join; sorting on either would need an ORDER BY
+                        over an expression the whitelist does not carry. */}
+                    <th>Remark</th>
+                    <th>Open Due to</th>
+                    <SortHeader col="city_name"               sortBy={sortKey} sortDir={sortDir} onSort={toggle}>City / PIN</SortHeader>
+                    <SortHeader col="client_name"             sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Client</SortHeader>
+                    <SortHeader col="client_ref_id"           sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Client Ref Id</SortHeader>
+                    <SortHeader col="requested_date_time"     sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Appointment Date</SortHeader>
+                    {/* Ticket Created is ticket_created_date_time — a DIFFERENT
+                        tbl_job column from created_date_time, and the one the
+                        Age expression anchors on. Newly whitelisted for sorting
+                        alongside this column. */}
+                    <SortHeader col="ticket_created_date_time" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Ticket Created</SortHeader>
+                    <th className="w-14">Rating</th>
+                    {/* Bucket / Bucket Status are derived server-side from
+                        job_status and ~24 more fields; there is no column to
+                        sort them on. */}
+                    <th>Bucket</th>
+                    <th>Bucket Status</th>
+                    <SortHeader col="service_category"        sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Category</SortHeader>
+                    <th>Client SPOC Name &amp; No.</th>
+                    <th>Easyfix SPOC</th>
+                    <SortHeader col="easyfixer_name"          sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Tx name -ID-Master/Under Master</SortHeader>
+                    <th>Escalted By</th>
                     <th className="stick-col-head stick-right text-right">Action</th>
                   </tr>
                 </thead>
@@ -1800,66 +1875,123 @@ export default function JobsPage() {
                       />
                     </td>
                   )}
-                  {/* Same shape as the Unconfirmed bucket: id, then the call-history
-                      popover. Reuses CallHistoryButton — no new component. */}
-                  <td className="font-medium whitespace-nowrap stick-col stick-left">
+                  {/* ─── the 20 cells, positionally 1:1 with the <thead> above ───
+                      Reordered and re-sourced to the legacy Manage Jobs set.
+                      Cells whose data is only on the view=manage projection
+                      render an em-dash when the field is absent, so an older
+                      BE degrades to blanks instead of throwing. */}
+                  {/* 1. Job booking reference id — the EasyFix-generated REF
+                         string, NOT client_ref_id and NOT the numeric id. It
+                         takes the pinned-left slot Job # used to hold, because
+                         it is now the first column. */}
+                  <td className="text-xs whitespace-nowrap stick-col stick-left">{j.job_reference_id ?? '—'}</td>
+                  {/* 2. Job Id — keeps the call-history popover it has always
+                         carried, so no capability moves with the column. */}
+                  <td className="font-medium whitespace-nowrap">
                     <span className="inline-flex items-center gap-1">
                       #{j.job_id}
                       <CallHistoryButton jobId={j.job_id} />
                     </span>
                   </td>
+                  {/* 3. Age */}
                   <td className="text-xs whitespace-nowrap tabular-nums" title={jobAgeTitle(j)}>{formatJobAge(j)}</td>
-                  <td className="text-xs">{j.job_reference_id ?? '—'}</td>
-                  <td className="text-xs">{j.client_ref_id ?? '—'}</td>
-                  <td className="whitespace-nowrap">{j.client_name ?? '—'}</td>
+                  {/* 4. Cx Name & Number — the number stays a CallableMobile,
+                         which owns masking and call logging and never receives
+                         unmasked digits, only the jobId. */}
                   <td className="whitespace-nowrap">
                     {j.customer_name ?? '—'}
-                    {/* Click-to-call still lives on the mobile line itself —
-                        CallableMobile carries the masking + call rules and
-                        never receives unmasked digits, only the jobId; BE
-                        resolves the customer mobile server-side. The wrapper
-                        is muted so the digits read as the secondary line; the
-                        call button keeps its own colour. */}
                     <div className="text-muted-foreground">
                       <CallableMobile jobId={j.job_id} mobile={j.customer_mob_no} />
                     </div>
                   </td>
-                  <td>{j.city_name ?? '—'}</td>
-                  <td className="text-xs">{j.job_type}</td>
-                  <td className="text-xs text-muted-foreground">{j.source_type ?? '—'}</td>
-                  {/* ASSIGNMENT IS KEYED ON THE ID, not the name.
-                      easyfixer_name arrives through a LEFT JOIN (ef.efr_name),
-                      so a job that IS assigned, to a technician whose row
-                      carries a blank efr_name, rendered the literal word
-                      "unassigned" — while the StatusChip on this very row
-                      already asked `fk_easyfixter_id != null`. One row, two
-                      answers. Both ask the id now.
-
-                      The number is a CallableMobile, matching how
-                      PendingToStartView renders this same field. Left as plain
-                      text it would be the one technician number in the app you
-                      cannot click, and it would skip the call-logging that
-                      component carries. */}
+                  {/* 5. Remark — THE LATEST COMMENT on the job, per ops. Not
+                         j.remarks: only one of the platform's comment writers
+                         mirrors into that column, and it doubles as a
+                         serialisation format for two fields that have no
+                         columns of their own. Clamped to two lines with the
+                         full text on hover; comments are free text and a long
+                         one would set the row height for the whole page. */}
+                  <td className="text-xs max-w-[16rem]">
+                    {j.last_comment
+                      ? <span className="line-clamp-2 break-words" title={j.last_comment}>{j.last_comment}</span>
+                      : <span className="text-muted-foreground">—</span>}
+                  </td>
+                  {/* 6. Open Due to — the accountable PARTY, not the reason
+                         text. Same reason row as legacy's Remark column, which
+                         is why the two were blank together there. */}
+                  <td className="text-xs whitespace-nowrap">{j.due_to_type ?? '—'}</td>
+                  {/* 7. City / PIN */}
+                  <td className="whitespace-nowrap">
+                    {j.city_name ?? '—'}
+                    {j.pin_code && <span className="text-muted-foreground"> / {j.pin_code}</span>}
+                  </td>
+                  {/* 8. Client */}
+                  <td className="whitespace-nowrap">{j.client_name ?? '—'}</td>
+                  {/* 9. Client Ref Id — the CLIENT's own reference. */}
+                  <td className="text-xs">{j.client_ref_id ?? '—'}</td>
+                  {/* 10. Appointment Date */}
+                  <td className="text-xs whitespace-nowrap">{formatDate(j.requested_date_time)}</td>
+                  {/* 11. Ticket Created */}
+                  <td className="text-xs whitespace-nowrap">
+                    {j.ticket_created_date_time ? formatDate(j.ticket_created_date_time) : '—'}
+                  </td>
+                  {/* 12. Rating — the CUSTOMER's rating of the technician for
+                          this job. Bare number, as legacy rendered it. */}
+                  <td className="text-xs tabular-nums text-center">
+                    {j.customer_rating != null && j.customer_rating > 0 ? j.customer_rating : '—'}
+                  </td>
+                  {/* 13. Bucket — the coarse lifecycle name, derived server-side. */}
+                  <td className="text-xs whitespace-nowrap">{j.bucket || '—'}</td>
+                  {/* 14. Bucket Status — the fine sub-state, also server-derived.
+                          The two CURRENT-product signals that used to hang off
+                          the retired Status column ride here, because both
+                          QUALIFY the state: a live delegation means the job is
+                          scheduled to a technician who is locked out of it, and
+                          a BOOKED job with no services is the data-quality gap
+                          ops triage. Dropping them with the column would have
+                          silently removed two working signals. */}
+                  <td className="text-xs">
+                    <span className="whitespace-nowrap">{j.bucket_status || '—'}</span>
+                    <ShareChip share={j.share} className="ml-1" />
+                    {j.job_status === 0 && (j.service_count ?? 0) === 0 && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openJobAction('view', j.job_id, { tab: 'services' });
+                        }}
+                        className="ml-1 inline-flex items-center rounded-full bg-warning-tint hover:bg-warning/20 px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-warning-strong whitespace-nowrap cursor-pointer transition-colors"
+                        title="Booked but no services attached. Click to open the Services tab and add line items."
+                      >
+                        No Services
+                      </button>
+                    )}
+                  </td>
+                  {/* 15. Category — the service CATEGORY, not the service type. */}
+                  <td className="text-xs whitespace-nowrap">{j.service_category ?? '—'}</td>
+                  {/* 16. Client SPOC Name & No. — both columns live on tbl_job
+                          itself, not on tbl_client. `client_spoc` is already
+                          registered in the backend's mask-mobile MOBILE_FIELDS,
+                          so it arrives masked. */}
+                  <td className="text-xs whitespace-nowrap">
+                    {j.client_spoc_name ?? '—'}
+                    {j.client_spoc && <div className="text-muted-foreground">{j.client_spoc}</div>}
+                  </td>
+                  {/* 17. Easyfix SPOC — job_client_owner, NOT job_owner. */}
+                  <td className="text-xs whitespace-nowrap">{j.easyfix_spoc ?? '—'}</td>
+                  {/* 18. Tx name -ID- Master/Under Master. Keyed on
+                          fk_easyfixter_id, never the joined name: a job that IS
+                          assigned to a technician with a blank efr_name once
+                          rendered the literal word "unassigned" while the chip
+                          on the same row disagreed. */}
                   <td className="whitespace-nowrap">
                     {j.fk_easyfixter_id != null ? (
                       <>
-                        {/*
-                          * Technician Id ABOVE the name (2026-09-10, per ops):
-                          * ops quote this id to the technician and to support,
-                          * so it reads off the row instead of costing a trip to
-                          * Manage Easyfixers.
-                          *
-                          * In this cell rather than a column of its own — the
-                          * table is already wide enough to scroll, and the id
-                          * belongs to the name beside it. Mono #<id> matches how
-                          * the same id renders in JobModal's Scheduling History,
-                          * so the two surfaces agree.
-                          */}
                         <div className="font-mono text-xs text-muted-foreground">#{j.fk_easyfixter_id}</div>
                         {formatEasyfixerName(j.easyfixer_name) || '—'}
-                        {/* Second line only when the tech HAS a number — an
-                            assigned tech with a blank efr_no shows the name
-                            alone rather than a stray dash. */}
+                        {txTier(j) && (
+                          <div className="text-xs text-muted-foreground">{txTier(j)}</div>
+                        )}
                         {j.easyfixer_mobile && (
                           <div className="text-xs text-muted-foreground">
                             <CallableMobile
@@ -1872,65 +2004,17 @@ export default function JobsPage() {
                       </>
                     ) : <span className="text-muted-foreground">unassigned</span>}
                   </td>
-                  {/* Same `#<id>` mono treatment JobModal's Scheduling History
-                      gives this exact field, so the id an operator reads in the
-                      list and the one in the modal are visibly one value.
-                      Asks fk_easyfixter_id — the assignment key the Technician
-                      cell and the StatusChip both ask — not the joined name. */}
-                  <td className="text-xs font-mono text-muted-foreground whitespace-nowrap">
-                    {j.fk_easyfixter_id != null ? `#${j.fk_easyfixter_id}` : '—'}
+                  {/* 19. Escalted By (legacy's spelling, kept). escalated_by
+                          resolved through tbl_user, which is what the operator
+                          wants — legacy printed the CLIENT SPOC's name in this
+                          cell whenever an escalator actually existed, which
+                          reads as a bug and is not reproduced. */}
+                  <td className="text-xs whitespace-nowrap">
+                    {j.escalated_by_name
+                      ? <>{j.escalated_by_name}{j.escalated_time && <div className="text-muted-foreground">{formatDate(j.escalated_time)}</div>}</>
+                      : <span className="text-muted-foreground">Not Escalated</span>}
                   </td>
-                  <td className="text-xs text-muted-foreground whitespace-nowrap">{j.owner_name ?? '—'}</td>
-                  <td className="text-xs whitespace-nowrap">{formatDate(j.created_date_time)}</td>
-                  <td className="text-xs whitespace-nowrap">{formatDate(j.requested_date_time)}</td>
-                  <td className="text-xs whitespace-nowrap">{j.scheduled_date_time ? formatDate(j.scheduled_date_time) : '—'}</td>
-                  <td className="text-xs whitespace-nowrap">{j.checkin_date_time ? formatDate(j.checkin_date_time) : '—'}</td>
-                  <td className="text-xs whitespace-nowrap">{j.checkout_date_time ? formatDate(j.checkout_date_time) : '—'}</td>
-                  <td>
-                    <StatusChip tone={statusTone(j.job_status)}>
-                      {statusLabel(j.job_status, { assigned: j.fk_easyfixter_id != null })}
-                    </StatusChip>
-                    {/*
-                     * Delegation pill. Sits beside the status chip because it
-                     * QUALIFIES the status: a "Scheduled" job with a live share
-                     * is scheduled to a technician who is locked out of it. It
-                     * renders nothing when there is no live share, so untouched
-                     * rows are visually unchanged.
-                     */}
-                    <ShareChip share={j.share} className="ml-1" />
-                    {/*
-                     * "No Services" pill (added 2026-05-28). Surfaces the
-                     * legacy data-quality gap where a BOOKED job has zero
-                     * active tbl_job_services rows — typically caused by
-                     * ops promoting an Unconfirmed job before adding any
-                     * service line items (see ref Job #482453). Mirrors
-                     * the amber Draft-pill pattern from
-                     * UnconfirmedJobsTable so operators can spot stragglers
-                     * at a glance and click into the Services tab to fix.
-                     *
-                     * Showing it ONLY on status=0 keeps the signal high —
-                     * a CALL_LATER / Unconfirmed row with no services is
-                     * expected; a BOOKED one is the anomaly.
-                     */}
-                    {j.job_status === 0 && (j.service_count ?? 0) === 0 && (
-                      <button
-                        type="button"
-                        // Clickable pill (2026-05-28). Opens the job's
-                        // Services tab directly — saves the operator
-                        // from row→modal→tab click chains. stopPropagation
-                        // so this doesn't fire any parent row click
-                        // handler that might exist now or later.
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openJobAction('view', j.job_id, { tab: 'services' });
-                        }}
-                        className="ml-1 inline-flex items-center rounded-full bg-warning-tint hover:bg-warning/20 px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-warning-strong whitespace-nowrap cursor-pointer transition-colors"
-                        title="Booked but no services attached. Click to open the Services tab and add line items."
-                      >
-                        No Services
-                      </button>
-                    )}
-                  </td>
+                  {/* 20. Action — unchanged, still pinned right. */}
                   <td className="stick-col stick-right text-right whitespace-nowrap">
                     {/*
                       * Status-driven row actions — the SAME per-bucket set
@@ -2022,17 +2106,19 @@ export default function JobsPage() {
                         * it missing. My Orders gates it the same way
                         * (my-orders/page.tsx:1202).
                         *
-                        * The FRONTEND is the one that answers false, and that matters:
-                        * the backend's copy (EasyFix_Backend/lib/job-stages.js, the same-stage branch) has
-                        * an explicit same-stage branch —
-                        *     if (targetStage && targetStage === sourceStage) return true;
-                        * — which this file lacks, though both headers claim to mirror
-                        * each other. So the server would ALLOW (1 → 1) while the client
-                        * hides it. Unreachable today (only pending-start holders see
-                        * status-1 rows, and the two agree for them) but a landmine for
-                        * the next same-status action. Do not "fix the inconsistency"
-                        * here by adding the call; the divergence is the thing to fix,
-                        * and it belongs in job-stages.ts with its own tests.
+                        * The (1 → 1) divergence this comment used to describe is
+                        * FIXED: src/lib/job-stages.ts now carries the same-stage
+                        * branch the backend has always had, so both sides answer
+                        * TRUE for (1 → 1) under a `pending-start` grant. (The old
+                        * text claimed "the two agree for them" — they did not; the
+                        * server allowed it and the client refused.) The call is
+                        * still omitted here on purpose: Reassign is not a stage
+                        * change, so isJobReassign is the whole gate. Adding
+                        * transitionAllowed(…, j.job_status, 1) would now be a no-op
+                        * for pending-start holders, but it would newly hide the
+                        * button from anyone holding a stage that shows status 1
+                        * without owning it — of which there are none today, and
+                        * that is not a property worth depending on.
                         */}
                       {j.job_status === 1 && canJob.isJobReassign && (
                         <IconButton

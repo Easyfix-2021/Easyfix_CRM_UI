@@ -219,6 +219,36 @@ test('an empty list grant permits no transition at all', () => {
   assert.equal(S.transitionAllowed(NONE, 2, 3), false);
 });
 
+test('a SAME-STAGE move is permitted even when the stage does not list the target', () => {
+  /*
+   * The branch this file used to lack, which made the client STRICTER than
+   * the server on 6,656 of 147,600 (grant, source, target) triples — always
+   * in the direction of hiding a control the server would have allowed.
+   *
+   * The pair is DERIVED, not named, so a future stage edit cannot leave this
+   * test asserting something vacuous: find a stage with two visible statuses
+   * (the only way a same-stage move can change the status code at all).
+   */
+  const multi = S.STAGE_KEYS.find((k) => S.STAGES[k].visibleStatuses.length > 1);
+  assert.ok(multi, 'positive control: no multi-status stage exists, so this test would prove nothing');
+  const [a, b] = S.STAGES[multi].visibleStatuses;
+  assert.equal(S.STAGES[multi].transitionTargets.includes(b), false,
+    'positive control: the target must NOT be a declared transitionTarget, or the same-stage branch is not what is being tested');
+  assert.equal(S.transitionAllowed(only(multi), a, b), true, `${multi}: ${a} -> ${b} stays inside the stage`);
+  assert.equal(S.transitionAllowed(only(multi), b, a), true, `${multi}: ${b} -> ${a} stays inside the stage`);
+
+  // The identity move, which is what Reassign produces (1 -> 1 on /assign).
+  for (const key of S.STAGE_KEYS) {
+    const src = S.STAGES[key].visibleStatuses[0];
+    if (src == null) continue;
+    assert.equal(S.transitionAllowed(only(key), src, src), true, `${key}: ${src} -> ${src}`);
+  }
+
+  // …but ONLY inside a stage the user owns.
+  const other = S.STAGE_KEYS.find((k) => k !== multi);
+  assert.equal(S.transitionAllowed(only(other), a, b), false, 'same-stage in a stage they do not own is still refused');
+});
+
 test('a terminal stage grants no outward transition', () => {
   /*
    * Terminal stages are DERIVED, not named. This listed 'pending-feedback',
@@ -228,13 +258,25 @@ test('a terminal stage grants no outward transition', () => {
    */
   const terminal = S.STAGE_KEYS.filter((k) => S.STAGES[k].transitionTargets.length === 0);
   assert.ok(terminal.length > 0, 'positive control: no terminal stage exists, so this test would prove nothing');
+  let checked = 0;
   for (const key of terminal) {
     const g = only(key);
+    const source = S.STAGES[key].visibleStatuses[0];
     for (const target of [0, 1, 2, 3, 5, 6, 9, 10, 20, 21]) {
-      const source = S.STAGES[key].visibleStatuses[0];
+      /*
+       * OUTWARD, and the word is load-bearing. A target inside the stage's own
+       * visibleStatuses is not a transition out of it — the job stays put — and
+       * the same-stage branch permits exactly those. This loop used to include
+       * them, so it asserted 5 → 5 and 6 → 6 were refused, which was never a
+       * claim about terminality: it only held while the client was stricter
+       * than the server. The server has always allowed the identity move.
+       */
+      if (S.STAGES[key].visibleStatuses.includes(target)) continue;
+      checked += 1;
       assert.equal(S.transitionAllowed(g, source, target), false, `${key}: ${source} → ${target}`);
     }
   }
+  assert.ok(checked > 0, 'positive control: every target was skipped as same-stage, so this test asserted nothing');
 });
 
 // ─── filterTabsForStages ──────────────────────────────────────────────────

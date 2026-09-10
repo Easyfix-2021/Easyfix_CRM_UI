@@ -90,10 +90,17 @@ const MAX_SCREENSHOTS = 5;
 const TITLE_MAX = 200;
 const DESCRIPTION_MAX = 4000;
 const COMMENT_MAX = 2000;
+const CLOSE_NOTE_MAX = 1000;
 const MIN_TEXT = 3;
 
-/** One page is the whole list here; the queue is not a reporting surface. */
+/** First page. The panel is 26rem wide, so a full table footer does not fit —
+ *  the list grows in ONE step to LIST_LIMIT_MAX instead of paginating. */
 const LIST_LIMIT = 50;
+
+/** issueListQuery's `limit.max()` in validators/issue.validator.js. Asking for
+ *  more is a hard 400, not a silent clamp. A manager whose queue is past this
+ *  has /admin-actions/issues, which paginates properly. */
+const LIST_LIMIT_MAX = 200;
 
 const LIST_PREFIX = '/admin/issues';
 
@@ -218,10 +225,16 @@ function ListBody({
   state,
   emptyLabel,
   onOpen,
+  onShowMore,
 }: {
   state: { data: IssueListResponse | null; loading: boolean; error: string | null };
   emptyLabel: string;
   onOpen: (id: number) => void;
+  /* NULL once the list is already asking for LIST_LIMIT_MAX — there is no
+   * second step, and a button that cannot change the result is worse than no
+   * button. The count line below still renders in that case, so a queue of 312
+   * never silently reads as 200 either. */
+  onShowMore: (() => void) | null;
 }) {
   if (state.loading) {
     return <p className="py-6 text-center text-sm text-muted-foreground">Loading…</p>;
@@ -233,9 +246,26 @@ function ListBody({
   if (items.length === 0) {
     return <p className="py-6 text-center text-sm text-muted-foreground">{emptyLabel}</p>;
   }
+  /* The server sends `total` on every page (services/issue.service.js
+   * listIssues). Falling back to items.length rather than 0 means a response
+   * shape that ever loses `total` hides the footer instead of claiming
+   * "Showing 50 Of 0". */
+  const total = state.data?.total ?? items.length;
   return (
     <div className="flex flex-col gap-2">
       {items.map((it) => <IssueRow key={it.id} issue={it} onOpen={onOpen} />)}
+      {total > items.length ? (
+        <div className="flex items-center justify-between gap-2 pt-1">
+          <span className="text-xs text-muted-foreground">
+            Showing {items.length} Of {total}
+          </span>
+          {onShowMore ? (
+            <Button type="button" variant="ghost" size="sm" onClick={onShowMore}>
+              Show More
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -275,12 +305,24 @@ export function IssueReporter() {
   const [commentText, setCommentText] = React.useState('');
   const [posting, setPosting] = React.useState(false);
 
+  /* Close note lives in a ref, not state: confirm() snapshots its `description`
+   * JSX at call time (see components/ui/confirm-dialog.tsx), so a controlled
+   * textarea there would never re-render on keystrokes. Same shape as
+   * admin-actions/issues/page.tsx and finance/payout-requests/page.tsx — the
+   * only two of the 75 useConfirm call sites that carry free text. */
+  const closeNoteRef = React.useRef('');
+
   /*
    * Every key is null unless the panel is open AND that pane is the one on
    * screen — see the header. A closed widget issues no requests at all.
    */
+  /* One step, 50 -> 200, SHARED by both list tabs. Shared rather than per-tab
+   * because the two tabs are never on screen together and a second piece of
+   * state would only have to be kept in sync with the first. */
+  const [listLimit, setListLimit] = React.useState(LIST_LIMIT);
+
   const listKey = (scope: 'mine' | 'all', status?: IssueStatus) =>
-    `${LIST_PREFIX}?scope=${scope}&limit=${LIST_LIMIT}${status ? `&status=${status}` : ''}`;
+    `${LIST_PREFIX}?scope=${scope}&limit=${listLimit}${status ? `&status=${status}` : ''}`;
 
   const showingList = open && selectedId === null;
   const openList = useFetch<IssueListResponse>(
@@ -447,15 +489,37 @@ export function IssueReporter() {
 
   async function closeIssue() {
     if (selectedId == null) return;
+    // Reset FIRST: the ref outlives the dialog, so a note typed into a close
+    // the operator then cancelled must not ride along on the next one.
+    closeNoteRef.current = '';
     const ok = await confirm({
       title: 'Close This Issue?',
-      description: 'The reporter can still comment on it afterwards, but it leaves the open queue.',
+      description: (
+        <div className="space-y-3">
+          <p>The reporter can still comment on it afterwards, but it leaves the open queue.</p>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">Close Note (Optional)</label>
+            <textarea
+              defaultValue=""
+              onChange={(e) => { closeNoteRef.current = e.target.value; }}
+              rows={3}
+              maxLength={CLOSE_NOTE_MAX}
+              placeholder="What Was Done, Or Why This Is Being Closed"
+              className="w-full rounded border border-input bg-background px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-ring"
+            />
+          </div>
+        </div>
+      ),
       confirmLabel: 'Close Issue',
       variant: 'destructive',
     });
     if (!ok) return;
     try {
-      await api.patch(`${LIST_PREFIX}/${selectedId}/close`, {});
+      // `|| undefined` drops the key; JSON.stringify then omits it, so a
+      // no-note close sends the same `{}` body it sends today.
+      await api.patch(`${LIST_PREFIX}/${selectedId}/close`, {
+        close_note: closeNoteRef.current.trim() || undefined,
+      });
       showToast({ variant: 'success', message: 'Issue Closed.' });
       detail.refetch();
       refreshLists();
@@ -477,6 +541,10 @@ export function IssueReporter() {
   function onTabChange(next: string) {
     setSelectedId(null);
     setTab(next as TabKey);
+    /* Back to the first page. Without this, switching tabs carries an
+     * expansion the operator made on the OTHER list into a 200-row fetch they
+     * did not ask for. */
+    setListLimit(LIST_LIMIT);
   }
 
   const issue = detail.data;
@@ -489,7 +557,19 @@ export function IssueReporter() {
             // z-40 — one band below the dialog stack (dialog.tsx is all z-50),
             // so an open job modal covers this rather than the reverse.
             'fixed bottom-20 right-4 z-40 flex flex-col overflow-hidden rounded-xl border border-border bg-card shadow-lg',
-            'w-[min(26rem,calc(100vw-2rem))] max-h-[min(34rem,calc(100vh-7rem))]',
+            /*
+             * h-, not max-h-. A max-height only CAPS the panel: a flex column
+             * still collapses to its content, so switching from the report form
+             * to a one-row All Tickets list shrank the panel and moved the
+             * header and the tab strip up under the pointer. The frame is now
+             * FIXED and the variability lives inside the scroll area below,
+             * which is what the min-h-0 flex-1 children are already built for.
+             *
+             * Still viewport-clamped by the min(): 34rem where there is room,
+             * and calc(100vh-7rem) on a short window so the panel never grows
+             * past the FAB it is anchored above.
+             */
+            'w-[min(26rem,calc(100vw-2rem))] h-[min(34rem,calc(100vh-7rem))]',
           )}
         >
           <div className="flex items-center justify-between gap-2 bg-sidebar px-4 py-3 text-sidebar-foreground">
@@ -508,7 +588,11 @@ export function IssueReporter() {
           </div>
 
           {selectedId != null ? (
-            <div className="flex-1 overflow-y-auto px-4 py-3">
+            /* min-h-0: a flex item's min-height is auto, i.e. its content, so
+               without this the detail pane pushes the fixed frame instead of
+               scrolling inside it. The tabs branch below already had it; this
+               branch only got away with it while the panel was free to grow. */
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
               <Button variant="ghost" size="sm" className="mb-2 -ml-2 gap-1" onClick={backToList}>
                 <ArrowLeft className="h-4 w-4" aria-hidden="true" />
                 Back
@@ -711,12 +795,22 @@ export function IssueReporter() {
                 </TabsContent>
 
                 <TabsContent value="open">
-                  <ListBody state={openList} emptyLabel="You Have No Open Tickets." onOpen={openTicket} />
+                  <ListBody
+                    state={openList}
+                    emptyLabel="You Have No Open Tickets."
+                    onOpen={openTicket}
+                    onShowMore={listLimit < LIST_LIMIT_MAX ? () => setListLimit(LIST_LIMIT_MAX) : null}
+                  />
                 </TabsContent>
 
                 {canManage ? (
                   <TabsContent value="all">
-                    <ListBody state={allList} emptyLabel="No Tickets Yet." onOpen={openTicket} />
+                    <ListBody
+                      state={allList}
+                      emptyLabel="No Tickets Yet."
+                      onOpen={openTicket}
+                      onShowMore={listLimit < LIST_LIMIT_MAX ? () => setListLimit(LIST_LIMIT_MAX) : null}
+                    />
                   </TabsContent>
                 ) : null}
               </div>
