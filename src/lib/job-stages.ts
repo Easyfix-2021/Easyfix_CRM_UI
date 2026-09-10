@@ -34,6 +34,7 @@ export type StageKey =
   | 'pending-close'
   | 'audit-complete'
   | 'pending-feedback'
+  | 'completed'
   | 'onhold'
   | 'estimate-pending'
   | 'cancelled';
@@ -53,9 +54,10 @@ export type StageDef = {
  *   unconfirmed          [9]               [0,6]               Unconfirmed Orders
  *   pending-scheduling   [0]               [1,6,9]             Pending for Scheduling
  *   pending-start        [1]               [2,20,21,6]         Pending to Start
- *   pending-close        [2,20]            [3,5,21,6]          Pending to Close
- *   audit-complete       [3,5]             [10]               Audit & Complete
- *   pending-feedback     [10]              []                  Pending for Feedback
+ *   pending-close        [2,20]            [10,21,6]           Pending to Close
+ *   audit-complete       [10]              [3,5,6]             Under Audit
+ *   pending-feedback     [3]               [5,6]               Pending for Feedback
+ *   completed            [5]               []                  Completed
  *   onhold               [21]              [1,6]               Orders in Followup
  *   estimate-pending     [15]              [0,1,6]             Estimate Pending
  *   cancelled            [6]               []                  Cancelled
@@ -64,9 +66,19 @@ export const STAGES: Record<StageKey, StageDef> = {
   'unconfirmed':        { key: 'unconfirmed',        label: 'Unconfirmed Orders',     visibleStatuses: [9],      transitionTargets: [0, 6] },
   'pending-scheduling': { key: 'pending-scheduling', label: 'Pending for Scheduling', visibleStatuses: [0],      transitionTargets: [1, 6, 9] },
   'pending-start':      { key: 'pending-start',      label: 'Pending to Start',       visibleStatuses: [1],      transitionTargets: [2, 20, 21, 6] },
-  'pending-close':      { key: 'pending-close',      label: 'Pending to Close',       visibleStatuses: [2, 20],  transitionTargets: [3, 5, 21, 6] },
-  'audit-complete':     { key: 'audit-complete',     label: 'Audit & Complete',       visibleStatuses: [3, 5],   transitionTargets: [10] },
-  'pending-feedback':   { key: 'pending-feedback',   label: 'Pending for Feedback',   visibleStatuses: [10],     transitionTargets: [] },
+  'pending-close':      { key: 'pending-close',      label: 'Pending to Close',       visibleStatuses: [2, 20],  transitionTargets: [10, 21, 6] },
+  /*
+   * 2026-09-10 — 3 and 10 were the wrong way round here. Full note in the BE
+   * mirror (lib/job-stages.js). In short: 10 is Under Audit and 3 is Pending
+   * for Feedback everywhere else on the platform — the legacy CRM's
+   * AppConstant, and this CRM's own dashboard, which already counted Audit as
+   * b['10'] while linking to a tab that showed [3,5].
+   * The 'audit-complete' SLUG is kept on purpose: bookmarks and the legacy
+   * redirect map (PendingForCheckout = 10) point at it.
+   */
+  'audit-complete':     { key: 'audit-complete',     label: 'Under Audit',            visibleStatuses: [10],     transitionTargets: [3, 5, 6] },
+  'pending-feedback':   { key: 'pending-feedback',   label: 'Pending for Feedback',   visibleStatuses: [3],      transitionTargets: [5, 6] },
+  'completed':          { key: 'completed',          label: 'Completed',              visibleStatuses: [5],      transitionTargets: [] },
   'onhold':             { key: 'onhold',             label: 'Orders in Followup',     visibleStatuses: [21],     transitionTargets: [1, 6] },
   'estimate-pending':   { key: 'estimate-pending',   label: 'Estimate Pending',       visibleStatuses: [15],     transitionTargets: [0, 1, 6] },
   'cancelled':          { key: 'cancelled',          label: 'Cancelled',              visibleStatuses: [6],      transitionTargets: [] },

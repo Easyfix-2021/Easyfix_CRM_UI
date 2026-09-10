@@ -295,6 +295,17 @@ export const URL_MAP: Record<string, string> = {
   'dashboardChecking?enumDesc=PendingFeedback':           '/my-orders?tab=pending-feedback',
   'dashboardChecking?enumDesc=PendingForApproval':        '/my-orders?tab=estimate-pending',
   'dashboardChecking?enumDesc=PendingForCheckout':        '/my-orders?tab=audit-complete',
+  /*
+   * Completed (status 5) has no legacy dashboardChecking bucket — the old CRM
+   * never surfaced one. This entry exists so a NEW tbl_menu row for it can
+   * carry a url in the same shape as its siblings and still route here.
+   *
+   * ⚠ tbl_menu drives BOTH sidebars. A row added for this will also appear in
+   * the legacy portal's My Orders, where dashboardChecking has no result
+   * mapped for enumDesc=Completed. Add the row only once that is acceptable
+   * or the legacy menu is retired.
+   */
+  'dashboardChecking?enumDesc=Completed':                 '/my-orders?tab=completed',
 };
 
 /*

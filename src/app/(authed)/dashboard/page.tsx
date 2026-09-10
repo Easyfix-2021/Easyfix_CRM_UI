@@ -120,7 +120,7 @@ const FLOW: FlowCard[] = [
   { title: 'Pending to Start',        sub: 'Accepted, pre check-in',    icon: Play,          tint: 'bg-info-tint text-info-strong',          statKey: 'pendingToStart',    href: '/my-orders?tab=pending-start' },
   { title: 'Pending App Ack',         sub: 'Assigned, awaiting tech',   icon: BellRing,      tint: 'bg-neutral-tint text-neutral-strong',      statKey: 'pendingAppAck',     href: '/my-orders?tab=pending-app-ack' },
   { title: 'Pending to Close',        sub: 'Technician on-site',        icon: CheckCircle2,  tint: 'bg-info-tint text-info-strong',        statKey: 'pendingToClose',    href: '/my-orders?tab=pending-close' },
-  { title: 'Audit & Complete',        sub: 'Closed — QA review',        icon: ShieldCheck,   tint: 'bg-success-tint text-success-strong',  statKey: 'auditComplete',     href: '/my-orders?tab=audit-complete' },
+  { title: 'Under Audit',             sub: 'Closed — QA review',        icon: ShieldCheck,   tint: 'bg-success-tint text-success-strong',  statKey: 'auditComplete',     href: '/my-orders?tab=audit-complete' },
   { title: 'Pending for Feedback',    sub: 'Closed from app',           icon: MessageSquare, tint: 'bg-warning-tint text-warning-strong',        statKey: 'pendingFeedback',   href: '/my-orders?tab=pending-feedback' },
   { title: 'Orders in Followup',      sub: 'Fulfilment on hold',        icon: PhoneCall,     tint: 'bg-urgent-tint text-urgent-strong',  statKey: 'followup',          href: '/my-orders?tab=onhold' },
 ];
@@ -292,10 +292,12 @@ export default function DashboardPage() {
        *     (status 15) to the existing "Fulfilment On Hold" (21).
        *     Both are operationally "we're waiting on someone".
        *
-       * NOTE: Audit & Complete and Pending for Feedback now both surface
-       * the same status (10). Per ops they are deliberately twin counts
-       * — the cards differ only in which sub-action surface they deep-
-       * link into (audit-complete vs pending-feedback list views).
+       * 2026-09-10: these two both counted status 10 — a workaround for the
+       * tab map having 3 and 10 the wrong way round, which left the Pending
+       * for Feedback card counting 10 while the tab it opened showed [3,5].
+       * The map is now correct (10 Under Audit / 3 Pending for Feedback /
+       * 5 Completed), so each card counts its own status and every card
+       * agrees with the list it links into.
        */
       setStats({
         followup:          (b['15'] ?? 0) + (b['21'] ?? 0),
@@ -305,7 +307,7 @@ export default function DashboardPage() {
         pendingToStart:    b['1']  ?? 0,
         pendingToClose:    (b['2'] ?? 0) + (b['20'] ?? 0),
         auditComplete:     b['10'] ?? 0,
-        pendingFeedback:   b['10'] ?? 0,
+        pendingFeedback:   b['3']  ?? 0,
       });
     }
     setLoadingStats(false);
