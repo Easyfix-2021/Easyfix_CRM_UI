@@ -82,7 +82,7 @@ import { parseIstDateTime } from '@/lib/format';
  * model: list-page + modal overlay. A single record type, one form definition,
  * three presentation modes. The form for create/edit shares fields with a
  * read-only card layout for view; view mode also hosts the status-driven action
- * buttons (Assign / Start / Complete / Cancel / Mark InComplete) so the user
+ * buttons (Check In / Reschedule / Cancel / Feedback) so the user
  * can drive the full job lifecycle without leaving the list.
  *
  * Status-code → visible-button map matches jobs/[id]/page.tsx exactly so the
@@ -134,7 +134,6 @@ const isJobClosed = (s: number) => [ST.COMPLETED, ST.COMPLETED_ALT].includes(s a
  * rather than the technician.
  */
 const canCheckIn        = (s: number) => s === ST.SCHEDULED;
-const canComplete       = (s: number) => s === ST.IN_PROGRESS;
 const canCancel         = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.IN_PROGRESS, ST.ENQUIRY, ST.REVISIT].includes(s as never);
 // NOTE: Confirm & Schedule for Unconfirmed orders (status 9 → 0) is handled
 // via JobModal's dedicated `'confirm'` mode, launched from the row-level
@@ -144,7 +143,7 @@ const canCancel         = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.IN_PROGRES
  * Modes:
  *   create  — blank form, POST /admin/jobs
  *   edit    — prefilled form, PATCH /admin/jobs/:id (scalar fields only)
- *   view    — read-only + ActionBar (Edit / Assign / Start / Complete / etc.)
+ *   view    — read-only + ActionBar (Check In / Reschedule / Feedback / etc.)
  *   confirm — prefilled edit form WITH services basket and a "Confirm &
  *             Schedule" footer that saves then promotes status 9 → 0. This is
  *             the replacement for the legacy `addEditJob?loc=home → Book Call`
@@ -706,7 +705,7 @@ export function JobModal({
            *
            * Every ACTION now sits in one right-aligned cluster in a fixed
            * reading order — Cancel first, the status-aware lifecycle buttons
-           * (Reschedule / Complete / Mark InComplete / Feedback) next, Close
+           * (Reschedule / Check In / Feedback) next, Close
            * last — so the eye lands on the same place in every job modal
            * instead of tracking a button that moves with the status. Only
            * Add Remarks stays left, matching Schedule & Assign and Reassign.
@@ -852,16 +851,12 @@ export function JobModal({
   );
 }
 
-// ─── Action bar (status-driven buttons with per-button loaders) ──────────────
-
-type BusyKey = 'start' | 'complete' | 'cancel' | 'incomplete' | 'assign' | 'owner' | 'confirm' | null;
-
+// ─── Action bar (status-driven buttons) ──────────────────────────────────────
 
 function ActionBar({ job, jobId, onChanged }: {
   job: Job; jobId: number; onChanged: () => void;
 }) {
   const s = Number(job.job_status);
-  const [busy, setBusy] = useState<BusyKey>(null);
   const [assignOpen, setAssignOpen] = useState(false);
   const [autoAssignOpen, setAutoAssignOpen] = useState(false);
   const [ownerOpen, setOwnerOpen] = useState(false);
@@ -879,14 +874,14 @@ function ActionBar({ job, jobId, onChanged }: {
   // Modal-internal permission gates. Each button maps to a legacy
   // Constants.actionPermissions key so the seeded role_menu_action rows
   // for the Admin role govern visibility. Status guards (canAssign,
-  // canComplete, etc.) AND the permission flag must both be true for the
+  // canCheckIn, etc.) AND the permission flag must both be true for the
   // button to render. (isJobCancel now gates the lifted footer Cancel.)
   const { me } = useMe();
   const can = actionFlags(me, [
     'isJobEdit',          // Change Owner + Reschedule + Description pencil + Feedback
     'isJobAssign',        // Auto-assign + Manual pick (initial)
     'isJobReassign',      // Auto-reassign + Manual pick (when already assigned)
-    'isJobStatusChange',  // Complete + Mark Incomplete
+    'isJobStatusChange',  // Check In
   ]);
   const isReassign = !!job.fk_easyfixter_id;
   const canPickTech = isReassign ? can.isJobReassign : can.isJobAssign;
@@ -895,19 +890,13 @@ function ActionBar({ job, jobId, onChanged }: {
   // Gated off (not deleted) so the dialogs below stay wired for a quick revert.
   const LEGACY_ASSIGN_BUTTONS = false;
 
-  async function doStatus(key: BusyKey, status: number, reasonId?: number, comment?: string) {
-    setBusy(key);
-    try { await api.patch(`/admin/jobs/${jobId}/status`, { status, reasonId, comment }); onChanged(); }
-    finally { setBusy(null); }
-  }
-
   return (
     <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
       {/* Outbound calling is consolidated onto the customer mobile cell
           itself across the CRM (see <CallableMobile> in
           src/components/calls/CallButton.tsx). The action bar deliberately
           carries no Call button — keeps the lifecycle controls
-          (Assign / Change Owner / Complete) visually distinct from the
+          (Check In / Reschedule / Feedback) visually distinct from the
           contact-the-customer action. */}
       {/* Confirm & Schedule for Unconfirmed orders is exposed as a dedicated
           modal mode launched from the list row (purple CalendarCheck icon),
@@ -967,19 +956,13 @@ function ActionBar({ job, jobId, onChanged }: {
       {canCheckIn(s) && can.isJobStatusChange && transitionAllowed(me?.allowedStages, s, ST.IN_PROGRESS) && (
         <Button size="sm" variant="outline" onClick={() => setCheckinOpen(true)}>Check In</Button>
       )}
-      {/* Complete (In Progress → Completed) and Mark InComplete (Completed →
-          Revisit) are stage transitions — gate by Job Stage Access too, so a
-          stage-restricted user only sees the moves their stages permit. */}
       {/*
-        * CHECK OUT, not Complete — and it sends ST.REVISIT (10 = Under Audit),
-        * not ST.COMPLETED (3). canComplete(s) is s === IN_PROGRESS, and
-        * pending-close's only forward target is 10; 3 is reached FROM 10 by the
-        * audit step, never directly from 2. The old wiring skipped Under Audit
-        * silently for every unrestricted operator. The label changed with the
-        * target: a button that says "Complete" and lands the job in an audit
-        * queue is the kind of mismatch nobody reports as a bug.
+        * NO CRM CHECK OUT (2026-09-11, per ops). Pending to Close on App is
+        * statuses 2/20: the technician is on site and closes the job FROM THE
+        * APP. This button (2 → 10 Under Audit) and the ✓ row actions on Manage
+        * Jobs and My Orders were the CRM's only 2/20 → 10 paths; all three are
+        * gone, and tests/no-crm-checkout.test.js keeps any from coming back.
         */}
-      {canComplete(s)       && can.isJobStatusChange && transitionAllowed(me?.allowedStages, s, ST.REVISIT) && <LoadBtn size="sm" variant="outline" loading={busy === 'complete'}   onClick={() => doStatus('complete', ST.REVISIT)}>Check Out</LoadBtn>}
       {/* Cancel lifted to the footer's far-left zone (2026-07-28). */}
       {/*
         * "MARK INCOMPLETE" REMOVED (2026-09-10) — it had no legal target left.
@@ -1000,8 +983,8 @@ function ActionBar({ job, jobId, onChanged }: {
         * the completed (or pending-feedback) stage a real target in
         * lib/job-stages.js and let it mirror to src/lib/job-stages.ts — NOT to
         * reinstate a button that routes around the table.
-        * tests/job-status-actions.test.js pins every remaining action against
-        * that table.
+        * tests/job-status-actions.test.js finds every PATCH to
+        * /admin/jobs/:id/status in src/ and checks it against that table.
         */}
 
       <AssignDialog
@@ -1046,7 +1029,7 @@ function ActionBar({ job, jobId, onChanged }: {
       />
       {/* Ops-side check-in. POST /admin/jobs/:id/checkin writes the check-in
           COLUMNS (checkin_date_time — the TAT anchor) alongside the status, so
-          it deliberately does NOT reuse doStatus()'s PATCH /status. 409 comes
+          it deliberately does NOT use the plain PATCH /status. 409 comes
           back when no technician is assigned or the job has left status 1; the
           dialog surfaces the backend's own message rather than guessing. */}
       <CheckInWithReasonDialog
@@ -1364,6 +1347,9 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
                 />
               : (job.easyfixer_mobile as string | null)],
             ['Helper Req', job.helper_req ? 'Yes' : 'No'],
+            // No Material Required row: nothing stores material_req (tbl_job has
+            // no such column; the Book / Confirm toggle is stripped by the backend
+            // validator), so it could only ever render '—'.
             // Technician-facing notes captured at booking (efr_special_notes).
             ['Handyman Notes', String(job.efr_special_notes ?? '') || '—'],
             /*
@@ -1406,6 +1392,10 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
              * (0 / null) comes back undefined → DlCard's em dash.
              */
             ['Collected By', collectedByText(job.collected_by)],
+            // Booking Date Time — the ticket instant Age below is measured from.
+            // Created On (Audit & History) is created_date_time, a different
+            // column; legacy's screen used that one, hence the fallback.
+            ['Booking Date Time', formatDate((job.ticket_created_date_time ?? job.created_date_time) as string)],
             /*
              * Age — the same server-computed reading the job LISTS show, so a
              * row and its detail can never disagree. Measured ticket-created →
@@ -1418,6 +1408,12 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
             ['Appointment', formatDate(job.requested_date_time as string)],
             ['Source', job.source_type],
             ['Owner', job.owner_name],
+            /*
+             * Open Job Reason — enquiry_reason_id, decoded by getByIdCore against
+             * action_taken_reason (enquiry_reason_name). The retired replica decoded
+             * it against tbl_enum_reason, which left ~2 in 3 of QA's enquiry jobs blank.
+             */
+            ['Open Job Reason', job.enquiry_reason_name],
             // Description carries an inline pencil (gated on isJobEdit) that
             // opens the same ChangeDescriptionDialog the old footer "Edit
             // Description" button used — now hosted at the modal root.
@@ -1437,6 +1433,9 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
                 )}
               </span>
             )],
+            ['Total No. of Products', totalProducts(job.services)],
+            // exp_tat is a varchar of hours; '' and NULL are both "not set".
+            ['Job Completion TAT', job.exp_tat ? `${String(job.exp_tat)} hrs` : null],
             // Additional Comments / technician-facing notes (efr_special_notes) —
             // captured on booking (Client Dashboard "Notes for technician") but
             // previously never rendered in the read view.
@@ -1460,6 +1459,24 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
             ['Approved By', (job as Record<string, unknown>).approved_by_client_contact as string],
             ['Rejected On', formatDate((job as Record<string, unknown>).approval_reject_date_time as string)],
             ['Last Updated', formatDate((job as Record<string, unknown>).last_update_time as string)],
+          ]}/>
+          {/* Custom Properties — in the Confirm form's Client Details order:
+              the canonical trio, then the rest. The trio never lands in
+              tbl_job.custom_property — Branch Details is its own column
+              (createJob hoists it out of client-app strings too), the other
+              two ride in remarks and getByIdCore decodes them back — so
+              `custom_properties` alone misses them. Legacy Java left the
+              literal '(NULL)' in branch_details (~1 in 6 set values on QA);
+              unset, as parseCustomPropertyString treats it. Sits beside
+              Audit & History, whose row otherwise ends in empty cells. */}
+          <DlCard title="Custom Properties" rows={[
+            ...([
+              ['Branch Details', job.branch_details],
+              ['Property / Building Name', job.building_name],
+              ['Product Code', job.product_code],
+            ] as [string, unknown][]).filter(([, v]) => !['', 'null', '(null)'].includes(String(v ?? '').trim().toLowerCase())),
+            ...(Array.isArray(job.custom_properties) ? job.custom_properties as Array<{ label?: string; name?: string; value?: unknown }> : [])
+              .map((p): [string, unknown] => [String(p.label || p.name), p.value]),
           ]}/>
         </div>
         <JobRescheduleHistory jobId={Number(job.job_id)} refreshKey={commentsRefreshKey} />
@@ -1486,6 +1503,9 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
           */}
         <div className="flex flex-wrap gap-5 [&>*]:flex-1 [&>*]:basis-[380px]">
           <DlCard title="Timeline" rows={[
+            // The first promise, snapshotted at create / Confirm & Schedule. Differs
+            // from Requested once a reschedule (or the after-3pm auto-shift) moves it.
+            ['Original Appointment', formatDate(job.original_appointment_date_time as string)],
             ['Requested', formatDate(job.requested_date_time as string)],
             ['Scheduled', formatDate(job.scheduled_date_time as string)],
             /*
@@ -2029,13 +2049,23 @@ function JobSchedulingHistory({ jobId, refreshKey = 0 }: { jobId: number; refres
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshKey]);
   const rows = useMemo(() => (Array.isArray(data) ? data : []), [data]);
+  // "Rescheduled N times" — the rows below that carry a reason chip; same
+  // predicate, so the count and the table cannot disagree.
+  const rescheduled = rows.filter((h) => h.reschedule_reason).length;
 
   // Hidden on failure rather than shown broken, matching JobCallHistory: this is
   // supporting history, and an error card on a read-only tab helps nobody.
   if (error) return null;
   return (
     <div className="mt-5">
-      <div className="font-medium text-sm mb-1">Scheduling History</div>
+      <div className="font-medium text-sm mb-1">
+        Scheduling History
+        {!loading && (
+          <span className="ml-2 text-xs font-normal text-muted-foreground">
+            Rescheduled {rescheduled} {rescheduled === 1 ? 'time' : 'times'}
+          </span>
+        )}
+      </div>
       {loading && rows.length === 0 ? (
         <div className="text-xs text-muted-foreground rounded border border-dashed px-3 py-2">
           Loading…
@@ -12243,6 +12273,9 @@ function DlCard({ title, rows }: { title: string; rows: [string, unknown][] }) {
     <div className="rounded-lg border bg-card">
       <div className="px-5 py-3 border-b bg-muted/30"><h3 className="text-sm font-semibold">{title}</h3></div>
       <div className="p-5">
+        {/* No rows (Custom Properties on a job without any) → the same em dash
+            an empty value gets, not a blank card body. */}
+        {rows.length === 0 ? <p className="text-sm text-muted-foreground">—</p> : (
         <dl className="text-sm space-y-1.5">
           {rows.map(([k, v]) => (
             <div key={k} className="flex justify-between gap-4 border-b last:border-0 pb-1.5 last:pb-0">
@@ -12253,6 +12286,7 @@ function DlCard({ title, rows }: { title: string; rows: [string, unknown][] }) {
             </div>
           ))}
         </dl>
+        )}
       </div>
     </div>
   );
@@ -12273,4 +12307,18 @@ function renderDlValue(v: unknown): React.ReactNode {
     return v as React.ReactElement;
   }
   return String(v);
+}
+
+/*
+ * Total No. of Products (Job Meta) — the number of ACTIVE service LINES, not
+ * their summed quantity: legacy's noOfProducts is jobServiceList.size() over
+ * getJobServiceList(jobId, 1), the active lines (JobAction.java). On QA the
+ * two readings differ for 7,825 of the 380,870 jobs with an active line.
+ * getById also returns soft-deleted lines (job_service_status 0) for the
+ * Services tab's restore toggle. The retired JobTransactionView summed quantity
+ * over every line, those included. Same active test as the Services tab.
+ */
+function totalProducts(services: unknown): number {
+  const rows = (Array.isArray(services) ? services : []) as Array<{ job_service_status?: unknown }>;
+  return rows.filter((s) => Number(s.job_service_status) !== 0).length;
 }
