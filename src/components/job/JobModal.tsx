@@ -3,7 +3,7 @@
 import * as React from 'react';
 import { useSlotRecommendations, SlotAdvisory } from '@/components/job/SlotRecommendations';
 import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
-import { useFetch, useUiFlags } from '@/lib/hooks';
+import { useFetch, useUiFlags, invalidateFetch } from '@/lib/hooks';
 import { Sparkles, Search, CalendarCheck, History, Eye, Plus, X, Pencil, CalendarPlus, CheckCircle2, BarChart3, Trash2, RotateCcw, AlertTriangle, FileText } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -807,6 +807,17 @@ export function JobModal({
             status: ST.CANCELLED, reasonId, comment,
           });
           showToast({ variant: 'success', message: 'Job Cancelled' });
+          /*
+           * The BE writes the cancel remark as a tbl_job_comment row, but the
+           * Comments tab is not remounted by refresh() — it kept showing the
+           * pre-cancel list, which read as "the remark was never saved" (0 of
+           * 8 Prod cancels on 2026-09-11 were followed by a comments re-read).
+           * Evict first, for a tab mounted AFTER this (confirm → view
+           * downgrade) that would otherwise hit the 30s cache; then bump the
+           * key the mounted tab refetches on, the same one Add Remarks uses.
+           */
+          invalidateFetch((k) => k.startsWith(`/admin/jobs/${resolvedJobId}/comments`));
+          setCommentsRefreshKey((k) => k + 1);
           setCancelOpen(false); refresh(); onSaved?.();
         }}
       />
@@ -5286,6 +5297,26 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
           excludeJobId: Number(initial.job_id),
         }
         : null;
+  /*
+   * The customer's prior jobs — ONE request feeds the button's count, the
+   * "No prior history" text and the dialog's rows, so the three cannot
+   * disagree. Hidden while loading (no button that flips to text a moment
+   * later); fails OPEN on error — the button without a count, so the dialog
+   * can show the error rather than the operator seeing nothing at all.
+   */
+  const historyFetch = useFetch<CustomerHistoryPage>(
+    historyCustomer ? `/admin/jobs?customerId=${historyCustomer.id}&limit=100` : null,
+  );
+  const history = priorJobs(historyFetch.data, historyCustomer?.excludeJobId);
+  const historySlot = !historyCustomer || historyFetch.loading ? null
+    : history && history.count === 0 && !historyFetch.error
+      ? <span className="text-xs text-muted-foreground italic">No prior history</span>
+      : (
+        <Button type="button" variant="outline" size="sm" onClick={() => setHistoryOpen(true)}>
+          <History className="h-4 w-4 mr-1.5" />
+          View History{history && !historyFetch.error ? ` · ${history.count}` : ''}
+        </Button>
+      );
 
   /*
    * In edit/confirm modes the form re-seeds whenever `initial`
@@ -7405,14 +7436,9 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 ? ((initial.customer_mob_no as string | null | undefined) ?? null)
                 : maskMobile((initial.customer_mob_no as string | null | undefined) ?? null)}
             />
-            {/* Same button Book New Call shows in its "Booking for" bar, in
+            {/* Same slot Book New Call shows in its "Booking for" bar, in
                 the same right-hand position, opening the same dialog. */}
-            {historyCustomer && (
-              <Button type="button" variant="outline" size="sm" onClick={() => setHistoryOpen(true)}>
-                <History className="h-4 w-4 mr-1.5" />
-                View History
-              </Button>
-            )}
+            {historySlot}
             </div>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1">
@@ -8976,17 +9002,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             </strong>
             <span className="text-muted-foreground ml-2">· {prefillCustomer.mobile}</span>
           </div>
-          {prefillCustomer.found && prefillCustomer.customer?.customer_id ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setHistoryOpen(true)}
-            >
-              <History className="h-4 w-4 mr-1.5" />
-              View History
-            </Button>
-          ) : (
+          {prefillCustomer.found && prefillCustomer.customer?.customer_id ? historySlot : (
             <span className="text-xs text-muted-foreground italic">No prior history (new customer)</span>
           )}
         </div>
@@ -10350,10 +10366,11 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
         <CustomerHistoryDialog
           open={historyOpen}
           onClose={() => setHistoryOpen(false)}
-          customerId={historyCustomer.id}
           customerName={historyCustomer.name}
           mobile={historyCustomer.mobile}
-          excludeJobId={historyCustomer.excludeJobId}
+          rows={history?.rows ?? null}
+          loading={historyFetch.loading}
+          error={historyFetch.error}
         />
       ) : null}
     </form>
@@ -10935,7 +10952,9 @@ function AutoServicesTable({
  * for the supplied customer_id. Renders inside its own Dialog so the
  * Book-New-Call form behind stays open + scrollable underneath.
  *
- * Data source: GET /admin/jobs?customerId=X&limit=100. Backend already
+ * Data source: GET /admin/jobs?customerId=X&limit=100, fetched by
+ * JobForm's useFetch — the same page that drives the button's count, so
+ * the dialog opens on rows already loaded. Backend already
  * RBAC-scopes the result (manage_clients × manage_cities), so an
  * operator only sees jobs they're allowed to view even when the
  * customer's history spans clients outside their permission set.
@@ -10945,21 +10964,36 @@ function AutoServicesTable({
  * but the JobModal is already mounted for the current booking — a
  * second JobModal on top would confuse the operator.)
  */
+type CustomerHistoryPage = { items?: Job[]; total?: number };
+
+/*
+ * A customer's PRIOR jobs out of one GET /admin/jobs?customerId= page.
+ *
+ * The count reads `total`, never the page length: the page is capped at 100
+ * and one customer on QA has 1,026 jobs. The job being confirmed is not prior
+ * history (listing it would show the operator the order they are looking at
+ * as if it were an earlier one), so it is dropped from the rows and — only
+ * when it was actually in the page — from the count.
+ */
+function priorJobs(page: CustomerHistoryPage | null, excludeJobId?: number) {
+  if (!page) return null;
+  const items = page.items || [];
+  const rows = items.filter((j) => Number(j.job_id) !== excludeJobId);
+  return { rows, count: (page.total ?? items.length) - (items.length - rows.length) };
+}
+
 function CustomerHistoryDialog({
-  open, onClose, customerId, customerName, mobile, excludeJobId,
+  open, onClose, customerName, mobile, rows, loading, error: err,
 }: {
   open: boolean;
   onClose: () => void;
-  customerId: number;
   customerName: string;
   mobile: string;
-  /* The job being confirmed, when opened from Confirm & Schedule — it is not
-     prior history. Absent from Book New Call, where there is no job yet. */
-  excludeJobId?: number;
+  /* priorJobs(...).rows — the current job already excluded. */
+  rows: Job[] | null;
+  loading: boolean;
+  error: string | null;
 }) {
-  const [rows, setRows] = useState<Job[] | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
   /*
    * Inline view-job state. When the operator clicks the Eye on a
    * history row we open ANOTHER JobModal stacked on top of the history
@@ -10969,21 +11003,6 @@ function CustomerHistoryDialog({
    * losing booking context.
    */
   const [viewJobId, setViewJobId] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    setLoading(true); setErr(null); setRows(null);
-    api.get<{ items: Job[]; total?: number }>('/admin/jobs', { customerId, limit: 100 })
-      .then((resp) => {
-        if (!cancelled) {
-          setRows((resp.items || []).filter((j) => Number(j.job_id) !== excludeJobId));
-        }
-      })
-      .catch((e) => { if (!cancelled) setErr(e instanceof ApiError ? e.message : 'Failed to load history'); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [open, customerId, excludeJobId]);
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>

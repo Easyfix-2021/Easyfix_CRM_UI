@@ -1371,6 +1371,9 @@ export function ScheduleAssignModal({
             });
             showToast({ variant: 'success', message: 'Job Cancelled' });
             setCancelOpen(false);
+            // The cancel remark is a new tbl_job_comment row; drop the cached
+            // pre-cancel list so opening this job next shows it (30s TTL).
+            invalidateFetch((k) => k.startsWith(`/admin/jobs/${jobId}/comments`));
             // Refresh the underlying list FIRST (a cancelled job leaves this
             // Pending-for-Scheduling tab), then close. onChanged triggers the
             // parent's in-place `load()` (revalidates without a skeleton flash).

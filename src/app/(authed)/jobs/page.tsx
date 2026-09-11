@@ -359,16 +359,17 @@ export default function JobsPage() {
   // query state so load() and the poll effect can depend on it. `toggle` + the
   // sort refetch effect live near the render below.
   /*
-   * Default sort is AGE DESC — oldest orders first (2026-09-10, per ops).
-   * Previously null, which let the backend fall back to job_id DESC. The
-   * legacy screen LOOKED age-sorted but was not: manageJob.vm hardcodes a
-   * fa-sort-down icon inside that header regardless of state, so the arrow was
-   * decoration. This makes the real order match what the arrow implied.
-   * A ?sort= in the URL still wins, so shared links are unaffected.
+   * No default sort key — the backend falls back to job_id DESC, newest first
+   * (2026-09-11, per ops). A day of AGE DESC filled page 1 with long-closed
+   * cancelled and failed orders: age runs to the terminal timestamp, so a job
+   * that sat open for months before it was cancelled outranks everything
+   * booked this week. The sort-down icon in the legacy Age header was
+   * decoration (manageJob.vm hardcodes it), not a sort. A ?sort= in the URL
+   * still wins.
    */
   const [sortKey, setSortKey] = useState<string | null>(() => {
     const s = searchParams.get('sort');
-    return s ? (s.split(':')[0] || null) : JOB_AGE_SORT_KEY;
+    return s ? (s.split(':')[0] || null) : null;
   });
   const [sortDir, setSortDir] = useState<SortDir>(() => {
     const s = searchParams.get('sort'); return s && s.split(':')[1] === 'asc' ? 'asc' : 'desc';

@@ -157,17 +157,20 @@ test('every sort header names a key the backend whitelists', () => {
   }
 });
 
-test('the default sort is Age, not the backend fallback', () => {
+test('the default sort is the backend\'s job_id DESC — newest first', () => {
   /*
-   * Ops asked for oldest-first. Before this the state seeded to null and the
-   * backend fell back to job_id DESC — the legacy screen only LOOKED age-sorted
-   * because manageJob.vm hardcodes a sort-down icon in that header regardless
-   * of state. A ?sort= in the URL still wins.
+   * Reverted 2026-09-11, per ops. For one day the key seeded to Age DESC, and
+   * page 1 filled with long-closed cancelled and failed orders: age runs to the
+   * terminal timestamp, so a job that sat open for months before it was
+   * cancelled outranks everything booked this week. With no key the backend
+   * falls back to job_id DESC. A ?sort= in the URL still wins.
    */
-  assert.match(src, /return s \? \(s\.split\(':'\)\[0\] \|\| null\) : JOB_AGE_SORT_KEY;/,
-    'the sort key must seed to the shared age key');
-  assert.match(src, /const \[sortDir, setSortDir\][\s\S]{0,200}'asc' : 'desc'/,
-    'and descending, so the oldest orders come first');
+  assert.match(src, /return s \? \(s\.split\(':'\)\[0\] \|\| null\) : null;/,
+    'with no ?sort= the key must seed to null, so the backend default applies');
+  assert.doesNotMatch(src, /: JOB_AGE_SORT_KEY;/,
+    'Age must not come back as the seeded default');
+  // Age stays SORTABLE — only the default changed.
+  assert.match(thead, /<SortHeader col=\{JOB_AGE_SORT_KEY\}/, 'the Age header still sorts on click');
 });
 
 test('the grid asks for the manage PROJECTION', () => {
