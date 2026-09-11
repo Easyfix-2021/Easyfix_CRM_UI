@@ -41,8 +41,9 @@ import { useCallback, useMemo } from 'react';
  * them into the view layout) — they exist so an entry point can name the job it
  * is opening for, while opening the same job from a list stays the neutral
  * "Job #N" viewer:
- *   checkin — Pending-to-Start "Check-In"; titles "Checkin · Job #N", drops the
- *             status/type sub-line, and surfaces the footer Check In action.
+ *   checkin — titles "Checkin · Job #N" and drops the status/type sub-line.
+ *             Nothing opens it since the CRM Check In went (2026-09-11); kept
+ *             so old links still open the job.
  *   audit   — Audit & Complete (status 3 / 5); titles "Audit · Job #N" and is
  *             pushed with `{ tab: 'billing' }` so it lands on Billing & Charges,
  *             where the audit actions (service approval, charge approvals,

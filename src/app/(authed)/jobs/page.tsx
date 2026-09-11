@@ -8,7 +8,7 @@ import { useDebouncedValue, useFetchOnce } from '@/lib/hooks';
 import {
   Plus, Upload, ChevronDown, ChevronUp, Repeat, Globe,
   // Row-level quick-action icons (mirror the legacy Manage Jobs action column)
-  Eye, CalendarClock, PlayCircle, CalendarCheck, MapPin, RefreshCw,
+  Eye, CalendarClock, CalendarCheck, MapPin, RefreshCw,
   ClipboardCheck,
 } from 'lucide-react';
 import { IconButton } from '@/components/ui/icon-button';
@@ -57,7 +57,6 @@ import { useVirtualRows, VirtualPad } from '@/components/ui/virtual-rows';
 import { Checkbox } from '@/components/ui/checkbox';
 import { RefreshBar } from '@/components/ui/refresh-bar';
 import { LiveLocationPopover } from '@/components/location/LiveLocationPopover';
-import { CheckInWithReasonDialog } from '@/components/job/CheckInWithReasonDialog';
 
 // `/admin/jobs` Joi caps limit at 500 — pass to pageSizeToLimit so
 // "All" sends 500 instead of the default 1000 (which would 400).
@@ -230,7 +229,6 @@ export default function JobsPage() {
     // gates could not render here even for operators who hold it — the button
     // was missing from the page, not denied by RBAC.
     'isJobReassign',
-    'isJobStatusChange',
     // Drives the "Transfer Job Ownership" button gating. The BE
     // bulk-transfer route is roleByName(['Admin']); we use the
     // existing permission key so the seed migration controls
@@ -1070,13 +1068,6 @@ export default function JobsPage() {
   // (null = closed). Shown for "Pending App Ack" (status 0, assigned) and
   // "Pending to Close" (status 2/20) rows, which always carry a tech.
   const [locationJob, setLocationJob] = useState<JobRow | null>(null);
-  /*
-   * Row-level ops check-in. NOT a plain status PATCH: that writes job_status
-   * alone and leaves checkin_date_time — the TAT anchor — null. The dialog
-   * POSTs /admin/jobs/:id/checkin, the same endpoint the workspace's Check In
-   * button uses.
-   */
-  const [checkinJobId, setCheckinJobId] = useState<number | null>(null);
   // Instant client-side search filter over the current (server-sorted,
   // server-paginated) page — shared filterJobRows in lib/job-tabs.ts. Sorting
   // itself is now server-side (see below), so this only narrows what's already
@@ -1619,22 +1610,7 @@ export default function JobsPage() {
                     consistency. The outline Reset to its left + the
                     emerald Export on the right give it a clear
                     visual shelf without a custom hue. */}
-                {/* Ops check-in from a row — same dialog, same endpoint as the workspace's
-          Check In button. Reload refreshes the list and the counts, so the
-          status pills stay coherent. */}
-      <CheckInWithReasonDialog
-        open={checkinJobId != null}
-        onClose={() => setCheckinJobId(null)}
-        jobId={checkinJobId ?? 0}
-        onDone={async () => {
-          setCheckinJobId(null);
-          cacheRef.current.clear();
-          await load(false, true);
-          refreshCounts();
-        }}
-      />
-
-      {canJob.isTransferJobOwnership && (
+                {canJob.isTransferJobOwnership && (
                   <>
                     <Button
                       type="button"
@@ -2034,12 +2010,10 @@ export default function JobsPage() {
                       * /my-orders offers, so muscle memory carries across:
                       *   status 9     → View + Confirm & Schedule
                       *   status 0     → View + Schedule & Assign (date/slot + tech, atomic)
-                      *   status 1     → View + Check-In + Reassign + Resend PIN
+                      *   status 1     → View + Reassign + Resend PIN (no Check-In: done from the app)
                       *   status 2, 20 → View + Resend PIN (no Check-Out: closed from the app)
                       *   status 3, 5  → View + Audit (Billing & Charges)
                       *   others       → View only
-                      * Check-In needs the check-in columns, so it opens the shared
-                      * CheckInWithReasonDialog and refreshes the list and counts.
                       */}
                     <div className="inline-flex items-center gap-0.5 justify-end">
                       <IconButton
@@ -2139,19 +2113,9 @@ export default function JobsPage() {
                           onClick={() => openReassign(j.job_id)}
                         />
                       )}
-                      {/* Check-In + Check-Out are status mutations → isJobStatusChange,
-                          also gated by the stage-transition rule (1→2 / →3). */}
-                      {j.job_status === 1 && canJob.isJobStatusChange && transitionAllowed(me?.allowedStages, j.job_status, 2) && (
-                        <IconButton
-                          icon={PlayCircle}
-                          intent="primary"
-                          label="Check-In — technician on-site, move to In Progress"
-                          onClick={() => setCheckinJobId(j.job_id)}
-                        />
-                      )}
-                      {/* No Check-Out row action (2026-09-11, per ops): Pending to
-                          Close on App jobs (2/20) are closed by the technician from
-                          the app. See the note in JobModal's ActionBar. */}
+                      {/* No Check-In or Check-Out row action (2026-09-11, per ops):
+                          the technician checks in and out from the app. See the
+                          note in JobModal's ActionBar. */}
                       {/*
                         * Audit (Audit & Complete — statuses 3 / 5). Opens the
                         * same workspace the Eye does, landed on Billing &
