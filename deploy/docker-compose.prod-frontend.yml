@@ -8,8 +8,10 @@
 #   PROD (two EC2s)
 #     • PROD_BACKEND_INSTANCE_ID  ← backend + dozzle ONLY, shipped by
 #                                   EasyFix_Backend's deploy/docker-compose.prod-backend.yml
-#     • PROD_FRONTEND_INSTANCE_ID ← THIS file: crm-ui + client-ui + dozzle
-#                                   (no backend; lives on the BE host above)
+#     • PROD_FRONTEND_INSTANCE_ID ← THIS file: crm-ui + client-ui + dozzle +
+#                                   dozzle-agent (no backend; lives on the BE
+#                                   host above, whose Dozzle reads this host
+#                                   through dozzle-agent)
 #
 # Both UI repos (Easyfix_CRM_UI + Easyfix_client_UI) ship this identical
 # file on every prod deploy. Idempotent — whichever deploy runs last wins,
@@ -110,17 +112,59 @@ services:
   # SECURITY POSTURE — network-only:
   # No app-level auth. The EC2 is in a private subnet; reaching :8888
   # at all requires being on the AWS Client VPN, which is the trust
-  # boundary. The Docker socket is mounted READ-ONLY (`:ro`) so even
-  # if Dozzle had a vulnerability, it can't mutate Docker state — only
-  # read container metadata + logs.
+  # boundary. The Docker socket is mounted `:ro`, but that only protects
+  # the socket FILE — it does not restrict the Docker API. What keeps
+  # Dozzle read-only is DOZZLE_ENABLE_ACTIONS / DOZZLE_ENABLE_SHELL being
+  # off (the default), plus that network boundary.
+  #
+  # EXACT tag, never :latest: `compose up` only pulls a MISSING image, so
+  # :latest never upgrades. Keep equal to dozzle-agent below and to the Dozzle
+  # tag in EasyFix_Backend's compose files (see its docs/dozzle-agent.md).
   dozzle:
-    image: amir20/dozzle:latest
+    image: amir20/dozzle:v11.0.0
     container_name: easyfix-dozzle
     restart: unless-stopped
     environment:
       DOZZLE_HOSTNAME: "EasyFix Prod-UI"
     ports:
       - "8888:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - easyfix-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # ─────────────────────────────────────────────────────────────────
+  # Dozzle AGENT — feeds THIS host's containers to the prod BE host's Dozzle
+  # (http://10.30.2.40:8888), so crm-ui + client-ui show up there next to the
+  # backend. That Dozzle dials <this-host-private-ip>:7007, configured by the
+  # PROD_DOZZLE_REMOTE_AGENT secret in EasyFix_Backend. Started by the CRM
+  # deploy (`compose up -d dozzle-agent`), which no other deploy recreates.
+  #
+  # SECURITY: 7007 is gRPC over mutual TLS with a certificate BUILT INTO every
+  # public Dozzle image, and the agent does not gate container actions — so
+  # anything that can reach :7007 with a stock Dozzle can read logs AND
+  # start/stop/remove/exec into these containers (`:ro` on the socket does not
+  # restrict the Docker API). The security group must allow 7007 from the prod
+  # BE host ONLY — never the VPN range — and security-group rules only ADD, so
+  # audit this host's existing rules too: any "All traffic" / "All TCP" / port
+  # range from the VPC or VPN CIDR exposes 7007 the moment this starts.
+  #
+  # Same tag as the BE-host Dozzle: server and agent share a gRPC protocol that
+  # changes between releases. Runbook: EasyFix_Backend/docs/dozzle-agent.md.
+  dozzle-agent:
+    image: amir20/dozzle:v11.0.0
+    container_name: easyfix-dozzle-agent
+    restart: unless-stopped
+    command: agent
+    environment:
+      DOZZLE_HOSTNAME: "EasyFix Prod-UI"
+    ports:
+      - "7007:7007"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:

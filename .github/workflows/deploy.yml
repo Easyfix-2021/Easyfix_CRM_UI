@@ -23,6 +23,7 @@
 #         a. update CRM_UI_IMAGE in /opt/easyfix/.env to the new tag
 #         b. docker compose pull crm-ui
 #         c. docker compose up -d --no-deps --force-recreate crm-ui
+#            (+ prod only: ensure dozzle-agent is up — feeds the BE Dozzle)
 #         d. wait for HEALTHY status
 #   4. Smoke-test http://127.0.0.1:5180/login via second SSM call
 #
@@ -593,6 +594,16 @@ jobs:
 
           echo "▶ Recreating crm-ui container (backend untouched)"
           docker compose up -d --no-deps --force-recreate crm-ui
+
+          # Prod only: the Dozzle agent that shows this host's containers in the
+          # prod BE host's Dozzle (EasyFix_Backend/docs/dozzle-agent.md). No-op
+          # when already up and unchanged; pulled + recreated when its definition
+          # in the compose written above changed. QA has no agent — its Dozzle
+          # runs on the same box. Non-fatal: log visibility must never fail a UI
+          # deploy. Started BEFORE the image prune below, so its image is in use.
+          if [[ "$ENV_NAME" != "qa" ]]; then
+            docker compose up -d --no-deps dozzle-agent || echo "⚠ dozzle-agent did not start (non-fatal)"
+          fi
 
           # Waiting for health without asserting it is just a slower way of
           # not checking — the loop used to fall through and report success
