@@ -481,9 +481,9 @@ export function AssignTechnicianModal({
                         <li>Holds an <strong>active Deep Skill</strong> matching the job&apos;s <strong>Service Category &amp; Type</strong> — if none match, all in-area technicians are shown instead</li>
                         <li>In the job&apos;s <strong>area</strong> — same <strong>city</strong>, widening to the pincode&apos;s <strong>zone(s)</strong> when fewer than 10 qualify</li>
                         <li>No other <strong>booking in the same date &amp; time slot</strong></li>
-                        <li><strong>COD</strong> jobs: account balance <strong>₹500+</strong></li>
+                        <li><strong>Cash</strong> jobs (Paid By Customer): account balance <strong>₹500 or more</strong></li>
                       </ul>
-                      <div className="text-ink-500">New technicians get neutral default performance so they still compete fairly. <strong>Concurrent-jobs count</strong> and <strong>account balance</strong> are shown as columns but don&apos;t filter the list.</div>
+                      <div className="text-ink-500">New technicians get neutral default performance so they still compete fairly. <strong>Concurrent-jobs count</strong> and <strong>account balance</strong> are shown as columns; only the balance filters, and only on cash jobs.</div>
                     </div>
                   </InfoTooltip>
                 )}
