@@ -38,20 +38,22 @@
  * routes/admin/issues.js). `api.post` already omits Content-Type for a
  * FormData body so the browser can set the multipart boundary.
  *
- * ─── THE "ALL TICKETS" TAB FAILS CLOSED ────────────────────────────────────
+ * ─── "ALL TICKETS" IS THE CALLER'S OWN TICKETS ─────────────────────────────
  *
- * It is rendered only when the caller passes BOTH locks the backend applies in
- * services/issue.service.js resolveActor: the `isIssueManage` action key, read
- * through actionFlags() like every other action gate in the CRM, AND the
- * `access.issues.emails` allowlist, read as canManageIssues from
- * GET /admin/access/features.
+ * Open Tickets = mine, open; All Tickets = mine, every status (2026-09-11, per
+ * ops). It used to list scope=all for the three issue managers, so their
+ * personal widget showed everyone's tickets — the full queue belongs on
+ * /admin-actions/issues, which has its own All Issues / Reported By Me scope.
+ * Being reporter-scoped, the tab is now shown to everyone: a reporter can find
+ * their closed tickets and the close notes on them.
  *
- * Both halves fail closed. actionFlags returns false for a missing `me`, a
- * missing permissions block and a missing key alike; the feature flag is
- * compared `=== true`, so an in-flight or failed fetch is undefined and denies.
- * A still-loading session therefore shows two tabs, not three. The server
- * refuses scope=all anyway; this only keeps the UI from offering a control
- * that would 403.
+ * The manager gate survives only on the Close button. It passes BOTH locks the
+ * backend applies in services/issue.service.js resolveActor: the `isIssueManage`
+ * action key, read through actionFlags() like every other action gate in the
+ * CRM, AND the `access.issues.emails` allowlist, read as canManageIssues from
+ * GET /admin/access/features. Both halves fail closed — an in-flight or failed
+ * fetch is undefined and denies. The server enforces all of this regardless:
+ * scope=all is refused to non-managers and scope=mine filters by reporter.
  */
 
 import * as React from 'react';
@@ -288,11 +290,6 @@ export function IssueReporter() {
   const [tab, setTab] = React.useState<TabKey>('report');
   const [selectedId, setSelectedId] = React.useState<number | null>(null);
 
-  /* A tab the caller may not hold must not stay selected if the grant is
-   * resolved late (or revoked on a /auth/me refresh) — otherwise the panel
-   * shows an empty body under a trigger that is no longer rendered. */
-  const activeTab: TabKey = tab === 'all' && !canManage ? 'report' : tab;
-
   // Report form.
   const [title, setTitle] = React.useState('');
   const [description, setDescription] = React.useState('');
@@ -321,15 +318,16 @@ export function IssueReporter() {
    * state would only have to be kept in sync with the first. */
   const [listLimit, setListLimit] = React.useState(LIST_LIMIT);
 
-  const listKey = (scope: 'mine' | 'all', status?: IssueStatus) =>
-    `${LIST_PREFIX}?scope=${scope}&limit=${listLimit}${status ? `&status=${status}` : ''}`;
+  // Both list tabs are the caller's own tickets — see "ALL TICKETS" above.
+  const listKey = (status?: IssueStatus) =>
+    `${LIST_PREFIX}?scope=mine&limit=${listLimit}${status ? `&status=${status}` : ''}`;
 
   const showingList = open && selectedId === null;
   const openList = useFetch<IssueListResponse>(
-    showingList && activeTab === 'open' ? listKey('mine', 'open') : null,
+    showingList && tab === 'open' ? listKey('open') : null,
   );
   const allList = useFetch<IssueListResponse>(
-    showingList && activeTab === 'all' && canManage ? listKey('all') : null,
+    showingList && tab === 'all' ? listKey() : null,
   );
   const detail = useFetch<IssueDetail>(
     open && selectedId != null ? `${LIST_PREFIX}/${selectedId}` : null,
@@ -684,12 +682,12 @@ export function IssueReporter() {
               ) : null}
             </div>
           ) : (
-            <Tabs value={activeTab} onValueChange={onTabChange} className="flex min-h-0 flex-1 flex-col">
+            <Tabs value={tab} onValueChange={onTabChange} className="flex min-h-0 flex-1 flex-col">
               <div className="px-4 pt-3">
                 <TabsList className="w-full">
                   <TabsTrigger value="report" className="flex-1">Report An Issue</TabsTrigger>
                   <TabsTrigger value="open" className="flex-1">Open Tickets</TabsTrigger>
-                  {canManage ? <TabsTrigger value="all" className="flex-1">All Tickets</TabsTrigger> : null}
+                  <TabsTrigger value="all" className="flex-1">All Tickets</TabsTrigger>
                 </TabsList>
               </div>
 
@@ -803,16 +801,14 @@ export function IssueReporter() {
                   />
                 </TabsContent>
 
-                {canManage ? (
-                  <TabsContent value="all">
-                    <ListBody
-                      state={allList}
-                      emptyLabel="No Tickets Yet."
-                      onOpen={openTicket}
-                      onShowMore={listLimit < LIST_LIMIT_MAX ? () => setListLimit(LIST_LIMIT_MAX) : null}
-                    />
-                  </TabsContent>
-                ) : null}
+                <TabsContent value="all">
+                  <ListBody
+                    state={allList}
+                    emptyLabel="You Have Not Reported Any Tickets Yet."
+                    onOpen={openTicket}
+                    onShowMore={listLimit < LIST_LIMIT_MAX ? () => setListLimit(LIST_LIMIT_MAX) : null}
+                  />
+                </TabsContent>
               </div>
             </Tabs>
           )}
