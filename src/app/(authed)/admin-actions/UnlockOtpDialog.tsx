@@ -9,9 +9,10 @@
  * finished job who cannot wait half an hour.
  *
  *   Person — an email or mobile: every login OTP lock for them (CRM, client,
- *            technician app, admin actions, change mobile/email) and, for a
- *            technician's mobile, the bank / profile-update OTP. One Unlock
- *            clears all of them.
+ *            technician app, admin actions, change mobile/email); for a mobile,
+ *            the technician app's own code-request / code-entry limits; and,
+ *            for a technician's mobile, the bank / profile-update OTP. One
+ *            Unlock clears all of them.
  *   Job    — a job id: its closing-PIN lock.
  *
  * Backend: /admin/otp-locks (EasyFix_Backend routes/admin/otp-locks.js), gated
@@ -37,6 +38,8 @@ type PersonLocks = {
   identifier: string;
   capActive: boolean;
   login: LoginLock[];
+  // Optional: a backend older than this dialog does not send it.
+  appLoginLimits?: (LockState & { limiter: string })[];
   technician: { efrId: number; name: string; profileOtp: LockState } | null;
 };
 type JobLocks = { jobId: number; hasPin: boolean; pin: LockState };
@@ -49,6 +52,12 @@ const FLOW_LABEL: Record<string, string> = {
   admin_action_restore: 'Admin Restore OTP',
   'Change Number': 'Change Mobile',
   'Change Email': 'Change Email',
+};
+
+// The technician app's per-mobile login limits (10-minute windows).
+const LIMITER_LABEL: Record<string, string> = {
+  'login-otp': 'Technician App · Code Requests',
+  'verify-otp': 'Technician App · Code Entries',
 };
 
 function statusText(s: LockState): string {
@@ -114,7 +123,9 @@ export function UnlockOtpDialog({ open, onClose }: { open: boolean; onClose: () 
   }
 
   const p = person.data;
-  const personTouched = !!p && (p.login.some(touched) || (!!p.technician && touched(p.technician.profileOtp)));
+  const appLimits = p?.appLoginLimits ?? [];
+  const personTouched = !!p
+    && (p.login.some(touched) || appLimits.some(touched) || (!!p.technician && touched(p.technician.profileOtp)));
 
   return (
     <Dialog open={open} onOpenChange={guardedOpenChange}>
@@ -127,7 +138,8 @@ export function UnlockOtpDialog({ open, onClose }: { open: boolean; onClose: () 
 
         <p className="text-xs text-muted-foreground">
           After 5 wrong codes in 30 minutes an OTP or a job&apos;s closing PIN locks until the 30 minutes
-          are up. Unlock lifts it now. No code is ever shown here.
+          are up. The technician app also limits code requests and entries per mobile for 10 minutes.
+          Unlock lifts these now. No code is ever shown here.
         </p>
 
         <div className="flex gap-2" role="tablist" aria-label="Unlock For">
@@ -161,12 +173,12 @@ export function UnlockOtpDialog({ open, onClose }: { open: boolean; onClose: () 
             {person.loading && <p className="text-sm text-muted-foreground">Looking Up…</p>}
             {person.error && <p className="text-sm text-urgent-strong">{person.error}</p>}
             {p && !p.capActive && (
-              <p className="text-sm text-muted-foreground">The OTP limit is not active on this server yet, so nothing can be locked.</p>
+              <p className="text-sm text-muted-foreground">The login OTP limit is not active on this server yet.</p>
             )}
-            {p && p.capActive && p.login.length === 0 && !p.technician && (
+            {p && p.capActive && p.login.length === 0 && appLimits.length === 0 && !p.technician && (
               <p className="text-sm text-muted-foreground">No OTP records for {p.identifier}.</p>
             )}
-            {p && (p.login.length > 0 || p.technician) && (
+            {p && (p.login.length > 0 || appLimits.length > 0 || p.technician) && (
               <table className="w-full text-sm">
                 <thead className="bg-muted/50">
                   <tr><th className="text-left p-2 font-medium">Flow</th><th className="text-left p-2 font-medium">Status</th></tr>
@@ -176,6 +188,12 @@ export function UnlockOtpDialog({ open, onClose }: { open: boolean; onClose: () 
                     <tr key={r.otpDetailsId} className="border-t">
                       <td className="p-2">{FLOW_LABEL[r.otpType] || r.otpType}</td>
                       <td className="p-2"><StatusCell s={r} /></td>
+                    </tr>
+                  ))}
+                  {appLimits.map((a) => (
+                    <tr key={a.limiter} className="border-t">
+                      <td className="p-2">{LIMITER_LABEL[a.limiter] || a.limiter}</td>
+                      <td className="p-2"><StatusCell s={a} /></td>
                     </tr>
                   ))}
                   {p.technician && (
