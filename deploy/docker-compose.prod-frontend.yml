@@ -117,11 +117,11 @@ services:
   # Dozzle read-only is DOZZLE_ENABLE_ACTIONS / DOZZLE_ENABLE_SHELL being
   # off (the default), plus that network boundary.
   #
-  # EXACT tag, never :latest: `compose up` only pulls a MISSING image, so
-  # :latest never upgrades. Keep equal to dozzle-agent below and to the Dozzle
-  # tag in EasyFix_Backend's compose files (see its docs/dozzle-agent.md).
+  # :latest, like every EasyFix Dozzle — but no deploy refreshes THIS server
+  # (only dozzle-agent below, opt-in), and `compose up` pulls only a MISSING
+  # image. Tag policy: EasyFix_Backend docs/dozzle-agent.md.
   dozzle:
-    image: amir20/dozzle:v11.0.0
+    image: amir20/dozzle:latest
     container_name: easyfix-dozzle
     restart: unless-stopped
     environment:
@@ -142,8 +142,10 @@ services:
   # Dozzle AGENT — feeds THIS host's containers to the prod BE host's Dozzle
   # (http://10.30.2.40:8888), so crm-ui + client-ui show up there next to the
   # backend. That Dozzle dials <this-host-private-ip>:7007, configured by the
-  # PROD_DOZZLE_REMOTE_AGENT secret in EasyFix_Backend. Started by the CRM
-  # deploy (`compose up -d dozzle-agent`), which no other deploy recreates.
+  # PROD_DOZZLE_REMOTE_AGENT secret in EasyFix_Backend. Started and refreshed
+  # ONLY by the CRM Production deploy, and only while the Easyfix_CRM_UI repo
+  # variable PROD_DOZZLE_AGENT_ENABLED is "true" — set after the security-group
+  # audit below. No other deploy starts, recreates or removes it.
   #
   # SECURITY: 7007 is gRPC over mutual TLS with a certificate BUILT INTO every
   # public Dozzle image, and the agent does not gate container actions — so
@@ -154,10 +156,12 @@ services:
   # audit this host's existing rules too: any "All traffic" / "All TCP" / port
   # range from the VPC or VPN CIDR exposes 7007 the moment this starts.
   #
-  # Same tag as the BE-host Dozzle: server and agent share a gRPC protocol that
-  # changes between releases. Runbook: EasyFix_Backend/docs/dozzle-agent.md.
+  # :latest like the BE-host Dozzle it feeds, but the two refresh on different
+  # deploys and Dozzle promises no server/agent compatibility across versions:
+  # after a new MAJOR this host can drop out of Prod Dozzle until the CRM
+  # deploys. Runbook: EasyFix_Backend/docs/dozzle-agent.md.
   dozzle-agent:
-    image: amir20/dozzle:v11.0.0
+    image: amir20/dozzle:latest
     container_name: easyfix-dozzle-agent
     restart: unless-stopped
     command: agent
