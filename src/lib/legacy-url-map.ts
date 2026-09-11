@@ -100,6 +100,10 @@ export const URL_MAP: Record<string, string> = {
   // EasyFix_Backend/migrations/2026-08-21-client-role-access-menu.sql.
   'clientRoleAccess':      '/clients/access-roles',
   'easyfixer':             '/easyfixers',
+  // New Registration 2 — revamped Easyfixer List → Profile experience
+  // (feature/new-registration-2). Route→url mapping seeded ahead of the
+  // backend tbl_menu row so the sidebar link resolves once that lands.
+  'newRegistration2':      '/easyfixers/new-registration-2',
   // Search-by-mobile / efr_no / name. Used by call-flow staff.
   'checkBalance':          '/search',
   // Onboarding queue — EasyFixers awaiting technician verification.
