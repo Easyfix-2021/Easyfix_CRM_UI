@@ -5249,6 +5249,43 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
    * for fresh customers there's nothing to show so the button is hidden.
    */
   const [historyOpen, setHistoryOpen] = useState(false);
+  /*
+   * WHOSE history the button opens — one value for both modes, so the button
+   * and the dialog mount cannot disagree about when there is a customer.
+   *
+   *   create  : the mobile-gate's match, exactly as before.
+   *   confirm : the job's own customer (2026-09-11). Confirm & Schedule had no
+   *             way to see a customer's earlier orders while confirming a new
+   *             one, though Book New Call always had.
+   *
+   * ⚠ The confirm-mode mobile is MASKED here. Confirm fetches the job with
+   * ?unmasked=true so the form can edit the number without bullet corruption,
+   * and the history dialog PRINTS this value in its title. Passing the raw
+   * initial.customer_mob_no would put the full customer number on screen for
+   * every operator whenever the customer-number-visible flag is off — the same
+   * mask the Job Summary's own read-only display applies, applied again.
+   *
+   * excludeJobId: the job being confirmed is not "prior" history, and listing it
+   * would show the operator the order they are looking at as if it were an
+   * earlier one.
+   */
+  const historyCustomer: { id: number; name: string; mobile: string; excludeJobId?: number } | null =
+    !isEditShape && prefillCustomer?.found && prefillCustomer.customer?.customer_id
+      ? {
+        id: prefillCustomer.customer.customer_id,
+        name: prefillCustomer.customer.customer_name || '',
+        mobile: prefillCustomer.mobile,
+      }
+      : isConfirm && initial && Number(initial.fk_customer_id) > 0
+        ? {
+          id: Number(initial.fk_customer_id),
+          name: String(initial.customer_name ?? ''),
+          mobile: (customerNumberVisible
+            ? ((initial.customer_mob_no as string | null | undefined) ?? null)
+            : maskMobile((initial.customer_mob_no as string | null | undefined) ?? null)) ?? '',
+          excludeJobId: Number(initial.job_id),
+        }
+        : null;
 
   /*
    * In edit/confirm modes the form re-seeds whenever `initial`
@@ -7350,6 +7387,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 fields because it covers create/edit/view modes uniformly.
                 Cast the mobile to a string-or-nullish at the call site
                 rather than widening CallableMobile's prop. */}
+            <div className="flex items-center gap-3">
             <CallableMobile
               jobId={Number(initial.job_id)}
               /*
@@ -7367,6 +7405,15 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 ? ((initial.customer_mob_no as string | null | undefined) ?? null)
                 : maskMobile((initial.customer_mob_no as string | null | undefined) ?? null)}
             />
+            {/* Same button Book New Call shows in its "Booking for" bar, in
+                the same right-hand position, opening the same dialog. */}
+            {historyCustomer && (
+              <Button type="button" variant="outline" size="sm" onClick={() => setHistoryOpen(true)}>
+                <History className="h-4 w-4 mr-1.5" />
+                View History
+              </Button>
+            )}
+            </div>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1">
             <div><span className="text-xs text-muted-foreground mr-2">Handyman Notes:</span>{String(initial.efr_special_notes ?? '—')}</div>
@@ -10299,13 +10346,14 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
           customer_id to query against). The dialog drops back to a
           plain "no history" message if the customer hasn't booked
           before. */}
-      {!isEditShape && prefillCustomer?.found && prefillCustomer.customer?.customer_id ? (
+      {historyCustomer ? (
         <CustomerHistoryDialog
           open={historyOpen}
           onClose={() => setHistoryOpen(false)}
-          customerId={prefillCustomer.customer.customer_id}
-          customerName={prefillCustomer.customer.customer_name || ''}
-          mobile={prefillCustomer.mobile}
+          customerId={historyCustomer.id}
+          customerName={historyCustomer.name}
+          mobile={historyCustomer.mobile}
+          excludeJobId={historyCustomer.excludeJobId}
         />
       ) : null}
     </form>
@@ -10898,13 +10946,16 @@ function AutoServicesTable({
  * second JobModal on top would confuse the operator.)
  */
 function CustomerHistoryDialog({
-  open, onClose, customerId, customerName, mobile,
+  open, onClose, customerId, customerName, mobile, excludeJobId,
 }: {
   open: boolean;
   onClose: () => void;
   customerId: number;
   customerName: string;
   mobile: string;
+  /* The job being confirmed, when opened from Confirm & Schedule — it is not
+     prior history. Absent from Book New Call, where there is no job yet. */
+  excludeJobId?: number;
 }) {
   const [rows, setRows] = useState<Job[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -10924,11 +10975,15 @@ function CustomerHistoryDialog({
     let cancelled = false;
     setLoading(true); setErr(null); setRows(null);
     api.get<{ items: Job[]; total?: number }>('/admin/jobs', { customerId, limit: 100 })
-      .then((resp) => { if (!cancelled) setRows(resp.items || []); })
+      .then((resp) => {
+        if (!cancelled) {
+          setRows((resp.items || []).filter((j) => Number(j.job_id) !== excludeJobId));
+        }
+      })
       .catch((e) => { if (!cancelled) setErr(e instanceof ApiError ? e.message : 'Failed to load history'); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [open, customerId]);
+  }, [open, customerId, excludeJobId]);
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
