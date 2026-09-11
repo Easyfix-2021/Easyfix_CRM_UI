@@ -51,6 +51,7 @@ import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
 import { StatusChip, type StatusChipTone } from '@/components/ui/StatusChip';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { SkillImageLightbox, type SkillImageLightboxValue } from '@/components/easyfixer/SkillImageLightbox';
 import { TablePagination, type TablePageSize, pageSizeToLimit, PAGE_SIZE_OPTIONS } from '@/components/ui/table-pagination';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { showToast, dismissToast } from '@/components/ui/toast';
@@ -356,6 +357,7 @@ function IssueDetailDialog({ issueId, nameOf, onClose, onChanged }: {
 
   const [comment, setComment] = useState('');
   const [busy, setBusy] = useState(false);
+  const [zoom, setZoom] = useState<SkillImageLightboxValue>(null);
   /* Close note lives in a ref, not state: the confirm dialog snapshots its
    * `description` JSX at call time, so a controlled textarea there would never
    * re-render on keystrokes. Same shape as the payout-requests remarks field. */
@@ -496,14 +498,16 @@ function IssueDetailDialog({ issueId, nameOf, onClose, onChanged }: {
                       </p>
                     )}
                     <div className={data.screenshot_urls.length > 1 ? 'grid gap-2 sm:grid-cols-2' : ''}>
-                      {data.screenshot_urls.map((u) => (
+                      {data.screenshot_urls.map((u, i) => (
                         /* key on the URL: a new presigned URL is a new panel,
                            which clears any prior expiry state without an effect. */
-                        <ScreenshotPanel key={u} url={u} onReload={refetch} />
+                        <ScreenshotPanel key={u} url={u} onReload={refetch}
+                          onOpen={() => setZoom({ url: u, name: `Screenshot ${i + 1} Of ${data.screenshot_urls.length}` })} />
                       ))}
                     </div>
                   </>
                 )}
+                <SkillImageLightbox wide value={zoom} onClose={() => setZoom(null)} />
               </div>
             )}
 
@@ -570,7 +574,7 @@ function IssueDetailDialog({ issueId, nameOf, onClose, onChanged }: {
  * A null `url` is NOT an error: the service returns null when S3 is
  * unconfigured or the presign itself failed, and says so explicitly.
  */
-function ScreenshotPanel({ url, onReload }: { url: string | null; onReload: () => void }) {
+function ScreenshotPanel({ url, onReload, onOpen }: { url: string | null; onReload: () => void; onOpen?: () => void }) {
   const [expired, setExpired] = useState(false);
 
   if (!url || expired) {
@@ -590,13 +594,21 @@ function ScreenshotPanel({ url, onReload }: { url: string | null; onReload: () =
     );
   }
 
+  /*
+   * Click to enlarge. The thumbnail is capped at 420px, which leaves a full-page
+   * capture unreadable; the operator's only way in used to be right-click → open
+   * the presigned URL. An expired or unsigned attachment never reaches here (the
+   * panel above renders instead), so the lightbox cannot open on a dead link.
+   */
   return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={url}
-      alt="Issue Screenshot"
-      onError={() => setExpired(true)}
-      className="max-h-[420px] w-full rounded border object-contain"
-    />
+    <button type="button" onClick={onOpen} title="Click To Enlarge" className="block w-full cursor-zoom-in">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={url}
+        alt="Issue Screenshot"
+        onError={() => setExpired(true)}
+        className="max-h-[420px] w-full rounded border object-contain"
+      />
+    </button>
   );
 }

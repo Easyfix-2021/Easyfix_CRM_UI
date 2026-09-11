@@ -91,6 +91,15 @@ const WEBSITE_SOURCE_TYPE = 'website';
 // other value in the filter/query layer here is a string.
 const RETAIL_CLIENT_ID = '1';
 
+/*
+ * The Job Id box's alphabet: job ids and job booking references (REF-482505),
+ * comma-separated. Anything else is stripped as it is typed, and from a `?q=`
+ * bookmarked back when this box searched names. It is the backend's jobIdOrRef
+ * pattern (validators/job.validator.js); a character outside it would 400, and
+ * a 400 behind a grid that keeps its previous rows reads as "nothing happened".
+ */
+const JOB_ID_OR_REF_STRIP = /[^A-Za-z0-9._/,-]/g;
+
 type JobRow = JobAgeFields & {
   job_id: number; job_reference_id: string | null; client_ref_id: string | null;
   job_status: number; job_type: string; source_type: string | null;
@@ -270,7 +279,7 @@ export default function JobsPage() {
    * arrays are evaluated during render: referencing it further down the
    * component put it in the temporal dead zone.
    */
-  const [q, setQ] = useState(() => searchParams.get('q') || '');
+  const [q, setQ] = useState(() => (searchParams.get('q') || '').replace(JOB_ID_OR_REF_STRIP, ''));
   const serverQ = useDebouncedValue(q, 300).trim();
   /*
    * `filters` mirrors the legacy CRM "Filter Job" panel. Every key
@@ -567,8 +576,13 @@ export default function JobsPage() {
          * pages when only this one was asked about. The backend exposes jobIds
          * on listQuery and services/job.service.js already built
          * `j.job_id IN (...)` from it — the capability existed, unexposed.
+         *
+         * jobIdOrRef, not jobIds (2026-09-11, per ops). Each token is a job id
+         * OR a job booking reference, matched exactly: a number still goes to
+         * the primary key, anything else to job_reference_id. jobIds was
+         * digits-only, so pasting the REF-… shown under every id 400'd.
          */
-        jobIds: serverQ || undefined,
+        jobIdOrRef: serverQ || undefined,
         /*
          * Asks for the Manage Jobs PROJECTION, not a filter: three extra joins,
          * eight scalar subqueries and the two derived bucket labels. Opt-in so
@@ -990,7 +1004,12 @@ export default function JobsPage() {
       })).forEach(([k, v]) => qs.set(k, String(v)));
       // Search is server-side now, so the sheet must be narrowed by it too —
       // otherwise Export silently returns more rows than the screen shows.
-      if (serverQ) qs.set('q', serverQ);
+      // The grid's own param (2026-09-11). This sent `q`, an eleven-column
+      // LIKE: a superset for one id, nothing at all for a CSV, and inside the
+      // export's default 6-month window, so an old closed job was a row on
+      // screen and an empty sheet. The export reads jobIdOrRef through list()'s
+      // predicate and lets it lift that window.
+      if (serverQ) qs.set('jobIdOrRef', serverQ);
       const isEscalated = searchParams.get('focus') === 'escalated' ? 'true' : null;
       if (isEscalated) qs.set('isEscalated', 'true');
       // Mirror the same `dateType` gate as load() so the export
@@ -1117,7 +1136,8 @@ export default function JobsPage() {
   // when the operator can actually transfer ownership. ONE constant: three
   // colSpans read it, and two hand-written numbers in one <thead> disagreed
   // the last time this table changed shape.
-  const jobCols = canJob.isTransferJobOwnership ? 21 : 20;
+  // 19 since 2026-09-11: the booking reference id folded into the Job Id cell.
+  const jobCols = canJob.isTransferJobOwnership ? 20 : 19;
 
   /*
    * ── Selection derivations ─────────────────────────────────────────
@@ -1334,25 +1354,22 @@ export default function JobsPage() {
                     (2026-08-18) — the label said "(This Page)" and meant it,
                     so an operator searching a job id from page 1 found nothing
                     unless they happened to already be on the page holding it.
-                    `q` now goes to the backend (job id, reference id, client
-                    ref, customer name + mobile) and resets to page 1.
-                    filterJobRows still runs over the loaded rows for instant
-                    feedback during the 300ms debounce; it matches a superset of
-                    the backend's fields, so it never hides a server match. */}
-                <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Job Id</label>
+                    It now goes to the backend as `jobIdOrRef` — each token an
+                    exact job id or job booking reference — and resets to page 1.
+                    (Not `q` any more, and no client-side re-filter: see load().) */}
+                <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Job Id / Ref Id</label>
                 <Input
-                  inputMode="numeric"
-                  placeholder="e.g. 500043"
-                  title="Search by Job Id. Use Customer Name / No., Client or EFR ID for the other fields."
+                  placeholder="e.g. 500043 or REF-500043"
+                  title="Search by Job Id or Job Booking Reference Id (comma-separate several). Use Customer Name / No., Client or EFR ID for the other fields."
                   value={q}
                   /*
-                   * Digits only. The backend rejects anything else outright, and
-                   * a 400 behind a table that deliberately keeps its previous
-                   * rows on error reads as "nothing happened" — the same silent
-                   * failure a too-small CSV limit caused on this page before.
-                   * Strip at the input so the request is never malformed.
+                   * Stripped to the id/reference alphabet as it is typed — see
+                   * JOB_ID_OR_REF_STRIP. A 400 behind a table that deliberately
+                   * keeps its previous rows on error reads as "nothing happened",
+                   * the same silent failure a too-small CSV limit caused on this
+                   * page before, so the request is never malformed.
                    */
-                  onChange={(e) => setQ(e.target.value.replace(/[^0-9,]/g, ''))}
+                  onChange={(e) => setQ(e.target.value.replace(JOB_ID_OR_REF_STRIP, ''))}
                 />
               </div>
               <div>
@@ -1790,12 +1807,18 @@ export default function JobsPage() {
                       </th>
                     )}
                     {/* ─────────────────────────────────────────────────────────
-                        THE 20 COLUMNS, IN THE LEGACY ORDER (2026-09-10).
+                        THE 19 COLUMNS, IN THE LEGACY ORDER (2026-09-10).
                         Header text and sequence are the legacy Manage Jobs
                         screen's verbatim — EasyFix_CRM manageJob.vm:778-797,
                         rows bound by jobList.vm — including its "Escalted By"
                         spelling, so an operator moving between the two screens
                         reads the same words in the same places.
+
+                        ONE deliberate departure (2026-09-11, per ops): legacy's
+                        first column, "Job booking reference id", took a whole
+                        column for one short string. It now renders small under
+                        the Job Id in the same cell, and Job Id took over the
+                        pinned-left slot.
 
                         A header is a sort header only when its key is in the
                         backend's SORTABLE_COLUMNS. An unwhitelisted key is not
@@ -1804,8 +1827,7 @@ export default function JobsPage() {
                         GRID. tests/wire-contract.test.js in the backend repo
                         checks every col= on this page against that map.
                         ───────────────────────────────────────────────────── */}
-                    <SortHeader col="job_reference_id"        sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="stick-col-head stick-left">Job booking reference id</SortHeader>
-                    <SortHeader col="job_id"                  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Job Id</SortHeader>
+                    <SortHeader col="job_id"                  sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="stick-col-head stick-left">Job Id</SortHeader>
                     {/* Age — ticket-created → terminal event (or now, while
                         open). Server-computed AND server-sorted on the seconds
                         expression, never the floored day label, so same-day
@@ -1876,27 +1898,33 @@ export default function JobsPage() {
                       />
                     </td>
                   )}
-                  {/* ─── the 20 cells, positionally 1:1 with the <thead> above ───
+                  {/* ─── the 19 cells, positionally 1:1 with the <thead> above ───
                       Reordered and re-sourced to the legacy Manage Jobs set.
                       Cells whose data is only on the view=manage projection
                       render an em-dash when the field is absent, so an older
                       BE degrades to blanks instead of throwing. */}
-                  {/* 1. Job booking reference id — the EasyFix-generated REF
-                         string, NOT client_ref_id and NOT the numeric id. It
-                         takes the pinned-left slot Job # used to hold, because
-                         it is now the first column. */}
-                  <td className="text-xs whitespace-nowrap stick-col stick-left">{j.job_reference_id ?? '—'}</td>
-                  {/* 2. Job Id — keeps the call-history popover it has always
-                         carried, so no capability moves with the column. */}
-                  <td className="font-medium whitespace-nowrap">
+                  {/* 1. Job Id — pinned left, and keeps the call-history
+                         popover it has always carried. The job booking
+                         reference id rides UNDER it, small and muted, only
+                         when the job has one: the EasyFix REF string, NOT
+                         client_ref_id (column 8). Truncated with the full
+                         value on hover — the column is varchar(100), and an
+                         unbounded string in a pinned cell would widen the
+                         pinned slot for the whole page. */}
+                  <td className="font-medium whitespace-nowrap stick-col stick-left">
                     <span className="inline-flex items-center gap-1">
                       #{j.job_id}
                       <CallHistoryButton jobId={j.job_id} />
                     </span>
+                    {j.job_reference_id && (
+                      <div className="max-w-[10rem] truncate text-xs font-normal text-muted-foreground" title={j.job_reference_id}>
+                        {j.job_reference_id}
+                      </div>
+                    )}
                   </td>
-                  {/* 3. Age */}
+                  {/* 2. Age */}
                   <td className="text-xs whitespace-nowrap tabular-nums" title={jobAgeTitle(j)}>{formatJobAge(j)}</td>
-                  {/* 4. Cx Name & Number — the number stays a CallableMobile,
+                  {/* 3. Cx Name & Number — the number stays a CallableMobile,
                          which owns masking and call logging and never receives
                          unmasked digits, only the jobId. */}
                   <td className="whitespace-nowrap">
@@ -1905,7 +1933,7 @@ export default function JobsPage() {
                       <CallableMobile jobId={j.job_id} mobile={j.customer_mob_no} />
                     </div>
                   </td>
-                  {/* 5. Remark — THE LATEST COMMENT on the job, per ops. Not
+                  {/* 4. Remark — THE LATEST COMMENT on the job, per ops. Not
                          j.remarks: only one of the platform's comment writers
                          mirrors into that column, and it doubles as a
                          serialisation format for two fields that have no
@@ -1917,33 +1945,33 @@ export default function JobsPage() {
                       ? <span className="line-clamp-2 break-words" title={j.last_comment}>{j.last_comment}</span>
                       : <span className="text-muted-foreground">—</span>}
                   </td>
-                  {/* 6. Open Due to — the accountable PARTY, not the reason
+                  {/* 5. Open Due to — the accountable PARTY, not the reason
                          text. Same reason row as legacy's Remark column, which
                          is why the two were blank together there. */}
                   <td className="text-xs whitespace-nowrap">{j.due_to_type ?? '—'}</td>
-                  {/* 7. City / PIN */}
+                  {/* 6. City / PIN */}
                   <td className="whitespace-nowrap">
                     {j.city_name ?? '—'}
                     {j.pin_code && <span className="text-muted-foreground"> / {j.pin_code}</span>}
                   </td>
-                  {/* 8. Client */}
+                  {/* 7. Client */}
                   <td className="whitespace-nowrap">{j.client_name ?? '—'}</td>
-                  {/* 9. Client Ref Id — the CLIENT's own reference. */}
+                  {/* 8. Client Ref Id — the CLIENT's own reference. */}
                   <td className="text-xs">{j.client_ref_id ?? '—'}</td>
-                  {/* 10. Appointment Date */}
+                  {/* 9. Appointment Date */}
                   <td className="text-xs whitespace-nowrap">{formatDate(j.requested_date_time)}</td>
-                  {/* 11. Ticket Created */}
+                  {/* 10. Ticket Created */}
                   <td className="text-xs whitespace-nowrap">
                     {j.ticket_created_date_time ? formatDate(j.ticket_created_date_time) : '—'}
                   </td>
-                  {/* 12. Rating — the CUSTOMER's rating of the technician for
+                  {/* 11. Rating — the CUSTOMER's rating of the technician for
                           this job. Bare number, as legacy rendered it. */}
                   <td className="text-xs tabular-nums text-center">
                     {j.customer_rating != null && j.customer_rating > 0 ? j.customer_rating : '—'}
                   </td>
-                  {/* 13. Bucket — the coarse lifecycle name, derived server-side. */}
+                  {/* 12. Bucket — the coarse lifecycle name, derived server-side. */}
                   <td className="text-xs whitespace-nowrap">{j.bucket || '—'}</td>
-                  {/* 14. Bucket Status — the fine sub-state, also server-derived.
+                  {/* 13. Bucket Status — the fine sub-state, also server-derived.
                           The two CURRENT-product signals that used to hang off
                           the retired Status column ride here, because both
                           QUALIFY the state: a live delegation means the job is
@@ -1968,9 +1996,9 @@ export default function JobsPage() {
                       </button>
                     )}
                   </td>
-                  {/* 15. Category — the service CATEGORY, not the service type. */}
+                  {/* 14. Category — the service CATEGORY, not the service type. */}
                   <td className="text-xs whitespace-nowrap">{j.service_category ?? '—'}</td>
-                  {/* 16. Client SPOC Name & No. — both columns live on tbl_job
+                  {/* 15. Client SPOC Name & No. — both columns live on tbl_job
                           itself, not on tbl_client. `client_spoc` is already
                           registered in the backend's mask-mobile MOBILE_FIELDS,
                           so it arrives masked. */}
@@ -1978,9 +2006,9 @@ export default function JobsPage() {
                     {j.client_spoc_name ?? '—'}
                     {j.client_spoc && <div className="text-muted-foreground">{j.client_spoc}</div>}
                   </td>
-                  {/* 17. Easyfix SPOC — job_client_owner, NOT job_owner. */}
+                  {/* 16. Easyfix SPOC — job_client_owner, NOT job_owner. */}
                   <td className="text-xs whitespace-nowrap">{j.easyfix_spoc ?? '—'}</td>
-                  {/* 18. Tx name -ID- Master/Under Master. Keyed on
+                  {/* 17. Tx name -ID- Master/Under Master. Keyed on
                           fk_easyfixter_id, never the joined name: a job that IS
                           assigned to a technician with a blank efr_name once
                           rendered the literal word "unassigned" while the chip
@@ -2005,7 +2033,7 @@ export default function JobsPage() {
                       </>
                     ) : <span className="text-muted-foreground">unassigned</span>}
                   </td>
-                  {/* 19. Escalted By (legacy's spelling, kept). escalated_by
+                  {/* 18. Escalted By (legacy's spelling, kept). escalated_by
                           resolved through tbl_user, which is what the operator
                           wants — legacy printed the CLIENT SPOC's name in this
                           cell whenever an escalator actually existed, which
@@ -2015,7 +2043,7 @@ export default function JobsPage() {
                       ? <>{j.escalated_by_name}{j.escalated_time && <div className="text-muted-foreground">{formatDate(j.escalated_time)}</div>}</>
                       : <span className="text-muted-foreground">Not Escalated</span>}
                   </td>
-                  {/* 20. Action — unchanged, still pinned right. */}
+                  {/* 19. Action — unchanged, still pinned right. */}
                   <td className="stick-col stick-right text-right whitespace-nowrap">
                     {/*
                       * Status-driven row actions — the SAME per-bucket set

@@ -48,8 +48,8 @@ import { hasAction } from '@/lib/permissions';
 import { formatServiceAddress } from '@/lib/format';
 import { formatDate, appointmentIsPast } from '@/lib/utils';
 import { displaySlot } from '@/lib/job-slots';
+import { collectedByText } from '@/lib/collected-by';
 import { CallableMobile } from '@/components/calls/CallButton';
-import { StatusChip } from '@/components/ui/StatusChip';
 import { JobRemarksView } from './JobRemarksView';
 /* The SAME dialog the job detail modal and the Unconfirmed transaction view
    open, so Edit Address behaves identically wherever ops reach it. Importing
@@ -119,7 +119,12 @@ export type JobContextData = {
    * no backend change — it was returned and simply never read.
    */
   product_quantity?: number | null;
-  payment_mode?: string | null;
+  /**
+   * tbl_job.collected_by (1/2/3; 0 or NULL = unset) — rendered as Payment Mode.
+   * NOT the BE's `payment_mode`/`paid_by`: paid_by is 0 or NULL on ~96% of jobs,
+   * so its label printed "Not Set" for a job storing collected_by = 1.
+   */
+  collected_by?: number | string | null;
   requested_date_time?: string | null;
   /**
    * The stored appointment window (tbl_job.time_slot). Every current write path
@@ -138,8 +143,6 @@ export type JobContextData = {
   job_desc?: string | null;
   /** Technician-facing note ("Anything Handyman should keep in mind?") — shown as Additional Comments. */
   efr_special_notes?: string | null;
-  /** Who pays — per JOB. 2 = the customer pays; anything else = not the customer. */
-  paid_by?: number | string | null;
   services?: JobServiceRow[] | null;
 };
 
@@ -324,7 +327,7 @@ export function JobContextPanel({
                     : null
                 }
               />
-              <ReadField label="Payment Mode" value={job.payment_mode} />
+              <ReadField label="Payment Mode" value={collectedByText(job.collected_by) ?? 'Not Set'} />
               <ReadField label="Booked By" value={job.created_by_name} />
               {/* formatDate renders date + IST time — no separate datetime helper. */}
               <ReadField label="Booked On" value={formatDate(job.created_date_time)} />
@@ -357,8 +360,8 @@ export function JobContextPanel({
                     <thead>
                       <tr className="text-left text-muted-foreground">
                         {/* Widths keep each service on ONE line: the four text
-                            columns truncate under pressure, while Qty / Amount /
-                            Score / Billing are content-sized and never wrap.
+                            columns truncate under pressure, while Score / Qty /
+                            Amount are content-sized and never wrap.
                             The percentages were rebalanced (was 30/24/24) to fit
                             Job Skill WITHOUT widening the modal. */}
                         <th className="font-medium py-1 pr-3 w-[22%]">Service</th>
@@ -372,8 +375,10 @@ export function JobContextPanel({
                         <th className="font-medium py-1 pr-3 text-right whitespace-nowrap w-16">Job Matrix Score</th>
                         <th className="font-medium py-1 pr-3 text-right whitespace-nowrap w-12">Qty</th>
                         <th className="font-medium py-1 pr-3 text-right whitespace-nowrap w-20">Amount</th>
-                        {/* Does the customer pay? Driven by tbl_job.paid_by. */}
-                        <th className="font-medium py-1 whitespace-nowrap">Payment</th>
+                        {/* No per-service Payment column (removed 2026-09-11): it
+                            keyed on tbl_job.paid_by, 0 or NULL on ~96% of jobs, so
+                            it read "Free for Customer" beside Paid By Customer
+                            jobs. Who pays is per JOB — Payment Mode above. */}
                       </tr>
                     </thead>
                     <tbody>
@@ -428,31 +433,6 @@ export function JobContextPanel({
                           </td>
                           <td className="py-1 pr-3 text-right whitespace-nowrap">{s.quantity ?? '—'}</td>
                           <td className="py-1 pr-3 text-right whitespace-nowrap">{s.total_charge != null ? `₹${s.total_charge}` : '—'}</td>
-                          {/*
-                           * PAYMENT — does the customer pay for this job?
-                           * Driven solely by tbl_job.paid_by (2 = the customer
-                           * pays; anything else = they don't), per ops.
-                           *
-                           * ⚠ paid_by is per-JOB, so every service line shows the
-                           * SAME chip — it sits per-row because that's where ops
-                           * read it, not because the data varies. Deliberately NOT
-                           * keyed on the per-service `billing_label` (which only
-                           * says whether a CHARGE exists) nor on `collected_by`
-                           * (who physically collects): a line can carry ₹1000 and
-                           * still be free to the customer when the client is billed.
-                           * paid_by is the only column that answers who pays.
-                           */}
-                          <td className="py-1 whitespace-nowrap">
-                            {Number(job.paid_by) === 2 ? (
-                              <StatusChip tone="amber" title="The customer pays for this job — collect on site.">
-                                Paid by Customer
-                              </StatusChip>
-                            ) : (
-                              <StatusChip tone="emerald" title="Nothing to collect from the customer — the client is billed.">
-                                Free for Customer
-                              </StatusChip>
-                            )}
-                          </td>
                         </tr>
                       ))}
                     </tbody>
