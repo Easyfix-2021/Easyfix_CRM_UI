@@ -8,7 +8,7 @@ import { useDebouncedValue, useFetchOnce } from '@/lib/hooks';
 import {
   Plus, Upload, ChevronDown, ChevronUp, Repeat, Globe,
   // Row-level quick-action icons (mirror the legacy Manage Jobs action column)
-  Eye, CalendarClock, PlayCircle, CheckCircle2, CalendarCheck, MapPin, RefreshCw,
+  Eye, CalendarClock, PlayCircle, CalendarCheck, MapPin, RefreshCw,
   ClipboardCheck,
 } from 'lucide-react';
 import { IconButton } from '@/components/ui/icon-button';
@@ -36,7 +36,7 @@ import {
   formatJobAge, jobAgeTitle, JOB_AGE_SORT_KEY, type JobAgeFields,
 } from '@/lib/job-age';
 import {
-  TABS, type CountsResp, countFor, filterJobRows, filterTabsForStages, makeQuickStatusChange,
+  TABS, type CountsResp, countFor, filterJobRows, filterTabsForStages,
   JOB_SEARCH_PLACEHOLDER, JOB_SEARCH_HINT,
 } from '@/lib/job-tabs';
 import { transitionAllowed } from '@/lib/job-stages';
@@ -52,7 +52,6 @@ import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
 import { cycleSort, SortHeader, type SortDir } from '@/lib/use-sort';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
-import { useConfirm } from '@/components/ui/confirm-dialog';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
 import { useVirtualRows, VirtualPad } from '@/components/ui/virtual-rows';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -1066,33 +1065,18 @@ export default function JobsPage() {
    * date/slot and the technician are picked in one atomic step. That keeps the
    * tech-selection flow in one place.
    */
-  const [rowBusy, setRowBusy] = useState<number | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   // Live-location popover — the job whose technician location is being viewed
   // (null = closed). Shown for "Pending App Ack" (status 0, assigned) and
   // "Pending to Close" (status 2/20) rows, which always carry a tech.
   const [locationJob, setLocationJob] = useState<JobRow | null>(null);
   /*
-   * Row-level ops check-in. NOT quickStatusChange: that PATCHes /status, which
-   * writes job_status alone and leaves checkin_date_time — the TAT anchor —
-   * null. The dialog POSTs /admin/jobs/:id/checkin, the same endpoint the
-   * workspace's Check In button uses.
+   * Row-level ops check-in. NOT a plain status PATCH: that writes job_status
+   * alone and leaves checkin_date_time — the TAT anchor — null. The dialog
+   * POSTs /admin/jobs/:id/checkin, the same endpoint the workspace's Check In
+   * button uses.
    */
   const [checkinJobId, setCheckinJobId] = useState<number | null>(null);
-  const confirmAction = useConfirm();
-  // Shared factory (lib/job-tabs.ts). /jobs keeps the short confirm copy and
-  // refreshes the dashboard counts after reload (afterReload: refreshCounts).
-  const quickStatusChange = makeQuickStatusChange({
-    confirmAction,
-    api,
-    description: `The job's status will be updated.`,
-    setRowBusy,
-    setErrorMsg,
-    clearCache: () => cacheRef.current.clear(),
-    reload: async () => { await load(false, true); },
-    afterReload: refreshCounts,
-  });
-
   // Instant client-side search filter over the current (server-sorted,
   // server-paginated) page — shared filterJobRows in lib/job-tabs.ts. Sorting
   // itself is now server-side (see below), so this only narrows what's already
@@ -1636,8 +1620,8 @@ export default function JobsPage() {
                     emerald Export on the right give it a clear
                     visual shelf without a custom hue. */}
                 {/* Ops check-in from a row — same dialog, same endpoint as the workspace's
-          Check In button. Reload mirrors quickStatusChange's success path,
-          counts included, so the status pills stay coherent. */}
+          Check In button. Reload refreshes the list and the counts, so the
+          status pills stay coherent. */}
       <CheckInWithReasonDialog
         open={checkinJobId != null}
         onClose={() => setCheckinJobId(null)}
@@ -2051,13 +2035,11 @@ export default function JobsPage() {
                       *   status 9     → View + Confirm & Schedule
                       *   status 0     → View + Schedule & Assign (date/slot + tech, atomic)
                       *   status 1     → View + Check-In + Reassign + Resend PIN
-                      *   status 2, 20 → View + Check-Out + Resend PIN
+                      *   status 2, 20 → View + Resend PIN (no Check-Out: closed from the app)
                       *   status 3, 5  → View + Audit (Billing & Charges)
                       *   others       → View only
-                      * Check-Out goes through quickStatusChange() (confirm + PATCH
-                      * /status + refresh list and counts). Check-In does NOT: it
-                      * needs the check-in columns, so it opens the shared
-                      * CheckInWithReasonDialog and refreshes the same way.
+                      * Check-In needs the check-in columns, so it opens the shared
+                      * CheckInWithReasonDialog and refreshes the list and counts.
                       */}
                     <div className="inline-flex items-center gap-0.5 justify-end">
                       <IconButton
@@ -2167,31 +2149,9 @@ export default function JobsPage() {
                           onClick={() => setCheckinJobId(j.job_id)}
                         />
                       )}
-                      {/*
-                        * CHECK-OUT SENDS 10 (Under Audit), NOT 3 (Completed).
-                        *
-                        * Pending to Close is statuses [2, 20] and its ONLY forward
-                        * target is 10 — the lifecycle is
-                        *   2/20 → 10 Under Audit → 3 Pending for Feedback → 5 Completed
-                        * (lib/job-stages.js, mirrored in src/lib/job-stages.ts).
-                        *
-                        * This used to send 3, which pending-close does not list as a
-                        * target at all: it skipped the Under Audit queue outright. It
-                        * never failed loudly, because transitionAllowed returns TRUE
-                        * for every UNRESTRICTED operator — the stage guard only bites
-                        * users holding explicit stage rows. So the bypass was
-                        * invisible to almost everyone, and for the few it did bite the
-                        * button simply disappeared.
-                        */}
-                      {(j.job_status === 2 || j.job_status === 20) && canJob.isJobStatusChange && transitionAllowed(me?.allowedStages, j.job_status, 10) && (
-                        <IconButton
-                          icon={CheckCircle2}
-                          intent="success"
-                          label="Check-Out — close the job and send it to Under Audit"
-                          busy={rowBusy === j.job_id}
-                          onClick={() => quickStatusChange(j.job_id, 10, 'Check out')}
-                        />
-                      )}
+                      {/* No Check-Out row action (2026-09-11, per ops): Pending to
+                          Close on App jobs (2/20) are closed by the technician from
+                          the app. See the note in JobModal's ActionBar. */}
                       {/*
                         * Audit (Audit & Complete — statuses 3 / 5). Opens the
                         * same workspace the Eye does, landed on Billing &

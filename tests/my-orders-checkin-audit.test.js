@@ -429,33 +429,23 @@ test('F2 — neither row Check-In goes through the status PATCH any more', () =>
   }
 });
 
-test('F2 — check-out is untouched: it has no columns of its own to write', () => {
+test('F2 — the row Check-Out is gone on purpose, and took its helper with it', () => {
   /*
-   * quickStatusChange is SHARED with the row Check-Out action. Routing check-in
-   * away from it must not take that caller with it, and a regex sweep for the
-   * helper would have.
-   *
-   * PINS THE HELPER, NOT THE STATUS. This used to match the whole call
-   * verbatim — `quickStatusChange(j.job_id, 3, 'Check out & complete')` —
-   * which froze two facts this test has no opinion about: the target status and
-   * the button's wording. When Check-Out was corrected from 3 to 10 (2/20's
-   * only legal target; 3 skipped the Under Audit queue) this test failed while
-   * the thing it actually guards was untouched. The target now belongs to
-   * tests/job-status-actions.test.js, which checks it against the stage table
-   * instead of against a copy of itself.
+   * This test used to guard the OTHER caller of quickStatusChange — the row
+   * Check-Out — so that routing check-in away from the helper could not take
+   * check-out with it. On 2026-09-11 ops removed Check-Out itself: Pending to
+   * Close on App jobs (2/20) are closed by the technician from the app
+   * (tests/no-crm-checkout.test.js). That left quickStatusChange with no caller,
+   * so it, its busy state and lib/job-tabs.ts's makeQuickStatusChange were
+   * deleted rather than kept as dead code. Pinned so neither returns without a
+   * caller that needs it.
    */
   for (const [name, src] of [['my-orders', page], ['jobs', jobsPage]]) {
-    assert.match(
-      src,
-      /quickStatusChange\(j\.job_id,\s*\d+,\s*'Check out/,
-      `${name}: check-out must still use the shared quick-status helper`,
-    );
+    assert.doesNotMatch(src, /\bquickStatusChange\s*\(/, `${name}: no quick status-change call may remain`);
+    assert.doesNotMatch(src, /\bmakeQuickStatusChange\b/, `${name}: nor the factory import`);
   }
-  assert.match(
-    read('lib', 'job-tabs.ts'),
-    /opts\.api\.patch\(`\/admin\/jobs\/\$\{jobId\}\/status`, \{ status: toStatus \}\)/,
-    'makeQuickStatusChange itself must be unchanged',
-  );
+  assert.doesNotMatch(read('lib', 'job-tabs.ts'), /export function makeQuickStatusChange/,
+    'the factory had one purpose, and it is gone');
 });
 
 test('F2 — the dialog is ONE component with three mount points, not three copies', () => {
