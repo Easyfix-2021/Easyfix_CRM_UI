@@ -96,6 +96,9 @@ const TITLE_MAX = 200;
 const DESCRIPTION_MAX = 4000;
 const COMMENT_MAX = 2000;
 const CLOSE_NOTE_MAX = 1000;
+/* validators/issue.validator.js issueReopen — 600, so the reopen comment can
+ * also carry the close it undoes within comment_text's 2000. */
+const REOPEN_NOTE_MAX = 600;
 const MIN_TEXT = 3;
 
 /** First page. The panel is 26rem wide, so a full table footer does not fit —
@@ -304,6 +307,7 @@ export function IssueReporter() {
   // Detail view.
   const [commentText, setCommentText] = React.useState('');
   const [posting, setPosting] = React.useState(false);
+  const [reopening, setReopening] = React.useState(false);
 
   /* Close note lives in a ref, not state: confirm() snapshots its `description`
    * JSX at call time (see components/ui/confirm-dialog.tsx), so a controlled
@@ -546,7 +550,7 @@ export function IssueReporter() {
               defaultValue=""
               onChange={(e) => { reopenNoteRef.current = e.target.value; }}
               rows={3}
-              maxLength={COMMENT_MAX}
+              maxLength={REOPEN_NOTE_MAX}
               required
               placeholder="What Still Happens, And Where"
               className="w-full rounded border border-input bg-background px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-ring"
@@ -562,13 +566,18 @@ export function IssueReporter() {
       showToast({ variant: 'error', message: 'Tell Us What Is Still Wrong.' });
       return;
     }
+    setReopening(true);
     try {
       await api.patch(`${LIST_PREFIX}/${selectedId}/reopen`, { reopen_note: reopenNote });
       showToast({ variant: 'success', message: 'Issue Reopened.' });
       detail.refetch();
       refreshLists();
     } catch (err) {
+      // 409 = someone reopened (or re-closed) it first: show the ticket as it is now.
+      if (err instanceof ApiError && err.status === 409) { detail.refetch(); refreshLists(); }
       showToast({ variant: 'error', message: errText(err, 'Could Not Reopen The Issue.') });
+    } finally {
+      setReopening(false);
     }
   }
 
@@ -716,7 +725,7 @@ export function IssueReporter() {
                           Close Issue
                         </Button>
                       ) : issue.status === 'closed' && (issue.reported_by === me?.user.user_id || canManage) ? (
-                        <Button type="button" variant="outline" size="sm" onClick={reopenIssue}>
+                        <Button type="button" variant="outline" size="sm" onClick={reopenIssue} disabled={reopening}>
                           Reopen Issue
                         </Button>
                       ) : <span />}
