@@ -38,7 +38,7 @@
 
 import { useEffect, useState } from 'react';
 import {
-  MapPin, Calendar, Loader2, Clock, ChevronDown, Pencil,
+  MapPin, Calendar, Loader2, Clock, ChevronDown, Pencil, AlertTriangle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { showToast } from '@/components/ui/toast';
@@ -545,10 +545,16 @@ export function JobContextPanel({
                 */}
               {!rescheduling && appointmentIsPast(job.requested_date_time) && (
                 pastBlocksAction ? (
-                  <p className="mt-2 text-xs font-medium text-urgent-strong">
-                    This appointment time has already passed. Reschedule it to a future
-                    slot before offering the job to technicians.
-                  </p>
+                  // A red STRIP, not red text (2026-09-11, per ops): this one
+                  // BLOCKS the offer, and as a line of text it read as a hint.
+                  // Same strip the LMS pages use for blocking notices.
+                  <div role="alert" className="mt-2 flex items-start gap-2 rounded-md border border-urgent/30 bg-urgent-tint p-2 text-xs font-medium text-urgent-strong">
+                    <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
+                    <span>
+                      This appointment time has already passed. Reschedule it to a future
+                      slot before offering the job to technicians.
+                    </span>
+                  </div>
                 ) : (
                   <p className="mt-2 text-xs font-medium text-warning-strong">
                     This appointment time has already passed. You can still reassign,
