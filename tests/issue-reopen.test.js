@@ -82,3 +82,18 @@ test('queue: the dialog is handed the caller id and canManage, not a new fetch',
   assert.match(SRC.queue, /<IssueDetailDialog[^>]*meId=\{me\?\.user\.user_id\}\s*canManage=\{canManage\}/);
   assert.doesNotMatch(SRC.queue, /It cannot be re-opened/, 'the close dialog must not promise a dead end any more');
 });
+
+test('both: Reopen is disabled while in flight, and a 409 shows the ticket as it is now', () => {
+  assert.match(SRC.widget, /onClick=\{reopenIssue\} disabled=\{reopening\}/);
+  assert.match(SRC.queue, /onClick=\{reopenIssue\} disabled=\{busy\}/);
+  for (const [name, src] of Object.entries(SRC)) {
+    assert.match(reopenBody(src), /status === 409\)[^\n]*refetch\(\)/, `${name}: a lost race refetches instead of leaving a stale Closed ticket`);
+  }
+});
+
+test('both: the reason is capped at the backend\'s 600, so the close it undoes still fits the comment', () => {
+  assert.match(SRC.widget, /const REOPEN_NOTE_MAX = 600;/);
+  for (const [name, src] of Object.entries(SRC)) {
+    assert.match(reopenBody(src), /maxLength=\{(REOPEN_NOTE_MAX|600\b)/, `${name}: textarea capped`);
+  }
+});

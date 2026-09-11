@@ -464,7 +464,7 @@ function IssueDetailDialog({ issueId, meId, canManage, nameOf, onClose, onChange
               defaultValue=""
               onChange={(e) => { reopenNoteRef.current = e.target.value; }}
               rows={3}
-              maxLength={2000}
+              maxLength={600 /* validators/issue.validator.js issueReopen */}
               required
               placeholder="What Still Happens, And Where"
               className="w-full rounded border border-input bg-background px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-ring"

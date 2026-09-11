@@ -29,10 +29,16 @@ function backendFile(rel) {
 }
 
 test('every per-mobile limiter the backend registers has a label in the dialog', () => {
-  const names = [...backendFile(path.join('routes', 'mobile', 'index.js')).matchAll(/perMobile:\s*'([^']+)'/g)].map((m) => m[1]);
-  assert.ok(names.length >= 2, `positive control: found the backend's limiters, got ${JSON.stringify(names)}`);
+  const src = backendFile(path.join('routes', 'mobile', 'index.js'));
+  assert.match(src, /'\/auth\/verify-otp'/, 'positive control: this is the technician auth router');
   const labels = dialog.slice(dialog.indexOf('const LIMITER_LABEL'), dialog.indexOf('};', dialog.indexOf('const LIMITER_LABEL')));
-  for (const n of names) assert.match(labels, new RegExp(`'${n}':\\s*'[^']+'`), `no label for limiter '${n}'`);
+  // CI and the deploy precheck clone the backend's DEFAULT branch (Production), which
+  // can be older than this CRM and register none — its lookup then sends no
+  // appLoginLimits, so there is nothing to label. Whatever it does register must be.
+  const names = [...src.matchAll(/perMobile:\s*'([^']+)'/g)].map((m) => m[1]);
+  for (const n of new Set([...names, 'login-otp', 'verify-otp'])) {
+    assert.match(labels, new RegExp(`'${n}':\\s*'[^']+'`), `no label for limiter '${n}'`);
+  }
 });
 
 test('the rows render, enable Unlock, and tolerate an older backend', () => {
