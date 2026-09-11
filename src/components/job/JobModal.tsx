@@ -313,9 +313,9 @@ export function JobModal({
   // the modal root so it can dismiss without unmounting JobForm/View.
   const [addRemarksOpen, setAddRemarksOpen] = useState(false);
   // Bumped by refresh() — and ONLY there — so every mounted reader of the
-  // job's comment thread refetches after any action. Those readers keep their
-  // own useFetch state and are not re-mounted by refresh(), so the new job
-  // payload alone never reaches them.
+  // job's comment thread, and Scheduling History, refetches after any action.
+  // Those readers keep their own useFetch state and are not re-mounted by
+  // refresh(), so the new job payload alone never reaches them.
   const [commentsRefreshKey, setCommentsRefreshKey] = useState(0);
   /*
    * Optimistic pending-comment list (2026-06-05).
@@ -450,6 +450,16 @@ export function JobModal({
      * up — the eviction covers its next mount.
      */
     invalidateFetch((k) => k.startsWith(`/admin/jobs/${resolvedJobId}/comments`));
+    /*
+     * Two more readers of what these actions write, evicted on the same terms.
+     * Scheduling History (Schedule tab) reads scheduling_history, which a
+     * reschedule appends to; mounted, it refetches on the key below.
+     * Schedule & Assign's Top-10 is ranked on open, but useFetch hands a reopen
+     * within 30s the ranking it cached last time — so a services / address /
+     * reschedule edit made here, then S&A reopened, showed the pre-edit ranking.
+     */
+    invalidateFetch((k) => k === `/admin/reports/job-tracking?jobId=${resolvedJobId}`
+      || k.startsWith(`/admin/jobs/${resolvedJobId}/candidates`));
     setCommentsRefreshKey((k) => k + 1);
     try { setJob(await api.get<Job>(`/admin/jobs/${resolvedJobId}`, fetchQuery)); }
     catch { /* swallow — outer error state is set by action handlers */ }
@@ -1500,7 +1510,7 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
           />
         </div>
         {/* Histories stay full width — they are 4-column tables. */}
-        <JobSchedulingHistory jobId={Number(job.job_id)} />
+        <JobSchedulingHistory jobId={Number(job.job_id)} refreshKey={commentsRefreshKey} />
       </Panel>
 
       {/*
@@ -1994,7 +2004,7 @@ function JobCustomerRequests({ jobId, jobStatus, onJobChanged }: { jobId: number
  * commentary; this is the record. Both are worth having, and neither is derivable
  * from the other — a reschedule with no comment appears only here.
  */
-function JobSchedulingHistory({ jobId }: { jobId: number }) {
+function JobSchedulingHistory({ jobId, refreshKey = 0 }: { jobId: number; refreshKey?: number }) {
   type ScheduleRow = {
     id: number;
     easyfixer_id: number | null;
@@ -2004,7 +2014,20 @@ function JobSchedulingHistory({ jobId }: { jobId: number }) {
     reschedule_reason: string | null;
   };
   // Shared hook per the repo's fetch rules — never a raw useEffect + api.get.
-  const { data, loading, error } = useFetch<ScheduleRow[]>(`/admin/reports/job-tracking?jobId=${jobId}`);
+  const { data, loading, error, refetch } = useFetch<ScheduleRow[]>(`/admin/reports/job-tracking?jobId=${jobId}`);
+  /*
+   * Same trigger as JobRescheduleHistory: a reschedule from the footer appends
+   * the row this table lists while the Schedule tab (or Single Page) shows it,
+   * and a mounted useFetch only re-reads when told. Skips mount — that is the
+   * hook's own fetch.
+   */
+  const seenRefreshKey = useRef(refreshKey);
+  useEffect(() => {
+    if (seenRefreshKey.current === refreshKey) return;
+    seenRefreshKey.current = refreshKey;
+    refetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey]);
   const rows = useMemo(() => (Array.isArray(data) ? data : []), [data]);
 
   // Hidden on failure rather than shown broken, matching JobCallHistory: this is
@@ -2432,7 +2455,14 @@ function invalidateBreakdownCache(jobId: number) {
   SERVICE_BREAKDOWN_CACHE.delete(jobId);
 }
 
-function ServicesTabBody({ job, onMutated, onDirtyChange }: { job: Job; onMutated?: () => void; onDirtyChange?: (dirty: boolean) => void }) {
+/*
+ * Exported for Schedule & Assign's Edit Services dialog, which hosts THIS
+ * component rather than a copy, so both surfaces edit services under the same
+ * gates. Every write here — add, quantity, remove, restore — ends in
+ * onMutated(); that callback is the host's only signal that the services
+ * (and so the technician ranking) changed.
+ */
+export function ServicesTabBody({ job, onMutated, onDirtyChange }: { job: Job; onMutated?: () => void; onDirtyChange?: (dirty: boolean) => void }) {
   const services = Array.isArray(job.services) ? job.services : [];
   // Active vs. inactive split — operators get a "Show Inactive" toggle
   // so the soft-deleted rows can be inspected (and restored when we
@@ -5664,6 +5694,13 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
    * discoverable but obviously not usable until save.
    */
   const [addRemarksFormOpen, setAddRemarksFormOpen] = useState(false);
+  /*
+   * Remounts Confirm & Schedule's JobRemarksView after an Add Remarks save —
+   * its thread is a mounted useFetch, which eviction alone cannot re-run.
+   * LOCAL on purpose: onRefresh would re-seed this form from `initial` and
+   * wipe whatever the operator has typed but not yet booked.
+   */
+  const [remarksReloadKey, setRemarksReloadKey] = useState(0);
 
   /*
    * Job-outcome dialog (Unreachable / Enquiry) — added 2026-05-18 to
@@ -8563,7 +8600,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
         </Section>
 
         {/* Read-only remarks / comments history at the bottom of the confirm form. */}
-        <JobRemarksView jobId={initial?.job_id ?? null} />
+        <JobRemarksView key={remarksReloadKey} jobId={initial?.job_id ?? null} />
 
         {error && <div className="text-sm text-destructive">{error}</div>}
         {/* Confirm-mode footer — three-button layout matching the legacy
@@ -8720,7 +8757,12 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             open={addRemarksFormOpen}
             jobId={initial.job_id}
             onClose={() => setAddRemarksFormOpen(false)}
-            onSaved={() => { setAddRemarksFormOpen(false); }}
+            onSaved={() => {
+              setAddRemarksFormOpen(false);
+              // Evict, then remount the thread above so it re-reads the new row.
+              invalidateFetch((k) => k.startsWith(`/admin/jobs/${initial.job_id}/comments`));
+              setRemarksReloadKey((n) => n + 1);
+            }}
           />
         )}
         {/* Customer History — the Job Summary strip's View History opens

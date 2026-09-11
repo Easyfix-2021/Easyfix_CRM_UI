@@ -72,7 +72,7 @@ import { CallableMobile } from '@/components/calls/CallButton';
 import { AddRemarksDialog } from './AddRemarksDialog';
 import { CancelWithReasonDialog } from './CancelWithReasonDialog';
 import { RescheduleDialog } from './RescheduleDialog';
-import { ST } from './JobModal';
+import { ST, ServicesTabBody } from './JobModal';
 import { JobContextPanel, type JobServiceRow } from './JobContextPanel';
 import {
   CandidateTable, PincodeListModal, type ScheduleCandidate,
@@ -331,7 +331,9 @@ export function ScheduleAssignModal({
   const [cancelOpen, setCancelOpen] = useState(false);
   // Reschedule dialog — the ONLY way to change the (now read-only) Job Date/Time.
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
-  // Bumped after a reschedule to REMOUNT JobRemarksView (its comment thread lives
+  // Edit Services dialog (hosts JobModal's ServicesTabBody) — see EditServicesDialog.
+  const [servicesOpen, setServicesOpen] = useState(false);
+  // Bumped after a reschedule or a remark to REMOUNT JobRemarksView (its comment thread lives
   // in its own useFetch, which invalidateFetch alone can't re-run — see onDone).
   const [remarksReloadKey, setRemarksReloadKey] = useState(0);
   // True from the moment a reschedule is submitted until the refetch settles.
@@ -407,6 +409,7 @@ export function ScheduleAssignModal({
     setSearch(''); setCommitting(false); setErr(null); setPincodeModalFor(null);
     setRetainedJob(null); setSelected(new Map());
     setSearchPage(0); setSearchPageSize(10);
+    setServicesOpen(false);
   }, [open, jobId]);
 
   // Toggle a technician's membership in the selection. OFFER mode = multi-select
@@ -454,12 +457,42 @@ export function ScheduleAssignModal({
   // Top-10 endpoint. A genuine date edit flips it true and re-ranks (intended).
   const scheduleEdited = seeded && jobDateLocal !== seedDate;
 
+  /*
+   * Every OPEN ranks afresh. useFetch caches for 30 s, so an edit made anywhere
+   * else within 30 s of a previous open — the View modal, Confirm & Schedule,
+   * another operator, the client portal, the tech app — would re-show the old
+   * ranking. Declared BEFORE the Top-10 hook: React runs a component's effects
+   * in declaration order, so the eviction lands before that hook's fetch.
+   */
+  useEffect(() => {
+    if (open && jobId) invalidateFetch((k) => k.startsWith(`/admin/jobs/${jobId}/candidates`));
+  }, [open, jobId]);
+
   // (b) TOP 10 — keyed on jobId; the proposed schedule joins the key only
   // after a real edit (scheduleEdited) so the first open is a single fetch.
   const topKey = open && jobId
     ? `/admin/jobs/${jobId}/candidates?limit=10${scheduleEdited ? scheduleQs : ''}`
     : null;
   const top = useFetch<CandidatesResponse>(topKey, { enabled: !!topKey });
+
+  /*
+   * Re-rank after an edit made IN this modal — address (zone eligibility is
+   * derived from the pin), services (the deep skills the ranker requires come
+   * from them), or the description. The panel's job object AND its Services
+   * rows come from the CANDIDATES response, and invalidateFetch only DROPS the
+   * cache: the still-mounted Top-10 hook has to be re-run as well. onChanged
+   * because the list behind the modal renders some of these fields itself.
+   * (Reschedule has its own onDone below: it also veils the list and
+   * refreshes the offers.)
+   */
+  function reRank() {
+    invalidateFetch((k) => k.startsWith(`/admin/jobs/${jobId}/candidates`));
+    top.refetch();
+    // A typed technician search is a second mounted ranking — eviction alone
+    // cannot re-run it either.
+    if (searchKey) searchRes.refetch();
+    onChanged?.();
+  }
 
   /*
    * ⚠ NEVER read `top.data` directly — read `topData`.
@@ -894,29 +927,25 @@ export function ScheduleAssignModal({
               /*
                * The panel's job object comes from the CANDIDATES response, not
                * from /admin/jobs/:id — invalidating the detail key alone would
-               * leave the OLD text on screen. And invalidateFetch only DROPS
-               * the cache; the still-mounted Top-10 hook has to be re-run, the
-               * same pairing the reschedule onDone below already documents.
+               * leave the OLD text on screen. reRank re-runs that hook too.
                */
-              invalidateFetch((k) => k.startsWith(`/admin/jobs/${jobId}/candidates`));
-              top.refetch();
-              // The list behind the modal renders job_desc (truncated) in its
-              // own row, so it needs to know too.
-              onChanged?.();
+              reRank();
             } : undefined}
             /*
-             * Edit Address — same opt-in gate and the same refresh pairing. The
-             * dialog PATCHes on its own, so this callback only has to make the
-             * panel re-read: drop the candidates cache AND re-run the mounted
-             * hook, because invalidateFetch cannot re-run a live hook.
-             * Ranking is address-sensitive (zone eligibility is derived from
-             * the pin), so the Top-10 below genuinely has to be recomputed —
-             * this is not a cosmetic refresh.
+             * Edit Address — same opt-in gate. The dialog PATCHes on its own,
+             * so this callback only has to re-rank — and ranking is
+             * address-sensitive, so this is not a cosmetic refresh.
              */
-            onAddressSaved={jobId != null && offerable ? () => {
-              invalidateFetch((k) => k.startsWith(`/admin/jobs/${jobId}/candidates`));
-              top.refetch();
-              onChanged?.();
+            onAddressSaved={jobId != null && offerable ? reRank : undefined}
+            /*
+             * Edit Services — same opt-in gate (the panel adds isJobEdit). The
+             * detail key is dropped first so the editor reads the job's services
+             * as they are NOW: the probe above cached that very key when this
+             * modal opened, and a View-modal edit since then is not in it.
+             */
+            onEditServices={jobId != null && offerable ? () => {
+              invalidateFetch((k) => k === `/admin/jobs/${jobId}`);
+              setServicesOpen(true);
             } : undefined}
           />
 
@@ -1355,6 +1384,10 @@ export function ScheduleAssignModal({
           onSaved={() => {
             showToast({ variant: 'success', message: 'Remark Added' });
             setRemarksOpen(false);
+            // The panel's Remarks thread is a mounted useFetch: evict, then
+            // remount it (same pairing as the reschedule onDone below).
+            invalidateFetch((k) => k.startsWith(`/admin/jobs/${jobId}/comments`));
+            setRemarksReloadKey((n) => n + 1);
           }}
         />
       )}
@@ -1409,6 +1442,81 @@ export function ScheduleAssignModal({
           }}
         />
       )}
+
+      {/* Edit Services — mounted only while open, so every open is a fresh
+          read of the job rather than the previous open's payload. Each write
+          inside it re-ranks the Top-10 (reRank). */}
+      {servicesOpen && jobId != null && (
+        <EditServicesDialog
+          jobId={jobId}
+          onClose={() => setServicesOpen(false)}
+          onMutated={reRank}
+        />
+      )}
+    </Dialog>
+  );
+}
+
+/*
+ * Edit Services — the View modal's own Services editor (JobModal's
+ * ServicesTabBody), hosted in a dialog so a Pending-for-Scheduling job's
+ * services can change before it is offered. The SAME component, not a copy:
+ * same catalog, same writes, same edit gates (it allows editing while the job
+ * is not closed; the button that opens this additionally needs isJobEdit).
+ *
+ * It needs the FULL job from /admin/jobs/:id — job_service_id,
+ * job_service_status, fk_client_id, fk_service_catg_id, job_type — none of
+ * which the /candidates job header carries, so that row is never cast to Job.
+ *
+ * ServicesTabBody calls onMutated after every successful write (add, quantity,
+ * remove, restore). Re-read this job so the dialog's own table shows it, then
+ * tell the host, whose Top-10 and Services rows come from /candidates.
+ */
+function EditServicesDialog({ jobId, onClose, onMutated }: {
+  jobId: number; onClose: () => void; onMutated: () => void;
+}) {
+  const detail = useFetch<Parameters<typeof ServicesTabBody>[0]['job']>(`/admin/jobs/${jobId}`);
+  // Same identity guard as the probe: a deep-link job swap re-renders this
+  // once with the new id before the modal's reset effect closes it.
+  const job = detail.data && Number(detail.data.job_id) === jobId ? detail.data : null;
+  /*
+   * Every write in the editor saves itself (quantity on blur), so the one edit a
+   * close can discard is a quantity OUTSIDE 1..100 — which ServicesTabBody
+   * refuses to save and reports through onDirtyChange for exactly this prompt.
+   */
+  const invalidQtyRef = useRef(false);
+  const guardedOpenChange = useFormDirtyGuard(onClose, {
+    isDirty: () => invalidQtyRef.current,
+    title: 'Discard Invalid Quantity?',
+    description: 'A quantity you entered is invalid and won’t be saved. Close and discard it?',
+    confirmLabel: 'Close Anyway',
+    cancelLabel: 'Keep Editing',
+  });
+  return (
+    <Dialog open onOpenChange={guardedOpenChange}>
+      <DialogContent className="!max-w-5xl !max-h-[calc(100vh-48px)] flex flex-col !p-0 gap-0 overflow-hidden">
+        <DialogHeader className="!mx-0 !mt-0 !mb-0 px-6 py-4 shrink-0">
+          <DialogTitle>Edit Services · Job #{jobId}</DialogTitle>
+        </DialogHeader>
+        <div className="p-4 flex-1 overflow-y-auto">
+          {job ? (
+            <ServicesTabBody
+              job={job}
+              onMutated={() => { detail.refetch(); onMutated(); }}
+              onDirtyChange={(dirty) => { invalidQtyRef.current = dirty; }}
+            />
+          ) : detail.error ? (
+            <div className="text-sm text-urgent-strong">Could Not Load Services: {detail.error}</div>
+          ) : (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+            </div>
+          )}
+        </div>
+        <div className="px-4 py-3 border-t flex justify-end gap-2 shrink-0">
+          <Button variant="outline" onClick={() => guardedOpenChange(false)}>Close</Button>
+        </div>
+      </DialogContent>
     </Dialog>
   );
 }

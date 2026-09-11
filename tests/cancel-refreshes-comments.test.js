@@ -31,6 +31,12 @@
  * reaches it through refresh(). The eviction test below accepts that, and
  * only that — the delegate must itself evict, and it must still run after
  * the PATCH. ScheduleAssignModal's mount is untouched and still evicts inline.
+ *
+ * ─── THIRD PASS: THE TWO SURFACES refresh() NEVER REACHES ─────────────────
+ *
+ * Add Remarks inside Confirm & Schedule (JobForm) and inside Schedule & Assign
+ * only closed the dialog, so the remarks thread mounted right there never
+ * showed the new row. Both now evict + remount locally; see the last two tests.
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -120,19 +126,44 @@ test('every mounted reader of the thread in JobModal refetches on the key refres
   }
 });
 
-test('JobRemarksView needs no key: refresh() never runs while JobForm is mounted', () => {
+/* Same eviction, for a job id read off an object (`initial.job_id`). */
+const EVICT_ANY = /invalidateFetch\(\(k\) => k\.startsWith\(`\/admin\/jobs\/\$\{[\w.]+\}\/comments`\)\)/;
+
+test('JobForm\'s JobRemarksView re-reads after its OWN Add Remarks — via a local key, never onRefresh', () => {
   /*
-   * The third reader of the thread renders inside JobForm (Confirm & Schedule).
-   * JobForm receives onRefresh but never calls it, and every other refresh()
-   * caller — footer, ActionBar, the Cancel / Description / Add Remarks dialogs,
-   * ViewBody — renders in view mode only. So there is no mounted JobRemarksView
-   * for a bump to reach; refresh()'s eviction covers its next mount. If JobForm
-   * starts calling onRefresh this goes red: key its JobRemarksView on
-   * commentsRefreshKey in the same change.
+   * The third reader of the thread renders inside JobForm (Confirm & Schedule),
+   * where refresh() never runs — and must not be made to: onRefresh re-seeds
+   * the form from `initial`, wiping a booking the operator has typed but not
+   * submitted. So JobForm's Add Remarks save closed the dialog and nothing
+   * else, and the thread under the form kept the pre-remark list (reviewer
+   * finding, 2026-09-11). It now evicts and bumps a key of its own.
    */
   const start = JM_CODE.indexOf('\nfunction JobForm(');
   const form = JM_CODE.slice(start, JM_CODE.indexOf('\nfunction ', start + 1));
   assert.ok(start > -1 && form.includes('<JobRemarksView'), 'positive control: JobRemarksView must mount inside JobForm');
+  assert.match(form, /<JobRemarksView key=\{remarksReloadKey\}/,
+    'keyed, so a bump remounts it — a mounted useFetch ignores eviction');
+  // The Add Remarks dialog mounted in the SAME return as that JobRemarksView.
+  const dlgAt = form.indexOf('<AddRemarksDialog', form.indexOf('<JobRemarksView'));
+  const saved = form.slice(form.indexOf('onSaved=', dlgAt), form.indexOf('/>', dlgAt));
+  assert.ok(dlgAt > -1 && saved.length > 0, 'positive control: the confirm-mode Add Remarks mount must be found');
+  const evictAt = saved.search(EVICT_ANY);
+  assert.ok(evictAt > -1, 'the save must evict the cached thread, or the remount re-reads the old list');
+  assert.ok(evictAt < saved.indexOf('setRemarksReloadKey((n) => n + 1);'), 'evict, THEN remount');
   assert.doesNotMatch(form, /\bonRefresh\s*(\?\.)?\(|=\{onRefresh\}/,
-    'JobForm now calls onRefresh — pass commentsRefreshKey down to its JobRemarksView');
+    'JobForm must not call onRefresh — it re-seeds the form from `initial`');
+});
+
+test('Schedule & Assign\'s Add Remarks re-reads the panel\'s thread, as its reschedule does', () => {
+  const sa = strip(fs.readFileSync(path.join(SRC_DIR, 'components/job/ScheduleAssignModal.tsx'), 'utf8'));
+  const panel = strip(fs.readFileSync(path.join(SRC_DIR, 'components/job/JobContextPanel.tsx'), 'utf8'));
+  const mount = sa.match(/<AddRemarksDialog\b[\s\S]*?\n\s*\/>/);
+  assert.ok(mount, 'positive control: S&A must mount Add Remarks');
+  const saved = mount[0].slice(mount[0].indexOf('onSaved='));
+  const evictAt = saved.search(EVICT);
+  assert.ok(evictAt > -1, 'the save must evict the cached thread');
+  assert.ok(evictAt < saved.indexOf('setRemarksReloadKey((n) => n + 1);'), 'evict, THEN remount');
+  // The bump only helps if the panel keys the reader on it.
+  assert.match(sa, /remarksReloadKey=\{remarksReloadKey\}/);
+  assert.match(panel, /<JobRemarksView key=\{remarksReloadKey\}/);
 });

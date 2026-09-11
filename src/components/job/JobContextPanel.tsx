@@ -174,6 +174,7 @@ export function JobContextPanel({
   pastBlocksAction = false,
   onSaveDetails,
   onAddressSaved,
+  onEditServices,
 }: {
   job: JobContextData | null;
   jobId: number | null;
@@ -210,6 +211,13 @@ export function JobContextPanel({
    */
   onAddressSaved?: () => void;
   /*
+   * Opt-in Edit Services button, on the same terms again: absent ⇒ no button,
+   * so Assign / Reassign stay read-only. The HOST owns the editor (it hosts
+   * JobModal's ServicesTabBody on a full /admin/jobs/:id read) and the re-rank
+   * after it — the Services rows here come from the host's /candidates fetch.
+   */
+  onEditServices?: () => void;
+  /*
    * Does a PAST appointment actually block this host modal's primary action?
    * true  → offering (the server 400s), so the notice is red + imperative.
    * false → assign / reassign, which the server permits on purpose, so the
@@ -233,6 +241,7 @@ export function JobContextPanel({
   const { me } = useMe();
   const canEditDetails = !!onSaveDetails && hasAction(me, 'isJobEdit');
   const canEditAddress = !!onAddressSaved && hasAction(me, 'isJobEdit');
+  const canEditServices = !!onEditServices && hasAction(me, 'isJobEdit');
   const [addressOpen, setAddressOpen] = useState(false);
 
   return (
@@ -352,9 +361,21 @@ export function JobContextPanel({
               </div>
             )}
 
-            {job.services && job.services.length > 0 && (
+            {/* Shown EMPTY too when editable: removing a job's last service
+                must not take the Edit Services button away with the list. */}
+            {((job.services && job.services.length > 0) || canEditServices) && (
               <div className="mt-3 pt-3 border-t">
-                <div className="text-xs font-semibold text-muted-foreground mb-1.5">Services</div>
+                <div className="mb-1.5 flex items-center justify-between gap-2">
+                  <div className="text-xs font-semibold text-muted-foreground">Services</div>
+                  {canEditServices && (
+                    <Button type="button" variant="outline" size="sm" onClick={onEditServices} className="!h-7 !px-2 text-xs">
+                      <Pencil className="size-3 mr-1" /> Edit Services
+                    </Button>
+                  )}
+                </div>
+                {!job.services || job.services.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No Services on This Job.</p>
+                ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs">
                     <thead>
@@ -438,6 +459,7 @@ export function JobContextPanel({
                     </tbody>
                   </table>
                 </div>
+                )}
               </div>
             )}
 
@@ -556,9 +578,9 @@ export function JobContextPanel({
       {/* Mounted only while open so the form re-seeds from the CURRENT job on
           every open — a persistently mounted dialog would keep the draft from
           the previous open and quietly re-save stale values.
-          Cast through `unknown` for the same reason JobTransactionView does:
-          the dialog reads a handful of address fields, and this panel's job is
-          the /candidates subset rather than the full Job row. */}
+          Cast through `unknown` because the dialog reads only a handful of
+          address fields, and this panel's job is the /candidates subset rather
+          than the full Job row. */}
       {addressOpen && job && (
         <JobAddressEditDialog
           job={job as unknown as Parameters<typeof JobAddressEditDialog>[0]['job']}

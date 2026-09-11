@@ -229,7 +229,8 @@ test('Time slot stayed on Schedule — it is WHEN, not WHO', () => {
 });
 
 test('scheduling history reads the record, not the commentary', () => {
-  assert.match(modal, /<JobSchedulingHistory jobId=\{Number\(job\.job_id\)\} \/>/, 'it must be mounted');
+  // Other props allowed: refreshKey is pinned in tests/sa-edit-services.test.js.
+  assert.match(modal, /<JobSchedulingHistory jobId=\{Number\(job\.job_id\)\}[^>]*\/>/, 'it must be mounted');
   assert.match(
     modal,
     /useFetch<ScheduleRow\[\]>\(`\/admin\/reports\/job-tracking\?jobId=\$\{jobId\}`\)/,
