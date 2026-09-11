@@ -93,7 +93,8 @@ export type JobServiceRow = {
 
 /*
  * The subset of the BE's enriched job object this panel renders. Both hosts'
- * candidates responses carry the full object; each declares its own richer job
+ * candidates responses carry buildJobHeader's allowlist of it (a field missing
+ * there arrives undefined — add it BE-side first); each declares its own richer job
  * type and passes it here (structurally assignable — this shape is a subset).
  */
 export type JobContextData = {
@@ -115,8 +116,10 @@ export type JobContextData = {
    * 16,395 uploaded jobs carry it); every other source leaves it NULL, which is
    * why ReadField's em-dash is the right rendering rather than a hidden field.
    *
-   * Already on the wire: the job detail query is `SELECT j.*`, so this needed
-   * no backend change — it was returned and simply never read.
+   * NOT free from `SELECT j.*`: this panel's job is the /candidates header,
+   * which is buildJobHeader's ALLOWLIST (EasyFix_Backend
+   * candidate-ranking.service.js). It had to be added there (2026-09-11) —
+   * until then the Quantity row read "—" on every open.
    */
   product_quantity?: number | null;
   /**

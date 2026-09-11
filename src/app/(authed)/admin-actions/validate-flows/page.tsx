@@ -26,7 +26,7 @@ import { SearchSelect } from '@/components/ui/search-select';
 import { showToast, dismissToast } from '@/components/ui/toast';
 import { api, ApiError } from '@/lib/api';
 import { useMe } from '@/lib/auth-context';
-import { useFetchOnce } from '@/lib/hooks';
+import { useFetch, useFetchOnce } from '@/lib/hooks';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 
 type ResolvedTech = { efrId: number; name: string; mobile: string; email: string } | null;
@@ -430,6 +430,22 @@ const AI_TERMINAL = new Set(['done', 'failed']);
 const AI_POLL_MS = 3000;
 const AI_MAX_POLL_FAILURES = 5;                 // consecutive transient errors before giving up
 const AI_MAX_POLLS = 140;                        // ~7 min > the 5-min max call duration
+const AI_RECORDING_WAIT_MS = 90_000;             // after 'done': how long to keep asking for the recording
+
+/*
+ * The recording follow-up poll's key — null = not polling.
+ *
+ * The call poll stops at 'done', but the recording arrives LATER: Plivo POSTs
+ * it to /api/public/plivo/ai-recording asynchronously, after the session has
+ * already mapped and gone 'done'. So the poll that saw 'done' usually carried
+ * recordingAvailable: false, and the player never appeared. Keep asking until
+ * the flag flips or AI_RECORDING_WAIT_MS runs out.
+ */
+function recordingPollKey(session: AiSession | null, waitOver: boolean): string | null {
+  return session?.status === 'done' && !session.recordingAvailable && !waitOver
+    ? `/admin/validate/ai-calling/${session.sessionId}`
+    : null;
+}
 const AI_STATUS_LABEL: Record<string, string> = {
   calling: 'Calling now — pick up your phone…',
   streaming: 'On the call — the AI is talking to the technician…',
@@ -486,6 +502,25 @@ function AiCallingModal({ open, onClose }: { open: boolean; onClose: () => void 
 
   const polling = Boolean(session && !AI_TERMINAL.has(session.status));
 
+  // Recording follow-up (see recordingPollKey): same interval as the call poll,
+  // via useFetch's refetchInterval; a null key stops it.
+  const [recordingWaitOver, setRecordingWaitOver] = useState(false);
+  const recordingKey = recordingPollKey(session, recordingWaitOver);
+  const recordingPoll = useFetch<AiSession>(recordingKey, { refetchInterval: AI_POLL_MS });
+  useEffect(() => {
+    if (!recordingKey) return;
+    const t = setTimeout(() => setRecordingWaitOver(true), AI_RECORDING_WAIT_MS);
+    return () => clearTimeout(t);
+  }, [recordingKey]);
+  useEffect(() => {
+    const s = recordingPoll.data;
+    if (!s?.recordingAvailable) return;
+    // sessionId guard: useFetch keeps its last data after the key goes null.
+    setSession((prev) => (prev && prev.sessionId === s.sessionId
+      ? { ...prev, recordingAvailable: true, recordingDuration: s.recordingDuration ?? null }
+      : prev));
+  }, [recordingPoll.data]);
+
   function stopPolling() {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
   }
@@ -493,6 +528,7 @@ function AiCallingModal({ open, onClose }: { open: boolean; onClose: () => void 
     genRef.current += 1;   // discard any in-flight poll resolution
     stopPolling();
     failRef.current = 0; countRef.current = 0;
+    setRecordingWaitOver(false);
     setEfrId(''); setMobile(''); setBusy(false);
     setStartMsg(null); setSession(null);
   }
@@ -531,6 +567,7 @@ function AiCallingModal({ open, onClose }: { open: boolean; onClose: () => void 
     setStartMsg(null); setSession(null); stopPolling();
     const gen = (genRef.current += 1);
     failRef.current = 0; countRef.current = 0;
+    setRecordingWaitOver(false);
     const m = mobile.trim();
     if (m && !/^\d{10}$/.test(m)) { showToast({ variant: 'error', message: 'Mobile must be a 10-digit number.' }); return; }
     if (!m && !efrId.trim()) { showToast({ variant: 'error', message: 'Provide a Mobile number or an Easyfixer Id to call.' }); return; }
