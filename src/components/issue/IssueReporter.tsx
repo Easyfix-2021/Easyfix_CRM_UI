@@ -47,6 +47,9 @@
  * Being reporter-scoped, the tab is now shown to everyone: a reporter can find
  * their closed tickets and the close notes on them.
  *
+ * Reopen Issue is offered on a closed ticket to its reporter or a manager — the
+ * backend's READ rule, so no key is needed to reopen your own.
+ *
  * The manager gate survives only on the Close button. It passes BOTH locks the
  * backend applies in services/issue.service.js resolveActor: the `isIssueManage`
  * action key, read through actionFlags() like every other action gate in the
@@ -308,6 +311,8 @@ export function IssueReporter() {
    * admin-actions/issues/page.tsx and finance/payout-requests/page.tsx — the
    * only two of the 75 useConfirm call sites that carry free text. */
   const closeNoteRef = React.useRef('');
+  /* The reopen reason — a ref for the same reason as closeNoteRef. */
+  const reopenNoteRef = React.useRef('');
 
   /*
    * Every key is null unless the panel is open AND that pane is the one on
@@ -526,6 +531,47 @@ export function IssueReporter() {
     }
   }
 
+  async function reopenIssue() {
+    if (selectedId == null) return;
+    // Reset FIRST, same as closeNoteRef.
+    reopenNoteRef.current = '';
+    const ok = await confirm({
+      title: 'Reopen This Issue?',
+      description: (
+        <div className="space-y-3">
+          <p>It goes back to the open queue, and your reason is added to the thread.</p>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">What Is Still Wrong?</label>
+            <textarea
+              defaultValue=""
+              onChange={(e) => { reopenNoteRef.current = e.target.value; }}
+              rows={3}
+              maxLength={COMMENT_MAX}
+              required
+              placeholder="What Still Happens, And Where"
+              className="w-full rounded border border-input bg-background px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-ring"
+            />
+          </div>
+        </div>
+      ),
+      confirmLabel: 'Reopen Issue',
+    });
+    if (!ok) return;
+    const reopenNote = reopenNoteRef.current.trim();
+    if (!reopenNote) {
+      showToast({ variant: 'error', message: 'Tell Us What Is Still Wrong.' });
+      return;
+    }
+    try {
+      await api.patch(`${LIST_PREFIX}/${selectedId}/reopen`, { reopen_note: reopenNote });
+      showToast({ variant: 'success', message: 'Issue Reopened.' });
+      detail.refetch();
+      refreshLists();
+    } catch (err) {
+      showToast({ variant: 'error', message: errText(err, 'Could Not Reopen The Issue.') });
+    }
+  }
+
   function openTicket(id: number) {
     setSelectedId(id);
     setCommentText('');
@@ -668,6 +714,10 @@ export function IssueReporter() {
                       {canManage && issue.status === 'open' ? (
                         <Button type="button" variant="outline" size="sm" onClick={closeIssue}>
                           Close Issue
+                        </Button>
+                      ) : issue.status === 'closed' && (issue.reported_by === me?.user.user_id || canManage) ? (
+                        <Button type="button" variant="outline" size="sm" onClick={reopenIssue}>
+                          Reopen Issue
                         </Button>
                       ) : <span />}
                       <Button type="submit" size="sm" className="gap-1" disabled={posting || !commentText.trim()}>

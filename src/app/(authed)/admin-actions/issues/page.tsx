@@ -22,6 +22,7 @@
  *   GET   /admin/issues/:id      → detail + comments + screenshot_urls[]
  *   POST  /admin/issues/:id/comments   { comment_text }
  *   PATCH /admin/issues/:id/close      { close_note? }   → 409 if already closed
+ *   PATCH /admin/issues/:id/reopen     { reopen_note }   → 409 if already open
  *
  * RBAC — the WHOLE page needs BOTH locks (isIssueManage AND the
  * access.issues.emails allowlist, as canManageIssues), and the gate fails
@@ -30,6 +31,8 @@
  * and this page is nothing but those two, so there is no second flag to check:
  * past the gate, canManage is true by construction. Everyone can FILE an issue
  * and read their own — that is the reporter widget's job, not this queue's.
+ * Reopen is the READ rule (reporter OR manager); the detail states it in full
+ * anyway, so it reads the same as the widget's.
  *
  * THE SCREENSHOT URL IS SHORT-LIVED (900 s, minted only by the detail
  * endpoint). An expired URL fails as an ordinary image load, which a browser
@@ -44,7 +47,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Bug, AlertTriangle, Eye, Image as ImageIcon, ImageOff,
-  MessageSquare, CheckCircle2, RefreshCw, Send,
+  MessageSquare, CheckCircle2, RefreshCw, RotateCcw, Send,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -335,6 +338,8 @@ export default function IssueQueuePage() {
       <IssueDetailDialog
         key={selectedId ?? 'none'}
         issueId={selectedId}
+        meId={me?.user.user_id}
+        canManage={canManage}
         nameOf={nameOf}
         onClose={() => setSelectedId(null)}
         onChanged={refreshList}
@@ -345,8 +350,10 @@ export default function IssueQueuePage() {
 
 /* ── Detail ─────────────────────────────────────────────────────────────── */
 
-function IssueDetailDialog({ issueId, nameOf, onClose, onChanged }: {
+function IssueDetailDialog({ issueId, meId, canManage, nameOf, onClose, onChanged }: {
   issueId: number | null;
+  meId: number | undefined;
+  canManage: boolean;
   nameOf: (id: number | null | undefined) => string;
   onClose: () => void;
   onChanged: () => void;
@@ -362,6 +369,8 @@ function IssueDetailDialog({ issueId, nameOf, onClose, onChanged }: {
    * `description` JSX at call time, so a controlled textarea there would never
    * re-render on keystrokes. Same shape as the payout-requests remarks field. */
   const closeNoteRef = useRef('');
+  /* The reopen reason — a ref for the same reason as closeNoteRef. */
+  const reopenNoteRef = useRef('');
 
   const guardedOpenChange = useFormDirtyGuard(onClose, {
     isDirty: () => comment.trim().length > 0,
@@ -401,7 +410,7 @@ function IssueDetailDialog({ issueId, nameOf, onClose, onChanged }: {
       icon: <CheckCircle2 className="size-5" />,
       description: (
         <div className="space-y-3">
-          <p>The reporter keeps read access and can still comment, but the issue leaves the open queue. It cannot be re-opened.</p>
+          <p>The reporter keeps read access and can still comment, but the issue leaves the open queue. The reporter or a manager can reopen it.</p>
           <div>
             <label className="mb-1 block text-xs font-medium text-muted-foreground">Close Note (Optional)</label>
             <textarea
@@ -433,6 +442,57 @@ function IssueDetailDialog({ issueId, nameOf, onClose, onChanged }: {
       // offering an action the row no longer supports.
       if (e instanceof ApiError && e.status === 409) refetch();
       showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Close Failed' });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reopenIssue() {
+    if (issueId == null) return;
+    reopenNoteRef.current = '';
+    const ok = await confirm({
+      title: 'Reopen This Issue?',
+      confirmLabel: 'Reopen Issue',
+      iconAccent: 'amber',
+      icon: <RotateCcw className="size-5" />,
+      description: (
+        <div className="space-y-3">
+          <p>It goes back to the open queue. The close note moves into the thread with your reason.</p>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">What Is Still Wrong?</label>
+            <textarea
+              defaultValue=""
+              onChange={(e) => { reopenNoteRef.current = e.target.value; }}
+              rows={3}
+              maxLength={2000}
+              required
+              placeholder="What Still Happens, And Where"
+              className="w-full rounded border border-input bg-background px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-ring"
+            />
+          </div>
+        </div>
+      ),
+    });
+    if (!ok) return;
+    const reopenNote = reopenNoteRef.current.trim();
+    if (!reopenNote) {
+      showToast({ variant: 'error', message: 'Tell Us What Is Still Wrong.' });
+      return;
+    }
+
+    setBusy(true);
+    const toastId = showToast({ variant: 'loading', message: 'Reopening Issue…' });
+    try {
+      await api.patch(`/admin/issues/${issueId}/reopen`, { reopen_note: reopenNote });
+      dismissToast(toastId);
+      showToast({ variant: 'success', message: 'Issue Reopened.' });
+      refetch();
+      onChanged();
+    } catch (e) {
+      dismissToast(toastId);
+      // 409 = someone else reopened it first — same refetch as close.
+      if (e instanceof ApiError && e.status === 409) refetch();
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Reopen Failed' });
     } finally {
       setBusy(false);
     }
@@ -551,6 +611,11 @@ function IssueDetailDialog({ issueId, nameOf, onClose, onChanged }: {
               {data.status === 'open' && (
                 <Button variant="destructive" onClick={closeIssue} disabled={busy}>
                   <CheckCircle2 className="size-4 mr-1" /> Close Issue
+                </Button>
+              )}
+              {data.status === 'closed' && (data.reported_by === meId || canManage) && (
+                <Button variant="outline" onClick={reopenIssue} disabled={busy}>
+                  <RotateCcw className="size-4 mr-1" /> Reopen Issue
                 </Button>
               )}
             </div>
