@@ -490,6 +490,8 @@ jobs:
             echo "▶ Writing /opt/easyfix/docker-compose.yml (prod-frontend topology)"
             echo "$COMPOSE_B64" | base64 -d > /opt/easyfix/.docker-compose.yml.new
             mv /opt/easyfix/.docker-compose.yml.new /opt/easyfix/docker-compose.yml
+            # For the backend's PROD_DOZZLE_REMOTE_AGENT (<ip>:7007) and the SG rule.
+            echo "▶ Host private IP: \$(hostname -I | awk '{print \$1}')"
           fi
 
           # Update CRM_UI_IMAGE in .env. Append if first run.
