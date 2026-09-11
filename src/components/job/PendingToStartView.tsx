@@ -73,7 +73,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Search, PlayCircle, RefreshCw, MapPin, Eye, AlertTriangle } from 'lucide-react';
+import { Search, RefreshCw, MapPin, Eye, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -227,17 +227,11 @@ export type PendingToStartViewProps = {
   me: Me | null | undefined;
   isAdmin: boolean;
   // Permission flags from the page's actionFlags(me, …) — we only read
-  // isJobStatusChange (Check-In) and isJobReassign (Reassign) here.
+  // isJobReassign (Reassign) here.
   canJob: Record<string, boolean>;
-  /*
-   * Reused page handlers — do NOT re-implement their logic. `openCheckin` opens
-   * the SAME page-owned JobModal workspace as openView, under ?action=checkin —
-   * so ops get the full detail / Billing & Charges workspace, titled "Checkin ·
-   * Job #N" instead of the neutral viewer, and perform the check-in inside it.
-   */
+  /* Reused page handlers — do NOT re-implement their logic. */
   /* Read-only viewer, same page-owned modal the other tabs' Eye opens. */
   openView: (jobId: number) => void;
-  openCheckin: (jobId: number) => void;
   openReassign: (jobId: number) => void;
   // Opens the page-owned LiveLocationPopover for a row's assigned technician.
   // The popover only polls (every 15s) WHILE OPEN, so this stays on-demand —
@@ -250,7 +244,6 @@ export function PendingToStartView({
   isAdmin,
   canJob,
   openView,
-  openCheckin,
   openReassign,
   onShowLocation,
 }: PendingToStartViewProps) {
@@ -280,17 +273,13 @@ export function PendingToStartView({
   };
 
   /*
-   * Every row action here opens a page-owned modal: ?action=reassign,
-   * ?action=checkin (the PlayCircle — the JobModal workspace whose footer
-   * carries the Check In action), or ?action=view (the read-only Eye). When one
-   * of those closes the row may have left this bucket — a reassign committed, or
-   * a check-in flipped the job to In-Progress — so refetch as the action param
-   * clears.
-   *
-   * 'checkin' was MISSING from this set until 2026-09-08, which is precisely the
-   * action that moves a row out of Pending-to-Start: closing the check-in
-   * workspace left the three buckets showing the job as still pending. Any
-   * action added to the row must be added here too.
+   * Every row action here opens a page-owned modal: ?action=reassign or
+   * ?action=view (the read-only Eye). When one of those closes the row may have
+   * left this bucket — a reassign committed, or the technician checked in from
+   * the app meanwhile — so refetch as the action param clears. ?action=checkin
+   * has had no row icon since 2026-09-11 (no CRM Check In); an old link still
+   * opens the view workspace under it, so it stays in the set. Any action added
+   * to the row must be added here too.
    */
   const { action } = useJobActionParams();
   const prevAction = useRef<typeof action>(action);
@@ -442,7 +431,6 @@ export function PendingToStartView({
         reloadKey={reloadKey}
         isAdmin={isAdmin}
         canJob={canJob}
-        onCheckin={openCheckin}
         onView={openView}
         onReassign={openReassign}
         onShowLocation={onShowLocation}
@@ -459,7 +447,6 @@ export function PendingToStartView({
         reloadKey={reloadKey}
         isAdmin={isAdmin}
         canJob={canJob}
-        onCheckin={openCheckin}
         onView={openView}
         onReassign={openReassign}
         onShowLocation={onShowLocation}
@@ -474,7 +461,6 @@ export function PendingToStartView({
         reloadKey={reloadKey}
         isAdmin={isAdmin}
         canJob={canJob}
-        onCheckin={openCheckin}
         onView={openView}
         onReassign={openReassign}
         onShowLocation={onShowLocation}
@@ -489,7 +475,6 @@ export function PendingToStartView({
         reloadKey={reloadKey}
         isAdmin={isAdmin}
         canJob={canJob}
-        onCheckin={openCheckin}
         onView={openView}
         onReassign={openReassign}
         onShowLocation={onShowLocation}
@@ -529,7 +514,6 @@ type PendingSectionProps = {
   isAdmin: boolean;
   canJob: Record<string, boolean>;
   onView: (jobId: number) => void;
-  onCheckin: (jobId: number) => void;
   onReassign: (jobId: number) => void;
   onShowLocation: (row: { job_id: number; easyfixer_name: string | null }) => void;
 };
@@ -547,7 +531,6 @@ function PendingSection({
   isAdmin,
   canJob,
   onView,
-  onCheckin,
   onReassign,
   onShowLocation,
 }: PendingSectionProps) {
@@ -596,7 +579,7 @@ function PendingSection({
     setPage(0);
   }, [filters, q]);
 
-  // Refetch on an external reload signal (post Check-In / Reassign).
+  // Refetch on an external reload signal (post Reassign).
   const firstReload = useRef(true);
   useEffect(() => {
     if (firstReload.current) {
@@ -859,21 +842,8 @@ function PendingSection({
                       >
                         <Eye className="h-3.5 w-3.5" />
                       </button>
-                      {/*
-                        * Check-In — opens the JobModal workspace (details +
-                        * Billing & Charges) where ops review and perform the
-                        * actual check-in.
-                        */}
-                      {canJob.isJobStatusChange && (
-                        <button
-                          type="button"
-                          onClick={() => onCheckin(j.job_id)}
-                          className="inline-flex items-center gap-1 text-warning-strong text-xs hover:underline"
-                          title="Check-In — open the job workspace to review and check in"
-                        >
-                          <PlayCircle className="h-3.5 w-3.5" />
-                        </button>
-                      )}
+                      {/* No Check-In (2026-09-11, per ops): the technician
+                          checks in from the app. See JobModal's ActionBar. */}
                       {canJob.isJobReassign && (
                         <button
                           type="button"

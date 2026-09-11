@@ -21,7 +21,6 @@ import { SkillImageLightbox, type SkillImageLightboxValue } from '@/components/e
 import { CustomerSubmissionPanel } from './CustomerSubmissionPanel';
 import { AddRemarksDialog } from './AddRemarksDialog';
 import { CancelWithReasonDialog } from './CancelWithReasonDialog';
-import { CheckInWithReasonDialog } from './CheckInWithReasonDialog';
 import { BillingChargesTab } from './BillingChargesTab';
 // Audited reschedule dialog (PATCH /admin/jobs/:id/reschedule → job.reschedule:
 // offer-expiry + scheduling_history). Kept aliased for a descriptive name;
@@ -122,19 +121,7 @@ const canAssign         = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.ENQUIRY, S
  * editing them back to a workable state.
  */
 const isJobClosed = (s: number) => [ST.COMPLETED, ST.COMPLETED_ALT].includes(s as never);
-/*
- * canCheckIn — ops-side check-in (SCHEDULED → IN_PROGRESS).
- *
- * This was removed on 2026-07-28 on the reasoning that only the technician
- * checks in, from the app. That decision was OVERRIDDEN 2026-09-08: ops need a
- * check-in when the technician cannot do it themselves. It is not the plain
- * status PATCH — that writes job_status alone and leaves checkin_date_time
- * (the TAT anchor) null — so the button posts to /admin/jobs/:id/checkin, which
- * writes the check-in columns, and demands a REASON recording why ops checked in
- * rather than the technician.
- */
-const canCheckIn        = (s: number) => s === ST.SCHEDULED;
-const canCancel         = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.IN_PROGRESS, ST.ENQUIRY, ST.REVISIT].includes(s as never);
+const canCancel        = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.IN_PROGRESS, ST.ENQUIRY, ST.REVISIT].includes(s as never);
 // NOTE: Confirm & Schedule for Unconfirmed orders (status 9 → 0) is handled
 // via JobModal's dedicated `'confirm'` mode, launched from the row-level
 // CalendarCheck icon — no predicate needed here.
@@ -143,7 +130,7 @@ const canCancel         = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.IN_PROGRES
  * Modes:
  *   create  — blank form, POST /admin/jobs
  *   edit    — prefilled form, PATCH /admin/jobs/:id (scalar fields only)
- *   view    — read-only + ActionBar (Check In / Reschedule / Feedback / etc.)
+ *   view    — read-only + ActionBar (Reschedule / Feedback / etc.)
  *   confirm — prefilled edit form WITH services basket and a "Confirm &
  *             Schedule" footer that saves then promotes status 9 → 0. This is
  *             the replacement for the legacy `addEditJob?loc=home → Book Call`
@@ -153,7 +140,9 @@ const canCancel         = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.IN_PROGRES
  * `checkin` and `audit` are the VIEW workspace under a different name — same
  * body, tabs and footer. They exist so the entry point that opened the modal
  * reads on the title, while the generic viewer opened from a list stays neutral:
- *   checkin — Pending-to-Start ("Checkin · Job #N", no status/type sub-line).
+ *   checkin — "Checkin · Job #N", no status/type sub-line. Nothing opens it
+ *             since the CRM Check In went (2026-09-11); kept so old links
+ *             still open the job.
  *   audit   — Audit & Complete ("Audit · Job #N"), pushed with ?viewTab=billing
  *             so it lands on Billing & Charges where the audit actions live.
  * Everything downstream keys off `effectiveMode`, which folds BOTH → view.
@@ -868,20 +857,17 @@ function ActionBar({ job, jobId, onChanged }: {
   //  far-left Cancel button drive those now.)
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
-  // Ops-side check-in (SCHEDULED → In Progress) — see canCheckIn above.
-  const [checkinOpen, setCheckinOpen] = useState(false);
 
   // Modal-internal permission gates. Each button maps to a legacy
   // Constants.actionPermissions key so the seeded role_menu_action rows
   // for the Admin role govern visibility. Status guards (canAssign,
-  // canCheckIn, etc.) AND the permission flag must both be true for the
+  // etc.) AND the permission flag must both be true for the
   // button to render. (isJobCancel now gates the lifted footer Cancel.)
   const { me } = useMe();
   const can = actionFlags(me, [
     'isJobEdit',          // Change Owner + Reschedule + Description pencil + Feedback
     'isJobAssign',        // Auto-assign + Manual pick (initial)
     'isJobReassign',      // Auto-reassign + Manual pick (when already assigned)
-    'isJobStatusChange',  // Check In
   ]);
   const isReassign = !!job.fk_easyfixter_id;
   const canPickTech = isReassign ? can.isJobReassign : can.isJobAssign;
@@ -896,7 +882,7 @@ function ActionBar({ job, jobId, onChanged }: {
           itself across the CRM (see <CallableMobile> in
           src/components/calls/CallButton.tsx). The action bar deliberately
           carries no Call button — keeps the lifecycle controls
-          (Check In / Reschedule / Feedback) visually distinct from the
+          (Reschedule / Feedback) visually distinct from the
           contact-the-customer action. */}
       {/* Confirm & Schedule for Unconfirmed orders is exposed as a dedicated
           modal mode launched from the list row (purple CalendarCheck icon),
@@ -944,24 +930,14 @@ function ActionBar({ job, jobId, onChanged }: {
           before the work is done, which legacy operators flagged as
           mistake-prone. */}
       {can.isJobEdit && (isJobClosed(s) || s === ST.CANCELLED) && <Button size="sm" variant="outline" onClick={() => setFeedbackOpen(true)}>Feedback</Button>}
-      {/* Check In (SCHEDULED → In Progress). Restored 2026-09-08, replacing the
-          2026-07-28 "Start button removed — check-in is done by the technician
-          from the app" decision, which the owner has overridden: ops need a
-          check-in for the calls where the technician can't do it themselves.
-          Unlike the retired Start, it does NOT go through the status PATCH —
-          POST /admin/jobs/:id/checkin writes checkin_date_time (the TAT anchor)
-          as well as the status, and requires a reason. Gated exactly like every
-          other lifecycle button here: status predicate + permission + Job Stage
-          Access. */}
-      {canCheckIn(s) && can.isJobStatusChange && transitionAllowed(me?.allowedStages, s, ST.IN_PROGRESS) && (
-        <Button size="sm" variant="outline" onClick={() => setCheckinOpen(true)}>Check In</Button>
-      )}
       {/*
-        * NO CRM CHECK OUT (2026-09-11, per ops). Pending to Close on App is
-        * statuses 2/20: the technician is on site and closes the job FROM THE
-        * APP. This button (2 → 10 Under Audit) and the ✓ row actions on Manage
-        * Jobs and My Orders were the CRM's only 2/20 → 10 paths; all three are
-        * gone, and tests/no-crm-checkout.test.js keeps any from coming back.
+        * NO CRM CHECK IN OR CHECK OUT (2026-09-11, per ops). The technician
+        * checks in and out FROM THE APP. Check Out (2/20 → 10 Under Audit) had
+        * this button and ✓ row actions on Manage Jobs and My Orders; Check In
+        * (1 → 2, POST /admin/jobs/:id/checkin) had this button, row icons on
+        * both pages and Pending to Start's PlayCircle. All are gone, and
+        * tests/no-crm-checkout.test.js + tests/no-crm-checkin.test.js keep them
+        * from coming back.
         */}
       {/* Cancel lifted to the footer's far-left zone (2026-07-28). */}
       {/*
@@ -1026,16 +1002,6 @@ function ActionBar({ job, jobId, onChanged }: {
         open={feedbackOpen} onClose={() => setFeedbackOpen(false)}
         jobId={jobId}
         onSaved={() => { setFeedbackOpen(false); onChanged(); }}
-      />
-      {/* Ops-side check-in. POST /admin/jobs/:id/checkin writes the check-in
-          COLUMNS (checkin_date_time — the TAT anchor) alongside the status, so
-          it deliberately does NOT use the plain PATCH /status. 409 comes
-          back when no technician is assigned or the job has left status 1; the
-          dialog surfaces the backend's own message rather than guessing. */}
-      <CheckInWithReasonDialog
-        open={checkinOpen} onClose={() => setCheckinOpen(false)}
-        jobId={jobId}
-        onDone={() => { setCheckinOpen(false); onChanged(); }}
       />
     </div>
   );
