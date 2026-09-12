@@ -83,7 +83,7 @@ export function WorkCoverageTab({
                       <li key={r.mapping_id} className="flex flex-wrap items-center gap-x-2 text-ink-700">
                         <span className="font-medium text-ink-900">{r.option_name ?? `Option ${r.option_id}`}</span>
                         {r.deep_skill_name && <span className="text-muted-foreground">· {r.deep_skill_name}</span>}
-                        {r.service_type_name && <span className="rounded border bg-info-tint px-1.5 py-0.5 text-[10px] text-info-strong">{r.service_type_name}</span>}
+                        {r.service_type_name && <span className="rounded border bg-info-tint px-1.5 py-0.5 text-xs text-info-strong">{r.service_type_name}</span>}
                       </li>
                     ))}
                   </ul>
@@ -115,7 +115,7 @@ export function WorkCoverageTab({
         ) : (
           <div className="flex flex-wrap gap-2">
             {filteredPins.map((p) => (
-              <span key={p.pincode_id} className="rounded-md border bg-muted px-2 py-1 font-mono text-[11px] text-ink-700" title={[p.location, p.city_name, p.state_name].filter(Boolean).join(', ')}>
+              <span key={p.pincode_id} className="rounded-md border bg-muted px-2 py-1 font-mono text-xs text-ink-700" title={[p.location, p.city_name, p.state_name].filter(Boolean).join(', ')}>
                 {p.pincode}{p.city_name ? ` · ${p.city_name}` : ''}
               </span>
             ))}

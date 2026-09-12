@@ -82,7 +82,7 @@ export function TransactionsTab({
             return (
               <div key={t.transaction_id} className={`overflow-hidden rounded-xl border border-l-4 bg-card ${credit ? 'border-l-success' : 'border-l-destructive'}`}>
                 <button type="button" onClick={() => setOpenId(open ? null : t.transaction_id)} className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-muted/50">
-                  <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg font-bold ${credit ? 'bg-success-tint text-success-strong' : 'bg-urgent-tint text-urgent-strong'}`}>
+                  <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg font-semibold ${credit ? 'bg-success-tint text-success-strong' : 'bg-urgent-tint text-urgent-strong'}`}>
                     {credit ? '↓' : '↑'}
                   </span>
                   <span className="min-w-0 flex-1">
@@ -95,7 +95,7 @@ export function TransactionsTab({
                     <span className={`font-mono text-sm font-semibold ${credit ? 'text-success' : 'text-destructive'}`}>
                       {credit ? '+' : '−'} {inr(Number(t.amount ?? 0))}
                     </span>
-                    <span className="block font-mono text-[11px] text-muted-foreground">Bal {inr(Number(t.balance ?? 0))}</span>
+                    <span className="block font-mono text-xs text-muted-foreground">Bal {inr(Number(t.balance ?? 0))}</span>
                   </span>
                 </button>
                 {open && (

@@ -159,10 +159,10 @@ export default function NewRegistration2ProfilePage() {
               : displayName.charAt(0).toUpperCase()}
           </div>
           <div className="min-w-[220px] flex-1">
-            <h1 className="flex flex-wrap items-center gap-2 text-xl font-bold text-ink-900">
+            <h1 className="flex flex-wrap items-center gap-2 text-xl font-semibold text-ink-900">
               {displayName}
               {typeof (agg?.job_count ?? row?.job_count) === 'number' && (agg?.job_count ?? row?.job_count ?? 0) < 5 && (
-                <span className="rounded-full bg-info-tint px-2 py-0.5 text-[11px] font-semibold text-info-strong">Fresher</span>
+                <span className="rounded-full bg-info-tint px-2 py-0.5 text-xs font-semibold text-info-strong">Fresher</span>
               )}
             </h1>
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-muted-foreground">

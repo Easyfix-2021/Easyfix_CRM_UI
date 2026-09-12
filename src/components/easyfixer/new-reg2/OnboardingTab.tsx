@@ -85,7 +85,7 @@ export function OnboardingTab({
             const cur = n === stage;
             return (
               <div key={s} className="flex items-center gap-2">
-                <span className={`grid h-6 w-6 place-items-center rounded-full font-mono text-xs font-bold ${done ? 'bg-success text-white' : cur ? 'bg-primary text-white' : 'border bg-muted text-ink-300'}`}>
+                <span className={`grid h-6 w-6 place-items-center rounded-full font-mono text-xs font-semibold ${done ? 'bg-success text-white' : cur ? 'bg-primary text-white' : 'border bg-muted text-ink-300'}`}>
                   {done ? '✓' : n}
                 </span>
                 <b className={`text-[13px] ${n <= stage ? 'text-ink-900' : 'text-ink-300'}`}>{s}</b>

@@ -61,8 +61,8 @@ export function Tile({
 }) {
   return (
     <div className="rounded-lg border bg-card p-3.5 shadow-sm">
-      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className={cn('mt-1 font-bold tabular-nums text-ink-900', small ? 'text-base' : 'text-xl')}>{value}</div>
+      <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className={cn('mt-1 font-semibold tabular-nums text-ink-900', small ? 'text-base' : 'text-xl')}>{value}</div>
       {sub != null && <div className="mt-0.5 text-xs text-muted-foreground">{sub}</div>}
     </div>
   );
@@ -129,7 +129,7 @@ export function StrengthRing({ pct }: { pct: number }) {
           {p}%
         </span>
       </div>
-      <div className="mt-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">Profile strength</div>
+      <div className="mt-1.5 text-xs uppercase tracking-wide text-muted-foreground">Profile strength</div>
     </div>
   );
 }
@@ -138,7 +138,7 @@ export function StrengthRing({ pct }: { pct: number }) {
 export function LockedBody({ note }: { note?: string }) {
   return (
     <div className="flex items-center gap-2 py-4 text-sm text-ink-300">
-      <span className="rounded-full border bg-muted px-2 py-0.5 text-[11px]">🔒</span>
+      <span className="rounded-full border bg-muted px-2 py-0.5 text-xs">🔒</span>
       {note ?? 'Available once the Easyfixer is activated.'}
     </div>
   );

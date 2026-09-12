@@ -54,8 +54,8 @@ export function StatusHistoryTab({
       <SectionCard title="Lifecycle status" icon={<span>🔵</span>} right={current ? <LifecycleTransitionGuideDialog currentStatus={current} availableTransitions={targets} /> : undefined}>
         <div className="flex flex-wrap items-center gap-4">
           <div>
-            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Lifecycle status</div>
-            <div className={`font-bold text-2xl ${paused ? 'text-destructive' : 'text-success'}`}>
+            <div className="text-xs uppercase tracking-wide text-muted-foreground">Lifecycle status</div>
+            <div className={`font-semibold text-2xl ${paused ? 'text-destructive' : 'text-success'}`}>
               {current ? lifecycleLabel(current) : '—'}
             </div>
           </div>
@@ -115,7 +115,7 @@ export function StatusHistoryTab({
                   <span>
                     {h.fromStatus ? `${lifecycleLabel(h.fromStatus)} → ` : ''}
                     <b>{lifecycleLabel(to)}</b>
-                    {h.reasonCode ? <span className="ml-1.5 rounded border bg-muted px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">{h.reasonCode}</span> : null}
+                    {h.reasonCode ? <span className="ml-1.5 rounded border bg-muted px-1.5 py-0.5 text-xs font-normal text-muted-foreground">{h.reasonCode}</span> : null}
                   </span>
                 ),
                 meta: (
