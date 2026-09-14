@@ -43,6 +43,25 @@ export function OnboardingTab({
   const stage = !leadAccepted ? 1 : !activated ? 2 : 3; // 1 registration, 2 verification, 3 active
   const stages = ['Registration', 'Verification & Activation', 'Active'];
 
+  async function recordActivityLog(kind: 'approve' | 'reject' | 'sendback', reason: string) {
+    try {
+      const eventMap = {
+        approve: { eventType: 'APPROVED', summary: 'Identity approved — sent to Finance' },
+        reject: { eventType: 'REJECTED', summary: `Profile rejected — ${reason}` },
+        sendback: { eventType: 'SENT_BACK', summary: `Sent back to technician — ${reason}` },
+      };
+      const event = eventMap[kind];
+      await api.post(`/admin/easyfixers/${efrId}/activity-log`, {
+        eventType: event.eventType,
+        section: 'onboarding',
+        summary: event.summary,
+        metadata: { reason: reason || null },
+      });
+    } catch (e) {
+      console.warn('Failed to record activity log:', e);
+    }
+  }
+
   async function run(kind: 'approve' | 'reject' | 'sendback') {
     if (kind !== 'approve' && note.trim().length === 0) {
       showToast({ variant: 'error', message: 'A note is required for reject / send-back.' });
@@ -52,12 +71,15 @@ export function OnboardingTab({
     try {
       if (kind === 'approve') {
         await api.put(`/admin/easyfixers/${efrId}/verification/identity`, { verification_status: 1 });
+        await recordActivityLog('approve', '');
         showToast({ variant: 'success', message: 'Identity approved — sent to Finance.' });
       } else if (kind === 'reject') {
         await api.put(`/admin/easyfixers/${efrId}/verification/identity`, { verification_status: 2, rejected_reason: note });
+        await recordActivityLog('reject', note);
         showToast({ variant: 'success', message: 'Profile rejected.' });
       } else {
         await api.put(`/admin/easyfixers/${efrId}/verification/lead`, { personal_details_filled: 0, reason: note });
+        await recordActivityLog('sendback', note);
         showToast({ variant: 'success', message: 'Sent back to technician.' });
       }
       setNote('');
