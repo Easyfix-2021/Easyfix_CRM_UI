@@ -68,7 +68,7 @@ import { showToast, dismissToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useMe } from '@/lib/auth-context';
-import { actionFlags } from '@/lib/permissions';
+import { actionFlags, hasAction } from '@/lib/permissions';
 import { transitionAllowed } from '@/lib/job-stages';
 import type { JobModalAction } from '@/lib/job-action-url';
 import { candidateJobOfferEligibility } from '@/lib/easyfixer-lifecycle';
@@ -1522,6 +1522,14 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
          * (CALL_LATER, REVISIT) keep the X — operators may still need
          * to clean up wrong attachments during confirmation/revisit.
          */}
+        {/* After-work photo (2026-09-11): every close now needs one, so ops can
+            supply the proof. Its own RBAC key (fail closed); never on a
+            Cancelled job, which will not be closed. */}
+        {hasAction(me, 'isJobAfterPhotoUpload') && Number(job.job_status) !== 6 && (
+          <div className="flex justify-end mb-3">
+            <AddAfterWorkPhotoButton jobId={Number(job.job_id)} onUploaded={onRefresh} />
+          </div>
+        )}
         <JobImagesTab
           images={images}
           onChanged={[3, 5, 6, 7].includes(Number(job.job_status)) ? undefined : onRefresh}
@@ -3614,13 +3622,54 @@ const COMMENT_STAGE_LABEL: Record<number, string> = {
   4: 'In Progress',
 };
 
+/*
+ * The remarks table is the legacy CRM's (EasyFix_CRM jobCommentList.vm), and
+ * the GET rows carry its three derived columns (services/job-comment.service.js
+ * shapeRow, 2026-09-11). They are OPTIONAL here on purpose: a backend older
+ * than that sends none of them, and every cell below falls back to today's
+ * fields rather than going blank — the same reason a pending row can omit them.
+ */
+type RemarkRow = JobComment & {
+  remarks_for?: string | null;
+  accountable?: string | null;
+  remark_by?: string | null;
+  _pending?: true;
+};
+
+// Legacy "Remarks For" by comment_on (jobCommentList.vm:15-28), a mirror of the
+// backend's REMARKS_FOR. Only the fallback: for an older backend, and for a
+// pending row, so it reads the same label before and after the refetch.
+const LEGACY_REMARKS_FOR: Record<number, string> = {
+  1: 'Scheduling', 2: 'CheckIn', 3: 'CheckOut', 4: 'Feedback', 6: 'Canceling',
+  8: 'TX Reschedule', 9: 'TX cancelled', 15: 'Approval', 16: 'Unconfirmed', 17: 'Inquiry',
+  18: 'TX Rejected', 19: 'Escalated', 20: 'Re-Opened Job', 21: 'ReScheduled',
+};
+
+/*
+ * Legacy Date/Time: `dd MMM yyyy HH:mm` ("11 Sep 2026 13:29" — JobDaoImpl.java
+ * :2846). Parsed and rendered in IST exactly as formatDate does, so the DB's
+ * zone-less IST wall clock comes back unshifted and a pending row's ISO instant
+ * lands in IST. Month names are fixed: en-GB's short September is "Sept".
+ */
+const REMARK_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function formatRemarkDate(d: string | null | undefined): string {
+  if (!d) return '';
+  const date = parseIstDateTime(d);
+  if (isNaN(date.getTime())) return '';
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata', year: 'numeric', month: 'numeric', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(date).map((x) => [x.type, x.value]));
+  return `${p.day} ${REMARK_MONTHS[Number(p.month) - 1]} ${p.year} ${p.hour}:${p.minute}`;
+}
+
 function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded }: { jobId: number; refreshKey?: number; pendingComments?: Array<JobComment & { _pending?: true }>; onLoaded?: () => void }) {
   /*
    * useFetch (feedback_crm_ui_fetch_hooks). refetch() evicts the key before
    * re-firing, so a refresh right after POSTing a comment is a real round-trip
    * rather than the 30s-cached pre-comment list.
    */
-  const { data, loading, error: loadError, refetch } = useFetch<JobComment[]>(`/admin/jobs/${jobId}/comments`);
+  const { data, loading, error: loadError, refetch } = useFetch<RemarkRow[]>(`/admin/jobs/${jobId}/comments`);
   const comments = useMemo(() => (Array.isArray(data) ? data : []), [data]);
   // POST failures belong to this component; the hook owns load errors only.
   const [mutError, setMutError] = useState<string | null>(null);
@@ -3665,7 +3714,7 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
   // pendings (from AddRemarksDialog) come via `pendingComments` prop;
   // local pendings (from postComment below) stay self-contained because
   // the input + the list live inside the same component.
-  const [localPending, setLocalPending] = useState<Array<JobComment & { _pending?: true }>>([]);
+  const [localPending, setLocalPending] = useState<RemarkRow[]>([]);
   const { me: currentMeForTab } = useMe();
   const currentUserName = (currentMeForTab?.user?.user_name || currentMeForTab?.user?.official_email || 'You') as string;
 
@@ -3709,7 +3758,7 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
     // load() which fetches the canonical row; we then drop the matching
     // local pending. Failure path drops the pending + surfaces a toast.
     const tempId = -Date.now() - Math.floor(Math.random() * 1000);
-    const optimistic: JobComment & { _pending?: true } = {
+    const optimistic: RemarkRow = {
       id: tempId,
       job_id: jobId,
       comments: text,
@@ -3722,6 +3771,9 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
       efr_id: null,
       enum_reason_id: reasonId ? Number(reasonId) : null,
       enum_desc: null,
+      remarks_for: LEGACY_REMARKS_FOR[stage] ?? null,
+      accountable: null,
+      remark_by: currentUserName,
       _pending: true,
     };
     setLocalPending((prev) => [optimistic, ...prev]);
@@ -3750,7 +3802,7 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
   // first (they came from the AddRemarksDialog which closes before this
   // tab's own input is interacted with), then local pendings, then the
   // canonical comments (already DESC-sorted by the BE).
-  const allRows: Array<JobComment & { _pending?: true }> = [
+  const allRows: RemarkRow[] = [
     ...pendingComments,
     ...localPending,
     ...comments,
@@ -3844,33 +3896,34 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
             </div>
           )}
           {/*
-            Remarks history rebuilt as a 4-column table (2026-06-03 per ops):
-              • Date/Time   — `formatDate(c.created_on)`
-              • Remarks     — comment text + Sending/pending pill on optimistic rows
-              • Remarks By  — `c.user_name`
-              • Reason      — `c.enum_desc` (BE joins tbl_job_comment.enum_reason_id
-                              → action_taken_reason.id, projects .action_desc as
-                              `enum_desc` for FE contract stability).
-            The previous list-card layout surfaced stage + author inline; ops asked
-            for the table form because it's scannable at scale. Stage label is
-            dropped from the visible columns per the same spec — it's still in
-            c.comment_on if any future audit needs it.
+            Remarks history in the LEGACY CRM's columns and order (2026-09-11 per
+            ops; EasyFix_CRM jobCommentList.vm:4-9):
+              Remarks For | Accountable | Reason | Remarks | Remark By | Date/Time
+            from remarks_for | accountable | enum_desc | comments | remark_by |
+            created_on. remark_by is the backend's resolved author (tbl_user name,
+            else the escalator's stored name, else the technician) — user_name
+            alone rendered "Unknown" for every escalation, which never sets
+            commented_by. A row with no author at all shows an em dash.
           */}
-          <div className="rounded border bg-card overflow-hidden">
+          <div className="rounded border bg-card overflow-x-auto">
             <table className="data-table w-full text-xs">
               <thead>
-                {/* Width strategy: Date/Time + Remarks By + Reason are
-                    short, content-shaped strings — collapse each to its
-                    own content width via the `w-1 whitespace-nowrap`
+                {/* Width strategy: the short, content-shaped columns collapse
+                    to their own content width via the `w-1 whitespace-nowrap`
                     trick (the table layout algorithm hands the cell its
-                    intrinsic width when w-1 is below the content's
-                    natural minimum). Remarks (free-text) gets no width
-                    cap and takes the remaining space. */}
+                    intrinsic width when w-1 is below the content's natural
+                    minimum). Reason and Remarks share the rest and wrap.
+                    Reason wraps because, kept on one line beside two new
+                    columns, a 42-character reason left Remarks 214px of a
+                    970px table and pushed it to scroll below ~830px
+                    (measured in a static render; wrapping gives 326px). */}
                 <tr>
-                  <th className="!text-left w-1 whitespace-nowrap">Date/Time</th>
+                  <th className="!text-left w-1 whitespace-nowrap">Remarks For</th>
+                  <th className="!text-left w-1 whitespace-nowrap">Accountable</th>
+                  <th className="!text-left">Reason</th>
                   <th className="!text-left">Remarks</th>
-                  <th className="!text-left w-1 whitespace-nowrap">Remarks By</th>
-                  <th className="!text-left w-1 whitespace-nowrap">Reason</th>
+                  <th className="!text-left w-1 whitespace-nowrap">Remark By</th>
+                  <th className="!text-left w-1 whitespace-nowrap">Date/Time</th>
                 </tr>
               </thead>
               <tbody>
@@ -3879,11 +3932,21 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
                     key={c.id}
                     className={c._pending ? 'opacity-75 bg-info-tint/40' : ''}
                   >
-                    <td className="!text-left text-muted-foreground whitespace-nowrap align-top">
-                      {formatDate(c.created_on)}
+                    <td className="!text-left align-top whitespace-nowrap">
+                      {c.remarks_for ?? LEGACY_REMARKS_FOR[c.comment_on] ?? ''}
                     </td>
+                    <td className="!text-left align-top whitespace-nowrap">
+                      {c.accountable ?? ''}
+                    </td>
+                    <td className="!text-left align-top text-muted-foreground">
+                      {c.enum_desc ? c.enum_desc : <span className="italic">—</span>}
+                    </td>
+                    {/* pre-wrap keeps the operator's line breaks; anywhere-wrap
+                        breaks a long unspaced token (a URL) instead of widening
+                        the table — the old nowrap table went to 1260px on one,
+                        clipping Reason behind overflow-hidden. */}
                     <td className="!text-left align-top">
-                      <div className="whitespace-pre-wrap">{c.comments}</div>
+                      <div className="whitespace-pre-wrap [overflow-wrap:anywhere]">{c.comments}</div>
                       {c._pending && (
                         <span className="inline-flex items-center gap-1 mt-1 bg-info-tint text-info-strong rounded px-1.5 py-0.5 text-xs">
                           <span className="inline-block h-2 w-2 rounded-full border-2 border-info/30 border-t-info animate-spin" aria-hidden />
@@ -3891,17 +3954,11 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
                         </span>
                       )}
                     </td>
-                    {/* Remarks By + Reason cells get whitespace-nowrap so
-                        the column collapses to its intrinsic content
-                        width (matches the header's `w-1 whitespace-nowrap`
-                        and lets the Remarks column take all remaining
-                        horizontal space). Remarks itself keeps the inner
-                        `whitespace-pre-wrap` div so long free-text wraps. */}
                     <td className="!text-left align-top whitespace-nowrap">
-                      <span className="font-medium">{c.user_name ?? 'Unknown'}</span>
+                      <span className="font-medium">{c.remark_by || c.user_name || ''}</span>
                     </td>
-                    <td className="!text-left align-top text-muted-foreground whitespace-nowrap">
-                      {c.enum_desc ? c.enum_desc : <span className="italic">—</span>}
+                    <td className="!text-left text-muted-foreground whitespace-nowrap align-top">
+                      {formatRemarkDate(c.created_on)}
                     </td>
                   </tr>
                 ))}
@@ -4325,6 +4382,62 @@ function JobImagesTab({ images, onChanged, compact, onImageDeleted, deferDelete,
       })}
       </div>
       <SkillImageLightbox value={lightbox} onClose={() => setLightbox(null)} />
+    </>
+  );
+}
+
+/*
+ * "Add After-Work Photo" (2026-09-11). The backend refuses every close without
+ * an after-work photo (409 AFTER_PHOTO_REQUIRED), so ops can add the proof here:
+ * POST /admin/jobs/:id/images with category=Completion, which needs
+ * isJobAfterPhotoUpload and an image by its bytes (a PDF is a 400). The route
+ * takes ONE file per request, so a multi-pick uploads sequentially; a failure
+ * does not stop the rest, and the job re-reads once, after the last.
+ */
+function AddAfterWorkPhotoButton({ jobId, onUploaded }: { jobId: number; onUploaded?: () => void }) {
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [uploading, setUploading] = useState(false);
+
+  async function upload(files: File[]) {
+    if (files.length === 0) return;
+    setUploading(true);
+    let added = 0;
+    let failure: string | null = null;
+    for (const file of files) {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('category', 'Completion');
+      try {
+        await api.post(`/admin/jobs/${jobId}/images`, fd);
+        added += 1;
+      } catch (e) {
+        failure ??= e instanceof ApiError ? e.message : 'Failed to add after-work photo';
+      }
+    }
+    setUploading(false);
+    if (fileRef.current) fileRef.current.value = '';
+    if (added > 0) {
+      showToast({ variant: 'success', message: added === 1 ? 'After-Work Photo Added.' : `${added} After-Work Photos Added.` });
+      // The images are job.images, from the modal's job GET — refresh() re-reads it.
+      onUploaded?.();
+    }
+    if (failure) showToast({ variant: 'error', message: failure });
+  }
+
+  return (
+    <>
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/gif"
+        multiple
+        className="hidden"
+        onChange={(e) => { void upload(Array.from(e.target.files ?? [])); }}
+      />
+      <Button size="sm" variant="outline" disabled={uploading} onClick={() => fileRef.current?.click()}>
+        <Plus className="size-3.5 mr-1" />
+        {uploading ? 'Uploading…' : 'Add After-Work Photo'}
+      </Button>
     </>
   );
 }

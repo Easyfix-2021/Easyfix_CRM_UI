@@ -16,4 +16,8 @@ export type JobComment = {
   efr_id: number | null;
   enum_reason_id: number | null;
   enum_desc: string | null;
+  /* The legacy "Remark By" resolved by the backend (tbl_user name, else the
+   * escalation's job_escalated_by, else the technician). Optional: an older
+   * backend does not send it. */
+  remark_by?: string | null;
 };

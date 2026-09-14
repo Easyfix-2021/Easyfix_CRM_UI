@@ -122,7 +122,7 @@ export function JobRemarksView({
                 <tr key={c.id} className="border-t align-top">
                   <td className="px-3 py-1.5 whitespace-nowrap text-muted-foreground">{formatDate(c.created_on)}</td>
                   <td className="px-3 py-1.5">{c.comments || <span className="text-muted-foreground">—</span>}</td>
-                  <td className="px-3 py-1.5 whitespace-nowrap">{c.user_name || <span className="text-muted-foreground">Customer</span>}</td>
+                  <td className="px-3 py-1.5 whitespace-nowrap">{c.remark_by || c.user_name || <span className="text-muted-foreground">—</span>}</td>
                   <td className="px-3 py-1.5">{c.enum_desc || <span className="text-muted-foreground">—</span>}</td>
                 </tr>
               ))}

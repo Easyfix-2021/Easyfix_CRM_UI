@@ -82,6 +82,11 @@ import { SearchMultiSelect } from '@/components/ui/search-multi-select';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { RefreshBar } from '@/components/ui/refresh-bar';
 import {
+  ReorderableSections,
+  SectionFrame,
+  type SectionControls,
+} from '@/components/ui/reorderable-sections';
+import {
   TablePagination,
   type TablePageSize,
   pageSizeToLimit,
@@ -222,6 +227,18 @@ function istBuckets(): { overDue: DateRange; actionToday: DateRange; future: Dat
   };
 }
 
+/*
+ * The three buckets collapse and re-order exactly as My Orders -> Unconfirmed's
+ * sections do (the shared ReorderableSections). Order and collapse are the
+ * operator's, remembered per browser under keys of THIS page's own — sharing
+ * Unconfirmed's would let one page's arrangement rewrite the other's.
+ * Technician Requests is deliberately not in the set: it is an exception queue
+ * that renders nothing when empty and must stay above the buckets.
+ */
+const BUCKET_SECTIONS = [{ key: 'overDue' }, { key: 'actionToday' }, { key: 'future' }] as const;
+const ORDER_KEY = 'easyfix.crm.pendingStart.sectionOrder.v1';
+const COLLAPSED_KEY = 'easyfix.crm.pendingStart.sectionCollapsed.v1';
+
 
 export type PendingToStartViewProps = {
   me: Me | null | undefined;
@@ -277,9 +294,9 @@ export function PendingToStartView({
    * ?action=view (the read-only Eye). When one of those closes the row may have
    * left this bucket — a reassign committed, or the technician checked in from
    * the app meanwhile — so refetch as the action param clears. ?action=checkin
-   * has had no row icon since 2026-09-11 (no CRM Check In); an old link still
-   * opens the view workspace under it, so it stays in the set. Any action added
-   * to the row must be added here too.
+   * has had no row icon since 2026-09-11 (the technician checks in from the
+   * app only); an old link still opens the view workspace under it, so it stays
+   * in the set. Any action added to the row must be added here too.
    */
   const { action } = useJobActionParams();
   const prevAction = useRef<typeof action>(action);
@@ -436,49 +453,30 @@ export function PendingToStartView({
         onShowLocation={onShowLocation}
       />
 
-      {/* ── Three appointment buckets ─────────────────────────────── */}
-      <PendingSection
-        title="Over Due"
-        subtitle="Appointment before today"
-        dateRange={buckets.overDue}
-        filters={applied}
-        q={debouncedSearch}
-        ownerId={ownerId}
-        reloadKey={reloadKey}
-        isAdmin={isAdmin}
-        canJob={canJob}
-        onView={openView}
-        onReassign={openReassign}
-        onShowLocation={onShowLocation}
-      />
-      <PendingSection
-        title="Action Today"
-        subtitle="Appointment is today"
-        dateRange={buckets.actionToday}
-        filters={applied}
-        q={debouncedSearch}
-        ownerId={ownerId}
-        reloadKey={reloadKey}
-        isAdmin={isAdmin}
-        canJob={canJob}
-        onView={openView}
-        onReassign={openReassign}
-        onShowLocation={onShowLocation}
-      />
-      <PendingSection
-        title="Future"
-        subtitle="Appointment tomorrow or later"
-        dateRange={buckets.future}
-        filters={applied}
-        q={debouncedSearch}
-        ownerId={ownerId}
-        reloadKey={reloadKey}
-        isAdmin={isAdmin}
-        canJob={canJob}
-        onView={openView}
-        onReassign={openReassign}
-        onShowLocation={onShowLocation}
-      />
+      {/* ── Three appointment buckets: collapsible + draggable ────── */}
+      <ReorderableSections sections={BUCKET_SECTIONS} orderKey={ORDER_KEY} collapsedKey={COLLAPSED_KEY}>
+        {(s, controls) => {
+          const shared = {
+            filters: applied,
+            q: debouncedSearch,
+            ownerId,
+            reloadKey,
+            isAdmin,
+            canJob,
+            onView: openView,
+            onReassign: openReassign,
+            onShowLocation,
+            controls,
+          };
+          if (s.key === 'overDue') {
+            return <PendingSection title="Over Due" subtitle="Appointment before today" dateRange={buckets.overDue} {...shared} />;
+          }
+          if (s.key === 'actionToday') {
+            return <PendingSection title="Action Today" subtitle="Appointment is today" dateRange={buckets.actionToday} {...shared} />;
+          }
+          return <PendingSection title="Future" subtitle="Appointment tomorrow or later" dateRange={buckets.future} {...shared} />;
+        }}
+      </ReorderableSections>
     </div>
   );
 }
@@ -516,6 +514,9 @@ type PendingSectionProps = {
   onView: (jobId: number) => void;
   onReassign: (jobId: number) => void;
   onShowLocation: (row: { job_id: number; easyfixer_name: string | null }) => void;
+  /* Present on the three buckets: renders them in the shared collapsible,
+   * draggable SectionFrame. Absent (Technician Requests) keeps the plain Card. */
+  controls?: SectionControls;
 };
 
 // One appointment bucket — its OWN /admin/jobs?status=1 call + pagination.
@@ -533,11 +534,17 @@ function PendingSection({
   onView,
   onReassign,
   onShowLocation,
+  controls,
 }: PendingSectionProps) {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState<TablePageSize>(10);
   const limit = pageSizeToLimit(pageSize, JOBS_MAX_LIMIT);
   const offset = page * limit;
+  /* Unconfirmed's rule: a bucket the operator EXPLICITLY shut still needs its
+   * count, not its rows — limit=1 fetches the total alone. One on auto fetches
+   * its page, since it cannot know whether to open until the count arrives.
+   * Expanding changes the key, so the real page is fetched then. */
+  const countOnly = controls?.explicitCollapsed === true;
 
   const key = buildJobsKey({
     status: 1,
@@ -562,8 +569,8 @@ function PendingSection({
     // The requests section filters client-side, so it pulls ONE bounded page
     // and pages within it — the server's limit/offset would slice the wrong
     // population. See the file header for what "bounded" costs.
-    limit: appRequests ? JOBS_MAX_LIMIT : limit,
-    offset: appRequests ? 0 : offset,
+    limit: appRequests ? JOBS_MAX_LIMIT : countOnly ? 1 : limit,
+    offset: appRequests || countOnly ? 0 : offset,
   });
 
   const { data, loading, refreshing, refetch } = useFetch<Resp>(key);
@@ -614,33 +621,8 @@ function PendingSection({
    * the skeleton and the empty-state colSpan both have to agree with <thead>. */
   const colCount = appRequests ? 13 : 12;
 
-  return (
-    <Card className={appRequests ? 'border-warning/40' : undefined}>
-      {/* pb-3 adds breathing room between the section header (title + subtitle)
-          and the table below it. The requests variant tints the whole header
-          strip: `bg-warning-tint` / `text-warning-strong` is the estate's
-          attention pair (StatusChip's `warning` tone, the bulk-upload and
-          auto-allocation notices), and the two tokens SWAP lightness between
-          the light and dark themes — so it stays a dark-on-light block in one
-          and a light-on-dark block in the other, never a 1.08-contrast smear
-          the way an `ink` surface with fixed white text would. */}
-      <div
-        className={
-          'flex items-center justify-between px-4 pt-3 pb-3'
-          + (appRequests ? ' bg-warning-tint text-warning-strong rounded-t-lg' : '')
-        }
-      >
-        <div className="flex items-start gap-2">
-          {appRequests && <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />}
-          <div>
-            <h2 className="text-sm font-semibold">{title}</h2>
-            <p className={appRequests ? 'text-xs' : 'text-xs text-muted-foreground'}>
-              {subtitle} · {data ? total.toLocaleString() : '…'} order
-              {total === 1 ? '' : 's'}
-            </p>
-          </div>
-        </div>
-      </div>
+  const body = (
+    <>
       <RefreshBar active={refreshing} />
       <CardContent className="p-0 overflow-x-auto">
         <table className="data-table">
@@ -829,21 +811,23 @@ function PendingSection({
                       )}
                       {/* View — read-only, ungated, first in the row so the
                           icon order matches the other tabs. Restored
-                          2026-09-04: it had been removed because Check-In and
-                          Reassign "both surface full job detail", which is true
-                          but makes LOOKING at an order require opening a WRITE
-                          modal. Do not re-remove it on that reasoning. */}
+                          2026-09-04: it had been removed because the old
+                          workspace icon and Reassign "both surface full job
+                          detail", which is true but makes LOOKING at an order
+                          require opening a WRITE modal. Do not re-remove it on
+                          that reasoning. */}
                       <button
                         type="button"
                         onClick={() => onView(j.job_id)}
                         className="inline-flex items-center gap-1 text-primary text-xs hover:underline"
-                        title="View details"
-                        aria-label="View details"
+                        title="View Job"
+                        aria-label="View Job"
                       >
                         <Eye className="h-3.5 w-3.5" />
                       </button>
-                      {/* No Check-In (2026-09-11, per ops): the technician
-                          checks in from the app. See JobModal's ActionBar. */}
+                      {/* Since 2026-09-11 (per ops) the technician checks in
+                          from the app; this row has no control for it, and
+                          View is the only way into the job from here. */}
                       {canJob.isJobReassign && (
                         <button
                           type="button"
@@ -890,6 +874,53 @@ function PendingSection({
           }}
         />
       )}
+    </>
+  );
+
+  /* A bucket: the shared frame, under Unconfirmed's auto rule — with no
+     explicit choice it is open while the count is unknown and shut at 0. */
+  if (controls) {
+    return (
+      <SectionFrame
+        label={title}
+        subtitle={subtitle}
+        count={data ? total : null}
+        collapsed={controls.explicitCollapsed ?? (data ? total === 0 : false)}
+        controls={controls}
+      >
+        {body}
+      </SectionFrame>
+    );
+  }
+
+  return (
+    <Card className={appRequests ? 'border-warning/40' : undefined}>
+      {/* pb-3 adds breathing room between the section header (title + subtitle)
+          and the table below it. The requests variant tints the whole header
+          strip: `bg-warning-tint` / `text-warning-strong` is the estate's
+          attention pair (StatusChip's `warning` tone, the bulk-upload and
+          auto-allocation notices), and the two tokens SWAP lightness between
+          the light and dark themes — so it stays a dark-on-light block in one
+          and a light-on-dark block in the other, never a 1.08-contrast smear
+          the way an `ink` surface with fixed white text would. */}
+      <div
+        className={
+          'flex items-center justify-between px-4 pt-3 pb-3'
+          + (appRequests ? ' bg-warning-tint text-warning-strong rounded-t-lg' : '')
+        }
+      >
+        <div className="flex items-start gap-2">
+          {appRequests && <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />}
+          <div>
+            <h2 className="text-sm font-semibold">{title}</h2>
+            <p className={appRequests ? 'text-xs' : 'text-xs text-muted-foreground'}>
+              {subtitle} · {data ? total.toLocaleString() : '…'} order
+              {total === 1 ? '' : 's'}
+            </p>
+          </div>
+        </div>
+      </div>
+      {body}
     </Card>
   );
 }
