@@ -9,11 +9,15 @@
  * and each regression below is a plain deletion that type-checks. The drag
  * ARITHMETIC is behaviour-tested separately (tests/section-reorder.test.js).
  *
- * "Same mechanism as Unconfirmed" is pinned two ways: Pending to Start must
- * render through the shared ReorderableSections / SectionFrame, and — until
- * UnconfirmedSections.tsx is migrated onto that component — the interaction
- * strings that define the behaviour must read identically in both copies, so
- * neither can drift alone.
+ * "Same mechanism as Unconfirmed" is pinned by SHARING it: both pages render
+ * through ReorderableSections / SectionFrame, so the interaction cannot drift
+ * between them. It was briefly duplicated — the component was lifted out of
+ * UnconfirmedSections.tsx for this view on 2026-09-11 and Unconfirmed kept its
+ * inline copy — and the check that pinned the two copies string-for-string is
+ * replaced below by the one that matters now: Unconfirmed must still render
+ * through the shared component and must not re-grow a copy of its own.
+ * Unconfirmed's OWN contract (its keys, its fetch, its footer) is covered in
+ * tests/unconfirmed-sections.test.js.
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -140,13 +144,41 @@ test('the shared component carries Unconfirmed\'s drag, keyboard, collapse and a
   for (const p of PARITY) assert.match(shared, p, `the shared component lost: ${p}`);
   assert.match(shared, /export function ReorderableSections</);
   assert.match(shared, /export function SectionFrame\(/);
+});
 
-  // Once Unconfirmed renders through the shared component, parity holds by
-  // construction; until then its inline copy must still read the same.
-  if (/from '@\/components\/ui\/reorderable-sections'/.test(unconfirmed)) return;
-  for (const p of PARITY) {
-    assert.match(unconfirmed, p,
-      `Unconfirmed and the shared component have drifted on ${p} — change both, or migrate Unconfirmed`);
+/*
+ * The pieces that make up ONE copy of the interaction. Every one of them is in
+ * the shared component (asserted below, which is also the positive control:
+ * each pattern is shown able to match a real copy before it is used to prove
+ * one is absent). None may reappear in Unconfirmed — that is what "there is one
+ * copy" means, and a re-grown copy is exactly how the two pages drift apart.
+ */
+const ONE_COPY_ONLY = [
+  /const REORDER_MS = 220;/,
+  /useLayoutEffect/,
+  /from '@\/lib\/reorder'/,
+  /requestAnimationFrame/,
+  /getBoundingClientRect/,
+  /prefers-reduced-motion/,
+  /localStorage/,
+  /\bdraggable\b/,
+  /<GripVertical /,
+  /ChevronRight/,
+  /aria-expanded=/,
+  /<StatusChip/,
+];
+
+test('Unconfirmed renders through the same shared component, and keeps no second copy of it', () => {
+  assert.match(unconfirmed,
+    /import \{\s*ReorderableSections,\s*SectionFrame,\s*type SectionControls,?\s*\} from '@\/components\/ui\/reorderable-sections';/,
+    'Unconfirmed must import the shared component — a lookalike is what this file exists to prevent');
+  assert.match(unconfirmed, /<ReorderableSections\b/, 'and render its sections inside it');
+  assert.match(unconfirmed, /<SectionFrame\b/, 'and each section through the shared frame');
+
+  for (const p of ONE_COPY_ONLY) {
+    assert.match(shared, p, `control: ${p} must exist in the shared component for this scan to mean anything`);
+    assert.doesNotMatch(unconfirmed, p,
+      `${p} is back in ${UNCONFIRMED} — the interaction has re-grown a second copy; delete it and use the shared component`);
   }
 });
 
