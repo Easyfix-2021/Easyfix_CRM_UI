@@ -19,7 +19,7 @@
  */
 
 import * as React from 'react';
-import { CheckCircle2, Loader2, Search, XCircle } from 'lucide-react';
+import { CheckCircle2, Loader2, MessageSquarePlus, Search, Send, UserCheck, UserPlus, XCircle } from 'lucide-react';
 import { api } from '@/lib/api';
 import { formatApiError } from '@/lib/api-errors';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
@@ -33,7 +33,23 @@ import { Label } from '@/components/ui/label';
 const API_BASE = '/admin/quicksight/supply-gap';
 const REMARKS_MAX = 500;
 const TEXTAREA_CLASS =
-  'flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus:outline-none focus-visible:border-foreground/40 disabled:opacity-60';
+  'flex w-full rounded-lg border border-input bg-background px-3 py-2.5 text-sm shadow-sm placeholder:text-muted-foreground focus:outline-none focus-visible:border-info focus-visible:ring-2 focus-visible:ring-info/20 disabled:opacity-60';
+
+/* Solid meaning-token buttons and per-dialog header bands (brand tokens only). */
+const SOLID = {
+  info: 'bg-info text-white shadow-sm hover:brightness-110',
+  success: 'bg-success text-white shadow-sm hover:brightness-110',
+  gold: 'bg-gold text-white shadow-sm hover:brightness-110',
+  urgent: 'bg-destructive text-white shadow-sm hover:brightness-110',
+  brand: 'bg-primary text-white shadow-sm hover:brightness-110',
+} as const;
+const HEADER = {
+  // Stable tokens only — these sit under white titles in BOTH themes.
+  info: 'from-info via-info to-success shadow-none',
+  success: 'from-success via-success to-info shadow-none',
+  gold: 'from-gold via-warning to-gold shadow-none',
+  urgent: 'from-destructive via-destructive-strong to-destructive shadow-none',
+} as const;
 
 type ActionResult = { id: number; status: number; whatsapp?: { sent: boolean; reason?: string | null } | null };
 
@@ -60,22 +76,28 @@ export function AddRemarkBox({ id, onAdded }: { id: number; onAdded: () => void 
   }
 
   return (
-    <div className="space-y-2">
-      <Label className="block">Add Remark</Label>
+    <section className="rounded-xl border border-border border-l-4 border-l-primary bg-background p-4 shadow-sm">
+      <div className="mb-3 flex items-center gap-2">
+        <span className="flex size-7 items-center justify-center rounded-lg bg-primary text-white">
+          <MessageSquarePlus className="size-4" />
+        </span>
+        <h3 className="text-sm font-semibold">Add Remark</h3>
+      </div>
       <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}
         maxLength={REMARKS_MAX}
         rows={2}
-        placeholder="Enter your remark here…"
+        placeholder="Share an update on this request…"
         className={TEXTAREA_CLASS}
       />
-      <div className="flex justify-end">
-        <Button variant="outline" size="sm" onClick={add} disabled={busy || !text.trim()}>
-          {busy ? 'Adding…' : '+ Add Remark'}
+      <div className="mt-2 flex items-center justify-between">
+        <span className="text-xs tabular-nums text-muted-foreground">{text.length} / {REMARKS_MAX}</span>
+        <Button size="sm" className={SOLID.brand} onClick={add} disabled={busy || !text.trim()}>
+          {busy ? <><Loader2 className="size-4 animate-spin" /> Adding…</> : <><MessageSquarePlus className="size-4" /> Add Remark</>}
         </Button>
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -108,8 +130,11 @@ export function CloseRequestDialog({
   return (
     <Dialog open onOpenChange={guarded}>
       <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>{complete ? 'Complete Supply Request' : 'Cancel Supply Request'}</DialogTitle>
+        <DialogHeader className={complete ? HEADER.success : HEADER.urgent}>
+          <DialogTitle className="flex items-center gap-2">
+            {complete ? <CheckCircle2 className="size-4" /> : <XCircle className="size-4" />}
+            {complete ? 'Complete Supply Request' : 'Cancel Supply Request'}
+          </DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
           <p className="text-sm text-muted-foreground">
@@ -133,11 +158,17 @@ export function CloseRequestDialog({
           <div className="flex justify-end gap-2 border-t pt-3">
             <CancelButton onCancel={onClose} disabled={busy} label="Back" />
             <Button
-              variant={complete ? 'default' : 'destructive'}
+              className={complete ? SOLID.success : SOLID.urgent}
               onClick={submit}
               disabled={busy || !text.trim()}
             >
-              {busy ? 'Saving…' : complete ? '✔ Mark Complete' : '✖ Cancel Request'}
+              {busy ? (
+                <><Loader2 className="size-4 animate-spin" /> Saving…</>
+              ) : complete ? (
+                <><CheckCircle2 className="size-4" /> Mark Complete</>
+              ) : (
+                <><XCircle className="size-4" /> Cancel Request</>
+              )}
             </Button>
           </div>
         </div>
@@ -237,8 +268,11 @@ export function NewTechnicianDialog({
   return (
     <Dialog open onOpenChange={guarded}>
       <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>{mode === 'invite' ? 'Invite Technician' : 'Add New Technician'}</DialogTitle>
+        <DialogHeader className={mode === 'invite' ? HEADER.info : HEADER.gold}>
+          <DialogTitle className="flex items-center gap-2">
+            {mode === 'invite' ? <Send className="size-4" /> : <UserPlus className="size-4" />}
+            {mode === 'invite' ? 'Invite Technician' : 'Add New Technician'}
+          </DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
           <div>
@@ -298,8 +332,14 @@ export function NewTechnicianDialog({
 
           <div className="flex justify-end gap-2 border-t pt-3">
             <CancelButton onCancel={onClose} disabled={busy} />
-            <Button onClick={submit} disabled={!canSubmit || busy}>
-              {busy ? 'Saving…' : mode === 'invite' ? 'Save Invite' : 'Add Technician'}
+            <Button className={mode === 'invite' ? SOLID.info : SOLID.gold} onClick={submit} disabled={!canSubmit || busy}>
+              {busy ? (
+                <><Loader2 className="size-4 animate-spin" /> Saving…</>
+              ) : mode === 'invite' ? (
+                <><Send className="size-4" /> Save Invite</>
+              ) : (
+                <><UserPlus className="size-4" /> Add Technician</>
+              )}
             </Button>
           </div>
         </div>
@@ -386,8 +426,10 @@ export function ExistingSupplyDialog({
   return (
     <Dialog open onOpenChange={guarded}>
       <DialogContent className="max-w-xl">
-        <DialogHeader>
-          <DialogTitle>Allocate An Existing Supply</DialogTitle>
+        <DialogHeader className={HEADER.info}>
+          <DialogTitle className="flex items-center gap-2">
+            <UserCheck className="size-4" /> Allocate An Existing Supply
+          </DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
           <div>
@@ -405,8 +447,8 @@ export function ExistingSupplyDialog({
                   onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); lookup(); } }}
                 />
               </div>
-              <Button variant="outline" onClick={lookup} disabled={looking || !txId || !catgId}>
-                {looking ? <Loader2 className="size-4 animate-spin" /> : 'Search'}
+              <Button className={SOLID.info} onClick={lookup} disabled={looking || !txId || !catgId}>
+                {looking ? <Loader2 className="size-4 animate-spin" /> : <><Search className="size-4" /> Search</>}
               </Button>
             </div>
             {!catgId && <p className="mt-1 text-xs text-urgent-strong">This request has no category, so technicians can’t be checked.</p>}
@@ -414,10 +456,15 @@ export function ExistingSupplyDialog({
           </div>
 
           {tx && (
-            <div className="rounded-lg border border-border">
-              <div className="border-b border-border px-4 py-2.5">
-                <p className="text-sm font-semibold">{tx.efrName ?? '-'}</p>
-                <p className="text-xs text-muted-foreground">TX #{tx.efrId}{tx.cityName ? ` · ${tx.cityName}` : ''}</p>
+            <div className="overflow-hidden rounded-xl border border-border shadow-sm">
+              <div className="flex items-center gap-3 border-b border-border bg-info-tint px-4 py-3">
+                <span className="flex size-10 items-center justify-center rounded-xl bg-info text-white">
+                  <UserCheck className="size-5" />
+                </span>
+                <div>
+                  <p className="text-sm font-semibold text-info-strong">{tx.efrName ?? '-'}</p>
+                  <p className="text-xs text-muted-foreground">TX #{tx.efrId}{tx.cityName ? ` · ${tx.cityName}` : ''}</p>
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-3 px-4 py-3 sm:grid-cols-4">
                 <Check label="City" ok={cityOk} value={tx.cityName ?? '—'} hint={cityOk ? undefined : `Request: ${cityName ?? '—'}`} />
@@ -456,8 +503,8 @@ export function ExistingSupplyDialog({
               Later
             </Button>
             {isJob && (
-              <Button onClick={() => submit(true)} disabled={!allOk || !remarks.trim() || busy}>
-                Schedule Now
+              <Button className={SOLID.info} onClick={() => submit(true)} disabled={!allOk || !remarks.trim() || busy}>
+                <UserCheck className="size-4" /> Schedule Now
               </Button>
             )}
           </div>
@@ -477,7 +524,7 @@ function Check({
 }: { label: string; ok: boolean; value: string; hint?: string; neutral?: boolean }) {
   const Icon = ok ? CheckCircle2 : XCircle;
   return (
-    <div className="min-w-0">
+    <div className={`min-w-0 rounded-lg px-2.5 py-2 ${neutral ? 'bg-muted/60' : ok ? 'bg-success-tint' : 'bg-urgent-tint'}`}>
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className={`flex items-center gap-1 text-sm font-medium ${neutral ? 'text-muted-foreground' : ok ? 'text-success-strong' : 'text-urgent-strong'}`}>
         {!neutral && <Icon className="size-4 shrink-0" />}
