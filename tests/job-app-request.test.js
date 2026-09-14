@@ -230,21 +230,24 @@ test('labels are Title Case and name the ASK, not the state', () => {
 
 // ─── Rendering invariants (source-scanned) ──────────────────────────────
 
-test('the requests section renders ABOVE Over Due', () => {
+test('the requests section DEFAULTS above Over Due (2026-09-14: it is reorderable now)', () => {
+  // Source order stopped meaning anything when the sections moved into the
+  // ReorderableSections render prop: what renders first is SECTIONS[0], and
+  // after that whatever the operator dragged (persisted per browser).
   const src = view();
-  const requests = src.indexOf('title="Technician Requests"');
-  const overDue = src.indexOf('title="Over Due"');
-  assert.ok(requests > 0, 'the Technician Requests section must exist');
-  assert.ok(overDue > 0, 'the Over Due bucket must still exist');
-  assert.ok(requests < overDue,
-    'Technician Requests must be rendered before Over Due — it is the only section waiting on a person');
+  const arr = src.match(/const SECTIONS = \[([\s\S]*?)\] as const;/);
+  assert.ok(arr, 'positive control: the SECTIONS array must be found');
+  const keys = [...arr[1].matchAll(/key: '([^']+)'/g)].map((m) => m[1]);
+  assert.deepEqual(keys, ['appRequests', 'overDue', 'actionToday', 'future'],
+    'Technician Requests defaults first — it is the only section waiting on a person');
 });
 
-test('an empty requests section occupies no space', () => {
-  const src = view();
-  assert.match(src, /if \(appRequests && total === 0\) return null;/,
-    'the requests section must return null when it has no rows, not an empty-state card');
-});
+// The old 'an empty requests section occupies no space' test asserted
+// `if (appRequests && total === 0) return null;`. The owner overrode that on
+// 2026-09-14 ("Technician Requests should also be collapsable, reorderable, etc
+// as other sections"): a section that vanishes cannot be dragged, so it keeps
+// its header and auto-collapses when empty, like every other section.
+// tests/pending-to-start-sections.test.js pins the new behaviour.
 
 test('the count and the rows come from the SAME predicate call', () => {
   const src = view();
