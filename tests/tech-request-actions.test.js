@@ -181,8 +181,34 @@ test('the pair is hidden outright without the permission', () => {
 });
 
 test('the backend seeds that exact key', () => {
-  // A key the FE gates on but nobody seeds is a permanently invisible button.
-  const mig = read('../EasyFix_Backend/migrations/2026-09-15-seed-job-app-request-action.sql');
+  /*
+   * A key the FE gates on but nobody seeds is a permanently invisible button.
+   *
+   * Located the way every other cross-repo test here does: EASYFIX_BACKEND_DIR
+   * first (CI shallow-clones the backend into RUNNER_TEMP and points this at
+   * it), then the developer-machine sibling. A hardcoded '../EasyFix_Backend'
+   * resolves against THIS repo's root, which is wrong in CI and wrong in any
+   * git worktree — and it made this test the only red one when the QA merge ran
+   * from a worktree, for a reason that had nothing to do with the code.
+   *
+   * BOTH directories are searched: migrations/ is the pending set and
+   * migrations/executed/ is where the file moves once it has been run
+   * everywhere. The seed is equally real in either, and pinning one would turn
+   * a routine bookkeeping move into a failing build.
+   */
+  const root = process.env.EASYFIX_BACKEND_DIR
+    || path.resolve(__dirname, '../../EasyFix_Backend');
+  const NAME = '2026-09-15-seed-job-app-request-action.sql';
+  const found = ['migrations', path.join('migrations', 'executed')]
+    .map((d) => path.join(root, d, NAME))
+    .find((f) => fs.existsSync(f));
+  // FAIL, NEVER SKIP: an unseeded key is a button nobody can ever click, and a
+  // check that quietly stops looking is how it would ship that way.
+  assert.ok(found,
+    `EasyFix_Backend checkout not found — set EASYFIX_BACKEND_DIR or clone it beside this `
+    + `repo. Looked for ${NAME} under ${root}/migrations{,/executed}. This is the cross-repo `
+    + 'half of the permission contract and must not degrade to a pass.');
+  const mig = fs.readFileSync(found, 'utf8');
   assert.match(mig, /'isJobAppRequestResolve'/);
   assert.match(mig, /INSERT INTO menu_action/);
   assert.match(mig, /'Approve \/ Reject Technician Requests'/);
