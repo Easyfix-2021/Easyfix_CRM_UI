@@ -26,8 +26,7 @@
  *     POST /admin/jobs/:id/offer. The job stays job_status=0 (BOOKED) with no
  *     single owner; each selected tech gets a tbl_job_offer row + an FCM push,
  *     and whoever accepts first on the app wins (race-safe BE-side). The
- *     "Offered to" section lists everyone the job was offered to (latest offer
- *     each, the holder first) with a live "offered N min ago".
+ *     "Offered to" section lists current offerees with a live "offered N min ago".
  *
  *   offerFlowEnabled = FALSE → DIRECT-ASSIGN: single-SELECT one technician, the
  *     button reads "Assign", and PATCH /admin/jobs/:id/assign bumps the job
@@ -38,9 +37,7 @@
  *   GET  /admin/jobs/:id/candidates/search?term=<q>&jobDate=&timeSlot=
  *   POST /admin/jobs/:id/offer   { easyfixerIds: number[] }  (carries the
  *        proposed schedule too so date/time update + offer happen together)
- *   GET  /admin/jobs/:id/offers  → { items: JobOffer[], offer_expiry_enabled? }
- *        (latest offer per technician, holder first, with a backend-derived
- *        outcome / outcome_label / outcome_detail)
+ *   GET  /admin/jobs/:id/offers  → { items: { efr_id, efr_name, offered_at }[] }
  *
  * Live-location tracking is intentionally DEFERRED — no map / location
  * icon here. A follow-up adds it.
@@ -72,9 +69,6 @@ import {
   mergeCandidatesByActiveSurface,
 } from '@/lib/easyfixer-lifecycle';
 import { CallableMobile } from '@/components/calls/CallButton';
-import {
-  INFERRED_OUTCOME_TITLE, offersCarryOutcome, offerStatusLabel, offerStatusTextClass, showsRejectReason,
-} from './offerOutcome';
 import { AddRemarksDialog } from './AddRemarksDialog';
 import { CancelWithReasonDialog } from './CancelWithReasonDialog';
 import { RescheduleDialog } from './RescheduleDialog';
@@ -231,36 +225,6 @@ function localInputToWallClock(local: string): string {
   return withSecs.replace('T', ' ');
 }
 
-/*
- * While this modal stays open, its OWN data refreshes silently every 15 minutes:
- * the status probe, the Top-10 ranking, a typed search, the Offered-To list and
- * the Remarks thread. Nothing else on the page reloads.
- *
- * WHY. Ops leave this modal open while chasing technicians, and what they are
- * waiting for happens elsewhere — a technician accepting on the app, another
- * operator offering, rescheduling or adding a remark. Without a refresh the
- * modal kept showing the moment it opened: a job accepted 20 minutes ago still
- * looked unassigned, and its offer rows never moved.
- *
- * WHY IT IS SAFE. useFetch's refetchInterval swaps data in place (`refreshing`,
- * never `loading`) and keeps the last rows on a failed poll, so nothing flashes
- * or blanks. The identity guards (probe / topData) already reject a payload for
- * another job; the seed effect re-seeds only when the APPOINTMENT changed, so a
- * poll never clobbers a schedule the operator is editing; `selected` is keyed by
- * efr_id, so a re-ranked list does not drop ticks — except a technician the new
- * payload marks un-offerable, which the existing blockedSelectedCandidate effect
- * removes WITH its explanation. If the probe learns the job left BOOKED (e.g. a
- * technician accepted), the existing staleBucket effect switches the modal to
- * read-only and tells the host to reload its list once — that is the only way a
- * poll reaches outside the modal, and it is the host row that became wrong.
- *
- * Every poll stops when the modal closes: each hook's key goes null.
- */
-const MODAL_REFRESH_MS = 15 * 60 * 1000;
-// Hidden tabs skip the tick and catch up once on return (see useFetch pauseWhenHidden):
-// a modal forgotten in a background tab must not run the ranker all night.
-const MODAL_POLL = { refetchInterval: MODAL_REFRESH_MS, pauseWhenHidden: true } as const;
-
 export function ScheduleAssignModal({
   open, onClose, onAssigned, onChanged, jobId,
 }: {
@@ -295,7 +259,7 @@ export function ScheduleAssignModal({
      */
     fk_easyfixter_id?: number | null;
     easyfixer_name?: string | null;
-  }>(open && jobId ? `/admin/jobs/${jobId}` : null, MODAL_POLL);
+  }>(open && jobId ? `/admin/jobs/${jobId}` : null);
   /*
    * ⚠ IDENTITY-GUARDED, exactly as `topData` is (see its own comment below).
    * useFetch RETAINS the previous key's payload — on a key change it sets
@@ -509,7 +473,7 @@ export function ScheduleAssignModal({
   const topKey = open && jobId
     ? `/admin/jobs/${jobId}/candidates?limit=10${scheduleEdited ? scheduleQs : ''}`
     : null;
-  const top = useFetch<CandidatesResponse>(topKey, { enabled: !!topKey, ...MODAL_POLL });
+  const top = useFetch<CandidatesResponse>(topKey, { enabled: !!topKey });
 
   /*
    * Re-rank after an edit made IN this modal — address (zone eligibility is
@@ -653,27 +617,19 @@ export function ScheduleAssignModal({
   const searchKey = open && jobId && debouncedTerm
     ? `/admin/jobs/${jobId}/candidates/search?term=${encodeURIComponent(debouncedTerm)}${seeded ? scheduleQs : ''}`
     : null;
-  const searchRes = useFetch<SearchResponse>(searchKey, { enabled: !!searchKey, ...MODAL_POLL });
+  const searchRes = useFetch<SearchResponse>(searchKey, { enabled: !!searchKey });
   const searchData = searchRes.data
     && (!searchRes.data.job || Number(searchRes.data.job.job_id) === Number(jobId))
     ? searchRes.data
     : null;
 
   // ── Offered-to section ──────────────────────────────────────────────
-  // Everyone the job has been offered to (latest offer each, the holder
-  // first: accepted, live, declined, closed). Keyed on jobId so it
+  // Who the job is currently offered to (open offers). Keyed on jobId so it
   // re-fetches on open; invalidated after a successful offer POST so the new
   // offerees appear immediately. Falls back to an empty list (e.g. when the
   // BE's tbl_job_offer table is absent → endpoint returns { items: [] }).
   const offersKey = open && jobId ? `/admin/jobs/${jobId}/offers` : null;
-  const offers = useFetch<JobOffersResponse>(offersKey, { enabled: !!offersKey, ...MODAL_POLL });
-  // Picks the caption wording; see offersCarryOutcome for why.
-  const offerRowsCarryOutcome = offersCarryOutcome(offers.data?.items);
-  // The caption only says "the holder is listed first" when a holder row is in
-  // the list — on an unassigned job with live offers the first row is just an
-  // open offer, and the sentence would describe someone who does not exist.
-  const offerHolderListed = offerRowsCarryOutcome
-    && (offers.data?.items ?? []).some((o) => o.outcome === 'accepted' || o.outcome === 'assigned');
+  const offers = useFetch<JobOffersResponse>(offersKey, { enabled: !!offersKey });
 
   // Live-time tick — bump a counter every 45s so the "offered N min ago"
   // labels re-render without re-fetching. Cleared on unmount / close.
@@ -733,62 +689,7 @@ export function ScheduleAssignModal({
   // `rescheduling` forces the loading state during the post-reschedule refetch
   // so the Top-10 doesn't show the OLD ranking (ranked against the old date).
   const listLoading = showingSearch ? searchRes.loading : (top.loading || !topData || rescheduling);
-  /*
-   * A failed BACKGROUND refresh must not blank the list. useFetch keeps the rows
-   * it already had and reports `error`; replacing the whole table with "Something
-   * Went Wrong" for up to 15 minutes hid the operator's ticks while Offer stayed
-   * enabled. So when the held rows belong to the CURRENT request (dataKey ===
-   * key), keep them and show a small notice with Retry instead. A failed first
-   * load, or a failed NEW search term (held rows are the previous term's), still
-   * shows the full error.
-   */
-  const activeRes = showingSearch ? searchRes : top;
-  const activeKey = showingSearch ? searchKey : topKey;
-  const listData = showingSearch ? searchData : topData;
-  const listRefreshFailed = !!activeRes.error && !!listData && activeRes.dataKey === activeKey;
-  const listError = listRefreshFailed ? null : activeRes.error;
-
-  /*
-   * A ticked Top-10 technician the refreshed Top 10 no longer contains — booked
-   * in an overlapping slot, offered by someone else, or ranked past #10. Their
-   * row vanishes, but the tick stayed in `selected`: invisible, still counted in
-   * "Offer to N", still sent. blockedSelectedCandidate can't see them (it only
-   * knows rows that are present), so untick them here, by name, with a way on.
-   * Top-10 ticks only — a pick made from Search is meant to stay selected while
-   * the operator is back on the Top 10. Keyed on topData alone, so switching
-   * surfaces or typing a search term never unticks anything.
-   */
-  const topNamesRef = useRef(new Map<number, string>());
-  useEffect(() => {
-    if (!topData) return;
-    const present = new Set((topData.candidates ?? []).map((c) => c.efr_id));
-    const dropped = [...selected.entries()]
-      .filter(([id, source]) => source === 'top10' && !present.has(id))
-      .map(([id]) => id);
-    if (dropped.length > 0) {
-      setSelected((previous) => {
-        const next = new Map(previous);
-        dropped.forEach((id) => next.delete(id));
-        return next;
-      });
-      const names = dropped.map((id) => topNamesRef.current.get(id) ?? `Efr #${id}`).join(', ');
-      setErr(`${names} ${dropped.length === 1 ? 'is' : 'are'} no longer in the refreshed Top 10 and ${dropped.length === 1 ? 'was' : 'were'} unselected. Search by name to offer anyway.`);
-    }
-    for (const c of topData.candidates ?? []) topNamesRef.current.set(c.efr_id, c.efr_name ?? `Efr #${c.efr_id}`);
-  }, [topData]); // eslint-disable-line react-hooks/exhaustive-deps -- deliberately topData only: see above
-
-  /*
-   * Offering switched OFF while several technicians are ticked (the property can
-   * flip without a restart, and a refresh picks it up). Direct assign is
-   * single-select, so the checkboxes become radios with several "checked" and a
-   * disabled Assign that says nothing. Clear the picks and say why — the modal
-   * never chooses a technician for the operator.
-   */
-  useEffect(() => {
-    if (offerMode || selected.size <= 1) return;
-    setSelected(new Map());
-    setErr('Offering has been switched off for this job. Select one technician to assign.');
-  }, [offerMode, selected.size]);
+  const listError = showingSearch ? searchRes.error : top.error;
 
   // A new term is a new result set — send the operator back to page 1 rather
   // than stranding them on a page that no longer exists.
@@ -824,13 +725,6 @@ export function ScheduleAssignModal({
     }
     const techCount = ids.length;
     const techLabel = `${techCount} technician${techCount === 1 ? '' : 's'}`;
-    // Name them. The list refreshes in the background, so a row can move under
-    // the cursor; a bare count would not show a tick that landed on the wrong
-    // technician. Resolved through every known surface, so a Search pick shown
-    // while on the Top 10 still has a name.
-    const techNames = ids
-      .map((id) => knownCandidatesById.get(id)?.efr_name ?? topNamesRef.current.get(id) ?? `Efr #${id}`)
-      .join(', ');
     const ok = await confirmAction({
       title: `Offer Job #${jobId} to ${techLabel}?`,
       icon: <AlertTriangle className="h-5 w-5" />,
@@ -849,7 +743,7 @@ export function ScheduleAssignModal({
             {staleOwnerName && (
               <li>• <b>{staleOwnerName}</b> is currently assigned and <b>will be released</b></li>
             )}
-            <li>• Offered to <b>{techNames}</b></li>
+            <li>• Offered to <b>{techLabel}</b></li>
             <li>• Each gets a <b>push notification</b></li>
             <li>• <b>First to accept</b> is assigned the job</li>
             {job?.requested_date_time && (
@@ -1010,7 +904,6 @@ export function ScheduleAssignModal({
             job={job}
             jobId={jobId}
             remarksReloadKey={remarksReloadKey}
-            remarksRefetchInterval={MODAL_REFRESH_MS}
             showReschedule
             onReschedule={() => setRescheduleOpen(true)}
             rescheduling={rescheduling}
@@ -1056,7 +949,7 @@ export function ScheduleAssignModal({
             } : undefined}
           />
 
-          {/* ───────── Offer history — holder + live + rejected + accepted + closed — offer mode only ───────── */}
+          {/* ───────── Offer history — live + rejected + expired — offer mode only ───────── */}
           {offerMode && (offers.data?.items?.length ?? 0) > 0 && (
             <section>
               <h3 className="text-sm font-semibold mb-2 flex items-center gap-1.5">
@@ -1082,63 +975,22 @@ export function ScheduleAssignModal({
                 * ignored it" is a claim about a person, and it was wrong —
                 * which is exactly the conclusion the old caption invited.
                 *
-                * So rows now say CLOSED plus the reason where one was recorded,
-                * and EXPIRED is kept for a real timeout only — the backend
-                * derives both (job.listOffers). Job 540158 added the holder:
-                * the ACCEPTED row used to be filtered out, so the table showed
-                * the losing technician's closed offer and never who took the
-                * job. The holder is now listed first, which the lead says — but
-                * only when a holder row is actually present (offerHolderListed).
-                *
-                * That wording describes the outcome rows, so it renders only
-                * when the rows carry `outcome`. The CRM ships before the backend
-                * (and a backend rollback lands here too): an older backend still
-                * drops ACCEPTED and labels every closed offer EXPIRED, and
-                * telling an operator those EXPIRED rows timed out would repeat
-                * the 538177 claim. For that data the earlier wording is the true
-                * one, so it stays.
-                *
-                * Neither says a Closed technician never answered. acceptOffer's
-                * lost-race branch closes the offer of a technician who tapped
-                * Accept after the job had already moved on; the one thing true of
-                * every CLOSED row is that the technician did not decline it.
-                *
                 * `undefined` (a backend that predates the field) gets the
                 * neutral wording rather than either promise.
                 */}
               <p className="mb-2 text-xs text-muted-foreground">
-                {offerRowsCarryOutcome ? (
-                  <>
-                    Technicians this job has been offered to
-                    {offerHolderListed ? ', with the technician who holds the job listed first' : ''}
-                    {' '}— who accepted, who declined, and whose offer was closed (with the reason,
-                    where one can be shown). Whoever accepts first on the app is assigned.
-                  </>
-                ) : (
-                  <>
-                    Technicians this job has been offered to — including those who declined,
-                    and those whose offer was closed without an answer. Whoever accepts first
-                    on the app is assigned.
-                  </>
-                )}{' '}
+                Technicians this job has been offered to — including those who declined,
+                and those whose offer was closed without an answer. Whoever accepts first
+                on the app is assigned.{' '}
                 {offers.data?.offer_expiry_enabled === true ? (
                   <>An open offer expires 30 minutes after it is made.</>
                 ) : offers.data?.offer_expiry_enabled === false ? (
-                  offerRowsCarryOutcome ? (
-                    <>
-                      Open offers do not time out. A <span className="font-medium">Closed</span>{' '}
-                      offer ended without the technician declining it; the reason is shown
-                      where one can be shown. <span className="font-medium">Expired</span>{' '}
-                      marks an offer that timed out while expiry was switched on.
-                    </>
-                  ) : (
-                    <>
-                      Open offers do not time out. An <span className="font-medium">Expired</span>{' '}
-                      offer here was closed by a later action on the job — a re-offer,
-                      assignment, reschedule, or another technician accepting — not by the
-                      technician failing to respond.
-                    </>
-                  )
+                  <>
+                    Open offers do not time out. An <span className="font-medium">Expired</span>{' '}
+                    offer here was closed by a later action on the job — a re-offer,
+                    assignment, reschedule, or another technician accepting — not by the
+                    technician failing to respond.
+                  </>
                 ) : null}
               </p>
               {/* Table rather than chips: a chip row wrapped unpredictably and
@@ -1159,9 +1011,14 @@ export function ScheduleAssignModal({
                   </thead>
                   <tbody>
                     {offers.data!.items.map((o) => {
-                      /* Status word + colour come from ./offerOutcome, shared
-                         with OfferHoverCard — see the WHY there. */
-                      const statusLabel = offerStatusLabel(o);
+                      /* Colour as TEXT, not a chip: inside a table the chip
+                         competed with the row's own status pills and made the
+                         column read as an action. REJECTED=rose, EXPIRED=slate,
+                         OFFERED (live)=amber. */
+                      const statusText =
+                        o.offer_status === 2 ? 'text-urgent-strong'
+                          : o.offer_status === 3 ? 'text-ink-500'
+                            : 'text-warning-strong';
                       return (
                         <tr key={o.efr_id}>
                           <td className="!text-left">
@@ -1178,15 +1035,10 @@ export function ScheduleAssignModal({
                           </td>
                           <td className="!text-left">
                             <div className="flex flex-col gap-0.5">
-                              {statusLabel && (
-                                <span className={`font-medium ${offerStatusTextClass(o)}`}>{statusLabel}</span>
+                              {o.offer_status_label && (
+                                <span className={`font-medium ${statusText}`}>{o.offer_status_label}</span>
                               )}
-                              {o.outcome_detail && (
-                                <span className="text-xs text-ink-500" title={o.outcome_inferred ? INFERRED_OUTCOME_TITLE : undefined}>
-                                  {o.outcome_detail}
-                                </span>
-                              )}
-                              {showsRejectReason(o) && o.reject_reason && (
+                              {o.offer_status === 2 && o.reject_reason && (
                                 <span className="text-xs text-urgent-strong" title="Reason given by technician">
                                   &ldquo;{o.reject_reason}&rdquo;
                                 </span>
@@ -1309,14 +1161,6 @@ export function ScheduleAssignModal({
                 right rather than at the modal's centre. The Job Details panel
                 and the search box above stay usable regardless, so a Top-10
                 failure never blocks searching + assigning a technician. */}
-            {listRefreshFailed && (
-              <p className="mb-2 text-xs text-warning-strong">
-                Couldn’t refresh this list — showing the last loaded results.{' '}
-                <button type="button" className="font-medium underline" onClick={() => activeRes.refetch()}>
-                  Retry
-                </button>
-              </p>
-            )}
             {!listLoading && listError ? (
               <div className="py-12 text-center text-sm text-urgent-strong">
                 {showingSearch

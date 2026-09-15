@@ -109,31 +109,11 @@ type FetchState<T> = { data: T | null; loading: boolean; error: string | null };
  */
 export function useFetch<T>(
   key: string | null,
-  options: {
-    enabled?: boolean;
-    refetchInterval?: number;
-    /*
-     * Opt-in: skip poll ticks while the browser tab is hidden, and catch up
-     * once when it becomes visible again (only if a full interval has passed).
-     * For long intervals on surfaces left open for hours — a 15-minute poll in
-     * a forgotten background tab otherwise runs all night.
-     */
-    pauseWhenHidden?: boolean;
-  } = {},
-): FetchState<T> & {
-  refreshing: boolean;
-  refetch: () => void;
-  /*
-   * The key the held `data` was fetched for. Differs from the current key while
-   * a new key loads — or after it FAILED, when `data` is still the previous
-   * key's payload. Lets a caller tell "refresh of what's on screen failed"
-   * (keep showing it) from "the new request failed" (show the error).
-   */
-  dataKey: string | null;
-} {
+  options: { enabled?: boolean; refetchInterval?: number } = {},
+): FetchState<T> & { refreshing: boolean; refetch: () => void } {
   const enabled = options.enabled !== false && key != null;
-  const [state, setState] = useState<FetchState<T> & { refreshing: boolean; dataKey: string | null }>({
-    data: null, loading: enabled, refreshing: false, error: null, dataKey: null,
+  const [state, setState] = useState<FetchState<T> & { refreshing: boolean }>({
+    data: null, loading: enabled, refreshing: false, error: null,
   });
   // Bump this counter to force a refetch — used by the returned `refetch`
   // callback and the optional poll below.
@@ -151,13 +131,13 @@ export function useFetch<T>(
       ? { ...s, loading: true, refreshing: false, error: null }
       : { ...s, loading: false, refreshing: true, error: null });
     dedupedGet<T>(key, () => api.get<T>(key))
-      .then((data) => { if (!cancelled) setState({ data, dataKey: key, loading: false, refreshing: false, error: null }); })
+      .then((data) => { if (!cancelled) setState({ data, loading: false, refreshing: false, error: null }); })
       .catch((e) => {
         // Keep the previous data on error so a transient poll/refetch failure
         // never blanks a populated table (SWR). First-load errors still show
         // (data was null anyway).
         if (!cancelled) setState((s) => ({
-          data: s.data, dataKey: s.dataKey, loading: false, refreshing: false,
+          data: s.data, loading: false, refreshing: false,
           error: e instanceof ApiError ? e.message : 'Failed to load',
         }));
       });
@@ -171,33 +151,19 @@ export function useFetch<T>(
   useEffect(() => {
     const ms = options.refetchInterval;
     if (!enabled || !key || !ms) return;
-    const pause = options.pauseWhenHidden === true && typeof document !== 'undefined';
-    let last = Date.now();
-    const fire = () => {
-      last = Date.now();
+    const id = setInterval(() => {
       cache.delete(key);
       inflight.delete(key);
       setTick((t) => t + 1);
-    };
-    const id = setInterval(() => {
-      if (pause && document.hidden) return;
-      fire();
     }, ms);
-    // Back from a hidden tab: one catch-up refresh if a full interval was missed.
-    const onVisible = () => { if (!document.hidden && Date.now() - last >= ms) fire(); };
-    if (pause) document.addEventListener('visibilitychange', onVisible);
-    return () => {
-      clearInterval(id);
-      if (pause) document.removeEventListener('visibilitychange', onVisible);
-    };
-  }, [key, enabled, options.refetchInterval, options.pauseWhenHidden]);
+    return () => clearInterval(id);
+  }, [key, enabled, options.refetchInterval]);
 
   return {
     data: state.data,
     loading: state.loading,
     refreshing: state.refreshing,
     error: state.error,
-    dataKey: state.dataKey,
     refetch: () => {
       // Drop cached entry for this key, then bump the tick — the next effect
       // run fires a real request (and swaps silently, since data is present).
