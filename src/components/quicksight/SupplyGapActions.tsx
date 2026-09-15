@@ -16,6 +16,9 @@
  * Nothing here renders a technician's phone number: the existing-supply lookup
  * returns one, but the checklist only needs the name and city, and the server
  * re-resolves the number itself on submit.
+ *
+ * Built from the shared components/ui kit only (Dialog, Card, Button,
+ * StatusChip, Input, Label) — no bespoke colours or header bands.
  */
 
 import * as React from 'react';
@@ -24,32 +27,20 @@ import { api } from '@/lib/api';
 import { formatApiError } from '@/lib/api-errors';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { showToast, dismissToast } from '@/components/ui/toast';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { CancelButton } from '@/components/ui/cancel-button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { StatusChip, type StatusChipTone } from '@/components/ui/StatusChip';
 
 const API_BASE = '/admin/quicksight/supply-gap';
 const REMARKS_MAX = 500;
-const TEXTAREA_CLASS =
-  'flex w-full rounded-lg border border-input bg-background px-3 py-2.5 text-sm shadow-sm placeholder:text-muted-foreground focus:outline-none focus-visible:border-info focus-visible:ring-2 focus-visible:ring-info/20 disabled:opacity-60';
-
-/* Solid meaning-token buttons and per-dialog header bands (brand tokens only). */
-const SOLID = {
-  info: 'bg-info text-white shadow-sm hover:brightness-110',
-  success: 'bg-success text-white shadow-sm hover:brightness-110',
-  gold: 'bg-gold text-white shadow-sm hover:brightness-110',
-  urgent: 'bg-destructive text-white shadow-sm hover:brightness-110',
-  brand: 'bg-primary text-white shadow-sm hover:brightness-110',
-} as const;
-const HEADER = {
-  // Stable tokens only — these sit under white titles in BOTH themes.
-  info: 'from-info via-info to-success shadow-none',
-  success: 'from-success via-success to-info shadow-none',
-  gold: 'from-gold via-warning to-gold shadow-none',
-  urgent: 'from-destructive via-destructive-strong to-destructive shadow-none',
-} as const;
+/* components/ui has no Textarea — this mirrors the shared <Input> surface so the
+   two read as one form. Exported for SupplyGapRequestDialog. */
+export const TEXTAREA_CLASS =
+  'flex w-full rounded-md border border-input bg-card px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus:outline-none focus-visible:outline-none focus-visible:border-foreground/40 disabled:cursor-not-allowed disabled:opacity-60';
 
 type ActionResult = { id: number; status: number; whatsapp?: { sent: boolean; reason?: string | null } | null };
 
@@ -76,28 +67,27 @@ export function AddRemarkBox({ id, onAdded }: { id: number; onAdded: () => void 
   }
 
   return (
-    <section className="rounded-xl border border-border border-l-4 border-l-primary bg-background p-4 shadow-sm">
-      <div className="mb-3 flex items-center gap-2">
-        <span className="flex size-7 items-center justify-center rounded-lg bg-primary text-white">
-          <MessageSquarePlus className="size-4" />
-        </span>
-        <h3 className="text-sm font-semibold">Add Remark</h3>
-      </div>
-      <textarea
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        maxLength={REMARKS_MAX}
-        rows={2}
-        placeholder="Share an update on this request…"
-        className={TEXTAREA_CLASS}
-      />
-      <div className="mt-2 flex items-center justify-between">
-        <span className="text-xs tabular-nums text-muted-foreground">{text.length} / {REMARKS_MAX}</span>
-        <Button size="sm" className={SOLID.brand} onClick={add} disabled={busy || !text.trim()}>
-          {busy ? <><Loader2 className="size-4 animate-spin" /> Adding…</> : <><MessageSquarePlus className="size-4" /> Add Remark</>}
-        </Button>
-      </div>
-    </section>
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle>Add Remark</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          maxLength={REMARKS_MAX}
+          rows={2}
+          placeholder="Share an update on this request…"
+          className={TEXTAREA_CLASS}
+        />
+        <div className="mt-2 flex items-center justify-between">
+          <span className="text-xs tabular-nums text-muted-foreground">{text.length} / {REMARKS_MAX}</span>
+          <Button size="sm" onClick={add} disabled={busy || !text.trim()}>
+            {busy ? <><Loader2 className="mr-1 size-4 animate-spin" /> Adding…</> : <><MessageSquarePlus className="mr-1 size-4" /> Add Remark</>}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -130,7 +120,7 @@ export function CloseRequestDialog({
   return (
     <Dialog open onOpenChange={guarded}>
       <DialogContent className="max-w-lg">
-        <DialogHeader className={complete ? HEADER.success : HEADER.urgent}>
+        <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             {complete ? <CheckCircle2 className="size-4" /> : <XCircle className="size-4" />}
             {complete ? 'Complete Supply Request' : 'Cancel Supply Request'}
@@ -154,24 +144,24 @@ export function CloseRequestDialog({
               className={TEXTAREA_CLASS}
             />
           </div>
-          {error && <ErrorLine>{error}</ErrorLine>}
-          <div className="flex justify-end gap-2 border-t pt-3">
-            <CancelButton onCancel={onClose} disabled={busy} label="Back" />
-            <Button
-              className={complete ? SOLID.success : SOLID.urgent}
-              onClick={submit}
-              disabled={busy || !text.trim()}
-            >
-              {busy ? (
-                <><Loader2 className="size-4 animate-spin" /> Saving…</>
-              ) : complete ? (
-                <><CheckCircle2 className="size-4" /> Mark Complete</>
-              ) : (
-                <><XCircle className="size-4" /> Cancel Request</>
-              )}
-            </Button>
-          </div>
+          {error && <p role="alert" className="text-sm text-urgent-strong">{error}</p>}
         </div>
+        <DialogFooter>
+          <CancelButton onCancel={onClose} disabled={busy} label="Back" />
+          <Button
+            variant={complete ? 'default' : 'destructive'}
+            onClick={submit}
+            disabled={busy || !text.trim()}
+          >
+            {busy ? (
+              <><Loader2 className="mr-1 size-4 animate-spin" /> Saving…</>
+            ) : complete ? (
+              <><CheckCircle2 className="mr-1 size-4" /> Mark Complete</>
+            ) : (
+              <><XCircle className="mr-1 size-4" /> Cancel Request</>
+            )}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
@@ -180,19 +170,14 @@ export function CloseRequestDialog({
 /* ── Add A New Supply / Invite Sent ───────────────────────────────────── */
 
 /* Legacy status → what it means for the operator, and whether it blocks. */
-const TX_STATUS_NOTE: Record<string, { tone: 'danger' | 'warning' | 'success'; text: string; blocks?: boolean }> = {
-  Active: { tone: 'danger', text: 'This technician is already active in the system.', blocks: true },
+const TX_STATUS_NOTE: Record<string, { tone: StatusChipTone; text: string; blocks?: boolean }> = {
+  Active: { tone: 'urgent', text: 'This technician is already active in the system.', blocks: true },
   'In-active': { tone: 'warning', text: 'Technician exists but is currently inactive. You can reactivate.' },
-  'Not Suitable': { tone: 'danger', text: 'Technician was marked as not suitable. Review before proceeding.' },
-  'Not Eligible': { tone: 'danger', text: 'Technician is not eligible for allocation.' },
+  'Not Suitable': { tone: 'urgent', text: 'Technician was marked as not suitable. Review before proceeding.' },
+  'Not Eligible': { tone: 'urgent', text: 'Technician is not eligible for allocation.' },
   'Self Registration In Progress': { tone: 'warning', text: 'Technician registration is in progress.' },
   'New Lead': { tone: 'success', text: 'New lead technician. You can proceed with registration.' },
   'Not logged into App': { tone: 'warning', text: 'Technician has not logged into the app yet.', blocks: true },
-};
-const NOTE_CLASS = {
-  danger: 'bg-urgent-tint text-urgent-strong',
-  warning: 'bg-warning-tint text-warning-strong',
-  success: 'bg-success-tint text-success-strong',
 };
 
 export function NewTechnicianDialog({
@@ -268,7 +253,7 @@ export function NewTechnicianDialog({
   return (
     <Dialog open onOpenChange={guarded}>
       <DialogContent className="max-w-lg">
-        <DialogHeader className={mode === 'invite' ? HEADER.info : HEADER.gold}>
+        <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             {mode === 'invite' ? <Send className="size-4" /> : <UserPlus className="size-4" />}
             {mode === 'invite' ? 'Invite Technician' : 'Add New Technician'}
@@ -305,9 +290,9 @@ export function NewTechnicianDialog({
           </div>
 
           {status && (
-            <div className={`rounded-md px-3 py-2 text-sm ${note ? NOTE_CLASS[note.tone] : 'bg-muted text-muted-foreground'}`}>
-              <span className="font-semibold">Status: {status}</span>
-              {note && <span className="block text-xs">{note.text}</span>}
+            <div>
+              <StatusChip tone={note?.tone ?? 'neutral'}>Status: {status}</StatusChip>
+              {note && <p className="mt-1 text-xs text-muted-foreground">{note.text}</p>}
             </div>
           )}
 
@@ -328,21 +313,20 @@ export function NewTechnicianDialog({
               The technician gets an onboarding WhatsApp, and the request moves to In Progress.
             </p>
           )}
-          {error && <ErrorLine>{error}</ErrorLine>}
-
-          <div className="flex justify-end gap-2 border-t pt-3">
-            <CancelButton onCancel={onClose} disabled={busy} />
-            <Button className={mode === 'invite' ? SOLID.info : SOLID.gold} onClick={submit} disabled={!canSubmit || busy}>
-              {busy ? (
-                <><Loader2 className="size-4 animate-spin" /> Saving…</>
-              ) : mode === 'invite' ? (
-                <><Send className="size-4" /> Save Invite</>
-              ) : (
-                <><UserPlus className="size-4" /> Add Technician</>
-              )}
-            </Button>
-          </div>
+          {error && <p role="alert" className="text-sm text-urgent-strong">{error}</p>}
         </div>
+        <DialogFooter>
+          <CancelButton onCancel={onClose} disabled={busy} />
+          <Button onClick={submit} disabled={!canSubmit || busy}>
+            {busy ? (
+              <><Loader2 className="mr-1 size-4 animate-spin" /> Saving…</>
+            ) : mode === 'invite' ? (
+              <><Send className="mr-1 size-4" /> Save Invite</>
+            ) : (
+              <><UserPlus className="mr-1 size-4" /> Add Technician</>
+            )}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
@@ -426,7 +410,7 @@ export function ExistingSupplyDialog({
   return (
     <Dialog open onOpenChange={guarded}>
       <DialogContent className="max-w-xl">
-        <DialogHeader className={HEADER.info}>
+        <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <UserCheck className="size-4" /> Allocate An Existing Supply
           </DialogTitle>
@@ -447,8 +431,8 @@ export function ExistingSupplyDialog({
                   onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); lookup(); } }}
                 />
               </div>
-              <Button className={SOLID.info} onClick={lookup} disabled={looking || !txId || !catgId}>
-                {looking ? <Loader2 className="size-4 animate-spin" /> : <><Search className="size-4" /> Search</>}
+              <Button onClick={lookup} disabled={looking || !txId || !catgId}>
+                {looking ? <Loader2 className="size-4 animate-spin" /> : <><Search className="mr-1 size-4" /> Search</>}
               </Button>
             </div>
             {!catgId && <p className="mt-1 text-xs text-urgent-strong">This request has no category, so technicians can’t be checked.</p>}
@@ -456,17 +440,17 @@ export function ExistingSupplyDialog({
           </div>
 
           {tx && (
-            <div className="overflow-hidden rounded-xl border border-border shadow-sm">
-              <div className="flex items-center gap-3 border-b border-border bg-info-tint px-4 py-3">
-                <span className="flex size-10 items-center justify-center rounded-xl bg-info text-white">
-                  <UserCheck className="size-5" />
-                </span>
-                <div>
-                  <p className="text-sm font-semibold text-info-strong">{tx.efrName ?? '-'}</p>
-                  <p className="text-xs text-muted-foreground">TX #{tx.efrId}{tx.cityName ? ` · ${tx.cityName}` : ''}</p>
+            <Card>
+              <CardHeader className="flex-row flex-wrap items-center justify-between gap-2 space-y-0 border-b py-3">
+                <div className="min-w-0 space-y-1">
+                  <CardTitle>{tx.efrName ?? '-'}</CardTitle>
+                  <CardDescription>TX #{tx.efrId}{tx.cityName ? ` · ${tx.cityName}` : ''}</CardDescription>
                 </div>
-              </div>
-              <div className="grid grid-cols-2 gap-3 px-4 py-3 sm:grid-cols-4">
+                <StatusChip tone={allOk ? 'success' : 'urgent'}>
+                  {allOk ? '✔ All checks passed — allocation allowed' : '✘ Allocation not allowed'}
+                </StatusChip>
+              </CardHeader>
+              <CardContent className="grid grid-cols-2 gap-3 pt-4 sm:grid-cols-4">
                 <Check label="City" ok={cityOk} value={tx.cityName ?? '—'} hint={cityOk ? undefined : `Request: ${cityName ?? '—'}`} />
                 <Check label="Category" ok={categoryOk} value={catgName ?? '—'} />
                 <Check label="Status" ok={statusOk} value={tx.supplyStatus} />
@@ -477,11 +461,8 @@ export function ExistingSupplyDialog({
                   hint={isJob ? 'Not checked for Job ID' : undefined}
                   neutral={isJob}
                 />
-              </div>
-              <div className={`border-t border-border px-4 py-2 text-sm font-medium ${allOk ? 'bg-success-tint text-success-strong' : 'bg-urgent-tint text-urgent-strong'}`}>
-                {allOk ? '✔ All checks passed — allocation allowed' : '✘ Allocation not allowed'}
-              </div>
-            </div>
+              </CardContent>
+            </Card>
           )}
 
           <div>
@@ -495,25 +476,24 @@ export function ExistingSupplyDialog({
               className={TEXTAREA_CLASS}
             />
           </div>
-          {error && <ErrorLine>{error}</ErrorLine>}
-
-          <div className="flex flex-wrap justify-end gap-2 border-t pt-3">
-            <CancelButton onCancel={onClose} disabled={busy} />
-            <Button variant="outline" onClick={() => submit(false)} disabled={!allOk || !remarks.trim() || busy}>
-              Later
-            </Button>
-            {isJob && (
-              <Button className={SOLID.info} onClick={() => submit(true)} disabled={!allOk || !remarks.trim() || busy}>
-                <UserCheck className="size-4" /> Schedule Now
-              </Button>
-            )}
-          </div>
+          {error && <p role="alert" className="text-sm text-urgent-strong">{error}</p>}
           {isJob && (
-            <p className="text-right text-xs text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               Schedule Now also opens this job in Manage Jobs so you can assign the technician.
             </p>
           )}
         </div>
+        <DialogFooter className="flex-wrap">
+          <CancelButton onCancel={onClose} disabled={busy} />
+          <Button variant="outline" onClick={() => submit(false)} disabled={!allOk || !remarks.trim() || busy}>
+            Later
+          </Button>
+          {isJob && (
+            <Button onClick={() => submit(true)} disabled={!allOk || !remarks.trim() || busy}>
+              <UserCheck className="mr-1 size-4" /> Schedule Now
+            </Button>
+          )}
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
@@ -524,22 +504,13 @@ function Check({
 }: { label: string; ok: boolean; value: string; hint?: string; neutral?: boolean }) {
   const Icon = ok ? CheckCircle2 : XCircle;
   return (
-    <div className={`min-w-0 rounded-lg px-2.5 py-2 ${neutral ? 'bg-muted/60' : ok ? 'bg-success-tint' : 'bg-urgent-tint'}`}>
+    <div className="min-w-0 space-y-1">
       <p className="text-xs text-muted-foreground">{label}</p>
-      <p className={`flex items-center gap-1 text-sm font-medium ${neutral ? 'text-muted-foreground' : ok ? 'text-success-strong' : 'text-urgent-strong'}`}>
-        {!neutral && <Icon className="size-4 shrink-0" />}
+      <StatusChip tone={neutral ? 'neutral' : ok ? 'success' : 'urgent'} className="max-w-full gap-1" title={value}>
+        {!neutral && <Icon className="size-3 shrink-0" />}
         <span className="truncate">{value}</span>
-      </p>
+      </StatusChip>
       {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
-    </div>
-  );
-}
-
-function ErrorLine({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex gap-2 rounded-md bg-urgent-tint px-3 py-2 text-sm text-urgent-strong">
-      <XCircle className="mt-0.5 size-4 shrink-0" />
-      <p>{children}</p>
     </div>
   );
 }

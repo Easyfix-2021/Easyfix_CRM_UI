@@ -3,6 +3,8 @@
  * page and the request dialog, so a status renamed on one cannot miss the other.
  */
 
+import { TONE_SURFACE_CLASSES, type StatusChipTone } from '@/components/ui/StatusChip';
+
 /* tbl_open_city.status — {0 Open, 1 In Progress, 2 Assigned, 3 Cancelled, 4 Completed}. */
 export const SUPPLY_STATUS_LABEL: Record<number, string> = {
   0: 'Open',
@@ -12,13 +14,19 @@ export const SUPPLY_STATUS_LABEL: Record<number, string> = {
   4: 'Completed',
 };
 
-export const SUPPLY_STATUS_CLASS: Record<number, string> = {
-  0: 'bg-info-tint text-info-strong',
-  1: 'bg-warning-tint text-warning-strong',
-  2: 'bg-neutral-tint text-neutral-strong',
-  3: 'bg-urgent-tint text-urgent-strong',
-  4: 'bg-success-tint text-success-strong',
+/* Status → shared StatusChip tone. The dialog renders <StatusChip>; the list
+   page's plain cell reads the same tone's surface classes, so the two agree. */
+export const SUPPLY_STATUS_TONE: Record<number, StatusChipTone> = {
+  0: 'info',
+  1: 'warning',
+  2: 'neutral',
+  3: 'urgent',
+  4: 'success',
 };
+
+export const SUPPLY_STATUS_CLASS: Record<number, string> = Object.fromEntries(
+  Object.entries(SUPPLY_STATUS_TONE).map(([status, tone]) => [status, TONE_SURFACE_CLASSES[tone]]),
+);
 
 /* supply_request_log.action_type — legacy opencity.component.ts statusMap. */
 export const SUPPLY_ACTION_LABEL: Record<number, string> = {
