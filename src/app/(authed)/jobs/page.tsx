@@ -197,10 +197,6 @@ type OfferEfr = { efr_id: number; efr_name: string | null; offer_status: number;
 // tbl_job_offer.offer_status — the two the Tx name cell reads.
 const OFFER_OFFERED = 0;
 const OFFER_ACCEPTED = 1;
-// Offered names listed in the cell itself; a longer list collapses to "+N more"
-// and the whole list opens on hover. A job can be offered to up to 50 technicians.
-const OFFERED_NAMES_SHOWN = 3;
-
 // The BE groups by (job, technician, status), so each technician appears once per status.
 const offerEfrsWith = (row: JobRow, status: number) =>
   (row.offer_efrs ?? []).filter((o) => o.offer_status === status);
@@ -211,11 +207,14 @@ const offerEfrsWith = (row: JobRow, status: number) =>
  * an offer does not set fk_easyfixter_id until a technician accepts.
  *
  *   accepted (tech not on tbl_job yet) → just that technician's ID and name,
- *                                        like an assigned row — no offer list;
- *   offered                            → "Offered to N Tx" and the first few
- *                                        names; hovering opens the full list
- *                                        (OfferHoverCard, the same card My
- *                                        Orders uses: status + call per tech);
+ *                                        like an assigned row;
+ *   offered                            → the "Offered to N Tx" chip ONLY — no
+ *                                        names in the cell. Hovering opens the
+ *                                        names (OfferHoverCard). This is exactly
+ *                                        the Pending for Scheduling chip on My
+ *                                        Orders (same tone, wording and card), so
+ *                                        the two screens read the same — ops asked
+ *                                        for that rather than names in the row;
  *   neither                            → "unassigned", as before.
  *
  * Accepted wins over offered: once someone accepts, the other offers close, so
@@ -237,25 +236,18 @@ function UnassignedTx({ row }: { row: JobRow }) {
   }
   const offered = offerEfrsWith(row, OFFER_OFFERED);
   if (offered.length === 0) return <span className="text-muted-foreground">unassigned</span>;
-  const hiddenCount = offered.length - OFFERED_NAMES_SHOWN;
   return (
     <OfferHoverCard jobId={row.job_id} enabled>
-      <div className="cursor-help">
-        <div className="text-xs font-semibold text-warning-strong">
-          Offered to {offered.length} Tx
-        </div>
-        {offered.slice(0, OFFERED_NAMES_SHOWN).map((o) => (
-          <div key={o.efr_id} className="text-xs">
-            {formatEasyfixerName(o.efr_name) || '—'}
-            <span className="ml-1 font-mono text-muted-foreground">#{o.efr_id}</span>
-          </div>
-        ))}
-        {hiddenCount > 0 && (
-          <div className="text-xs text-muted-foreground underline decoration-dotted">
-            +{hiddenCount} more — hover to see all
-          </div>
-        )}
-      </div>
+      <StatusChip
+        tone="orange"
+        title={
+          offered.length > 1
+            ? `Offered to ${offered.length} technicians — awaiting the first to accept`
+            : `Offered to ${formatEasyfixerName(offered[0].efr_name) || 'technician'}`
+        }
+      >
+        {offered.length > 1 ? `Offered to ${offered.length} Tx` : 'Offered to Tx'}
+      </StatusChip>
     </OfferHoverCard>
   );
 }
@@ -2046,8 +2038,8 @@ export default function JobsPage() {
                           assigned to a technician with a blank efr_name once
                           rendered the literal word "unassigned" while the chip
                           on the same row disagreed.
-                          Unassigned but offered → the offerees' names, the full
-                          list on hover; accepted → that technician's ID and
+                          Unassigned but offered → the "Offered to N Tx" chip,
+                          names on hover; accepted → that technician's ID and
                           name only (see UnassignedTx). */}
                   <td className="whitespace-nowrap">
                     {j.fk_easyfixter_id != null ? (
