@@ -3,6 +3,7 @@ import { useMemo, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { SearchSelect, type SearchOption } from '@/components/ui/search-select';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
+import { useFetchOnce } from '@/lib/hooks';
 import { useLookup } from '@/lib/use-lookup';
 
 /*
@@ -17,7 +18,7 @@ import { useLookup } from '@/lib/use-lookup';
  * a second copy of the `ps*` param contract.
  *
  * Project managers triage this queue by Scheduling Status / Service Category /
- * City / Client / Vertical. All five drive the SERVER query — the list is
+ * City / Client / Zonal Manager. All five drive the SERVER query — the list is
  * server-paginated, so an in-memory filter would only narrow the rows on screen
  * and quietly lie about the rest.
  *
@@ -42,45 +43,48 @@ import { useLookup } from '@/lib/use-lookup';
  *
  * Controls are the SHARED pickers already used across the CRM (SearchMultiSelect
  * on the Pending-to-Start bar + the QuickSight filter bar, SearchSelect on the
- * Manage Jobs filter card); options come from the shared `useLookup()` hook —
- * no ad-hoc dropdowns, no ad-hoc lookup fetches, no raw useEffect + api.get.
+ * Manage Jobs filter card); options come from the shared `useLookup()` hook, or
+ * `useFetchOnce()` for Zonal Managers (see below) — no ad-hoc dropdowns, no raw
+ * useEffect + api.get.
  *
  * Single vs multi is dictated by what the BE query validator accepts
  * (validators/job.validator.js):
- *   offerState  → one of 3 literals     ⇒ SearchSelect (the states are exclusive)
- *   cityId      → csvIds (id OR CSV)    ⇒ SearchMultiSelect
- *   clientId    → csvIds (id OR CSV)    ⇒ SearchMultiSelect
- *   categoryId  → single intId ONLY     ⇒ SearchSelect (a CSV here 400s)
- *   verticalId  → single intId ONLY     ⇒ SearchSelect (a CSV here 400s)
+ *   offerState     → one of 3 literals     ⇒ SearchSelect (the states are exclusive)
+ *   cityId         → csvIds (id OR CSV)    ⇒ SearchMultiSelect
+ *   clientId       → csvIds (id OR CSV)    ⇒ SearchMultiSelect
+ *   categoryId     → single intId ONLY     ⇒ SearchSelect (a CSV here 400s)
+ *   zonalManagerId → csvIds (id OR CSV)    ⇒ SearchMultiSelect
  *
- * ── What "Vertical" means here (2026-08-03) ─────────────────────────────────
- * `tbl_vertical` is the master. A JOB reaches a vertical through its CLIENT,
- * and the schema has TWO edges for that: `tbl_client.vertical_id` (the client's
- * own vertical, 1:1 — what the QuickSight reports and the RBAC verticals-scope
- * read) and `tbl_vertical_mapping(client_id, vertical_id, user_id)` (per-client
- * vertical × user SPOC assignments, MANY-TO-MANY — one client may carry rows
- * for several verticals).
+ * ── What "Zonal Manager" means here (2026-09-15) ────────────────────────────
+ * Replaced the Vertical control. A zonal manager is the tbl_user that owns the
+ * job's CITY — `tbl_city.state_user`, reached through the job's address. GET
+ * /admin/jobs?zonalManagerId= applies `ci.state_user IN (…)`, and the jobs
+ * export applies the same predicate, so a /jobs export still mirrors the screen.
+ * It is NOT `zonalId`, which the jobs list reads as a tbl_zone_master ZONE (see
+ * ZONAL_ID_COLLISION in the BE's services/job-export.service.js).
  *
- * GET /admin/jobs?verticalId= uses the MANY-TO-MANY edge with ANY-match
- * semantics: a job is kept when AT LEAST ONE of its client's mapped verticals
- * is the selected one. The BE expresses that as an EXISTS subquery, so a client
- * mapped to several verticals still yields exactly one row (a JOIN would
- * duplicate the job and inflate the paginated COUNT). This control therefore
- * offers ONE vertical at a time — matching both the BE validator (`intId`, so a
- * CSV is a hard 400) and the identically-wired "Vertical" field on the /jobs
- * "Filter Job" panel, which drives the very same param.
+ * Options come from GET /shared/lookup/zonal-managers (users owning at least one
+ * city), which is not in `useLookup()`. It is fetched with `useFetchOnce` under
+ * the SAME key /jobs already uses for its Filter Job "Zonal" field, so hosting
+ * the bar there costs no second request. The endpoint is role(['admin']) — the
+ * same gate as the clients lookup this bar already depends on.
+ *
+ * A bookmarked `?psVertical=` from before the swap is scrubbed, not read — see
+ * writePsFilterParams.
  */
 export type PsFilters = {
   offerState: '' | 'pending' | 'offered' | 'expired';
   categoryId: string;
   cityId: number[];
   clientId: number[];
-  verticalId: string;
+  zonalManagerId: number[];
 };
 
 export const EMPTY_PS_FILTERS: PsFilters = {
-  offerState: '', categoryId: '', cityId: [], clientId: [], verticalId: '',
+  offerState: '', categoryId: '', cityId: [], clientId: [], zonalManagerId: [],
 };
+
+type ManagerLite = { user_id: number; user_name: string };
 
 /*
  * Scheduling Status options — the three offer sub-states within the bucket.
@@ -104,9 +108,9 @@ export function toOfferState(raw: string | null): PsFilters['offerState'] {
 }
 
 /*
- * Parse a URL CSV of ids back into numbers (city / client). Blank segments are
- * dropped BEFORE Number() so an empty or trailing-comma param can't inject a
- * phantom 0 into the IN (…) list.
+ * Parse a URL CSV of ids back into numbers (city / client / zonal manager).
+ * Blank segments are dropped BEFORE Number() so an empty or trailing-comma param
+ * can't inject a phantom 0 into the IN (…) list.
  */
 export function csvNums(raw: string | null): number[] {
   return String(raw ?? '')
@@ -130,16 +134,16 @@ export function psFiltersFromParams(sp: { get(name: string): string | null }): P
     categoryId: sp.get('psCategory') || '',
     cityId:     csvNums(sp.get('psCity')),
     clientId:   csvNums(sp.get('psClient')),
-    verticalId: sp.get('psVertical') || '',
+    zonalManagerId: csvNums(sp.get('psZonalManager')),
   };
 }
 
 /*
  * Serialise the filter set INTO an existing URLSearchParams (mutates). Both
  * pages seed `p` from the live searchParams so params they never write are
- * preserved — which is exactly why the retired `psStatus` is scrubbed here: a
- * bookmarked `?psStatus=20` would otherwise linger in the URL long after it
- * stopped being read, reading like an applied filter that isn't.
+ * preserved — which is exactly why the retired `psStatus` and `psVertical` are
+ * scrubbed here: a bookmarked `?psStatus=20` would otherwise linger in the URL
+ * long after it stopped being read, reading like an applied filter that isn't.
  *
  * The `ps*` names are shared by both pages ON PURPOSE — a filtered link is
  * portable between /my-orders and /jobs.
@@ -151,7 +155,8 @@ export function writePsFilterParams(p: URLSearchParams, f: PsFilters): void {
   set('psCategory', f.categoryId);
   set('psCity',     f.cityId.join(','));
   set('psClient',   f.clientId.join(','));
-  set('psVertical', f.verticalId);
+  set('psZonalManager', f.zonalManagerId.join(','));
+  p.delete('psVertical');
 }
 
 /*
@@ -164,7 +169,7 @@ export function writePsFilterParams(p: URLSearchParams, f: PsFilters): void {
  */
 export function psFilterKey(f: PsFilters): string {
   return [
-    f.offerState, f.categoryId, f.cityId.join(','), f.clientId.join(','), f.verticalId,
+    f.offerState, f.categoryId, f.cityId.join(','), f.clientId.join(','), f.zonalManagerId.join(','),
   ].join('|');
 }
 
@@ -182,8 +187,8 @@ export function psAnyFilterSet(f: PsFilters): boolean {
  * later `undefined` win). Callers must send it ONLY while the
  * Pending-for-Scheduling tab is active.
  *
- * cityId / clientId ship as CSV (BE `csvIds` → IN (…)); categoryId and
- * verticalId are single ids (the BE accepts only `intId` there); offerState is
+ * cityId / clientId / zonalManagerId ship as CSV (BE `csvIds` → IN (…));
+ * categoryId is a single id (the BE accepts only `intId` there); offerState is
  * one of the three literals in PS_OFFER_STATE_OPTIONS.
  */
 export function psQueryParams(f: PsFilters): Record<string, string> {
@@ -192,7 +197,7 @@ export function psQueryParams(f: PsFilters): Record<string, string> {
   if (f.categoryId)      out.categoryId = f.categoryId;
   if (f.cityId.length)   out.cityId     = f.cityId.join(',');
   if (f.clientId.length) out.clientId   = f.clientId.join(',');
-  if (f.verticalId)      out.verticalId = f.verticalId;
+  if (f.zonalManagerId.length) out.zonalManagerId = f.zonalManagerId.join(',');
   return out;
 }
 
@@ -251,9 +256,11 @@ export function PendingSchedulingFilters({
     () => [...lookup.toOpts.serviceCategories].sort((a, b) => String(a.label).localeCompare(String(b.label))),
     [lookup.toOpts.serviceCategories],
   );
-  const verticalOpts = useMemo<SearchOption[]>(
-    () => [...lookup.toOpts.verticals].sort((a, b) => String(a.label).localeCompare(String(b.label))),
-    [lookup.toOpts.verticals],
+  // Already ordered by user_name server-side, so no client-side sort.
+  const zonalManagersRes = useFetchOnce<ManagerLite[]>('/shared/lookup/zonal-managers');
+  const zonalManagerOpts = useMemo<SearchOption[]>(
+    () => (zonalManagersRes.data ?? []).map((u) => ({ value: u.user_id, label: u.user_name })),
+    [zonalManagersRes.data],
   );
 
   const anySet = psAnyFilterSet(value);
@@ -307,16 +314,16 @@ export function PendingSchedulingFilters({
             selectedLabel="clients"
           />
         </PsField>
-        <PsField label="Vertical">
-          {/* Single-select: the BE query validator types `verticalId` as a lone
-              positive integer (like categoryId, unlike cityId / clientId), so a
-              multi-select here would 400. The BE matches a job when ANY vertical
-              mapped to its client is the selected one — see the header note. */}
-          <SearchSelect
-            value={value.verticalId}
-            onChange={(v) => onChange({ ...value, verticalId: v })}
-            options={verticalOpts}
-            placeholder="All Verticals"
+        <PsField label="Zonal Manager">
+          {/* Multi-select: the BE query validator types `zonalManagerId` as
+              csvIds, like cityId / clientId. Matches the job's city owner
+              (tbl_city.state_user) — see the header note. */}
+          <SearchMultiSelect
+            value={value.zonalManagerId}
+            onChange={(v) => onChange({ ...value, zonalManagerId: toNums(v) })}
+            options={zonalManagerOpts}
+            placeholder="All Zonal Managers"
+            selectedLabel="managers"
           />
         </PsField>
       </div>
