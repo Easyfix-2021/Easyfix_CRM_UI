@@ -36,6 +36,7 @@ import {
 import { CallableMobile } from '@/components/calls/CallButton';
 import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
 import { ResendPinButton, RESEND_PIN_ACTION } from '@/components/job/ResendPinButton';
+import { APP_REQUEST_ACTION } from '@/components/job/TechRequestActions';
 import { cycleSort, SortHeader, type SortDir } from '@/lib/use-sort';
 import { RefreshBar } from '@/components/ui/refresh-bar';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
@@ -228,6 +229,13 @@ export default function MyOrdersPage() {
     // may change a job's status is not automatically an operator who may text
     // that job's customer. Key declared in ResendPinButton.
     RESEND_PIN_ACTION,
+    // Approve / Reject a technician's cancellation or reschedule request
+    // (Pending to Start → Technician Requests). Its own key because it is a
+    // DECISION on someone else's ask, not a routine job edit: an operator who
+    // may reassign is not automatically one who may grant a cancellation.
+    // Key declared in TechRequestActions; seeded by
+    // EasyFix_Backend/migrations/2026-09-15-seed-job-app-request-action.sql.
+    APP_REQUEST_ACTION,
   ]);
   /*
    * Audit entry point gate. `canManageJobCharges` is a STANDALONE boolean on
@@ -1244,6 +1252,10 @@ export default function MyOrdersPage() {
         mode={assignModal.mode}
         onClose={() => closeJobAction()}
         onAssigned={() => { cacheRef.current.clear(); load(false, true); }}
+        // Cancel Job from inside Reassign also mutates the list — same in-place
+        // refresh as onAssigned so the cancelled row drops out without a
+        // skeleton flash. Mirrors ScheduleAssignModal's onChanged below.
+        onChanged={() => { cacheRef.current.clear(); load(false, true); }}
       />
 
       {/*

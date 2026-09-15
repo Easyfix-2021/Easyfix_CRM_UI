@@ -99,6 +99,7 @@ import {
 import { CallableMobile } from '@/components/calls/CallButton';
 import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
 import { ResendPinButton, RESEND_PIN_ACTION } from '@/components/job/ResendPinButton';
+import { TechRequestActions, APP_REQUEST_ACTION } from '@/components/job/TechRequestActions';
 import { ShareChip } from '@/components/job/JobShareControls';
 import { useFetch, invalidateFetch, useDebouncedValue } from '@/lib/hooks';
 import { formatJobAge, jobAgeTitle, type JobAgeFields } from '@/lib/job-age';
@@ -467,6 +468,7 @@ export function PendingToStartView({
             onView: openView,
             onReassign: openReassign,
             onShowLocation,
+            onRequestActioned: bumpReload,
             controls,
           };
           if (s.key === 'appRequests') {
@@ -519,6 +521,10 @@ type PendingSectionProps = {
   onView: (jobId: number) => void;
   onReassign: (jobId: number) => void;
   onShowLocation: (row: { job_id: number; easyfixer_name: string | null }) => void;
+  /* Page-wide reload after an Approve / Reject. Not this section's own
+   * refetch(): an approved cancellation leaves the tab entirely and every
+   * bucket's count moves with it, so the signal has to be the parent's. */
+  onRequestActioned: () => void;
   /* Every section is a member of the reorderable set, so this is required:
    * it is how the section gets its grip, chevron, position and persistence. */
   controls: SectionControls;
@@ -539,6 +545,7 @@ function PendingSection({
   onView,
   onReassign,
   onShowLocation,
+  onRequestActioned,
   controls,
 }: PendingSectionProps) {
   const [page, setPage] = useState(0);
@@ -834,7 +841,14 @@ function PendingSection({
                         * (every 15s), so there's no eager per-row location fetch.
                         * Only meaningful once a technician is assigned.
                         */}
-                      {j.fk_easyfixter_id != null && (
+                      {/*
+                        * Not on a Technician Requests row (owner, 2026-09-15).
+                        * That row is a DECISION — approve or reject an ask —
+                        * and Location / Resend PIN are day-to-day chasing tools
+                        * for a job that is proceeding. Only View Job and
+                        * Reassign survive there, beside the new pair.
+                        */}
+                      {!appRequests && j.fk_easyfixter_id != null && (
                         <button
                           type="button"
                           onClick={() => onShowLocation(j)}
@@ -883,13 +897,30 @@ function PendingSection({
                         * and never reveals the code to staff. It self-gates on
                         * job_status too, so no status test is duplicated here.
                         */}
-                      <ResendPinButton
-                        jobId={j.job_id}
-                        jobStatus={j.job_status}
-                        customerName={j.customer_name}
-                        customerMobile={j.customer_mob_no}
-                        allowed={!!canJob[RESEND_PIN_ACTION]}
-                      />
+                      {!appRequests && (
+                        <ResendPinButton
+                          jobId={j.job_id}
+                          jobStatus={j.job_status}
+                          customerName={j.customer_name}
+                          customerMobile={j.customer_mob_no}
+                          allowed={!!canJob[RESEND_PIN_ACTION]}
+                        />
+                      )}
+                      {/*
+                        * Approve / Reject, last in the row so the two
+                        * irreversible controls sit furthest from the read-only
+                        * ones. Rendered from `req` — the same object the
+                        * Request column painted — so the buttons can never act
+                        * on a different ask than the chip names.
+                        */}
+                      {req && (
+                        <TechRequestActions
+                          jobId={j.job_id}
+                          request={req}
+                          allowed={!!canJob[APP_REQUEST_ACTION]}
+                          onActioned={onRequestActioned}
+                        />
+                      )}
                     </div>
                   </td>
                 </tr>
