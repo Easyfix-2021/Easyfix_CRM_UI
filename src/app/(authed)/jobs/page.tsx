@@ -161,10 +161,11 @@ type JobRow = JobAgeFields & {
      anyone report to me". See txTier(). */
   efr_manager_id?: number | null;
   efr_team_count?: number | null;
-  /* Technicians holding (offer_status 0) or having accepted (1) an offer on the
-     job — BE attachOfferEfrs. What the Tx name cell names while an offered job
+  /* Technicians holding an open offer (offer_status 0) on the job — BE
+     attachOfferEfrs. What the Tx name cell's chip counts while an offered job
      has no fk_easyfixter_id yet. Absent on an older BE → the cell reads as it
-     did before. */
+     did before; an older BE may still send ACCEPTED rows, which the cell
+     ignores (see UnassignedTx). */
   offer_efrs?: OfferEfr[] | null;
   /* escalated_by_name is escu.user_name — escalated_by resolved through
      tbl_user, which is better than the denormalised varchar legacy printed. */
@@ -194,9 +195,8 @@ function txTier(row: JobRow): string | null {
 }
 
 type OfferEfr = { efr_id: number; efr_name: string | null; offer_status: number; offered_at: string | null };
-// tbl_job_offer.offer_status — the two the Tx name cell reads.
+// tbl_job_offer.offer_status — the one the Tx name cell reads.
 const OFFER_OFFERED = 0;
-const OFFER_ACCEPTED = 1;
 // The BE groups by (job, technician, status), so each technician appears once per status.
 const offerEfrsWith = (row: JobRow, status: number) =>
   (row.offer_efrs ?? []).filter((o) => o.offer_status === status);
@@ -206,34 +206,21 @@ const offerEfrsWith = (row: JobRow, status: number) =>
  * used to print "unassigned" beside a Bucket Status of "Offered To Tx", because
  * an offer does not set fk_easyfixter_id until a technician accepts.
  *
- *   accepted (tech not on tbl_job yet) → just that technician's ID and name,
- *                                        like an assigned row;
- *   offered                            → the "Offered to N Tx" chip ONLY — no
- *                                        names in the cell. Hovering opens the
- *                                        names (OfferHoverCard). This is exactly
- *                                        the Pending for Scheduling chip on My
- *                                        Orders (same tone, wording and card), so
- *                                        the two screens read the same — ops asked
- *                                        for that rather than names in the row;
- *   neither                            → "unassigned", as before.
+ *   offered → the "Offered to N Tx" chip ONLY — no names in the cell. Hovering
+ *             opens the names (OfferHoverCard). This is exactly the Pending for
+ *             Scheduling chip on My Orders (same tone, wording and card), so the
+ *             two screens read the same — ops asked for that rather than names
+ *             in the row;
+ *   neither → "unassigned", as before.
  *
- * Accepted wins over offered: once someone accepts, the other offers close, so
- * a leftover OFFERED row must not turn the accepter back into a list.
+ * An ACCEPTED offer row is deliberately NOT read here. acceptOffer sets
+ * fk_easyfixter_id in the same transaction, so an accepted job renders the
+ * assigned branch (ID + name) and never reaches this cell. An ACCEPTED row on a
+ * job with NO technician is always stale: a reassign (release + re-offer) clears
+ * fk_easyfixter_id but leaves the old accepter's row ACCEPTED. Reading it named a
+ * technician who no longer holds the job and hid the live "Offered to Tx" chip.
  */
 function UnassignedTx({ row }: { row: JobRow }) {
-  const accepted = offerEfrsWith(row, OFFER_ACCEPTED);
-  if (accepted.length > 0) {
-    return (
-      <>
-        {accepted.map((o) => (
-          <div key={o.efr_id}>
-            <div className="font-mono text-xs text-muted-foreground">#{o.efr_id}</div>
-            {formatEasyfixerName(o.efr_name) || '—'}
-          </div>
-        ))}
-      </>
-    );
-  }
   const offered = offerEfrsWith(row, OFFER_OFFERED);
   if (offered.length === 0) return <span className="text-muted-foreground">unassigned</span>;
   return (

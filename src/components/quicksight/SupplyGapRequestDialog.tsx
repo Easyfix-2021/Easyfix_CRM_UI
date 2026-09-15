@@ -507,8 +507,14 @@ function ExistingRequestBody({
   }, [d, editable, catgId, reason, setDirty]);
 
   // Re-read this request (detail + history) and the list after any action.
+  // invalidateFetch alone only evicts the cache — useFetch does not listen for
+  // it — so the open dialog kept its old status, buttons and Action History
+  // (a new remark never appeared; Cancel left every action button showing).
+  // refetch() is what re-runs the two reads.
   function refreshAfterAction() {
     invalidateFetch((k) => k.startsWith(`${API_BASE}/${id}`));
+    detail.refetch();
+    history.refetch();
     onSaved();
   }
 

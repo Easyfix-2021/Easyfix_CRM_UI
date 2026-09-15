@@ -6,7 +6,8 @@
  * name column: an offer does not set fk_easyfixter_id until a technician
  * accepts. Ops asked for the same treatment Pending for Scheduling (My Orders)
  * already gives: only an "Offered to N Tx" chip in the row, the names on hover —
- * and, once accepted, only that technician's name and ID.
+ * and, once accepted, only that technician's name and ID (the assigned branch,
+ * since accepting sets fk_easyfixter_id).
  *
  * Source-shape guard (the suite mounts nothing). Each assertion names the
  * regression it blocks.
@@ -26,12 +27,16 @@ test('an unassigned row renders the offer-aware cell, not a bare "unassigned"', 
   assert.match(flat, /offer_efrs\?: OfferEfr\[\] \| null;/);
 });
 
-test('accepted wins: the accepter shows as ID + name only, before the offered chip', () => {
+test('an ACCEPTED offer row is never read by the unassigned cell (it is always stale there)', () => {
+  // acceptOffer sets fk_easyfixter_id in the same transaction, so an accepted
+  // job shows its technician through the assigned branch. On a job with NO
+  // technician an ACCEPTED row is a leftover from a reassign (release +
+  // re-offer): reading it named a technician who no longer held the job and hid
+  // the live "Offered to Tx" chip (pre-Production review, 2026-09-15).
   assert.ok(cell, 'UnassignedTx must exist');
-  const acceptedAt = cell.indexOf('offerEfrsWith(row, OFFER_ACCEPTED)');
-  const offeredAt = cell.indexOf('offerEfrsWith(row, OFFER_OFFERED)');
-  assert.ok(acceptedAt > -1 && offeredAt > -1 && acceptedAt < offeredAt,
-    'the accepted check must run before the offered chip, so a leftover OFFERED row cannot hide the accepter');
+  assert.match(cell, /const offered = offerEfrsWith\(row, OFFER_OFFERED\);/);
+  assert.doesNotMatch(cell, /OFFER_ACCEPTED|offer_status === 1/, 'the cell must not pick up ACCEPTED rows');
+  assert.doesNotMatch(PAGE, /const OFFER_ACCEPTED/);
   assert.doesNotMatch(PAGE, /AcceptedTag/, 'ops asked for only the name and ID once accepted — no extra tag');
 });
 
