@@ -4,17 +4,26 @@
  *
  * Real data: earnings/jobs/rating from the aggregates POST, balance +
  * registration date from the list row, PIN count + section progress from the
- * verification payload. Jobs-by-category and TQI have no admin endpoint yet,
- * so they render an explicit "endpoint pending" placeholder rather than mock
- * data (see the delivery notes).
+ * verification payload. Recent category performance reuses the QuickSight
+ * Technician Performance drill-down (fetched only when opened). Lifetime
+ * jobs-by-category / vertical and TQI have no endpoint, so they render an
+ * explicit "endpoint pending" placeholder rather than mock data.
  */
-import { formatDate } from '@/lib/utils';
+import { useState } from 'react';
+import { formatDate, formatEasyfixerName } from '@/lib/utils';
+import { parseIstDateTime } from '@/lib/format';
+import { useMe } from '@/lib/auth-context';
+import { actionFlags } from '@/lib/permissions';
+import { Button } from '@/components/ui/button';
+import { TechnicianCategoryModal } from '@/app/(authed)/quicksight/technician-performance/TechnicianCategoryModal';
 import { SectionCard, Tile, MeterRow, LockedBody, EndpointPending, inr } from './ui';
 import type { VerificationPayload, ProfileListRow, AggregateRow } from './types';
 
+const QUICKSIGHT_KEYS = ['ef-QuickSight', 'isQuickSightTechnicianPerformanceView'] as const;
+
 function tenureFrom(iso: string | null | undefined): string {
   if (!iso) return '—';
-  const start = new Date(iso);
+  const start = parseIstDateTime(iso);
   if (Number.isNaN(start.getTime())) return '—';
   const now = new Date();
   let months = (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth());
@@ -37,6 +46,12 @@ export function OverviewTab({
   agg: AggregateRow | null;
   v: VerificationPayload | null;
 }) {
+  const { me } = useMe();
+  const qsFlags = actionFlags(me, QUICKSIGHT_KEYS);
+  const canViewCategories = QUICKSIGHT_KEYS.every((k) => qsFlags[k]);
+  const [categoriesOpen, setCategoriesOpen] = useState(false);
+  const efrId = v?.header.efr_id ?? row?.efr_id ?? null;
+
   const pinCount = v?.additional.serviceable_pincodes_count
     ?? (row?.serviceable_pincodes_csv ? row.serviceable_pincodes_csv.split(',').filter(Boolean).length : 0);
   const earnings = agg?.total_earnings ?? row?.total_earnings ?? 0;
@@ -74,9 +89,16 @@ export function OverviewTab({
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <SectionCard title="Jobs completed" icon={<span>🧩</span>} right={<span>by category / vertical</span>}>
-          {active
-            ? <EndpointPending what="Jobs-by-category / vertical breakdown needs GET /admin/easyfixers/:id/job-category-summary (returns per-category & per-vertical completed-job counts). Only the total job count is available today." />
-            : <LockedBody />}
+          {active ? (
+            <div className="space-y-3">
+              <EndpointPending what="A lifetime jobs-by-category / vertical breakdown has no endpoint yet (needs e.g. GET /admin/easyfixers/:id/job-category-summary). Only the total job count is available." />
+              {canViewCategories && efrId != null ? (
+                <Button size="sm" variant="outline" onClick={() => setCategoriesOpen(true)}>Category performance (last 3 months)</Button>
+              ) : (
+                <p className="text-xs text-muted-foreground">Recent category performance needs QuickSight → Technician Performance access.</p>
+              )}
+            </div>
+          ) : <LockedBody />}
         </SectionCard>
         <SectionCard title="Profile strength" icon={<span>📊</span>} right={<span>{row?.efr_profile_perc ?? v?.registrationVerification.overall_progress ?? 0}% complete</span>}>
           {strengthRows.length
@@ -87,8 +109,18 @@ export function OverviewTab({
 
       {active && (
         <SectionCard title="TQI — Technician Quality Index" icon={<span>⭐</span>} right={<span>weekly + lifetime</span>}>
-          <EndpointPending what="TQI weekly + lifetime scores and per-criterion weights need GET /admin/easyfixers/:id/tqi (grade snapshot). No grade-snapshot endpoint exists yet." />
+          <EndpointPending what="The backend has no TQI score: nothing returns weekly or lifetime TQI values or per-criterion weights. The technician's A+ to E grade does exist and is shown under Activity → Performance." />
         </SectionCard>
+      )}
+
+      {canViewCategories && efrId != null && (
+        <TechnicianCategoryModal
+          txId={efrId}
+          txName={formatEasyfixerName(v?.header.full_name ?? row?.efr_name ?? '')}
+          flag="monthly"
+          open={categoriesOpen}
+          onOpenChange={setCategoriesOpen}
+        />
       )}
     </div>
   );

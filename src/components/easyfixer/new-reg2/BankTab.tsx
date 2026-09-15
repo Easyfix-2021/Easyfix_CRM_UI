@@ -5,9 +5,10 @@
  * The finance-verify contract is account-level (PUT .../verification/banking
  * {verification_status:1|2}), not per-item, so a single Valid/Invalid action
  * bar is rendered (per-item accept/reject would need a new endpoint). API-
- * verified badges come from is_verified_by_app; "verified by" from the review
- * metadata; notes reuse the Banking comments thread; editing reuses
- * EasyfixerBankDialog (opened by the parent).
+ * verified badges come from is_verified_by_app; "last updated by" is the
+ * technician row's updated_by (any edit, not only Finance); notes reuse the
+ * Banking comments thread; editing reuses EasyfixerBankDialog (opened by the
+ * parent).
  */
 import { useState } from 'react';
 import { api, ApiError } from '@/lib/api';
@@ -32,7 +33,7 @@ export function BankTab({
   onReload: () => Promise<void> | void;
 }) {
   const b = v.registrationVerification.banking;
-  const verified = b.verification_status === 1;
+  const status = b.verification_status;
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -64,12 +65,24 @@ export function BankTab({
 
   return (
     <div className="space-y-4">
-      <div className={`flex flex-wrap items-center gap-3 rounded-xl border p-4 ${verified ? 'border-success/40 bg-success-tint' : 'border-destructive/40 bg-urgent-tint'}`}>
+      <div className={`flex flex-wrap items-center gap-3 rounded-xl border p-4 ${status === 1 ? 'border-success/40 bg-success-tint' : status === 2 ? 'border-destructive/40 bg-urgent-tint' : 'border-warning/40 bg-warning-tint'}`}>
         <div className="flex-1 text-sm text-ink-900">
-          <strong className="block font-semibold">{verified ? '✓ Account verified by Finance' : 'Account not yet verified'}</strong>
-          {verified
-            ? 'Payouts enabled.'
-            : 'Finance must validate the account before payouts release. Account no., IFSC and holder name are auto-checked by 3rd-party APIs when the app verifies them.'}
+          {status === 1 ? (
+            <>
+              <strong className="block font-semibold">✓ Banking details marked valid</strong>
+              Set when someone marks the details valid in the CRM, and also set automatically when a bank change from the CRM or the technician app passes the account verification check.
+            </>
+          ) : status === 2 ? (
+            <>
+              <strong className="block font-semibold">Banking details marked invalid</strong>
+              These details were marked invalid in the CRM.
+            </>
+          ) : (
+            <>
+              <strong className="block font-semibold">Banking details not yet marked</strong>
+              These details have not been marked valid or invalid yet.
+            </>
+          )}
         </div>
         {canEditBank && <Button size="sm" variant="outline" onClick={onEditBank}>Update bank details</Button>}
       </div>
@@ -81,25 +94,23 @@ export function BankTab({
         <KV k="Account holder name" v={b.account_holder_name} />
         <KV k="Preferred mode of transfer" v={b.mode_of_payment} />
         <KV k="Cancelled cheque" v={b.cancelled_cheque_img ? 'Uploaded' : null} />
-        <KV k="Reviewed by" v={b.updated_by_name ? `${b.updated_by_name} · ${formatDate(b.update_date)}` : null} />
+        <KV k="Profile last updated by" v={b.updated_by_name ? `${b.updated_by_name} · ${formatDate(b.update_date)}` : null} />
 
-        {!verified && (
-          <div className="mt-4 border-t pt-3">
-            <label className="mb-1 block text-xs font-semibold text-muted-foreground">Mark verification</label>
-            <textarea
-              rows={2}
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="Reason (required to mark invalid)"
-              className="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
-            />
-            <div className="mt-2 flex flex-wrap justify-end gap-2">
-              <Button variant="destructive" size="sm" disabled={busy} onClick={() => mark(2)}>Invalid banking details</Button>
-              <Button size="sm" disabled={busy} onClick={() => mark(1)} className="bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white">Valid banking details</Button>
-            </div>
+        <div className="mt-4 border-t pt-3">
+          <label className="mb-1 block text-xs font-semibold text-muted-foreground">Mark verification</label>
+          <textarea
+            rows={2}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Reason (required to mark invalid)"
+            className="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
+          />
+          <div className="mt-2 flex flex-wrap justify-end gap-2">
+            <Button variant="destructive" size="sm" disabled={busy} onClick={() => mark(2)}>Invalid banking details</Button>
+            <Button size="sm" disabled={busy || status === 1} onClick={() => mark(1)} className="bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white">Valid banking details</Button>
           </div>
-        )}
-        {b.verification_comment && b.verification_status === 2 && (
+        </div>
+        {b.verification_comment && status === 2 && (
           <div className="mt-2 rounded bg-muted p-2 text-xs text-ink-700">Invalid reason: {b.verification_comment}</div>
         )}
       </SectionCard>
@@ -108,8 +119,8 @@ export function BankTab({
         <CommentsPanel entries={b.comments as CommentEntry[]} onAdd={addNote} addLabel="Add a finance note" />
       </SectionCard>
 
-      <SectionCard title="Bank change history" icon={<span>🗂️</span>} right={<span>append-only audit</span>}>
-        <EndpointPending what="Bank-change audit trail needs GET /admin/easyfixers/:id/bank/history (who changed which fields, when, with penny-drop/name-match results). Not available today." />
+      <SectionCard title="Bank change history" icon={<span>🗂️</span>}>
+        <EndpointPending what="Bank account changes are logged on the server, but the CRM has no way to read that log, so the history cannot be shown here." />
       </SectionCard>
     </div>
   );

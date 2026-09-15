@@ -14,7 +14,7 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
-import { useFetch, usePostFetch } from '@/lib/hooks';
+import { useFetch, useFetchOnce, usePostFetch } from '@/lib/hooks';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { BackLink } from '@/components/ui/back-link';
@@ -48,6 +48,8 @@ import type { VerificationPayload, ProfileListRow, AggregateRow } from '@/compon
 
 type TabKey = 'overview' | 'status' | 'onboarding' | 'profile' | 'work' | 'bank' | 'transactions' | 'activity' | 'team';
 
+type ServiceCategory = { service_catg_id: number; service_catg_name: string };
+
 export default function NewRegistration2ProfilePage() {
   const params = useParams<{ id: string }>();
   const efrId = Number(params.id);
@@ -62,6 +64,18 @@ export default function NewRegistration2ProfilePage() {
   const { data: rowResp, refetch: refetchRow } =
     useFetch<{ items: ProfileListRow[]; total: number }>(validId ? `/admin/easyfixers?easyfixerId=${efrId}&status=0&limit=1` : null, { enabled: validId });
   const row = rowResp?.items?.[0] ?? null;
+
+  // efr_service_category is a CSV of ids; map to names like the roster's parseCsvCell.
+  const { data: serviceCategories } = useFetchOnce<ServiceCategory[]>('/shared/lookup/service-categories?includeInactive=true');
+  const serviceCategoryNames = useMemo(() => {
+    const byId = new Map((serviceCategories ?? []).map((c) => [String(c.service_catg_id), c.service_catg_name]));
+    return (row?.efr_service_category ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((id) => byId.get(id) ?? `Unknown (${id})`)
+      .join(', ');
+  }, [serviceCategories, row?.efr_service_category]);
 
   // Aggregates (earnings / jobs / rating) — a POST load, so via usePostFetch
   // (module-level dedupe + Strict-Mode-safe, unlike a raw api.post in useEffect).
@@ -177,7 +191,7 @@ export default function NewRegistration2ProfilePage() {
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <EasyfixerLifecycleChip value={row?.lifecycle_status} fallbackLabel={row?.efr_status_label} />
-              {row?.efr_service_category && <span className="rounded-full border bg-muted px-2.5 py-0.5 text-xs text-ink-700">{row.efr_service_category}</span>}
+              {serviceCategoryNames && <span className="rounded-full border bg-muted px-2.5 py-0.5 text-xs text-ink-700">{serviceCategoryNames}</span>}
             </div>
           </div>
           <StrengthRing pct={strength} />

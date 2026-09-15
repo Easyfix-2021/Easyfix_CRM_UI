@@ -8,7 +8,7 @@
  * the legacy verification workflow:
  *   - Approve identity / Send to Finance → PUT .../verification/identity {verification_status:1}
  *   - Reject profile                     → PUT .../verification/identity {verification_status:2, rejected_reason}
- *   - Send back to technician            → PUT .../verification/lead {personal_details_filled:0, reason}
+ *   - Accept / Deny lead / Send back     → PUT .../verification/lead {personal_details_filled:1|2|0, reason}
  *   - Notes                              → POST .../verification/comments {text, section}
  * The full multi-field activation (grade / bank / beneficiary) is not
  * re-implemented here; a deep link routes to the canonical workflow page.
@@ -16,6 +16,8 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { api, ApiError } from '@/lib/api';
+import { useMe } from '@/lib/auth-context';
+import { hasAction } from '@/lib/permissions';
 import { Button } from '@/components/ui/button';
 import { showToast } from '@/components/ui/toast';
 import { VerificationSection } from '@/components/easyfixer/VerificationSection';
@@ -23,6 +25,17 @@ import { CommentsPanel, type CommentEntry } from '@/components/easyfixer/Comment
 import { formatDate } from '@/lib/utils';
 import { SectionCard, KV } from './ui';
 import type { VerificationPayload } from './types';
+
+type DecisionKind = 'approve' | 'reject' | 'sendback' | 'accept' | 'deny';
+
+const LEAD_DECISIONS = {
+  accept: { value: 1, toast: 'Technician lead accepted.' },
+  deny: { value: 2, toast: 'Technician lead denied.' },
+  sendback: { value: 0, toast: 'Sent back to technician.' },
+} as const;
+
+// Backend caps summary at 500; the full note stays in metadata.reason.
+const capSummary = (s: string) => s.slice(0, 500).replace(/[\uD800-\uDBFF]$/, '');
 
 export function OnboardingTab({
   efrId,
@@ -35,26 +48,34 @@ export function OnboardingTab({
 }) {
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
+  const [eligible, setEligible] = useState(false);
+  const { me } = useMe();
+  // Legacy verification page is only reachable behind isEdit.
+  const canDecideLead = hasAction(me, 'isEdit');
 
   const leadAccepted = v.lead.status.personal_details_filled === 1;
+  const leadDenied = v.lead.status.personal_details_filled === 2;
+  const leadPending = !leadAccepted && !leadDenied;
   const activated = v.activation.is_activated;
   const rv = v.registrationVerification;
 
   const stage = !leadAccepted ? 1 : !activated ? 2 : 3; // 1 registration, 2 verification, 3 active
   const stages = ['Registration', 'Verification & Activation', 'Active'];
 
-  async function recordActivityLog(kind: 'approve' | 'reject' | 'sendback', reason: string) {
+  async function recordActivityLog(kind: DecisionKind, reason: string) {
     try {
       const eventMap = {
         approve: { eventType: 'APPROVED', summary: 'Identity approved — sent to Finance' },
         reject: { eventType: 'REJECTED', summary: `Profile rejected — ${reason}` },
         sendback: { eventType: 'SENT_BACK', summary: `Sent back to technician — ${reason}` },
+        accept: { eventType: 'LEAD_ACCEPTED', summary: reason.trim() ? `Technician lead accepted — ${reason}` : 'Technician lead accepted' },
+        deny: { eventType: 'LEAD_DENIED', summary: `Technician lead denied — ${reason}` },
       };
       const event = eventMap[kind];
       await api.post(`/admin/easyfixers/${efrId}/activity-log`, {
         eventType: event.eventType,
         section: 'onboarding',
-        summary: event.summary,
+        summary: capSummary(event.summary),
         metadata: { reason: reason || null },
       });
     } catch (e) {
@@ -62,9 +83,9 @@ export function OnboardingTab({
     }
   }
 
-  async function run(kind: 'approve' | 'reject' | 'sendback') {
-    if (kind !== 'approve' && note.trim().length === 0) {
-      showToast({ variant: 'error', message: 'A note is required for reject / send-back.' });
+  async function run(kind: DecisionKind) {
+    if (kind !== 'approve' && kind !== 'accept' && note.trim().length === 0) {
+      showToast({ variant: 'error', message: 'A note is required for deny / reject / send-back.' });
       return;
     }
     setBusy(true);
@@ -78,11 +99,12 @@ export function OnboardingTab({
         await recordActivityLog('reject', note);
         showToast({ variant: 'success', message: 'Profile rejected.' });
       } else {
-        await api.put(`/admin/easyfixers/${efrId}/verification/lead`, { personal_details_filled: 0, reason: note });
-        await recordActivityLog('sendback', note);
-        showToast({ variant: 'success', message: 'Sent back to technician.' });
+        await api.put(`/admin/easyfixers/${efrId}/verification/lead`, { personal_details_filled: LEAD_DECISIONS[kind].value, reason: note });
+        await recordActivityLog(kind, note);
+        showToast({ variant: 'success', message: LEAD_DECISIONS[kind].toast });
       }
       setNote('');
+      setEligible(false);
       await onReload();
     } catch (e) {
       showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Action failed' });
@@ -160,15 +182,34 @@ export function OnboardingTab({
       {/* Decision bar */}
       {!activated && (
         <SectionCard title="Decision" icon={<span>🧭</span>} right={<span>each decision records who, when &amp; why</span>}>
+          {leadDenied && (
+            <div className="mb-3 rounded-md border border-urgent/30 bg-urgent-tint px-3 py-2 text-sm text-urgent-strong">
+              This technician lead was <span className="font-semibold">denied</span>. See the review notes below.
+            </div>
+          )}
           <textarea
             rows={2}
             value={note}
             onChange={(e) => setNote(e.target.value)}
-            placeholder="Note (required for Reject / Send back)"
+            placeholder="Note (required for Deny / Reject / Send back)"
             className="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
           />
+          {leadPending && canDecideLead && (
+            <label className="mt-3 flex items-start gap-2 text-sm">
+              <input type="checkbox" className="mt-1" checked={eligible} onChange={(e) => setEligible(e.target.checked)} />
+              <span>Yes, This Is A Valid Technician Lead And I Find Him Eligible To Represent Easyfix Customers And Brands.</span>
+            </label>
+          )}
           <div className="mt-3 flex flex-wrap justify-end gap-2">
-            {!leadAccepted && (
+            {leadPending && canDecideLead && (
+              <>
+                <Button size="sm" disabled={!eligible || busy} onClick={() => run('accept')} className="bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white">
+                  Accept lead
+                </Button>
+                <Button variant="destructive" size="sm" disabled={busy} onClick={() => run('deny')}>Deny lead</Button>
+              </>
+            )}
+            {leadPending && (
               <Button variant="outline" size="sm" disabled={busy} onClick={() => run('sendback')}>Send back</Button>
             )}
             <Button variant="destructive" size="sm" disabled={busy} onClick={() => run('reject')}>Reject</Button>

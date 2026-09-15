@@ -15,6 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Search } from 'lucide-react';
 import { api } from '@/lib/api';
+import { useFetch, useFetchOnce } from '@/lib/hooks';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -75,6 +76,18 @@ const STRIP: Array<{ key: keyof StatusCounts; label: string; status: string; lif
 
 const EF_COLS = 8;
 
+type ServiceCategory = { service_catg_id: number; service_catg_name: string };
+
+// Same id -> name mapping as the roster's parseCsvCell (efr_service_category is a CSV of ids).
+function serviceCategoryNames(raw: string | null | undefined, lookup: Map<string, string>): string {
+  return (raw ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((id) => lookup.get(id) ?? `Unknown (${id})`)
+    .join(', ');
+}
+
 export default function NewRegistration2ListPage() {
   const [rows, setRows] = useState<EfRow[]>([]);
   const [total, setTotal] = useState(0);
@@ -89,6 +102,15 @@ export default function NewRegistration2ListPage() {
 
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState<TablePageSize>(50);
+  // status-counts `total` includes deleted rows the list excludes; ask the All list for its own total.
+  const { data: allResp } = useFetch<ListResp>('/admin/easyfixers?status=0&limit=1');
+  const [resetTick, setResetTick] = useState(0);
+
+  const { data: serviceCategories } = useFetchOnce<ServiceCategory[]>('/shared/lookup/service-categories?includeInactive=true');
+  const categoryById = useMemo(
+    () => new Map((serviceCategories ?? []).map((c) => [String(c.service_catg_id), c.service_catg_name])),
+    [serviceCategories],
+  );
 
   const seqRef = useRef(0);
 
@@ -144,8 +166,8 @@ export default function NewRegistration2ListPage() {
     setPage(0);
     // load() reads state on next tick via the effect below.
   };
-  // When the status filter changes, reset to page 0 and reload.
-  useEffect(() => { void load(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [status, lifecycleStatus]);
+  // When the status filter changes or Reset is pressed, reset to page 0 and reload.
+  useEffect(() => { void load(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [status, lifecycleStatus, resetTick]);
 
   const activeStrip = useMemo(() => {
     return STRIP.map((it) => ({
@@ -162,10 +184,10 @@ export default function NewRegistration2ListPage() {
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
             <button
               type="button"
-              onClick={() => onPickStatus({ status: '', lifecycleStatus: '' })}
-              className={cn('inline-flex items-center gap-1.5', !status && !lifecycleStatus ? 'font-semibold text-foreground' : 'hover:text-foreground')}
+              onClick={() => onPickStatus({ status: '0', lifecycleStatus: '' })}
+              className={cn('inline-flex items-center gap-1.5', status === '0' && !lifecycleStatus ? 'font-semibold text-foreground' : 'hover:text-foreground')}
             >
-              <span className="tabular-nums">{counts.total.toLocaleString('en-IN')}</span> All
+              <span className="tabular-nums">{(allResp?.total ?? counts.total).toLocaleString('en-IN')}</span> All
             </button>
             {activeStrip.map((it) => (
               <span key={it.key} className="inline-flex items-center gap-2">
@@ -201,7 +223,7 @@ export default function NewRegistration2ListPage() {
         <Button onClick={() => load(true)} disabled={loading}>Search</Button>
         <Button
           variant="outline"
-          onClick={() => { setSearch(''); setStatus('1'); setLifecycleStatus(''); setPage(0); }}
+          onClick={() => { setSearch(''); setStatus('1'); setLifecycleStatus(''); setPage(0); setResetTick((n) => n + 1); }}
           disabled={loading}
         >
           Reset
@@ -257,7 +279,7 @@ export default function NewRegistration2ListPage() {
                         <div>{e.city_name ?? '—'}</div>
                         <div className="text-xs text-ink-300">{e.state_name ?? ''}</div>
                       </td>
-                      <td>{e.efr_service_category ?? '—'}</td>
+                      <td>{serviceCategoryNames(e.efr_service_category, categoryById) || '—'}</td>
                       <td>
                         <div className="flex items-center gap-2">
                           <span className="h-1.5 w-24 overflow-hidden rounded-full bg-muted">
