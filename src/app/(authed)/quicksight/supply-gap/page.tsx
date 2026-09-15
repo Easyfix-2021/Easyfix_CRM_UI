@@ -10,9 +10,11 @@
  *                   GET /api/admin/quicksight/supply-gap/:id/allocations
  *                   GET /api/admin/quicksight/supply-gap/:id/history
  *
- * Native rebuild of the legacy "Supply Gap Dashboard" LIST surface. This is
- * the READ/report view — the legacy full-CRUD write flow (new request /
- * allocate / action) is out of scope for the QuickSight rebuild.
+ * Native rebuild of the legacy "Supply Gap Dashboard". The list is the report
+ * view; "New Supply Request" and the eye icon open SupplyGapRequestDialog
+ * (create, edit-while-Open, Action History, and the action row: remarks,
+ * allocate existing / add new supply, cancel, complete — ported 2026-09-14).
+ * "Invite Sent" opens NewTechnicianDialog in invite mode.
  *
  * Fetch hygiene: data comes through the shared `useFetch` (GET) keyed on the
  * serialized applied-filter + page state — never a raw useEffect+api.get
@@ -33,14 +35,23 @@ import {
   DoorOpen,
   Users,
   Hourglass,
+  Plus,
+  Send,
 } from 'lucide-react';
 
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import { useFetch } from '@/lib/hooks';
 import { useLookup } from '@/lib/use-lookup';
+import { showToast } from '@/components/ui/toast';
 
 import { ReportPageScaffold } from '@/components/quicksight/ReportPageScaffold';
+import {
+  SupplyGapRequestDialog,
+  type SupplyGapDialogTarget,
+} from '@/components/quicksight/SupplyGapRequestDialog';
+import { NewTechnicianDialog } from '@/components/quicksight/SupplyGapActions';
+import { SUPPLY_STATUS_CLASS as STATUS_CLASS, SUPPLY_STATUS_LABEL as STATUS_LABEL } from '@/lib/supply-gap';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
@@ -103,34 +114,6 @@ type ListResponse = {
   totalPages: number;
 };
 
-type DetailRow = {
-  id: number;
-  clientName: string | null;
-  stateUserName: string | null;
-  catgName: string | null;
-  pin: number | null;
-  cityName: string | null;
-  districtName: string | null;
-  stateName: string | null;
-  comments: string | null;
-  referenceId: string | null;
-  status: number | null;
-  newSupplyNumber: string | null;
-  newSupplyName: string | null;
-  oldSupplyId: number | null;
-  actionDate: string | null;
-  actionRemarks: string | null;
-  initiatedOn: string | null;
-  requestFor: number | null;
-  closedOn: string | null;
-  closedComments: string | null;
-  actionUserName: string | null;
-  initiatedByUser: string | null;
-  closedByUser: string | null;
-  isJobEscalated: number;
-  jobStatus: number | null;
-};
-
 type AllocationRow = {
   supplyId: number;
   supplyName: string | null;
@@ -159,22 +142,6 @@ const EMPTY_FILTERS: Filters = {
   startDate: '',
   endDate: '',
   searchText: '',
-};
-
-/* On-screen status labels {0 Open,1 In Progress,2 Assigned,3 Cancelled,4 Completed}. */
-const STATUS_LABEL: Record<number, string> = {
-  0: 'Open',
-  1: 'In Progress',
-  2: 'Assigned',
-  3: 'Cancelled',
-  4: 'Completed',
-};
-const STATUS_CLASS: Record<number, string> = {
-  0: 'bg-info-tint text-info-strong',
-  1: 'bg-warning-tint text-warning-strong',
-  2: 'bg-neutral-tint text-neutral-strong',
-  3: 'bg-urgent-tint text-urgent-strong',
-  4: 'bg-success-tint text-success-strong',
 };
 
 const STATUS_OPTIONS = [
@@ -229,7 +196,7 @@ export default function SupplyGapPage() {
     () => (canView ? `${API_BASE}?${buildListQuery(applied, page + 1, effSize)}` : null),
     [canView, applied, page, effSize],
   );
-  const { data, loading, error } = useFetch<ListResponse>(listKey);
+  const { data, loading, error, refetch } = useFetch<ListResponse>(listKey);
 
   const rows = data?.data ?? [];
   const total = data?.totalRecords ?? 0;
@@ -295,13 +262,9 @@ export default function SupplyGapPage() {
 
   const hasChartData = rows.length > 0;
 
-  /* ── Detail modal (eye icon) ───────────────────────────────────────── */
-  const [detailId, setDetailId] = useState<number | null>(null);
-  const detailKey = useMemo(
-    () => (detailId != null ? `${API_BASE}/${detailId}` : null),
-    [detailId],
-  );
-  const detail = useFetch<DetailRow>(detailKey, { enabled: detailId != null });
+  /* ── Request dialog (New Supply Request button / eye icon) ─────────── */
+  const [requestTarget, setRequestTarget] = useState<SupplyGapDialogTarget | null>(null);
+  const [inviteOpen, setInviteOpen] = useState(false);
 
   /* ── Allocations drawer ("Added Tx :N") ────────────────────────────── */
   const [allocId, setAllocId] = useState<number | null>(null);
@@ -354,6 +317,7 @@ export default function SupplyGapPage() {
   };
 
   return (
+    <>
     <ReportPageScaffold
       title="Supply Gap Analysis"
       subtitle="Open city supply requests — allocation, status and remarks."
@@ -364,6 +328,18 @@ export default function SupplyGapPage() {
       isEmpty={isEmpty}
       onDownload={onDownload}
       downloading={downloading}
+      headerActions={
+        canView && !accessDenied ? (
+          <>
+            <Button variant="outline" onClick={() => setInviteOpen(true)}>
+              <Send className="size-4" /> Invite Sent
+            </Button>
+            <Button onClick={() => setRequestTarget({ kind: 'new' })}>
+              <Plus className="size-4" /> New Supply Request
+            </Button>
+          </>
+        ) : null
+      }
       filters={
         <div className="space-y-3">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -592,7 +568,7 @@ export default function SupplyGapPage() {
                       aria-label="View details"
                       title="View Details"
                       className="inline-flex items-center justify-center rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-                      onClick={() => setDetailId(r.openCityId)}
+                      onClick={() => setRequestTarget({ kind: 'existing', id: r.openCityId })}
                     >
                       <Eye className="size-4" />
                     </button>
@@ -614,28 +590,6 @@ export default function SupplyGapPage() {
           }}
         />
       </div>
-
-      {/* ── Detail modal (eye icon) ── */}
-      <Dialog
-        open={detailId != null}
-        // eslint-disable-next-line no-restricted-syntax -- read-only drill-down modal — no form state to guard
-        onOpenChange={(o) => !o && setDetailId(null)}
-      >
-        <DialogContent className="max-w-3xl">
-          <DialogHeader className="bg-sidebar text-sidebar-foreground">
-            <DialogTitle>Supply Gap #{detailId}</DialogTitle>
-          </DialogHeader>
-          {detail.loading ? (
-            <div className="flex items-center justify-center gap-2 p-8 text-muted-foreground">
-              <Loader2 className="size-5 animate-spin" /> Loading…
-            </div>
-          ) : detail.error ? (
-            <div className="p-8 text-center text-sm text-urgent">{detail.error}</div>
-          ) : detail.data ? (
-            <DetailGrid d={detail.data} />
-          ) : null}
-        </DialogContent>
-      </Dialog>
 
       {/* ── Allocations drawer ("Added Tx :N") ── */}
       <Dialog
@@ -712,6 +666,28 @@ export default function SupplyGapPage() {
         </DialogContent>
       </Dialog>
     </ReportPageScaffold>
+
+    {/* Outside the scaffold on purpose: the scaffold swaps its children for an
+        empty-state panel when the list has no rows, and "New Supply Request"
+        must still open then. */}
+    {requestTarget && (
+      <SupplyGapRequestDialog
+        key={requestTarget.kind === 'new' ? 'new' : `gap-${requestTarget.id}`}
+        target={requestTarget}
+        onClose={() => setRequestTarget(null)}
+        onSaved={refetch}
+        onOpenExisting={(id) => {
+          showToast({ variant: 'warning', message: `A request for this job is already open — showing request #${id}.` });
+          setRequestTarget({ kind: 'existing', id });
+        }}
+        categoryOptions={lookup.toOpts.serviceCategories}
+        clientOptions={lookup.toOpts.clients}
+      />
+    )}
+    {inviteOpen && (
+      <NewTechnicianDialog mode="invite" onClose={() => setInviteOpen(false)} onDone={() => {}} />
+    )}
+    </>
   );
 }
 
@@ -736,51 +712,6 @@ function renderActionBy(r: ListRow) {
       {when ? <span className="text-xs text-muted-foreground">{when}</span> : null}
     </span>
   );
-}
-
-/* Read-only detail grid for the eye-icon modal. */
-function DetailGrid({ d }: { d: DetailRow }) {
-  const items: Array<[string, React.ReactNode]> = [
-    ['Gap ID', d.id],
-    ['Gap For', d.requestFor === 1 ? 'Job ID' : d.requestFor === 2 ? 'New City' : '-'],
-    ['Job ID', d.referenceId ?? '-'],
-    ['Client', d.clientName ?? '-'],
-    ['Pin Code', d.pin ?? '-'],
-    ['City', d.cityName ?? '-'],
-    ['District', d.districtName ?? '-'],
-    ['State', d.stateName ?? '-'],
-    ['Zonal Manager', d.stateUserName ?? '-'],
-    ['Category', d.catgName ?? '-'],
-    ['Status', STATUS_LABEL[d.status ?? -1] ?? `Status ${d.status}`],
-    ['Escalated', d.isJobEscalated === 1 ? 'Yes' : 'No'],
-    ['Open Remarks', d.comments ?? '-'],
-    ['Opened By', d.initiatedByUser ?? '-'],
-    ['Opened On', d.initiatedOn ?? '-'],
-    ['Tx Details', txDetailsText(d)],
-    ['Action Remarks', d.actionRemarks ?? '-'],
-    ['Action By', d.actionUserName ?? '-'],
-    ['Action On', d.actionDate ?? '-'],
-    ['Closed By', d.closedByUser ?? '-'],
-    ['Closed On', d.closedOn ?? '-'],
-  ];
-  return (
-    <div className="grid grid-cols-1 gap-x-6 gap-y-2 p-4 sm:grid-cols-2">
-      {items.map(([label, value]) => (
-        <div key={label} className="flex flex-col">
-          <span className="text-xs font-medium text-muted-foreground">{label}</span>
-          <span className="text-sm">{value}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function txDetailsText(d: DetailRow): string {
-  if (d.newSupplyName || d.newSupplyNumber) {
-    return [d.newSupplyName, d.newSupplyNumber].filter(Boolean).join(' - ');
-  }
-  if (d.oldSupplyId) return String(d.oldSupplyId);
-  return '-';
 }
 
 /* Small labelled wrapper for filter fields (Title-Case label). */
