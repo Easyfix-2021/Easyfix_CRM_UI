@@ -100,6 +100,52 @@ const ACTIONS = [
     sources: [0, 1],
     targets: [6],
   },
+  {
+    name: 'Reassign · Cancel Job',
+    file: 'components/job/AssignTechnicianModal.tsx',
+    /*
+     * Added 2026-09-15 (owner): ops open Reassign to find a replacement,
+     * discover there is nobody to send, and need to kill the order without
+     * hunting for another surface.
+     *
+     * Unlike Schedule & Assign's twin, the status is fenced INSIDE the modal
+     * rather than at the call sites: it opens from a shareable
+     * ?action=assign|reassign URL for ANY jobId, so it probes the real status
+     * and `wrongStatusForMode` pins it to 0 (assign) or 1 (reassign). The
+     * `probe?.job_status != null` half additionally refuses to paint a
+     * destructive button before the probe has answered.
+     */
+    gates: [
+      ['components/job/AssignTechnicianModal.tsx',
+        "const canCancel = hasAction(me, 'isJobCancel') && probe?.job_status != null && !wrongStatusForMode;"],
+      ['components/job/AssignTechnicianModal.tsx', "const allowedStatus = mode === 'reassign' ? 1 : 0;"],
+      ['components/job/AssignTechnicianModal.tsx',
+        'const wrongStatusForMode = probe?.job_status != null && Number(probe.job_status) !== allowedStatus;'],
+    ],
+    sources: [0, 1],
+    targets: [6],
+  },
+  {
+    name: 'Technician Requests · Approve Cancellation',
+    file: 'components/job/TechRequestActions.tsx',
+    /*
+     * Approving a technician's cancellation ask IS cancelling the job, so it
+     * goes through the same CancelWithReasonDialog → PATCH /:id/status as every
+     * other cancel rather than a third code path.
+     *
+     * The source is pinned by the QUEUE, not by the button: a row only reaches
+     * this component when appRequestOf() returned non-null, and that predicate
+     * refuses any job_status but 1. So the only reachable source is SCHEDULED.
+     */
+    gates: [
+      ['lib/job-app-request.ts', 'export const PENDING_TO_START_STATUS = 1;'],
+      ['lib/job-app-request.ts', 'if (Number(row.job_status) !== PENDING_TO_START_STATUS) return null;'],
+      ['components/job/PendingToStartView.tsx', 'const req = appRequests ? appRequestOf(j) : null;'],
+      ['components/job/TechRequestActions.tsx', "const isCancel = request.kind === 'cancel';"],
+    ],
+    sources: [1],
+    targets: [6],
+  },
 ];
 
 /*

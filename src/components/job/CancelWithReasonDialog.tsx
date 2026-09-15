@@ -27,11 +27,18 @@ const CANCEL_DUE_TO_OPTIONS: Array<'Customer' | 'Client' | 'EasyFix' | 'Technici
   'Customer', 'Client', 'EasyFix', 'Technician',
 ];
 
-export function CancelWithReasonDialog({ open, onClose, onSubmit }: {
+type CancelDueTo = (typeof CANCEL_DUE_TO_OPTIONS)[number];
+
+export function CancelWithReasonDialog({ open, onClose, onSubmit, defaultDueTo = 'Customer' }: {
   open: boolean; onClose: () => void;
   onSubmit: (reasonId: number, comment: string) => Promise<void>;
+  /* Which radio is pre-selected on open. Defaults to Customer — the common case
+   * and what every existing mount gets. Approving a TECHNICIAN's cancellation
+   * request seeds 'Technician' instead, since that is who asked; the operator
+   * can still change it, because who raised the ask is not always the cause. */
+  defaultDueTo?: CancelDueTo;
 }) {
-  const [dueTo, setDueTo] = useState<string>('Customer');
+  const [dueTo, setDueTo] = useState<string>(defaultDueTo);
   const [reasonId, setReasonId] = useState('');
   const [reasons, setReasons] = useState<Array<{ id: number; label: string }>>([]);
   const [reasonsLoading, setReasonsLoading] = useState(false);
@@ -40,8 +47,8 @@ export function CancelWithReasonDialog({ open, onClose, onSubmit }: {
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    if (open) { setDueTo('Customer'); setReasonId(''); setComment(''); setErr(null); }
-  }, [open]);
+    if (open) { setDueTo(defaultDueTo); setReasonId(''); setComment(''); setErr(null); }
+  }, [open, defaultDueTo]);
 
   // Reason list filtered by the "Cancellation Due To" radio → action_taken_reason
   // user_type (within the action_type=1 Cancel bucket). Refetch on radio change;

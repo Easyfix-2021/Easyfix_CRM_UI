@@ -59,6 +59,8 @@ import { JobContextPanel, type JobContextData } from './JobContextPanel';
 import { CandidateTable, PincodeListModal, type ScheduleCandidate } from './CandidateTable';
 import { AddRemarksDialog } from './AddRemarksDialog';
 import { RescheduleDialog } from './RescheduleDialog';
+import { CancelWithReasonDialog } from './CancelWithReasonDialog';
+import { ST } from './JobModal';
 
 /* Job context carried on the candidates response — the SAME enriched job object
    Schedule & Assign reads, rendered by the shared <JobContextPanel>. Typed as
@@ -103,12 +105,17 @@ type SearchResponse = {
 export type AssignMode = 'assign' | 'reassign';
 
 export function AssignTechnicianModal({
-  open, onClose, onAssigned,
+  open, onClose, onAssigned, onChanged,
   jobId, mode,
 }: {
   open: boolean;
   onClose: () => void;
   onAssigned?: (efrId: number, efrName: string) => void;
+  /* Any OTHER mutation this modal commits that moves the job out of the
+   * caller's list — today just Cancel Job. Separate from onAssigned because
+   * that one carries the technician it assigned, and a cancel assigns nobody.
+   * Mirrors ScheduleAssignModal, which already splits them the same way. */
+  onChanged?: () => void;
   jobId: number | null;
   mode: AssignMode;
 }) {
@@ -164,6 +171,7 @@ export function AssignTechnicianModal({
   // Footer "Add Remarks" + panel "Reschedule" — reuse JobModal's extracted
   // dialogs so both behave exactly as they do in Schedule & Assign.
   const [remarksOpen, setRemarksOpen] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   // Bump to REMOUNT the JobContextPanel's remarks thread after a remark or a
   // reschedule (JobRemarksView owns its own useFetch, which cache-invalidation
@@ -220,6 +228,24 @@ export function AssignTechnicianModal({
   const serverAssignable = topData?.assignable ?? true;
   const assignBlockReason = topData?.assignBlockReason ?? null;
   const commitBlocked = wrongStatusForMode || !serverAssignable;
+  /*
+   * Cancel Job — the escape hatch ops asked for (owner, 2026-09-15): they open
+   * Reassign to find a replacement, discover there is nobody to send, and had
+   * to close the modal and go hunting for another surface to kill the order.
+   * Gated on its own legacy key, NOT on canCommit: a user who may cancel a job
+   * but not reassign one should still get the button, and vice versa.
+   *
+   * It IS fenced on `wrongStatusForMode`, which canCommit also carries, and it
+   * additionally waits for the probe to answer. This modal opens from a
+   * shareable ?action=assign|reassign URL for ANY jobId, and the server's
+   * setStatus would cancel a COMPLETED job without complaint unless its
+   * completion is already posted to the ledger. A destructive control must not
+   * render on a status this modal was never meant to be open at, nor on a
+   * status nobody has confirmed yet — which is why this is stricter than the
+   * commit button beside it.
+   */
+  const canCancel = hasAction(me, 'isJobCancel')
+    && probe?.job_status != null && !wrongStatusForMode;
   const canCommit = (mode === 'reassign'
     ? hasAction(me, 'isJobReassign')
     : hasAction(me, 'isJobAssign')) && !commitBlocked;
@@ -662,8 +688,20 @@ export function AssignTechnicianModal({
               Add Remarks
             </Button>
           </div>
-          {/* RIGHT — Close, then the single-technician (Re)Assign commit. */}
+          {/* RIGHT — destructive Cancel, then Close, then the single-technician
+              (Re)Assign commit. Cancel-first matches the job-modal footer
+              convention (Add Remarks left; Cancel · lifecycle · Close right)
+              and Schedule & Assign's identical cluster. */}
           <div className="flex items-center gap-2">
+            {canCancel && (
+              <Button
+                variant="destructive"
+                onClick={() => setCancelOpen(true)}
+                disabled={!jobId || committing}
+              >
+                Cancel Job
+              </Button>
+            )}
             <Button variant="outline" onClick={onClose} disabled={committing}>Close</Button>
             {canCommit && (
               <Button
@@ -700,6 +738,29 @@ export function AssignTechnicianModal({
             setRemarksOpen(false);
             invalidateFetch((k) => k.startsWith(`/admin/jobs/${jobId}/comments`));
             setRemarksReloadKey((n) => n + 1);
+          }}
+        />
+      )}
+
+      {/* Cancel Job — same PATCH /:id/status contract JobModal and Schedule &
+          Assign use, so all three cancel surfaces write one shape. Refresh the
+          caller's list BEFORE closing (the cancelled row leaves this tab), then
+          close — the order Schedule & Assign already uses. */}
+      {jobId && (
+        <CancelWithReasonDialog
+          open={cancelOpen}
+          onClose={() => setCancelOpen(false)}
+          onSubmit={async (reasonId, comment) => {
+            await api.patch(`/admin/jobs/${jobId}/status`, {
+              status: ST.CANCELLED, reasonId, comment,
+            });
+            showToast({ variant: 'success', message: 'Job Cancelled' });
+            setCancelOpen(false);
+            // The cancel remark is a new tbl_job_comment row; drop the cached
+            // pre-cancel thread so opening this job next shows it (30s TTL).
+            invalidateFetch((k) => k.startsWith(`/admin/jobs/${jobId}/comments`));
+            onChanged?.();
+            onClose();
           }}
         />
       )}

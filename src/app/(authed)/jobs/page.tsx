@@ -2262,6 +2262,9 @@ export default function JobsPage() {
         mode={assignModal.mode}
         onClose={() => closeJobAction()}
         onAssigned={() => { cacheRef.current.clear(); load(false, true); refreshCounts(); }}
+        // Cancel Job from inside Reassign moves the row between status tabs, so
+        // the counts have to move with it — same refresh as onAssigned.
+        onChanged={() => { cacheRef.current.clear(); load(false, true); refreshCounts(); }}
       />
 
       {/*
