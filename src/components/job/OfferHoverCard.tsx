@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import { createPortal } from 'react-dom';
 import { Clock } from 'lucide-react';
 import { api } from '@/lib/api';
 import { CallableMobile } from '@/components/calls/CallButton';
@@ -28,26 +29,10 @@ import type { JobOffer, JobOffersResponse } from '@/lib/api';
 
 const cache = new Map<number, JobOffer[]>();
 
-/*
- * The box the card can actually be seen in: the viewport, narrowed by every
- * ancestor that clips its overflow. A list table sits in an `overflow-x-auto`
- * wrapper, and overflow-x other than visible makes the Y axis clip too — so a
- * card opened on one of the last rows was cut off by the table's own bottom
- * edge long before it reached the bottom of the screen.
- */
-function visibleBounds(el: HTMLElement): { top: number; bottom: number } {
-  let top = 0;
-  let bottom = window.innerHeight;
-  for (let node = el.parentElement; node && node !== document.body; node = node.parentElement) {
-    const s = window.getComputedStyle(node);
-    if (s.overflowX !== 'visible' || s.overflowY !== 'visible') {
-      const r = node.getBoundingClientRect();
-      top = Math.max(top, r.top);
-      bottom = Math.min(bottom, r.bottom);
-    }
-  }
-  return { top, bottom };
-}
+/* Keep the card this far from the viewport edges. */
+const VIEWPORT_EDGE = 8;
+
+type CardPos = { top: number; left: number; placement: 'below' | 'above'; maxHeight: number | null };
 
 export function OfferHoverCard({
   jobId,
@@ -78,27 +63,77 @@ export function OfferHoverCard({
   }, []);
 
   /*
-   * Open UPWARDS when the card would not fit below — the last rows of a list.
-   * Measured before paint (layout effect), so it never flashes below first, and
-   * again when the content changes size (Loading… → the roster). It only flips
-   * when the space above is also the larger, so a card on a short table near
-   * its top keeps opening downwards.
+   * PORTALED into <body> and positioned `fixed` against the VIEWPORT — the same
+   * posture as the pincodes InfoTooltip and the SearchSelect popover.
+   *
+   * The card used to be `absolute` under the chip, inside the list table's
+   * `overflow-x-auto` wrapper — and overflow-x other than visible clips the Y
+   * axis too. On the last rows it was cut off by the table's bottom edge, and
+   * flipping it upwards inside that same box still cut it when the box had no
+   * room either way: a one-row result (Manage Jobs, job 482502) left only the
+   * header above the chip, so the card's top was sliced off. z-index does not
+   * defeat overflow clipping; leaving the box does.
+   *
+   * Below when the screen has room; above when it doesn't and above has more;
+   * clamped on screen horizontally; if neither side fits, capped to the larger
+   * side and scrolls. Measured before paint (hidden on the measuring frame), and
+   * again when the content resizes (Loading… → the roster).
+   *
+   * Hovering the card keeps it open: React synthesises mouseenter/leave along
+   * the COMPONENT tree, and a portal is a child of the chip's span there. The 4px
+   * gap is padding INSIDE the card's box (pt-1 / pb-1), so moving the pointer
+   * from the chip onto the card never crosses dead space.
    */
   const anchorRef = React.useRef<HTMLSpanElement | null>(null);
-  const cardRef = React.useRef<HTMLDivElement | null>(null);
-  const [above, setAbove] = React.useState(false);
-  React.useLayoutEffect(() => {
-    if (!open) { setAbove(false); return; }
+  const panelRef = React.useRef<HTMLDivElement | null>(null);
+  const [pos, setPos] = React.useState<CardPos | null>(null);
+  const place = React.useCallback(() => {
     const anchor = anchorRef.current;
-    const card = cardRef.current;
-    if (!anchor || !card) return;
+    const panel = panelRef.current;
+    if (!anchor || !panel) return;
     const a = anchor.getBoundingClientRect();
-    const { top, bottom } = visibleBounds(anchor);
-    const needed = card.offsetHeight + 4; // + the 4px gap (mt-1 / mb-1)
-    const spaceBelow = bottom - a.bottom;
-    const spaceAbove = a.top - top;
-    setAbove(needed > spaceBelow && spaceAbove > spaceBelow);
-  }, [open, loading, error, items]);
+    // scrollHeight is the panel's NATURAL height even while a previous
+    // maxHeight is capping it; + borders + the 4px gap.
+    const h = panel.scrollHeight + (panel.offsetHeight - panel.clientHeight) + 4;
+    const w = panel.offsetWidth;
+    const spaceBelow = window.innerHeight - a.bottom - VIEWPORT_EDGE;
+    const spaceAbove = a.top - VIEWPORT_EDGE;
+    const below = h <= spaceBelow || spaceBelow >= spaceAbove;
+    const room = Math.max(0, below ? spaceBelow : spaceAbove);
+    setPos({
+      placement: below ? 'below' : 'above',
+      top: below ? a.bottom : a.top - Math.min(h, room),
+      left: Math.max(VIEWPORT_EDGE, Math.min(a.left, window.innerWidth - w - VIEWPORT_EDGE)),
+      maxHeight: h > room ? Math.max(0, room - 4) : null,
+    });
+  }, []);
+  React.useLayoutEffect(() => {
+    if (!open) { setPos(null); return; }
+    place();
+  }, [open, loading, error, items, place]);
+
+  /*
+   * A fixed card does not travel with its row, so close it when anything that
+   * CONTAINS the chip scrolls (the page, the table) rather than leave it floating
+   * over the wrong job. Other scrolls — the card's own roster list, a call dialog
+   * opened from it — are not about this chip and must not close it. A resize
+   * just re-places it.
+   */
+  React.useEffect(() => {
+    if (!open) return;
+    const onScroll = (e: Event) => {
+      const t = e.target;
+      if (t === document || (t instanceof Node && anchorRef.current && t.contains(anchorRef.current))) {
+        setOpen(false);
+      }
+    };
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', place);
+    return () => {
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', place);
+    };
+  }, [open, place]);
 
   async function load() {
     if (items || loading) return;
@@ -128,11 +163,12 @@ export function OfferHoverCard({
       onMouseLeave={() => setOpen(false)}
     >
       {children}
-      {open && (
+      {open && typeof document !== 'undefined' && createPortal(
         /*
-         * whitespace-normal is REQUIRED: `.data-table td` sets nowrap and the
-         * panel inherits it, which would run every line off the edge. z-50 to
-         * clear the table's sticky columns/header.
+         * whitespace-normal stays explicit: the card used to inherit nowrap from
+         * `.data-table td`, and keeping it pins the wrapping whatever it is
+         * rendered under. z-[60] clears the table's sticky columns/header and
+         * the app chrome.
          */
         /*
          * `w-max` shrinks the card to its widest row instead of always painting
@@ -141,8 +177,16 @@ export function OfferHoverCard({
          * max-w stops a long name stretching it across the table.
          */
         <div
-          ref={cardRef}
-          className={`absolute left-0 ${above ? 'bottom-full mb-1' : 'top-full mt-1'} z-50 w-max min-w-[13rem] max-w-[20rem] whitespace-normal rounded-md border border-ink-100 bg-popover p-2.5 text-left text-xs font-normal leading-relaxed text-ink-700 shadow-xl`}
+          className={`fixed z-[60] ${pos?.placement === 'above' ? 'pb-1' : 'pt-1'}`}
+          style={pos
+            ? { top: pos.top, left: pos.left }
+            // Measuring frame: laid out off-screen and invisible, placed before paint.
+            : { top: 0, left: 0, visibility: 'hidden' }}
+        >
+        <div
+          ref={panelRef}
+          className="w-max min-w-[13rem] max-w-[20rem] whitespace-normal rounded-md border border-ink-100 bg-popover p-2.5 text-left text-xs font-normal leading-relaxed text-ink-700 shadow-xl"
+          style={pos?.maxHeight != null ? { maxHeight: pos.maxHeight, overflowY: 'auto' } : undefined}
         >
           <div className="mb-1.5 font-semibold text-ink-900">Offered To</div>
 
@@ -199,6 +243,8 @@ export function OfferHoverCard({
             </ul>
           )}
         </div>
+        </div>,
+        document.body,
       )}
     </span>
   );
