@@ -1,19 +1,31 @@
 'use strict';
 /*
- * Pending to Start — the three appointment buckets (Over Due / Action Today /
- * Future) collapse and re-order the way My Orders -> Unconfirmed's sections
- * do, and the row carries no Check In, only a View that opens the job.
+ * Pending to Start — ALL FOUR sections (Technician Requests / Over Due /
+ * Action Today / Future) collapse and re-order the way My Orders ->
+ * Unconfirmed's sections do, and the row carries no Check In, only a View that
+ * opens the job.
+ *
+ * Technician Requests joined the set on 2026-09-14 (owner: "should also be
+ * collapsable, reorderable, etc as other sections"). It had been pinned above
+ * the buckets and returned null when empty; both are gone, because a section
+ * that renders nothing cannot be dragged. What replaces those two guarantees
+ * is asserted below: it is a member of the set, it DEFAULTS first, and the
+ * order key was bumped so a pre-change saved order cannot append it last.
  *
  * Source-scanned, like job-app-request.test.js and resend-pin-action.test.js:
  * every rule here lives in a .tsx component that test:build does not compile,
  * and each regression below is a plain deletion that type-checks. The drag
  * ARITHMETIC is behaviour-tested separately (tests/section-reorder.test.js).
  *
- * "Same mechanism as Unconfirmed" is pinned two ways: Pending to Start must
- * render through the shared ReorderableSections / SectionFrame, and — until
- * UnconfirmedSections.tsx is migrated onto that component — the interaction
- * strings that define the behaviour must read identically in both copies, so
- * neither can drift alone.
+ * "Same mechanism as Unconfirmed" is pinned by SHARING it: both pages render
+ * through ReorderableSections / SectionFrame, so the interaction cannot drift
+ * between them. It was briefly duplicated — the component was lifted out of
+ * UnconfirmedSections.tsx for this view on 2026-09-11 and Unconfirmed kept its
+ * inline copy — and the check that pinned the two copies string-for-string is
+ * replaced below by the one that matters now: Unconfirmed must still render
+ * through the shared component and must not re-grow a copy of its own.
+ * Unconfirmed's OWN contract (its keys, its fetch, its footer) is covered in
+ * tests/unconfirmed-sections.test.js.
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -48,24 +60,33 @@ function reorderable(src) {
   return open > 0 && close > open ? { open, text: src.slice(open, close) } : null;
 }
 
-// ─── 1. The buckets are the reorderable sections ─────────────────────────
+// ─── 1. All four sections are the reorderable set ────────────────────────
 
-test('the three buckets render inside the shared ReorderableSections, Technician Requests outside it', () => {
+test('all four sections, Technician Requests included, render inside the shared ReorderableSections', () => {
   assert.match(view,
     /import \{\s*ReorderableSections,\s*SectionFrame,\s*type SectionControls,?\s*\} from '@\/components\/ui\/reorderable-sections';/,
     'the view must use the shared component, not a second copy of the interaction');
 
   const region = reorderable(view);
-  assert.ok(region, 'the buckets must be wrapped in <ReorderableSections>…</ReorderableSections>');
+  assert.ok(region, 'the sections must be wrapped in <ReorderableSections>…</ReorderableSections>');
   assert.match(region.text,
-    /<ReorderableSections sections=\{BUCKET_SECTIONS\} orderKey=\{ORDER_KEY\} collapsedKey=\{COLLAPSED_KEY\}>/);
+    /<ReorderableSections sections=\{SECTIONS\} orderKey=\{ORDER_KEY\} collapsedKey=\{COLLAPSED_KEY\}>/);
 
-  const keys = view.match(/const BUCKET_SECTIONS = \[([^\]]*)\] as const;/);
-  assert.ok(keys, 'BUCKET_SECTIONS must be found');
+  /*
+   * The array IS the default arrangement (reconcile() keeps its order when
+   * nothing is stored), so 'appRequests' first is the whole of requirement
+   * "default position stays FIRST" for a fresh browser.
+   */
+  const keys = view.match(/const SECTIONS = \[([\s\S]*?)\] as const;/);
+  assert.ok(keys, 'SECTIONS must be found');
   assert.deepEqual([...keys[1].matchAll(/key: '([^']+)'/g)].map((m) => m[1]),
-    ['overDue', 'actionToday', 'future'],
-    'exactly the three buckets, in their default order — a missing key never renders its bucket');
+    ['appRequests', 'overDue', 'actionToday', 'future'],
+    'exactly the four sections, requests first — the array order IS the default arrangement');
 
+  // Each key renders its own section, all of them through {...shared}.
+  assert.match(region.text,
+    /if \(s\.key === 'appRequests'\) \{\s*return <PendingSection appRequests title="Technician Requests"[^>]*\{\.\.\.shared\} \/>;/,
+    'Technician Requests must render for its own key, with the shared props (controls included)');
   for (const [key, title] of [['overDue', 'Over Due'], ['actionToday', 'Action Today']]) {
     assert.match(region.text,
       new RegExp(`if \\(s\\.key === '${key}'\\) \\{\\s*return <PendingSection title="${title}"[^>]*\\{\\.\\.\\.shared\\} />;`),
@@ -73,26 +94,60 @@ test('the three buckets render inside the shared ReorderableSections, Technician
   }
   assert.match(region.text, /return <PendingSection title="Future"[^>]*\{\.\.\.shared\} \/>;/);
   assert.match(region.text, /const shared = \{[^}]*\bcontrols,\s*\};/,
-    'every bucket must receive its SectionControls');
+    'every section must receive its SectionControls');
 
-  const requests = view.indexOf('title="Technician Requests"');
-  assert.ok(requests > 0 && requests < region.open,
-    'Technician Requests stays pinned ABOVE the buckets, outside the reorderable set');
-  assert.ok(!region.text.includes('title="Technician Requests"'));
+  // …and NOTHING renders a PendingSection outside the set any more: one
+  // rendered above it would be un-draggable and would silently win the top.
+  assert.equal((view.match(/<PendingSection\b/g) || []).length, 4,
+    'exactly four <PendingSection> mounts, all inside <ReorderableSections>');
+  assert.ok(view.indexOf('title="Technician Requests"') > region.open,
+    'Technician Requests must live INSIDE the reorderable region, not pinned above it');
 });
 
-test('each bucket renders in SectionFrame under Unconfirmed\'s collapse rule, with its own pagination', () => {
-  assert.match(view, /if \(controls\) \{\s*return \(\s*<SectionFrame\b/,
-    'a bucket must render through the shared frame');
-  assert.match(view, /collapsed=\{controls\.explicitCollapsed \?\? \(data \? total === 0 : false\)\}/,
-    'auto rule: open while the count is unknown, shut at 0, an explicit click wins');
+test('Technician Requests keeps its identity: subtitle, no date window, its own row grammar', () => {
+  const region = reorderable(view);
+  assert.match(region.text, /subtitle="Cancellation or reschedule raised from the app"/,
+    'the subtitle is what tells an operator what the section is');
+  assert.match(region.text, /dateRange=\{NO_DATE_RANGE\}/,
+    'a request is orthogonal to the appointment date — it sends no window');
+  // Requests-only chrome survives the move into the shared frame.
+  assert.match(view, /\{appRequests && <th>Request<\/th>\}/);
+  /*
+   * The attention strip. The section header is the SHARED one now, so the tint
+   * that used to be on the old plain-Card header lives in the body — scoped to
+   * THAT div, not to "somewhere in the file": the reschedule chip three
+   * hundred lines down also carries both tokens, and a loose scan here reads
+   * green off the chip while the strip is gone.
+   */
+  assert.match(view, /\{appRequests && \(\s*<div className="[^"]*\bbg-warning-tint text-warning-strong">/,
+    'the requests body must open with the tint/strong attention strip');
+  assert.match(view, /<AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" \/>/);
+});
+
+test('each section renders in SectionFrame under Unconfirmed\'s collapse rule, with its own pagination', () => {
+  assert.match(view, /return \(\s*<SectionFrame\b/,
+    'a section must render through the shared frame');
+  assert.doesNotMatch(view, /<Card className=\{appRequests/,
+    'the requests section must not keep a plain-Card escape hatch beside the frame');
+  assert.match(view, /controls: SectionControls;/,
+    'controls is REQUIRED — an optional one is how a section slips back out of the set');
+  // Unconfirmed's rule, with ONE deliberate difference: while the count is
+  // unknown the buckets open (they almost always have rows) but Technician
+  // Requests starts shut — most days it is empty, and a skeleton at the top of
+  // the page that then collapses drags the buckets up under the operator.
+  assert.match(view, /collapsed=\{controls\.explicitCollapsed \?\? \(data \? total === 0 : appRequests\)\}/,
+    'auto rule: shut at 0, an explicit click wins, and only Requests starts shut while unknown');
   assert.match(unconfirmed, /explicitCollapsed \?\? \(data \? total === 0 : false\)/,
     'and that must be the rule Unconfirmed uses');
   assert.match(view, /count=\{data \? total : null\}/, 'the count chip reads the bucket\'s own total');
   assert.match(view, /controls=\{controls\}/);
 
-  // An explicitly shut bucket fetches its count, not its rows — as Unconfirmed does.
-  assert.match(view, /const countOnly = controls\?\.explicitCollapsed === true;/);
+  // An explicitly shut bucket fetches its count, not its rows — as Unconfirmed
+  // does. The requests section is EXEMPT and must stay exempt: its total is
+  // matched.length over a client-side filter, so a limit=1 fetch would report
+  // 0-or-1 requests. The `appRequests ?` arm ahead of `countOnly ?` is that
+  // exemption; if it ever goes, the count chip starts lying while collapsed.
+  assert.match(view, /const countOnly = controls\.explicitCollapsed === true;/);
   assert.match(view, /limit: appRequests \? JOBS_MAX_LIMIT : countOnly \? 1 : limit,/);
   assert.match(view, /offset: appRequests \|\| countOnly \? 0 : offset,/);
 
@@ -104,6 +159,25 @@ test('each bucket renders in SectionFrame under Unconfirmed\'s collapse rule, wi
   assert.match(body[1], /<TablePagination\s+page=\{page\}/, 'each bucket keeps its own footer');
   assert.match(section, /<\/SectionFrame>/);
   assert.match(section, /\{body\}\s*<\/SectionFrame>/, 'the frame wraps that body');
+});
+
+test('an empty Technician Requests section still renders its header', () => {
+  /*
+   * It used to `return null` at total === 0. That is the one thing that made
+   * it un-reorderable — you cannot grip a section that is not on the page — so
+   * the guard must not come back in ANY shape, not just the exact old line.
+   * The section instead takes the buckets' auto-collapse (asserted above), so
+   * an empty day costs a shut header rather than a whole card.
+   */
+  const section = view.slice(view.indexOf('function PendingSection('));
+  const earlyReturns = [...section.matchAll(/if \([^)]*appRequests[^)]*\)\s*return null;/g)];
+  assert.equal(earlyReturns.length, 0,
+    `an appRequests early return is back: ${earlyReturns.map((m) => m[0]).join(' | ')}`);
+
+  // Positive control: that matcher does fire on the line this test replaced.
+  assert.match('  if (appRequests && total === 0) return null;',
+    /if \([^)]*appRequests[^)]*\)\s*return null;/,
+    'control: the scan must be able to see the guard it forbids');
 });
 
 // ─── 2. Same interaction as Unconfirmed ──────────────────────────────────
@@ -140,13 +214,41 @@ test('the shared component carries Unconfirmed\'s drag, keyboard, collapse and a
   for (const p of PARITY) assert.match(shared, p, `the shared component lost: ${p}`);
   assert.match(shared, /export function ReorderableSections</);
   assert.match(shared, /export function SectionFrame\(/);
+});
 
-  // Once Unconfirmed renders through the shared component, parity holds by
-  // construction; until then its inline copy must still read the same.
-  if (/from '@\/components\/ui\/reorderable-sections'/.test(unconfirmed)) return;
-  for (const p of PARITY) {
-    assert.match(unconfirmed, p,
-      `Unconfirmed and the shared component have drifted on ${p} — change both, or migrate Unconfirmed`);
+/*
+ * The pieces that make up ONE copy of the interaction. Every one of them is in
+ * the shared component (asserted below, which is also the positive control:
+ * each pattern is shown able to match a real copy before it is used to prove
+ * one is absent). None may reappear in Unconfirmed — that is what "there is one
+ * copy" means, and a re-grown copy is exactly how the two pages drift apart.
+ */
+const ONE_COPY_ONLY = [
+  /const REORDER_MS = 220;/,
+  /useLayoutEffect/,
+  /from '@\/lib\/reorder'/,
+  /requestAnimationFrame/,
+  /getBoundingClientRect/,
+  /prefers-reduced-motion/,
+  /localStorage/,
+  /\bdraggable\b/,
+  /<GripVertical /,
+  /ChevronRight/,
+  /aria-expanded=/,
+  /<StatusChip/,
+];
+
+test('Unconfirmed renders through the same shared component, and keeps no second copy of it', () => {
+  assert.match(unconfirmed,
+    /import \{\s*ReorderableSections,\s*SectionFrame,\s*type SectionControls,?\s*\} from '@\/components\/ui\/reorderable-sections';/,
+    'Unconfirmed must import the shared component — a lookalike is what this file exists to prevent');
+  assert.match(unconfirmed, /<ReorderableSections\b/, 'and render its sections inside it');
+  assert.match(unconfirmed, /<SectionFrame\b/, 'and each section through the shared frame');
+
+  for (const p of ONE_COPY_ONLY) {
+    assert.match(shared, p, `control: ${p} must exist in the shared component for this scan to mean anything`);
+    assert.doesNotMatch(unconfirmed, p,
+      `${p} is back in ${UNCONFIRMED} — the interaction has re-grown a second copy; delete it and use the shared component`);
   }
 });
 
@@ -161,6 +263,20 @@ test('order and collapse persist under Pending to Start\'s own localStorage keys
   assert.ok(theirs.length >= 2, `expected Unconfirmed's keys to be found, found ${theirs.length}`);
   assert.match(view, /const ORDER_KEY = 'easyfix\.crm\.pendingStart\.[\w.]+';/);
   assert.match(view, /const COLLAPSED_KEY = 'easyfix\.crm\.pendingStart\.[\w.]+';/);
+
+  /*
+   * THE MIGRATION. reconcile() (asserted below, on the shared component)
+   * APPENDS a key it has never seen, so an order saved before Technician
+   * Requests joined the set — ['overDue','actionToday','future'] under
+   * sectionOrder.v1 — would put the new section LAST, the opposite of its
+   * default. The order key is therefore at v2: those saved arrangements are
+   * retired once and everyone starts from SECTIONS again. Reverting the key to
+   * v1 silently demotes the section for every operator who ever dragged one.
+   */
+  assert.match(view, /const ORDER_KEY = 'easyfix\.crm\.pendingStart\.sectionOrder\.v2';/,
+    'the order key must be at v2 or a pre-2026-09-14 saved order appends Technician Requests last');
+  assert.match(shared, /for \(const s of sections\) if \(!seen\.has\(s\.key\)\) out\.push\(s\);/,
+    'control: reconcile() really does APPEND unknown-to-storage sections — that is why v2 exists');
   assert.notEqual(mine[0], mine[1], 'order and collapse are stored separately');
   for (const k of mine) {
     assert.ok(!theirs.includes(k),
@@ -202,9 +318,9 @@ test('a View action still opens the job workspace', () => {
   assert.equal(buttons.length, 1, 'exactly one Eye "View Job" button, calling onView(j.job_id)');
   assert.match(view, /import \{[^}]*\bEye\b[^}]*\} from 'lucide-react';/);
 
-  // onView is the page's openView on every section…
-  assert.match(view, /onView: openView,/, 'the buckets get openView');
-  assert.match(view, /onView=\{openView\}/, 'Technician Requests gets openView');
+  // onView is the page's openView on every section — one `shared` object now
+  // that Technician Requests is a member too, so one assertion covers all four.
+  assert.match(view, /onView: openView,/, 'every section gets openView');
   // …and the page's openView is the ?action=view workspace.
   const page = strip(read(PAGE));
   assert.match(page, /<PendingToStartView[\s\S]{0,200}?openView=\{openView\}/);
