@@ -48,6 +48,7 @@ import {
 import { TransferJobOwnershipDialog } from '@/components/job/TransferJobOwnershipDialog';
 import { UnconfirmedJobsTable } from '@/components/job/UnconfirmedJobsTable';
 import { CallableMobile } from '@/components/calls/CallButton';
+import { OfferHoverCard } from '@/components/job/OfferHoverCard';
 import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
 import { cycleSort, SortHeader, type SortDir } from '@/lib/use-sort';
 import { useMe } from '@/lib/auth-context';
@@ -160,6 +161,11 @@ type JobRow = JobAgeFields & {
      anyone report to me". See txTier(). */
   efr_manager_id?: number | null;
   efr_team_count?: number | null;
+  /* Technicians holding (offer_status 0) or having accepted (1) an offer on the
+     job — BE attachOfferEfrs. What the Tx name cell names while an offered job
+     has no fk_easyfixter_id yet. Absent on an older BE → the cell reads as it
+     did before. */
+  offer_efrs?: OfferEfr[] | null;
   /* escalated_by_name is escu.user_name — escalated_by resolved through
      tbl_user, which is better than the denormalised varchar legacy printed. */
   escalated_by_name?: string | null;
@@ -185,6 +191,73 @@ function txTier(row: JobRow): string | null {
   if (hasManager) return 'Under Master';
   if (hasTeam) return 'Master';
   return 'Individual';
+}
+
+type OfferEfr = { efr_id: number; efr_name: string | null; offer_status: number; offered_at: string | null };
+// tbl_job_offer.offer_status — the two the Tx name cell reads.
+const OFFER_OFFERED = 0;
+const OFFER_ACCEPTED = 1;
+// Offered names listed in the cell itself; a longer list collapses to "+N more"
+// and the whole list opens on hover. A job can be offered to up to 50 technicians.
+const OFFERED_NAMES_SHOWN = 3;
+
+// The BE groups by (job, technician, status), so each technician appears once per status.
+const offerEfrsWith = (row: JobRow, status: number) =>
+  (row.offer_efrs ?? []).filter((o) => o.offer_status === status);
+
+/*
+ * The Tx name cell for a job with no fk_easyfixter_id (ops issue #13). The row
+ * used to print "unassigned" beside a Bucket Status of "Offered To Tx", because
+ * an offer does not set fk_easyfixter_id until a technician accepts.
+ *
+ *   accepted (tech not on tbl_job yet) → just that technician's ID and name,
+ *                                        like an assigned row — no offer list;
+ *   offered                            → "Offered to N Tx" and the first few
+ *                                        names; hovering opens the full list
+ *                                        (OfferHoverCard, the same card My
+ *                                        Orders uses: status + call per tech);
+ *   neither                            → "unassigned", as before.
+ *
+ * Accepted wins over offered: once someone accepts, the other offers close, so
+ * a leftover OFFERED row must not turn the accepter back into a list.
+ */
+function UnassignedTx({ row }: { row: JobRow }) {
+  const accepted = offerEfrsWith(row, OFFER_ACCEPTED);
+  if (accepted.length > 0) {
+    return (
+      <>
+        {accepted.map((o) => (
+          <div key={o.efr_id}>
+            <div className="font-mono text-xs text-muted-foreground">#{o.efr_id}</div>
+            {formatEasyfixerName(o.efr_name) || '—'}
+          </div>
+        ))}
+      </>
+    );
+  }
+  const offered = offerEfrsWith(row, OFFER_OFFERED);
+  if (offered.length === 0) return <span className="text-muted-foreground">unassigned</span>;
+  const hiddenCount = offered.length - OFFERED_NAMES_SHOWN;
+  return (
+    <OfferHoverCard jobId={row.job_id} enabled>
+      <div className="cursor-help">
+        <div className="text-xs font-semibold text-warning-strong">
+          Offered to {offered.length} Tx
+        </div>
+        {offered.slice(0, OFFERED_NAMES_SHOWN).map((o) => (
+          <div key={o.efr_id} className="text-xs">
+            {formatEasyfixerName(o.efr_name) || '—'}
+            <span className="ml-1 font-mono text-muted-foreground">#{o.efr_id}</span>
+          </div>
+        ))}
+        {hiddenCount > 0 && (
+          <div className="text-xs text-muted-foreground underline decoration-dotted">
+            +{hiddenCount} more — hover to see all
+          </div>
+        )}
+      </div>
+    </OfferHoverCard>
+  );
 }
 type Resp = { items: JobRow[]; total: number; limit: number; offset: number };
 
@@ -1972,7 +2045,10 @@ export default function JobsPage() {
                           fk_easyfixter_id, never the joined name: a job that IS
                           assigned to a technician with a blank efr_name once
                           rendered the literal word "unassigned" while the chip
-                          on the same row disagreed. */}
+                          on the same row disagreed.
+                          Unassigned but offered → the offerees' names, the full
+                          list on hover; accepted → that technician's ID and
+                          name only (see UnassignedTx). */}
                   <td className="whitespace-nowrap">
                     {j.fk_easyfixter_id != null ? (
                       <>
@@ -1991,7 +2067,7 @@ export default function JobsPage() {
                           </div>
                         )}
                       </>
-                    ) : <span className="text-muted-foreground">unassigned</span>}
+                    ) : <UnassignedTx row={j} />}
                   </td>
                   {/* 18. Escalted By (legacy's spelling, kept). escalated_by
                           resolved through tbl_user, which is what the operator
