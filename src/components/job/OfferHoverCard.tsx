@@ -28,6 +28,27 @@ import type { JobOffer, JobOffersResponse } from '@/lib/api';
 
 const cache = new Map<number, JobOffer[]>();
 
+/*
+ * The box the card can actually be seen in: the viewport, narrowed by every
+ * ancestor that clips its overflow. A list table sits in an `overflow-x-auto`
+ * wrapper, and overflow-x other than visible makes the Y axis clip too — so a
+ * card opened on one of the last rows was cut off by the table's own bottom
+ * edge long before it reached the bottom of the screen.
+ */
+function visibleBounds(el: HTMLElement): { top: number; bottom: number } {
+  let top = 0;
+  let bottom = window.innerHeight;
+  for (let node = el.parentElement; node && node !== document.body; node = node.parentElement) {
+    const s = window.getComputedStyle(node);
+    if (s.overflowX !== 'visible' || s.overflowY !== 'visible') {
+      const r = node.getBoundingClientRect();
+      top = Math.max(top, r.top);
+      bottom = Math.min(bottom, r.bottom);
+    }
+  }
+  return { top, bottom };
+}
+
 export function OfferHoverCard({
   jobId,
   enabled,
@@ -56,6 +77,29 @@ export function OfferHoverCard({
     return () => { aliveRef.current = false; };
   }, []);
 
+  /*
+   * Open UPWARDS when the card would not fit below — the last rows of a list.
+   * Measured before paint (layout effect), so it never flashes below first, and
+   * again when the content changes size (Loading… → the roster). It only flips
+   * when the space above is also the larger, so a card on a short table near
+   * its top keeps opening downwards.
+   */
+  const anchorRef = React.useRef<HTMLSpanElement | null>(null);
+  const cardRef = React.useRef<HTMLDivElement | null>(null);
+  const [above, setAbove] = React.useState(false);
+  React.useLayoutEffect(() => {
+    if (!open) { setAbove(false); return; }
+    const anchor = anchorRef.current;
+    const card = cardRef.current;
+    if (!anchor || !card) return;
+    const a = anchor.getBoundingClientRect();
+    const { top, bottom } = visibleBounds(anchor);
+    const needed = card.offsetHeight + 4; // + the 4px gap (mt-1 / mb-1)
+    const spaceBelow = bottom - a.bottom;
+    const spaceAbove = a.top - top;
+    setAbove(needed > spaceBelow && spaceAbove > spaceBelow);
+  }, [open, loading, error, items]);
+
   async function load() {
     if (items || loading) return;
     const cached = cache.get(jobId);
@@ -78,6 +122,7 @@ export function OfferHoverCard({
 
   return (
     <span
+      ref={anchorRef}
       className="relative inline-block"
       onMouseEnter={() => { setOpen(true); void load(); }}
       onMouseLeave={() => setOpen(false)}
@@ -95,7 +140,10 @@ export function OfferHoverCard({
          * space. min-w keeps a one-word name from collapsing into a sliver, and
          * max-w stops a long name stretching it across the table.
          */
-        <div className="absolute left-0 top-full z-50 mt-1 w-max min-w-[13rem] max-w-[20rem] whitespace-normal rounded-md border border-ink-100 bg-popover p-2.5 text-left text-xs font-normal leading-relaxed text-ink-700 shadow-xl">
+        <div
+          ref={cardRef}
+          className={`absolute left-0 ${above ? 'bottom-full mb-1' : 'top-full mt-1'} z-50 w-max min-w-[13rem] max-w-[20rem] whitespace-normal rounded-md border border-ink-100 bg-popover p-2.5 text-left text-xs font-normal leading-relaxed text-ink-700 shadow-xl`}
+        >
           <div className="mb-1.5 font-semibold text-ink-900">Offered To</div>
 
           {loading && <div className="py-1 text-muted-foreground">Loading…</div>}
