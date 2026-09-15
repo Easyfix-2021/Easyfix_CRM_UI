@@ -95,9 +95,10 @@ export const api = {
    *   technician ids. The job stays job_status=0 (BOOKED) with no single owner;
    *   each technician gets a tbl_job_offer row + an FCM push, and whoever
    *   accepts first on the app wins (race-safe first-wins on the BE).
-   * getJobOffers(jobId) — GET /admin/jobs/:id/offers → the technicians the job
-   *   is currently offered to (open offers), for the "Offered to" section with
-   *   a live "offered <relativeTime>" label.
+   * getJobOffers(jobId) — GET /admin/jobs/:id/offers → every technician the job
+   *   has been offered to (latest offer each: live, accepted, declined or
+   *   closed), for the "Offered to" section with a live "offered <relativeTime>"
+   *   label.
    */
   offerJob: (
     jobId: number,
@@ -390,7 +391,14 @@ export type EasyfixerLocationResponse = {
 };
 
 /*
- * One technician this job is currently offered to. `offered_at` is a server
+ * How the backend reads one technician's latest offer against who holds the
+ * job now. Derived server-side (job.listOffers) so the CRM keeps no copy of
+ * the rules or the reason wording.
+ */
+export type OfferOutcome = 'offered' | 'accepted' | 'accepted_released' | 'accepted_reassigned' | 'assigned' | 'rejected' | 'expired' | 'closed';
+
+/*
+ * One technician this job has been offered to. `offered_at` is a server
  * datetime string rendered via relativeTime() as a live "offered N min ago".
  */
 export type JobOffer = {
@@ -401,8 +409,18 @@ export type JobOffer = {
   responded_at?: string | null;
   /** Raw offer_status code: 0 OFFERED · 1 ACCEPTED · 2 REJECTED · 3 EXPIRED. */
   offer_status?: number | null;
-  /** Human-readable offer_status (OFFERED / REJECTED / EXPIRED). */
+  /** Human-readable offer_status (OFFERED / ACCEPTED / REJECTED / EXPIRED). */
   offer_status_label?: string | null;
+  /** Stored reason an EXPIRED offer was closed; null when not recorded. EXPIRED rows only. */
+  closed_reason?: string | null;
+  /** Outcome derived by the backend; absent from a backend that predates it. */
+  outcome?: OfferOutcome | null;
+  /** Status word to show in place of offer_status_label (e.g. ASSIGNED, CLOSED). */
+  outcome_label?: string | null;
+  /** Secondary line under the status word (e.g. why the offer closed). */
+  outcome_detail?: string | null;
+  /** True when outcome_detail was inferred from timing rather than recorded. */
+  outcome_inferred?: boolean;
   /** Reason the technician gave when rejecting (offer_status 2 only). */
   reject_reason?: string | null;
   /** How many times this tech has been (re)offered this job. */
@@ -421,9 +439,9 @@ export type JobOffer = {
 };
 
 /*
- * GET /admin/jobs/:id/offers → the job's offer history: live offers PLUS the
- * technicians who declined (REJECTED) or timed out (EXPIRED). One row per tech
- * (latest offer), ordered live → rejected → expired.
+ * GET /admin/jobs/:id/offers → the job's offer history: one row per technician
+ * (latest offer): the job's holder first, then live → rejected → earlier
+ * ACCEPTED → closed.
  */
 export type JobOffersResponse = {
   items: JobOffer[];

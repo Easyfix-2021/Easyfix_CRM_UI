@@ -6,6 +6,7 @@ import { api } from '@/lib/api';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { relativeTime } from '@/lib/utils';
 import type { JobOffer, JobOffersResponse } from '@/lib/api';
+import { INFERRED_OUTCOME_TITLE, offerStatusLabel, offerStatusTextClass } from './offerOutcome';
 
 /*
  * OfferHoverCard — hovering a job's status chip reveals WHO the job was offered
@@ -127,16 +128,12 @@ export function OfferHoverCard({
                   <div className="min-w-0 flex-1">
                     <div className="truncate font-medium text-ink-900">{o.efr_name}</div>
                     <div className="flex items-center gap-1.5 text-xs">
-                      {o.offer_status_label && (
-                        <span
-                          className={
-                            'font-medium '
-                            + (o.offer_status === 2 ? 'text-urgent-strong'
-                              : o.offer_status === 3 ? 'text-ink-500'
-                                : 'text-warning-strong')
-                          }
-                        >
-                          {o.offer_status_label}
+                      {/* Word + colour shared with Schedule & Assign via
+                          ./offerOutcome, so an ACCEPTED row no longer falls
+                          through to the amber "still pending" colour. */}
+                      {offerStatusLabel(o) && (
+                        <span className={`font-medium ${offerStatusTextClass(o)}`}>
+                          {offerStatusLabel(o)}
                         </span>
                       )}
                       <span className="inline-flex items-center gap-1 text-muted-foreground">
@@ -145,6 +142,11 @@ export function OfferHoverCard({
                         {(o.offer_count ?? 1) > 1 && <span>· ×{o.offer_count}</span>}
                       </span>
                     </div>
+                    {o.outcome_detail && (
+                      <div className="truncate text-xs text-ink-500" title={o.outcome_inferred ? INFERRED_OUTCOME_TITLE : undefined}>
+                        {o.outcome_detail}
+                      </div>
+                    )}
                   </div>
                 </li>
               ))}

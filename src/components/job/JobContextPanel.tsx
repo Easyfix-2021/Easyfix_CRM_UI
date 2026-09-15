@@ -36,7 +36,7 @@
  * reschedule.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   MapPin, Calendar, Loader2, Clock, ChevronDown, Pencil, AlertTriangle,
 } from 'lucide-react';
@@ -171,6 +171,7 @@ export function JobContextPanel({
   defaultDetailsOpen = true,
   remarksReloadKey,
   remarksDefaultOpen = false,
+  remarksRefetchInterval,
   showReschedule = false,
   onReschedule,
   rescheduling = false,
@@ -187,6 +188,9 @@ export function JobContextPanel({
       useFetch, which cache-invalidation alone can't re-run). */
   remarksReloadKey?: number | string;
   remarksDefaultOpen?: boolean;
+  /** Optional silent refresh (ms) of the Remarks thread, in place — no remount,
+      so its collapsed/expanded state survives. Omitted ⇒ no polling. */
+  remarksRefetchInterval?: number;
   /** Schedule & Assign only — renders the Reschedule button + "locked" helper. */
   showReschedule?: boolean;
   onReschedule?: () => void;
@@ -246,6 +250,23 @@ export function JobContextPanel({
   const canEditAddress = !!onAddressSaved && hasAction(me, 'isJobEdit');
   const canEditServices = !!onEditServices && hasAction(me, 'isJobEdit');
   const [addressOpen, setAddressOpen] = useState(false);
+  /*
+   * The host's post-save refresh, captured when the address dialog OPENS. A
+   * host can withdraw onAddressSaved while the dialog is up (Schedule & Assign
+   * does, when a background refresh finds the job is no longer offerable), and
+   * the save must still re-read the job it just changed.
+   */
+  const addressSavedRef = useRef<(() => void) | undefined>(undefined);
+  /*
+   * The details editor stays mounted while it holds UNSAVED text, even after the
+   * host withdraws editing. Swapping it for the read-only block would unmount it
+   * and destroy what the operator typed — which a background refresh can now
+   * trigger with no operator action. Locked, it keeps the text on screen (Save
+   * disabled, Cancel discards) until the draft is clean, then gives way.
+   */
+  const [detailsDirty, setDetailsDirty] = useState(false);
+  useEffect(() => { setDetailsDirty(false); }, [jobId]);
+  const showDetailsEditor = canEditDetails || detailsDirty;
 
   return (
     <>
@@ -309,7 +330,7 @@ export function JobContextPanel({
                     {canEditAddress && (
                       <button
                         type="button"
-                        onClick={() => setAddressOpen(true)}
+                        onClick={() => { addressSavedRef.current = onAddressSaved; setAddressOpen(true); }}
                         className="text-muted-foreground hover:text-primary shrink-0 mt-0.5"
                         title="Edit Address"
                         aria-label="Edit Address"
@@ -351,12 +372,16 @@ export function JobContextPanel({
                 is the technician-facing note ("Anything Handyman should keep
                 in mind?" in the Book-New-Call form) surfaced here as
                 "Additional Comments". */}
-            {canEditDetails && onSaveDetails ? (
+            {showDetailsEditor ? (
               /* ⚠ Rendered OUTSIDE the `job_desc || efr_special_notes` guard
                  below: that guard hides the whole block when both are empty,
                  which would make it impossible to ADD a description to a job
                  that has none — the exact case an operator most needs. */
-              <EditableJobDetails job={job} onSave={onSaveDetails} />
+              <EditableJobDetails
+                job={job}
+                onSave={canEditDetails ? onSaveDetails : undefined}
+                onDirtyChange={setDetailsDirty}
+              />
             ) : (job.job_desc || job.efr_special_notes) && (
               <div className="mt-3 pt-3 border-t grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 text-sm">
                 <ReadField label="Job Description" value={job.job_desc} />
@@ -582,7 +607,12 @@ export function JobContextPanel({
           the choice, not after it. Collapsed by default so a long thread can't
           push the list off-screen; the header carries the count so ops can tell
           at a glance whether it's worth opening. */}
-      <JobRemarksView key={remarksReloadKey} jobId={jobId} collapsible defaultOpen={remarksDefaultOpen} />
+      <JobRemarksView key={remarksReloadKey}
+        jobId={jobId}
+        collapsible
+        defaultOpen={remarksDefaultOpen}
+        refetchInterval={remarksRefetchInterval}
+      />
 
       {/* Mounted only while open so the form re-seeds from the CURRENT job on
           every open — a persistently mounted dialog would keep the draft from
@@ -594,7 +624,7 @@ export function JobContextPanel({
         <JobAddressEditDialog
           job={job as unknown as Parameters<typeof JobAddressEditDialog>[0]['job']}
           onClose={() => setAddressOpen(false)}
-          onSaved={() => { setAddressOpen(false); onAddressSaved?.(); }}
+          onSaved={() => { setAddressOpen(false); addressSavedRef.current?.(); }}
         />
       )}
     </>
@@ -628,9 +658,12 @@ function ReadField({ label, value }: { label: string; value: React.ReactNode }) 
  * which this very panel prints two rows up as "Booked On". Sending an
  * unchanged job_desc alongside a comments edit would silently move it.
  */
-function EditableJobDetails({ job, onSave }: {
+function EditableJobDetails({ job, onSave, onDirtyChange }: {
   job: JobContextData;
-  onSave: (patch: { job_desc?: string; efr_special_notes?: string }) => Promise<void>;
+  /* Absent ⇒ LOCKED: the host withdrew editing while a draft was unsaved. */
+  onSave?: (patch: { job_desc?: string; efr_special_notes?: string }) => Promise<void>;
+  /* Tells the panel whether unsaved text exists, so it keeps this mounted. */
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const storedDesc = job.job_desc ?? '';
   const storedNotes = job.efr_special_notes ?? '';
@@ -646,21 +679,43 @@ function EditableJobDetails({ job, onSave }: {
    */
   const [saved, setSaved] = useState({ desc: storedDesc, notes: storedNotes });
   /*
-   * Re-seed from the STORED values (and on a job swap). A failed save changes
-   * nothing stored, so this does not fire and the operator's text stays on
-   * screen — silently reverting to the old value is what makes a failure look
-   * like a success.
+   * Re-seed from the STORED values when they change — but a field the operator
+   * is editing keeps its draft. A failed save changes nothing stored, so this
+   * does not fire and the operator's text stays on screen — silently reverting
+   * to the old value is what makes a failure look like a success.
+   *
+   * Per field, not all-or-nothing (2026-09-15). Schedule & Assign re-reads the
+   * job in the background, so a stored value can change while someone is
+   * typing: another operator edits Additional Comments, and re-seeding BOTH
+   * fields threw away an unsaved Job Description with no notice. Now a CLEAN
+   * field follows the server, a DIRTY one keeps its text (and stays dirty
+   * against the new baseline, so Save/Cancel still behave), and a job swap
+   * resets both. After a successful save the draft equals the optimistic
+   * baseline, so it is clean and takes the stored value, as before.
    */
+  const latest = useRef({ desc, notes, saved });
+  latest.current = { desc, notes, saved };
+  const seededJobId = useRef(job.job_id);
   useEffect(() => {
+    const { desc: d, notes: n, saved: s } = latest.current;
+    const jobSwapped = seededJobId.current !== job.job_id;
+    seededJobId.current = job.job_id;
+    if (jobSwapped || d === s.desc) setDesc(storedDesc);
+    if (jobSwapped || n === s.notes) setNotes(storedNotes);
     setSaved({ desc: storedDesc, notes: storedNotes });
-    setDesc(storedDesc);
-    setNotes(storedNotes);
   }, [job.job_id, storedDesc, storedNotes]);
 
   const descDirty = desc !== saved.desc;
   const notesDirty = notes !== saved.notes;
+  const locked = !onSave;
+
+  useEffect(() => { onDirtyChange?.(descDirty || notesDirty); }, [descDirty, notesDirty, onDirtyChange]);
+  const onDirtyChangeRef = useRef(onDirtyChange);
+  onDirtyChangeRef.current = onDirtyChange;
+  useEffect(() => () => onDirtyChangeRef.current?.(false), []);
 
   async function save() {
+    if (!onSave) return;
     const patch: { job_desc?: string; efr_special_notes?: string } = {};
     if (descDirty) patch.job_desc = desc.trim();
     if (notesDirty) patch.efr_special_notes = notes.trim();
@@ -702,6 +757,7 @@ function EditableJobDetails({ job, onSave }: {
           onChange={setDesc}
           maxLength={5000}
           disabled={saving}
+          readOnly={locked}
           placeholder="Describe the work to be done…"
         />
         <EditField
@@ -710,12 +766,17 @@ function EditableJobDetails({ job, onSave }: {
           onChange={setNotes}
           maxLength={2000}
           disabled={saving}
+          readOnly={locked}
           placeholder="Anything the technician should keep in mind…"
         />
       </div>
       {(descDirty || notesDirty) && (
         <div className="flex flex-wrap items-center justify-end gap-2">
-          <span className="mr-auto text-xs font-medium text-warning-strong">Unsaved Changes</span>
+          <span className="mr-auto text-xs font-medium text-warning-strong">
+            {locked
+              ? 'This order can no longer be edited here. Your unsaved text is kept so you can copy it; Cancel discards it.'
+              : 'Unsaved Changes'}
+          </span>
           <Button
             type="button"
             variant="outline"
@@ -725,7 +786,7 @@ function EditableJobDetails({ job, onSave }: {
           >
             Cancel
           </Button>
-          <Button type="button" size="sm" disabled={saving} onClick={save}>
+          <Button type="button" size="sm" disabled={saving || locked} onClick={save}>
             {saving ? 'Saving…' : 'Save'}
           </Button>
         </div>
@@ -736,12 +797,14 @@ function EditableJobDetails({ job, onSave }: {
 
 /* Editable twin of <ReadField> — same label typography so the block still
    reads as part of the Job Details grid. */
-function EditField({ label, value, onChange, maxLength, disabled, placeholder }: {
+function EditField({ label, value, onChange, maxLength, disabled, readOnly = false, placeholder }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   maxLength: number;
   disabled: boolean;
+  /* readOnly, not disabled, when locked: disabled text can't be selected to copy. */
+  readOnly?: boolean;
   placeholder: string;
 }) {
   return (
@@ -752,6 +815,7 @@ function EditField({ label, value, onChange, maxLength, disabled, placeholder }:
           value={value}
           onChange={(e) => onChange(e.target.value)}
           disabled={disabled}
+          readOnly={readOnly}
           maxLength={maxLength}
           placeholder={placeholder}
           aria-label={label}

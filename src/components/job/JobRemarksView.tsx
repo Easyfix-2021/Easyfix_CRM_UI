@@ -43,18 +43,26 @@ export function JobRemarksView({
   jobId,
   collapsible = false,
   defaultOpen = true,
+  refetchInterval,
 }: {
   jobId: number | null;
   collapsible?: boolean;
   defaultOpen?: boolean;
+  /*
+   * Optional silent background refresh (ms). A host that stays open for a long
+   * time (Schedule & Assign) passes one so remarks added by someone else appear
+   * in place — unlike bumping a remount key, it keeps the collapsed/expanded
+   * state and never flashes "Loading". Omitted everywhere else: no polling.
+   */
+  refetchInterval?: number;
 }) {
   const { data, loading } = useFetch<JobComment[]>(
     jobId ? `/admin/jobs/${jobId}/comments` : null,
-    { enabled: !!jobId },
+    { enabled: !!jobId, refetchInterval, pauseWhenHidden: true },
   );
   const { data: reqData } = useFetch<CustomerRequest[]>(
     jobId ? `/admin/jobs/${jobId}/customer-requests` : null,
-    { enabled: !!jobId },
+    { enabled: !!jobId, refetchInterval, pauseWhenHidden: true },
   );
   const [bodyOpen, setBodyOpen] = useState(defaultOpen);
   const rows = data ?? [];
