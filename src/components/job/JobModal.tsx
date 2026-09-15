@@ -4,6 +4,7 @@ import * as React from 'react';
 import { useSlotRecommendations, SlotAdvisory } from '@/components/job/SlotRecommendations';
 import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import { useFetch, useUiFlags, invalidateFetch } from '@/lib/hooks';
+import { collectedByCode, collectedByLabel, collectedByDisplay, collectedByText, COLLECTED_BY_JOB_OPTIONS } from '@/lib/collected-by';
 import { Sparkles, Search, CalendarCheck, History, Eye, Plus, X, Pencil, CalendarPlus, CheckCircle2, BarChart3, Trash2, RotateCcw, AlertTriangle, FileText } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -16,12 +17,10 @@ import { SearchMultiSelect } from '@/components/ui/search-multi-select';
 import { Switch } from '@/components/ui/switch';
 import { AddressPickerWithMap, type AddressValue } from '@/components/ui/address-picker-with-map';
 import { AddressEditDialog, type EditableAddress } from './AddressEditDialog';
-import { JobTransactionView } from './JobTransactionView';
 import { SkillImageLightbox, type SkillImageLightboxValue } from '@/components/easyfixer/SkillImageLightbox';
 import { CustomerSubmissionPanel } from './CustomerSubmissionPanel';
 import { AddRemarksDialog } from './AddRemarksDialog';
 import { CancelWithReasonDialog } from './CancelWithReasonDialog';
-import { CheckInWithReasonDialog } from './CheckInWithReasonDialog';
 import { BillingChargesTab } from './BillingChargesTab';
 // Audited reschedule dialog (PATCH /admin/jobs/:id/reschedule → job.reschedule:
 // offer-expiry + scheduling_history). Kept aliased for a descriptive name;
@@ -69,7 +68,7 @@ import { showToast, dismissToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useMe } from '@/lib/auth-context';
-import { actionFlags } from '@/lib/permissions';
+import { actionFlags, hasAction } from '@/lib/permissions';
 import { transitionAllowed } from '@/lib/job-stages';
 import type { JobModalAction } from '@/lib/job-action-url';
 import { candidateJobOfferEligibility } from '@/lib/easyfixer-lifecycle';
@@ -82,7 +81,7 @@ import { parseIstDateTime } from '@/lib/format';
  * model: list-page + modal overlay. A single record type, one form definition,
  * three presentation modes. The form for create/edit shares fields with a
  * read-only card layout for view; view mode also hosts the status-driven action
- * buttons (Assign / Start / Complete / Cancel / Mark InComplete) so the user
+ * buttons (Check In / Reschedule / Cancel / Feedback) so the user
  * can drive the full job lifecycle without leaving the list.
  *
  * Status-code → visible-button map matches jobs/[id]/page.tsx exactly so the
@@ -122,20 +121,7 @@ const canAssign         = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.ENQUIRY, S
  * editing them back to a workable state.
  */
 const isJobClosed = (s: number) => [ST.COMPLETED, ST.COMPLETED_ALT].includes(s as never);
-/*
- * canCheckIn — ops-side check-in (SCHEDULED → IN_PROGRESS).
- *
- * This was removed on 2026-07-28 on the reasoning that only the technician
- * checks in, from the app. That decision was OVERRIDDEN 2026-09-08: ops need a
- * check-in when the technician cannot do it themselves. It is not the plain
- * status PATCH — that writes job_status alone and leaves checkin_date_time
- * (the TAT anchor) null — so the button posts to /admin/jobs/:id/checkin, which
- * writes the check-in columns, and demands a REASON recording why ops checked in
- * rather than the technician.
- */
-const canCheckIn        = (s: number) => s === ST.SCHEDULED;
-const canComplete       = (s: number) => s === ST.IN_PROGRESS;
-const canCancel         = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.IN_PROGRESS, ST.ENQUIRY, ST.REVISIT].includes(s as never);
+const canCancel        = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.IN_PROGRESS, ST.ENQUIRY, ST.REVISIT].includes(s as never);
 // NOTE: Confirm & Schedule for Unconfirmed orders (status 9 → 0) is handled
 // via JobModal's dedicated `'confirm'` mode, launched from the row-level
 // CalendarCheck icon — no predicate needed here.
@@ -144,7 +130,7 @@ const canCancel         = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.IN_PROGRES
  * Modes:
  *   create  — blank form, POST /admin/jobs
  *   edit    — prefilled form, PATCH /admin/jobs/:id (scalar fields only)
- *   view    — read-only + ActionBar (Edit / Assign / Start / Complete / etc.)
+ *   view    — read-only + ActionBar (Reschedule / Feedback / etc.)
  *   confirm — prefilled edit form WITH services basket and a "Confirm &
  *             Schedule" footer that saves then promotes status 9 → 0. This is
  *             the replacement for the legacy `addEditJob?loc=home → Book Call`
@@ -154,7 +140,9 @@ const canCancel         = (s: number) => [ST.BOOKED, ST.SCHEDULED, ST.IN_PROGRES
  * `checkin` and `audit` are the VIEW workspace under a different name — same
  * body, tabs and footer. They exist so the entry point that opened the modal
  * reads on the title, while the generic viewer opened from a list stays neutral:
- *   checkin — Pending-to-Start ("Checkin · Job #N", no status/type sub-line).
+ *   checkin — "Checkin · Job #N", no status/type sub-line. Nothing opens it
+ *             since the CRM Check In went (2026-09-11); kept so old links
+ *             still open the job.
  *   audit   — Audit & Complete ("Audit · Job #N"), pushed with ?viewTab=billing
  *             so it lands on Billing & Charges where the audit actions live.
  * Everything downstream keys off `effectiveMode`, which folds BOTH → view.
@@ -185,19 +173,19 @@ type Job = Record<string, unknown> & {
 };
 
 export function JobModal({
-  open, onClose, mode: initialMode, jobId, onSaved, initialTab, siblings,
+  open, onClose, mode: initialMode, jobId, onSaved, initialTab,
 }: {
   open: boolean;
   onClose: () => void;
   mode: JobModalMode;
   jobId?: number;
   /*
-   * Optional sibling "family" for the Unconfirmed grouped view: all the jobs
-   * sharing one client_ref_id (a multi-category booking). When provided (and
-   * >1, and the currently-open job is among them), the status-9 read view
-   * renders a tab per category — each tab reusing JobTransactionView for that
-   * sibling — instead of a single job. Transient (not URL-backed): a fresh
-   * deep-link without it simply shows the single job.
+   * IGNORED — kept only because /jobs and /my-orders still pass it. It fed the
+   * Unconfirmed "family" view (a tab per sibling category, each a
+   * JobTransactionView). That view was retired twice over: the list stopped
+   * computing families on 2026-08-11 (no caller has passed a value since), and
+   * on 2026-09-11 status 9 moved onto the same ViewBody as every other status,
+   * so there is no per-status layout left for a family to switch between.
    */
   siblings?: Array<{ job_id: number; service_category: string | null }>;
   /* Called after any successful save. On a CREATE (Book New Call) the newly
@@ -312,10 +300,10 @@ export function JobModal({
   // Add-Remarks popup for the Unconfirmed view-mode footer. Lives at
   // the modal root so it can dismiss without unmounting JobForm/View.
   const [addRemarksOpen, setAddRemarksOpen] = useState(false);
-  // Bumped by every AddRemarksDialog save — drives JobCommentsTab's refetch
-  // so the just-added remark shows up immediately without manual refresh.
-  // (The Comments tab maintains its own list state and isn't re-mounted on
-  // refresh(), so a separate trigger is needed.)
+  // Bumped by refresh() — and ONLY there — so every mounted reader of the
+  // job's comment thread, and Scheduling History, refetches after any action.
+  // Those readers keep their own useFetch state and are not re-mounted by
+  // refresh(), so the new job payload alone never reaches them.
   const [commentsRefreshKey, setCommentsRefreshKey] = useState(0);
   /*
    * Optimistic pending-comment list (2026-06-05).
@@ -433,6 +421,34 @@ export function JobModal({
     // Resolved id, not the raw prop — otherwise a post-create refresh silently
     // no-ops and the modal keeps showing pre-save values.
     if (!resolvedJobId) return;
+    /*
+     * The comment thread refreshes HERE, for every caller, not per button
+     * (2026-09-11). The actions routed through refresh() write tbl_job_comment
+     * rows server-side — cancel, reschedule, check-in, a remark — but its
+     * readers are mounted useFetch hooks that this job GET never touches, and
+     * invalidateFetch() does not re-run a mounted useFetch. The per-button
+     * version (cancel only, ffa7247) left a reschedule's row missing from the
+     * Rescheduling History on screen beside the button that wrote it.
+     *
+     * Evict first, for a reader mounted AFTER this (a tab switched to, a
+     * confirm → view downgrade) that would otherwise get the 30s-cached
+     * pre-action list; then bump the key the MOUNTED readers refetch on
+     * (JobCommentsTab, JobRescheduleHistory). JobRemarksView, the third
+     * reader, lives in JobForm, and nothing calls refresh() while JobForm is
+     * up — the eviction covers its next mount.
+     */
+    invalidateFetch((k) => k.startsWith(`/admin/jobs/${resolvedJobId}/comments`));
+    /*
+     * Two more readers of what these actions write, evicted on the same terms.
+     * Scheduling History (Schedule tab) reads scheduling_history, which a
+     * reschedule appends to; mounted, it refetches on the key below.
+     * Schedule & Assign's Top-10 is ranked on open, but useFetch hands a reopen
+     * within 30s the ranking it cached last time — so a services / address /
+     * reschedule edit made here, then S&A reopened, showed the pre-edit ranking.
+     */
+    invalidateFetch((k) => k === `/admin/reports/job-tracking?jobId=${resolvedJobId}`
+      || k.startsWith(`/admin/jobs/${resolvedJobId}/candidates`));
+    setCommentsRefreshKey((k) => k + 1);
     try { setJob(await api.get<Job>(`/admin/jobs/${resolvedJobId}`, fetchQuery)); }
     catch { /* swallow — outer error state is set by action handlers */ }
   }
@@ -561,10 +577,13 @@ export function JobModal({
           )}
           {error && !job && <div className="text-sm text-destructive">{error}</div>}
           {!loading && effectiveMode === 'view' && job && (
-            // Unconfirmed (status=9) gets the legacy "Job Transaction"
-            // single-page read-only layout — no tabs, no edits. Every
-            // other status keeps the tabbed Summary/Services/Schedule/
-            // Images/etc. view that ops uses for active jobs.
+            // ONE body for every status, Unconfirmed (9) included (2026-09-11,
+            // per ops: "the tab and single-page modal like we have at all
+            // places"). Status 9 used to get JobTransactionView, a separate
+            // read-only replica of the legacy "Job Transaction" page — a second
+            // layout whose Remarks table never saw an Add Remarks save. Its
+            // status-specific footer (Add Remarks) is unaffected: it keys off
+            // job_status below, not off which body is showing.
             <>
               {/* A `?action=confirm` deep-link to a non-Unconfirmed job was
                   downgraded to read-only — tell the operator why so it isn't
@@ -574,20 +593,16 @@ export function JobModal({
                   This order isn’t Unconfirmed, so Confirm &amp; Schedule isn’t available — opened in read-only view.
                 </div>
               )}
-              {Number(job.job_status) === 9
-                ? (siblings && siblings.length > 1 && siblings.some((s) => Number(s.job_id) === Number(job.job_id))
-                    ? <SiblingCategoryTabs siblings={siblings} />
-                    : <JobTransactionView jobId={Number(job.job_id)} />)
-                : <ViewBody
-                    job={job}
-                    onRefresh={refresh}
-                    initialTab={initialTab}
-                    onDirtyChange={(dirty) => { hasUnsavedQtyRef.current = dirty; }}
-                    commentsRefreshKey={commentsRefreshKey}
-                    pendingComments={pendingComments}
-                    onCommentsLoaded={() => setPendingComments([])}
-                    onEditDescription={() => setDescOpen(true)}
-                  />}
+              <ViewBody
+                job={job}
+                onRefresh={refresh}
+                initialTab={initialTab}
+                onDirtyChange={(dirty) => { hasUnsavedQtyRef.current = dirty; }}
+                commentsRefreshKey={commentsRefreshKey}
+                pendingComments={pendingComments}
+                onCommentsLoaded={() => setPendingComments([])}
+                onEditDescription={() => setDescOpen(true)}
+              />
             </>
           )}
           {/* Mobile-first gate for the CREATE flow. Mirrors legacy
@@ -679,7 +694,7 @@ export function JobModal({
            *
            * Every ACTION now sits in one right-aligned cluster in a fixed
            * reading order — Cancel first, the status-aware lifecycle buttons
-           * (Reschedule / Complete / Mark InComplete / Feedback) next, Close
+           * (Reschedule / Check In / Feedback) next, Close
            * last — so the eye lands on the same place in every job modal
            * instead of tracking a button that moves with the status. Only
            * Add Remarks stays left, matching Schedule & Assign and Reassign.
@@ -787,11 +802,12 @@ export function JobModal({
             setPendingComments((prev) => prev.filter((c) => c.id !== tempId));
           }}
           onSaved={() => {
-            // POST succeeded — bump refresh key so JobCommentsTab refetches
-            // and the canonical row replaces the pending one. (Pending
-            // cleanup happens via onCommentsLoaded after refetch finishes.)
-            setCommentsRefreshKey((k) => k + 1);
-            onSaved?.();
+            // POST succeeded — the shared refresh() refetches the comment
+            // readers, and the canonical row replaces the pending one (pending
+            // cleanup happens via onCommentsLoaded after that refetch). The job
+            // re-pull is not wasted: addComment mirrors the remark onto
+            // tbl_job.remarks.
+            refresh(); onSaved?.();
           }}
         />
       )}
@@ -807,17 +823,8 @@ export function JobModal({
             status: ST.CANCELLED, reasonId, comment,
           });
           showToast({ variant: 'success', message: 'Job Cancelled' });
-          /*
-           * The BE writes the cancel remark as a tbl_job_comment row, but the
-           * Comments tab is not remounted by refresh() — it kept showing the
-           * pre-cancel list, which read as "the remark was never saved" (0 of
-           * 8 Prod cancels on 2026-09-11 were followed by a comments re-read).
-           * Evict first, for a tab mounted AFTER this (confirm → view
-           * downgrade) that would otherwise hit the 30s cache; then bump the
-           * key the mounted tab refetches on, the same one Add Remarks uses.
-           */
-          invalidateFetch((k) => k.startsWith(`/admin/jobs/${resolvedJobId}/comments`));
-          setCommentsRefreshKey((k) => k + 1);
+          // The cancel remark is a tbl_job_comment row; refresh() re-reads the
+          // comment thread along with the job (see there).
           setCancelOpen(false); refresh(); onSaved?.();
         }}
       />
@@ -833,89 +840,12 @@ export function JobModal({
   );
 }
 
-// ─── Action bar (status-driven buttons with per-button loaders) ──────────────
-
-type BusyKey = 'start' | 'complete' | 'cancel' | 'incomplete' | 'assign' | 'owner' | 'confirm' | null;
-
-/*
- * collectedByCode — coerce the form's `collected_by` field (a
- * human-readable label like "Easyfix" / "Easyfixer" / "Client", per
- * the legacy default at line 5610) into the integer enum tbl_job
- * expects. Returns `undefined` for unknown values so the BE falls
- * back to whatever default it prefers.
- *
- *   1 = Easyfixer (technician collects)
- *   2 = Easyfix   (operator/CRM collects)
- *   3 = Client    (client collects)
- */
-function collectedByCode(label: unknown): number | undefined {
-  if (label == null || label === '') return undefined;
-  if (typeof label === 'number') return label;
-  const s = String(label).trim().toLowerCase();
-  if (s === 'easyfixer') return 1;
-  if (s === 'easyfix')   return 2;
-  if (s === 'client')    return 3;
-  // Allow numeric strings too (e.g. "2") for forward-compat.
-  const n = Number(s);
-  return Number.isFinite(n) ? n : undefined;
-}
-
-/*
- * collectedByLabel — inverse of collectedByCode. tbl_job stores the enum as an
- * INTEGER (1/2/3), but the Collected By <SearchSelect> options are the string
- * labels. On reload we must map the stored integer back to its label, else the
- * dropdown value matches no option and renders blank — the "Collected By not
- * saved" symptom. Tolerant of already-label values (legacy rows). Returns
- * undefined for unknown so the caller can apply its default.
- */
-function collectedByLabel(code: unknown): string | undefined {
-  if (code == null || code === '') return undefined;
-  const s = String(code).trim().toLowerCase();
-  if (s === '1' || s === 'easyfixer') return 'Easyfixer';
-  if (s === '2' || s === 'easyfix')   return 'Easyfix';
-  if (s === '3' || s === 'client')    return 'Client';
-  return undefined;
-}
-
-/*
- * Customer-facing wording for Collected By. The stored enum and the wire
- * vocabulary are UNCHANGED — 'Easyfixer'/'Easyfix' remain the option values and
- * the BE's /collected-by-preference still answers with them (routes/admin/
- * clients.js COLLECTED_BY_MAP). Only the words ops read change, from "who
- * physically collects" to "who bears the cost", which is the same fact:
- *   1 Easyfixer → the technician takes payment on site → Paid By Customer
- *   2 Easyfix   → Easyfix invoices the client          → Free For Customer
- * Keeping value≠label is deliberate: relabelling the VALUES would silently
- * reinterpret 82k jobs already storing 1 and break collectedByCode()'s mapping.
- *
- * 3 (Client) is intentionally NOT offered per job — ops set it on the client
- * profile, and production has 13 such jobs. Any unmapped value falls through
- * verbatim so a legacy 'Client' row still renders its own name rather than blank.
- */
-const COLLECTED_BY_CUSTOMER_LABEL: Record<string, string> = {
-  Easyfixer: 'Paid By Customer',
-  Easyfix:   'Free For Customer',
-};
-function collectedByDisplay(v: unknown): string {
-  const s = String(v ?? '').trim();
-  return COLLECTED_BY_CUSTOMER_LABEL[s] ?? s;
-}
-
-/*
- * The two options the booking flow offers when the client profile says "Any"
- * (tbl_client.collected_by = 0). Ops MUST pick one — leaving it unset is what
- * wrote 0 to tbl_job and blocked those jobs from checking out.
- */
-const COLLECTED_BY_JOB_OPTIONS = [
-  { value: 'Easyfix',   label: 'Free For Customer' },
-  { value: 'Easyfixer', label: 'Paid By Customer' },
-];
+// ─── Action bar (status-driven buttons) ──────────────────────────────────────
 
 function ActionBar({ job, jobId, onChanged }: {
   job: Job; jobId: number; onChanged: () => void;
 }) {
   const s = Number(job.job_status);
-  const [busy, setBusy] = useState<BusyKey>(null);
   const [assignOpen, setAssignOpen] = useState(false);
   const [autoAssignOpen, setAutoAssignOpen] = useState(false);
   const [ownerOpen, setOwnerOpen] = useState(false);
@@ -927,20 +857,17 @@ function ActionBar({ job, jobId, onChanged }: {
   //  far-left Cancel button drive those now.)
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
-  // Ops-side check-in (SCHEDULED → In Progress) — see canCheckIn above.
-  const [checkinOpen, setCheckinOpen] = useState(false);
 
   // Modal-internal permission gates. Each button maps to a legacy
   // Constants.actionPermissions key so the seeded role_menu_action rows
   // for the Admin role govern visibility. Status guards (canAssign,
-  // canComplete, etc.) AND the permission flag must both be true for the
+  // etc.) AND the permission flag must both be true for the
   // button to render. (isJobCancel now gates the lifted footer Cancel.)
   const { me } = useMe();
   const can = actionFlags(me, [
     'isJobEdit',          // Change Owner + Reschedule + Description pencil + Feedback
     'isJobAssign',        // Auto-assign + Manual pick (initial)
     'isJobReassign',      // Auto-reassign + Manual pick (when already assigned)
-    'isJobStatusChange',  // Complete + Mark Incomplete
   ]);
   const isReassign = !!job.fk_easyfixter_id;
   const canPickTech = isReassign ? can.isJobReassign : can.isJobAssign;
@@ -949,19 +876,13 @@ function ActionBar({ job, jobId, onChanged }: {
   // Gated off (not deleted) so the dialogs below stay wired for a quick revert.
   const LEGACY_ASSIGN_BUTTONS = false;
 
-  async function doStatus(key: BusyKey, status: number, reasonId?: number, comment?: string) {
-    setBusy(key);
-    try { await api.patch(`/admin/jobs/${jobId}/status`, { status, reasonId, comment }); onChanged(); }
-    finally { setBusy(null); }
-  }
-
   return (
     <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
       {/* Outbound calling is consolidated onto the customer mobile cell
           itself across the CRM (see <CallableMobile> in
           src/components/calls/CallButton.tsx). The action bar deliberately
           carries no Call button — keeps the lifecycle controls
-          (Assign / Change Owner / Complete) visually distinct from the
+          (Reschedule / Feedback) visually distinct from the
           contact-the-customer action. */}
       {/* Confirm & Schedule for Unconfirmed orders is exposed as a dedicated
           modal mode launched from the list row (purple CalendarCheck icon),
@@ -1009,31 +930,15 @@ function ActionBar({ job, jobId, onChanged }: {
           before the work is done, which legacy operators flagged as
           mistake-prone. */}
       {can.isJobEdit && (isJobClosed(s) || s === ST.CANCELLED) && <Button size="sm" variant="outline" onClick={() => setFeedbackOpen(true)}>Feedback</Button>}
-      {/* Check In (SCHEDULED → In Progress). Restored 2026-09-08, replacing the
-          2026-07-28 "Start button removed — check-in is done by the technician
-          from the app" decision, which the owner has overridden: ops need a
-          check-in for the calls where the technician can't do it themselves.
-          Unlike the retired Start, it does NOT go through the status PATCH —
-          POST /admin/jobs/:id/checkin writes checkin_date_time (the TAT anchor)
-          as well as the status, and requires a reason. Gated exactly like every
-          other lifecycle button here: status predicate + permission + Job Stage
-          Access. */}
-      {canCheckIn(s) && can.isJobStatusChange && transitionAllowed(me?.allowedStages, s, ST.IN_PROGRESS) && (
-        <Button size="sm" variant="outline" onClick={() => setCheckinOpen(true)}>Check In</Button>
-      )}
-      {/* Complete (In Progress → Completed) and Mark InComplete (Completed →
-          Revisit) are stage transitions — gate by Job Stage Access too, so a
-          stage-restricted user only sees the moves their stages permit. */}
       {/*
-        * CHECK OUT, not Complete — and it sends ST.REVISIT (10 = Under Audit),
-        * not ST.COMPLETED (3). canComplete(s) is s === IN_PROGRESS, and
-        * pending-close's only forward target is 10; 3 is reached FROM 10 by the
-        * audit step, never directly from 2. The old wiring skipped Under Audit
-        * silently for every unrestricted operator. The label changed with the
-        * target: a button that says "Complete" and lands the job in an audit
-        * queue is the kind of mismatch nobody reports as a bug.
+        * NO CRM CHECK IN OR CHECK OUT (2026-09-11, per ops). The technician
+        * checks in and out FROM THE APP. Check Out (2/20 → 10 Under Audit) had
+        * this button and ✓ row actions on Manage Jobs and My Orders; Check In
+        * (1 → 2, POST /admin/jobs/:id/checkin) had this button, row icons on
+        * both pages and Pending to Start's PlayCircle. All are gone, and
+        * tests/no-crm-checkout.test.js + tests/no-crm-checkin.test.js keep them
+        * from coming back.
         */}
-      {canComplete(s)       && can.isJobStatusChange && transitionAllowed(me?.allowedStages, s, ST.REVISIT) && <LoadBtn size="sm" variant="outline" loading={busy === 'complete'}   onClick={() => doStatus('complete', ST.REVISIT)}>Check Out</LoadBtn>}
       {/* Cancel lifted to the footer's far-left zone (2026-07-28). */}
       {/*
         * "MARK INCOMPLETE" REMOVED (2026-09-10) — it had no legal target left.
@@ -1054,8 +959,8 @@ function ActionBar({ job, jobId, onChanged }: {
         * the completed (or pending-feedback) stage a real target in
         * lib/job-stages.js and let it mirror to src/lib/job-stages.ts — NOT to
         * reinstate a button that routes around the table.
-        * tests/job-status-actions.test.js pins every remaining action against
-        * that table.
+        * tests/job-status-actions.test.js finds every PATCH to
+        * /admin/jobs/:id/status in src/ and checks it against that table.
         */}
 
       <AssignDialog
@@ -1098,51 +1003,11 @@ function ActionBar({ job, jobId, onChanged }: {
         jobId={jobId}
         onSaved={() => { setFeedbackOpen(false); onChanged(); }}
       />
-      {/* Ops-side check-in. POST /admin/jobs/:id/checkin writes the check-in
-          COLUMNS (checkin_date_time — the TAT anchor) alongside the status, so
-          it deliberately does NOT reuse doStatus()'s PATCH /status. 409 comes
-          back when no technician is assigned or the job has left status 1; the
-          dialog surfaces the backend's own message rather than guessing. */}
-      <CheckInWithReasonDialog
-        open={checkinOpen} onClose={() => setCheckinOpen(false)}
-        jobId={jobId}
-        onDone={() => { setCheckinOpen(false); onChanged(); }}
-      />
     </div>
   );
 }
 
 // ─── View body (tabbed read-only display) ────────────────────────────────────
-
-/*
- * Unconfirmed grouped view — one tab per service category for a multi-category
- * booking (sibling jobs sharing one client_ref_id). Each tab reuses
- * JobTransactionView for that sibling job. Radix Tabs unmounts the inactive
- * TabsContent, so each sibling's GET /admin/jobs/:id/transaction is lazy (only
- * the active tab fetches) — no new endpoint, no eager fan-out of requests.
- */
-function SiblingCategoryTabs({ siblings }: { siblings: Array<{ job_id: number; service_category: string | null }> }) {
-  const tabs = React.useMemo(() => {
-    const seen = new Set<number>();
-    return siblings.filter((s) => (seen.has(s.job_id) ? false : (seen.add(s.job_id), true)));
-  }, [siblings]);
-  return (
-    <Tabs defaultValue={String(tabs[0]?.job_id ?? '')}>
-      <TabsList className="flex flex-wrap h-auto">
-        {tabs.map((s, i) => (
-          <TabsTrigger key={s.job_id} value={String(s.job_id)}>
-            {s.service_category || `Service ${i + 1}`}
-          </TabsTrigger>
-        ))}
-      </TabsList>
-      {tabs.map((s) => (
-        <TabsContent key={s.job_id} value={String(s.job_id)} className="mt-3">
-          <JobTransactionView jobId={s.job_id} />
-        </TabsContent>
-      ))}
-    </Tabs>
-  );
-}
 
 /*
  * LAYOUT TOGGLE (2026-09-09, ops request) — "Tabs" or "Single Page".
@@ -1448,6 +1313,9 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
                 />
               : (job.easyfixer_mobile as string | null)],
             ['Helper Req', job.helper_req ? 'Yes' : 'No'],
+            // No Material Required row: nothing stores material_req (tbl_job has
+            // no such column; the Book / Confirm toggle is stripped by the backend
+            // validator), so it could only ever render '—'.
             // Technician-facing notes captured at booking (efr_special_notes).
             ['Handyman Notes', String(job.efr_special_notes ?? '') || '—'],
             /*
@@ -1483,6 +1351,18 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
             ['Job ID', job.job_id],
             ['Reference', job.job_reference_id],
             /*
+             * Collected By (2026-09-11) — tbl_job.collected_by, already on this
+             * payload via getByIdCore's `j.*`. It is the stored INTEGER (1/2/3),
+             * so it goes through collectedByText, not collectedByDisplay: the
+             * latter maps the form's LABELS and would print a bare "1". Unset
+             * (0 / null) comes back undefined → DlCard's em dash.
+             */
+            ['Collected By', collectedByText(job.collected_by)],
+            // Booking Date Time — the ticket instant Age below is measured from.
+            // Created On (Audit & History) is created_date_time, a different
+            // column; legacy's screen used that one, hence the fallback.
+            ['Booking Date Time', formatDate((job.ticket_created_date_time ?? job.created_date_time) as string)],
+            /*
              * Age — the same server-computed reading the job LISTS show, so a
              * row and its detail can never disagree. Measured ticket-created →
              * terminal event (checkout / cancel / enquiry), or → now while the
@@ -1494,6 +1374,12 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
             ['Appointment', formatDate(job.requested_date_time as string)],
             ['Source', job.source_type],
             ['Owner', job.owner_name],
+            /*
+             * Open Job Reason — enquiry_reason_id, decoded by getByIdCore against
+             * action_taken_reason (enquiry_reason_name). The retired replica decoded
+             * it against tbl_enum_reason, which left ~2 in 3 of QA's enquiry jobs blank.
+             */
+            ['Open Job Reason', job.enquiry_reason_name],
             // Description carries an inline pencil (gated on isJobEdit) that
             // opens the same ChangeDescriptionDialog the old footer "Edit
             // Description" button used — now hosted at the modal root.
@@ -1513,6 +1399,9 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
                 )}
               </span>
             )],
+            ['Total No. of Products', totalProducts(job.services)],
+            // exp_tat is a varchar of hours; '' and NULL are both "not set".
+            ['Job Completion TAT', job.exp_tat ? `${String(job.exp_tat)} hrs` : null],
             // Additional Comments / technician-facing notes (efr_special_notes) —
             // captured on booking (Client Dashboard "Notes for technician") but
             // previously never rendered in the read view.
@@ -1537,8 +1426,26 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
             ['Rejected On', formatDate((job as Record<string, unknown>).approval_reject_date_time as string)],
             ['Last Updated', formatDate((job as Record<string, unknown>).last_update_time as string)],
           ]}/>
+          {/* Custom Properties — in the Confirm form's Client Details order:
+              the canonical trio, then the rest. The trio never lands in
+              tbl_job.custom_property — Branch Details is its own column
+              (createJob hoists it out of client-app strings too), the other
+              two ride in remarks and getByIdCore decodes them back — so
+              `custom_properties` alone misses them. Legacy Java left the
+              literal '(NULL)' in branch_details (~1 in 6 set values on QA);
+              unset, as parseCustomPropertyString treats it. Sits beside
+              Audit & History, whose row otherwise ends in empty cells. */}
+          <DlCard title="Custom Properties" rows={[
+            ...([
+              ['Branch Details', job.branch_details],
+              ['Property / Building Name', job.building_name],
+              ['Product Code', job.product_code],
+            ] as [string, unknown][]).filter(([, v]) => !['', 'null', '(null)'].includes(String(v ?? '').trim().toLowerCase())),
+            ...(Array.isArray(job.custom_properties) ? job.custom_properties as Array<{ label?: string; name?: string; value?: unknown }> : [])
+              .map((p): [string, unknown] => [String(p.label || p.name), p.value]),
+          ]}/>
         </div>
-        <JobRescheduleHistory jobId={Number(job.job_id)} />
+        <JobRescheduleHistory jobId={Number(job.job_id)} refreshKey={commentsRefreshKey} />
         <JobCallHistory jobId={Number(job.job_id)} />
       </Panel>
 
@@ -1562,6 +1469,9 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
           */}
         <div className="flex flex-wrap gap-5 [&>*]:flex-1 [&>*]:basis-[380px]">
           <DlCard title="Timeline" rows={[
+            // The first promise, snapshotted at create / Confirm & Schedule. Differs
+            // from Requested once a reschedule (or the after-3pm auto-shift) moves it.
+            ['Original Appointment', formatDate(job.original_appointment_date_time as string)],
             ['Requested', formatDate(job.requested_date_time as string)],
             ['Scheduled', formatDate(job.scheduled_date_time as string)],
             /*
@@ -1586,7 +1496,7 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
           />
         </div>
         {/* Histories stay full width — they are 4-column tables. */}
-        <JobSchedulingHistory jobId={Number(job.job_id)} />
+        <JobSchedulingHistory jobId={Number(job.job_id)} refreshKey={commentsRefreshKey} />
       </Panel>
 
       {/*
@@ -1612,6 +1522,14 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
          * (CALL_LATER, REVISIT) keep the X — operators may still need
          * to clean up wrong attachments during confirmation/revisit.
          */}
+        {/* After-work photo (2026-09-11): every close now needs one, so ops can
+            supply the proof. Its own RBAC key (fail closed); never on a
+            Cancelled job, which will not be closed. */}
+        {hasAction(me, 'isJobAfterPhotoUpload') && Number(job.job_status) !== 6 && (
+          <div className="flex justify-end mb-3">
+            <AddAfterWorkPhotoButton jobId={Number(job.job_id)} onUploaded={onRefresh} />
+          </div>
+        )}
         <JobImagesTab
           images={images}
           onChanged={[3, 5, 6, 7].includes(Number(job.job_status)) ? undefined : onRefresh}
@@ -1636,10 +1554,10 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
           pendingComments={pendingComments}
           onLoaded={onCommentsLoaded}
         />
-        {/* commentsRefreshKey is bumped by the JobModal-level AddRemarksDialog
-            onSaved (see ~line 514); prop-drilled through ViewBody so the
-            Comments tab refetches the moment a remark lands, without
-            needing to be re-mounted. `pendingComments` carries the optimistic
+        {/* commentsRefreshKey is bumped by JobModal's refresh(), which every
+            action (Add Remarks included) goes through; prop-drilled through
+            ViewBody so the Comments tab refetches the moment a remark lands,
+            without needing to be re-mounted. `pendingComments` carries the optimistic
             row the dialog stamps on Save-click (~line 524) so it renders
             instantly at the top of the list with a "Sending…" pill — once
             the refetch completes, `onCommentsLoaded` fires and the parent
@@ -1783,8 +1701,8 @@ function DlRow({ label, value }: { label: string; value: unknown }) {
  * post-creation edits. PATCH body shape matches the existing
  * address-edit branch in services/job.service.js#update.
  *
- * Exported so JobTransactionView (the Unconfirmed-job single-page
- * view) can reuse it without duplicating the picker + submit logic.
+ * Exported so JobContextPanel can reuse it without duplicating the
+ * picker + submit logic.
  */
 export function JobAddressEditDialog({ job, onClose, onSaved }: {
   job: Job; onClose: () => void; onSaved: () => void;
@@ -2080,7 +1998,7 @@ function JobCustomerRequests({ jobId, jobStatus, onJobChanged }: { jobId: number
  * commentary; this is the record. Both are worth having, and neither is derivable
  * from the other — a reschedule with no comment appears only here.
  */
-function JobSchedulingHistory({ jobId }: { jobId: number }) {
+function JobSchedulingHistory({ jobId, refreshKey = 0 }: { jobId: number; refreshKey?: number }) {
   type ScheduleRow = {
     id: number;
     easyfixer_id: number | null;
@@ -2090,15 +2008,38 @@ function JobSchedulingHistory({ jobId }: { jobId: number }) {
     reschedule_reason: string | null;
   };
   // Shared hook per the repo's fetch rules — never a raw useEffect + api.get.
-  const { data, loading, error } = useFetch<ScheduleRow[]>(`/admin/reports/job-tracking?jobId=${jobId}`);
+  const { data, loading, error, refetch } = useFetch<ScheduleRow[]>(`/admin/reports/job-tracking?jobId=${jobId}`);
+  /*
+   * Same trigger as JobRescheduleHistory: a reschedule from the footer appends
+   * the row this table lists while the Schedule tab (or Single Page) shows it,
+   * and a mounted useFetch only re-reads when told. Skips mount — that is the
+   * hook's own fetch.
+   */
+  const seenRefreshKey = useRef(refreshKey);
+  useEffect(() => {
+    if (seenRefreshKey.current === refreshKey) return;
+    seenRefreshKey.current = refreshKey;
+    refetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey]);
   const rows = useMemo(() => (Array.isArray(data) ? data : []), [data]);
+  // "Rescheduled N times" — the rows below that carry a reason chip; same
+  // predicate, so the count and the table cannot disagree.
+  const rescheduled = rows.filter((h) => h.reschedule_reason).length;
 
   // Hidden on failure rather than shown broken, matching JobCallHistory: this is
   // supporting history, and an error card on a read-only tab helps nobody.
   if (error) return null;
   return (
     <div className="mt-5">
-      <div className="font-medium text-sm mb-1">Scheduling History</div>
+      <div className="font-medium text-sm mb-1">
+        Scheduling History
+        {!loading && (
+          <span className="ml-2 text-xs font-normal text-muted-foreground">
+            Rescheduled {rescheduled} {rescheduled === 1 ? 'time' : 'times'}
+          </span>
+        )}
+      </div>
       {loading && rows.length === 0 ? (
         <div className="text-xs text-muted-foreground rounded border border-dashed px-3 py-2">
           Loading…
@@ -2151,7 +2092,7 @@ function JobSchedulingHistory({ jobId }: { jobId: number }) {
   );
 }
 
-function JobRescheduleHistory({ jobId }: { jobId: number }) {
+function JobRescheduleHistory({ jobId, refreshKey = 0 }: { jobId: number; refreshKey?: number }) {
   /*
    * Uses the SHARED JobComment from ./jobTypes — which is the entire reason
    * that file exists ("so components can reference the SAME JobComment shape
@@ -2171,7 +2112,22 @@ function JobRescheduleHistory({ jobId }: { jobId: number }) {
    * declared OPTIONAL, so `undefined` was a valid value. A hand-rolled optional
    * field is an assertion that the API sends it — tsc will believe you.
    */
-  const { data } = useFetch<JobComment[] | { items?: JobComment[] }>(`/admin/jobs/${jobId}/comments`);
+  const { data, refetch } = useFetch<JobComment[] | { items?: JobComment[] }>(`/admin/jobs/${jobId}/comments`);
+  /*
+   * Same trigger as JobCommentsTab (see there), for the same thread. This card
+   * sits on Summary — the default tab — so it is ON SCREEN when the footer's
+   * Reschedule writes the appointment_on row it lists, and a mounted useFetch
+   * only re-reads when told. Skips its first run: mount is the hook's own key.
+   * refetch() keeps the old rows up while it loads, where a key-bump remount
+   * would flash "No reschedules recorded." first.
+   */
+  const seenRefreshKey = useRef(refreshKey);
+  useEffect(() => {
+    if (seenRefreshKey.current === refreshKey) return;
+    seenRefreshKey.current = refreshKey;
+    refetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey]);
   const rows: JobComment[] = useMemo(() => {
     const arr = Array.isArray(data) ? data : (data?.items ?? []);
     return arr.filter((r) => r.appointment_on);
@@ -2503,7 +2459,14 @@ function invalidateBreakdownCache(jobId: number) {
   SERVICE_BREAKDOWN_CACHE.delete(jobId);
 }
 
-function ServicesTabBody({ job, onMutated, onDirtyChange }: { job: Job; onMutated?: () => void; onDirtyChange?: (dirty: boolean) => void }) {
+/*
+ * Exported for Schedule & Assign's Edit Services dialog, which hosts THIS
+ * component rather than a copy, so both surfaces edit services under the same
+ * gates. Every write here — add, quantity, remove, restore — ends in
+ * onMutated(); that callback is the host's only signal that the services
+ * (and so the technician ranking) changed.
+ */
+export function ServicesTabBody({ job, onMutated, onDirtyChange }: { job: Job; onMutated?: () => void; onDirtyChange?: (dirty: boolean) => void }) {
   const services = Array.isArray(job.services) ? job.services : [];
   // Active vs. inactive split — operators get a "Show Inactive" toggle
   // so the soft-deleted rows can be inspected (and restored when we
@@ -3659,13 +3622,54 @@ const COMMENT_STAGE_LABEL: Record<number, string> = {
   4: 'In Progress',
 };
 
+/*
+ * The remarks table is the legacy CRM's (EasyFix_CRM jobCommentList.vm), and
+ * the GET rows carry its three derived columns (services/job-comment.service.js
+ * shapeRow, 2026-09-11). They are OPTIONAL here on purpose: a backend older
+ * than that sends none of them, and every cell below falls back to today's
+ * fields rather than going blank — the same reason a pending row can omit them.
+ */
+type RemarkRow = JobComment & {
+  remarks_for?: string | null;
+  accountable?: string | null;
+  remark_by?: string | null;
+  _pending?: true;
+};
+
+// Legacy "Remarks For" by comment_on (jobCommentList.vm:15-28), a mirror of the
+// backend's REMARKS_FOR. Only the fallback: for an older backend, and for a
+// pending row, so it reads the same label before and after the refetch.
+const LEGACY_REMARKS_FOR: Record<number, string> = {
+  1: 'Scheduling', 2: 'CheckIn', 3: 'CheckOut', 4: 'Feedback', 6: 'Canceling',
+  8: 'TX Reschedule', 9: 'TX cancelled', 15: 'Approval', 16: 'Unconfirmed', 17: 'Inquiry',
+  18: 'TX Rejected', 19: 'Escalated', 20: 'Re-Opened Job', 21: 'ReScheduled',
+};
+
+/*
+ * Legacy Date/Time: `dd MMM yyyy HH:mm` ("11 Sep 2026 13:29" — JobDaoImpl.java
+ * :2846). Parsed and rendered in IST exactly as formatDate does, so the DB's
+ * zone-less IST wall clock comes back unshifted and a pending row's ISO instant
+ * lands in IST. Month names are fixed: en-GB's short September is "Sept".
+ */
+const REMARK_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function formatRemarkDate(d: string | null | undefined): string {
+  if (!d) return '';
+  const date = parseIstDateTime(d);
+  if (isNaN(date.getTime())) return '';
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata', year: 'numeric', month: 'numeric', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(date).map((x) => [x.type, x.value]));
+  return `${p.day} ${REMARK_MONTHS[Number(p.month) - 1]} ${p.year} ${p.hour}:${p.minute}`;
+}
+
 function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded }: { jobId: number; refreshKey?: number; pendingComments?: Array<JobComment & { _pending?: true }>; onLoaded?: () => void }) {
   /*
    * useFetch (feedback_crm_ui_fetch_hooks). refetch() evicts the key before
    * re-firing, so a refresh right after POSTing a comment is a real round-trip
    * rather than the 30s-cached pre-comment list.
    */
-  const { data, loading, error: loadError, refetch } = useFetch<JobComment[]>(`/admin/jobs/${jobId}/comments`);
+  const { data, loading, error: loadError, refetch } = useFetch<RemarkRow[]>(`/admin/jobs/${jobId}/comments`);
   const comments = useMemo(() => (Array.isArray(data) ? data : []), [data]);
   // POST failures belong to this component; the hook owns load errors only.
   const [mutError, setMutError] = useState<string | null>(null);
@@ -3710,7 +3714,7 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
   // pendings (from AddRemarksDialog) come via `pendingComments` prop;
   // local pendings (from postComment below) stay self-contained because
   // the input + the list live inside the same component.
-  const [localPending, setLocalPending] = useState<Array<JobComment & { _pending?: true }>>([]);
+  const [localPending, setLocalPending] = useState<RemarkRow[]>([]);
   const { me: currentMeForTab } = useMe();
   const currentUserName = (currentMeForTab?.user?.user_name || currentMeForTab?.user?.official_email || 'You') as string;
 
@@ -3754,7 +3758,7 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
     // load() which fetches the canonical row; we then drop the matching
     // local pending. Failure path drops the pending + surfaces a toast.
     const tempId = -Date.now() - Math.floor(Math.random() * 1000);
-    const optimistic: JobComment & { _pending?: true } = {
+    const optimistic: RemarkRow = {
       id: tempId,
       job_id: jobId,
       comments: text,
@@ -3767,6 +3771,9 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
       efr_id: null,
       enum_reason_id: reasonId ? Number(reasonId) : null,
       enum_desc: null,
+      remarks_for: LEGACY_REMARKS_FOR[stage] ?? null,
+      accountable: null,
+      remark_by: currentUserName,
       _pending: true,
     };
     setLocalPending((prev) => [optimistic, ...prev]);
@@ -3795,7 +3802,7 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
   // first (they came from the AddRemarksDialog which closes before this
   // tab's own input is interacted with), then local pendings, then the
   // canonical comments (already DESC-sorted by the BE).
-  const allRows: Array<JobComment & { _pending?: true }> = [
+  const allRows: RemarkRow[] = [
     ...pendingComments,
     ...localPending,
     ...comments,
@@ -3889,33 +3896,34 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
             </div>
           )}
           {/*
-            Remarks history rebuilt as a 4-column table (2026-06-03 per ops):
-              • Date/Time   — `formatDate(c.created_on)`
-              • Remarks     — comment text + Sending/pending pill on optimistic rows
-              • Remarks By  — `c.user_name`
-              • Reason      — `c.enum_desc` (BE joins tbl_job_comment.enum_reason_id
-                              → action_taken_reason.id, projects .action_desc as
-                              `enum_desc` for FE contract stability).
-            The previous list-card layout surfaced stage + author inline; ops asked
-            for the table form because it's scannable at scale. Stage label is
-            dropped from the visible columns per the same spec — it's still in
-            c.comment_on if any future audit needs it.
+            Remarks history in the LEGACY CRM's columns and order (2026-09-11 per
+            ops; EasyFix_CRM jobCommentList.vm:4-9):
+              Remarks For | Accountable | Reason | Remarks | Remark By | Date/Time
+            from remarks_for | accountable | enum_desc | comments | remark_by |
+            created_on. remark_by is the backend's resolved author (tbl_user name,
+            else the escalator's stored name, else the technician) — user_name
+            alone rendered "Unknown" for every escalation, which never sets
+            commented_by. A row with no author at all shows an em dash.
           */}
-          <div className="rounded border bg-card overflow-hidden">
+          <div className="rounded border bg-card overflow-x-auto">
             <table className="data-table w-full text-xs">
               <thead>
-                {/* Width strategy: Date/Time + Remarks By + Reason are
-                    short, content-shaped strings — collapse each to its
-                    own content width via the `w-1 whitespace-nowrap`
+                {/* Width strategy: the short, content-shaped columns collapse
+                    to their own content width via the `w-1 whitespace-nowrap`
                     trick (the table layout algorithm hands the cell its
-                    intrinsic width when w-1 is below the content's
-                    natural minimum). Remarks (free-text) gets no width
-                    cap and takes the remaining space. */}
+                    intrinsic width when w-1 is below the content's natural
+                    minimum). Reason and Remarks share the rest and wrap.
+                    Reason wraps because, kept on one line beside two new
+                    columns, a 42-character reason left Remarks 214px of a
+                    970px table and pushed it to scroll below ~830px
+                    (measured in a static render; wrapping gives 326px). */}
                 <tr>
-                  <th className="!text-left w-1 whitespace-nowrap">Date/Time</th>
+                  <th className="!text-left w-1 whitespace-nowrap">Remarks For</th>
+                  <th className="!text-left w-1 whitespace-nowrap">Accountable</th>
+                  <th className="!text-left">Reason</th>
                   <th className="!text-left">Remarks</th>
-                  <th className="!text-left w-1 whitespace-nowrap">Remarks By</th>
-                  <th className="!text-left w-1 whitespace-nowrap">Reason</th>
+                  <th className="!text-left w-1 whitespace-nowrap">Remark By</th>
+                  <th className="!text-left w-1 whitespace-nowrap">Date/Time</th>
                 </tr>
               </thead>
               <tbody>
@@ -3924,11 +3932,21 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
                     key={c.id}
                     className={c._pending ? 'opacity-75 bg-info-tint/40' : ''}
                   >
-                    <td className="!text-left text-muted-foreground whitespace-nowrap align-top">
-                      {formatDate(c.created_on)}
+                    <td className="!text-left align-top whitespace-nowrap">
+                      {c.remarks_for ?? LEGACY_REMARKS_FOR[c.comment_on] ?? ''}
                     </td>
+                    <td className="!text-left align-top whitespace-nowrap">
+                      {c.accountable ?? ''}
+                    </td>
+                    <td className="!text-left align-top text-muted-foreground">
+                      {c.enum_desc ? c.enum_desc : <span className="italic">—</span>}
+                    </td>
+                    {/* pre-wrap keeps the operator's line breaks; anywhere-wrap
+                        breaks a long unspaced token (a URL) instead of widening
+                        the table — the old nowrap table went to 1260px on one,
+                        clipping Reason behind overflow-hidden. */}
                     <td className="!text-left align-top">
-                      <div className="whitespace-pre-wrap">{c.comments}</div>
+                      <div className="whitespace-pre-wrap [overflow-wrap:anywhere]">{c.comments}</div>
                       {c._pending && (
                         <span className="inline-flex items-center gap-1 mt-1 bg-info-tint text-info-strong rounded px-1.5 py-0.5 text-xs">
                           <span className="inline-block h-2 w-2 rounded-full border-2 border-info/30 border-t-info animate-spin" aria-hidden />
@@ -3936,17 +3954,11 @@ function JobCommentsTab({ jobId, refreshKey = 0, pendingComments = [], onLoaded 
                         </span>
                       )}
                     </td>
-                    {/* Remarks By + Reason cells get whitespace-nowrap so
-                        the column collapses to its intrinsic content
-                        width (matches the header's `w-1 whitespace-nowrap`
-                        and lets the Remarks column take all remaining
-                        horizontal space). Remarks itself keeps the inner
-                        `whitespace-pre-wrap` div so long free-text wraps. */}
                     <td className="!text-left align-top whitespace-nowrap">
-                      <span className="font-medium">{c.user_name ?? 'Unknown'}</span>
+                      <span className="font-medium">{c.remark_by || c.user_name || ''}</span>
                     </td>
-                    <td className="!text-left align-top text-muted-foreground whitespace-nowrap">
-                      {c.enum_desc ? c.enum_desc : <span className="italic">—</span>}
+                    <td className="!text-left text-muted-foreground whitespace-nowrap align-top">
+                      {formatRemarkDate(c.created_on)}
                     </td>
                   </tr>
                 ))}
@@ -4370,6 +4382,62 @@ function JobImagesTab({ images, onChanged, compact, onImageDeleted, deferDelete,
       })}
       </div>
       <SkillImageLightbox value={lightbox} onClose={() => setLightbox(null)} />
+    </>
+  );
+}
+
+/*
+ * "Add After-Work Photo" (2026-09-11). The backend refuses every close without
+ * an after-work photo (409 AFTER_PHOTO_REQUIRED), so ops can add the proof here:
+ * POST /admin/jobs/:id/images with category=Completion, which needs
+ * isJobAfterPhotoUpload and an image by its bytes (a PDF is a 400). The route
+ * takes ONE file per request, so a multi-pick uploads sequentially; a failure
+ * does not stop the rest, and the job re-reads once, after the last.
+ */
+function AddAfterWorkPhotoButton({ jobId, onUploaded }: { jobId: number; onUploaded?: () => void }) {
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [uploading, setUploading] = useState(false);
+
+  async function upload(files: File[]) {
+    if (files.length === 0) return;
+    setUploading(true);
+    let added = 0;
+    let failure: string | null = null;
+    for (const file of files) {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('category', 'Completion');
+      try {
+        await api.post(`/admin/jobs/${jobId}/images`, fd);
+        added += 1;
+      } catch (e) {
+        failure ??= e instanceof ApiError ? e.message : 'Failed to add after-work photo';
+      }
+    }
+    setUploading(false);
+    if (fileRef.current) fileRef.current.value = '';
+    if (added > 0) {
+      showToast({ variant: 'success', message: added === 1 ? 'After-Work Photo Added.' : `${added} After-Work Photos Added.` });
+      // The images are job.images, from the modal's job GET — refresh() re-reads it.
+      onUploaded?.();
+    }
+    if (failure) showToast({ variant: 'error', message: failure });
+  }
+
+  return (
+    <>
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/gif"
+        multiple
+        className="hidden"
+        onChange={(e) => { void upload(Array.from(e.target.files ?? [])); }}
+      />
+      <Button size="sm" variant="outline" disabled={uploading} onClick={() => fileRef.current?.click()}>
+        <Plus className="size-3.5 mr-1" />
+        {uploading ? 'Uploading…' : 'Add After-Work Photo'}
+      </Button>
     </>
   );
 }
@@ -5317,6 +5385,26 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
           View History{history && !historyFetch.error ? ` · ${history.count}` : ''}
         </Button>
       );
+  /*
+   * The dialog the slot opens, as ONE value rendered in EVERY return that
+   * renders the slot. JobForm has two — Confirm & Schedule's early return and
+   * the create/edit form — and the dialog used to be mounted in the second
+   * only, so Confirm & Schedule's "View History" set historyOpen with nothing
+   * mounted to read it: a button that did nothing (2026-09-11). Same trap
+   * AddRemarksDialog and JobOutcomeDialog hit below; this keeps one copy of
+   * the props instead of two.
+   */
+  const historyDialog = historyCustomer ? (
+    <CustomerHistoryDialog
+      open={historyOpen}
+      onClose={() => setHistoryOpen(false)}
+      customerName={historyCustomer.name}
+      mobile={historyCustomer.mobile}
+      rows={history?.rows ?? null}
+      loading={historyFetch.loading}
+      error={historyFetch.error}
+    />
+  ) : null;
 
   /*
    * In edit/confirm modes the form re-seeds whenever `initial`
@@ -5715,6 +5803,13 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
    * discoverable but obviously not usable until save.
    */
   const [addRemarksFormOpen, setAddRemarksFormOpen] = useState(false);
+  /*
+   * Remounts Confirm & Schedule's JobRemarksView after an Add Remarks save —
+   * its thread is a mounted useFetch, which eviction alone cannot re-run.
+   * LOCAL on purpose: onRefresh would re-seed this form from `initial` and
+   * wipe whatever the operator has typed but not yet booked.
+   */
+  const [remarksReloadKey, setRemarksReloadKey] = useState(0);
 
   /*
    * Job-outcome dialog (Unreachable / Enquiry) — added 2026-05-18 to
@@ -8614,7 +8709,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
         </Section>
 
         {/* Read-only remarks / comments history at the bottom of the confirm form. */}
-        <JobRemarksView jobId={initial?.job_id ?? null} />
+        <JobRemarksView key={remarksReloadKey} jobId={initial?.job_id ?? null} />
 
         {error && <div className="text-sm text-destructive">{error}</div>}
         {/* Confirm-mode footer — three-button layout matching the legacy
@@ -8771,9 +8866,17 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             open={addRemarksFormOpen}
             jobId={initial.job_id}
             onClose={() => setAddRemarksFormOpen(false)}
-            onSaved={() => { setAddRemarksFormOpen(false); }}
+            onSaved={() => {
+              setAddRemarksFormOpen(false);
+              // Evict, then remount the thread above so it re-reads the new row.
+              invalidateFetch((k) => k.startsWith(`/admin/jobs/${initial.job_id}/comments`));
+              setRemarksReloadKey((n) => n + 1);
+            }}
           />
         )}
+        {/* Customer History — the Job Summary strip's View History opens
+            this. Same early-return trap as the two dialogs around it. */}
+        {historyDialog}
         {/* Outcome popup — identical to the one wired on the create
             form below. Inlined here because confirm-mode early-returns
             before reaching the create form's render block, so the
@@ -10357,22 +10460,9 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
           }
         }}
       />
-      {/* Customer History dialog — only meaningful in create mode after
-          the mobile-gate matched an existing customer (we need a
-          customer_id to query against). The dialog drops back to a
-          plain "no history" message if the customer hasn't booked
-          before. */}
-      {historyCustomer ? (
-        <CustomerHistoryDialog
-          open={historyOpen}
-          onClose={() => setHistoryOpen(false)}
-          customerName={historyCustomer.name}
-          mobile={historyCustomer.mobile}
-          rows={history?.rows ?? null}
-          loading={historyFetch.loading}
-          error={historyFetch.error}
-        />
-      ) : null}
+      {/* Customer History dialog — Book New Call's mount (the slot in the
+          "Booking for" bar opens it). See historyDialog. */}
+      {historyDialog}
     </form>
   );
 }
@@ -12262,6 +12352,9 @@ function DlCard({ title, rows }: { title: string; rows: [string, unknown][] }) {
     <div className="rounded-lg border bg-card">
       <div className="px-5 py-3 border-b bg-muted/30"><h3 className="text-sm font-semibold">{title}</h3></div>
       <div className="p-5">
+        {/* No rows (Custom Properties on a job without any) → the same em dash
+            an empty value gets, not a blank card body. */}
+        {rows.length === 0 ? <p className="text-sm text-muted-foreground">—</p> : (
         <dl className="text-sm space-y-1.5">
           {rows.map(([k, v]) => (
             <div key={k} className="flex justify-between gap-4 border-b last:border-0 pb-1.5 last:pb-0">
@@ -12272,6 +12365,7 @@ function DlCard({ title, rows }: { title: string; rows: [string, unknown][] }) {
             </div>
           ))}
         </dl>
+        )}
       </div>
     </div>
   );
@@ -12292,4 +12386,18 @@ function renderDlValue(v: unknown): React.ReactNode {
     return v as React.ReactElement;
   }
   return String(v);
+}
+
+/*
+ * Total No. of Products (Job Meta) — the number of ACTIVE service LINES, not
+ * their summed quantity: legacy's noOfProducts is jobServiceList.size() over
+ * getJobServiceList(jobId, 1), the active lines (JobAction.java). On QA the
+ * two readings differ for 7,825 of the 380,870 jobs with an active line.
+ * getById also returns soft-deleted lines (job_service_status 0) for the
+ * Services tab's restore toggle. The retired JobTransactionView summed quantity
+ * over every line, those included. Same active test as the Services tab.
+ */
+function totalProducts(services: unknown): number {
+  const rows = (Array.isArray(services) ? services : []) as Array<{ job_service_status?: unknown }>;
+  return rows.filter((s) => Number(s.job_service_status) !== 0).length;
 }

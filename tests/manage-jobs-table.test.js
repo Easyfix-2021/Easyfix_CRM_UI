@@ -1,6 +1,6 @@
 'use strict';
 /*
- * The Manage Jobs grid renders the legacy 20 columns, in the legacy order.
+ * The Manage Jobs grid renders the legacy columns, in the legacy order.
  *
  * ─── WHAT THIS IS FOR (2026-09-10) ─────────────────────────────────────────
  *
@@ -10,6 +10,10 @@
  * "Escalted By" spelling, so an operator moving between the two screens reads
  * the same words in the same places. Anyone "fixing" that typo changes the
  * thing that was asked for.
+ *
+ * 19, not legacy's 20, since 2026-09-11 (per ops): "Job booking reference id"
+ * took a whole column for one short string, so it now renders small under the
+ * Job Id in the same cell — and the Job Id box searches both.
  *
  * ─── WHY A SOURCE-SHAPE GUARD, AND WHAT IT CATCHES ─────────────────────────
  *
@@ -73,7 +77,6 @@ const tbody = src.slice(src.indexOf('                <tbody ref={vJobs.bodyRef}>
 
 /* The operator's list, verbatim, in order. */
 const WANTED = [
-  'Job booking reference id',
   'Job Id',
   'Age',
   'Cx Name &amp; Number',
@@ -95,7 +98,7 @@ const WANTED = [
   'Action',
 ];
 
-test('the 20 headers render in exactly the requested order', () => {
+test('the 19 headers render in exactly the requested order', () => {
   const found = [...thead.matchAll(/^\s*<(?:SortHeader[^>]*?|th[^>]*?)>(.+?)<\/(?:SortHeader|th)>/gm)]
     .map((m) => m[1].trim());
   assert.deepEqual(found, WANTED,
@@ -207,4 +210,59 @@ test('the two current-product signals survived the column change', () => {
   assert.ok(bucketAt > -1, 'the Bucket Status cell must exist');
   assert.ok(tbody.indexOf('<ShareChip', bucketAt) - bucketAt < 600,
     'the chip belongs in the Bucket Status cell, where it qualifies the state');
+});
+
+test('the booking reference id rides under the Job Id, and Job Id holds the pinned slot', () => {
+  /*
+   * Header and cell are pinned by two separate class lists. Moving only one of
+   * them pins a header over a scrolling column (or the reverse), and nothing
+   * errors. The select column, when present, comes first on BOTH sides, so the
+   * pinned one is the second opening tag on each.
+   */
+  const heads = [...thead.matchAll(/^\s*<(?:SortHeader|th)\b[^\n]*/gm)].map((m) => m[0]);
+  const cells = [...tbody.matchAll(/<td\b[^>]*>/g)].map((m) => m[0]).filter((t) => !/colSpan=/.test(t));
+  assert.ok(heads.length > 2 && cells.length > 2, 'the parse must have found the header and cell runs');
+  assert.match(heads[1], /col="job_id"[^\n]*className="stick-col-head stick-left">Job Id</, 'Job Id is the pinned first data header');
+  assert.match(cells[1], /stick-col stick-left/, 'and its cell is the pinned first data cell');
+  assert.equal((thead.match(/stick-left/g) || []).length, 1, 'exactly one pinned-left header');
+  assert.equal((tbody.match(/stick-left/g) || []).length, 1, 'exactly one pinned-left cell');
+
+  // The reference lives INSIDE the Job Id cell: small, muted, only when present.
+  const start = tbody.indexOf(cells[1]);
+  const cell = tbody.slice(start, tbody.indexOf('</td>', start));
+  assert.match(cell, /#\{j\.job_id\}/, 'the cell still shows the id');
+  assert.match(cell, /<CallHistoryButton jobId=\{j\.job_id\} \/>/, 'and keeps its call-history popover');
+  assert.match(cell, /\{j\.job_reference_id && \(\s*<div className="[^"]*\btext-xs\b[^"]*\btext-muted-foreground\b/,
+    'the reference renders small and muted, and only when the job has one');
+  assert.equal((tbody.match(/j\.job_reference_id/g) || []).length, (cell.match(/j\.job_reference_id/g) || []).length,
+    'and nowhere else in the row');
+});
+
+test('the Job Id box searches ids AND booking references, on the param the backend reads', () => {
+  /*
+   * jobIds is digits-only on the backend, so the REF-… shown under every id was
+   * a 400 behind a grid that keeps its old rows on error. The box now sends
+   * jobIdOrRef, and strips to the backend's own alphabet — read from the
+   * validator here rather than copied, because a character the box keeps and
+   * the validator rejects is that same silent 400.
+   */
+  assert.match(src, /^\s*jobIdOrRef: serverQ \|\| undefined,$/m, 'the list request must send jobIdOrRef');
+  assert.doesNotMatch(src, /^\s*jobIds: serverQ/m, 'and not the digits-only jobIds');
+  // The Export button too: `q` there was a different search inside a 6-month
+  // window, so the sheet disagreed with the grid it claims to mirror.
+  assert.match(src, /if \(serverQ\) qs\.set\('jobIdOrRef', serverQ\);/, 'the export must send the grid’s param');
+  assert.doesNotMatch(src, /qs\.set\('q', serverQ\)/, 'and not the eleven-column q');
+  assert.match(src, /setQ\(e\.target\.value\.replace\(JOB_ID_OR_REF_STRIP, ''\)\)/, 'typing is stripped');
+  assert.match(src, /\(searchParams\.get\('q'\) \|\| ''\)\.replace\(JOB_ID_OR_REF_STRIP, ''\)/,
+    'and so is a ?q= restored from the URL — a bookmark from the name-search era would 400');
+
+  const fe = /const JOB_ID_OR_REF_STRIP = \/\[\^([^\]]+)\]\/g;/.exec(src);
+  const beSrc = fs.readFileSync(path.join(backendRoot(), 'validators/job.validator.js'), 'utf8');
+  const be = /jobIdOrRef: Joi\.string\(\)\.pattern\(\/\^\[([^\]]+)\]\+\$\/\)/.exec(beSrc);
+  assert.ok(fe, 'the FE strip class must be parseable');
+  assert.ok(be, 'the BE jobIdOrRef pattern must be parseable');
+  assert.equal(fe[1], be[1], 'the box must keep exactly the characters the backend accepts');
+
+  const strip = new RegExp(`[^${fe[1]}]`, 'g');
+  assert.equal('REF-538916, 482505'.replace(strip, ''), 'REF-538916,482505', 'a pasted list survives, minus the space');
 });

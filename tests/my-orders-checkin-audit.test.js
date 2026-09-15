@@ -33,6 +33,12 @@ const path = require('path');
  * empty modal rather than erroring — so each is pinned below.
  *
  * Source-level, because tests/ here is node:test over pure logic with no DOM.
+ *
+ * 2026-09-11: ops removed the CRM Check In altogether — technicians check in
+ * from the app. The tests that pinned the button, its dialog and the row icons
+ * went with them; tests/no-crm-checkin.test.js keeps them gone. What stays here
+ * is the audit entry point and the registration of `checkin`, which an old link
+ * can still open as the view workspace.
  */
 
 const SRC = path.join(__dirname, '..', 'src');
@@ -53,7 +59,6 @@ const urlSrc = read('lib', 'job-action-url.ts');
 const hostSrc = read('components', 'job', 'JobModalHost.tsx');
 const pageSrc = read('app', '(authed)', 'my-orders', 'page.tsx');
 const jobsSrc = read('app', '(authed)', 'jobs', 'page.tsx');
-const dialogSrc = read('components', 'job', 'CheckInWithReasonDialog.tsx');
 
 const modal = strip(modalSrc);
 const pending = strip(pendingSrc);
@@ -61,95 +66,8 @@ const url = strip(urlSrc);
 const host = strip(hostSrc);
 const page = strip(pageSrc);
 const jobsPage = strip(jobsSrc);
-const dialog = strip(dialogSrc);
 
-// ── A. The ops Check-In action ──────────────────────────────────────
-
-/*
- * The gate on the button. Written as ONE regex over the whole conjunction
- * rather than three independent substring checks: the failure being guarded
- * against is a button that renders on the wrong status or without a permission,
- * and three separate matches would pass on a file where the three fragments
- * exist in unrelated places.
- */
-const CHECKIN_BUTTON =
-  /\{canCheckIn\(s\) && can\.isJobStatusChange && transitionAllowed\(me\?\.allowedStages, s, ST\.IN_PROGRESS\) && \(\s*<Button[^>]*onClick=\{\(\) => setCheckinOpen\(true\)\}>Check In<\/Button>/;
-
-test('the job workspace carries a Check In action for a SCHEDULED job', () => {
-  assert.match(
-    modal,
-    /const canCheckIn\s*=\s*\(s: number\) => s === ST\.SCHEDULED;/,
-    'check-in must be predicated on job_status 1 (SCHEDULED), like every other lifecycle predicate here',
-  );
-  assert.match(
-    modal,
-    CHECKIN_BUTTON,
-    'ActionBar must render a Check In button gated on the status predicate AND isJobStatusChange AND the 1 → 2 stage transition',
-  );
-});
-
-test('Check In posts to the check-in endpoint, never the status PATCH', () => {
-  /*
-   * This is the whole point of the change. PATCH /admin/jobs/:id/status writes
-   * job_status alone; the check-in columns (checkin_date_time — the TAT anchor)
-   * are written only by the dedicated endpoint. A "fix" that reused doStatus()
-   * would look identical in the UI and leave the anchor null.
-   */
-  assert.match(
-    dialog,
-    /api\.post\(`\/admin\/jobs\/\$\{jobId\}\/checkin`, \{ reason: trimmed \}\)/,
-    'it must POST /admin/jobs/:id/checkin with the reason',
-  );
-  assert.ok(
-    !/\/status`/.test(dialog),
-    'it must not fall back to the status PATCH, which writes no check-in columns',
-  );
-});
-
-test('the reason is mandatory and capped at the wire limit', () => {
-  assert.match(dialog, /maxLength=\{500\}/, 'the textarea must cap at the backend max');
-  assert.match(
-    dialog,
-    /disabled=\{loading \|\| !trimmed\}/,
-    'submit must be disabled until a non-blank reason is typed',
-  );
-  assert.match(
-    dialog,
-    /if \(!trimmed\) \{ setErr\('A reason is required\.'\); return; \}/,
-    'and the handler must refuse a blank reason even if the disabled state is bypassed',
-  );
-});
-
-test('the check-in dialog uses the shared dirty guard, not an inline onOpenChange', () => {
-  assert.match(dialog, /useFormDirtyGuard\(onClose, \{/, 'house rule: Esc / X / overlay close routes through useFormDirtyGuard');
-  assert.match(dialog, /<Dialog open=\{open\} onOpenChange=\{guardedOpenChange\}>/);
-  assert.ok(
-    !/onOpenChange=\{\(o\) =>/.test(dialog),
-    'no inline onOpenChange arrow — that is the pattern the guard replaces',
-  );
-});
-
-test('the retired "ops never check in" comment no longer contradicts the code', () => {
-  /*
-   * Scanned against the RAW source on purpose — the claim being retired IS a
-   * comment, so the stripped copy cannot see it.
-   *
-   * Matched on the tail of the sentence ("not by ops on the web") rather than
-   * on "Start button removed": the replacement comment quotes the old decision
-   * by name while recording that it was overridden, so a check keyed on the
-   * name would fail against the very edit that fixed it.
-   */
-  assert.ok(
-    !modalSrc.includes('not by ops on the web'),
-    'JobModal must not still assert that ops cannot check in on the web',
-  );
-  assert.ok(
-    !modalSrc.includes('canStart removed'),
-    'the canStart tombstone must be replaced by the live canCheckIn predicate',
-  );
-});
-
-// ── B. Pending to Start refetches when the check-in workspace closes ──
+// ── B. Pending to Start refetches when a workspace closes ────────────
 
 test("'checkin' is in the set of actions whose close refetches the buckets", () => {
   const guard = pending.match(/prevAction\.current === 'reassign'[\s\S]{0,260}?\) &&/);
@@ -160,16 +78,6 @@ test("'checkin' is in the set of actions whose close refetches the buckets", () 
       `'${action}' must be in the refetch set — its close can move a row out of this bucket`,
     );
   }
-});
-
-test('the PlayCircle row action still opens the check-in workspace', () => {
-  assert.match(
-    pending,
-    /onClick=\{\(\) => onCheckin\(j\.job_id\)\}/,
-    'the Check-In icon must survive — it is the only entry to the ops check-in',
-  );
-  assert.match(pending, /canJob\.isJobStatusChange && \(/, 'and stay permission-gated');
-  assert.match(page, /function openCheckin\(id: number\)\s*\{ openJobAction\('checkin',\s*id\); \}/);
 });
 
 // ── C. The four+one registration points for the `audit` action ───────
@@ -410,75 +318,23 @@ test('F1 — the page that owns ?action=schedule still derives its real modal fr
   assert.match(page, /<ScheduleAssignModal\n\s*open=\{scheduleModal\.open\}/);
 });
 
-test('F2 — neither row Check-In goes through the status PATCH any more', () => {
-  for (const [name, src] of [['my-orders', page], ['jobs', jobsPage]]) {
-    assert.ok(
-      !/quickStatusChange\(j\.job_id, 2, 'Check in'\)/.test(src),
-      `${name}: the row check-in must not PATCH /status — it writes no checkin_date_time`,
-    );
-    assert.match(
-      src,
-      /onClick=\{\(\) => setCheckinJobId\(j\.job_id\)\}/,
-      `${name}: the row check-in must open the shared reason dialog`,
-    );
-    assert.match(
-      src,
-      /<CheckInWithReasonDialog\n\s*open=\{checkinJobId != null\}/,
-      `${name}: and must actually mount it`,
-    );
-  }
-});
-
-test('F2 — check-out is untouched: it has no columns of its own to write', () => {
+test('F2 — the row Check-Out is gone on purpose, and took its helper with it', () => {
   /*
-   * quickStatusChange is SHARED with the row Check-Out action. Routing check-in
-   * away from it must not take that caller with it, and a regex sweep for the
-   * helper would have.
-   *
-   * PINS THE HELPER, NOT THE STATUS. This used to match the whole call
-   * verbatim — `quickStatusChange(j.job_id, 3, 'Check out & complete')` —
-   * which froze two facts this test has no opinion about: the target status and
-   * the button's wording. When Check-Out was corrected from 3 to 10 (2/20's
-   * only legal target; 3 skipped the Under Audit queue) this test failed while
-   * the thing it actually guards was untouched. The target now belongs to
-   * tests/job-status-actions.test.js, which checks it against the stage table
-   * instead of against a copy of itself.
+   * This test used to guard the OTHER caller of quickStatusChange — the row
+   * Check-Out — so that routing check-in away from the helper could not take
+   * check-out with it. On 2026-09-11 ops removed Check-Out itself: Pending to
+   * Close on App jobs (2/20) are closed by the technician from the app
+   * (tests/no-crm-checkout.test.js). That left quickStatusChange with no caller,
+   * so it, its busy state and lib/job-tabs.ts's makeQuickStatusChange were
+   * deleted rather than kept as dead code. Pinned so neither returns without a
+   * caller that needs it.
    */
   for (const [name, src] of [['my-orders', page], ['jobs', jobsPage]]) {
-    assert.match(
-      src,
-      /quickStatusChange\(j\.job_id,\s*\d+,\s*'Check out/,
-      `${name}: check-out must still use the shared quick-status helper`,
-    );
+    assert.doesNotMatch(src, /\bquickStatusChange\s*\(/, `${name}: no quick status-change call may remain`);
+    assert.doesNotMatch(src, /\bmakeQuickStatusChange\b/, `${name}: nor the factory import`);
   }
-  assert.match(
-    read('lib', 'job-tabs.ts'),
-    /opts\.api\.patch\(`\/admin\/jobs\/\$\{jobId\}\/status`, \{ status: toStatus \}\)/,
-    'makeQuickStatusChange itself must be unchanged',
-  );
-});
-
-test('F2 — the dialog is ONE component with three mount points, not three copies', () => {
-  /*
-   * The reason this is an extraction and not a copy. Three inlined dialogs would
-   * fix the reported defect and reintroduce it the next time the endpoint, the
-   * 500-char cap or the 409 copy changes in only two of them.
-   */
-  assert.match(dialog, /export function CheckInWithReasonDialog\(/, 'it must be its own module');
-  assert.ok(
-    !/function CheckInWithReasonDialog\(/.test(modal),
-    'JobModal must import it, not keep a private copy',
-  );
-  const posts = (str) => (str.match(/\/checkin`/g) || []).length;
-  assert.equal(posts(dialog), 1, 'exactly one call site for the endpoint');
-  for (const [name, src] of [['JobModal', modal], ['my-orders', page], ['jobs', jobsPage]]) {
-    assert.equal(posts(src), 0, `${name} must not POST the check-in endpoint itself`);
-    assert.match(
-      src,
-      /import \{ CheckInWithReasonDialog \}/,
-      `${name} must import the shared dialog`,
-    );
-  }
+  assert.doesNotMatch(read('lib', 'job-tabs.ts'), /export function makeQuickStatusChange/,
+    'the factory had one purpose, and it is gone');
 });
 
 // ── E. Controls ─────────────────────────────────────────────────────
@@ -519,12 +375,6 @@ test('differential control — each guard fails on a source with its subject del
    * re-run — every one must now miss.
    */
   const cases = [
-    [
-      'the Check In button',
-      modal.replace(CHECKIN_BUTTON, ''),
-      CHECKIN_BUTTON,
-      modal,
-    ],
     [
       'the audit fold in effectiveMode',
       modal.replace(/\(mode === 'checkin' \|\| mode === 'audit'\)/, "mode === 'checkin'"),

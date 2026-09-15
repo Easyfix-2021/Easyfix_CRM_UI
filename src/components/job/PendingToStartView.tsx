@@ -32,7 +32,7 @@
  *   Action Today → today 00:00:00 IST <= requested_date_time <= today 23:59:59 IST
  *   Future       → requested_date_time >= tomorrow 00:00:00 IST   (unbounded future)
  *
- * ─── THE FOURTH SECTION: TECHNICIAN REQUESTS (top of the page) ───────────
+ * ─── THE FOURTH SECTION: TECHNICIAN REQUESTS ─────────────────────────────
  *
  * A technician can ask, from the mobile app, for a pending order to be
  * CANCELLED or its appointment MOVED. Neither ask changes job_status, so the
@@ -40,14 +40,19 @@
  * puts it in — a request raised on a job due next month lands at the bottom of
  * Future and nobody sees it. The three buckets answer "when is this due"; a
  * request is the question of whether it is due at all, so it needs its own
- * section, and it renders FIRST because it is the only thing on this page that
- * is waiting on an operator rather than on a clock. The predicate and the
+ * section, and it DEFAULTS first because it is the only thing on this page
+ * that is waiting on an operator rather than on a clock. The predicate and the
  * cancel-vs-reschedule discrimination live in `@/lib/job-app-request` (tested;
  * see tests/job-app-request.test.js) — this file only renders them.
  *
  * It is the SAME <PendingSection/> as the three buckets, under `appRequests`,
  * because the row grammar (icons, click-to-call, chips, pagination) has to be
- * identical to the buckets below it — a second table would drift.
+ * identical to the buckets below it — a second table would drift. Since
+ * 2026-09-14 (owner's call) it is also a full MEMBER of the reorderable set:
+ * same grip, arrow keys, chevron, count chip and persisted position as the
+ * buckets. It therefore keeps its header when empty — auto-collapsed, exactly
+ * like a bucket at zero — because a section that renders nothing cannot be
+ * dragged, and the arrangement is the operator's to make.
  *
  * TWO WAYS IT DIFFERS, both forced by the backend:
  *
@@ -73,7 +78,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Search, PlayCircle, RefreshCw, MapPin, Eye, AlertTriangle } from 'lucide-react';
+import { Search, RefreshCw, MapPin, Eye, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -81,6 +86,11 @@ import { type SearchOption } from '@/components/ui/search-select';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { RefreshBar } from '@/components/ui/refresh-bar';
+import {
+  ReorderableSections,
+  SectionFrame,
+  type SectionControls,
+} from '@/components/ui/reorderable-sections';
 import {
   TablePagination,
   type TablePageSize,
@@ -222,22 +232,44 @@ function istBuckets(): { overDue: DateRange; actionToday: DateRange; future: Dat
   };
 }
 
+/*
+ * All FOUR sections collapse and re-order exactly as My Orders -> Unconfirmed's
+ * sections do (the shared ReorderableSections). Order and collapse are the
+ * operator's, remembered per browser under keys of THIS page's own — sharing
+ * Unconfirmed's would let one page's arrangement rewrite the other's.
+ *
+ * The array order IS the default arrangement, so Technician Requests leads.
+ *
+ * ORDER_KEY IS AT v2 DELIBERATELY. reconcile() in the shared component drops
+ * unknown keys and APPENDS ones it has never seen, so a v1 order saved before
+ * 2026-09-14 (['overDue','actionToday','future']) would push the new section to
+ * the BOTTOM — the opposite of its default. Bumping the key retires those saved
+ * arrangements once, and everyone starts from this array again.
+ *
+ * COLLAPSED_KEY stays at v1 on purpose: collapse is a separate map keyed by
+ * section key, 'appRequests' is simply absent from it (→ auto), and the shared
+ * component's own contract is that "a change to one shape never resets the
+ * other". Bumping it would throw away three real choices to fix nothing.
+ */
+const SECTIONS = [
+  { key: 'appRequests' },
+  { key: 'overDue' },
+  { key: 'actionToday' },
+  { key: 'future' },
+] as const;
+const ORDER_KEY = 'easyfix.crm.pendingStart.sectionOrder.v2';
+const COLLAPSED_KEY = 'easyfix.crm.pendingStart.sectionCollapsed.v1';
+
 
 export type PendingToStartViewProps = {
   me: Me | null | undefined;
   isAdmin: boolean;
   // Permission flags from the page's actionFlags(me, …) — we only read
-  // isJobStatusChange (Check-In) and isJobReassign (Reassign) here.
+  // isJobReassign (Reassign) here.
   canJob: Record<string, boolean>;
-  /*
-   * Reused page handlers — do NOT re-implement their logic. `openCheckin` opens
-   * the SAME page-owned JobModal workspace as openView, under ?action=checkin —
-   * so ops get the full detail / Billing & Charges workspace, titled "Checkin ·
-   * Job #N" instead of the neutral viewer, and perform the check-in inside it.
-   */
+  /* Reused page handlers — do NOT re-implement their logic. */
   /* Read-only viewer, same page-owned modal the other tabs' Eye opens. */
   openView: (jobId: number) => void;
-  openCheckin: (jobId: number) => void;
   openReassign: (jobId: number) => void;
   // Opens the page-owned LiveLocationPopover for a row's assigned technician.
   // The popover only polls (every 15s) WHILE OPEN, so this stays on-demand —
@@ -250,7 +282,6 @@ export function PendingToStartView({
   isAdmin,
   canJob,
   openView,
-  openCheckin,
   openReassign,
   onShowLocation,
 }: PendingToStartViewProps) {
@@ -280,17 +311,13 @@ export function PendingToStartView({
   };
 
   /*
-   * Every row action here opens a page-owned modal: ?action=reassign,
-   * ?action=checkin (the PlayCircle — the JobModal workspace whose footer
-   * carries the Check In action), or ?action=view (the read-only Eye). When one
-   * of those closes the row may have left this bucket — a reassign committed, or
-   * a check-in flipped the job to In-Progress — so refetch as the action param
-   * clears.
-   *
-   * 'checkin' was MISSING from this set until 2026-09-08, which is precisely the
-   * action that moves a row out of Pending-to-Start: closing the check-in
-   * workspace left the three buckets showing the job as still pending. Any
-   * action added to the row must be added here too.
+   * Every row action here opens a page-owned modal: ?action=reassign or
+   * ?action=view (the read-only Eye). When one of those closes the row may have
+   * left this bucket — a reassign committed, or the technician checked in from
+   * the app meanwhile — so refetch as the action param clears. ?action=checkin
+   * has had no row icon since 2026-09-11 (the technician checks in from the
+   * app only); an old link still opens the view workspace under it, so it stays
+   * in the set. Any action added to the row must be added here too.
    */
   const { action } = useJobActionParams();
   const prevAction = useRef<typeof action>(action);
@@ -426,74 +453,34 @@ export function PendingToStartView({
         </CardContent>
       </Card>
 
-      {/*
-        * ── Technician requests, ABOVE the buckets ─────────────────
-        * Renders nothing at all when there are none (see PendingSection's
-        * `appRequests` branch), so an empty queue costs no vertical space.
-        */}
-      <PendingSection
-        appRequests
-        title="Technician Requests"
-        subtitle="Cancellation or reschedule raised from the app"
-        dateRange={NO_DATE_RANGE}
-        filters={applied}
-        q={debouncedSearch}
-        ownerId={ownerId}
-        reloadKey={reloadKey}
-        isAdmin={isAdmin}
-        canJob={canJob}
-        onCheckin={openCheckin}
-        onView={openView}
-        onReassign={openReassign}
-        onShowLocation={onShowLocation}
-      />
-
-      {/* ── Three appointment buckets ─────────────────────────────── */}
-      <PendingSection
-        title="Over Due"
-        subtitle="Appointment before today"
-        dateRange={buckets.overDue}
-        filters={applied}
-        q={debouncedSearch}
-        ownerId={ownerId}
-        reloadKey={reloadKey}
-        isAdmin={isAdmin}
-        canJob={canJob}
-        onCheckin={openCheckin}
-        onView={openView}
-        onReassign={openReassign}
-        onShowLocation={onShowLocation}
-      />
-      <PendingSection
-        title="Action Today"
-        subtitle="Appointment is today"
-        dateRange={buckets.actionToday}
-        filters={applied}
-        q={debouncedSearch}
-        ownerId={ownerId}
-        reloadKey={reloadKey}
-        isAdmin={isAdmin}
-        canJob={canJob}
-        onCheckin={openCheckin}
-        onView={openView}
-        onReassign={openReassign}
-        onShowLocation={onShowLocation}
-      />
-      <PendingSection
-        title="Future"
-        subtitle="Appointment tomorrow or later"
-        dateRange={buckets.future}
-        filters={applied}
-        q={debouncedSearch}
-        ownerId={ownerId}
-        reloadKey={reloadKey}
-        isAdmin={isAdmin}
-        canJob={canJob}
-        onCheckin={openCheckin}
-        onView={openView}
-        onReassign={openReassign}
-        onShowLocation={onShowLocation}
-      />
+      {/* ── Four sections: collapsible + draggable, Technician Requests
+             first by default (SECTIONS is the default arrangement). ───── */}
+      <ReorderableSections sections={SECTIONS} orderKey={ORDER_KEY} collapsedKey={COLLAPSED_KEY}>
+        {(s, controls) => {
+          const shared = {
+            filters: applied,
+            q: debouncedSearch,
+            ownerId,
+            reloadKey,
+            isAdmin,
+            canJob,
+            onView: openView,
+            onReassign: openReassign,
+            onShowLocation,
+            controls,
+          };
+          if (s.key === 'appRequests') {
+            return <PendingSection appRequests title="Technician Requests" subtitle="Cancellation or reschedule raised from the app" dateRange={NO_DATE_RANGE} {...shared} />;
+          }
+          if (s.key === 'overDue') {
+            return <PendingSection title="Over Due" subtitle="Appointment before today" dateRange={buckets.overDue} {...shared} />;
+          }
+          if (s.key === 'actionToday') {
+            return <PendingSection title="Action Today" subtitle="Appointment is today" dateRange={buckets.actionToday} {...shared} />;
+          }
+          return <PendingSection title="Future" subtitle="Appointment tomorrow or later" dateRange={buckets.future} {...shared} />;
+        }}
+      </ReorderableSections>
     </div>
   );
 }
@@ -515,8 +502,9 @@ type PendingSectionProps = {
    * "this section lists app requests rather than an appointment window" — and
    * every difference below follows from it: no date window on the query, a
    * client-side filter + page slice (the endpoint cannot filter on the flags),
-   * the extra Request column, the attention styling, and rendering nothing at
-   * all when the set is empty. See the file header for the ceiling.
+   * the extra Request column and the attention strip. Everything else — frame,
+   * collapse, drag, count chip, pagination — is the buckets' own. See the file
+   * header for the ceiling.
    */
   appRequests?: boolean;
   title: string;
@@ -529,9 +517,11 @@ type PendingSectionProps = {
   isAdmin: boolean;
   canJob: Record<string, boolean>;
   onView: (jobId: number) => void;
-  onCheckin: (jobId: number) => void;
   onReassign: (jobId: number) => void;
   onShowLocation: (row: { job_id: number; easyfixer_name: string | null }) => void;
+  /* Every section is a member of the reorderable set, so this is required:
+   * it is how the section gets its grip, chevron, position and persistence. */
+  controls: SectionControls;
 };
 
 // One appointment bucket — its OWN /admin/jobs?status=1 call + pagination.
@@ -547,14 +537,25 @@ function PendingSection({
   isAdmin,
   canJob,
   onView,
-  onCheckin,
   onReassign,
   onShowLocation,
+  controls,
 }: PendingSectionProps) {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState<TablePageSize>(10);
   const limit = pageSizeToLimit(pageSize, JOBS_MAX_LIMIT);
   const offset = page * limit;
+  /* Unconfirmed's rule: a bucket the operator EXPLICITLY shut still needs its
+   * count, not its rows — limit=1 fetches the total alone. One on auto fetches
+   * its page, since it cannot know whether to open until the count arrives.
+   * Expanding changes the key, so the real page is fetched then.
+   *
+   * IT CANNOT APPLY TO THE REQUESTS SECTION, shut or not: its count IS
+   * matched.length over the client-side filter, so limit=1 would report 0-or-1
+   * requests instead of the real number. A collapsed requests section keeps
+   * paying for its bounded page — that is the price of the missing server-side
+   * filter (see the file header's ceiling), not an oversight. */
+  const countOnly = controls.explicitCollapsed === true;
 
   const key = buildJobsKey({
     status: 1,
@@ -579,8 +580,8 @@ function PendingSection({
     // The requests section filters client-side, so it pulls ONE bounded page
     // and pages within it — the server's limit/offset would slice the wrong
     // population. See the file header for what "bounded" costs.
-    limit: appRequests ? JOBS_MAX_LIMIT : limit,
-    offset: appRequests ? 0 : offset,
+    limit: appRequests ? JOBS_MAX_LIMIT : countOnly ? 1 : limit,
+    offset: appRequests || countOnly ? 0 : offset,
   });
 
   const { data, loading, refreshing, refetch } = useFetch<Resp>(key);
@@ -596,7 +597,7 @@ function PendingSection({
     setPage(0);
   }, [filters, q]);
 
-  // Refetch on an external reload signal (post Check-In / Reassign).
+  // Refetch on an external reload signal (post Reassign).
   const firstReload = useRef(true);
   useEffect(() => {
     if (firstReload.current) {
@@ -619,45 +620,41 @@ function PendingSection({
   const total = appRequests ? matched.length : (data?.total ?? 0);
 
   /*
-   * An empty requests section occupies NO space — not a header, not an empty
-   * state. It is an exception queue: on most days it is empty, and a permanent
-   * "no requests" card above Over Due would be a standing distraction. This
-   * also covers the first paint (no data yet → no matches → nothing), so the
-   * section appears only once there is something to action.
+   * The requests section used to return null when empty, so an empty exception
+   * queue cost no vertical space. That is gone (owner, 2026-09-14): a section
+   * with no header cannot be gripped, so it could never join the reorderable
+   * set. It now follows the buckets' rule instead — header always, and the
+   * auto-collapse below shuts it at zero, which costs one 36px strip on a quiet
+   * day and buys the operator an arrangement they control. First paint is
+   * covered by the same `data ? … : false` the buckets use: open (and
+   * skeletoned) while the count is unknown, not flickering shut at a 0 that
+   * only means "not loaded yet".
    */
-  if (appRequests && total === 0) return null;
 
   /* Column count — the Request column exists only on the requests section, and
    * the skeleton and the empty-state colSpan both have to agree with <thead>. */
   const colCount = appRequests ? 13 : 12;
 
-  return (
-    <Card className={appRequests ? 'border-warning/40' : undefined}>
-      {/* pb-3 adds breathing room between the section header (title + subtitle)
-          and the table below it. The requests variant tints the whole header
-          strip: `bg-warning-tint` / `text-warning-strong` is the estate's
-          attention pair (StatusChip's `warning` tone, the bulk-upload and
-          auto-allocation notices), and the two tokens SWAP lightness between
-          the light and dark themes — so it stays a dark-on-light block in one
-          and a light-on-dark block in the other, never a 1.08-contrast smear
-          the way an `ink` surface with fixed white text would. */}
-      <div
-        className={
-          'flex items-center justify-between px-4 pt-3 pb-3'
-          + (appRequests ? ' bg-warning-tint text-warning-strong rounded-t-lg' : '')
-        }
-      >
-        <div className="flex items-start gap-2">
-          {appRequests && <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />}
-          <div>
-            <h2 className="text-sm font-semibold">{title}</h2>
-            <p className={appRequests ? 'text-xs' : 'text-xs text-muted-foreground'}>
-              {subtitle} · {data ? total.toLocaleString() : '…'} order
-              {total === 1 ? '' : 's'}
-            </p>
-          </div>
+  const body = (
+    <>
+      {/*
+        * Attention strip. The section header is now the SHARED one (same grip,
+        * chevron, chip and position as every other section — that is the whole
+        * point), so the tint moved inside the body rather than being lost: the
+        * requests queue is the one thing here waiting on a person, and it
+        * should not read as a fourth date bucket. `bg-warning-tint` /
+        * `text-warning-strong` is the estate's attention pair (StatusChip's
+        * `warning` tone, the bulk-upload and auto-allocation notices) and the
+        * two tokens SWAP lightness between light and dark, so it stays legible
+        * in both — unlike an `ink` surface with fixed white text, which
+        * inverts to a 1.08-contrast smear.
+        */}
+      {appRequests && (
+        <div className="flex items-center gap-2 px-4 py-2 text-xs bg-warning-tint text-warning-strong">
+          <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
+          <span>Waiting on an operator, not on the clock.</span>
         </div>
-      </div>
+      )}
       <RefreshBar active={refreshing} />
       <CardContent className="p-0 overflow-x-auto">
         <table className="data-table">
@@ -698,7 +695,11 @@ function PendingSection({
             {!loading && rows.length === 0 && (
               <tr>
                 <td colSpan={colCount} className="text-center text-muted-foreground py-8">
-                  No orders in this bucket{!isAdmin ? ' owned by you' : ''}.
+                  {/* Newly reachable: the requests section used to vanish when
+                      empty, so its empty state was never rendered. It is not a
+                      bucket, so it does not say "bucket". */}
+                  No {appRequests ? 'technician requests' : 'orders in this bucket'}
+                  {!isAdmin ? ' owned by you' : ''}.
                 </td>
               </tr>
             )}
@@ -846,34 +847,23 @@ function PendingSection({
                       )}
                       {/* View — read-only, ungated, first in the row so the
                           icon order matches the other tabs. Restored
-                          2026-09-04: it had been removed because Check-In and
-                          Reassign "both surface full job detail", which is true
-                          but makes LOOKING at an order require opening a WRITE
-                          modal. Do not re-remove it on that reasoning. */}
+                          2026-09-04: it had been removed because the old
+                          workspace icon and Reassign "both surface full job
+                          detail", which is true but makes LOOKING at an order
+                          require opening a WRITE modal. Do not re-remove it on
+                          that reasoning. */}
                       <button
                         type="button"
                         onClick={() => onView(j.job_id)}
                         className="inline-flex items-center gap-1 text-primary text-xs hover:underline"
-                        title="View details"
-                        aria-label="View details"
+                        title="View Job"
+                        aria-label="View Job"
                       >
                         <Eye className="h-3.5 w-3.5" />
                       </button>
-                      {/*
-                        * Check-In — opens the JobModal workspace (details +
-                        * Billing & Charges) where ops review and perform the
-                        * actual check-in.
-                        */}
-                      {canJob.isJobStatusChange && (
-                        <button
-                          type="button"
-                          onClick={() => onCheckin(j.job_id)}
-                          className="inline-flex items-center gap-1 text-warning-strong text-xs hover:underline"
-                          title="Check-In — open the job workspace to review and check in"
-                        >
-                          <PlayCircle className="h-3.5 w-3.5" />
-                        </button>
-                      )}
+                      {/* Since 2026-09-11 (per ops) the technician checks in
+                          from the app; this row has no control for it, and
+                          View is the only way into the job from here. */}
                       {canJob.isJobReassign && (
                         <button
                           type="button"
@@ -920,6 +910,23 @@ function PendingSection({
           }}
         />
       )}
-    </Card>
+    </>
+  );
+
+  /* Every section: the shared frame, under Unconfirmed's auto rule — with no
+     explicit choice it is open while the count is unknown and shut at 0. */
+  return (
+    <SectionFrame
+      label={title}
+      subtitle={subtitle}
+      count={data ? total : null}
+      collapsed={controls.explicitCollapsed ?? (data ? total === 0 : appRequests)}
+      /* Unknown count: the buckets open (they almost always have rows), Technician
+       * Requests starts SHUT — most days it is empty, and painting a 4-row skeleton
+       * at the top of the page only to collapse it yanks the buckets upward. */
+      controls={controls}
+    >
+      {body}
+    </SectionFrame>
   );
 }

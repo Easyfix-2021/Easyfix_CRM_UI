@@ -90,7 +90,17 @@ jobs:
       # depth-1 clone of the tool is all that is needed.
       - name: Fetch the shared message-literal audit
         run: git clone --quiet --depth 1 https://github.com/Easyfix-2021/Easyfix_Backend.git "$RUNNER_TEMP/easyfix-backend-audit"
+      # tests/dozzle-agent-compose.test.js FAILS (never skips) unless
+      # Easyfix_client_UI carries a byte-identical deploy/docker-compose.prod-frontend.yml
+      # — same clone as deploy.yml precheck. A PR clones its target branch, the
+      # copy precheck compares against on the push; a dispatch has no target, so
+      # it compares against Production, the only env that file is written to.
+      - name: Fetch Easyfix_client_UI for the compose mirror check
+        env:
+          BRANCH: ${{ github.base_ref || 'Production' }}
+        run: git clone --quiet --depth 1 --branch "$BRANCH" https://github.com/Easyfix-2021/Easyfix_client_UI.git "$RUNNER_TEMP/easyfix-client-ui"
       - name: Test
         env:
           EASYFIX_BACKEND_DIR: ${{ runner.temp }}/easyfix-backend-audit
+          EASYFIX_CLIENT_UI_DIR: ${{ runner.temp }}/easyfix-client-ui
         run: npm test

@@ -1,5 +1,3 @@
-import type { ConfirmOptions } from '@/components/ui/confirm-dialog';
-import { api } from '@/lib/api';
 import { formatDate, statusLabel } from '@/lib/utils';
 
 /*
@@ -279,43 +277,4 @@ export function filterJobRows<T extends SearchableJobRow>(items: T[], q: string)
     if (s.includes('•')) return maskedMatches(s, needle);
     return s.toLowerCase().includes(needle);
   }));
-}
-
-/*
- * Factory for the per-row quick status-change handler shared by /jobs and
- * /my-orders. The two pages differ only in (a) the confirm description copy
- * and (b) whether a counts refresh fires after reload — so those are passed
- * in rather than branched on. Everything else (confirm dialog shape, the
- * PATCH /admin/jobs/:id/status payload, the cache-clear → reload sequence,
- * row-busy + error wiring) is identical and lives here once.
- */
-export function makeQuickStatusChange(opts: {
-  confirmAction: (o?: ConfirmOptions) => Promise<boolean>;
-  api: typeof api;
-  description: ConfirmOptions['description'];
-  setRowBusy: (id: number | null) => void;
-  setErrorMsg: (m: string) => void;
-  clearCache: () => void;
-  reload: () => Promise<void>;
-  afterReload?: () => void;
-}) {
-  return async function quickStatusChange(jobId: number, toStatus: number, verb: string) {
-    const ok = await opts.confirmAction({
-      title: `${verb} job #${jobId}?`,
-      description: opts.description,
-      confirmLabel: verb,
-    });
-    if (!ok) return;
-    opts.setRowBusy(jobId);
-    try {
-      await opts.api.patch(`/admin/jobs/${jobId}/status`, { status: toStatus });
-      opts.clearCache();
-      await opts.reload();
-      opts.afterReload?.();
-    } catch (e) {
-      opts.setErrorMsg(`${verb} failed: ${e instanceof Error ? e.message : 'Unknown error'}`);
-    } finally {
-      opts.setRowBusy(null);
-    }
-  };
 }

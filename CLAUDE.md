@@ -64,7 +64,7 @@ There is an HTTP API, so a log question does not need a browser or the user:
 
 ```bash
 B=http://10.30.2.40:8888                                  # QA: 10.30.2.30:8888
-curl -sN -m 10 "$B/api/events/stream" | head -c 60000      # SSE — sample it; ids + host UUID
+curl -sN -m 20 "$B/api/events/stream" | head -c 60000      # SSE — sample it; ids + host UUID(s)
 curl -s "$B/api/hosts/<HOST_UUID>/containers/<ID>/logs?stdout=1&stderr=1&everything=true"
 ```
 
@@ -72,6 +72,12 @@ curl -s "$B/api/hosts/<HOST_UUID>/containers/<ID>/logs?stdout=1&stderr=1&everyth
 a bad URL). Output is NDJSON — `grep -a` it; `m` holds the message. Discover the
 host UUID each time; it differs per environment. Bare `/api/containers` and
 `/api/hosts` are 404.
+
+Prod crm-ui / client-ui run on a SEPARATE host. They appear in the Prod Dozzle
+above only once its agent is enabled (repo variable `PROD_DOZZLE_AGENT_ENABLED`,
+runbook EasyFix_Backend `docs/dozzle-agent.md`); Prod then lists **two hosts**
+— use the UUID that owns the container. `-m 20`, not 10: a slow agent can hold
+the first events for up to 10s.
 
 Deploys archive the retiring container's logs for 7 days as
 `easyfix-<svc>-logs-<stamp>-<env>-<commit>` — to read a specific release, find

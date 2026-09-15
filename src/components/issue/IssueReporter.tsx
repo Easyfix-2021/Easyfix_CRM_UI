@@ -38,20 +38,25 @@
  * routes/admin/issues.js). `api.post` already omits Content-Type for a
  * FormData body so the browser can set the multipart boundary.
  *
- * ─── THE "ALL TICKETS" TAB FAILS CLOSED ────────────────────────────────────
+ * ─── "ALL TICKETS" IS THE CALLER'S OWN TICKETS ─────────────────────────────
  *
- * It is rendered only when the caller passes BOTH locks the backend applies in
- * services/issue.service.js resolveActor: the `isIssueManage` action key, read
- * through actionFlags() like every other action gate in the CRM, AND the
- * `access.issues.emails` allowlist, read as canManageIssues from
- * GET /admin/access/features.
+ * Open Tickets = mine, open; All Tickets = mine, every status (2026-09-11, per
+ * ops). It used to list scope=all for the three issue managers, so their
+ * personal widget showed everyone's tickets — the full queue belongs on
+ * /admin-actions/issues, which has its own All Issues / Reported By Me scope.
+ * Being reporter-scoped, the tab is now shown to everyone: a reporter can find
+ * their closed tickets and the close notes on them.
  *
- * Both halves fail closed. actionFlags returns false for a missing `me`, a
- * missing permissions block and a missing key alike; the feature flag is
- * compared `=== true`, so an in-flight or failed fetch is undefined and denies.
- * A still-loading session therefore shows two tabs, not three. The server
- * refuses scope=all anyway; this only keeps the UI from offering a control
- * that would 403.
+ * Reopen Issue is offered on a closed ticket to its reporter or a manager — the
+ * backend's READ rule, so no key is needed to reopen your own.
+ *
+ * The manager gate survives only on the Close button. It passes BOTH locks the
+ * backend applies in services/issue.service.js resolveActor: the `isIssueManage`
+ * action key, read through actionFlags() like every other action gate in the
+ * CRM, AND the `access.issues.emails` allowlist, read as canManageIssues from
+ * GET /admin/access/features. Both halves fail closed — an in-flight or failed
+ * fetch is undefined and denies. The server enforces all of this regardless:
+ * scope=all is refused to non-managers and scope=mine filters by reporter.
  */
 
 import * as React from 'react';
@@ -91,6 +96,9 @@ const TITLE_MAX = 200;
 const DESCRIPTION_MAX = 4000;
 const COMMENT_MAX = 2000;
 const CLOSE_NOTE_MAX = 1000;
+/* validators/issue.validator.js issueReopen — 600, so the reopen comment can
+ * also carry the close it undoes within comment_text's 2000. */
+const REOPEN_NOTE_MAX = 600;
 const MIN_TEXT = 3;
 
 /** First page. The panel is 26rem wide, so a full table footer does not fit —
@@ -288,11 +296,6 @@ export function IssueReporter() {
   const [tab, setTab] = React.useState<TabKey>('report');
   const [selectedId, setSelectedId] = React.useState<number | null>(null);
 
-  /* A tab the caller may not hold must not stay selected if the grant is
-   * resolved late (or revoked on a /auth/me refresh) — otherwise the panel
-   * shows an empty body under a trigger that is no longer rendered. */
-  const activeTab: TabKey = tab === 'all' && !canManage ? 'report' : tab;
-
   // Report form.
   const [title, setTitle] = React.useState('');
   const [description, setDescription] = React.useState('');
@@ -304,6 +307,7 @@ export function IssueReporter() {
   // Detail view.
   const [commentText, setCommentText] = React.useState('');
   const [posting, setPosting] = React.useState(false);
+  const [reopening, setReopening] = React.useState(false);
 
   /* Close note lives in a ref, not state: confirm() snapshots its `description`
    * JSX at call time (see components/ui/confirm-dialog.tsx), so a controlled
@@ -311,6 +315,8 @@ export function IssueReporter() {
    * admin-actions/issues/page.tsx and finance/payout-requests/page.tsx — the
    * only two of the 75 useConfirm call sites that carry free text. */
   const closeNoteRef = React.useRef('');
+  /* The reopen reason — a ref for the same reason as closeNoteRef. */
+  const reopenNoteRef = React.useRef('');
 
   /*
    * Every key is null unless the panel is open AND that pane is the one on
@@ -321,15 +327,16 @@ export function IssueReporter() {
    * state would only have to be kept in sync with the first. */
   const [listLimit, setListLimit] = React.useState(LIST_LIMIT);
 
-  const listKey = (scope: 'mine' | 'all', status?: IssueStatus) =>
-    `${LIST_PREFIX}?scope=${scope}&limit=${listLimit}${status ? `&status=${status}` : ''}`;
+  // Both list tabs are the caller's own tickets — see "ALL TICKETS" above.
+  const listKey = (status?: IssueStatus) =>
+    `${LIST_PREFIX}?scope=mine&limit=${listLimit}${status ? `&status=${status}` : ''}`;
 
   const showingList = open && selectedId === null;
   const openList = useFetch<IssueListResponse>(
-    showingList && activeTab === 'open' ? listKey('mine', 'open') : null,
+    showingList && tab === 'open' ? listKey('open') : null,
   );
   const allList = useFetch<IssueListResponse>(
-    showingList && activeTab === 'all' && canManage ? listKey('all') : null,
+    showingList && tab === 'all' ? listKey() : null,
   );
   const detail = useFetch<IssueDetail>(
     open && selectedId != null ? `${LIST_PREFIX}/${selectedId}` : null,
@@ -528,6 +535,52 @@ export function IssueReporter() {
     }
   }
 
+  async function reopenIssue() {
+    if (selectedId == null) return;
+    // Reset FIRST, same as closeNoteRef.
+    reopenNoteRef.current = '';
+    const ok = await confirm({
+      title: 'Reopen This Issue?',
+      description: (
+        <div className="space-y-3">
+          <p>It goes back to the open queue, and your reason is added to the thread.</p>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">What Is Still Wrong?</label>
+            <textarea
+              defaultValue=""
+              onChange={(e) => { reopenNoteRef.current = e.target.value; }}
+              rows={3}
+              maxLength={REOPEN_NOTE_MAX}
+              required
+              placeholder="What Still Happens, And Where"
+              className="w-full rounded border border-input bg-background px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-ring"
+            />
+          </div>
+        </div>
+      ),
+      confirmLabel: 'Reopen Issue',
+    });
+    if (!ok) return;
+    const reopenNote = reopenNoteRef.current.trim();
+    if (!reopenNote) {
+      showToast({ variant: 'error', message: 'Tell Us What Is Still Wrong.' });
+      return;
+    }
+    setReopening(true);
+    try {
+      await api.patch(`${LIST_PREFIX}/${selectedId}/reopen`, { reopen_note: reopenNote });
+      showToast({ variant: 'success', message: 'Issue Reopened.' });
+      detail.refetch();
+      refreshLists();
+    } catch (err) {
+      // 409 = someone reopened (or re-closed) it first: show the ticket as it is now.
+      if (err instanceof ApiError && err.status === 409) { detail.refetch(); refreshLists(); }
+      showToast({ variant: 'error', message: errText(err, 'Could Not Reopen The Issue.') });
+    } finally {
+      setReopening(false);
+    }
+  }
+
   function openTicket(id: number) {
     setSelectedId(id);
     setCommentText('');
@@ -671,6 +724,10 @@ export function IssueReporter() {
                         <Button type="button" variant="outline" size="sm" onClick={closeIssue}>
                           Close Issue
                         </Button>
+                      ) : issue.status === 'closed' && (issue.reported_by === me?.user.user_id || canManage) ? (
+                        <Button type="button" variant="outline" size="sm" onClick={reopenIssue} disabled={reopening}>
+                          Reopen Issue
+                        </Button>
                       ) : <span />}
                       <Button type="submit" size="sm" className="gap-1" disabled={posting || !commentText.trim()}>
                         {posting
@@ -684,12 +741,12 @@ export function IssueReporter() {
               ) : null}
             </div>
           ) : (
-            <Tabs value={activeTab} onValueChange={onTabChange} className="flex min-h-0 flex-1 flex-col">
+            <Tabs value={tab} onValueChange={onTabChange} className="flex min-h-0 flex-1 flex-col">
               <div className="px-4 pt-3">
                 <TabsList className="w-full">
                   <TabsTrigger value="report" className="flex-1">Report An Issue</TabsTrigger>
                   <TabsTrigger value="open" className="flex-1">Open Tickets</TabsTrigger>
-                  {canManage ? <TabsTrigger value="all" className="flex-1">All Tickets</TabsTrigger> : null}
+                  <TabsTrigger value="all" className="flex-1">All Tickets</TabsTrigger>
                 </TabsList>
               </div>
 
@@ -803,16 +860,14 @@ export function IssueReporter() {
                   />
                 </TabsContent>
 
-                {canManage ? (
-                  <TabsContent value="all">
-                    <ListBody
-                      state={allList}
-                      emptyLabel="No Tickets Yet."
-                      onOpen={openTicket}
-                      onShowMore={listLimit < LIST_LIMIT_MAX ? () => setListLimit(LIST_LIMIT_MAX) : null}
-                    />
-                  </TabsContent>
-                ) : null}
+                <TabsContent value="all">
+                  <ListBody
+                    state={allList}
+                    emptyLabel="You Have Not Reported Any Tickets Yet."
+                    onOpen={openTicket}
+                    onShowMore={listLimit < LIST_LIMIT_MAX ? () => setListLimit(LIST_LIMIT_MAX) : null}
+                  />
+                </TabsContent>
               </div>
             </Tabs>
           )}

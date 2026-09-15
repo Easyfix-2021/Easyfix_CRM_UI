@@ -23,6 +23,14 @@
  * every operator whenever the customer-number-visible flag is off — no error,
  * just a leak on screen. And the COUNT, which is arithmetic with two traps
  * (a capped page, an excluded row) — so that one is RUN, not pattern-matched.
+ *
+ * Third pass, same day: "View History is visible now but nothing happens on
+ * click." JobForm has TWO returns — Confirm & Schedule's early return and the
+ * create/edit form — and the slot rendered in both while the dialog it opens
+ * was mounted in the second only. Every check in this file passed on that
+ * build: they asserted both surfaces READ historyCustomer, never that the
+ * branch showing the button also MOUNTS what it opens. The last test here
+ * walks JobForm's returns and asserts exactly that.
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -63,7 +71,7 @@ const jobs = (...ids) => ids.map((job_id) => ({ job_id }));
 
 test('one value decides whose history — the slot and the dialog cannot disagree', () => {
   assert.ok(decl.length > 0, 'historyCustomer must be declared');
-  assert.match(SRC, /\{historyCustomer \? \(\s*\n\s*<CustomerHistoryDialog/,
+  assert.match(SRC, /const historyDialog = historyCustomer \? \(\s*\n\s*<CustomerHistoryDialog/,
     'the dialog mounts off historyCustomer');
   assert.match(slot, /^ {2}const historySlot = !historyCustomer \|\| historyFetch\.loading \? null/,
     'and so does the slot');
@@ -131,4 +139,42 @@ test('the slot sits in the Job Summary strip, beside the customer number', () =>
   assert.ok(strip.length > 0, 'the Job Summary strip must be found');
   assert.match(strip, /<CallableMobile[\s\S]*\{historySlot\}/,
     'the slot follows the number, rightmost — the position Book New Call uses');
+});
+
+/*
+ * Parsed, not sliced: "which return is this inside" is a scoping question, and
+ * a text window between two `return (` strings answers it wrong the moment a
+ * callback's own return sits in between. Returns of nested functions (event
+ * handlers, helpers) are skipped — only JobForm's own branches render the form.
+ */
+test('every JobForm return that renders View History also mounts the dialog it opens', () => {
+  const sf = ts.createSourceFile('JobModal.tsx', SRC, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const jobForm = sf.statements.find((n) => ts.isFunctionDeclaration(n) && n.name && n.name.text === 'JobForm');
+  assert.ok(jobForm, 'JobForm must be found');
+
+  const returns = [];
+  (function walk(n) {
+    if (n !== jobForm && ts.isFunctionLike(n)) return;
+    if (ts.isReturnStatement(n) && n.expression) returns.push(n.expression);
+    ts.forEachChild(n, walk);
+  })(jobForm);
+  const mentions = (node, name) => {
+    let hit = false;
+    (function walk(n) {
+      if (hit) return;
+      if (ts.isIdentifier(n) && n.text === name) hit = true;
+      else ts.forEachChild(n, walk);
+    })(node);
+    return hit;
+  };
+
+  const withSlot = returns.filter((r) => mentions(r, 'historySlot'));
+  // Silence is the passing signal below, so first prove the walk found both
+  // surfaces: Confirm & Schedule's early return and Book New Call's form.
+  assert.ok(withSlot.length >= 2, `expected the slot in 2 JobForm returns, found ${withSlot.length}`);
+  for (const r of withSlot) {
+    const line = sf.getLineAndCharacterOfPosition(r.getStart(sf)).line + 1;
+    assert.ok(mentions(r, 'historyDialog') || mentions(r, 'CustomerHistoryDialog'),
+      `JobModal.tsx:${line} — this return renders View History but not the dialog it opens; the click sets historyOpen and nothing reads it`);
+  }
 });

@@ -8,7 +8,7 @@ import { useDebouncedValue, useFetchOnce } from '@/lib/hooks';
 import {
   Plus, Upload, ChevronDown, ChevronUp, Repeat, Globe,
   // Row-level quick-action icons (mirror the legacy Manage Jobs action column)
-  Eye, CalendarClock, PlayCircle, CheckCircle2, CalendarCheck, MapPin, RefreshCw,
+  Eye, CalendarClock, CalendarCheck, MapPin, RefreshCw,
   ClipboardCheck,
 } from 'lucide-react';
 import { IconButton } from '@/components/ui/icon-button';
@@ -36,7 +36,7 @@ import {
   formatJobAge, jobAgeTitle, JOB_AGE_SORT_KEY, type JobAgeFields,
 } from '@/lib/job-age';
 import {
-  TABS, type CountsResp, countFor, filterJobRows, filterTabsForStages, makeQuickStatusChange,
+  TABS, type CountsResp, countFor, filterJobRows, filterTabsForStages,
   JOB_SEARCH_PLACEHOLDER, JOB_SEARCH_HINT,
 } from '@/lib/job-tabs';
 import { transitionAllowed } from '@/lib/job-stages';
@@ -52,13 +52,11 @@ import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
 import { cycleSort, SortHeader, type SortDir } from '@/lib/use-sort';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
-import { useConfirm } from '@/components/ui/confirm-dialog';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
 import { useVirtualRows, VirtualPad } from '@/components/ui/virtual-rows';
 import { Checkbox } from '@/components/ui/checkbox';
 import { RefreshBar } from '@/components/ui/refresh-bar';
 import { LiveLocationPopover } from '@/components/location/LiveLocationPopover';
-import { CheckInWithReasonDialog } from '@/components/job/CheckInWithReasonDialog';
 
 // `/admin/jobs` Joi caps limit at 500 — pass to pageSizeToLimit so
 // "All" sends 500 instead of the default 1000 (which would 400).
@@ -90,6 +88,15 @@ const WEBSITE_SOURCE_TYPE = 'website';
 // route falls back to (its FALLBACK_CLIENT_ID). Kept as a string because every
 // other value in the filter/query layer here is a string.
 const RETAIL_CLIENT_ID = '1';
+
+/*
+ * The Job Id box's alphabet: job ids and job booking references (REF-482505),
+ * comma-separated. Anything else is stripped as it is typed, and from a `?q=`
+ * bookmarked back when this box searched names. It is the backend's jobIdOrRef
+ * pattern (validators/job.validator.js); a character outside it would 400, and
+ * a 400 behind a grid that keeps its previous rows reads as "nothing happened".
+ */
+const JOB_ID_OR_REF_STRIP = /[^A-Za-z0-9._/,-]/g;
 
 type JobRow = JobAgeFields & {
   job_id: number; job_reference_id: string | null; client_ref_id: string | null;
@@ -222,7 +229,6 @@ export default function JobsPage() {
     // gates could not render here even for operators who hold it — the button
     // was missing from the page, not denied by RBAC.
     'isJobReassign',
-    'isJobStatusChange',
     // Drives the "Transfer Job Ownership" button gating. The BE
     // bulk-transfer route is roleByName(['Admin']); we use the
     // existing permission key so the seed migration controls
@@ -270,7 +276,7 @@ export default function JobsPage() {
    * arrays are evaluated during render: referencing it further down the
    * component put it in the temporal dead zone.
    */
-  const [q, setQ] = useState(() => searchParams.get('q') || '');
+  const [q, setQ] = useState(() => (searchParams.get('q') || '').replace(JOB_ID_OR_REF_STRIP, ''));
   const serverQ = useDebouncedValue(q, 300).trim();
   /*
    * `filters` mirrors the legacy CRM "Filter Job" panel. Every key
@@ -567,8 +573,13 @@ export default function JobsPage() {
          * pages when only this one was asked about. The backend exposes jobIds
          * on listQuery and services/job.service.js already built
          * `j.job_id IN (...)` from it — the capability existed, unexposed.
+         *
+         * jobIdOrRef, not jobIds (2026-09-11, per ops). Each token is a job id
+         * OR a job booking reference, matched exactly: a number still goes to
+         * the primary key, anything else to job_reference_id. jobIds was
+         * digits-only, so pasting the REF-… shown under every id 400'd.
          */
-        jobIds: serverQ || undefined,
+        jobIdOrRef: serverQ || undefined,
         /*
          * Asks for the Manage Jobs PROJECTION, not a filter: three extra joins,
          * eight scalar subqueries and the two derived bucket labels. Opt-in so
@@ -990,7 +1001,12 @@ export default function JobsPage() {
       })).forEach(([k, v]) => qs.set(k, String(v)));
       // Search is server-side now, so the sheet must be narrowed by it too —
       // otherwise Export silently returns more rows than the screen shows.
-      if (serverQ) qs.set('q', serverQ);
+      // The grid's own param (2026-09-11). This sent `q`, an eleven-column
+      // LIKE: a superset for one id, nothing at all for a CSV, and inside the
+      // export's default 6-month window, so an old closed job was a row on
+      // screen and an empty sheet. The export reads jobIdOrRef through list()'s
+      // predicate and lets it lift that window.
+      if (serverQ) qs.set('jobIdOrRef', serverQ);
       const isEscalated = searchParams.get('focus') === 'escalated' ? 'true' : null;
       if (isEscalated) qs.set('isEscalated', 'true');
       // Mirror the same `dateType` gate as load() so the export
@@ -1047,33 +1063,11 @@ export default function JobsPage() {
    * date/slot and the technician are picked in one atomic step. That keeps the
    * tech-selection flow in one place.
    */
-  const [rowBusy, setRowBusy] = useState<number | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   // Live-location popover — the job whose technician location is being viewed
   // (null = closed). Shown for "Pending App Ack" (status 0, assigned) and
   // "Pending to Close" (status 2/20) rows, which always carry a tech.
   const [locationJob, setLocationJob] = useState<JobRow | null>(null);
-  /*
-   * Row-level ops check-in. NOT quickStatusChange: that PATCHes /status, which
-   * writes job_status alone and leaves checkin_date_time — the TAT anchor —
-   * null. The dialog POSTs /admin/jobs/:id/checkin, the same endpoint the
-   * workspace's Check In button uses.
-   */
-  const [checkinJobId, setCheckinJobId] = useState<number | null>(null);
-  const confirmAction = useConfirm();
-  // Shared factory (lib/job-tabs.ts). /jobs keeps the short confirm copy and
-  // refreshes the dashboard counts after reload (afterReload: refreshCounts).
-  const quickStatusChange = makeQuickStatusChange({
-    confirmAction,
-    api,
-    description: `The job's status will be updated.`,
-    setRowBusy,
-    setErrorMsg,
-    clearCache: () => cacheRef.current.clear(),
-    reload: async () => { await load(false, true); },
-    afterReload: refreshCounts,
-  });
-
   // Instant client-side search filter over the current (server-sorted,
   // server-paginated) page — shared filterJobRows in lib/job-tabs.ts. Sorting
   // itself is now server-side (see below), so this only narrows what's already
@@ -1117,7 +1111,8 @@ export default function JobsPage() {
   // when the operator can actually transfer ownership. ONE constant: three
   // colSpans read it, and two hand-written numbers in one <thead> disagreed
   // the last time this table changed shape.
-  const jobCols = canJob.isTransferJobOwnership ? 21 : 20;
+  // 19 since 2026-09-11: the booking reference id folded into the Job Id cell.
+  const jobCols = canJob.isTransferJobOwnership ? 20 : 19;
 
   /*
    * ── Selection derivations ─────────────────────────────────────────
@@ -1334,25 +1329,22 @@ export default function JobsPage() {
                     (2026-08-18) — the label said "(This Page)" and meant it,
                     so an operator searching a job id from page 1 found nothing
                     unless they happened to already be on the page holding it.
-                    `q` now goes to the backend (job id, reference id, client
-                    ref, customer name + mobile) and resets to page 1.
-                    filterJobRows still runs over the loaded rows for instant
-                    feedback during the 300ms debounce; it matches a superset of
-                    the backend's fields, so it never hides a server match. */}
-                <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Job Id</label>
+                    It now goes to the backend as `jobIdOrRef` — each token an
+                    exact job id or job booking reference — and resets to page 1.
+                    (Not `q` any more, and no client-side re-filter: see load().) */}
+                <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Job Id / Ref Id</label>
                 <Input
-                  inputMode="numeric"
-                  placeholder="e.g. 500043"
-                  title="Search by Job Id. Use Customer Name / No., Client or EFR ID for the other fields."
+                  placeholder="e.g. 500043 or REF-500043"
+                  title="Search by Job Id or Job Booking Reference Id (comma-separate several). Use Customer Name / No., Client or EFR ID for the other fields."
                   value={q}
                   /*
-                   * Digits only. The backend rejects anything else outright, and
-                   * a 400 behind a table that deliberately keeps its previous
-                   * rows on error reads as "nothing happened" — the same silent
-                   * failure a too-small CSV limit caused on this page before.
-                   * Strip at the input so the request is never malformed.
+                   * Stripped to the id/reference alphabet as it is typed — see
+                   * JOB_ID_OR_REF_STRIP. A 400 behind a table that deliberately
+                   * keeps its previous rows on error reads as "nothing happened",
+                   * the same silent failure a too-small CSV limit caused on this
+                   * page before, so the request is never malformed.
                    */
-                  onChange={(e) => setQ(e.target.value.replace(/[^0-9,]/g, ''))}
+                  onChange={(e) => setQ(e.target.value.replace(JOB_ID_OR_REF_STRIP, ''))}
                 />
               </div>
               <div>
@@ -1618,22 +1610,7 @@ export default function JobsPage() {
                     consistency. The outline Reset to its left + the
                     emerald Export on the right give it a clear
                     visual shelf without a custom hue. */}
-                {/* Ops check-in from a row — same dialog, same endpoint as the workspace's
-          Check In button. Reload mirrors quickStatusChange's success path,
-          counts included, so the status pills stay coherent. */}
-      <CheckInWithReasonDialog
-        open={checkinJobId != null}
-        onClose={() => setCheckinJobId(null)}
-        jobId={checkinJobId ?? 0}
-        onDone={async () => {
-          setCheckinJobId(null);
-          cacheRef.current.clear();
-          await load(false, true);
-          refreshCounts();
-        }}
-      />
-
-      {canJob.isTransferJobOwnership && (
+                {canJob.isTransferJobOwnership && (
                   <>
                     <Button
                       type="button"
@@ -1790,12 +1767,18 @@ export default function JobsPage() {
                       </th>
                     )}
                     {/* ─────────────────────────────────────────────────────────
-                        THE 20 COLUMNS, IN THE LEGACY ORDER (2026-09-10).
+                        THE 19 COLUMNS, IN THE LEGACY ORDER (2026-09-10).
                         Header text and sequence are the legacy Manage Jobs
                         screen's verbatim — EasyFix_CRM manageJob.vm:778-797,
                         rows bound by jobList.vm — including its "Escalted By"
                         spelling, so an operator moving between the two screens
                         reads the same words in the same places.
+
+                        ONE deliberate departure (2026-09-11, per ops): legacy's
+                        first column, "Job booking reference id", took a whole
+                        column for one short string. It now renders small under
+                        the Job Id in the same cell, and Job Id took over the
+                        pinned-left slot.
 
                         A header is a sort header only when its key is in the
                         backend's SORTABLE_COLUMNS. An unwhitelisted key is not
@@ -1804,8 +1787,7 @@ export default function JobsPage() {
                         GRID. tests/wire-contract.test.js in the backend repo
                         checks every col= on this page against that map.
                         ───────────────────────────────────────────────────── */}
-                    <SortHeader col="job_reference_id"        sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="stick-col-head stick-left">Job booking reference id</SortHeader>
-                    <SortHeader col="job_id"                  sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Job Id</SortHeader>
+                    <SortHeader col="job_id"                  sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="stick-col-head stick-left">Job Id</SortHeader>
                     {/* Age — ticket-created → terminal event (or now, while
                         open). Server-computed AND server-sorted on the seconds
                         expression, never the floored day label, so same-day
@@ -1876,27 +1858,33 @@ export default function JobsPage() {
                       />
                     </td>
                   )}
-                  {/* ─── the 20 cells, positionally 1:1 with the <thead> above ───
+                  {/* ─── the 19 cells, positionally 1:1 with the <thead> above ───
                       Reordered and re-sourced to the legacy Manage Jobs set.
                       Cells whose data is only on the view=manage projection
                       render an em-dash when the field is absent, so an older
                       BE degrades to blanks instead of throwing. */}
-                  {/* 1. Job booking reference id — the EasyFix-generated REF
-                         string, NOT client_ref_id and NOT the numeric id. It
-                         takes the pinned-left slot Job # used to hold, because
-                         it is now the first column. */}
-                  <td className="text-xs whitespace-nowrap stick-col stick-left">{j.job_reference_id ?? '—'}</td>
-                  {/* 2. Job Id — keeps the call-history popover it has always
-                         carried, so no capability moves with the column. */}
-                  <td className="font-medium whitespace-nowrap">
+                  {/* 1. Job Id — pinned left, and keeps the call-history
+                         popover it has always carried. The job booking
+                         reference id rides UNDER it, small and muted, only
+                         when the job has one: the EasyFix REF string, NOT
+                         client_ref_id (column 8). Truncated with the full
+                         value on hover — the column is varchar(100), and an
+                         unbounded string in a pinned cell would widen the
+                         pinned slot for the whole page. */}
+                  <td className="font-medium whitespace-nowrap stick-col stick-left">
                     <span className="inline-flex items-center gap-1">
                       #{j.job_id}
                       <CallHistoryButton jobId={j.job_id} />
                     </span>
+                    {j.job_reference_id && (
+                      <div className="max-w-[10rem] truncate text-xs font-normal text-muted-foreground" title={j.job_reference_id}>
+                        {j.job_reference_id}
+                      </div>
+                    )}
                   </td>
-                  {/* 3. Age */}
+                  {/* 2. Age */}
                   <td className="text-xs whitespace-nowrap tabular-nums" title={jobAgeTitle(j)}>{formatJobAge(j)}</td>
-                  {/* 4. Cx Name & Number — the number stays a CallableMobile,
+                  {/* 3. Cx Name & Number — the number stays a CallableMobile,
                          which owns masking and call logging and never receives
                          unmasked digits, only the jobId. */}
                   <td className="whitespace-nowrap">
@@ -1905,7 +1893,7 @@ export default function JobsPage() {
                       <CallableMobile jobId={j.job_id} mobile={j.customer_mob_no} />
                     </div>
                   </td>
-                  {/* 5. Remark — THE LATEST COMMENT on the job, per ops. Not
+                  {/* 4. Remark — THE LATEST COMMENT on the job, per ops. Not
                          j.remarks: only one of the platform's comment writers
                          mirrors into that column, and it doubles as a
                          serialisation format for two fields that have no
@@ -1917,33 +1905,33 @@ export default function JobsPage() {
                       ? <span className="line-clamp-2 break-words" title={j.last_comment}>{j.last_comment}</span>
                       : <span className="text-muted-foreground">—</span>}
                   </td>
-                  {/* 6. Open Due to — the accountable PARTY, not the reason
+                  {/* 5. Open Due to — the accountable PARTY, not the reason
                          text. Same reason row as legacy's Remark column, which
                          is why the two were blank together there. */}
                   <td className="text-xs whitespace-nowrap">{j.due_to_type ?? '—'}</td>
-                  {/* 7. City / PIN */}
+                  {/* 6. City / PIN */}
                   <td className="whitespace-nowrap">
                     {j.city_name ?? '—'}
                     {j.pin_code && <span className="text-muted-foreground"> / {j.pin_code}</span>}
                   </td>
-                  {/* 8. Client */}
+                  {/* 7. Client */}
                   <td className="whitespace-nowrap">{j.client_name ?? '—'}</td>
-                  {/* 9. Client Ref Id — the CLIENT's own reference. */}
+                  {/* 8. Client Ref Id — the CLIENT's own reference. */}
                   <td className="text-xs">{j.client_ref_id ?? '—'}</td>
-                  {/* 10. Appointment Date */}
+                  {/* 9. Appointment Date */}
                   <td className="text-xs whitespace-nowrap">{formatDate(j.requested_date_time)}</td>
-                  {/* 11. Ticket Created */}
+                  {/* 10. Ticket Created */}
                   <td className="text-xs whitespace-nowrap">
                     {j.ticket_created_date_time ? formatDate(j.ticket_created_date_time) : '—'}
                   </td>
-                  {/* 12. Rating — the CUSTOMER's rating of the technician for
+                  {/* 11. Rating — the CUSTOMER's rating of the technician for
                           this job. Bare number, as legacy rendered it. */}
                   <td className="text-xs tabular-nums text-center">
                     {j.customer_rating != null && j.customer_rating > 0 ? j.customer_rating : '—'}
                   </td>
-                  {/* 13. Bucket — the coarse lifecycle name, derived server-side. */}
+                  {/* 12. Bucket — the coarse lifecycle name, derived server-side. */}
                   <td className="text-xs whitespace-nowrap">{j.bucket || '—'}</td>
-                  {/* 14. Bucket Status — the fine sub-state, also server-derived.
+                  {/* 13. Bucket Status — the fine sub-state, also server-derived.
                           The two CURRENT-product signals that used to hang off
                           the retired Status column ride here, because both
                           QUALIFY the state: a live delegation means the job is
@@ -1968,9 +1956,9 @@ export default function JobsPage() {
                       </button>
                     )}
                   </td>
-                  {/* 15. Category — the service CATEGORY, not the service type. */}
+                  {/* 14. Category — the service CATEGORY, not the service type. */}
                   <td className="text-xs whitespace-nowrap">{j.service_category ?? '—'}</td>
-                  {/* 16. Client SPOC Name & No. — both columns live on tbl_job
+                  {/* 15. Client SPOC Name & No. — both columns live on tbl_job
                           itself, not on tbl_client. `client_spoc` is already
                           registered in the backend's mask-mobile MOBILE_FIELDS,
                           so it arrives masked. */}
@@ -1978,9 +1966,9 @@ export default function JobsPage() {
                     {j.client_spoc_name ?? '—'}
                     {j.client_spoc && <div className="text-muted-foreground">{j.client_spoc}</div>}
                   </td>
-                  {/* 17. Easyfix SPOC — job_client_owner, NOT job_owner. */}
+                  {/* 16. Easyfix SPOC — job_client_owner, NOT job_owner. */}
                   <td className="text-xs whitespace-nowrap">{j.easyfix_spoc ?? '—'}</td>
-                  {/* 18. Tx name -ID- Master/Under Master. Keyed on
+                  {/* 17. Tx name -ID- Master/Under Master. Keyed on
                           fk_easyfixter_id, never the joined name: a job that IS
                           assigned to a technician with a blank efr_name once
                           rendered the literal word "unassigned" while the chip
@@ -2005,7 +1993,7 @@ export default function JobsPage() {
                       </>
                     ) : <span className="text-muted-foreground">unassigned</span>}
                   </td>
-                  {/* 19. Escalted By (legacy's spelling, kept). escalated_by
+                  {/* 18. Escalted By (legacy's spelling, kept). escalated_by
                           resolved through tbl_user, which is what the operator
                           wants — legacy printed the CLIENT SPOC's name in this
                           cell whenever an escalator actually existed, which
@@ -2015,21 +2003,17 @@ export default function JobsPage() {
                       ? <>{j.escalated_by_name}{j.escalated_time && <div className="text-muted-foreground">{formatDate(j.escalated_time)}</div>}</>
                       : <span className="text-muted-foreground">Not Escalated</span>}
                   </td>
-                  {/* 20. Action — unchanged, still pinned right. */}
+                  {/* 19. Action — unchanged, still pinned right. */}
                   <td className="stick-col stick-right text-right whitespace-nowrap">
                     {/*
                       * Status-driven row actions — the SAME per-bucket set
                       * /my-orders offers, so muscle memory carries across:
                       *   status 9     → View + Confirm & Schedule
                       *   status 0     → View + Schedule & Assign (date/slot + tech, atomic)
-                      *   status 1     → View + Check-In + Reassign + Resend PIN
-                      *   status 2, 20 → View + Check-Out + Resend PIN
+                      *   status 1     → View + Reassign + Resend PIN (no Check-In: done from the app)
+                      *   status 2, 20 → View + Resend PIN (no Check-Out: closed from the app)
                       *   status 3, 5  → View + Audit (Billing & Charges)
                       *   others       → View only
-                      * Check-Out goes through quickStatusChange() (confirm + PATCH
-                      * /status + refresh list and counts). Check-In does NOT: it
-                      * needs the check-in columns, so it opens the shared
-                      * CheckInWithReasonDialog and refreshes the same way.
                       */}
                     <div className="inline-flex items-center gap-0.5 justify-end">
                       <IconButton
@@ -2129,41 +2113,9 @@ export default function JobsPage() {
                           onClick={() => openReassign(j.job_id)}
                         />
                       )}
-                      {/* Check-In + Check-Out are status mutations → isJobStatusChange,
-                          also gated by the stage-transition rule (1→2 / →3). */}
-                      {j.job_status === 1 && canJob.isJobStatusChange && transitionAllowed(me?.allowedStages, j.job_status, 2) && (
-                        <IconButton
-                          icon={PlayCircle}
-                          intent="primary"
-                          label="Check-In — technician on-site, move to In Progress"
-                          onClick={() => setCheckinJobId(j.job_id)}
-                        />
-                      )}
-                      {/*
-                        * CHECK-OUT SENDS 10 (Under Audit), NOT 3 (Completed).
-                        *
-                        * Pending to Close is statuses [2, 20] and its ONLY forward
-                        * target is 10 — the lifecycle is
-                        *   2/20 → 10 Under Audit → 3 Pending for Feedback → 5 Completed
-                        * (lib/job-stages.js, mirrored in src/lib/job-stages.ts).
-                        *
-                        * This used to send 3, which pending-close does not list as a
-                        * target at all: it skipped the Under Audit queue outright. It
-                        * never failed loudly, because transitionAllowed returns TRUE
-                        * for every UNRESTRICTED operator — the stage guard only bites
-                        * users holding explicit stage rows. So the bypass was
-                        * invisible to almost everyone, and for the few it did bite the
-                        * button simply disappeared.
-                        */}
-                      {(j.job_status === 2 || j.job_status === 20) && canJob.isJobStatusChange && transitionAllowed(me?.allowedStages, j.job_status, 10) && (
-                        <IconButton
-                          icon={CheckCircle2}
-                          intent="success"
-                          label="Check-Out — close the job and send it to Under Audit"
-                          busy={rowBusy === j.job_id}
-                          onClick={() => quickStatusChange(j.job_id, 10, 'Check out')}
-                        />
-                      )}
+                      {/* No Check-In or Check-Out row action (2026-09-11, per ops):
+                          the technician checks in and out from the app. See the
+                          note in JobModal's ActionBar. */}
                       {/*
                         * Audit (Audit & Complete — statuses 3 / 5). Opens the
                         * same workspace the Eye does, landed on Billing &

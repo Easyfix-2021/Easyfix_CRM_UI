@@ -9,10 +9,13 @@ import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 export type SkillImageLightboxValue = { url: string; name: string } | null;
 
 export function SkillImageLightbox({
-  value, onClose,
+  value, onClose, wide = false,
 }: {
   value: SkillImageLightboxValue;
   onClose: () => void;
+  /* Near-full-viewport, for page screenshots: at the default 2xl a full-width
+     capture comes out SMALLER than the thumbnail it was opened from. */
+  wide?: boolean;
 }) {
   /*
    * Project-canonical close handler — `useFormDirtyGuard` is mandatory
@@ -23,7 +26,7 @@ export function SkillImageLightbox({
   const guardedClose = useFormDirtyGuard(onClose, { isDirty: false });
   return (
     <Dialog open={value !== null} onOpenChange={guardedClose}>
-      <DialogContent className="sm:max-w-2xl" noPadding>
+      <DialogContent className={wide ? '!max-w-none w-[calc(100vw-48px)]' : 'sm:max-w-2xl'} noPadding>
         <DialogHeader className="px-6 py-4 shrink-0">
           <DialogTitle className="text-base">{value?.name}</DialogTitle>
         </DialogHeader>
@@ -33,7 +36,7 @@ export function SkillImageLightbox({
             <img
               src={value.url}
               alt={value.name}
-              className="max-h-[70vh] max-w-full object-contain rounded"
+              className={`${wide ? 'max-h-[80vh]' : 'max-h-[70vh]'} max-w-full object-contain rounded`}
             />
           </div>
         )}

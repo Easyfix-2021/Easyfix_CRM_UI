@@ -19,22 +19,23 @@ import { parseIstDateTime } from '@/lib/format';
  * Unconfirmed bucket (job_status = 9). Shared by /jobs and /my-orders
  * so both pages stay aligned on what an Unconfirmed row looks like.
  *
- * Columns (left → right):
- *   1. Job ID
+ * Columns (left → right) — the header order below, 14 in all:
+ *   1. Job #  +  job booking reference id (small, under it)
  *   2. Age — server-computed (see lib/job-age.ts), sortable server-side
- *   3. Ticket Created Date
- *   4. Client  +  Client Reference (Unique Code)
- *   4. City
- *   5. Current Status (pill)
- *   6. Action Taken Reason  (parsed from the structured remarks prefix
+ *   3. Ticket Created
+ *   4. Client Ref Id  (client + Client Reference / Unique Code)
+ *   5. City
+ *   6. Appointment · Slot  (requested_date_time + time_slot)
+ *   7. Status (pill)
+ *   8. Customer Request
+ *   9. Action Taken Reason  (parsed from the structured remarks prefix
  *      we write in JobOutcomeDialog: `[Unreachable · ... · Reason: X]`)
- *   7. Remarks  (operator's free-text portion, after the structured
+ *  10. Remarks  (operator's free-text portion, after the structured
  *      prefix is stripped)
- *   8. Client SPOC  (name + email/contact line)
- *   9. Appointment  (requested_date_time + time_slot)
- *  10. Customer  (name + masked mobile with click-to-call)
- *  11. Source
- *  12. Action  (View, plus Confirm-and-Schedule when the operator has
+ *  11. Client SPOC  (name + email/contact line)
+ *  12. Customer  (name + masked mobile with click-to-call)
+ *  13. Source
+ *  14. Action  (View, plus Confirm-and-Schedule when the operator has
  *      `isJobConfirm`)
  *
  * The `canConfirm` prop gates the Confirm icon — caller passes the
@@ -47,9 +48,9 @@ export type UnconfirmedJobRow = JobAgeFields & {
   job_status: number;
   client_ref_id: string | null;
   // Family reference shared across sibling jobs of a multi-category booking.
-  // Already on the shared /admin/jobs LIST projection; surfaced as a column so
-  // ops can spot linked orders. Optional so older API responses don't break the
-  // type narrow.
+  // Already on the shared /admin/jobs LIST projection; shown small under the
+  // Job # so ops can spot linked orders. Optional so older API responses don't
+  // break the type narrow.
   job_reference_id?: string | null;
   // Already returned by the shared list() projection (sc.service_catg_name AS
   // service_category). Used to group multi-category siblings by client_ref_id
@@ -222,7 +223,6 @@ export function UnconfirmedJobsTable({
               Sends the shared JOB_AGE_SORT_KEY so the BE orders by precise
               seconds. */}
           <SortHeader<string> col={JOB_AGE_SORT_KEY} sortBy={sortBy} sortDir={sortDir} onSort={onSort} className="w-16">Age</SortHeader>
-          <SortHeader<string> col="job_reference_id" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Job Ref</SortHeader>
           <SortHeader<string> col="created_date_time" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Ticket Created</SortHeader>
           <SortHeader<string> col="client_name" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>Client Ref Id</SortHeader>
           <SortHeader<string> col="city_name" sortBy={sortBy} sortDir={sortDir} onSort={onSort}>City</SortHeader>
@@ -238,9 +238,9 @@ export function UnconfirmedJobsTable({
         </tr>
       </thead>
       <tbody>
-        {loading && <tr><td colSpan={15} className="text-center py-8 text-muted-foreground">Loading…</td></tr>}
+        {loading && <tr><td colSpan={14} className="text-center py-8 text-muted-foreground">Loading…</td></tr>}
         {!loading && rows.length === 0 && (
-          <tr><td colSpan={15} className="text-center py-8 text-muted-foreground">No unconfirmed orders.</td></tr>
+          <tr><td colSpan={14} className="text-center py-8 text-muted-foreground">No unconfirmed orders.</td></tr>
         )}
         {!loading && rows.map((j) => {
           const { reason, freeText } = splitRemarks(j.remarks ?? '');
@@ -255,14 +255,24 @@ export function UnconfirmedJobsTable({
           const autoRescheduled = !!j.auto_rescheduled;
           return (
             <tr key={j.job_id}>
+              {/* Job # — the job booking reference id rides UNDER it, small and
+                  muted, only when the job has one (per ops: its own column took
+                  a whole slot for one short string). Same markup as /jobs' Job Id
+                  cell. Truncated with the full value on hover — the column is
+                  varchar(100), and an unbounded string in a pinned cell would
+                  widen the pinned slot for the whole table. */}
               <td className="font-medium whitespace-nowrap stick-col stick-left">
                 <span className="inline-flex items-center gap-1">
                   #{j.job_id}
                   <CallHistoryButton jobId={j.job_id} />
                 </span>
+                {j.job_reference_id && (
+                  <div className="max-w-[10rem] truncate text-xs font-normal text-muted-foreground" title={j.job_reference_id}>
+                    {j.job_reference_id}
+                  </div>
+                )}
               </td>
               <td className="text-xs whitespace-nowrap tabular-nums" title={jobAgeTitle(j)}>{formatJobAge(j)}</td>
-              <td className="text-xs whitespace-nowrap">{j.job_reference_id ?? '—'}</td>
               <td className="text-xs whitespace-nowrap">
                 <div>{ticketTs ? formatDate(ticketTs) : '—'}</div>
               </td>

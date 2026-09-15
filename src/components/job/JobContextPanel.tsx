@@ -38,7 +38,7 @@
 
 import { useEffect, useState } from 'react';
 import {
-  MapPin, Calendar, Loader2, Clock, ChevronDown, Pencil,
+  MapPin, Calendar, Loader2, Clock, ChevronDown, Pencil, AlertTriangle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { showToast } from '@/components/ui/toast';
@@ -48,8 +48,8 @@ import { hasAction } from '@/lib/permissions';
 import { formatServiceAddress } from '@/lib/format';
 import { formatDate, appointmentIsPast } from '@/lib/utils';
 import { displaySlot } from '@/lib/job-slots';
+import { collectedByText } from '@/lib/collected-by';
 import { CallableMobile } from '@/components/calls/CallButton';
-import { StatusChip } from '@/components/ui/StatusChip';
 import { JobRemarksView } from './JobRemarksView';
 /* The SAME dialog the job detail modal and the Unconfirmed transaction view
    open, so Edit Address behaves identically wherever ops reach it. Importing
@@ -93,7 +93,8 @@ export type JobServiceRow = {
 
 /*
  * The subset of the BE's enriched job object this panel renders. Both hosts'
- * candidates responses carry the full object; each declares its own richer job
+ * candidates responses carry buildJobHeader's allowlist of it (a field missing
+ * there arrives undefined — add it BE-side first); each declares its own richer job
  * type and passes it here (structurally assignable — this shape is a subset).
  */
 export type JobContextData = {
@@ -115,11 +116,18 @@ export type JobContextData = {
    * 16,395 uploaded jobs carry it); every other source leaves it NULL, which is
    * why ReadField's em-dash is the right rendering rather than a hidden field.
    *
-   * Already on the wire: the job detail query is `SELECT j.*`, so this needed
-   * no backend change — it was returned and simply never read.
+   * NOT free from `SELECT j.*`: this panel's job is the /candidates header,
+   * which is buildJobHeader's ALLOWLIST (EasyFix_Backend
+   * candidate-ranking.service.js). It had to be added there (2026-09-11) —
+   * until then the Quantity row read "—" on every open.
    */
   product_quantity?: number | null;
-  payment_mode?: string | null;
+  /**
+   * tbl_job.collected_by (1/2/3; 0 or NULL = unset) — rendered as Payment Mode.
+   * NOT the BE's `payment_mode`/`paid_by`: paid_by is 0 or NULL on ~96% of jobs,
+   * so its label printed "Not Set" for a job storing collected_by = 1.
+   */
+  collected_by?: number | string | null;
   requested_date_time?: string | null;
   /**
    * The stored appointment window (tbl_job.time_slot). Every current write path
@@ -138,8 +146,6 @@ export type JobContextData = {
   job_desc?: string | null;
   /** Technician-facing note ("Anything Handyman should keep in mind?") — shown as Additional Comments. */
   efr_special_notes?: string | null;
-  /** Who pays — per JOB. 2 = the customer pays; anything else = not the customer. */
-  paid_by?: number | string | null;
   services?: JobServiceRow[] | null;
 };
 
@@ -171,6 +177,7 @@ export function JobContextPanel({
   pastBlocksAction = false,
   onSaveDetails,
   onAddressSaved,
+  onEditServices,
 }: {
   job: JobContextData | null;
   jobId: number | null;
@@ -207,6 +214,13 @@ export function JobContextPanel({
    */
   onAddressSaved?: () => void;
   /*
+   * Opt-in Edit Services button, on the same terms again: absent ⇒ no button,
+   * so Assign / Reassign stay read-only. The HOST owns the editor (it hosts
+   * JobModal's ServicesTabBody on a full /admin/jobs/:id read) and the re-rank
+   * after it — the Services rows here come from the host's /candidates fetch.
+   */
+  onEditServices?: () => void;
+  /*
    * Does a PAST appointment actually block this host modal's primary action?
    * true  → offering (the server 400s), so the notice is red + imperative.
    * false → assign / reassign, which the server permits on purpose, so the
@@ -230,6 +244,7 @@ export function JobContextPanel({
   const { me } = useMe();
   const canEditDetails = !!onSaveDetails && hasAction(me, 'isJobEdit');
   const canEditAddress = !!onAddressSaved && hasAction(me, 'isJobEdit');
+  const canEditServices = !!onEditServices && hasAction(me, 'isJobEdit');
   const [addressOpen, setAddressOpen] = useState(false);
 
   return (
@@ -324,7 +339,7 @@ export function JobContextPanel({
                     : null
                 }
               />
-              <ReadField label="Payment Mode" value={job.payment_mode} />
+              <ReadField label="Payment Mode" value={collectedByText(job.collected_by) ?? 'Not Set'} />
               <ReadField label="Booked By" value={job.created_by_name} />
               {/* formatDate renders date + IST time — no separate datetime helper. */}
               <ReadField label="Booked On" value={formatDate(job.created_date_time)} />
@@ -349,16 +364,28 @@ export function JobContextPanel({
               </div>
             )}
 
-            {job.services && job.services.length > 0 && (
+            {/* Shown EMPTY too when editable: removing a job's last service
+                must not take the Edit Services button away with the list. */}
+            {((job.services && job.services.length > 0) || canEditServices) && (
               <div className="mt-3 pt-3 border-t">
-                <div className="text-xs font-semibold text-muted-foreground mb-1.5">Services</div>
+                <div className="mb-1.5 flex items-center justify-between gap-2">
+                  <div className="text-xs font-semibold text-muted-foreground">Services</div>
+                  {canEditServices && (
+                    <Button type="button" variant="outline" size="sm" onClick={onEditServices} className="!h-7 !px-2 text-xs">
+                      <Pencil className="size-3 mr-1" /> Edit Services
+                    </Button>
+                  )}
+                </div>
+                {!job.services || job.services.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No Services on This Job.</p>
+                ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="text-left text-muted-foreground">
                         {/* Widths keep each service on ONE line: the four text
-                            columns truncate under pressure, while Qty / Amount /
-                            Score / Billing are content-sized and never wrap.
+                            columns truncate under pressure, while Score / Qty /
+                            Amount are content-sized and never wrap.
                             The percentages were rebalanced (was 30/24/24) to fit
                             Job Skill WITHOUT widening the modal. */}
                         <th className="font-medium py-1 pr-3 w-[22%]">Service</th>
@@ -372,8 +399,10 @@ export function JobContextPanel({
                         <th className="font-medium py-1 pr-3 text-right whitespace-nowrap w-16">Job Matrix Score</th>
                         <th className="font-medium py-1 pr-3 text-right whitespace-nowrap w-12">Qty</th>
                         <th className="font-medium py-1 pr-3 text-right whitespace-nowrap w-20">Amount</th>
-                        {/* Does the customer pay? Driven by tbl_job.paid_by. */}
-                        <th className="font-medium py-1 whitespace-nowrap">Payment</th>
+                        {/* No per-service Payment column (removed 2026-09-11): it
+                            keyed on tbl_job.paid_by, 0 or NULL on ~96% of jobs, so
+                            it read "Free for Customer" beside Paid By Customer
+                            jobs. Who pays is per JOB — Payment Mode above. */}
                       </tr>
                     </thead>
                     <tbody>
@@ -428,36 +457,12 @@ export function JobContextPanel({
                           </td>
                           <td className="py-1 pr-3 text-right whitespace-nowrap">{s.quantity ?? '—'}</td>
                           <td className="py-1 pr-3 text-right whitespace-nowrap">{s.total_charge != null ? `₹${s.total_charge}` : '—'}</td>
-                          {/*
-                           * PAYMENT — does the customer pay for this job?
-                           * Driven solely by tbl_job.paid_by (2 = the customer
-                           * pays; anything else = they don't), per ops.
-                           *
-                           * ⚠ paid_by is per-JOB, so every service line shows the
-                           * SAME chip — it sits per-row because that's where ops
-                           * read it, not because the data varies. Deliberately NOT
-                           * keyed on the per-service `billing_label` (which only
-                           * says whether a CHARGE exists) nor on `collected_by`
-                           * (who physically collects): a line can carry ₹1000 and
-                           * still be free to the customer when the client is billed.
-                           * paid_by is the only column that answers who pays.
-                           */}
-                          <td className="py-1 whitespace-nowrap">
-                            {Number(job.paid_by) === 2 ? (
-                              <StatusChip tone="amber" title="The customer pays for this job — collect on site.">
-                                Paid by Customer
-                              </StatusChip>
-                            ) : (
-                              <StatusChip tone="emerald" title="Nothing to collect from the customer — the client is billed.">
-                                Free for Customer
-                              </StatusChip>
-                            )}
-                          </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
+                )}
               </div>
             )}
 
@@ -543,10 +548,16 @@ export function JobContextPanel({
                 */}
               {!rescheduling && appointmentIsPast(job.requested_date_time) && (
                 pastBlocksAction ? (
-                  <p className="mt-2 text-xs font-medium text-urgent-strong">
-                    This appointment time has already passed. Reschedule it to a future
-                    slot before offering the job to technicians.
-                  </p>
+                  // A red STRIP, not red text (2026-09-11, per ops): this one
+                  // BLOCKS the offer, and as a line of text it read as a hint.
+                  // Same strip the LMS pages use for blocking notices.
+                  <div role="alert" className="mt-2 flex items-start gap-2 rounded-md border border-urgent/30 bg-urgent-tint p-2 text-xs font-medium text-urgent-strong">
+                    <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
+                    <span>
+                      This appointment time has already passed. Reschedule it to a future
+                      slot before offering the job to technicians.
+                    </span>
+                  </div>
                 ) : (
                   <p className="mt-2 text-xs font-medium text-warning-strong">
                     This appointment time has already passed. You can still reassign,
@@ -576,9 +587,9 @@ export function JobContextPanel({
       {/* Mounted only while open so the form re-seeds from the CURRENT job on
           every open — a persistently mounted dialog would keep the draft from
           the previous open and quietly re-save stale values.
-          Cast through `unknown` for the same reason JobTransactionView does:
-          the dialog reads a handful of address fields, and this panel's job is
-          the /candidates subset rather than the full Job row. */}
+          Cast through `unknown` because the dialog reads only a handful of
+          address fields, and this panel's job is the /candidates subset rather
+          than the full Job row. */}
       {addressOpen && job && (
         <JobAddressEditDialog
           job={job as unknown as Parameters<typeof JobAddressEditDialog>[0]['job']}

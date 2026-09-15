@@ -4,7 +4,7 @@ import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { useJobActionParams, useJobActionNav, isJobModalAction } from '@/lib/job-action-url';
 import {
   Search, Eye,
-  CalendarClock, PlayCircle, CheckCircle2, CalendarCheck,
+  CalendarClock, CalendarCheck,
   RefreshCw, MapPin, ClipboardCheck,
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
@@ -19,7 +19,7 @@ import { StatusChip } from '@/components/ui/StatusChip';
 import { ShareChip } from '@/components/job/JobShareControls';
 import type { JobShare } from '@/lib/job-share';
 import {
-  TABS, filterJobRows, filterTabsForStages, makeQuickStatusChange,
+  TABS, filterJobRows, filterTabsForStages,
   JOB_SEARCH_PLACEHOLDER, JOB_SEARCH_HINT,
 } from '@/lib/job-tabs';
 import { transitionAllowed, STAGES } from '@/lib/job-stages';
@@ -28,7 +28,6 @@ import { UnconfirmedSections } from '@/components/job/UnconfirmedSections';
 import { PendingToStartView } from '@/components/job/PendingToStartView';
 import { AssignTechnicianModal, type AssignMode } from '@/components/job/AssignTechnicianModal';
 import { ScheduleAssignModal } from '@/components/job/ScheduleAssignModal';
-import { CheckInWithReasonDialog } from '@/components/job/CheckInWithReasonDialog';
 import { OfferHoverCard } from '@/components/job/OfferHoverCard';
 import {
   PendingSchedulingFilters, psFiltersFromParams, writePsFilterParams,
@@ -39,7 +38,6 @@ import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
 import { ResendPinButton, RESEND_PIN_ACTION } from '@/components/job/ResendPinButton';
 import { cycleSort, SortHeader, type SortDir } from '@/lib/use-sort';
 import { RefreshBar } from '@/components/ui/refresh-bar';
-import { useConfirm } from '@/components/ui/confirm-dialog';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
 import { useDebouncedValue } from '@/lib/hooks';
 import { LiveLocationPopover } from '@/components/location/LiveLocationPopover';
@@ -222,7 +220,6 @@ export default function MyOrdersPage() {
     'isJobConfirm',       // Confirm unconfirmed (status 9 → 0)
     'isJobAssign',        // Assign / Schedule (status 0 → 1)
     'isJobReassign',      // Reassign already-scheduled (status 1)
-    'isJobStatusChange',  // Check-In / Check-Out / Completion
     // Gates the Trigger/Retrigger button on the Unconfirmed tab — see
     // the parallel block in (authed)/jobs/page.tsx for the rationale.
     'isJobMagicLinkSend',
@@ -556,9 +553,6 @@ export default function MyOrdersPage() {
   const [familySiblings, setFamilySiblings] = useState<Array<{ job_id: number; service_category: string | null }> | null>(null);
   function closeModal()                { closeJobAction(); }
   function openView(id: number, siblings?: Array<{ job_id: number; service_category: string | null }>)        { setFamilySiblings(siblings ?? null); openJobAction('view',     id); }
-  // Pending-to-Start Check-In — same JobModal workspace as view, opened under
-  // ?action=checkin so it titles itself "Checkin · Job #N" (see JobModalMode).
-  function openCheckin(id: number)     { openJobAction('checkin',  id); }
   /*
    * Audit & Complete (status 3 / 5) — the SAME JobModal workspace again, opened
    * under ?action=audit so it titles itself "Audit · Job #N", and deep-linked
@@ -578,10 +572,6 @@ export default function MyOrdersPage() {
   // Pending-for-Scheduling rows → combined Schedule & Assign modal.
   function openSchedule(id: number)    { openJobAction('schedule', id); }
 
-  // Row-level quick action — same pattern as /jobs. Confirms, PATCHes status,
-  // busts cache, refetches list + counts so badges stay coherent.
-  const [rowBusy, setRowBusy] = useState<number | null>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   // Live-location popover state — the job whose technician location is being
   // viewed (null = closed). Shown for "Pending App Ack" (status 0, assigned)
   // and "Pending to Close" (status 2/20) rows, which always have a tech.
@@ -590,28 +580,6 @@ export default function MyOrdersPage() {
   // table's MapPin call site) and PendingToStartView's PendingJobRow, so both
   // call sites type-check without importing each other's row type.
   const [locationJob, setLocationJob] = useState<{ job_id: number; easyfixer_name: string | null } | null>(null);
-  /*
-   * Row-level ops check-in. NOT quickStatusChange: that PATCHes /status, which
-   * writes job_status alone and leaves checkin_date_time — the TAT anchor —
-   * null. The dialog POSTs /admin/jobs/:id/checkin, the same endpoint the
-   * workspace's Check In button uses, so a row check-in and a workspace
-   * check-in are now indistinguishable in the data.
-   */
-  const [checkinJobId, setCheckinJobId] = useState<number | null>(null);
-  const confirmAction = useConfirm();
-  // Shared factory (lib/job-tabs.ts). /my-orders keeps its longer "continue
-  // working" confirm copy and does NOT refresh counts (no pill bar here — see
-  // the refreshCounts-removed note above), so no afterReload is passed.
-  const quickStatusChange = makeQuickStatusChange({
-    confirmAction,
-    api,
-    description: `The job's status will be updated. You can continue working while the update applies.`,
-    setRowBusy,
-    setErrorMsg,
-    clearCache: () => cacheRef.current.clear(),
-    reload: async () => { await load(false, true); },
-  });
-
   // Client-side search over the currently-loaded page (shared filterJobRows
   // in lib/job-tabs.ts — see there for the column/label/date matching rationale).
   //
@@ -707,12 +675,6 @@ export default function MyOrdersPage() {
 
   return (
     <div className="space-y-5">
-      {errorMsg && (
-        <div className="flex items-start justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-          <span>{errorMsg}</span>
-          <button type="button" onClick={() => setErrorMsg(null)} className="text-xs hover:underline">Dismiss</button>
-        </div>
-      )}
       <div className="flex items-end justify-between">
         <div>
           {/*
@@ -788,7 +750,6 @@ export default function MyOrdersPage() {
           isAdmin={isAdmin}
           canJob={canJob}
           openView={openView}
-          openCheckin={openCheckin}
           openReassign={openReassign}
           onShowLocation={(row) => setLocationJob(row)}
         />
@@ -1208,61 +1169,24 @@ export default function MyOrdersPage() {
                           <CalendarClock className="h-3.5 w-3.5" />
                         </button>
                       )}
-                      {j.job_status === 1 && (
-                        <>
-                          {canJob.isJobStatusChange && transitionAllowed(me?.allowedStages, j.job_status, 2) && (
-                            <button
-                              type="button"
-                              onClick={() => setCheckinJobId(j.job_id)}
-                              className="inline-flex items-center gap-1 text-warning-strong text-xs hover:underline disabled:opacity-50"
-                              title="Check-In — technician on-site, move to In Progress"
-                            >
-                              <PlayCircle className="h-3.5 w-3.5" />
-                            </button>
-                          )}
-                          {/*
-                            * Reassign Technician — same modal, mode=reassign.
-                            * Backend candidates query already excludes anyone
-                            * who's previously rejected/rescheduled this job.
-                            */}
-                          {canJob.isJobReassign && (
-                            <button
-                              type="button"
-                              onClick={() => openReassign(j.job_id)}
-                              className="inline-flex items-center gap-1 text-primary text-xs hover:underline"
-                              title="Reassign Technician — pick a different tech from the ranked list"
-                            >
-                              <RefreshCw className="h-3.5 w-3.5" />
-                            </button>
-                          )}
-                        </>
-                      )}
                       {/*
-                        * CHECK-OUT SENDS 10 (Under Audit), NOT 3 (Completed).
-                        *
-                        * Pending to Close is statuses [2, 20] and its ONLY forward target is
-                        * 10 — the lifecycle is
-                        *   2/20 → 10 Under Audit → 3 Pending for Feedback → 5 Completed
-                        * (lib/job-stages.js, mirrored in src/lib/job-stages.ts).
-                        *
-                        * This used to send 3, which pending-close does not list as a target at
-                        * all: it skipped the Under Audit queue outright. It never failed
-                        * loudly, because transitionAllowed returns TRUE for every UNRESTRICTED
-                        * operator — the stage guard only bites users holding explicit stage
-                        * rows. So the bypass was invisible to almost everyone, and for the few
-                        * it did bite the button simply disappeared.
+                        * Reassign Technician — same modal, mode=reassign.
+                        * Backend candidates query already excludes anyone
+                        * who's previously rejected/rescheduled this job.
                         */}
-                      {(j.job_status === 2 || j.job_status === 20) && canJob.isJobStatusChange && transitionAllowed(me?.allowedStages, j.job_status, 10) && (
+                      {j.job_status === 1 && canJob.isJobReassign && (
                         <button
                           type="button"
-                          disabled={rowBusy === j.job_id}
-                          onClick={() => quickStatusChange(j.job_id, 10, 'Check out')}
-                          className="inline-flex items-center gap-1 text-success-strong text-xs hover:underline disabled:opacity-50"
-                          title="Check-Out — close the job and send it to Under Audit"
+                          onClick={() => openReassign(j.job_id)}
+                          className="inline-flex items-center gap-1 text-primary text-xs hover:underline"
+                          title="Reassign Technician — pick a different tech from the ranked list"
                         >
-                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          <RefreshCw className="h-3.5 w-3.5" />
                         </button>
                       )}
+                      {/* No Check-In or Check-Out row action (2026-09-11, per ops):
+                          the technician checks in and out from the app. See the
+                          note in JobModal's ActionBar. */}
                       {/*
                         * Resend Customer PIN — last icon in the row, matching
                         * PendingToStartView.
@@ -1335,20 +1259,6 @@ export default function MyOrdersPage() {
         // Cancel Job (non-assign) also mutates the list — same in-place refresh
         // as onAssigned so the cancelled row drops out without a skeleton flash.
         onChanged={() => { cacheRef.current.clear(); load(false, true); }}
-      />
-
-      {/* Ops check-in from a generic-table row — same dialog, same endpoint as
-          the workspace's Check In button. Reload mirrors quickStatusChange's
-          success path so the row leaves its bucket. */}
-      <CheckInWithReasonDialog
-        open={checkinJobId != null}
-        onClose={() => setCheckinJobId(null)}
-        jobId={checkinJobId ?? 0}
-        onDone={() => {
-          setCheckinJobId(null);
-          cacheRef.current.clear();
-          void load(false, true);
-        }}
       />
 
       {/*

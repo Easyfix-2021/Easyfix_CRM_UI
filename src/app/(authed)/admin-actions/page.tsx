@@ -16,7 +16,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
   ShieldCheck, Webhook, FileSpreadsheet, ShieldAlert, Workflow, Database, FileText, Trash2, Activity, Sparkles, AudioLines,
-  Timer, KeyRound, Fingerprint, LifeBuoy,
+  Timer, KeyRound, Fingerprint, LifeBuoy, LockOpen,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -37,6 +37,7 @@ import { DeleteEntityDialog } from './DeleteEntityDialog';
 import { DeletedRecordsDialog } from './DeletedRecordsDialog';
 import { FieldRekeyDialog } from './FieldRekeyDialog';
 import { RecoveryKeyDialog } from './RecoveryKeyDialog';
+import { UnlockOtpDialog } from './UnlockOtpDialog';
 
 const ACTIONS = [
   {
@@ -155,6 +156,9 @@ export default function AdminActionsPage() {
   // endpoint requires (requireClickToCallAction on /admin/calls/recordings/backfill).
   const canBackfillRecordings = hasAction(me, 'isClickToCall');
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [unlockOtpOpen, setUnlockOtpOpen] = useState(false);
+  // RBAC action (menu "Admin Action") — migrations/2026-09-11-seed-otp-unlock-action.sql.
+  const canUnlockOtp = hasAction(me, 'isOtpUnlock');
   const [deletedRecordsOpen, setDeletedRecordsOpen] = useState(false);
   const [recBackfillOpen, setRecBackfillOpen] = useState(false);
   /* Field-encryption key management (contract ADDENDUM 2 / 3). Two separate
@@ -298,6 +302,31 @@ export default function AdminActionsPage() {
             </button>
           </div>
         )}
+        {/* Unlock OTP / PIN — lifts a 5-wrong-codes lock (login OTPs, the
+            bank/profile OTP, a job's closing PIN) before its 30 minutes are
+            up. Opens UnlockOtpDialog. */}
+        {canUnlockOtp && (
+          <button
+            type="button"
+            onClick={() => setUnlockOtpOpen(true)}
+            className="w-full text-left"
+          >
+            <Card className="hover:border-primary hover:shadow-sm transition-colors h-full">
+              <CardContent className="p-4 space-y-2">
+                <div className="flex items-center gap-2">
+                  <div className="h-8 w-8 rounded-md bg-primary/10 text-primary grid place-items-center">
+                    <LockOpen className="h-4 w-4" />
+                  </div>
+                  <h2 className="font-medium flex-1">Unlock OTP / PIN</h2>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Someone locked out after 5 wrong codes? Look them up by email or mobile — or a job by its
+                  ID for the closing PIN — and lift the lock without waiting 30 minutes.
+                </p>
+              </CardContent>
+            </Card>
+          </button>
+        )}
         {/* Delete Easyfixer / User — OTP-gated hard-delete with an
             impact pre-check (blocks records that still have operational
             history). Opens DeleteEntityDialog. */}
@@ -424,6 +453,7 @@ export default function AdminActionsPage() {
       </div>
       {canFinance && <GenerateInvoiceDialog open={invoiceOpen} onClose={() => setInvoiceOpen(false)} />}
       {canDelete && <DeleteEntityDialog open={deleteOpen} onClose={() => setDeleteOpen(false)} />}
+      {canUnlockOtp && <UnlockOtpDialog open={unlockOtpOpen} onClose={() => setUnlockOtpOpen(false)} />}
       {canRestore && <DeletedRecordsDialog open={deletedRecordsOpen} onClose={() => setDeletedRecordsOpen(false)} />}
       {canBackfillRecordings && <RecordingBackfillDialog open={recBackfillOpen} onClose={() => setRecBackfillOpen(false)} />}
       {canManageSecrets && keyFlags.isFieldRekeyRun && <FieldRekeyDialog open={rekeyOpen} onClose={() => setRekeyOpen(false)} />}
