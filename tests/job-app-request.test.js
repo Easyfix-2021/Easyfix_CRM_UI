@@ -249,12 +249,30 @@ test('the requests section DEFAULTS above Over Due (2026-09-14: it is reorderabl
 // its header and auto-collapses when empty, like every other section.
 // tests/pending-to-start-sections.test.js pins the new behaviour.
 
-test('the count and the rows come from the SAME predicate call', () => {
+test('the count and the rows come from the SAME predicate — now the SERVER\'s', () => {
+  /*
+   * REWRITTEN 2026-09-16. This used to require the section to filter
+   * client-side (`items.filter(appRequestOf)`) and to count `matched.length`,
+   * because /admin/jobs could not filter on the flags. That was the 500-row
+   * ceiling: it only saw the first bounded page. The predicate now lives in
+   * SQL (`appRequest`, services/job.service.js appRequestClause), so the count
+   * and the rows come from the server — still one predicate, one level down.
+   *
+   * What has to stay true is the AGREEMENT: appRequestOf() still runs per row
+   * to draw the chip, so it must recognise everything the server sent. The
+   * cross-repo half of that is asserted in the backend's
+   * tests/job-app-request-filter.test.js.
+   */
   const src = view();
-  assert.match(src, /items\.filter\(\(j\) => appRequestOf\(j\) !== null\)/,
-    'the section must filter through appRequestOf, never re-read the flags inline');
-  assert.match(src, /const total = appRequests \? matched\.length/,
-    'the header count must be the length of the filtered set, not the server total');
+  assert.match(src, /appRequest: appRequests \? 'any' : undefined,/,
+    'the section must ask the server to filter');
+  assert.match(src, /const rows = data\?\.items \?\? \[\];/);
+  assert.match(src, /const total = data\?\.total \?\? 0;/,
+    'the count is the server\'s total — the same query the rows came from');
+  assert.doesNotMatch(src, /items\.filter\(\(j\) => appRequestOf\(j\) !== null\)/,
+    're-filtering in the browser is what bounded this section to 500 rows');
+  // The chip still renders through the predicate, once, per row.
+  assert.match(src, /const req = appRequests \? appRequestOf\(j\) : null;/);
 });
 
 test('the requests section sends NO date window', () => {

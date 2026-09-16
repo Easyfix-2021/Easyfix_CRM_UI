@@ -424,8 +424,14 @@ function TransactionsTab({ clientId }: { clientId: string }) {
 /*
  * CreateTransactionDialog — minimal form mapped to POST /admin/finance/transactions.
  * Joi schema requires { clientId, transactionType, amount }; description + jobId
- * optional. transactionType is a legacy code (1=Debit, 2=Credit, etc.); we expose
- * the most common 2 codes + leave others passable via the raw number input.
+ * optional.
+ *
+ * transactionType carries the SIGN and the amount is always positive: 1 = Debit
+ * lowers the client's balance, 2 = Credit raises it. Those are the only two the
+ * ledger defines — across 330,844 rows on QA there is not one row of any other
+ * type, and the backend now rejects anything else — so the "3 — Adjustment"
+ * option this select used to offer has gone. Type a positive amount and pick the
+ * direction; never type a negative amount.
  */
 function CreateTransactionDialog({ open, defaultClientId, onClose, onSaved }: {
   open: boolean; defaultClientId: string; onClose: () => void; onSaved: () => void;
@@ -470,10 +476,12 @@ function CreateTransactionDialog({ open, defaultClientId, onClose, onSaved }: {
             <select value={transactionType} onChange={(e) => setTransactionType(e.target.value)} className="border rounded h-9 px-2 text-sm bg-background w-full">
               <option value="1">1 — Debit</option>
               <option value="2">2 — Credit</option>
-              <option value="3">3 — Adjustment</option>
             </select>
           </div>
-          <div><Label>Amount ₹ *</Label><Input value={amount} onChange={(e) => setAmount(e.target.value)} className="font-mono" /></div>
+          {/* Digits and one decimal point only: the sign lives in Type, and a
+              typed "-500" is now a 400 from the backend rather than a balance
+              that moves the wrong way. */}
+          <div><Label>Amount ₹ *</Label><Input value={amount} inputMode="decimal" onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} className="font-mono" /></div>
           <div><Label>Description</Label>
             <textarea value={description} onChange={(e) => setDescription(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" rows={2} />
           </div>
@@ -612,20 +620,60 @@ function PayoutsTab() {
   const { data, loading, error, reload } = useFetch<Payout>(url);
   const [showCreate, setShowCreate] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  // Guards a double click on a money button: without it two submits race and
+  // the second one now collects a 409 per row from the backend's state gate.
+  const [bulkBusy, setBulkBusy] = useState(false);
   const { me } = useMe();
   const can = actionFlags(me, ['isPayoutCreate', 'isPayoutBulkApprove']);
   const STATUS_LABEL: Record<number, string> = { 0: 'Pending', 1: 'Ops Approved', 2: 'Finance Approved', 3: 'Rejected' };
-  // Bulk Ops-Approve handler — surfaces the existing
-  // POST /admin/finance/payouts/bulk-ops-approve endpoint.
+  /*
+   * Bulk Ops-Approve — POST /admin/finance/payouts/bulk-ops-approve.
+   *
+   * This posted `{ payoutIds: [...] }` while the endpoint's schema is
+   * `{ items: [{ payoutId, opsApprovedAmount }] }`. validate() runs with
+   * stripUnknown, so `payoutIds` was DISCARDED before the handler, `items` was
+   * then missing, and every click returned 400 "Validation failed" — the button
+   * has never approved anything. It needs the AMOUNT per payout, which is the
+   * same `ops_amount` the single-row Ops ✓ sends, so the items are built from
+   * the loaded rows rather than from the id set alone.
+   *
+   * Per-row outcomes are now reported instead of a blanket success: the backend
+   * refuses an already-paid payout rather than re-approving it, so a partial
+   * result is a normal answer and the operator has to see which rows did not go.
+   */
   async function bulkOpsApprove() {
-    if (selectedIds.size === 0) return;
+    if (selectedIds.size === 0 || bulkBusy) return;
+    const items = data
+      .filter((p) => selectedIds.has(p.payout_id))
+      .map((p) => ({ payoutId: p.payout_id, opsApprovedAmount: p.ops_amount ?? 0 }));
+    // Selected rows the current filter no longer shows carry no amount here, so
+    // they are left out — and said so, rather than silently dropped.
+    const unseen = selectedIds.size - items.length;
+    if (items.length === 0) {
+      showToast({ variant: 'error', message: 'Selected Payouts Are Not In The Current View — Clear The Filter And Retry' });
+      return;
+    }
+    setBulkBusy(true);
     try {
-      await api.post('/admin/finance/payouts/bulk-ops-approve', { payoutIds: Array.from(selectedIds) });
-      showToast({ variant: 'success', message: 'Bulk Ops Approval Submitted' });
+      const res = await api.post<{
+        results: { payoutId: number; ok: boolean; error?: string }[];
+        approvedCount: number; failedCount: number;
+      }>('/admin/finance/payouts/bulk-ops-approve', { items });
+      const failed = (res.results ?? []).filter((r) => !r.ok);
+      const tail = unseen > 0 ? ` · ${unseen} Not In View` : '';
+      if (failed.length === 0) {
+        showToast({ variant: unseen > 0 ? 'warning' : 'success',
+          message: `${res.approvedCount} Ops-Approved${tail}` });
+      } else {
+        showToast({ variant: res.approvedCount > 0 ? 'warning' : 'error',
+          message: `${res.approvedCount} Ops-Approved, ${failed.length} Skipped${tail} — ${failed[0].error ?? 'refused'}` });
+      }
       setSelectedIds(new Set());
       reload();
     } catch (e) {
       showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Failed' });
+    } finally {
+      setBulkBusy(false);
     }
   }
   async function act(p: Payout, action: 'ops-approve' | 'fin-approve' | 'fin-reject') {
@@ -659,8 +707,9 @@ function PayoutsTab() {
         </div>
         <div className="flex items-center gap-2">
           {can.isPayoutBulkApprove && selectedIds.size > 0 && (
-            <Button size="sm" variant="outline" onClick={bulkOpsApprove}>
-              <CheckCircle2 className="size-3.5 mr-1" /> Bulk Ops-Approve ({selectedIds.size})
+            <Button size="sm" variant="outline" onClick={bulkOpsApprove} disabled={bulkBusy}>
+              <CheckCircle2 className="size-3.5 mr-1" />
+              {bulkBusy ? 'Approving…' : `Bulk Ops-Approve (${selectedIds.size})`}
             </Button>
           )}
           {can.isPayoutCreate && (
