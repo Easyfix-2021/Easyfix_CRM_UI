@@ -74,6 +74,12 @@ import { useCancelJob } from './CancelJob';
 import { RescheduleDialog } from './RescheduleDialog';
 import { ServicesTabBody } from './JobModal';
 import { JobContextPanel, type JobServiceRow } from './JobContextPanel';
+import { ScheduleAssignUplifted } from './ScheduleAssignUplifted';
+
+/** Per-browser memory of the Current/Uplifted choice — see `view` below. */
+const SA_VIEW_KEY = 'crm_schedule_assign_view';
+/** Same base lib/api.ts talks to; the media tiles link straight at the BE. */
+const SA_API_BASE = process.env.NEXT_PUBLIC_API_URL || '/api';
 import {
   CandidateTable, PincodeListModal, type ScheduleCandidate,
 } from './CandidateTable';
@@ -259,6 +265,20 @@ export function ScheduleAssignModal({
      */
     fk_easyfixter_id?: number | null;
     easyfixer_name?: string | null;
+    /*
+     * Read by the Uplifted tab only — all four already ride on this same
+     * `j.*` projection, so surfacing them costs no extra request:
+     *   original_appointment_*  the appointment as first booked (SDA is scored
+     *                           against it, so a rescheduled job must still
+     *                           show the date the customer was promised)
+     *   images / videos         whatever was attached when the order was
+     *                           created; ops were opening the View modal in a
+     *                           second tab just to look at them.
+     */
+    original_appointment_date_time?: string | null;
+    original_appointment_time?: string | null;
+    images?: Array<Record<string, unknown>> | null;
+    videos?: Array<{ media_id: number; content_type?: string | null; source?: string | null; created_at?: string | null }> | null;
   }>(open && jobId ? `/admin/jobs/${jobId}` : null);
   /*
    * ⚠ IDENTITY-GUARDED, exactly as `topData` is (see its own comment below).
@@ -279,6 +299,33 @@ export function ScheduleAssignModal({
   const probe = statusGate.data && Number(statusGate.data.job_id) === Number(jobId)
     ? statusGate.data
     : null;
+
+  /*
+   * CURRENT vs UPLIFTED (2026-09-16) — the redesigned console ships BESIDE the
+   * screen ops use all day, not in place of it. Both tabs drive the same state,
+   * the same offer commit and the same footer, so a job can be worked from
+   * either; only the arrangement above the technician table differs.
+   *
+   * Default is Current, so nobody is moved onto a new layout mid-shift. The
+   * choice is remembered per browser: an operator evaluating Uplifted should
+   * not have to re-pick it on every job. localStorage may throw (Safari private
+   * mode), hence the try/catch — a broken preference must not break the modal.
+   */
+  const [view, setView] = useState<'current' | 'uplifted'>('current');
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(SA_VIEW_KEY) === 'uplifted') setView('uplifted');
+    } catch { /* no preference available — Current stands */ }
+  }, []);
+  function pickView(next: 'current' | 'uplifted') {
+    setView(next);
+    try { localStorage.setItem(SA_VIEW_KEY, next); } catch { /* preference is a convenience, not state */ }
+  }
+  /*
+   * "Choose technicians" in the Uplifted header scrolls to the Top-10 table
+   * rather than duplicating it — one table, one selection, one commit button.
+   */
+  const techRef = useRef<HTMLElement | null>(null);
   const staleOwnerName = probe?.fk_easyfixter_id != null
     ? (probe.easyfixer_name || `Efr #${probe.fk_easyfixter_id}`)
     : null;
@@ -877,12 +924,31 @@ export function ScheduleAssignModal({
         className="!max-w-none w-[calc(100vw-48px)] h-[calc(100vh-48px)] overflow-hidden flex flex-col"
       >
         <DialogHeader className="px-6 py-4">
-          <DialogTitle className="flex items-center gap-2">
+          <DialogTitle className="flex flex-wrap items-center gap-2">
             Schedule &amp; Assign
             {jobId && <span className="text-sm font-normal text-ink-300">· Job #{jobId}</span>}
             {probe?.job_reference_id && (
               <span className="text-sm font-normal text-ink-300">· {probe.job_reference_id}</span>
             )}
+            {/* Layout switch, not a mode switch: both tabs act on the same job
+                with the same footer. Sits in the title row so it is the first
+                thing seen and costs no vertical space of its own. */}
+            <span className="ml-auto mr-8 inline-flex items-center gap-1 rounded-md border bg-muted/50 p-0.5">
+              {(['current', 'uplifted'] as const).map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => pickView(v)}
+                  aria-pressed={view === v}
+                  className={[
+                    'rounded px-2.5 py-1 text-xs font-medium capitalize transition-colors',
+                    view === v ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+                  ].join(' ')}
+                >
+                  {v}
+                </button>
+              ))}
+            </span>
           </DialogTitle>
         </DialogHeader>
 
@@ -900,6 +966,25 @@ export function ScheduleAssignModal({
                 : <>This order can’t be scheduled or offered right now — opened read-only.</>}
             </div>
           )}
+          {/* ───────── UPLIFTED: the console layout, above the shared panels ─────────
+              Presentation only — it fetches nothing and mutates nothing. The
+              job details / services / notes / address / remarks EDITORS stay in
+              JobContextPanel below (collapsed in this tab, since the cards here
+              already carry customer + client), so both tabs share one
+              implementation of every edit. */}
+          {view === 'uplifted' && (
+            <ScheduleAssignUplifted
+              job={job}
+              probe={probe}
+              offers={offers.data?.items ?? null}
+              offersLoading={offers.loading}
+              offerable={offerable}
+              onReschedule={() => setRescheduleOpen(true)}
+              onPickTechnicians={() => techRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+              apiBase={SA_API_BASE}
+            />
+          )}
+
           {/* ───────── (a) COMPLETE JOB DETAILS + read-only schedule + remarks ─────────
               Shared with the Assign / Reassign modals via <JobContextPanel>. The
               Reschedule button + "locked" helper + the post-reschedule "Updating…"
@@ -910,6 +995,13 @@ export function ScheduleAssignModal({
             job={job}
             jobId={jobId}
             remarksReloadKey={remarksReloadKey}
+            /*
+             * Uplifted already states customer, client, address and the
+             * appointment in its cards, so the panel opens COLLAPSED there and
+             * serves as the editor drawer (services / notes / address) plus the
+             * remarks thread. Current is unchanged: details expanded.
+             */
+            defaultDetailsOpen={view === 'current'}
             showReschedule
             onReschedule={() => setRescheduleOpen(true)}
             rescheduling={rescheduling}
@@ -955,8 +1047,11 @@ export function ScheduleAssignModal({
             } : undefined}
           />
 
-          {/* ───────── Offer history — live + rejected + expired — offer mode only ───────── */}
-          {offerMode && (offers.data?.items?.length ?? 0) > 0 && (
+          {/* ───────── Offer history — live + rejected + expired — offer mode only ─────────
+              Current tab only: Uplifted carries the same rows, compacted, in its
+              Technician card, and two copies of one list on one screen is how
+              they start disagreeing. */}
+          {view === 'current' && offerMode && (offers.data?.items?.length ?? 0) > 0 && (
             <section>
               <h3 className="text-sm font-semibold mb-2 flex items-center gap-1.5">
                 Offered To
@@ -1085,8 +1180,10 @@ export function ScheduleAssignModal({
             </div>
           )}
 
-          {/* ───────── (c) SEARCH TECHNICIAN ───────── */}
-          <section>
+          {/* ───────── (c) SEARCH TECHNICIAN ─────────
+              SHARED by both tabs — one Top-10 table, one selection, one commit.
+              The ref is the scroll target for Uplifted's "Choose technicians". */}
+          <section ref={techRef}>
             <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
               <h3 className="text-sm font-semibold flex items-center gap-1.5">
                 {showingSearch ? 'Search Results' : 'Top 10 Technicians'}
