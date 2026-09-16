@@ -68,6 +68,14 @@ test('Dockerfile sets ARG → ENV GIT_COMMIT in the RUNNER stage', () => {
   assert.match(runner, /^ENV GIT_COMMIT=\$\{GIT_COMMIT\}$/m);
 });
 
+test('container healthchecks probe /healthcheck, not a rendered page', () => {
+  assert.match(read('Dockerfile'), /^\s+CMD wget -qO- http:\/\/127\.0\.0\.1:5180\/healthcheck -O \/dev\/null \|\| exit 1$/m);
+  // The compose healthcheck REPLACES the image's on the host, so it is the one that runs.
+  const probes = [...read('deploy/docker-compose.prod-frontend.yml').matchAll(/^\s+test: \[.*"(http:\/\/127\.0\.0\.1:\d+\/\S*?)"/gm)]
+    .map((m) => m[1]);
+  assert.deepEqual(probes, ['http://127.0.0.1:5180/healthcheck', 'http://127.0.0.1:5181/healthcheck']);
+});
+
 test('every image build in deploy.yml passes GIT_COMMIT=github.sha', () => {
   const steps = read('.github/workflows/deploy.yml').split(/uses: docker\/build-push-action@/).slice(1);
   assert.ok(steps.length >= 1, 'no docker/build-push-action step found — test would pass vacuously');
