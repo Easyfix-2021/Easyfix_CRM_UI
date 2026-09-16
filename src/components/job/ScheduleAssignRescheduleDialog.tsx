@@ -108,6 +108,19 @@ export function ScheduleAssignRescheduleDialog({
 
   const options = useMemo(() => (reasons.data ?? []), [reasons.data]);
 
+  /*
+   * What is still missing, in the order the form asks for it — ONE source for
+   * both the disabled button and the hint beside it, so they can never
+   * disagree about why it cannot be submitted.
+   */
+  const blocker =
+    !dateTime ? 'Pick the new date and time'
+      : !dueTo ? 'Step 1: choose who this is due to'
+        : !reasonId ? 'Step 2: select a reason'
+          : remarks.trim().length < MIN_REMARKS
+            ? `Step 3: ${MIN_REMARKS - remarks.trim().length} more character${MIN_REMARKS - remarks.trim().length === 1 ? '' : 's'} of remarks`
+            : '';
+
   async function submit() {
     if (!jobId) return;
     if (!dateTime) { setErr('Pick the new date and time'); return; }
@@ -125,18 +138,22 @@ export function ScheduleAssignRescheduleDialog({
      */
     if (liveOffers > 0) {
       const ok = await confirmAction({
-        title: `Expire ${liveOffers} open offer${liveOffers === 1 ? '' : 's'} and reschedule?`,
+        title: `Reschedule and expire ${liveOffers} offer${liveOffers === 1 ? '' : 's'}?`,
         icon: <AlertTriangle className="h-5 w-5" />,
         iconAccent: 'amber',
+        /*
+         * Short lines, one fact each. The paragraph this replaced said the same
+         * thing in three clauses, and an operator mid-task reads the first line
+         * and clicks — so the first line has to be the consequence, not the
+         * preamble.
+         */
         description: (
-          <div className="space-y-2 text-sm">
-            <p>
-              Rescheduling job <b>#{jobId}</b> closes the {liveOffers} offer{liveOffers === 1 ? '' : 's'} still
-              waiting for a reply. {liveOffers === 1 ? 'That technician' : 'Those technicians'} will see the
-              offer as expired, with the reason <b>Appointment rescheduled</b>.
-            </p>
-            <p>The job goes back to unallocated and has to be offered again for the new time.</p>
-          </div>
+          <ul className="space-y-1.5 text-sm">
+            <li>• {liveOffers} technician{liveOffers === 1 ? '' : 's'} waiting to reply will lose the offer.</li>
+            <li>• They will see it as <b>Expired · Appointment rescheduled</b>.</li>
+            <li>• The job becomes <b>Unallocated</b> again.</li>
+            <li>• You will have to offer it again for the new time.</li>
+          </ul>
         ),
         confirmLabel: 'Reschedule and expire offers',
       });
@@ -167,7 +184,11 @@ export function ScheduleAssignRescheduleDialog({
   return (
     // eslint-disable-next-line no-restricted-syntax
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent noPadding className="!max-w-2xl overflow-hidden p-0">
+      {/* A column that never exceeds the viewport: header and footer are fixed
+          bands and only the middle scrolls, so Submit is on screen from the
+          moment the dialog opens. It used to sit below a 70vh body and the
+          operator had to scroll to discover it existed. */}
+      <DialogContent noPadding className="flex max-h-[92vh] !max-w-2xl flex-col overflow-hidden p-0">
         <div className="flex items-center gap-3 border-b-[3px] border-primary bg-sidebar px-4 py-3 text-sidebar-foreground">
           <span className="grid h-9 w-9 place-items-center rounded-md bg-white/10">
             <CalendarClock className="h-4 w-4" />
@@ -177,11 +198,11 @@ export function ScheduleAssignRescheduleDialog({
           <h2 className="flex-1 text-base font-semibold">Reschedule job{jobId ? ` #${jobId}` : ''}</h2>
         </div>
 
-        <div className="max-h-[70vh] space-y-4 overflow-y-auto px-4 py-4">
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
           {/* WHAT is changing, before WHY: the two appointments side by side, so
               the operator can see whether this move leaves the original date —
               which is exactly what decides SDA. */}
-          <div className="space-y-2 rounded-md border bg-muted/40 p-3">
+          <div className="space-y-2 rounded-md border bg-muted/40 p-2.5">
             {/* Both dates on ONE line: they are read together — "where it is
                 now" against "what the customer was first promised" — and two
                 stacked rows made a comparison look like a list. */}
@@ -207,12 +228,13 @@ export function ScheduleAssignRescheduleDialog({
             <p className="flex items-start gap-2 rounded-md border border-warning bg-warning-tint px-3 py-2 text-sm text-warning-strong">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
               <span>
-                {liveOffers} offer{liveOffers === 1 ? '' : 's'} {liveOffers === 1 ? 'is' : 'are'} still open on this job.
-                Rescheduling expires {liveOffers === 1 ? 'it' : 'them'} and the job must be offered again for the new time.
+                <b>{liveOffers} offer{liveOffers === 1 ? '' : 's'} open.</b> Rescheduling expires {liveOffers === 1 ? 'it' : 'them'} —
+                the job returns to Unallocated and must be offered again.
               </span>
             </p>
           )}
 
+          <div className="grid gap-3 sm:grid-cols-2">
           <Step n={1} label="Reschedule due to" required>
             <div className="flex flex-wrap gap-2">
               {DUE_TO.map((d) => (
@@ -257,10 +279,11 @@ export function ScheduleAssignRescheduleDialog({
               </p>
             )}
           </Step>
+          </div>
 
           <Step n={3} label="Remarks" required>
             <textarea
-              className="min-h-[88px] w-full rounded-md border bg-background px-2 py-1.5 text-sm"
+              className="min-h-[72px] w-full rounded-md border bg-background px-2 py-1.5 text-sm"
               placeholder="Called the technician twice at 12:15 pm, no answer. Customer agreed to a new time."
               value={remarks}
               disabled={saving}
@@ -272,24 +295,25 @@ export function ScheduleAssignRescheduleDialog({
             </div>
           </Step>
 
-          {/* NOT a choice — a statement. Reschedule notifies both parties on
-              its own; ticked-and-disabled says who gets told without offering a
-              switch that would do nothing. */}
-          <div className="border-t pt-3">
-            <p className="text-sm font-medium">Notify</p>
-            <div className="mt-1.5 flex flex-wrap gap-4 text-sm text-muted-foreground">
-              <label className="inline-flex items-center gap-2"><input type="checkbox" checked disabled className="accent-primary" />SMS the customer</label>
-              <label className="inline-flex items-center gap-2"><input type="checkbox" checked disabled className="accent-primary" />Notify technician</label>
-            </div>
-            <p className="mt-1 text-xs text-muted-foreground">Sent automatically on every reschedule. Open offers are withdrawn and sent again for the new time.</p>
-          </div>
+          {/* NOT a choice — a statement, on one line. Reschedule notifies both
+              parties on its own, so ticked-and-disabled says who gets told
+              without offering a switch that controls nothing. */}
+          <p className="border-t pt-2 text-xs text-muted-foreground">
+            <span className="font-medium text-foreground">Notify</span> · the customer gets an SMS and the technician is
+            notified automatically. Open offers are expired and must be sent again for the new time.
+          </p>
 
           {err && <p className="text-sm text-urgent-strong" role="alert">{err}</p>}
         </div>
 
-        <div className="flex justify-end gap-2 border-t px-4 py-3">
+        {/* The button is ALWAYS here, disabled until the form is complete, with
+            the missing piece named beside it. Hiding it (or leaving it enabled
+            and erroring) both left the operator asking "where is the button" —
+            the honest answer is "here, and this is what it still needs". */}
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-muted/30 px-4 py-2.5">
+          {blocker && <span className="mr-auto text-xs text-muted-foreground">{blocker}</span>}
           <Button type="button" variant="outline" onClick={onClose} disabled={saving}>Close</Button>
-          <Button type="button" onClick={submit} disabled={saving}>
+          <Button type="button" onClick={submit} disabled={saving || !!blocker}>
             {saving ? 'Submitting…' : 'Submit reschedule'}
           </Button>
         </div>

@@ -253,17 +253,30 @@ export function ScheduleAssignUplifted({
 
   return (
     <div className="space-y-3">
-      {/* ── What to do now: one line, because the bucket already says it ── */}
-      <div className={`flex flex-wrap items-center gap-3 rounded-md border px-3 py-2 ${tone.wrap}`}>
-        <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-md ${tone.icon}`}>
-          <tone.Icon className="h-4 w-4" />
+      {/*
+        * What to do now. A PAST APPOINTMENT OVERRIDES THE BUCKET: the server
+        * refuses to offer a job whose appointment has gone, and the footer
+        * button is disabled to match — so the strip must stop saying "offer
+        * this job" beside a button that cannot. It names the blocker and puts
+        * Reschedule first; offering comes back the moment there is a future
+        * time to offer.
+        */}
+      <div className={`flex flex-wrap items-center gap-3 rounded-md border px-3 py-2 ${apptPast ? 'border-urgent bg-urgent-tint text-urgent-strong' : tone.wrap}`}>
+        <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-md ${apptPast ? 'bg-destructive text-destructive-foreground' : tone.icon}`}>
+          {apptPast ? <AlertTriangle className="h-4 w-4" /> : <tone.Icon className="h-4 w-4" />}
         </span>
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold">{tone.title}</p>
+          <p className="text-sm font-semibold">
+            {apptPast ? 'Reschedule first — this appointment has passed' : tone.title}
+          </p>
           <p className="text-xs opacity-90">
-            {bucket === 'unallocated' && <>Appointment {appointment ? formatDate(appointment) : 'not set'} · first technician to accept gets the job</>}
-            {bucket === 'offered' && <>{live.length} of {items.length} still to reply · {closed.length} expired or rejected</>}
-            {bucket === 'no_takers' && <>Expired and rejected: {closed.length} · widen the search or reschedule with the customer</>}
+            {apptPast
+              ? <>The appointment was {appointment ? formatDate(appointment) : 'not set'}. Technicians can’t be offered a job whose time has gone — set a new date and time, then offer.</>
+              : <>
+                {bucket === 'unallocated' && <>Appointment {appointment ? formatDate(appointment) : 'not set'} · first technician to accept gets the job</>}
+                {bucket === 'offered' && <>{live.length} of {items.length} still to reply · {closed.length} expired or rejected</>}
+                {bucket === 'no_takers' && <>Expired and rejected: {closed.length} · widen the search or reschedule with the customer</>}
+              </>}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -272,12 +285,11 @@ export function ScheduleAssignUplifted({
               it belongs beside the alert — and otherwise under the Appointment
               tile, beside the date it changes. Two copies invited the question
               of whether they did the same thing. */}
-          {apptPast && (
-            <button type="button" onClick={onReschedule} className="rounded-md border border-current/30 bg-background/70 px-2.5 py-1 text-xs font-medium hover:bg-background">
-              <CalendarClock className="mr-1 inline h-3.5 w-3.5" />Reschedule
+          {apptPast ? (
+            <button type="button" onClick={onReschedule} className="rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground hover:opacity-90">
+              <CalendarClock className="mr-1 inline h-3.5 w-3.5" />Reschedule now
             </button>
-          )}
-          {offerable && (
+          ) : offerable && (
             <button type="button" onClick={onPickTechnicians} className="rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground hover:opacity-90">
               {bucket === 'unallocated' ? 'Choose technicians' : 'Offer to more'}
             </button>
@@ -340,8 +352,10 @@ export function ScheduleAssignUplifted({
           <div className="bg-card px-3 py-2">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Appointment</p>
             <p className="text-sm font-semibold">{appointment ? formatDate(appointment) : 'Not set'}</p>
-            <p className={`text-xs ${apptMoved ? 'font-medium text-warning-strong' : 'text-muted-foreground'}`}>
-              {apptMoved ? `Original ${formatDate(originalAppt)}` : (displaySlot(job?.requested_date_time, job?.time_slot) || 'Fixed at booking')}
+            <p className={`text-xs ${apptPast ? 'font-medium text-urgent-strong' : apptMoved ? 'font-medium text-warning-strong' : 'text-muted-foreground'}`}>
+              {apptPast
+                ? 'Passed · reschedule before offering'
+                : apptMoved ? `Original ${formatDate(originalAppt)}` : (displaySlot(job?.requested_date_time, job?.time_slot) || 'Fixed at booking')}
             </p>
             {!apptPast && (
               <button type="button" onClick={onReschedule} className="mt-1.5 inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium hover:bg-muted">

@@ -43,7 +43,7 @@ export function JobInternalNotes({ jobId, canAdd = true }: {
   /** The host withholds adding on a read-only open, same gate as its editors. */
   canAdd?: boolean;
 }) {
-  const { data, loading } = useFetch<JobNote[]>(jobId ? `/admin/jobs/${jobId}/notes` : null);
+  const { data, loading, refetch } = useFetch<JobNote[]>(jobId ? `/admin/jobs/${jobId}/notes` : null);
   const [text, setText] = useState('');
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
@@ -61,9 +61,15 @@ export function JobInternalNotes({ jobId, canAdd = true }: {
     try {
       await api.post(`/admin/jobs/${jobId}/notes`, { notes: body });
       setText('');
-      // The list is a mounted useFetch; drop its key so it re-reads the row we
-      // just wrote rather than showing the thread without it until reopen.
+      /*
+       * BOTH, and in this order. invalidateFetch only DROPS the cached key — it
+       * cannot re-run a hook that is still mounted, which is why a new note
+       * appeared only after a page refresh. refetch() is what actually re-reads
+       * the list; dropping the key first stops a later mount serving the stale
+       * copy. (Same trap the reschedule refresh hit.)
+       */
       invalidateFetch((k) => k === `/admin/jobs/${jobId}/notes`);
+      refetch();
       showToast({ variant: 'success', message: 'Note Added.' });
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : 'Could not save the note');
@@ -114,7 +120,10 @@ export function JobInternalNotes({ jobId, canAdd = true }: {
           No internal notes on this job.
         </p>
       ) : (
-        <ul className="grid gap-2">
+        /* Newest first (the endpoint orders by created DESC, id DESC). The
+           stack is capped and scrolls rather than growing without limit: a job
+           with 20 notes must not push the rest of the console off screen. */
+        <ul className="grid max-h-72 gap-2 overflow-y-auto pr-0.5">
           {notes.map((n) => (
             <li key={n.id} className="rounded-md border border-gold bg-gold-tint p-2.5 text-xs">
               <p className="whitespace-pre-wrap break-words text-ink-900">{n.notes}</p>
