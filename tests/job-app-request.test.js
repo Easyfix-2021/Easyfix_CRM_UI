@@ -7,18 +7,19 @@
  * ─── WHAT IS AT STAKE ─────────────────────────────────────────────────────
  *
  * A technician asking for a job to be cancelled or moved does not change
- * job_status, so the row keeps sitting in whichever appointment bucket its
- * CURRENT appointment puts it in. The requests section is the ONLY surface in
- * the CRM that answers "who is waiting on me". Four ways it can go wrong, all
- * of them silent — nothing throws, nothing fails to compile, the page just
- * renders a table with the wrong rows in it:
+ * job_status, so without a surface of its own the row would sit among the
+ * appointments like any other. The Reschedule request / Cancel request tabs
+ * (and the Request column on All) are the ONLY surface in the CRM that answers
+ * "who is waiting on me". Four ways it can go wrong, all of them silent —
+ * nothing throws, nothing fails to compile, the page just renders a table with
+ * the wrong rows in it:
  *
  *   1. the status test is dropped, and every request ops has ALREADY actioned
- *      comes back forever — the section has no "handled" flag of its own, the
+ *      comes back forever — a request has no "handled" flag of its own, the
  *      status IS the handled flag;
  *   2. the flag test accepts a stringified '0', which is a non-empty string
  *      and therefore truthy in JS — every pending order in the queue becomes a
- *      "request" and the section is noise;
+ *      "request" and the request tabs are noise;
  *   3. a row carrying BOTH flags renders as a reschedule, hiding the fact that
  *      somebody is asking to kill the order;
  *   4. a cancellation acquires a requested-new-appointment line, so the row
@@ -26,10 +27,11 @@
  *
  * The predicate lives in `src/lib/job-app-request.ts`, which `npm run
  * test:build` compiles, so these are real behavioural imports. The rendering
- * invariants that cannot be expressed there — that the section renders FIRST,
- * that it disappears when empty, and that its colour pair is theme-correct —
- * live in a .tsx and are source-scanned, the same way resend-pin-action.test.js
- * and job-share.test.js do it.
+ * invariants that cannot be expressed there — that the server partitions the
+ * requests into their own tabs, that the Request column shows where request
+ * rows can appear, and that its colour pair is theme-correct — live in a .tsx
+ * and are source-scanned, the same way resend-pin-action.test.js and
+ * job-share.test.js do it.
  *
  * NOTE ON REGEXES: every pattern below is non-global, or used via `.match()`.
  * A /g regex reused with `.test()` carries `lastIndex` between calls and
@@ -230,63 +232,75 @@ test('labels are Title Case and name the ASK, not the state', () => {
 
 // ─── Rendering invariants (source-scanned) ──────────────────────────────
 
-test('the requests section DEFAULTS above Over Due (2026-09-14: it is reorderable now)', () => {
-  // Source order stopped meaning anything when the sections moved into the
-  // ReorderableSections render prop: what renders first is SECTIONS[0], and
-  // after that whatever the operator dragged (persisted per browser).
+/*
+ * REWRITTEN 2026-09-16 (tabs replaced the sections). The old test here pinned
+ * Technician Requests as the DEFAULT-FIRST reorderable section, because it was
+ * the only section waiting on a person and a request raised on a far-off job
+ * otherwise sank to the bottom of Future. The equivalent intent now: requests
+ * are never buried among appointments at all. The server partitions them into
+ * their own two tabs — cancel and reschedule outrank every date state — and
+ * the strip (tests/pending-to-start-tabs.test.js) puts those tabs on screen
+ * beside the counts, so "who is waiting on me" is one glance, not a scroll.
+ */
+test('requests are their own tabs — the server partitions them out of the date states', () => {
   const src = view();
-  const arr = src.match(/const SECTIONS = \[([\s\S]*?)\] as const;/);
-  assert.ok(arr, 'positive control: the SECTIONS array must be found');
-  const keys = [...arr[1].matchAll(/key: '([^']+)'/g)].map((m) => m[1]);
-  assert.deepEqual(keys, ['appRequests', 'overDue', 'actionToday', 'future'],
-    'Technician Requests defaults first — it is the only section waiting on a person');
+  assert.match(src, /ptsState: ptsState \|\| undefined,/,
+    'the table must ask the server for the selected state, not narrow rows itself');
+  const tabs = strip(read('src/components/job/PendingStartTabs.tsx'));
+  const values = [...tabs.matchAll(/\{ value: '([^']*)',/g)].map((m) => m[1]);
+  for (const kind of ['cancel', 'reschedule']) {
+    assert.ok(values.includes(kind), `the strip must carry the ${kind} state as a tab of its own`);
+  }
 });
 
-// The old 'an empty requests section occupies no space' test asserted
-// `if (appRequests && total === 0) return null;`. The owner overrode that on
-// 2026-09-14 ("Technician Requests should also be collapsable, reorderable, etc
-// as other sections"): a section that vanishes cannot be dragged, so it keeps
-// its header and auto-collapses when empty, like every other section.
-// tests/pending-to-start-sections.test.js pins the new behaviour.
-
-test('the count and the rows come from the SAME predicate — now the SERVER\'s', () => {
+test('the count and the rows come from the SAME predicate — the SERVER\'s', () => {
   /*
-   * REWRITTEN 2026-09-16. This used to require the section to filter
+   * REWRITTEN 2026-09-16, twice. This first required the section to filter
    * client-side (`items.filter(appRequestOf)`) and to count `matched.length`,
-   * because /admin/jobs could not filter on the flags. That was the 500-row
-   * ceiling: it only saw the first bounded page. The predicate now lives in
-   * SQL (`appRequest`, services/job.service.js appRequestClause), so the count
-   * and the rows come from the server — still one predicate, one level down.
+   * because /admin/jobs could not filter on the flags — the 500-row ceiling.
+   * Then the predicate moved into SQL (`appRequest`). Now the tabs send
+   * `ptsState=cancel|reschedule`, whose priority puts every request row in
+   * exactly one of those two tabs — still one predicate, one level down.
    *
    * What has to stay true is the AGREEMENT: appRequestOf() still runs per row
-   * to draw the chip, so it must recognise everything the server sent. The
-   * cross-repo half of that is asserted in the backend's
-   * tests/job-app-request-filter.test.js.
+   * to draw the chip and pick the actions, so it must recognise everything the
+   * server sent. The cross-repo half of that is asserted in the backend.
    */
   const src = view();
-  assert.match(src, /appRequest: appRequests \? 'any' : undefined,/,
-    'the section must ask the server to filter');
   assert.match(src, /const rows = data\?\.items \?\? \[\];/);
   assert.match(src, /const total = data\?\.total \?\? 0;/,
     'the count is the server\'s total — the same query the rows came from');
   assert.doesNotMatch(src, /items\.filter\(\(j\) => appRequestOf\(j\) !== null\)/,
-    're-filtering in the browser is what bounded this section to 500 rows');
+    're-filtering in the browser is what bounded the old section to 500 rows');
   // The chip still renders through the predicate, once, per row.
-  assert.match(src, /const req = appRequests \? appRequestOf\(j\) : null;/);
+  assert.match(src, /const req = appRequestOf\(j\);/);
 });
 
-test('the requests section sends NO date window', () => {
+test('the view computes NO date window — the server owns the day boundaries', () => {
+  /*
+   * The old sections sent dateType/startDate/endDate windows built from
+   * istNowWallClock(), and the requests section had to drop them. The server's
+   * ptsState now draws every boundary in IST, so none of those params (or the
+   * clock they were built from) may creep back into this view: a second,
+   * browser-side boundary is how a job lands under Today on the table while the
+   * strip counts it as Slots missed.
+   */
   const src = view();
   for (const param of ['dateType', 'startDate', 'endDate']) {
-    assert.match(src, new RegExp(`${param}: appRequests \\? undefined :`),
-      `${param} must be dropped on the requests section — a request is orthogonal to the appointment date`);
+    assert.doesNotMatch(src, new RegExp(`\\b${param}:`), `${param} must not be sent — ptsState is the window`);
   }
+  assert.doesNotMatch(src, /istNowWallClock/, 'no client-side "today"');
 });
 
 test('the attention styling uses a token pair that inverts with the theme', () => {
   const src = view();
-  assert.match(src, /bg-warning-tint text-warning-strong/,
-    'the requests header must use the tint/strong pair StatusChip uses');
+  /*
+   * The reschedule ask's highlight — scoped to THAT span, not "somewhere in
+   * the file" (the old requests header strip, which also carried the pair,
+   * went with the sections).
+   */
+  assert.match(src, /<span className="rounded bg-warning-tint px-1\.5 py-0\.5 text-warning-strong">\s*Requested:/,
+    'the requested appointment must use the tint/strong pair StatusChip uses');
   /*
    * `bg-ink-*` with fixed white text is the documented dark-mode trap: the ink
    * ramp inverts, so the surface goes light while the text stays white (1.08
@@ -298,9 +312,19 @@ test('the attention styling uses a token pair that inverts with the theme', () =
 
 test('the Request column has a header, and the skeleton/colSpan agree with it', () => {
   const src = view();
-  assert.match(src, /\{appRequests && <th>Request<\/th>\}/,
-    'the requests section needs its own column header');
-  assert.match(src, /const colCount = appRequests \? 13 : 12;/,
+  assert.match(src, /\{showRequest && <th>Request<\/th>\}/,
+    'the request tabs need their own column header');
+  assert.match(src, /const showRequest = REQUEST_COLUMN_TABS\.has\(ptsState\);/);
+  /*
+   * Where request rows can appear: All and the two request tabs. On Slots
+   * missed / Today / Future the server has excluded them, and the column would
+   * be a stack of dashes.
+   */
+  const set = src.match(/const REQUEST_COLUMN_TABS: ReadonlySet<PtsState> = new Set<PtsState>\(\[([^\]]*)\]\);/);
+  assert.ok(set, 'positive control: REQUEST_COLUMN_TABS must be found');
+  assert.deepEqual([...set[1].matchAll(/'([^']*)'/g)].map((m) => m[1]).sort(), ['', 'cancel', 'reschedule'],
+    'the Request column shows on All, Reschedule request and Cancel request — and nowhere else');
+  assert.match(src, /const colCount = showRequest \? 13 : 12;/,
     'the column count must be derived, or the skeleton and empty-state colSpan drift from <thead>');
   assert.doesNotMatch(src, /colSpan=\{12\}/, 'colSpan must use colCount, not a literal');
   assert.doesNotMatch(src, /Array\.from\(\{ length: 12 \}\)/, 'the skeleton must use colCount, not a literal');
