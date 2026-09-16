@@ -1,11 +1,12 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { CalendarClock, X } from 'lucide-react';
+import { CalendarClock, AlertTriangle } from 'lucide-react';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { showToast } from '@/components/ui/toast';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { api, ApiError } from '@/lib/api';
 import { useFetch } from '@/lib/hooks';
 import { formatDate } from '@/lib/utils';
@@ -42,10 +43,16 @@ const DUE_TO_PARAM: Record<DueTo, string> = {
 const MIN_REMARKS = 15;
 
 export function ScheduleAssignRescheduleDialog({
-  open, jobId, currentAppointment, originalAppointment, onClose, onDone,
+  open, jobId, currentAppointment, originalAppointment, liveOffers = 0, onClose, onDone,
 }: {
   open: boolean;
   jobId: number | null;
+  /*
+   * Open offers that this reschedule will expire. The backend expires them and
+   * stamps closed_reason = 'rescheduled'; the operator has to know BEFORE
+   * saving that the job goes back to square one and must be offered again.
+   */
+  liveOffers?: number;
   /** What the job says now — the thing being changed. */
   currentAppointment: string | null;
   /** What the customer was first promised; SDA is scored against this. */
@@ -59,6 +66,7 @@ export function ScheduleAssignRescheduleDialog({
   const [remarks, setRemarks] = useState('');
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const confirmAction = useConfirm();
 
   /*
    * Reasons are fetched per party, so the list can only ever offer reasons that
@@ -109,6 +117,31 @@ export function ScheduleAssignRescheduleDialog({
       setErr(`Step 3: add remarks of at least ${MIN_REMARKS} characters`);
       return;
     }
+    /*
+     * Last-moment confirm, and only when it can actually cost something: a
+     * reschedule EXPIRES every open offer (closed_reason = 'rescheduled') and
+     * the job has to be offered again from scratch. The warning above says so
+     * while the form is filled; this catches the operator who filled it anyway.
+     */
+    if (liveOffers > 0) {
+      const ok = await confirmAction({
+        title: `Expire ${liveOffers} open offer${liveOffers === 1 ? '' : 's'} and reschedule?`,
+        icon: <AlertTriangle className="h-5 w-5" />,
+        iconAccent: 'amber',
+        description: (
+          <div className="space-y-2 text-sm">
+            <p>
+              Rescheduling job <b>#{jobId}</b> closes the {liveOffers} offer{liveOffers === 1 ? '' : 's'} still
+              waiting for a reply. {liveOffers === 1 ? 'That technician' : 'Those technicians'} will see the
+              offer as expired, with the reason <b>Appointment rescheduled</b>.
+            </p>
+            <p>The job goes back to unallocated and has to be offered again for the new time.</p>
+          </div>
+        ),
+        confirmLabel: 'Reschedule and expire offers',
+      });
+      if (!ok) return;
+    }
     setSaving(true); setErr(null);
     try {
       const label = options.find((o) => String(o.id) === String(reasonId))?.label;
@@ -139,10 +172,9 @@ export function ScheduleAssignRescheduleDialog({
           <span className="grid h-9 w-9 place-items-center rounded-md bg-white/10">
             <CalendarClock className="h-4 w-4" />
           </span>
+          {/* No close button here: DialogContent renders its own ✕ in this
+              corner, and the hand-rolled one sat directly on top of it. */}
           <h2 className="flex-1 text-base font-semibold">Reschedule job{jobId ? ` #${jobId}` : ''}</h2>
-          <button type="button" onClick={onClose} aria-label="Close" className="grid h-8 w-8 place-items-center rounded-md bg-white/10 hover:bg-white/20">
-            <X className="h-4 w-4" />
-          </button>
         </div>
 
         <div className="max-h-[70vh] space-y-4 overflow-y-auto px-4 py-4">
@@ -150,13 +182,12 @@ export function ScheduleAssignRescheduleDialog({
               the operator can see whether this move leaves the original date —
               which is exactly what decides SDA. */}
           <div className="space-y-2 rounded-md border bg-muted/40 p-3">
-            <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm">
-              <span className="text-muted-foreground">Current appointment</span>
-              <strong>{currentAppointment ? formatDate(currentAppointment) : 'Not set'}</strong>
-            </div>
-            <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm">
-              <span className="text-muted-foreground">Original appointment</span>
-              <strong>{originalAppointment ? formatDate(originalAppointment) : '—'}</strong>
+            {/* Both dates on ONE line: they are read together — "where it is
+                now" against "what the customer was first promised" — and two
+                stacked rows made a comparison look like a list. */}
+            <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 text-sm">
+              <span><span className="text-muted-foreground">Current </span><strong>{currentAppointment ? formatDate(currentAppointment) : 'Not set'}</strong></span>
+              <span><span className="text-muted-foreground">Original </span><strong>{originalAppointment ? formatDate(originalAppointment) : '—'}</strong></span>
             </div>
             <div>
               <Label className="text-sm font-medium">New date &amp; time <span className="text-urgent-strong">*</span></Label>
@@ -171,6 +202,16 @@ export function ScheduleAssignRescheduleDialog({
               />
             </div>
           </div>
+
+          {liveOffers > 0 && (
+            <p className="flex items-start gap-2 rounded-md border border-warning bg-warning-tint px-3 py-2 text-sm text-warning-strong">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                {liveOffers} offer{liveOffers === 1 ? '' : 's'} {liveOffers === 1 ? 'is' : 'are'} still open on this job.
+                Rescheduling expires {liveOffers === 1 ? 'it' : 'them'} and the job must be offered again for the new time.
+              </span>
+            </p>
+          )}
 
           <Step n={1} label="Reschedule due to" required>
             <div className="flex flex-wrap gap-2">

@@ -376,17 +376,12 @@ export function ScheduleAssignUplifted({
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-x-6 gap-y-1 border-t bg-muted/40 px-3 py-2 text-xs">
-          <span><span className="text-muted-foreground">Job type </span>{job?.job_type || '—'}</span>
-          <span><span className="text-muted-foreground">Booked by </span>{job?.created_by_name || '—'}</span>
-          {/* tbl_job.collected_by (1/2/3), through the SAME helper the Current
-              tab's Job Details grid uses — NOT the BE's `payment_mode`, which
-              this console showed and which is unset on almost every job. Who
-              collects is a per-JOB fact, so it belongs in this row. */}
-          <span><span className="text-muted-foreground">Payment </span>{job?.payment_label || collectedByText(job?.collected_by) || 'Not set'}</span>
-          <span><span className="text-muted-foreground">Project manager </span>{job?.project_manager_name || '—'}</span>
-          <span><span className="text-muted-foreground">Zonal manager </span>{job?.zonal_manager_name || '—'}</span>
-        </div>
+        {/* The five-fact strip that used to sit here is gone (2026-09-16). It
+            was a grey row of unrelated facts under the tiles, and every one of
+            them has a home that answers a question someone is already asking
+            there: Booked by is the timeline's Booked step, Payment belongs with
+            the customer who pays, Job type with the services, and the two
+            managers with the client and city they come from. */}
       </div>
 
       {/* ── Who it is for, and who has it ── */}
@@ -399,7 +394,11 @@ export function ScheduleAssignUplifted({
               ? <CallableMobile jobId={job?.job_id} mobile={job.customer_mob_no} />
               : '—'}
           />
-          <Row label="Alt number" value={<span className="text-muted-foreground">Not added</span>} />
+          {/* tbl_job.collected_by through the SAME helper the Current tab's Job
+              Details grid uses. NOT the BE's `payment_mode`, which is derived
+              from paid_by alone and reads "Not Set" on ~96% of jobs — the two
+              tabs must never disagree about who pays. */}
+          <Row label="Payment" value={collectedByText(job?.collected_by) ?? 'Not set'} />
           <div className="mt-2 rounded-md border bg-muted/40 px-2.5 py-2 text-xs">
             <div className="flex items-start gap-1.5">
               <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -433,6 +432,16 @@ export function ScheduleAssignUplifted({
               : '—'}
           />
           <Row label="Job ref" value={probe?.job_reference_id || '—'} />
+          {/* Both names are INHERITED, not job columns: the PM from the client's
+              vertical mapping, the ZM from the address city's owner — so they
+              belong beside the client, not in a strip of loose facts. A blank ZM
+              means that city has no owner set, not that the console failed. */}
+          <Row label="Project manager" value={job?.project_manager_name || '—'} />
+          <Row
+            label="Zonal manager"
+            value={job?.zonal_manager_name
+              || <span className="font-normal text-muted-foreground" title="tbl_city.state_user is not set for this job's city">Not set for this city</span>}
+          />
         </Card>
 
         <Card icon={<Wrench className="h-3.5 w-3.5" />} title="Technician">
@@ -468,14 +477,24 @@ export function ScheduleAssignUplifted({
                       {o.reject_reason ? ` · ${o.reject_reason}` : ''}
                     </span>
                   </span>
-                  <span className="flex shrink-0 items-center gap-1.5">
-                    <span className={[
-                      'rounded-full border px-2 py-0.5 text-xs font-medium',
-                      (o.offer_status ?? 0) === 0 ? 'border-warning bg-warning-tint text-warning-strong'
-                        : o.offer_status === 2 ? 'border-urgent bg-urgent-tint text-urgent-strong'
-                          : 'border-border bg-muted text-muted-foreground',
-                    ].join(' ')}>
-                      {o.offer_status_label || ((o.offer_status ?? 0) === 0 ? 'Waiting' : 'Closed')}
+                  <span className="flex shrink-0 items-start gap-1.5">
+                    <span className="flex flex-col items-end gap-0.5">
+                      <span className={[
+                        'rounded-full border px-2 py-0.5 text-xs font-medium',
+                        (o.offer_status ?? 0) === 0 ? 'border-warning bg-warning-tint text-warning-strong'
+                          : o.offer_status === 2 ? 'border-urgent bg-urgent-tint text-urgent-strong'
+                            : 'border-border bg-muted text-muted-foreground',
+                      ].join(' ')}>
+                        {o.offer_status_label || ((o.offer_status ?? 0) === 0 ? 'Waiting' : 'Closed')}
+                      </span>
+                      {/* WHY it closed, under the chip. "Expired" alone reads as
+                          "nobody answered" — but an offer also expires the moment
+                          the job is rescheduled, reoffered or taken by someone
+                          else, and an operator deciding whether to chase this
+                          technician needs to know which it was. */}
+                      {(o.offer_status ?? 0) !== 0 && o.closed_reason_label && (
+                        <span className="text-xs text-muted-foreground">{o.closed_reason_label}</span>
+                      )}
                     </span>
                     {/* Click-to-call the technician we are waiting on, without
                         leaving the console — the same control the Current tab's
@@ -493,7 +512,7 @@ export function ScheduleAssignUplifted({
       <div className="grid gap-3 lg:grid-cols-[1.3fr_1fr_1fr]">
         <Card
           icon={<Box className="h-3.5 w-3.5" />}
-          title={`Services ${job?.services?.length ?? 0}`}
+          title={`${job?.job_type || 'Services'} · ${job?.services?.length ?? 0}`}
           action={canEditServices ? (
             <button type="button" onClick={onEditServices} className="rounded-md border px-2 py-1 text-xs font-medium hover:bg-muted">
               <Pencil className="mr-1 inline h-3 w-3" />Edit

@@ -77,6 +77,7 @@ import { JobContextPanel, type JobServiceRow } from './JobContextPanel';
 import { ScheduleAssignUplifted } from './ScheduleAssignUplifted';
 import { JobRemarksView } from './JobRemarksView';
 import { ScheduleAssignRescheduleDialog } from './ScheduleAssignRescheduleDialog';
+import { JobInternalNotes } from './JobInternalNotes';
 
 /** Per-browser memory of the Current/Uplifted choice — see `view` below. */
 const SA_VIEW_KEY = 'crm_schedule_assign_view';
@@ -1447,7 +1448,15 @@ export function ScheduleAssignModal({
               thing to read. Current keeps it inside JobContextPanel, where it
               has always been. Same component, same fetch, same reload key. */}
           {view === 'uplifted' && (
-            <JobRemarksView key={remarksReloadKey} jobId={jobId} />
+            /* Two threads, side by side rather than stacked: remarks are the
+               job's audit trail and run long, internal notes are the handful of
+               things the next person must not miss. Sharing one scroll would
+               bury the second under the first, so remarks take two thirds and
+               the notes hold the right third, in view while the thread is read. */
+            <div className="grid gap-3 lg:grid-cols-[2fr_1fr]">
+              <JobRemarksView key={remarksReloadKey} jobId={jobId} />
+              <JobInternalNotes jobId={jobId} canAdd={offerable} />
+            </div>
           )}
 
         </div>
@@ -1558,6 +1567,9 @@ export function ScheduleAssignModal({
           jobId={jobId}
           currentAppointment={job?.requested_date_time ?? null}
           originalAppointment={probe?.original_appointment_date_time ?? null}
+          /* Offers still waiting for a reply — the reschedule expires every one
+             of them, so the dialog warns before and confirms at the end. */
+          liveOffers={(offers.data?.items ?? []).filter((o) => (o.offer_status ?? 0) === 0).length}
           onClose={() => setRescheduleOpen(false)}
           onDone={onRescheduled}
         />
