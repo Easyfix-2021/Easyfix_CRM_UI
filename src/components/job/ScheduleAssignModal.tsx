@@ -76,6 +76,7 @@ import { ServicesTabBody } from './JobModal';
 import { JobContextPanel, type JobServiceRow } from './JobContextPanel';
 import { ScheduleAssignUplifted } from './ScheduleAssignUplifted';
 import { JobRemarksView } from './JobRemarksView';
+import { ScheduleAssignRescheduleDialog } from './ScheduleAssignRescheduleDialog';
 
 /** Per-browser memory of the Current/Uplifted choice — see `view` below. */
 const SA_VIEW_KEY = 'crm_schedule_assign_view';
@@ -327,6 +328,25 @@ export function ScheduleAssignModal({
    * rather than duplicating it — one table, one selection, one commit button.
    */
   const techRef = useRef<HTMLElement | null>(null);
+
+  /*
+   * What has to happen after ANY successful reschedule, from either tab's
+   * dialog. invalidateFetch only DROPS the cache — it does not re-run a hook
+   * that is still mounted, which is why a reschedule used to need a manual page
+   * reload. So refetch the two mounted queries (new Job Date, re-ranked
+   * candidates, newly-expired offers) and remount JobRemarksView so the
+   * reschedule comment and any pending-request change appear too.
+   */
+  function onRescheduled() {
+    rescheduleRefetchStarted.current = false;
+    setRescheduling(true); // veil the stale date/list until the refetch settles
+    top.refetch();
+    offers.refetch();
+    invalidateFetch((k) =>
+      k.startsWith(`/admin/jobs/${jobId}/comments`)
+      || k.startsWith(`/admin/jobs/${jobId}/customer-requests`));
+    setRemarksReloadKey((n) => n + 1);
+  }
   const staleOwnerName = probe?.fk_easyfixter_id != null
     ? (probe.easyfixer_name || `Efr #${probe.fk_easyfixter_id}`)
     : null;
@@ -1527,8 +1547,22 @@ export function ScheduleAssignModal({
 
       {/* Reschedule — the ONLY way to change the (read-only) Job Date/Time. The
           BE persists + audits, then onDone re-ranks candidates and refreshes the
-          offer list (open offers get EXPIRED on reschedule) against the new date. */}
-      {jobId && (
+          offer list (open offers get EXPIRED on reschedule) against the new date.
+          ONE endpoint, two front doors: Uplifted asks the three questions the
+          Cancel popup asks (due to → reason → remarks) and Current keeps the
+          dialog it has always had. Both PATCH the same body, so a job's history
+          reads the same whichever tab rescheduled it. */}
+      {jobId && view === 'uplifted' && (
+        <ScheduleAssignRescheduleDialog
+          open={rescheduleOpen}
+          jobId={jobId}
+          currentAppointment={job?.requested_date_time ?? null}
+          originalAppointment={probe?.original_appointment_date_time ?? null}
+          onClose={() => setRescheduleOpen(false)}
+          onDone={onRescheduled}
+        />
+      )}
+      {jobId && view === 'current' && (
         <RescheduleDialog
           open={rescheduleOpen}
           jobId={jobId}
@@ -1540,14 +1574,7 @@ export function ScheduleAssignModal({
             // new Job Date + re-ranked candidates + expired offers show at once,
             // and remount JobRemarksView (key bump) so the reschedule comment and
             // any pending-request change appear too.
-            rescheduleRefetchStarted.current = false;
-            setRescheduling(true); // veil the stale date/list until the refetch settles
-            top.refetch();
-            offers.refetch();
-            invalidateFetch((k) =>
-              k.startsWith(`/admin/jobs/${jobId}/comments`)
-              || k.startsWith(`/admin/jobs/${jobId}/customer-requests`));
-            setRemarksReloadKey((n) => n + 1);
+            onRescheduled();
           }}
         />
       )}

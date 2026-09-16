@@ -10,6 +10,7 @@ import { formatDate, relativeTime, appointmentIsPast } from '@/lib/utils';
 import { formatJobAge, jobAgeTitle } from '@/lib/job-age';
 import { displaySlot } from '@/lib/job-slots';
 import { formatServiceAddress } from '@/lib/format';
+import { collectedByText } from '@/lib/collected-by';
 import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
 import { showToast } from '@/components/ui/toast';
@@ -56,6 +57,22 @@ export type UpliftedJob = {
   time_slot?: string | null;
   created_date_time?: string | null;
   created_by_name?: string | null;
+  /*
+   * The timeline's five stamped moments, all from tbl_job. Optional because a
+   * payload that predates them simply renders the step as not-yet-happened —
+   * the console must not blank out because one column has not shipped.
+   */
+  ticket_created_date_time?: string | null;
+  original_scheduling_date_time?: string | null;
+  first_scheduled_by_name?: string | null;
+  /* tbl_job.checkin_date_time — the column mobile-performance.service.js
+     scores OTA and SDA on. Acceptance has no column of its own: it lives on
+     the accepted OFFER row, which this console already receives. */
+  checkin_date_time?: string | null;
+  efr_name?: string | null;
+  /** Who collects payment — the backend's own mapping, not a raw code. */
+  collected_by_label?: string | null;
+  collected_by?: number | string | null;
   job_desc?: string | null;
   efr_special_notes?: string | null;
   services?: JobServiceRow[] | null;
@@ -145,6 +162,10 @@ export function ScheduleAssignUplifted({
   const tone = TONE[bucket];
   const items = offers ?? [];
 
+  /* The technician who took the job. Acceptance is stamped on the OFFER row
+     (offer_status 1 + responded_at), not on tbl_job — so the timeline reads it
+     from the same offers payload the replies list uses. */
+  const accepted = items.find((o) => o.offer_status === 1) ?? null;
   const live = items.filter((o) => (o.offer_status ?? 0) === 0);
   const closed = items.filter((o) => (o.offer_status ?? 0) !== 0);
 
@@ -206,16 +227,22 @@ export function ScheduleAssignUplifted({
     return [...imgs, ...vids];
   }, [probe?.images, probe?.videos, apiBase]);
 
-  const steps: Array<{ name: string; when: string; state: 'done' | 'now' | 'next' }> = [
-    { name: 'Created', when: job?.created_date_time ? formatDate(job.created_date_time) : '—', state: 'done' },
-    { name: 'Appointment', when: originalAppt ? formatDate(originalAppt) : appointment ? formatDate(appointment) : '—', state: 'done' },
-    { name: 'Offered', when: items.length ? relativeTime(items[items.length - 1].offered_at) : '—', state: items.length ? 'done' : 'now' },
-    { name: 'Accepted', when: items.length ? 'Now' : '—', state: items.length ? 'now' : 'next' },
-    { name: 'Check-in', when: '—', state: 'next' },
-    { name: 'Audit', when: '—', state: 'next' },
-    { name: 'Closed', when: '—', state: 'next' },
-    { name: 'QC', when: '—', state: 'next' },
+  /*
+   * FIVE STEPS, each with WHEN and WHO — the two questions asked of a timeline.
+   * Every value is a stored column, never derived from another step: "Created"
+   * is the client's ticket (raised by their SPOC), "Booked" is the EasyFix user
+   * who turned it into a job, "Offered" is the first scheduling push, and the
+   * last two are the technician's own actions. A step with no timestamp has not
+   * happened; the first such step is the one being waited on.
+   */
+  const steps: Array<{ name: string; when: string | null; who: string | null }> = [
+    { name: 'Created', when: job?.ticket_created_date_time ?? null, who: job?.client_spoc_name || job?.client_spoc || null },
+    { name: 'Booked', when: job?.created_date_time ?? null, who: job?.created_by_name ?? null },
+    { name: 'Offered', when: job?.original_scheduling_date_time ?? null, who: job?.first_scheduled_by_name ?? null },
+    { name: 'Accepted', when: accepted?.responded_at ?? null, who: accepted?.efr_name ?? null },
+    { name: 'Check-In', when: job?.checkin_date_time ?? null, who: accepted?.efr_name || job?.efr_name || null },
   ];
+  const firstPending = steps.findIndex((s) => !s.when);
 
   return (
     <div className="space-y-3">
@@ -259,24 +286,32 @@ export function ScheduleAssignUplifted({
           </h3>
         </div>
         <div className="overflow-x-auto px-3 pb-3 pt-1">
-          <div className="flex min-w-[680px]">
-            {steps.map((s, i) => (
-              <div key={s.name} className="relative flex flex-1 flex-col items-center gap-1 px-1 text-center">
-                {i > 0 && (
-                  <span className={`absolute left-[-50%] top-[7px] h-0.5 w-full ${s.state === 'next' ? 'bg-border' : 'bg-success'}`} />
-                )}
-                <span className={[
-                  'relative z-[1] h-4 w-4 rounded-full border-2',
-                  s.state === 'done' ? 'border-success bg-success'
-                    : s.state === 'now' ? 'border-primary bg-background ring-4 ring-primary/20'
-                      : 'border-border bg-background',
-                ].join(' ')} />
-                <span className={`text-xs leading-tight ${s.state === 'now' ? 'font-semibold text-primary' : s.state === 'next' ? 'text-muted-foreground' : 'font-medium'}`}>
-                  {s.name}
-                </span>
-                <span className="text-xs leading-tight text-muted-foreground">{s.when}</span>
-              </div>
-            ))}
+          <div className="flex min-w-[560px]">
+            {steps.map((s, i) => {
+              const state = s.when ? 'done' : i === firstPending ? 'now' : 'next';
+              return (
+                <div key={s.name} className="relative flex flex-1 flex-col items-center gap-1 px-1 text-center">
+                  {i > 0 && (
+                    <span className={`absolute left-[-50%] top-[7px] h-0.5 w-full ${state === 'next' ? 'bg-border' : 'bg-success'}`} />
+                  )}
+                  <span className={[
+                    'relative z-[1] h-4 w-4 rounded-full border-2',
+                    state === 'done' ? 'border-success bg-success'
+                      : state === 'now' ? 'border-primary bg-background ring-4 ring-primary/20'
+                        : 'border-border bg-background',
+                  ].join(' ')} />
+                  <span className={`text-xs leading-tight ${state === 'now' ? 'font-semibold text-primary' : state === 'next' ? 'text-muted-foreground' : 'font-medium'}`}>
+                    {s.name}
+                  </span>
+                  <span className="text-xs leading-tight text-muted-foreground">{s.when ? formatDate(s.when) : '—'}</span>
+                  {/* WHO, on its own line: a timeline that says when but not by
+                      whom sends the next question to a different screen. */}
+                  <span className="max-w-[120px] truncate text-xs leading-tight text-muted-foreground" title={s.who || undefined}>
+                    {s.who || (state === 'done' ? '—' : '')}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </div>
 
@@ -323,7 +358,13 @@ export function ScheduleAssignUplifted({
               <span className="inline-flex rounded-full border bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">OTA pending</span>
             </p>
             <p className="text-xs text-muted-foreground">
-              {apptMoved ? 'Moved off the original date' : 'Both decided at check-in'}
+              {/* The backend's own rules, stated so nobody has to guess what
+                  the chips predict (services/mobile-performance.service.js):
+                  SDA = check-in on the ORIGINAL appointment's date;
+                  OTA = check-in within 60 min of the appointment time. */}
+              {apptMoved
+                ? `Check-in on ${formatDate(originalAppt).split(',')[0]} keeps SDA Yes`
+                : 'SDA: check-in on this date · OTA: within 60 min of it'}
             </p>
           </div>
         </div>
@@ -331,7 +372,11 @@ export function ScheduleAssignUplifted({
         <div className="flex flex-wrap gap-x-6 gap-y-1 border-t bg-muted/40 px-3 py-2 text-xs">
           <span><span className="text-muted-foreground">Job type </span>{job?.job_type || '—'}</span>
           <span><span className="text-muted-foreground">Booked by </span>{job?.created_by_name || '—'}</span>
-          <span><span className="text-muted-foreground">Payment </span>{job?.payment_mode || '—'}</span>
+          {/* tbl_job.collected_by (1/2/3), through the SAME helper the Current
+              tab's Job Details grid uses — NOT the BE's `payment_mode`, which
+              this console showed and which is unset on almost every job. Who
+              collects is a per-JOB fact, so it belongs in this row. */}
+          <span><span className="text-muted-foreground">Payment </span>{collectedByText(job?.collected_by) ?? 'Not set'}</span>
           <span><span className="text-muted-foreground">Project manager </span>{job?.project_manager_name || '—'}</span>
           <span><span className="text-muted-foreground">Zonal manager </span>{job?.zonal_manager_name || '—'}</span>
         </div>
