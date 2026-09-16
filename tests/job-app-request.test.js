@@ -321,6 +321,64 @@ test('ShareChip is on the pending rows, exactly as the other call sites use it',
     'match /my-orders and /jobs verbatim — a delegated job must be identifiable here too');
 });
 
+// ─── Reassign Technician: "Reschedule Requested" under Job Date & Time ─────
+
+const reschDetail = (over = {}) => ({
+  job_id: 1,
+  job_status: 1,
+  appRequest: { type: 'reschedule', requestedDateTime: '2026-07-08 10:30', reason: 'Customer Busy', requestedAt: null },
+  ...over,
+});
+
+test('reschedule row: a Pending to Start ask yields its time VERBATIM and its reason', () => {
+  const req = R.pendingRescheduleRequest(reschDetail());
+  assert.equal(req.requestedFor, '2026-07-08 10:30',
+    'an IST wall-clock string must pass through untouched — no Date round-trip');
+  assert.equal(req.reason, 'Customer Busy', 'the reason renders next to the time');
+  assert.equal(req.label, 'Reschedule Requested');
+  assert.equal(R.pendingRescheduleRequest(reschDetail({ job_status: '1' })).requestedFor, '2026-07-08 10:30');
+});
+
+test('reschedule row: gated to Pending to Start, to reschedule asks, and to a real time', () => {
+  for (const status of [0, 2, 3, 6, null]) {
+    assert.equal(R.pendingRescheduleRequest(reschDetail({ job_status: status })), null,
+      `job_status ${status} is not Pending to Start and must render no row`);
+  }
+  assert.equal(R.pendingRescheduleRequest(reschDetail({ appRequest: { type: 'cancel', requestedDateTime: null } })), null,
+    'a cancel ask (which wins over a reschedule server-side) proposes no time');
+  assert.equal(R.pendingRescheduleRequest(reschDetail({ appRequest: null })), null, 'no ask ⇒ no row');
+  assert.equal(R.pendingRescheduleRequest(reschDetail({ appRequest: { type: 'reschedule', requestedDateTime: '  ' } })), null,
+    'a blank requested time must not render an empty "Reschedule Requested" row');
+  assert.equal(R.pendingRescheduleRequest(null), null);
+});
+
+test('Reassign modal feeds the panel from its detail probe, and re-reads it after a reschedule', () => {
+  const modal = strip(read('src/components/job/AssignTechnicianModal.tsx'));
+  assert.match(modal, /rescheduleRequest=\{pendingRescheduleRequest\(probe\)\}/,
+    'the identity-guarded probe, never raw statusGate.data (a previous job\'s ask would show)');
+  assert.match(modal, /onDone=\{\(\) => \{[\s\S]*?statusGate\.refetch\(\);[\s\S]*?\}\}/,
+    'a reschedule clears the ask server-side; without the re-read the row outlives it');
+
+  const panel = strip(read('src/components/job/JobContextPanel.tsx'));
+  const slot = panel.indexOf('displaySlot(job.requested_date_time, job.time_slot)');
+  const asked = panel.indexOf('<RescheduleRequestedText request={rescheduleRequest} />');
+  const past = panel.indexOf('appointmentIsPast(job.requested_date_time)');
+  assert.ok(slot > 0 && asked > slot && past > asked,
+    'the ask renders directly under Job Date & Time / Time Slot, above the past-appointment notice');
+  assert.match(panel, /\{!rescheduling && rescheduleRequest && \(/, 'renders nothing when there is no ask');
+});
+
+test('JobModal Timeline shows the ask right under Time slot, through the SAME renderer', () => {
+  const modal = strip(read('src/components/job/JobModal.tsx'));
+  const slot = modal.indexOf("['Time slot', displaySlot(job.requested_date_time, job.time_slot) || null],");
+  const asked = modal.indexOf("...(rescheduleAsk ? [['Reschedule Requested'");
+  const checkin = modal.indexOf("['Check-in',");
+  assert.ok(slot > 0 && asked > slot && checkin > asked, 'the row sits between Time slot and Check-in');
+  assert.match(modal, /const rescheduleAsk = pendingRescheduleRequest\(\{/, 'gated by the shared status-aware helper');
+  assert.match(modal, /<RescheduleRequestedText request=\{rescheduleAsk\} \/>/);
+  assert.match(modal, /\{request\.reason && <> · Reason: \{request\.reason\}<\/>\}/, 'the reason renders next to the time');
+});
+
 // ─── Control ────────────────────────────────────────────────────────────
 
 test('positive control — the comment stripper actually removes prose', () => {
