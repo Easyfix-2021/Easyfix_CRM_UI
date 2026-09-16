@@ -30,9 +30,10 @@ import { AssignTechnicianModal, type AssignMode } from '@/components/job/AssignT
 import { ScheduleAssignModal } from '@/components/job/ScheduleAssignModal';
 import { OfferHoverCard } from '@/components/job/OfferHoverCard';
 import {
-  PendingSchedulingFilters, psFiltersFromParams, writePsFilterParams,
+  PendingSchedulingFilters, psFiltersFromParams, EMPTY_PS_FILTERS, writePsFilterParams,
   psFilterKey, psAnyFilterSet, psQueryParams, type PsFilters,
 } from '@/components/job/PendingSchedulingFilters';
+import { JobScopeBar, scopeIsClampedFor } from '@/components/job/JobScopeBar';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
 import { ResendPinButton, RESEND_PIN_ACTION } from '@/components/job/ResendPinButton';
@@ -510,6 +511,33 @@ export default function MyOrdersPage() {
   }, [me?.allowedStages, tab]);
 
   /*
+   * VIEW SCOPE (2026-09-16) — this page has no tab bar either (grep
+   * TabsTrigger here: 0 hits); ops arrive from a sidebar sub-menu or a shared
+   * URL, so the bucket is invisible state exactly as it was on /jobs. The
+   * shared JobScopeBar now states it, which is why the H1's "· <bucket>"
+   * suffix went: one statement per page, in the same place on both surfaces.
+   *
+   * Leaving is the part this page genuinely lacked — with no tab bar and no
+   * clear action, the only way back to every order was the sidebar.
+   */
+  const scopeIsClamped = scopeIsClampedFor(me?.allowedStages);
+
+  function clearTabScope() {
+    setTab('all');
+    setPage(0);
+    setPsFilters(EMPTY_PS_FILTERS);
+    // `tab` is the one piece of view state the persistence effect below does
+    // NOT write (it is put there by whoever navigated), so drop it explicitly
+    // or a refresh restores the scope the operator just cleared. The bucket's
+    // own ps* filters go with it.
+    const p = new URLSearchParams(searchParams);
+    p.delete('tab');
+    writePsFilterParams(p, EMPTY_PS_FILTERS);
+    const next = p.toString();
+    router.replace(next ? `${pathname}?${next}` : pathname, { scroll: false });
+  }
+
+  /*
    * Modal state is derived from the URL — every row-level action
    * (View / Confirm / Assign / Reassign) pushes its intent into
    * `?jobId=&action=` so teammates can share the URL and land
@@ -637,9 +665,8 @@ export default function MyOrdersPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverQ, sortKey, sortDir, psKey]);
 
-  // Resolve the current tab's human label for the page header — each sidebar
-  // sub-menu is a standalone status page, so the tab name IS the page title.
-  const activeTab = TABS.find((t) => t.value === tab);
+  // The tab's human label is rendered by JobScopeBar (shared with /jobs), not
+  // by this page's header — see VIEW SCOPE above.
 
   // Pending-for-Scheduling tab (status=0, unassigned) gets a DISTINCT
   // column set + a stripped-down action menu (Schedule & Assign only —
@@ -686,17 +713,14 @@ export default function MyOrdersPage() {
       <div className="flex items-end justify-between">
         <div>
           {/*
-            * Page title = "My Orders · <lifecycle phase>" when a tab is set,
-            * plain "My Orders" for the 'all' default. Ops land here directly
-            * from a sidebar sub-menu so the tab context is already baked into
-            * their click — no need for an in-page tab selector.
+            * The title is plain "My Orders". It used to append
+            * "· <lifecycle phase>" for the active tab; JobScopeBar below now
+            * carries that, so the bucket is stated ONCE and in the same place
+            * as on /jobs, which has no header to put it in. Ops still land
+            * here from a sidebar sub-menu, so the bucket is baked into their
+            * click — what was missing was a way back out of it.
             */}
-          <h1 className="text-2xl font-semibold">
-            My Orders
-            {activeTab && activeTab.value !== 'all' && (
-              <span className="text-muted-foreground font-normal"> · {activeTab.label}</span>
-            )}
-          </h1>
+          <h1 className="text-2xl font-semibold">My Orders</h1>
           <p className="text-sm text-muted-foreground">
             {data?.total.toLocaleString() ?? '…'} matching orders
             {!isAdmin && me?.user && <span> owned by <strong>{me.user.user_name}</strong></span>}
@@ -711,7 +735,12 @@ export default function MyOrdersPage() {
         * etc.), so an in-page tab bar would duplicate that navigation.
         * Users switch buckets via the sidebar; the URL's ?tab= param drives
         * the filter under the hood, unchanged.
+        *
+        * Which is precisely why the scope bar sits here: with no tab selector,
+        * nothing on the page said which bucket was showing or offered a way
+        * back to all of them.
         */}
+      <JobScopeBar tab={tab} clamped={scopeIsClamped} onClear={clearTabScope} noun="Orders" />
 
       {/* Search bar — hidden on the retired Pending App Ack page and on
           Pending to Start (which renders its own filter bar). */}

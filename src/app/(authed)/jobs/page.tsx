@@ -45,6 +45,7 @@ import {
   PendingSchedulingFilters, psFiltersFromParams, writePsFilterParams,
   psFilterKey, psQueryParams, EMPTY_PS_FILTERS, type PsFilters,
 } from '@/components/job/PendingSchedulingFilters';
+import { JobScopeBar, scopeIsClampedFor } from '@/components/job/JobScopeBar';
 import { TransferJobOwnershipDialog } from '@/components/job/TransferJobOwnershipDialog';
 import { UnconfirmedJobsTable } from '@/components/job/UnconfirmedJobsTable';
 import { CallableMobile } from '@/components/calls/CallButton';
@@ -959,10 +960,7 @@ export default function JobsPage() {
    * "Show All Jobs" to someone who may not sit on 'all' would appear to do
    * nothing. They see the label alone, which is the honest version.
    */
-  const allowedStages = me?.allowedStages;
-  const scopeIsClamped = !!allowedStages && allowedStages.mode !== 'all'
-    && !filterTabsForStages(TABS, allowedStages).some((t) => t.value === 'all');
-  const scopeLabel = TABS.find((t) => t.value === tab)?.label ?? tab;
+  const scopeIsClamped = scopeIsClampedFor(me?.allowedStages);
 
   /*
    * Back to every job. The tab is the one piece of view state the persistence
@@ -1319,21 +1317,7 @@ export default function JobsPage() {
       )}
 
       {/* The scope this list is narrowed to — see VIEW SCOPE above. */}
-      {tab !== 'all' && (
-        <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/40 px-3 py-2 text-sm">
-          <span>
-            Showing <span className="font-medium">{scopeLabel}</span> Only
-            {scopeIsClamped && (
-              <span className="text-muted-foreground"> · Limited By Your Job Stage Access</span>
-            )}
-          </span>
-          {!scopeIsClamped && (
-            <button type="button" onClick={clearTabScope} className="whitespace-nowrap text-xs hover:underline">
-              Show All Jobs
-            </button>
-          )}
-        </div>
-      )}
+      <JobScopeBar tab={tab} clamped={scopeIsClamped} onClear={clearTabScope} noun="Jobs" />
       <div className="flex items-end justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Jobs</h1>
