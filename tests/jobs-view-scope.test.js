@@ -26,6 +26,8 @@ const ts = require('typescript');
 const PAGE = fs.readFileSync(path.join(__dirname, '..', 'src/app/(authed)/jobs/page.tsx'), 'utf8');
 const MAP = fs.readFileSync(path.join(__dirname, '..', 'src/lib/legacy-url-map.ts'), 'utf8');
 const PSF = fs.readFileSync(path.join(__dirname, '..', 'src/components/job/PendingSchedulingFilters.tsx'), 'utf8');
+const ORDERS = fs.readFileSync(path.join(__dirname, '..', 'src/app/(authed)/my-orders/page.tsx'), 'utf8');
+const BAR = fs.readFileSync(path.join(__dirname, '..', 'src/components/job/JobScopeBar.tsx'), 'utf8');
 
 /* Transpile one top-level declaration out of a TSX file and evaluate it. */
 function evaluate(src, startMarker, endMarker, closure = {}) {
@@ -57,9 +59,9 @@ test('the empty-filter constant was really extracted, not defaulted to {}', () =
     `expected the real PsFilters shape, got ${JSON.stringify(EMPTY_PS_FILTERS)}`);
 });
 
-function runClear(initialQuery) {
+function runClear(initialQuery, src = PAGE, extras = {}) {
   const calls = { tab: [], page: [], ps: [], uw: [], replaced: [], wrote: [] };
-  const fn = evaluate(PAGE, '  function clearTabScope() {', '\n  }', {
+  const fn = evaluate(src, '  function clearTabScope() {', '\n  }', {
     setTab: (v) => calls.tab.push(v),
     setPage: (v) => calls.page.push(v),
     setPsFilters: (v) => calls.ps.push(v),
@@ -69,6 +71,7 @@ function runClear(initialQuery) {
     router: { replace: (url) => calls.replaced.push(url) },
     writePsFilterParams: (p, f) => { calls.wrote.push(f); ['psStatus', 'psCategory', 'psCity', 'psClient', 'psZonalManager'].forEach((k) => p.delete(k)); },
     EMPTY_PS_FILTERS,
+    ...extras,
   });
   fn();
   return calls;
@@ -100,13 +103,47 @@ test('with no query left, it replaces to the bare path rather than a dangling ?'
   assert.equal(c.replaced[0], '/jobs');
 });
 
-test('the scope bar renders only when a tab narrows the list, and hides the way out when the clamp owns it', () => {
-  assert.match(PAGE, /\{tab !== 'all' && \(/, 'the bar is gated on a narrowing tab');
-  assert.match(PAGE, /Showing <span className="font-medium">\{scopeLabel\}<\/span> Only/);
-  assert.match(PAGE, /\{!scopeIsClamped && \([\s\S]{0,200}onClick=\{clearTabScope\}/,
+test('the shared bar renders only when a tab narrows the list, and hides the way out when the clamp owns it', () => {
+  assert.match(BAR, /if \(tab === 'all'\) return null;/, 'no bar on the neutral view');
+  assert.match(BAR, /Showing <span className="font-medium">\{label\}<\/span> Only/);
+  assert.match(BAR, /\{!clamped && \([\s\S]{0,240}onClick=\{onClear\}/,
     'the clear action must be hidden when the stage clamp would snap the user back');
-  assert.match(PAGE, /scopeIsClamped = !!allowedStages && allowedStages\.mode !== 'all'\s*\n?\s*&& !filterTabsForStages\(TABS, allowedStages\)\.some\(\(t\) => t\.value === 'all'\)/,
-    'clamped means: stage-restricted AND not permitted to sit on all');
+  assert.match(BAR, /Limited By Your Job Stage Access/, 'a clamped user is told why instead');
+  assert.match(BAR, /if \(!allowedStages \|\| allowedStages\.mode === 'all'\) return false;/,
+    'admin / finance / still-loading are never clamped');
+});
+
+test('BOTH surfaces render the shared bar — neither has a tab bar of its own', () => {
+  for (const [name, src, noun] of [['jobs', PAGE, 'Jobs'], ['my-orders', ORDERS, 'Orders']]) {
+    /*
+     * Positive control: the claim "no tab bar" is what makes the bar necessary.
+     * Matched on the JSX USE (`<TabsTrigger`), not the bare word — both pages
+     * now mention the token in a comment documenting this very denominator,
+     * and a prose mention is not a tab bar.
+     */
+    assert.equal((src.match(/<TabsTrigger/g) || []).length, 0, `${name} must still have no tab bar`);
+    assert.match(src, new RegExp(`<JobScopeBar tab=\\{tab\\} clamped=\\{scopeIsClamped\\} onClear=\\{clearTabScope\\} noun="${noun}" \\/>`),
+      `${name} must render the shared bar with noun="${noun}"`);
+    assert.match(src, /scopeIsClamped = scopeIsClampedFor\(me\?\.allowedStages\)/,
+      `${name} must use the shared clamp predicate, not its own copy`);
+  }
+});
+
+test('my-orders states the bucket ONCE — the H1 suffix gave way to the bar', () => {
+  assert.ok(!/· \{activeTab\.label\}/.test(ORDERS), 'the duplicate scope statement must be gone');
+  assert.ok(!/const activeTab =/.test(ORDERS), 'and its now-dead lookup with it');
+  assert.match(ORDERS, /<h1 className="text-2xl font-semibold">My Orders<\/h1>/);
+});
+
+test('clearing on my-orders drops the tab and the bucket filters too', () => {
+  const c = runClear('tab=pending-scheduling&psCity=12&q=goa', ORDERS);
+  assert.equal(c.replaced.length, 1);
+  assert.ok(!/(\?|&)tab=/.test(c.replaced[0]), `tab must be gone, got ${c.replaced[0]}`);
+  assert.ok(!/psCity/.test(c.replaced[0]));
+  assert.match(c.replaced[0], /q=goa/, 'an unrelated search survives');
+  assert.deepEqual(c.tab, ['all']);
+  assert.deepEqual(c.page, [0]);
+  assert.deepEqual(c.ps, [EMPTY_PS_FILTERS]);
 });
 
 test("the legacy map's own prose points where the map actually points", () => {
