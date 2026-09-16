@@ -3,7 +3,7 @@
 /*
  * IssueReporter — the in-app bug reporter.
  *
- * One floating button, bottom-right, mounted once at the authed root so an
+ * One floating button, bottom-right by default and draggable, mounted once at the authed root so an
  * operator can report what they are looking at without leaving the page.
  *
  * ─── IT FETCHES NOTHING UNTIL IT IS OPENED ─────────────────────────────────
@@ -60,8 +60,8 @@
  */
 
 import * as React from 'react';
-import { usePathname } from 'next/navigation';
-import { ArrowLeft, Bug, Loader2, Paperclip, Send, X } from 'lucide-react';
+import { usePathname, useSearchParams } from 'next/navigation';
+import { ArrowLeft, Bug, Camera, Loader2, Paperclip, Send, X } from 'lucide-react';
 
 import { api, ApiError } from '@/lib/api';
 import { useFetch, useFetchOnce, invalidateFetch } from '@/lib/hooks';
@@ -89,6 +89,85 @@ const ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gi
 /** Mirrors MAX_SCREENSHOTS in routes/admin/issues.js. Enforced here so the
  *  sixth attachment is refused with a sentence rather than a 400. */
 const MAX_SCREENSHOTS = 5;
+
+/*
+ * ─── CAPTURE SCREEN (owner, 2026-09-16) ──────────────────────────────────
+ *
+ * Route three, beside the picker and the paste: grab THIS tab. Native
+ * getDisplayMedia rather than a DOM-to-canvas library — no dependency, and it
+ * is what the operator actually sees (modals, portals, canvases, the lot),
+ * where a DOM renderer approximates. Chrome's picker still shows, but the
+ * hints below default it to the current tab so it is one click.
+ *
+ * JPEG, not PNG: a 1440×900 PNG of a dense table can pass the 5 MB cap this
+ * form enforces; the same frame as JPEG at this quality is a few hundred KB
+ * and every screenshot this feature has ever needed was legible at it.
+ *
+ * The frame is grabbed a beat after the stream starts so the picker overlay
+ * has cleared; the panel itself is hidden for the whole capture so the shot
+ * is the page, not this form over the page.
+ */
+const CAPTURE_JPEG_QUALITY = 0.85;
+const CAPTURE_SETTLE_MS = 250;
+/* Chrome-only hints (ignored elsewhere): open the picker on THIS tab, let it
+ * be picked, and do not offer whole monitors. Typed loosely — lib.dom has
+ * not caught up with them. */
+const CAPTURE_PICKER_HINTS: Record<string, unknown> = {
+  preferCurrentTab: true,
+  selfBrowserSurface: 'include',
+  surfaceSwitching: 'exclude',
+  monitorTypeSurfaces: 'exclude',
+};
+
+/*
+ * ─── THE BUTTON MOVES (owner, 2026-09-16) ────────────────────────────────
+ *
+ * Bottom-right is where every page puts its own last button, so the FAB sat
+ * on top of Search on Pending to Start and on the row actions of a long
+ * table. It can now be dragged anywhere, and the spot persists in a cookie —
+ * per the owner, a cookie, so it survives a new tab and a restart the same
+ * way the login does. The value is two integers, so no encoding.
+ *
+ * Click versus drag: a press that travels less than DRAG_THRESHOLD_PX is a
+ * click and toggles the panel; more is a drag, and the click the browser
+ * fires on release is swallowed once. Keyboard users never drag, so their
+ * Enter/Space still lands on the plain click path.
+ */
+const FAB_COOKIE = 'crm_issue_fab';
+const FAB_COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
+const FAB_SIZE = 48;        // h-12 w-12
+const FAB_MARGIN = 16;      // bottom-4 right-4 — also the minimum inset when dragged
+const DRAG_THRESHOLD_PX = 4;
+
+type FabPos = { x: number; y: number };
+
+function readFabCookie(): FabPos | null {
+  try {
+    const m = document.cookie.match(new RegExp(`(?:^|; )${FAB_COOKIE}=(\\d+),(\\d+)`));
+    return m ? { x: Number(m[1]), y: Number(m[2]) } : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeFabCookie(p: FabPos) {
+  try {
+    document.cookie = `${FAB_COOKIE}=${Math.round(p.x)},${Math.round(p.y)}; path=/; max-age=${FAB_COOKIE_MAX_AGE}; SameSite=Lax`;
+  } catch {
+    /* a browser that refuses cookies still gets a draggable button for the session */
+  }
+}
+
+/* Keep the whole button on screen — a spot saved on a wide monitor must not
+ * park it off the edge of a laptop. */
+function clampFab(p: FabPos): FabPos {
+  const maxX = window.innerWidth - FAB_SIZE - FAB_MARGIN;
+  const maxY = window.innerHeight - FAB_SIZE - FAB_MARGIN;
+  return {
+    x: Math.min(Math.max(FAB_MARGIN, p.x), Math.max(FAB_MARGIN, maxX)),
+    y: Math.min(Math.max(FAB_MARGIN, p.y), Math.max(FAB_MARGIN, maxY)),
+  };
+}
 
 /** Joi bounds from validators/issue.validator.js — kept in step so a typo is a
  *  field-level stop here rather than a 400 after a round trip. */
@@ -280,6 +359,16 @@ function ListBody({
 
 export function IssueReporter() {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  /*
+   * PATH AND QUERY (owner, 2026-09-16). `/my-orders?tab=pending-start&
+   * action=reassign&jobId=509493` is the reproduction — which tab, which
+   * modal, which job — and the path alone sent every triager back to ask.
+   * The backend keeps the query too now (validators/issue.validator.js) and
+   * still drops any fragment.
+   */
+  const search = searchParams?.toString();
+  const pageUrl = `${pathname ?? ''}${search ? `?${search}` : ''}`;
   const { me } = useMe();
   const confirm = useConfirm();
 
@@ -300,6 +389,20 @@ export function IssueReporter() {
   const [title, setTitle] = React.useState('');
   const [description, setDescription] = React.useState('');
   const [files, setFiles] = React.useState<File[]>([]);
+  const [capturing, setCapturing] = React.useState(false);
+
+  /* null = the default corner (the CSS bottom-4 right-4). Read from the
+   * cookie after mount — never during render, which runs on the server too. */
+  const [fabPos, setFabPos] = React.useState<FabPos | null>(null);
+  React.useEffect(() => {
+    const saved = readFabCookie();
+    if (saved) setFabPos(clampFab(saved));
+    const onResize = () => setFabPos((p) => (p ? clampFab(p) : p));
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  const drag = React.useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number; moved: boolean; last: FabPos | null } | null>(null);
+  const swallowNextClick = React.useRef(false);
   const [previewUrls, setPreviewUrls] = React.useState<string[]>([]);
   const [submitting, setSubmitting] = React.useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -396,6 +499,85 @@ export function IssueReporter() {
     });
   }
 
+  /* Route three: this tab, through the browser's own capture API. Goes
+   * through acceptFiles like the other two, so the 5-file and 5 MB rules
+   * apply to it unchanged. See CAPTURE_* above for the choices. */
+  async function captureScreen() {
+    if (capturing || files.length >= MAX_SCREENSHOTS) return;
+    const md = typeof navigator !== 'undefined' ? navigator.mediaDevices : undefined;
+    if (!md?.getDisplayMedia) {
+      showToast({ variant: 'error', message: 'Screen Capture Is Not Available In This Browser. Paste Or Choose A File Instead.' });
+      return;
+    }
+    setCapturing(true); // hides the panel before the picker even opens
+    let stream: MediaStream | null = null;
+    try {
+      stream = await md.getDisplayMedia({
+        video: { displaySurface: 'browser' },
+        audio: false,
+        ...CAPTURE_PICKER_HINTS,
+      } as DisplayMediaStreamOptions);
+      const video = document.createElement('video');
+      video.srcObject = stream;
+      video.muted = true;
+      video.playsInline = true;
+      await video.play();
+      await new Promise((r) => setTimeout(r, CAPTURE_SETTLE_MS));
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext('2d')?.drawImage(video, 0, 0);
+      const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/jpeg', CAPTURE_JPEG_QUALITY));
+      if (!blob) throw new Error('capture produced no image');
+      acceptFiles([new File([blob], `screen-${Date.now()}.jpg`, { type: 'image/jpeg' })]);
+    } catch (err) {
+      // NotAllowedError is the operator closing the picker — not a failure.
+      if (!(err instanceof DOMException && err.name === 'NotAllowedError')) {
+        showToast({ variant: 'error', message: 'Could Not Capture The Screen.' });
+      }
+    } finally {
+      // Always. A capture stream left running keeps the tab's "sharing" pill lit.
+      stream?.getTracks().forEach((t) => t.stop());
+      setCapturing(false);
+    }
+  }
+
+  /* The FAB's drag. Pointer events cover mouse and touch alike; capture keeps
+   * the gesture on the button when the pointer outruns it. */
+  function fabPointerDown(e: React.PointerEvent<HTMLButtonElement>) {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    drag.current = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, originX: rect.left, originY: rect.top, moved: false, last: null };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }
+  function fabPointerMove(e: React.PointerEvent<HTMLButtonElement>) {
+    const d = drag.current;
+    if (!d) return;
+    const dx = e.clientX - d.startX;
+    const dy = e.clientY - d.startY;
+    if (!d.moved && Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
+    d.moved = true;
+    d.last = clampFab({ x: d.originX + dx, y: d.originY + dy });
+    setFabPos(d.last);
+  }
+  function fabPointerUp(e: React.PointerEvent<HTMLButtonElement>) {
+    const d = drag.current;
+    drag.current = null;
+    if (!d) return;
+    if (e.currentTarget.hasPointerCapture(d.pointerId)) e.currentTarget.releasePointerCapture(d.pointerId);
+    if (d.moved) {
+      if (d.last) writeFabCookie(d.last);
+      swallowNextClick.current = true; // the click that follows a drag is not a click
+    }
+  }
+  function fabClick() {
+    if (swallowNextClick.current) {
+      swallowNextClick.current = false;
+      return;
+    }
+    setOpen((v) => !v);
+  }
+
   /* Route two: the clipboard. Win+Shift+S / Cmd+Ctrl+Shift+4 put the capture
    * here and nowhere else, so a paste anywhere in the form attaches it. */
   function onPaste(e: React.ClipboardEvent<HTMLFormElement>) {
@@ -457,14 +639,14 @@ export function IssueReporter() {
         const fd = new FormData();
         fd.append('title', t);
         fd.append('description', d);
-        fd.append('page_path', pathname ?? '');
+        fd.append('page_path', pageUrl);
         // Repeated under ONE field name — multer's .array('screenshot') on the
         // route collects them into req.files in this order, which becomes
         // tbl_crm_issue_image.sort_order.
         for (const f of files) fd.append('screenshot', f);
         await api.post(LIST_PREFIX, fd);
       } else {
-        await api.post(LIST_PREFIX, { title: t, description: d, page_path: pathname ?? '' });
+        await api.post(LIST_PREFIX, { title: t, description: d, page_path: pageUrl });
       }
       resetForm();
       showToast({ variant: 'success', message: 'Issue Reported.' });
@@ -610,6 +792,9 @@ export function IssueReporter() {
             // z-40 — one band below the dialog stack (dialog.tsx is all z-50),
             // so an open job modal covers this rather than the reverse.
             'fixed bottom-20 right-4 z-40 flex flex-col overflow-hidden rounded-xl border border-border bg-card shadow-lg',
+            // Out of the shot for the whole capture — visibility, not unmount,
+            // so the half-written report underneath survives untouched.
+            capturing && 'invisible',
             /*
              * h-, not max-h-. A max-height only CAPS the panel: a flex column
              * still collapses to its content, so switching from the report form
@@ -804,6 +989,20 @@ export function IssueReporter() {
                           <Paperclip className="h-4 w-4" aria-hidden="true" />
                           {files.length ? 'Add More' : 'Choose Files'}
                         </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="gap-1"
+                          disabled={capturing || files.length >= MAX_SCREENSHOTS}
+                          onClick={captureScreen}
+                          title="Grab This Tab As A Screenshot"
+                        >
+                          {capturing
+                            ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                            : <Camera className="h-4 w-4" aria-hidden="true" />}
+                          Capture Screen
+                        </Button>
                         {files.length > 1 ? (
                           <Button type="button" variant="ghost" size="sm" onClick={clearScreenshots}>
                             Remove All
@@ -811,7 +1010,7 @@ export function IssueReporter() {
                         ) : null}
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        Or Paste Screenshots Anywhere In This Form. Up To {MAX_SCREENSHOTS}, 5 MB Each.
+                        Capture Screen Grabs This Tab; Or Paste Screenshots Anywhere In This Form. Up To {MAX_SCREENSHOTS}, 5 MB Each.
                       </p>
 
                       {previewUrls.length ? (
@@ -876,12 +1075,21 @@ export function IssueReporter() {
 
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={fabClick}
+        onPointerDown={fabPointerDown}
+        onPointerMove={fabPointerMove}
+        onPointerUp={fabPointerUp}
+        onPointerCancel={fabPointerUp}
         aria-label="Report An Issue"
         aria-expanded={open}
+        title="Report An Issue — Drag To Move"
+        // A saved spot overrides the corner classes inline; null keeps them.
+        style={fabPos ? { left: fabPos.x, top: fabPos.y, right: 'auto', bottom: 'auto' } : undefined}
         className={cn(
           'fixed bottom-4 right-4 z-40 flex h-12 w-12 items-center justify-center rounded-full',
           'bg-primary text-primary-foreground shadow-lg transition-colors hover:bg-primary/90',
+          // touch-none: a finger drag moves the button, not the page under it.
+          'touch-none cursor-grab active:cursor-grabbing select-none',
         )}
       >
         {open
