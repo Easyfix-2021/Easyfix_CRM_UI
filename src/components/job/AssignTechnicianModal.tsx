@@ -60,6 +60,7 @@ import { CandidateTable, PincodeListModal, type ScheduleCandidate } from './Cand
 import { AddRemarksDialog } from './AddRemarksDialog';
 import { RescheduleDialog } from './RescheduleDialog';
 import { useCancelJob } from './CancelJob';
+import { pendingRescheduleRequestFor, type AppRequestDetail } from '@/lib/job-app-request';
 
 /* Job context carried on the candidates response — the SAME enriched job object
    Schedule & Assign reads, rendered by the shared <JobContextPanel>. Typed as
@@ -128,7 +129,9 @@ export function AssignTechnicianModal({
   // for a SCHEDULED (1) job — a tampered link to any other status (e.g. a
   // completed job) must NOT let the operator (re)assign. Probe the real status;
   // while it loads (status unknown) we don't block — the modal shows its loader.
-  const statusGate = useFetch<{ job_id?: number; job_status?: number }>(open && jobId ? `/admin/jobs/${jobId}` : null);
+  // The same full read also carries `appRequest`, which feeds the
+  // "Reschedule Requested" row under Job Date & Time — no second fetch.
+  const statusGate = useFetch<{ job_id?: number; job_status?: number; appRequest?: AppRequestDetail | null }>(open && jobId ? `/admin/jobs/${jobId}` : null);
   /*
    * ⚠ IDENTITY-GUARDED, like `topData` below. useFetch RETAINS the previous
    * key's payload (a key change sets `refreshing`, not `loading`; `key = null`
@@ -455,6 +458,7 @@ export function AssignTechnicianModal({
             showReschedule
             onReschedule={() => setRescheduleOpen(true)}
             rescheduling={rescheduling}
+            rescheduleRequestedFor={pendingRescheduleRequestFor(probe)}
           />
 
           {/* Note banners. */}
@@ -762,6 +766,10 @@ export function AssignTechnicianModal({
             // can't re-run a still-mounted hook.
             invalidateFetch((k) => k.startsWith(`/admin/jobs/${jobId}/candidates`));
             top.refetch();
+            // A reschedule clears the technician's reschedule ask server-side
+            // (resolveAppRequests), so re-read the detail probe or the
+            // "Reschedule Requested" row outlives the ask it answered.
+            statusGate.refetch();
             // Remount the remarks thread so the reschedule comment + any actioned
             // customer request appear.
             invalidateFetch((k) =>
