@@ -78,6 +78,7 @@ import { ScheduleAssignUplifted } from './ScheduleAssignUplifted';
 import { JobRemarksView } from './JobRemarksView';
 import { ScheduleAssignRescheduleDialog } from './ScheduleAssignRescheduleDialog';
 import { JobInternalNotes } from './JobInternalNotes';
+import { ServicesOneListDialog } from './ServicesOneListDialog';
 
 /** Per-browser memory of the Current/Uplifted choice — see `view` below. */
 const SA_VIEW_KEY = 'crm_schedule_assign_view';
@@ -329,6 +330,12 @@ export function ScheduleAssignModal({
    * rather than duplicating it — one table, one selection, one commit button.
    */
   const techRef = useRef<HTMLElement | null>(null);
+  /*
+   * The Uplifted tab's services editor is the new one-list dialog; the Current
+   * tab keeps the basket editor (EditServicesDialog). Separate open flags so
+   * each tab can only ever open its own, and the comparison stays honest.
+   */
+  const [oneListOpen, setOneListOpen] = useState(false);
 
   /*
    * What has to happen after ANY successful reschedule, from either tab's
@@ -1018,10 +1025,7 @@ export function ScheduleAssignModal({
                 reRank();
               } : undefined}
               onAddressSaved={jobId != null && offerable ? reRank : undefined}
-              onEditServices={jobId != null && offerable ? () => {
-                invalidateFetch((k) => k === `/admin/jobs/${jobId}`);
-                setServicesOpen(true);
-              } : undefined}
+              onEditServices={jobId != null && offerable ? () => setOneListOpen(true) : undefined}
               apiBase={SA_API_BASE}
             />
           )}
@@ -1580,6 +1584,18 @@ export function ScheduleAssignModal({
           jobId={jobId}
           onClose={() => setRescheduleOpen(false)}
           onDone={onRescheduled}
+        />
+      )}
+
+      {/* Uplifted's one-list services editor. One save sends the complete set;
+          reRank re-reads the job header (services, amounts) and the Top-10,
+          which is ranked on the job's services. */}
+      {view === 'uplifted' && jobId != null && (
+        <ServicesOneListDialog
+          open={oneListOpen}
+          jobId={jobId}
+          onClose={() => setOneListOpen(false)}
+          onSaved={reRank}
         />
       )}
 
