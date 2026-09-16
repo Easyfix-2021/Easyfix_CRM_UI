@@ -153,7 +153,13 @@ export function ScheduleAssignUplifted({
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold">{tone.title}</p>
           <p className="text-xs opacity-90">
-            {bucket === 'not_offered' && <>Appointment {appointment ? formatDate(appointment) : 'not set'} · offers stay open 48h</>}
+            {/* No expiry duration is stated here ON PURPOSE. The window is a
+                backend property (job.offer_expiry.enabled + its TTL) that is
+                currently OFF in production, so any figure printed here would be
+                a claim the server may not be honouring. The Current tab's offer
+                caption already branches on `offer_expiry_enabled`; this line
+                sticks to what is true in both regimes. */}
+            {bucket === 'not_offered' && <>Appointment {appointment ? formatDate(appointment) : 'not set'} · first technician to accept gets the job</>}
             {bucket === 'offered' && <>{live.length} waiting · {declined.length} declined · {expired.length} expired</>}
             {bucket === 'no_takers' && <>{declined.length} declined · {expired.length} expired · widen the search or reschedule with the customer</>}
           </p>
