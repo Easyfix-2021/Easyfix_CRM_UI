@@ -43,6 +43,7 @@
  * so no effect is needed to clear it.
  */
 
+import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
@@ -298,7 +299,15 @@ export default function IssueQueuePage() {
                       </td>
                       <td className="!text-left">{nameOf(r.reported_by)}</td>
                       <td className="!text-left max-w-[220px] truncate font-mono text-xs text-muted-foreground" title={r.page_path ?? ''}>
-                        {r.page_path || '—'}
+                        {/* Since 2026-09-16 page_path carries the query too, so it is
+                            the reproduction — one click lands the triager on the tab,
+                            the modal and the job the reporter was looking at. Only an
+                            in-app path is linked; anything else stays text. */}
+                        {r.page_path
+                          ? (r.page_path.startsWith('/')
+                            ? <Link href={r.page_path} className="hover:underline" target="_blank" rel="noopener">{r.page_path}</Link>
+                            : r.page_path)
+                          : '—'}
                       </td>
                       <td className="!text-left text-xs">{formatDate(r.created_on)}</td>
                       <td className="!text-center font-mono text-xs">{r.comment_count}</td>
@@ -521,7 +530,11 @@ function IssueDetailDialog({ issueId, meId, canManage, nameOf, onClose, onChange
               <span>Issue #{data.id}</span>
               <span>Reported By {nameOf(data.reported_by)}</span>
               <span>{formatDate(data.created_on)}</span>
-              {data.page_path && <span className="font-mono">{data.page_path}</span>}
+              {data.page_path && (
+                data.page_path.startsWith('/')
+                  ? <Link href={data.page_path} className="font-mono hover:underline" target="_blank" rel="noopener">{data.page_path}</Link>
+                  : <span className="font-mono">{data.page_path}</span>
+              )}
             </div>
 
             <div>

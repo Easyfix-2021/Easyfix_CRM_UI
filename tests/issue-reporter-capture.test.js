@@ -56,7 +56,10 @@ test('the backend keeps the query too — otherwise the FE change is theatre', (
   assert.ok(rule.length > 0, 'the rule must still be named strip-fragment');
   assert.match(rule, /split\('#'\)\[0\]/, 'the fragment is still dropped');
   assert.doesNotMatch(rule, /split\('\?'\)/, 'the query must NOT be stripped any more');
-  assert.match(rule, /\.slice\(0, 255\)/, 'and the value still fits the VARCHAR(255) column');
+  // 2048 since migrations/2026-09-16-widen-crm-issue-page-path.sql; the cap
+  // is named so the validator's max() and slice() cannot drift apart.
+  assert.match(v, /const PAGE_PATH_MAX = 2048;/, 'the cap is the widened column');
+  assert.match(rule, /\.slice\(0, PAGE_PATH_MAX\)/, 'and the value is cut to it, never to the old 255');
 });
 
 // ─── Capture Screen ─────────────────────────────────────────────────────
@@ -134,6 +137,21 @@ test('a saved spot is clamped into the viewport, on load and on resize', () => {
   assert.match(SRC, /return \(\) => window\.removeEventListener\('resize', onResize\);/);
   // The corner classes stay the default; a saved spot overrides them inline.
   assert.match(SRC, /style=\{fabPos \? \{ left: fabPos\.x, top: fabPos\.y, right: 'auto', bottom: 'auto' \} : undefined\}/);
+});
+
+// ─── The queue links it ─────────────────────────────────────────────────
+
+test('the issue queue renders page_path as a link — the repro is one click', () => {
+  const PAGE = strip(read('src/app/(authed)/admin-actions/issues/page.tsx'));
+  assert.match(PAGE, /import Link from 'next\/link';/);
+  // Both renders: the list cell and the detail header.
+  const links = [...PAGE.matchAll(/<Link href=\{(r|data)\.page_path\}[^>]*target="_blank" rel="noopener">/g)];
+  assert.equal(links.length, 2, `expected the list cell and the detail header to link, found ${links.length}`);
+  // Only an in-app path is linked. page_path is written by one validator, but
+  // the guard costs one call and keeps a stray absolute URL from becoming a
+  // click-through to somewhere else.
+  assert.equal((PAGE.match(/page_path\.startsWith\('\/'\)/g) || []).length, 2, 'each link is guarded on a leading slash');
+  assert.doesNotMatch(PAGE, /\{r\.page_path \|\| '—'\}/, 'the old plain-text cell must be gone');
 });
 
 // ─── Vocabulary ─────────────────────────────────────────────────────────
