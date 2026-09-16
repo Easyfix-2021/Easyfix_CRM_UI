@@ -91,7 +91,10 @@ type ManagerLite = { user_id: number; user_name: string };
  * The empty value is deliberately NOT listed: "All" is the SearchSelect
  * placeholder, consistent with the Service Category field beside it.
  */
-const PS_OFFER_STATE_OPTIONS: SearchOption[] = [
+// Exported (2026-09-16): Manage Jobs now hosts this one control inside its own
+// Filter Job panel, so the vocabulary has to be shared rather than retyped —
+// two copies of a three-value list is how the two surfaces start disagreeing.
+export const PS_OFFER_STATE_OPTIONS: SearchOption[] = [
   { value: 'pending', label: 'Pending to Scheduling' },
   { value: 'offered', label: 'Offered to Tx' },
   { value: 'expired', label: 'Expired/Rejected' },

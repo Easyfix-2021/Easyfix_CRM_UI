@@ -1,3 +1,5 @@
+import { isUnrestricted, stageVisibleStatuses, type AllowedStages } from './job-stages';
+
 /*
  * Bucket Status — the legacy CRM's 3-way categorical view over job_status
  * (Open / Closed / Cancelled), and the Job Status dropdown derived from it.
@@ -55,11 +57,36 @@ export const JOB_STATUS_OPTIONS: StatusOption[] = [
  *
  * No bucket selected → every status, which is the previous behaviour.
  */
-export function jobStatusOptionsFor(bucketStatus: string): StatusOption[] {
+export function jobStatusOptionsFor(bucketStatus: string, allowed?: AllowedStages | null): StatusOption[] {
   const ids = bucketStatus ? BUCKET_STATUS_MAP[bucketStatus] : null;
-  if (!ids) return JOB_STATUS_OPTIONS;
-  return JOB_STATUS_OPTIONS.filter((o) => ids.includes(Number(o.value)));
+  const visible = isUnrestricted(allowed) ? null : stageVisibleStatuses(allowed!.stages);
+  if (!ids && !visible) return JOB_STATUS_OPTIONS;
+  return JOB_STATUS_OPTIONS.filter((o) => {
+    const code = Number(o.value);
+    if (ids && !ids.includes(code)) return false;
+    if (visible && !visible.has(code)) return false;
+    return true;
+  });
 }
+
+/*
+ * JOB STAGE ACCESS IN THE FILTERS THEMSELVES (2026-09-16).
+ *
+ * A stage-restricted user used to get a SEPARATE bucket panel above the filter
+ * card, so their Manage Jobs looked like a different page from everyone else's.
+ * The owner's call: one filter panel for everybody, and where a user lacks
+ * access, the dropdown simply does not offer that value.
+ *
+ * Both option builders therefore narrow on two independent axes — the selected
+ * bucket (Open / Closed / Cancelled) and the user's own stage grant — and both
+ * reuse job-stages' rule rather than re-deriving it: `isUnrestricted` decides
+ * whether a grant applies at all (no rows = every stage), and
+ * `stageVisibleStatuses` turns granted stage_keys into job_status codes. The
+ * two vocabularies do NOT overlap by name — these options are keyed
+ * 'scheduling' / 'close' / 'audit' while a grant is keyed 'pending-scheduling'
+ * / 'pending-close' / 'audit-complete' — so the comparison is made in STATUS
+ * CODES, the one representation both sides agree on.
+ */
 
 /* ─────────────────────────────────────────────────────────────────────
  * JOB STAGE filter — legacy parity (2026-08-18).
@@ -120,6 +147,58 @@ const STAGE_STATUS_IDS: Record<string, number[]> = {
 export type StageFilter = { statuses: number[]; assigned?: boolean };
 
 /*
+ * A TAB, EXPRESSED AS A FILTER SELECTION (2026-09-16).
+ *
+ * Manage Jobs used to carry TWO status mechanisms: the `?tab=` bucket, whose
+ * pins were unconditional, and the Bucket / Job Status dropdowns. They could
+ * contradict each other, so the dropdowns were HIDDEN whenever a bucket was
+ * active — which is why a bucket-scoped user saw a different filter panel from
+ * everyone else, with a separate card above it.
+ *
+ * Owner's call: one panel for everybody. So a tab now PRE-SELECTS the
+ * dropdowns and the dropdowns are the only status mechanism. The translation is
+ * DERIVED from the same stage definitions the dropdown offers, not typed out as
+ * a second table that could drift from them:
+ *
+ *   1. the tab's own status codes (and its `assigned` axis, if it pins one);
+ *   2. every stage option whose resolved statuses fall inside those codes and
+ *      whose `assigned` axis agrees;
+ *   3. only if those stages cover the tab's codes EXACTLY is the tab
+ *      expressible — otherwise nothing is pre-selected and the tab's extra
+ *      pins (a date window, a quotation state) keep doing their own work.
+ *
+ * Returning empty is therefore a real answer, not a failure: `running-late`
+ * (statuses 0+1 AND requested-before-now) is not a status selection, and
+ * pretending it were would widen it.
+ */
+export function tabSelectionFor(tab: TabStatusDef | undefined | null): { bucketStatus: string; stages: string[] } {
+  const none = { bucketStatus: '', stages: [] as string[] };
+  if (!tab) return none;
+  const codes = tab.statuses ?? (tab.status !== undefined ? [tab.status] : []);
+  if (codes.length === 0) return none;
+  const codeSet = new Set(codes);
+
+  const stages = JOB_STAGE_OPTIONS.filter((o) => {
+    const r = resolveStageFilter([o.value]);
+    if (!r || r.statuses.length === 0) return false;
+    if (!r.statuses.every((c) => codeSet.has(c))) return false;
+    // The technician axis has to agree, or "Pending for scheduling" would also
+    // match the assigned-but-unacknowledged bucket that shares status 0.
+    if (tab.assigned !== undefined && r.assigned !== tab.assigned) return false;
+    if (tab.assigned === undefined && r.assigned !== undefined) return false;
+    return true;
+  }).map((o) => o.value);
+
+  if (stages.length === 0) return none;
+  const covered = new Set(stages.flatMap((v) => resolveStageFilter([v])?.statuses ?? []));
+  if (covered.size !== codeSet.size || [...codeSet].some((c) => !covered.has(c))) return none;
+
+  const bucketStatus = Object.keys(BUCKET_STATUS_MAP)
+    .find((k) => codes.every((c) => BUCKET_STATUS_MAP[k].includes(c))) ?? '';
+  return { bucketStatus, stages };
+}
+
+/*
  * Resolve selected stages into the backend's `statuses` + `assigned` pair.
  *
  * `assigned` reproduces legacy's efrFlag, including its looseness: the flag
@@ -162,13 +241,34 @@ export function resolveStageFilter(selected: string[]): StageFilter | null {
  * inside the bucket makes that contradiction unconstructable instead of merely
  * unexplained. No bucket → every stage.
  */
-export function jobStageOptionsFor(bucketStatus: string): StatusOption[] {
+export function jobStageOptionsFor(bucketStatus: string, allowed?: AllowedStages | null): StatusOption[] {
   const ids = bucketStatus ? BUCKET_STATUS_MAP[bucketStatus] : null;
-  if (!ids) return JOB_STAGE_OPTIONS;
+  const visible = isUnrestricted(allowed) ? null : stageVisibleStatuses(allowed!.stages);
+  if (!ids && !visible) return JOB_STAGE_OPTIONS;
   return JOB_STAGE_OPTIONS.filter((o) => {
     const resolved = resolveStageFilter([o.value]);
-    return !!resolved && resolved.statuses.some((s) => ids.includes(s));
+    if (!resolved) return false;
+    if (ids && !resolved.statuses.some((c) => ids.includes(c))) return false;
+    if (visible && !resolved.statuses.some((c) => visible.has(c))) return false;
+    return true;
   });
+}
+
+/*
+ * The Open / Closed / Cancelled selector, minus any bucket the user cannot see
+ * a single status inside. Without this a restricted user could pick "Closed",
+ * get an empty Job Status list and an empty table, with nothing saying why.
+ */
+export const BUCKET_OPTIONS: StatusOption[] = [
+  { value: 'open',      label: 'Open' },
+  { value: 'closed',    label: 'Closed / Completed' },
+  { value: 'cancelled', label: 'Cancelled' },
+];
+
+export function bucketOptionsFor(allowed?: AllowedStages | null): StatusOption[] {
+  if (isUnrestricted(allowed)) return BUCKET_OPTIONS;
+  const visible = stageVisibleStatuses(allowed!.stages);
+  return BUCKET_OPTIONS.filter((b) => (BUCKET_STATUS_MAP[b.value] || []).some((c) => visible.has(c)));
 }
 
 /* ─────────────────────────────────────────────────────────────────────

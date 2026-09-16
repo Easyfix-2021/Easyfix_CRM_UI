@@ -242,3 +242,113 @@ test('REGRESSION: the export builder must not ignore a stage selection', () => {
   const onScreen = B.buildStatusParams({ stages: ['audit'], tab: {} });
   assert.equal(onScreen.statuses, '10');
 });
+
+
+/* ─────────────────────────────────────────────────────────────────────
+ * ONE FILTER PANEL (2026-09-16) — a tab must be expressible as a filter
+ * SELECTION, and a user's Job Stage Access must narrow the options offered.
+ *
+ * Manage Jobs used to carry a second status mechanism (the tab's unconditional
+ * pins) and hid the dropdowns while it was active, so a bucket-scoped user saw
+ * a different panel. The tab now pre-selects the dropdowns, which is only safe
+ * if the translation reproduces the tab EXACTLY — a selection that widened a
+ * bucket is the /my-orders inversion that comment in jobs/page.tsx records.
+ * ───────────────────────────────────────────────────────────────────── */
+const fs = require('fs');
+const path = require('path');
+
+/*
+ * The REAL tab definitions, parsed from lib/job-tabs.ts. That file imports the
+ * `@/` alias so it is not in .test-build, and typing its pins out here would be
+ * a fixture free to agree with itself while disagreeing with the app.
+ */
+function realTabDefs() {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src/lib/job-tabs.ts'), 'utf8');
+  const defs = [...src.matchAll(/\{\s*value:\s*'([\w-]+)'[^}]*\}/g)].map((m) => {
+    const whole = m[0];
+    const status = /\bstatus:\s*(\d+)/.exec(whole);
+    const statuses = /\bstatuses:\s*\[([\d,\s]+)\]/.exec(whole);
+    const assigned = /\bassigned:\s*(true|false)/.exec(whole);
+    const def = { value: m[1] };
+    if (statuses) def.statuses = statuses[1].split(',').map((x) => Number(x.trim()));
+    else if (status) def.status = Number(status[1]);
+    if (assigned) def.assigned = assigned[1] === 'true';
+    return def;
+  });
+  // POSITIVE CONTROL on the parser, not only on its output: a regex that
+  // matched nothing would make every assertion below vacuous.
+  assert.ok(defs.length >= 12, `parsed ${defs.length} tab defs — the matcher is broken, not job-tabs`);
+  const ps = defs.find((d) => d.value === 'pending-scheduling');
+  assert.deepEqual(ps, { value: 'pending-scheduling', status: 0, assigned: false },
+    'the parser must recover the pins, not just the names');
+  return defs;
+}
+
+test('a tab pre-selects a filter selection that reproduces it EXACTLY, or none at all', () => {
+  const defs = realTabDefs();
+  let expressed = 0;
+  for (const def of defs) {
+    const sel = B.tabSelectionFor(def);
+    if (sel.stages.length === 0) continue;          // not a status pick — its own pins stand
+    expressed += 1;
+    const resolved = B.resolveStageFilter(sel.stages);
+    const want = (def.statuses ?? [def.status]).slice().sort((a, b) => a - b);
+    assert.deepEqual(resolved.statuses.slice().sort((a, b) => a - b), want,
+      `${def.value}: the pre-selection must not widen or narrow the tab`);
+    assert.equal(resolved.assigned, def.assigned,
+      `${def.value}: the technician axis must survive the translation`);
+    assert.ok(B.BUCKET_STATUS_MAP[sel.bucketStatus].every((c) => true));
+    assert.ok(want.every((c) => B.BUCKET_STATUS_MAP[sel.bucketStatus].includes(c)),
+      `${def.value}: the bucket must contain every status the tab pins`);
+  }
+  assert.ok(expressed >= 5, `only ${expressed} tabs were expressible — expected the bucket tabs at least`);
+  console.log(`tab→selection: ${expressed} of ${defs.length} tabs expressed exactly, the rest keep their own pins`);
+});
+
+test('the tabs a status selection cannot state pre-select NOTHING', () => {
+  // completed pins status 5 while the Completed stage spans 3 AND 5; running-late
+  // is statuses 0+1 AND requested-before-now. Pre-selecting either would widen
+  // the view — the failure this whole mechanism exists to avoid.
+  for (const def of [{ value: 'completed', status: 5 }, { value: 'running-late', statuses: [0, 1] }, { value: 'all' }]) {
+    assert.deepEqual(B.tabSelectionFor(def), { bucketStatus: '', stages: [] }, def.value);
+  }
+  assert.deepEqual(B.tabSelectionFor(undefined), { bucketStatus: '', stages: [] });
+});
+
+test('Job Stage Access narrows the options offered, and no grant means every option', () => {
+  const all = B.jobStageOptionsFor('');
+  assert.ok(all.length >= 10, `expected the full stage list, got ${all.length}`);
+  assert.deepEqual(B.jobStageOptionsFor('', { mode: 'all', stages: [] }), all,
+    'mode "all" must be indistinguishable from no grant at all');
+  assert.deepEqual(B.jobStageOptionsFor('', undefined), all);
+
+  const granted = B.jobStageOptionsFor('', { mode: 'list', stages: ['pending-scheduling'] }).map((o) => o.value);
+  assert.ok(granted.length > 0 && granted.length < all.length,
+    `a grant must narrow but not empty the list, got ${JSON.stringify(granted)}`);
+  assert.ok(granted.includes('scheduling'), 'the granted stage itself must be offered');
+  assert.ok(!granted.includes('completed'), 'a stage outside the grant must not be offered');
+  /*
+   * KNOWN LOOSENESS, matched to the shipped rule: the comparison is made in
+   * status CODES, and 'scheduling' / 'acknowledge' both live at status 0 — they
+   * differ only on the technician axis, which a grant does not express. So a
+   * pending-scheduling grant also offers "Pending app acknowledgement".
+   * filterTabsForStages has exactly the same looseness; diverging here would
+   * make the dropdown and the tab list disagree about one grant.
+   */
+  assert.ok(granted.includes('acknowledge'), 'documented: status 0 is shared by two stages');
+});
+
+test('a bucket with no reachable status is not offered', () => {
+  const all = B.bucketOptionsFor().map((b) => b.value);
+  assert.deepEqual(all, ['open', 'closed', 'cancelled']);
+  assert.deepEqual(B.bucketOptionsFor({ mode: 'list', stages: ['pending-scheduling'] }).map((b) => b.value), ['open'],
+    'status 0 lives only in the open bucket');
+  assert.deepEqual(B.bucketOptionsFor({ mode: 'all', stages: [] }).map((b) => b.value), all);
+});
+
+test('the status-code option list narrows the same way', () => {
+  const all = B.jobStatusOptionsFor('');
+  const granted = B.jobStatusOptionsFor('', { mode: 'list', stages: ['pending-scheduling'] });
+  assert.ok(granted.length > 0 && granted.length < all.length);
+  assert.ok(granted.every((o) => Number(o.value) === 0), `expected only status 0, got ${JSON.stringify(granted)}`);
+});

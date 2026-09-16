@@ -99,7 +99,13 @@ export const STAGE_OPTIONS: Array<{ value: StageKey; label: string }> =
  */
 export type AllowedStages = { mode: 'all' | 'list'; stages: string[] };
 
-function isUnrestricted(allowed: AllowedStages | undefined | null): boolean {
+/*
+ * Exported (2026-09-16) so the FILTER OPTION builders in job-buckets.ts apply
+ * the same "is this user restricted at all" rule the tab filter does. Two
+ * copies of this predicate is exactly how a restricted user ends up seeing a
+ * dropdown value the server will refuse.
+ */
+export function isUnrestricted(allowed: AllowedStages | undefined | null): boolean {
   return !allowed || allowed.mode === 'all';
 }
 
