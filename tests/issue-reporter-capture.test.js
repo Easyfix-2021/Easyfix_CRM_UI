@@ -4,6 +4,11 @@
  * and let the floating button be dragged out of the way — with the spot kept
  * in a cookie.
  *
+ * AND, after the first cut shipped (owner, 2026-09-16):
+ *   · "it still does not auto capture the page screenshot"
+ *   · "everything is just in header line ... like 'Navigation: <Page Path>'"
+ *   · "users should be able to add images in comments as well"
+ *
  * Source-scanned, like issue-reporter-scope.test.js and
  * issue-screenshot-enlarge.test.js: the suite mounts nothing, and every rule
  * here is a deletion that type-checks. Comments are stripped before scanning
@@ -70,16 +75,31 @@ test('capture is the browser\'s own API, defaulted to this tab, JPEG at a bounde
   assert.match(SRC, /selfBrowserSurface: 'include',/);
   assert.match(SRC, /canvas\.toBlob\(r, 'image\/jpeg', CAPTURE_JPEG_QUALITY\)/);
   assert.match(SRC, /const CAPTURE_JPEG_QUALITY = 0\.85;/);
-  // No DOM-to-image dependency crept in.
+  /*
+   * AMENDED 2026-09-16. This used to assert NO capture library at all, and that
+   * was right while the only capture was the button: getDisplayMedia is native
+   * and pixel-exact. The owner then asked for an AUTOMATIC capture, which that
+   * API cannot do — it requires a user gesture and always prompts. So exactly
+   * ONE rasteriser is allowed, for route zero, and the MANUAL path must still
+   * be native. A second library, or the manual path quietly switching to the
+   * rasteriser, both fail here.
+   */
   const pkg = JSON.parse(read('package.json'));
   const deps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
-  assert.deepEqual(deps.filter((d) => /canvas|screenshot|dom-to-image|html-to-image|modern-screenshot/i.test(d)), [],
-    'screen capture must stay native — no capture library');
+  assert.deepEqual(deps.filter((d) => /canvas|screenshot|dom-to-image|html-to-image/i.test(d)), ['modern-screenshot'],
+    'exactly one rasteriser, for the automatic capture only');
+  const manualAt = SRC.indexOf('async function captureScreen()');
+  const manual = SRC.slice(manualAt, SRC.indexOf('\n  }\n', manualAt));
+  assert.doesNotMatch(manual, /modern-screenshot|domToBlob/,
+    'Capture Screen stays pixel-exact — that is the whole reason it survived route zero');
 });
 
 test('the captured frame goes through acceptFiles, so the 5-file and 5 MB rules apply', () => {
   assert.match(SRC, /acceptFiles\(\[new File\(\[blob\], `screen-\$\{Date\.now\(\)\}\.jpg`, \{ type: 'image\/jpeg' \}\)\]\);/);
-  assert.match(SRC, /const ALLOWED_MIME = new Set\(\['image\/png', 'image\/jpeg'/, 'jpeg must be in the allow-set or every capture is refused');
+  // The allow-set lives in the shared module now — assert it where it IS.
+  assert.match(strip(read('src/components/issue/screenshotAttachments.tsx')),
+    /export const ALLOWED_MIME = new Set\(\['image\/png', 'image\/jpeg'/,
+    'jpeg must be in the allow-set or every capture is refused');
   assert.match(SRC, /if \(capturing \|\| files\.length >= MAX_SCREENSHOTS\) return;/);
 });
 
@@ -145,13 +165,124 @@ test('the issue queue renders page_path as a link — the repro is one click', (
   const PAGE = strip(read('src/app/(authed)/admin-actions/issues/page.tsx'));
   assert.match(PAGE, /import Link from 'next\/link';/);
   // Both renders: the list cell and the detail header.
-  const links = [...PAGE.matchAll(/<Link href=\{(r|data)\.page_path\}[^>]*target="_blank" rel="noopener">/g)];
-  assert.equal(links.length, 2, `expected the list cell and the detail header to link, found ${links.length}`);
+  /*
+   * Checked per SURFACE rather than with one whole-tag regex. The two links are
+   * formatted differently — the list cell on one line, the detail header
+   * attribute-per-line — and a single regex that happened to match only one of
+   * them would pass with the other deleted, which is precisely the bug this
+   * assertion exists to catch.
+   */
+  for (const [surface, expr] of [['list cell', 'r.page_path'], ['detail header', 'data.page_path']]) {
+    const at = PAGE.indexOf(`href={${expr}}`);
+    assert.ok(at > -1, `${surface}: page_path must be an anchor's href`);
+    const tag = PAGE.slice(PAGE.lastIndexOf('<Link', at), PAGE.indexOf('>', at));
+    assert.match(tag, /target="_blank"/, `${surface}: opens in a new tab`);
+    assert.match(tag, /rel="noopener"/, `${surface}: and drops the opener reference`);
+  }
   // Only an in-app path is linked. page_path is written by one validator, but
   // the guard costs one call and keeps a stray absolute URL from becoming a
   // click-through to somewhere else.
   assert.equal((PAGE.match(/page_path\.startsWith\('\/'\)/g) || []).length, 2, 'each link is guarded on a leading slash');
   assert.doesNotMatch(PAGE, /\{r\.page_path \|\| '—'\}/, 'the old plain-text cell must be gone');
+});
+
+// ─── Route zero: the AUTOMATIC capture ──────────────────────────────────
+
+test('opening the panel captures the page with no click and no picker', () => {
+  /*
+   * getDisplayMedia (route three) requires a user gesture and always shows the
+   * browser's picker — a security property of the API, not a setting — so the
+   * automatic one HAS to rasterise the DOM instead.
+   */
+  assert.match(SRC, /const autoCapture = React\.useCallback\(async \(\) => \{/);
+  assert.match(SRC, /await import\('modern-screenshot'\)/,
+    'dynamically imported: this component mounts on every authed page');
+  assert.match(SRC, /domToBlob\(document\.body, \{/);
+  // Fires on the OPEN transition, not on every render.
+  assert.match(SRC, /if \(!open\) \{ autoCaptureDone\.current = false; return; \}/);
+  assert.match(SRC, /if \(autoCaptureDone\.current \|\| files\.length\) return;/,
+    're-opening a panel that already has screenshots must not shove another in front of the operator');
+});
+
+test('the auto shot is the VIEWPORT, and excludes the reporter itself', () => {
+  // A full-body rasterise of a 500-row table is an enormous image against a
+  // 5 MB cap, and "Current Screen's Screenshot" is what was asked for.
+  assert.match(SRC, /width: window\.innerWidth,/);
+  assert.match(SRC, /height: window\.innerHeight,/);
+  assert.match(SRC, /translate\(\$\{-window\.scrollX\}px, \$\{-window\.scrollY\}px\)/);
+  // The shot must be the PAGE, not the form sitting on top of it.
+  assert.match(SRC, /const REPORTER_ROOT_ATTR = 'data-issue-reporter';/);
+  assert.match(SRC, /filter: \(node: Node\) => !\(node instanceof Element && node\.hasAttribute\(REPORTER_ROOT_ATTR\)\)/);
+  assert.equal((SRC.match(/\{\.\.\.\{ \[REPORTER_ROOT_ATTR\]: '' \}\}/g) || []).length, 2,
+    'both roots — the panel and the FAB — must carry the marker');
+});
+
+test('a failed auto-capture is SILENT, and goes through the same acceptFiles', () => {
+  const at = SRC.indexOf('const autoCapture = React.useCallback');
+  assert.ok(at > -1, 'positive control: autoCapture must be locatable');
+  const fn = SRC.slice(at, SRC.indexOf('  }, []);', at));
+  assert.match(fn, /acceptFiles\(\[new File\(\[blob\], `page-\$\{Date\.now\(\)\}\.jpg`/,
+    'the 5-file and 5 MB rules must apply to it like any other attachment');
+  assert.match(fn, /\} catch \{/);
+  assert.doesNotMatch(fn, /showToast/,
+    'it is automatic — a toast on every page whose images will not inline is noise nobody can act on');
+});
+
+// ─── Images on comments ─────────────────────────────────────────────────
+
+test('the caps and the picker live in ONE module, used by all three surfaces', () => {
+  const SHARED = strip(read('src/components/issue/screenshotAttachments.tsx'));
+  assert.match(SHARED, /export const MAX_SCREENSHOTS = 5;/);
+  assert.match(SHARED, /export const SCREENSHOT_FIELD = 'screenshot';/,
+    "singular — a plural field name arrives at multer as Unexpected field");
+  // The report form, the reporter's comment box, and the queue's comment box.
+  const QUEUE = strip(read('src/app/(authed)/admin-actions/issues/page.tsx'));
+  assert.equal((SRC.match(/useScreenshotAttachments\(\)/g) || []).length, 2,
+    'the reporter holds two independent sets: the report form and the comment box');
+  assert.match(QUEUE, /useScreenshotAttachments\(\)/);
+  // No surface may re-declare the rules.
+  for (const [name, src] of [['reporter', SRC], ['queue', QUEUE]]) {
+    assert.doesNotMatch(src, /image\/png', 'image\/jpeg/, `${name} must not re-declare the allow-set`);
+  }
+});
+
+test('a comment posts multipart only when something is attached', () => {
+  for (const [name, src] of [['reporter', SRC], ['queue', strip(read('src/app/(authed)/admin-actions/issues/page.tsx'))]]) {
+    assert.match(src, /appendScreenshots\(fd, /, `${name}: must send the files`);
+    assert.match(src, /fd\.append\('comment_text', text\);/, `${name}: and the text alongside them`);
+    // Plain JSON otherwise — every client before this deploy posted that shape.
+    assert.match(src, /comment_text: text \}\)/, `${name}: keeps the JSON path`);
+  }
+});
+
+test('a comment renders its own attachments, opened full size in a tab', () => {
+  for (const [name, src] of [['reporter', SRC], ['queue', strip(read('src/app/(authed)/admin-actions/issues/page.tsx'))]]) {
+    assert.match(src, /c\.screenshot_urls\?\.length \? \(/, `${name}: renders the gallery`);
+    assert.match(src, /target="_blank" rel="noopener noreferrer"/, `${name}: opens full size`);
+  }
+});
+
+test('text stays required — an image with no sentence cannot be triaged', () => {
+  assert.match(SRC, /disabled=\{posting \|\| !commentText\.trim\(\)\}/);
+});
+
+// ─── The detail header ──────────────────────────────────────────────────
+
+test('the header is a labelled definition list, and the URL is "Navigation"', () => {
+  const QUEUE = strip(read('src/app/(authed)/admin-actions/issues/page.tsx'));
+  // It was one flex-wrap row of bare values with nothing saying which was which.
+  assert.doesNotMatch(QUEUE, /<div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">/,
+    'the run-on header line must be gone');
+  assert.match(QUEUE, /<dl className="grid/);
+  for (const label of ['Status', 'Issue', 'Reported By', 'Reported On', 'Navigation']) {
+    assert.match(QUEUE, new RegExp(`<Meta label="${label}"`), `missing field: ${label}`);
+  }
+  // A real <dt>/<dd>, so a screen reader reads term-then-value.
+  assert.match(QUEUE, /<dt className=/);
+  assert.match(QUEUE, /<dd className=/);
+  // Navigation spans both columns — a full URL with its query is the longest value.
+  assert.match(QUEUE, /<Meta label="Navigation" span2>/);
+  assert.match(QUEUE, /Not Captured/, 'and says so when there is no path, rather than rendering an em dash');
 });
 
 // ─── Vocabulary ─────────────────────────────────────────────────────────

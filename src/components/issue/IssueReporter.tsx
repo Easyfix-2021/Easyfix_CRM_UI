@@ -34,7 +34,7 @@
  * When a file is attached the create goes as multipart/form-data; with no file
  * it goes as plain JSON. That is the backend's contract, not a preference:
  * server.js caps `application/json` on /api/admin at 2 MB, so a base64
- * screenshot would 413 on any ordinary full-page PNG (see the header comment in
+ * screenshot is captured automatically on open (route zero) and would 413 on any ordinary full-page PNG (see the header comment in
  * routes/admin/issues.js). `api.post` already omits Content-Type for a
  * FormData body so the browser can set the multipart boundary.
  *
@@ -74,21 +74,21 @@ import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { showToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import {
+  useScreenshotAttachments,
+  ScreenshotField,
+  appendScreenshots,
+  MAX_SCREENSHOTS,
+  MAX_SCREENSHOT_BYTES,
+  ALLOWED_MIME,
+} from './screenshotAttachments';
 
 /** The one action key that means "issue manager" — services/issue.service.js. */
 const MANAGE_ACTION = 'isIssueManage';
 
-/*
- * Mirrors multer's cap and the route's allow-set in routes/admin/issues.js.
- * Checked here so an oversized paste is refused instantly rather than after a
- * 5 MB upload that the server then rejects.
- */
-const MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024;
-const ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
-
-/** Mirrors MAX_SCREENSHOTS in routes/admin/issues.js. Enforced here so the
- *  sixth attachment is refused with a sentence rather than a 400. */
-const MAX_SCREENSHOTS = 5;
+/* The caps, the allow-set and the picker markup all live in
+ * ./screenshotAttachments now — three surfaces attach images since
+ * 2026-09-16 and they must refuse the same things the same way. */
 
 /*
  * ─── CAPTURE SCREEN (owner, 2026-09-16) ──────────────────────────────────
@@ -118,6 +118,46 @@ const CAPTURE_PICKER_HINTS: Record<string, unknown> = {
   surfaceSwitching: 'exclude',
   monitorTypeSurfaces: 'exclude',
 };
+
+/*
+ * ─── ROUTE ZERO: THE AUTOMATIC ONE (owner, 2026-09-16) ────────────────────
+ *
+ * "It still does not auto capture the page screenshot." Route three above is a
+ * BUTTON and structurally cannot be anything else: getDisplayMedia requires a
+ * user gesture and always shows the browser's picker — a security property of
+ * the API, not a setting. So a genuinely automatic capture has to rasterise the
+ * DOM instead, which is what modern-screenshot does.
+ *
+ * The two are not redundant and both stay:
+ *   · AUTO (here) — silent, instant, fires the moment the panel opens, so the
+ *     operator gets a screenshot without knowing the feature exists. It
+ *     APPROXIMATES: it re-renders the DOM into an SVG foreignObject, so
+ *     cross-origin images it cannot inline come out blank and live <canvas>
+ *     contents do not survive.
+ *   · MANUAL (Capture Screen) — pixel-exact, everything the compositor drew,
+ *     at the cost of a picker click. The upgrade path when the auto shot missed
+ *     the thing being reported.
+ *
+ * DYNAMICALLY IMPORTED. This component mounts on EVERY authed page; the library
+ * is ~180 KB unpacked and is needed only once someone actually opens the
+ * reporter. A static import would tax every page load in the CRM for a feature
+ * used a few times a week.
+ *
+ * VIEWPORT, NOT THE FULL PAGE. domToBlob(document.body) would rasterise the
+ * whole scroll height — on a 500-row table that is an enormous image against a
+ * 5 MB cap, and it is not what was asked for ("Current Screen's Screenshot").
+ * The body is shifted by the scroll offset and clipped to innerWidth/Height, so
+ * the result is exactly what the operator was looking at.
+ *
+ * scale: 1 on purpose. The default follows devicePixelRatio, which on a Retina
+ * machine quadruples the pixels for no legibility a bug report needs.
+ */
+const AUTO_CAPTURE_SCALE = 1;
+/* Marks this component's own two roots so the rasteriser drops them: the shot
+ * must be the PAGE, not the reporter sitting on top of it. An attribute rather
+ * than a class because Tailwind classes here are composed by cn() and a filter
+ * matching on them would be a string match against a moving target. */
+const REPORTER_ROOT_ATTR = 'data-issue-reporter';
 
 /*
  * ─── THE BUTTON MOVES (owner, 2026-09-16) ────────────────────────────────
@@ -217,6 +257,10 @@ type IssueListResponse = {
 type IssueComment = {
   id: number;
   comment_text: string;
+  /* Attachments on a reply (2026-09-16). Presigned server-side in
+   * getIssueDetail, same 900s TTL as the report's own. Optional so a CRM that
+   * meets an older backend renders the text and no gallery. */
+  screenshot_urls?: string[];
   commented_by: number;
   created_on: string;
 };
@@ -388,8 +432,13 @@ export function IssueReporter() {
   // Report form.
   const [title, setTitle] = React.useState('');
   const [description, setDescription] = React.useState('');
-  const [files, setFiles] = React.useState<File[]>([]);
+  /* The REPORT form's attachments. The same hook the comment box below uses,
+   * so both surfaces enforce one set of rules — see ./screenshotAttachments. */
+  const reportShots = useScreenshotAttachments();
+  const { files, acceptFiles, onPaste, clear: clearScreenshots } = reportShots;
   const [capturing, setCapturing] = React.useState(false);
+  /* Route zero runs once per open, and only when nothing is attached yet. */
+  const autoCaptureDone = React.useRef(false);
 
   /* null = the default corner (the CSS bottom-4 right-4). Read from the
    * cookie after mount — never during render, which runs on the server too. */
@@ -403,12 +452,14 @@ export function IssueReporter() {
   }, []);
   const drag = React.useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number; moved: boolean; last: FabPos | null } | null>(null);
   const swallowNextClick = React.useRef(false);
-  const [previewUrls, setPreviewUrls] = React.useState<string[]>([]);
   const [submitting, setSubmitting] = React.useState(false);
-  const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   // Detail view.
   const [commentText, setCommentText] = React.useState('');
+  /* A reply's attachments — its own set, independent of the report form's, so
+   * a half-written report with screenshots is not disturbed by commenting on a
+   * different ticket in the other tab. */
+  const commentShots = useScreenshotAttachments();
   const [posting, setPosting] = React.useState(false);
   const [reopening, setReopening] = React.useState(false);
 
@@ -445,59 +496,50 @@ export function IssueReporter() {
     open && selectedId != null ? `${LIST_PREFIX}/${selectedId}` : null,
   );
 
-  /* Local previews only — every URL is revoked when the set changes, so a long
-   * session that pastes a dozen screenshots does not pin a dozen blobs in
-   * memory. The whole list is rebuilt rather than diffed: createObjectURL is
-   * free next to the render it triggers, and a diff here would be a cache with
-   * an invalidation bug waiting in it. */
-  React.useEffect(() => {
-    if (!files.length) {
-      setPreviewUrls([]);
-      return;
+  /*
+   * Route zero: rasterise the page the moment the panel opens. Silent by
+   * design — it is automatic, so a toast on every page whose images will not
+   * inline would be noise the operator cannot act on. A failure simply leaves
+   * the form with no attachment, exactly as before this existed.
+   */
+  const autoCapture = React.useCallback(async () => {
+    try {
+      const { domToBlob } = await import('modern-screenshot');
+      const blob = await domToBlob(document.body, {
+        type: 'image/jpeg',
+        quality: CAPTURE_JPEG_QUALITY,
+        scale: AUTO_CAPTURE_SCALE,
+        width: window.innerWidth,
+        height: window.innerHeight,
+        style: {
+          // Clip to the viewport by shifting the body under a fixed-size frame.
+          transform: `translate(${-window.scrollX}px, ${-window.scrollY}px)`,
+          transformOrigin: 'top left',
+        },
+        // Drop this component's own DOM — the panel and the FAB.
+        filter: (node: Node) => !(node instanceof Element && node.hasAttribute(REPORTER_ROOT_ATTR)),
+      });
+      if (!blob) return;
+      acceptFiles([new File([blob], `page-${Date.now()}.jpg`, { type: 'image/jpeg' })]);
+    } catch {
+      /* Approximation failed (tainted canvas, an un-inlinable font, a browser
+       * without foreignObject support). The Capture Screen button still works. */
     }
-    const urls = files.map((f) => URL.createObjectURL(f));
-    setPreviewUrls(urls);
-    return () => urls.forEach((u) => URL.revokeObjectURL(u));
-  }, [files]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /*
-   * APPENDS. Picking files twice, or pasting twice, adds to the set rather
-   * than replacing it — the two capture routes below are used together (paste
-   * the screen, then browse for the log), and a picker that silently discarded
-   * the first attachment was the whole complaint.
-   *
-   * Each rejection reason is reported separately and the acceptable files in
-   * the same batch are still kept: dropping four good screenshots because the
-   * fifth was a PDF is not a helpful reading of "one of these is wrong".
+   * Fires on the OPEN transition only, and only with an empty attachment set:
+   * re-opening a panel the operator already put screenshots in must not shove
+   * another one in front of them, and must not spend the rasterise.
    */
-  function acceptFiles(candidates: ArrayLike<File> | null | undefined) {
-    const incoming = Array.from(candidates ?? []);
-    if (!incoming.length) return;
-
-    const wrongType = incoming.filter((f) => !ALLOWED_MIME.has(f.type));
-    const tooBig = incoming.filter((f) => ALLOWED_MIME.has(f.type) && f.size > MAX_SCREENSHOT_BYTES);
-    const ok = incoming.filter((f) => ALLOWED_MIME.has(f.type) && f.size <= MAX_SCREENSHOT_BYTES);
-
-    if (wrongType.length) {
-      showToast({ variant: 'error', message: 'Only PNG, JPEG, WEBP Or GIF Screenshots Are Accepted.' });
-    }
-    if (tooBig.length) {
-      showToast({ variant: 'error', message: 'Each Screenshot Must Be Under 5 MB.' });
-    }
-    if (!ok.length) return;
-
-    setFiles((prev) => {
-      const room = MAX_SCREENSHOTS - prev.length;
-      if (room <= 0) {
-        showToast({ variant: 'error', message: `You Can Attach Up To ${MAX_SCREENSHOTS} Screenshots.` });
-        return prev;
-      }
-      if (ok.length > room) {
-        showToast({ variant: 'error', message: `Only ${room} More Screenshot${room === 1 ? '' : 's'} Can Be Attached.` });
-      }
-      return [...prev, ...ok.slice(0, room)];
-    });
-  }
+  React.useEffect(() => {
+    if (!open) { autoCaptureDone.current = false; return; }
+    if (autoCaptureDone.current || files.length) return;
+    autoCaptureDone.current = true;
+    void autoCapture();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   /* Route three: this tab, through the browser's own capture API. Goes
    * through acceptFiles like the other two, so the 5-file and 5 MB rules
@@ -578,37 +620,6 @@ export function IssueReporter() {
     setOpen((v) => !v);
   }
 
-  /* Route two: the clipboard. Win+Shift+S / Cmd+Ctrl+Shift+4 put the capture
-   * here and nowhere else, so a paste anywhere in the form attaches it. */
-  function onPaste(e: React.ClipboardEvent<HTMLFormElement>) {
-    const items = Array.from(e.clipboardData?.items ?? []);
-    // EVERY image on the clipboard, not just the first — a multi-image paste is
-    // one gesture and should not silently lose all but one of them.
-    const images = items
-      .filter((it) => it.kind === 'file' && it.type.startsWith('image/'))
-      .map((it) => it.getAsFile())
-      .filter((f): f is File => f != null);
-    if (!images.length) return;
-    e.preventDefault();
-    acceptFiles(images);
-  }
-
-  function clearScreenshots() {
-    setFiles([]);
-    if (fileInputRef.current) fileInputRef.current.value = '';
-  }
-
-  /*
-   * Removing ONE keeps the rest. The input's value is cleared too: without it
-   * the browser treats re-picking the same file as "no change" and fires no
-   * change event, so a screenshot removed by mistake could not be re-added
-   * without picking something else first.
-   */
-  function removeScreenshotAt(index: number) {
-    setFiles((prev) => prev.filter((_, i) => i !== index));
-    if (fileInputRef.current) fileInputRef.current.value = '';
-  }
-
   function resetForm() {
     setTitle('');
     setDescription('');
@@ -665,8 +676,17 @@ export function IssueReporter() {
     if (!text || selectedId == null) return;
     setPosting(true);
     try {
-      await api.post(`${LIST_PREFIX}/${selectedId}/comments`, { comment_text: text });
+      if (commentShots.files.length) {
+        const fd = new FormData();
+        fd.append('comment_text', text);
+        appendScreenshots(fd, commentShots.files);
+        await api.post(`${LIST_PREFIX}/${selectedId}/comments`, fd);
+      } else {
+        // Plain JSON when there is nothing to attach — the route accepts both.
+        await api.post(`${LIST_PREFIX}/${selectedId}/comments`, { comment_text: text });
+      }
       setCommentText('');
+      commentShots.clear();
       detail.refetch();
       refreshLists();
     } catch (err) {
@@ -788,6 +808,7 @@ export function IssueReporter() {
     <>
       {open ? (
         <div
+          {...{ [REPORTER_ROOT_ATTR]: '' }}
           className={cn(
             // z-40 — one band below the dialog stack (dialog.tsx is all z-50),
             // so an open job modal covers this rather than the reverse.
@@ -889,13 +910,33 @@ export function IssueReporter() {
                       issue.comments.map((c) => (
                         <div key={c.id} className="rounded-md border border-border px-3 py-2">
                           <p className="whitespace-pre-wrap text-sm text-foreground">{c.comment_text}</p>
+                          {c.screenshot_urls?.length ? (
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {c.screenshot_urls.map((url, i) => (
+                                /* Opens in a tab rather than a lightbox: this panel is
+                                   26rem wide, so a full-page capture is unreadable inside
+                                   it however it is framed. */
+                                <a key={url} href={url} target="_blank" rel="noopener noreferrer" title="Open Full Size">
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img
+                                    src={url}
+                                    alt={`Comment Screenshot ${i + 1}`}
+                                    className="h-16 w-16 rounded border border-border object-cover"
+                                  />
+                                </a>
+                              ))}
+                            </div>
+                          ) : null}
                           <p className="mt-1 text-xs text-muted-foreground">{fmtWhen(c.created_on)}</p>
                         </div>
                       ))
                     )}
                   </div>
 
-                  <form className="flex flex-col gap-2" onSubmit={postComment}>
+                  {/* onPaste on the FORM, matching the report form above: a
+                      screenshot on the clipboard attaches wherever the operator
+                      happens to have focus. */}
+                  <form className="flex flex-col gap-2" onSubmit={postComment} onPaste={commentShots.onPaste}>
                     <textarea
                       rows={2}
                       maxLength={COMMENT_MAX}
@@ -904,6 +945,7 @@ export function IssueReporter() {
                       placeholder="Add A Comment"
                       className={TEXTAREA_CLASS}
                     />
+                    <ScreenshotField attachments={commentShots} compact disabled={posting} />
                     <div className="flex items-center justify-between gap-2">
                       {canManage && issue.status === 'open' ? (
                         <Button type="button" variant="outline" size="sm" onClick={closeIssue}>
@@ -914,6 +956,9 @@ export function IssueReporter() {
                           Reopen Issue
                         </Button>
                       ) : <span />}
+                      {/* Text stays REQUIRED even with images attached: the
+                          backend's Joi minimum is 1 char, and a bare image with
+                          no sentence is the comment nobody can triage. */}
                       <Button type="submit" size="sm" className="gap-1" disabled={posting || !commentText.trim()}>
                         {posting
                           ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
@@ -963,80 +1008,31 @@ export function IssueReporter() {
                     </div>
 
                     <div className="flex flex-col gap-2">
-                      <span className="text-xs font-medium text-muted-foreground">
-                        Screenshots (Optional) {files.length ? `— ${files.length} Of ${MAX_SCREENSHOTS}` : ''}
-                      </span>
-                      <input
-                        ref={fileInputRef}
-                        type="file"
-                        // multiple: the picker is one of the two capture routes, and the
-                        // other (paste) already handles a batch. Selecting three files
-                        // in one pass should not mean three trips through the dialog.
-                        multiple
-                        accept="image/png,image/jpeg,image/webp,image/gif"
-                        className="hidden"
-                        onChange={(e) => acceptFiles(e.target.files)}
-                      />
-                      <div className="flex items-center gap-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="gap-1 self-start"
-                          disabled={files.length >= MAX_SCREENSHOTS}
-                          onClick={() => fileInputRef.current?.click()}
-                        >
-                          <Paperclip className="h-4 w-4" aria-hidden="true" />
-                          {files.length ? 'Add More' : 'Choose Files'}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="gap-1"
-                          disabled={capturing || files.length >= MAX_SCREENSHOTS}
-                          onClick={captureScreen}
-                          title="Grab This Tab As A Screenshot"
-                        >
-                          {capturing
-                            ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                            : <Camera className="h-4 w-4" aria-hidden="true" />}
-                          Capture Screen
-                        </Button>
-                        {files.length > 1 ? (
-                          <Button type="button" variant="ghost" size="sm" onClick={clearScreenshots}>
-                            Remove All
+                      {/* The picker, the previews and the caps all come from
+                          ./screenshotAttachments — shared with the comment box
+                          below and the Issue Queue's. Capture Screen is passed
+                          in because it is the report form's alone: a reply is
+                          about something already on screen, not about the page
+                          the reply is typed on. */}
+                      <ScreenshotField
+                        attachments={reportShots}
+                        extraAction={(
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="gap-1"
+                            disabled={capturing || files.length >= MAX_SCREENSHOTS}
+                            onClick={captureScreen}
+                            title="Grab This Tab As A Screenshot"
+                          >
+                            {capturing
+                              ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                              : <Camera className="h-4 w-4" aria-hidden="true" />}
+                            Capture Screen
                           </Button>
-                        ) : null}
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        Capture Screen Grabs This Tab; Or Paste Screenshots Anywhere In This Form. Up To {MAX_SCREENSHOTS}, 5 MB Each.
-                      </p>
-
-                      {previewUrls.length ? (
-                        <div className="grid grid-cols-2 gap-2">
-                          {previewUrls.map((url, i) => (
-                            <div key={url} className="relative">
-                              {/* eslint-disable-next-line @next/next/no-img-element -- local
-                                  blob: preview of a file that never leaves the browser until
-                                  submit; next/image cannot take an object URL. */}
-                              <img
-                                src={url}
-                                alt={`Screenshot Preview ${i + 1}`}
-                                className="max-h-40 w-full rounded-md border border-border object-contain"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => removeScreenshotAt(i)}
-                                aria-label={`Remove Screenshot ${i + 1}`}
-                                className="absolute right-1 top-1 rounded-full bg-card p-1 text-foreground shadow-sm transition-colors hover:bg-muted"
-                              >
-                                <X className="h-4 w-4" aria-hidden="true" />
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      ) : null}
+                        )}
+                      />
 
                       <p className="text-xs text-muted-foreground">
                         Screenshots May Contain Customer Data. Remove Anything Sensitive Before Submitting.
@@ -1075,6 +1071,7 @@ export function IssueReporter() {
 
       <button
         type="button"
+        {...{ [REPORTER_ROOT_ATTR]: '' }}
         onClick={fabClick}
         onPointerDown={fabPointerDown}
         onPointerMove={fabPointerMove}

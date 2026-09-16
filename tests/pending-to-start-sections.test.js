@@ -142,14 +142,21 @@ test('each section renders in SectionFrame under Unconfirmed\'s collapse rule, w
   assert.match(view, /count=\{data \? total : null\}/, 'the count chip reads the bucket\'s own total');
   assert.match(view, /controls=\{controls\}/);
 
-  // An explicitly shut bucket fetches its count, not its rows — as Unconfirmed
-  // does. The requests section is EXEMPT and must stay exempt: its total is
-  // matched.length over a client-side filter, so a limit=1 fetch would report
-  // 0-or-1 requests. The `appRequests ?` arm ahead of `countOnly ?` is that
-  // exemption; if it ever goes, the count chip starts lying while collapsed.
+  /*
+   * An explicitly shut bucket fetches its count, not its rows — as Unconfirmed
+   * does. The requests section USED to be exempt, because its total was
+   * matched.length over a client-side filter and a limit=1 fetch would have
+   * reported 0-or-1 requests. That exemption is GONE (2026-09-16): the server
+   * filters now (`appRequest`), so its total is the server's like every other
+   * section's and a collapsed section costs one row again.
+   */
   assert.match(view, /const countOnly = controls\.explicitCollapsed === true;/);
-  assert.match(view, /limit: appRequests \? JOBS_MAX_LIMIT : countOnly \? 1 : limit,/);
-  assert.match(view, /offset: appRequests \|\| countOnly \? 0 : offset,/);
+  assert.match(view, /limit: countOnly \? 1 : limit,/);
+  assert.match(view, /offset: countOnly \? 0 : offset,/);
+  assert.doesNotMatch(view, /appRequests \? JOBS_MAX_LIMIT/,
+    'the bounded-page workaround must not come back — it was the 500-row ceiling');
+  assert.match(view, /appRequest: appRequests \? 'any' : undefined,/,
+    'and the section must ask the server for the filter instead');
 
   // Pagination stays per-bucket, and inside the frame's body.
   const section = view.slice(view.indexOf('function PendingSection('));

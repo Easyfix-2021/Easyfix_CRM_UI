@@ -44,6 +44,11 @@
  */
 
 import Link from 'next/link';
+import {
+  useScreenshotAttachments,
+  ScreenshotField,
+  appendScreenshots,
+} from '@/components/issue/screenshotAttachments';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
@@ -82,6 +87,9 @@ type ListResp = { items: IssueRow[]; total: number; limit: number; offset: numbe
 type IssueComment = {
   id: number;
   comment_text: string;
+  /* Attachments on a reply (2026-09-16) — presigned in getIssueDetail beside
+   * the report's own. Optional: an older backend simply sends no gallery. */
+  screenshot_urls?: string[];
   commented_by: number;
   created_on: string | null;
 };
@@ -359,6 +367,21 @@ export default function IssueQueuePage() {
 
 /* ── Detail ─────────────────────────────────────────────────────────────── */
 
+/*
+ * One labelled field in the detail header's definition list. A <dt>/<dd> pair
+ * rather than two <span>s: this IS a term-and-value list, and a screen reader
+ * reading "Navigation, slash my-orders question-mark tab equals…" is the whole
+ * point of the change.
+ */
+function Meta({ label, span2, children }: { label: string; span2?: boolean; children: React.ReactNode }) {
+  return (
+    <div className={span2 ? 'sm:col-span-2' : undefined}>
+      <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</dt>
+      <dd className="mt-0.5 text-sm">{children}</dd>
+    </div>
+  );
+}
+
 function IssueDetailDialog({ issueId, meId, canManage, nameOf, onClose, onChanged }: {
   issueId: number | null;
   meId: number | undefined;
@@ -372,6 +395,9 @@ function IssueDetailDialog({ issueId, meId, canManage, nameOf, onClose, onChange
   const { data, loading, error, refetch } = useFetch<IssueDetail>(detailKey);
 
   const [comment, setComment] = useState('');
+  /* Attachments on the reply being typed — same hook, same caps as the
+   * reporter widget's comment box. */
+  const shots = useScreenshotAttachments();
   const [busy, setBusy] = useState(false);
   const [zoom, setZoom] = useState<SkillImageLightboxValue>(null);
   /* Close note lives in a ref, not state: the confirm dialog snapshots its
@@ -395,10 +421,19 @@ function IssueDetailDialog({ issueId, meId, canManage, nameOf, onClose, onChange
     setBusy(true);
     const toastId = showToast({ variant: 'loading', message: 'Adding Comment…' });
     try {
-      await api.post(`/admin/issues/${issueId}/comments`, { comment_text: text });
+      if (shots.files.length) {
+        const fd = new FormData();
+        fd.append('comment_text', text);
+        appendScreenshots(fd, shots.files);
+        await api.post(`/admin/issues/${issueId}/comments`, fd);
+      } else {
+        // Plain JSON when nothing is attached — the route accepts both shapes.
+        await api.post(`/admin/issues/${issueId}/comments`, { comment_text: text });
+      }
       dismissToast(toastId);
       showToast({ variant: 'success', message: 'Comment Added' });
       setComment('');
+      shots.clear();
       refetch();
       onChanged();
     } catch (e) {
@@ -525,17 +560,41 @@ function IssueDetailDialog({ issueId, meId, canManage, nameOf, onClose, onChange
 
         {!loading && data && (
           <div className="space-y-4">
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-              {meta && <StatusChip tone={meta.tone} size="sm">{meta.label}</StatusChip>}
-              <span>Issue #{data.id}</span>
-              <span>Reported By {nameOf(data.reported_by)}</span>
-              <span>{formatDate(data.created_on)}</span>
-              {data.page_path && (
-                data.page_path.startsWith('/')
-                  ? <Link href={data.page_path} className="font-mono hover:underline" target="_blank" rel="noopener">{data.page_path}</Link>
-                  : <span className="font-mono">{data.page_path}</span>
-              )}
-            </div>
+            {/*
+              * LABELLED, NOT A RUN-ON LINE (owner, 2026-09-16). This was one
+              * flex-wrap row of bare values separated by gaps — a status pill,
+              * a number, a name, a date and a URL with nothing saying which was
+              * which, so the page path in particular read as stray text. Each
+              * value now carries its own caption, and the URL's is
+              * "Navigation" because that is what it answers: where the reporter
+              * was standing. Two columns on anything wider than a phone, with
+              * Navigation spanning both since a full URL with its query is by
+              * far the longest value here.
+              */}
+            <dl className="grid grid-cols-1 gap-x-6 gap-y-2.5 rounded-lg border bg-muted/30 px-4 py-3 sm:grid-cols-2">
+              <Meta label="Status">
+                {meta ? <StatusChip tone={meta.tone} size="sm">{meta.label}</StatusChip> : '—'}
+              </Meta>
+              <Meta label="Issue">#{data.id}</Meta>
+              <Meta label="Reported By">{nameOf(data.reported_by)}</Meta>
+              <Meta label="Reported On">{formatDate(data.created_on)}</Meta>
+              <Meta label="Navigation" span2>
+                {data.page_path
+                  ? (data.page_path.startsWith('/')
+                    ? (
+                      <Link
+                        href={data.page_path}
+                        className="break-all font-mono text-primary hover:underline"
+                        target="_blank"
+                        rel="noopener"
+                      >
+                        {data.page_path}
+                      </Link>
+                    )
+                    : <span className="break-all font-mono">{data.page_path}</span>)
+                  : <span className="text-muted-foreground">Not Captured</span>}
+              </Meta>
+            </dl>
 
             <div>
               <h3 className="mb-1 text-sm font-medium">Description</h3>
@@ -599,6 +658,20 @@ function IssueDetailDialog({ issueId, meId, canManage, nameOf, onClose, onChange
                       <span>{formatDate(c.created_on)}</span>
                     </div>
                     <p className="whitespace-pre-wrap text-sm">{c.comment_text}</p>
+                    {c.screenshot_urls?.length ? (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {c.screenshot_urls.map((url, i) => (
+                          <a key={url} href={url} target="_blank" rel="noopener noreferrer" title="Open Full Size">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={url}
+                              alt={`Comment Screenshot ${i + 1}`}
+                              className="h-20 w-20 rounded border object-cover"
+                            />
+                          </a>
+                        ))}
+                      </div>
+                    ) : null}
                   </li>
                 ))}
               </ul>
@@ -612,8 +685,14 @@ function IssueDetailDialog({ issueId, meId, canManage, nameOf, onClose, onChange
                   rows={3}
                   maxLength={2000}
                   placeholder="Reply on this issue"
+                  onPaste={shots.onPaste}
                   className="w-full rounded border border-input bg-background px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-ring"
                 />
+                <div className="mt-2">
+                  {/* Same picker and the same caps as the reporter widget — see
+                      components/issue/screenshotAttachments. */}
+                  <ScreenshotField attachments={shots} compact disabled={busy} />
+                </div>
               </div>
             </div>
 

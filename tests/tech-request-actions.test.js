@@ -101,9 +101,14 @@ test('the Approve / Reject pair renders from the SAME ask the Request column pai
   // carries both).
   assert.match(VIEW, /const req = appRequests \? appRequestOf\(j\) : null;/);
   assert.match(VIEW, /\{req && \(\s*<TechRequestActions[\s\S]*?request=\{req\}/);
-  assert.equal((VIEW.match(/appRequestOf\(/g) || []).length, 2,
-    'appRequestOf is called exactly twice — once to filter/count, once per row; a third '
-    + 'call is a second reading of the flags that can disagree with the first');
+  /*
+   * ONCE since 2026-09-16 — the filtering and counting moved into SQL, so the
+   * only remaining call is the per-row one that draws the chip. A second call
+   * here would be a second reading of the flags that can disagree with the
+   * first, which is what this count has always been guarding against.
+   */
+  assert.equal((VIEW.match(/appRequestOf\(/g) || []).length, 1,
+    'appRequestOf is called exactly once — per row, to render; the filter is the server\'s now');
 });
 
 // ─── Approve: the existing endpoints, never a third cancel path ─────────

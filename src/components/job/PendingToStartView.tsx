@@ -54,22 +54,24 @@
  * like a bucket at zero — because a section that renders nothing cannot be
  * dragged, and the arrangement is the operator's to make.
  *
- * TWO WAYS IT DIFFERS, both forced by the backend:
+ * ONE WAY IT DIFFERS: NO DATE WINDOW. A request is orthogonal to the
+ * appointment date, so the section sends no dateType/startDate/endDate.
+ * Everything else — the filter, the count, the paging — is the server's, the
+ * same as the three buckets.
  *
- *   1. NO DATE WINDOW. A request is orthogonal to the appointment date, so the
- *      section queries every pending order and narrows client-side.
- *   2. CLIENT-SIDE FILTER AND PAGINATION. `/admin/jobs` projects the request
- *      flags but has no filter for them (no entry in the service's WHERE
- *      builder, and none in SORTABLE_COLUMNS either), so `total` and the page
- *      slice are computed here over one bounded page of rows.
+ * ─── THE 500-ROW CEILING IS GONE (2026-09-16) ────────────────────────────
  *
- * CEILING, stated plainly: that bounded page is JOBS_MAX_LIMIT (500) rows —
- * `/admin/jobs`'s own Joi cap — ordered by appointment ascending. Production
- * carries ~19 pending requests against a pending-to-start queue well inside
- * 500, so the window holds today; if that queue ever exceeds 500 rows, the
- * requests sitting on the LATEST appointments fall outside it and stop being
- * listed. The fix is a server-side filter (an `appRequest` LIST param beside
- * `offerState`), not a bigger limit here.
+ * It used to pull ONE bounded page of JOBS_MAX_LIMIT (500) pending jobs and
+ * narrow it in the browser, because `/admin/jobs` projected the two request
+ * flags but could not filter on them. That held only while the whole
+ * pending-to-start queue fitted inside 500 rows: past that, the requests on the
+ * LATEST appointments fell outside the window and stopped being listed —
+ * silently, because a client cannot filter rows it was never sent.
+ *
+ * The backend now takes `appRequest` ('any' | 'cancel' | 'reschedule',
+ * services/job.service.js appRequestClause) and reproduces appRequestOf()'s
+ * predicate verbatim in SQL, status pin included. This section is now an
+ * ordinary server-paged list.
  *
  * Reuses (never re-implements): the parent's openView / openReassign /
  * quickStatusChange handlers + canJob permission flags, the shared fetch hooks
@@ -557,11 +559,11 @@ function PendingSection({
    * its page, since it cannot know whether to open until the count arrives.
    * Expanding changes the key, so the real page is fetched then.
    *
-   * IT CANNOT APPLY TO THE REQUESTS SECTION, shut or not: its count IS
-   * matched.length over the client-side filter, so limit=1 would report 0-or-1
-   * requests instead of the real number. A collapsed requests section keeps
-   * paying for its bounded page — that is the price of the missing server-side
-   * filter (see the file header's ceiling), not an oversight. */
+   * SINCE 2026-09-16 THIS APPLIES TO THE REQUESTS SECTION TOO. It used to be
+   * exempt because its count was matched.length over a client-side filter, so
+   * limit=1 would have reported 0-or-1 requests instead of the real number.
+   * The server filters now (`appRequest`), so its total is the server's total
+   * like every other section's and a collapsed section costs one row again. */
   const countOnly = controls.explicitCollapsed === true;
 
   const key = buildJobsKey({
@@ -572,6 +574,14 @@ function PendingSection({
     dateType: appRequests ? undefined : 'requested',
     startDate: appRequests ? undefined : dateRange.startDate,
     endDate: appRequests ? undefined : dateRange.endDate,
+    /*
+     * The server-side filter (2026-09-16). 'any' = either ask. The backend
+     * reproduces appRequestOf()'s predicate verbatim, status pin included, so
+     * the rows it returns are exactly the rows this section used to keep after
+     * filtering 500 of them in the browser — and the ones past row 500, which
+     * it never used to see at all.
+     */
+    appRequest: appRequests ? 'any' : undefined,
     // Multi-select → comma-separated string; empty selection omits the param
     // (buildJobsKey drops undefined). The BE splits the CSV into an IN (...).
     clientId: filters.clientId.length ? filters.clientId.join(',') : undefined,
@@ -584,11 +594,9 @@ function PendingSection({
     // Soonest appointment first within each bucket — the order ops triage in.
     sortBy: 'requested_date_time',
     sortDir: 'asc',
-    // The requests section filters client-side, so it pulls ONE bounded page
-    // and pages within it — the server's limit/offset would slice the wrong
-    // population. See the file header for what "bounded" costs.
-    limit: appRequests ? JOBS_MAX_LIMIT : countOnly ? 1 : limit,
-    offset: appRequests || countOnly ? 0 : offset,
+    // Every section pages on the server now, the requests one included.
+    limit: countOnly ? 1 : limit,
+    offset: countOnly ? 0 : offset,
   });
 
   const { data, loading, refreshing, refetch } = useFetch<Resp>(key);
@@ -616,15 +624,15 @@ function PendingSection({
   }, [reloadKey]);
 
   /*
-   * The requests section derives BOTH its count and its page slice from the
-   * same appRequestOf() call the row renders through, so the number in the
-   * header and the rows under it can never describe different sets. An
-   * appointment bucket keeps the server's own paging untouched.
+   * ONE SOURCE FOR EVERY SECTION since 2026-09-16: the server's page and the
+   * server's total. The requests section used to filter and slice here, which
+   * is what bounded it to the first 500 pending jobs; `appRequest` in the key
+   * above moved that predicate into the WHERE clause, so there is nothing left
+   * to narrow. appRequestOf() still runs PER ROW below to render the chip — it
+   * is the same predicate the server filtered on, so it cannot disagree.
    */
-  const items = data?.items ?? [];
-  const matched = appRequests ? items.filter((j) => appRequestOf(j) !== null) : items;
-  const rows = appRequests ? matched.slice(offset, offset + limit) : matched;
-  const total = appRequests ? matched.length : (data?.total ?? 0);
+  const rows = data?.items ?? [];
+  const total = data?.total ?? 0;
 
   /*
    * The requests section used to return null when empty, so an empty exception
