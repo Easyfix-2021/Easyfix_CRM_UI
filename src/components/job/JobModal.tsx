@@ -673,17 +673,23 @@ export function JobModal({
                 else onClose();
               }}
               onSaved={(saved, opts) => {
-                // Outcome-only path (Unreachable / Enquiry): close the
-                // modal immediately and notify the parent to refresh
-                // its list. Skips the setMode('view') + refetch cycle
-                // that previously caused a ~2-3s blank-modal flash.
+                // Close-after path (Unreachable / Enquiry / Save Draft /
+                // Confirm's Book Call): close the modal immediately and
+                // notify the parent to refresh its list. Skips the
+                // setMode('view') + refetch cycle that previously caused a
+                // ~2-3s blank-modal flash.
                 if (opts?.closeAfter) {
+                  // The reset guardedClose does. This close bypasses it, and the
+                  // modal stays mounted, so a flag left set here would raise a
+                  // false "Discard Unsaved Changes?" on the next open.
+                  hasUnsavedQtyRef.current = false;
+                  hasUnsavedFormRef.current = false;
                   onSaved?.();
                   onClose();
                   return;
                 }
-                // Book / Confirm path: stay open, switch to view mode,
-                // notify parent. The mode-dep useEffect still fires a
+                // Edit path: stay open, switch to view mode, notify
+                // parent. The mode-dep useEffect still fires a
                 // refetch — that's intentional here so the view-mode
                 // payload comes through the masking middleware.
                 setJob(saved); setMode('view'); onSaved?.();
@@ -4949,8 +4955,10 @@ function CreateJobMobileGate({
  * JobModal can decide whether to close the modal immediately or refresh
  * in-place. For outcome-only submits (Unreachable / Enquiry) the
  * operator's intent is "log and move on" — the modal should close right
- * away rather than flicker through a refetch. For Book / Confirm the
- * operator typically wants to see the updated view so we stay open.
+ * away rather than flicker through a refetch. Save Draft and Confirm &
+ * Schedule's Book Call close too — a booked job has left the Unconfirmed
+ * list, so the parent refreshes that instead. Only an Edit-mode save stays
+ * open so the operator can see the updated view.
  *
  * Without `closeAfter`, the previous flow was: setJob(saved) →
  * setMode('view') → mode-dep useEffect re-fires → setJob(null) +
@@ -6191,13 +6199,22 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
      *     Modal stays open so the operator can retry without losing
      *     their dialog inputs.
      *
-     * Book / Confirm flows keep their existing inline feedback (the
-     * modal stays open and refreshes); no toast spam there.
+     * Book / Confirm flows show no loading toast. An Edit save keeps its
+     * inline feedback (the modal stays open and refreshes); Confirm's Book
+     * Call closes the modal and shows one success toast after the save.
      */
     const isOutcomeSubmit = isEditShape
       && (submitVariant === 'unreachable' || submitVariant === 'enquiry');
     const outcomeLabel = submitVariant === 'unreachable' ? 'Unreachable' : 'Enquiry';
     let loadingToastId: number | null = null;
+    /*
+     * Set once a successful save has handed the modal off to close
+     * (`closeAfter`). `submitting` then stays true until the modal unmounts:
+     * the close is a URL navigation that commits a round trip later, and
+     * re-enabling Book Call / Save Draft in that gap let a second click submit
+     * the same form again (re-running the multi-category fan-out).
+     */
+    let handedOffToClose = false;
     if (isOutcomeSubmit) {
       loadingToastId = showToast({
         variant: 'loading',
@@ -6928,12 +6945,28 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             message: 'Draft Saved',
           });
         }
+        /*
+         * Confirm & Schedule → Book Call (2026-09-15, per ops). The booked job
+         * leaves Unconfirmed (status 9 → 0), so the modal now CLOSES and the
+         * list behind it refreshes, instead of switching into a view of a row
+         * that is no longer in the list the operator is working through. The
+         * toast is the confirmation the in-place view used to give.
+         */
+        const closesAfterBook = isConfirm && submitVariant === 'book';
+        if (closesAfterBook) {
+          showToast({
+            variant: 'success',
+            message: `Job #${initial.job_id} booked successfully`,
+          });
+        }
         // Tell the parent how to behave after this save. Outcome-only
-        // flows (Unreachable / Enquiry) AND Save Draft want the modal
-        // closed immediately — no flash of "loading…" while the modal
-        // refetches into view mode. Book stays open so the operator can
-        // see the updated booking.
-        onSaved(saved, { closeAfter: isOutcomeOnly || submitVariant === 'draft', variant: submitVariant });
+        // flows (Unreachable / Enquiry), Save Draft AND Confirm's Book Call
+        // want the modal closed immediately — no flash of "loading…" while
+        // the modal refetches into view mode. Only an Edit-mode save stays
+        // open so the operator can see the updated job.
+        const closeAfter = isOutcomeOnly || submitVariant === 'draft' || closesAfterBook;
+        onSaved(saved, { closeAfter, variant: submitVariant });
+        handedOffToClose = closeAfter;
       } else {
         // Create flow — full payload including customer + address + services.
         const servicesPayload = buildServicesPayload();
@@ -7330,7 +7363,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
           message: `Failed to mark as ${outcomeLabel}: ${msg}`,
         });
       }
-    } finally { setSubmitting(false); }
+    } finally { if (!handedOffToClose) setSubmitting(false); }
   }
 
   /*
@@ -8851,6 +8884,10 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
               type="button"
               variant="outline"
               onClick={() => setOutcomeDialog({ mode: 'unreachable' })}
+              // Locked while ANY variant is in flight, like Save Draft. A save
+              // already under way owns this form; a second outcome submitted on
+              // top of it would race the first one's status PATCH.
+              disabled={submitting}
               title="Customer couldn't be reached — keep status Unconfirmed with reason"
             >
               Unreachable
@@ -8861,6 +8898,8 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
               type="button"
               variant="outline"
               onClick={() => setOutcomeDialog({ mode: 'enquiry' })}
+              // Same lock as Unreachable above.
+              disabled={submitting}
               title="Information request only — move status to Enquiry"
             >
               Enquiry
@@ -8914,9 +8953,12 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             // ID / Reporting Contact / customer name / address / city /
             // PIN / date-time / time-slot missing — the BE would reject
             // with a Joi 400 per-field, but the FE should refuse to
-            // submit upfront. Unreachable + Enquiry remain enabled (they
-            // skip the full payload — see the outcome-only submit path).
-            disabled={!confirmBookReady}
+            // submit upfront. Unreachable + Enquiry skip that completeness
+            // rule (they skip the full payload — see the outcome-only submit
+            // path), but every button here is locked while a save is in
+            // flight: `loading` only covers a book, so `submitting` is what
+            // stops a book landing on top of a draft or an outcome.
+            disabled={!confirmBookReady || submitting}
             title={
               !confirmSection2Complete
                 ? 'Fill all mandatory fields (Client Ref ID, Reporting Contact, Customer Name, Address, City, PIN, Date & Time) before booking.'
