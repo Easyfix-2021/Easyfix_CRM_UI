@@ -38,6 +38,9 @@ export function GET() {
     {
       status: 'ok',
       service: 'easyfix-crm-ui',
+      // Baked in by the Dockerfile's GIT_COMMIT build arg; 'unknown' on a local
+      // run. Lets a deploy be confirmed by SHA without asking GitHub.
+      commit: process.env.GIT_COMMIT || 'unknown',
       timestamp: new Date().toISOString(),
       // process.uptime() is the seconds since the Node process started.
       // Useful for ops to spot a server that restarted unexpectedly

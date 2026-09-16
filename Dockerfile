@@ -199,6 +199,13 @@ COPY --from=builder --chown=node:node /app/public ./public
 
 EXPOSE 5180
 
+# The commit this build came from, returned by GET /healthcheck so a deploy is
+# confirmed by reading a SHA (same contract as the backend's /api/health).
+# Declared this late on purpose: an ARG that changes every build invalidates
+# every layer after it, and nothing after this point is expensive.
+ARG GIT_COMMIT=unknown
+ENV GIT_COMMIT=${GIT_COMMIT}
+
 HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
     CMD wget -qO- http://127.0.0.1:5180/login -O /dev/null || exit 1
 
