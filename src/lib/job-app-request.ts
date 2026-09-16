@@ -231,3 +231,29 @@ export function pendingRescheduleRequest(
   const req = appRequestFromDetail(detail.appRequest);
   return req?.kind === 'reschedule' && req.requestedFor ? req : null;
 }
+
+/*
+ * RescheduleDialog pre-fill for an open technician reschedule ask: the asked-for
+ * time in the picker's 'YYYY-MM-DDTHH:mm' shape, plus a remarks line naming the
+ * ask. The reason select stays EMPTY on purpose — the operator picks a CRM
+ * reschedule reason, as on every other pre-filled reschedule.
+ *
+ * The time is seeded only while it is still in the FUTURE: the picker's `min` is
+ * IST now and the server refuses a reschedule into the past, so a stale ask would
+ * pre-fill a value the operator cannot submit. `nowWallClock` is istNowWallClock()
+ * (lib/utils — not imported: `test:build` compiles src/lib/* with no path
+ * aliases). Both sides are fixed-width wall-clock strings, so lexicographic IS
+ * chronological; slice-and-swap, never new Date(), which would re-read the IST
+ * literal in the browser's zone.
+ */
+export function rescheduleRequestPrefill(
+  req: AppRequest | null | undefined,
+  nowWallClock: string,
+): { initialDateTime?: string; initialRemarks?: string } {
+  if (!req || req.kind !== 'reschedule') return {};
+  const initialRemarks = `Technician requested reschedule${req.reason ? `: ${req.reason}` : ''}`;
+  const at = req.requestedFor ? req.requestedFor.slice(0, 16).replace(' ', 'T') : '';
+  return at.length === 16 && at >= nowWallClock.slice(0, 16)
+    ? { initialDateTime: at, initialRemarks }
+    : { initialRemarks };
+}
