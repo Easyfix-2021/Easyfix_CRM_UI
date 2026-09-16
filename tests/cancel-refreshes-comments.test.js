@@ -18,8 +18,8 @@
  *     reopening the job from My Orders) — useFetch's 30s module cache would
  *     hand it the pre-cancel list, so the key is evicted too.
  *
- * Every mount of the dialog is enumerated, not the two known ones: a third
- * cancel surface added later is exactly where this would come back.
+ * Every mount of the dialog is enumerated, not the known ones: a cancel
+ * surface added later is exactly where this would come back.
  *
  * ─── SECOND PASS, SAME DAY: THE SHARED STEP ────────────────────────────────
  *
@@ -31,6 +31,17 @@
  * reaches it through refresh(). The eviction test below accepts that, and
  * only that — the delegate must itself evict, and it must still run after
  * the PATCH. ScheduleAssignModal's mount is untouched and still evicts inline.
+ *
+ * ─── FOURTH PASS (2026-09-15): ONE WRITER, SO ONE PLACE TO GET IT RIGHT ───
+ *
+ * There were four cancel surfaces, each with its own copy of the dialog mount,
+ * the PATCH, the toast and the eviction — and the labels had already drifted
+ * (three "Cancel", one "Cancel Job"). They now share
+ * components/job/CancelJob.tsx (useCancelJob), so this file's enumeration
+ * inverts: instead of "every one of N mounts evicts", it asserts there is
+ * EXACTLY ONE mount, that it is the shared one, and — the part that keeps the
+ * guarantee — that no other file re-grows a cancel of its own. A fifth surface
+ * added by copy-paste is now a failing test rather than a fourth copy.
  *
  * ─── THIRD PASS: THE TWO SURFACES refresh() NEVER REACHES ─────────────────
  *
@@ -69,10 +80,30 @@ const EVICT = /invalidateFetch\(\(k\) => k\.startsWith\(`\/admin\/jobs\/\$\{\w+\
 const refreshAt = JM_CODE.indexOf('  async function refresh() {');
 const refreshBody = refreshAt > -1 ? JM_CODE.slice(refreshAt, JM_CODE.indexOf('\n  }\n', refreshAt)) : '';
 
-test('the enumeration finds the cancel surfaces', () => {
-  // Silence is the passing signal below, so first prove the scan saw them.
-  assert.ok(mounts.length >= 2, `expected JobModal + ScheduleAssignModal, found ${mounts.length}`);
-  for (const m of mounts) assert.match(m.body, /status: ST\.CANCELLED/, `${m.file}: not a cancel mount?`);
+const SHARED = path.join('components', 'job', 'CancelJob.tsx');
+
+test('there is exactly ONE cancel mount, and it is the shared control', () => {
+  // Silence is the passing signal below, so first prove the scan saw it.
+  assert.equal(mounts.length, 1,
+    `expected the single shared mount in ${SHARED}, found ${mounts.length}: ${mounts.map((m) => m.file).join(', ')}`);
+  assert.equal(mounts[0].file, SHARED, 'the cancel dialog belongs to the shared control, nowhere else');
+  assert.match(mounts[0].body, /status: ST\.CANCELLED/, 'not a cancel mount?');
+});
+
+test('no surface writes its own cancel — the shared control is the only writer', () => {
+  /*
+   * THE DENOMINATOR, and the reason this file survives the refactor. Counted
+   * from the two things a bespoke cancel cannot avoid: the CANCELLED status in
+   * a PATCH body, and the dialog itself. Both must appear only in the shared
+   * module. Four copies is how the label drifted; this is what stops a fifth.
+   */
+  const offenders = walk(SRC_DIR)
+    .map((f) => ({ file: path.relative(SRC_DIR, f), src: strip(fs.readFileSync(f, 'utf8')) }))
+    .filter(({ src }) => /status: ST\.CANCELLED/.test(src) || /<CancelWithReasonDialog\b/.test(src))
+    .map(({ file }) => file);
+  assert.ok(offenders.length > 0, 'found no cancel writer at all: the matcher is broken, not the code');
+  assert.deepEqual(offenders, [SHARED],
+    `these files cancel a job themselves instead of using useCancelJob: ${offenders.join(', ')}`);
 });
 
 test('every cancel evicts the job\'s cached comments — after the PATCH, not before', () => {
@@ -103,9 +134,16 @@ test('JobModal re-reads the comment thread in its shared refresh(), not per butt
   // will be the one without it.
   const bumps = JM_CODE.match(/setCommentsRefreshKey\(/g) || [];
   assert.equal(bumps.length, 1, `only refresh() may bump the key; found ${bumps.length} bump sites`);
-  const jm = mounts.find((m) => m.file === JM);
-  assert.ok(jm, 'JobModal must mount the cancel dialog');
-  assert.match(jm.body, /\brefresh\(\);/, 'the cancel must go through refresh()');
+  /*
+   * JobModal no longer mounts the dialog — it calls useCancelJob and hands it
+   * an onCancelled. That callback is where refresh() now runs, so the
+   * guarantee is unchanged and the assertion follows it there.
+   */
+  const hookAt = JM_CODE.indexOf('useCancelJob({');
+  assert.ok(hookAt > -1, 'JobModal must use the shared cancel control');
+  const hookCall = JM_CODE.slice(hookAt, JM_CODE.indexOf('});', hookAt));
+  assert.match(hookCall, /onCancelled: \(\) => \{ refresh\(\); onSaved\?\.\(\); \}/,
+    'JobModal\'s cancel must still go through refresh(), which is what bumps the key');
 });
 
 test('every mounted reader of the thread in JobModal refetches on the key refresh() bumps', () => {

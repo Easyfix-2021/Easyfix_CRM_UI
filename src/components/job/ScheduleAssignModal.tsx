@@ -70,7 +70,7 @@ import {
 } from '@/lib/easyfixer-lifecycle';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { AddRemarksDialog } from './AddRemarksDialog';
-import { CancelWithReasonDialog } from './CancelWithReasonDialog';
+import { useCancelJob } from './CancelJob';
 import { RescheduleDialog } from './RescheduleDialog';
 import { ST, ServicesTabBody } from './JobModal';
 import { JobContextPanel, type JobServiceRow } from './JobContextPanel';
@@ -328,7 +328,6 @@ export function ScheduleAssignModal({
 
   // Footer action dialogs — reuse the SAME extracted dialogs JobModal uses.
   const [remarksOpen, setRemarksOpen] = useState(false);
-  const [cancelOpen, setCancelOpen] = useState(false);
   // Reschedule dialog — the ONLY way to change the (now read-only) Job Date/Time.
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   // Edit Services dialog (hosts JobModal's ServicesTabBody) — see EditServicesDialog.
@@ -382,6 +381,13 @@ export function ScheduleAssignModal({
   // True while the commit (offer POST or assign PATCH) is in flight — drives the
   // sticky footer button's spinner + disabled state.
   const [committing, setCommitting] = useState(false);
+  /* The shared cancel control — see ./CancelJob. Refresh the list before
+     closing: a cancelled job leaves this Pending-for-Scheduling tab. */
+  const cancel = useCancelJob({
+    jobId,
+    disabled: committing,
+    onCancelled: () => { onChanged?.(); onClose(); },
+  });
   const [err, setErr] = useState<string | null>(null);
   // Serviceable-pincodes "view all" modal target (the clicked candidate).
   const [pincodeModalFor, setPincodeModalFor] = useState<ScheduleCandidate | null>(null);
@@ -1295,7 +1301,7 @@ export function ScheduleAssignModal({
 
         <DialogFooter className="px-6 sm:justify-between">
           {/* LEFT — Add Remarks. Reuses JobModal's extracted dialogs
-              (./AddRemarksDialog, ./CancelWithReasonDialog) so behaviour
+              (./AddRemarksDialog, ./CancelJob) so behaviour
               stays identical. */}
           <div className="flex items-center gap-2">
             {/* (c) HOVER-ONLY inversion, pinned with a `dark:hover:` twin.
@@ -1327,15 +1333,7 @@ export function ScheduleAssignModal({
               job to every selected technician at once and is disabled until at
               least one is ticked. */}
           <div className="flex items-center gap-2">
-            {canCancel && (
-              <Button
-                variant="destructive"
-                onClick={() => setCancelOpen(true)}
-                disabled={!jobId || committing}
-              >
-                Cancel
-              </Button>
-            )}
+            {canCancel && cancel.button}
             <Button variant="outline" onClick={onClose} disabled={committing}>Close</Button>
             {canCommit && (
               <Button
@@ -1392,29 +1390,7 @@ export function ScheduleAssignModal({
         />
       )}
 
-      {/* Cancel Job — same PATCH /:id/status contract JobModal uses
-          (status=ST.CANCELLED + reasonId + comment). */}
-      {jobId && (
-        <CancelWithReasonDialog
-          open={cancelOpen}
-          onClose={() => setCancelOpen(false)}
-          onSubmit={async (reasonId, comment) => {
-            await api.patch(`/admin/jobs/${jobId}/status`, {
-              status: ST.CANCELLED, reasonId, comment,
-            });
-            showToast({ variant: 'success', message: 'Job Cancelled' });
-            setCancelOpen(false);
-            // The cancel remark is a new tbl_job_comment row; drop the cached
-            // pre-cancel list so opening this job next shows it (30s TTL).
-            invalidateFetch((k) => k.startsWith(`/admin/jobs/${jobId}/comments`));
-            // Refresh the underlying list FIRST (a cancelled job leaves this
-            // Pending-for-Scheduling tab), then close. onChanged triggers the
-            // parent's in-place `load()` (revalidates without a skeleton flash).
-            onChanged?.();
-            onClose();
-          }}
-        />
-      )}
+      {cancel.dialog}
 
       {/* Reschedule — the ONLY way to change the (read-only) Job Date/Time. The
           BE persists + audits, then onDone re-ranks candidates and refreshes the

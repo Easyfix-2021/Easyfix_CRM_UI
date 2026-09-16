@@ -54,17 +54,14 @@
 
 import { useState } from 'react';
 import { CheckCircle2, XCircle } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { api } from '@/lib/api';
 import { formatApiError } from '@/lib/api-errors';
 import { invalidateFetch } from '@/lib/hooks';
 import { showToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
-import { CancelWithReasonDialog } from './CancelWithReasonDialog';
 import { RescheduleDialog } from './RescheduleDialog';
-// ST lives in JobModal (the estate's one status-code map) — same import
-// ScheduleAssignModal's cancel mount uses. No bundle cost here: every page that
-// renders this row already mounts JobModal.
-import { ST } from './JobModal';
+import { useCancelJob } from './CancelJob';
 import type { AppRequest } from '@/lib/job-app-request';
 
 /*
@@ -107,17 +104,42 @@ export type TechRequestActionsProps = {
    * queue and an approved cancellation leaves the tab entirely, so the refresh
    * has to be the page-wide one, not this section's own refetch. */
   onActioned: () => void;
+  /* How the two triggers are drawn. 'icon' (default) for a table action cell;
+   * 'button' for the JobModal banner, where labelled buttons match the
+   * customer-request banner sitting directly above it. The DECISION is
+   * identical either way — only the trigger markup differs. */
+  variant?: 'icon' | 'button';
 };
 
-export function TechRequestActions({ jobId, request, allowed, onActioned }: TechRequestActionsProps) {
+export function TechRequestActions({ jobId, request, allowed, onActioned, variant = 'icon' }: TechRequestActionsProps) {
   const confirm = useConfirm();
-  const [cancelOpen, setCancelOpen] = useState(false);
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  /*
+   * Approving a cancellation IS cancelling the job, so it goes through the ONE
+   * shared cancel control every other surface uses (./CancelJob) rather than a
+   * fourth copy of the PATCH. Only the trigger differs here — a row icon or a
+   * banner button, never that module's footer Button — so this calls open()
+   * and ignores `button`. defaultDueTo seeds the radio to Technician, since
+   * that is who asked; ops can still change it.
+   */
+  const cancel = useCancelJob({
+    jobId,
+    defaultDueTo: 'Technician',
+    disabled: busy,
+    onCancelled: onActioned,
+  });
 
   if (!allowed) return null;
 
   const isCancel = request.kind === 'cancel';
+  const approveTitle = isCancel
+    ? 'Approve Cancellation — opens Cancel Job so you can record the reason'
+    : 'Approve Reschedule — opens Reschedule Job pre-filled with the requested time';
+  const rejectTitle = isCancel
+    ? 'Reject Cancellation — the job stays scheduled, unchanged'
+    : 'Reject Reschedule — the job keeps its current appointment';
+  const onApprove = () => (isCancel ? cancel.open() : setRescheduleOpen(true));
 
   async function onReject() {
     if (busy) return;
@@ -160,16 +182,31 @@ export function TechRequestActions({ jobId, request, allowed, onActioned }: Tech
     }
   }
 
-  return (
+  /*
+   * Two triggers, one flow. The row renders icons to sit in the action cell's
+   * grammar; the JobModal banner renders labelled buttons to sit in the
+   * customer-request banner's. Everything below the triggers is shared, so the
+   * two surfaces cannot decide differently.
+   */
+  const triggers = variant === 'button' ? (
+    <>
+      <Button size="sm" disabled={busy} onClick={onApprove} title={approveTitle}>
+        <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />
+        Approve
+      </Button>
+      <Button size="sm" variant="destructive" disabled={busy} onClick={onReject} title={rejectTitle}>
+        <XCircle className="mr-1.5 h-3.5 w-3.5" />
+        Reject
+      </Button>
+    </>
+  ) : (
     <>
       <button
         type="button"
         disabled={busy}
-        onClick={() => (isCancel ? setCancelOpen(true) : setRescheduleOpen(true))}
+        onClick={onApprove}
         className="inline-flex items-center gap-1 text-success-strong text-xs hover:underline disabled:opacity-50"
-        title={isCancel
-          ? 'Approve Cancellation — opens Cancel Job so you can record the reason'
-          : 'Approve Reschedule — opens Reschedule Job pre-filled with the requested time'}
+        title={approveTitle}
         aria-label={isCancel ? 'Approve Cancellation Request' : 'Approve Reschedule Request'}
       >
         <CheckCircle2 className="h-3.5 w-3.5" />
@@ -179,30 +216,20 @@ export function TechRequestActions({ jobId, request, allowed, onActioned }: Tech
         disabled={busy}
         onClick={onReject}
         className="inline-flex items-center gap-1 text-urgent-strong text-xs hover:underline disabled:opacity-50"
-        title={isCancel
-          ? 'Reject Cancellation — the job stays scheduled, unchanged'
-          : 'Reject Reschedule — the job keeps its current appointment'}
+        title={rejectTitle}
         aria-label={isCancel ? 'Reject Cancellation Request' : 'Reject Reschedule Request'}
       >
         <XCircle className="h-3.5 w-3.5" />
       </button>
+    </>
+  );
 
-      {/* Approve a CANCELLATION — the same PATCH /:id/status contract JobModal
-          and Schedule & Assign use. Defaults the "Cancellation Due To" radio to
-          Technician, since that is who asked; ops can still change it (the
-          technician's ask is not always the real cause). */}
-      <CancelWithReasonDialog
-        open={cancelOpen}
-        defaultDueTo="Technician"
-        onClose={() => setCancelOpen(false)}
-        onSubmit={async (reasonId, comment) => {
-          await api.patch(`/admin/jobs/${jobId}/status`, { status: ST.CANCELLED, reasonId, comment });
-          showToast({ variant: 'success', message: 'Job Cancelled' });
-          setCancelOpen(false);
-          invalidateFetch((k) => k.startsWith(`/admin/jobs/${jobId}/comments`));
-          onActioned();
-        }}
-      />
+  return (
+    <>
+      {triggers}
+
+      {/* Approve a CANCELLATION — the ONE shared cancel control. */}
+      {cancel.dialog}
 
       {/* Approve a RESCHEDULE — pre-filled with the slot the technician asked
           for and the reason they gave, so ops only has to pick a CRM reschedule

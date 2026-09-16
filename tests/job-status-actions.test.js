@@ -94,6 +94,7 @@ const ACTIONS = [
     // technician accepts while it is open, and it stays open).
     gates: [
       ['components/job/ScheduleAssignModal.tsx', "const canCancel = hasAction(me, 'isJobCancel');"],
+      ['components/job/CancelJob.tsx', 'status: ST.CANCELLED'],
       ['app/(authed)/jobs/page.tsx', 'j.job_status === 0 && canJob.isJobAssign && transitionAllowed(me?.allowedStages, j.job_status, 1)'],
       ['app/(authed)/my-orders/page.tsx', 'j.job_status === 0 && canJob.isJobAssign && transitionAllowed(me?.allowedStages, j.job_status, 1)'],
     ],
@@ -142,6 +143,7 @@ const ACTIONS = [
       ['lib/job-app-request.ts', 'if (Number(row.job_status) !== PENDING_TO_START_STATUS) return null;'],
       ['components/job/PendingToStartView.tsx', 'const req = appRequests ? appRequestOf(j) : null;'],
       ['components/job/TechRequestActions.tsx', "const isCancel = request.kind === 'cancel';"],
+      ['components/job/TechRequestActions.tsx', "const onApprove = () => (isCancel ? cancel.open() : setRescheduleOpen(true));"],
     ],
     sources: [1],
     targets: [6],
@@ -248,7 +250,16 @@ test('ACTIONS covers every status-change call site in src/', () => {
    * Compared per FILE, so a site dropped in one file and added in another
    * cannot cancel out. (A '/status' built by string concatenation would slip
    * past; none exists, and the template literal is the house style.)
+   *
+   * ⚠ ONE WRITER, FOUR SURFACES (2026-09-15). Cancel moved into the shared
+   * control components/job/CancelJob.tsx, so counting URLs alone would collapse
+   * four surfaces into one row and lose exactly the per-surface resolution this
+   * table exists for — each has different SOURCES, and a cancel from a status
+   * the stage table forbids would stop being visible here. So the shared
+   * module's own URL is EXCLUDED and its CALLERS are counted instead: one
+   * `useCancelJob(` call is one cancel surface, wherever the write lives.
    */
+  const SHARED_CANCEL = path.join('components', 'job', 'CancelJob.tsx');
   const files = [];
   (function walk(dir) {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -264,8 +275,13 @@ test('ACTIONS covers every status-change call site in src/', () => {
     const src = fs.readFileSync(f, 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, ' ')     // block comments — the removal note
       .replace(/^\s*\/\/.*$/gm, ' ');        // line comments
-    const n = (src.match(/`\/admin\/jobs\/\$\{[^}`]+\}\/status[`?]/g) || []).length;
-    for (let i = 0; i < n; i += 1) sites.push(path.relative(SRC, f));
+    const rel = path.relative(SRC, f);
+    // The shared writer is not itself a surface — its callers are.
+    const n = rel === SHARED_CANCEL
+      ? 0
+      : (src.match(/`\/admin\/jobs\/\$\{[^}`]+\}\/status[`?]/g) || []).length
+        + (src.match(/\buseCancelJob\(/g) || []).length;
+    for (let i = 0; i < n; i += 1) sites.push(rel);
   }
 
   assert.ok(sites.length > 0, 'found no `/admin/jobs/${…}/status` call at all: the matcher is broken, not the code');
