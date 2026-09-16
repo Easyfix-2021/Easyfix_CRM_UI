@@ -22,22 +22,44 @@ import { TABS, filterTabsForStages } from '@/lib/job-tabs';
  * Stage Access clamp that snaps a restricted user back to their first allowed
  * tab, so a "Show All" they are not permitted to sit on would fire and appear
  * to do nothing. They get the reason instead.
+ *
+ * `nameScope=false` drops the bucket NAME and states only the limitation
+ * (2026-09-16). Manage Jobs' two status dropdowns now state the scope
+ * themselves, and they can be changed WITHOUT changing `tab` — a restricted
+ * user switching Job Status to another granted stage left this bar reading
+ * "Showing Pending for Scheduling Only" over a table of something else. The
+ * name belongs to whichever control the operator can actually move; when that
+ * is the dropdown, this bar says only why the list is limited.
  */
-export function JobScopeBar({ tab, clamped, onClear, noun }: {
+export function JobScopeBar({ tab, clamped, onClear, noun, nameScope = true }: {
   tab: string;
   clamped: boolean;
   onClear: () => void;
   /** "Jobs" on /jobs, "Orders" on /my-orders — the button names what it shows. */
   noun: string;
+  /**
+   * False when another control on the page already states the scope and can be
+   * changed independently of `tab` (Manage Jobs' Job Status dropdown). Naming
+   * the tab there goes stale the moment the operator moves that control.
+   */
+  nameScope?: boolean;
 }) {
   if (tab === 'all') return null;
+  // Nothing left to say: the scope is stated elsewhere and nothing limits it.
+  if (!nameScope && !clamped) return null;
   const label = TABS.find((t) => t.value === tab)?.label ?? tab;
   return (
     <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/40 px-3 py-2 text-sm">
       <span>
-        Showing <span className="font-medium">{label}</span> Only
-        {clamped && (
-          <span className="text-muted-foreground"> · Limited By Your Job Stage Access</span>
+        {nameScope ? (
+          <>
+            Showing <span className="font-medium">{label}</span> Only
+            {clamped && (
+              <span className="text-muted-foreground"> · Limited By Your Job Stage Access</span>
+            )}
+          </>
+        ) : (
+          <span className="text-muted-foreground">Limited By Your Job Stage Access</span>
         )}
       </span>
       {!clamped && (
