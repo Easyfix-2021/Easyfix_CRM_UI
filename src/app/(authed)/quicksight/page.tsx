@@ -31,7 +31,7 @@ import {
   LayoutDashboard, Lock,
   ClipboardList, Gauge, Layers, Flame, Package,
   Building2, Wrench, MapPinned, Users, BarChart3,
-  ArrowRight, Handshake, UserPen, ShieldAlert, PhoneCall, type LucideIcon,
+  ArrowRight, Handshake, UserPen, ShieldAlert, PhoneCall, TrendingUp, type LucideIcon,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { useMe } from '@/lib/auth-context';
@@ -193,6 +193,14 @@ const REPORTS: ReportCardDef[] = [
     actionKey: 'isQuickSightCallTrackingView',
     description: 'Calls placed from the CRM — by job (who called, at which step, to whom) and by user per day.',
     Icon: PhoneCall,
+  },
+  {
+    urlBase: 'employee-performance',
+    label: 'Employee Performance',
+    newOrder: 6,
+    actionKey: 'isQuickSightEmployeePerformanceView',
+    description: 'MIS dashboard — revenue vs target, open jobs, TAT / SDA and productivity by SPOC and team.',
+    Icon: TrendingUp,
   },
 ];
 
