@@ -294,8 +294,8 @@ test('the job console icon is first in the action cell, and only when the host w
 test('a closed console, reassign or view — and every Approve / Reject — refreshes the rows AND recounts', () => {
   const guard = view.match(/prevAction\.current === 'reassign'[\s\S]{0,300}?\) &&/);
   assert.ok(guard, 'positive control: the refetch set must be found');
-  assert.ok(guard[0].includes("prevAction.current === 'schedule'"),
-    "'schedule' (the job console) must be in the refetch set — it can reschedule, cancel or reassign");
+  assert.ok(guard[0].includes("prevAction.current === 'console'"),
+    "'console' (the accepted-job console, ?action=console) must be in the refetch set — it can approve or reject a request, or reschedule");
   assert.match(view, /const bumpReload = \(\) => \{\s*invalidateFetch\(\(k\) => k\.startsWith\('\/admin\/jobs'\)\);\s*setReloadKey\(\(k\) => k \+ 1\);\s*\};/,
     'the eviction prefix covers /admin/jobs/pending-start/counts too');
   assert.match(view, /<PendingStartTabs[\s\S]*?reloadKey=\{reloadKey\}/, 'the strip recounts');
@@ -330,9 +330,9 @@ test('differential control — the guards go red when their subject is removed',
     ['the offer-state pin on hydrate',
       view, view.replace('withoutOfferState(psFiltersFromParams(searchParams))', 'psFiltersFromParams(searchParams)'),
       /useState<PsFilters>\(\(\) => withoutOfferState\(psFiltersFromParams\(searchParams\)\)\)/],
-    ['schedule in the refetch set',
-      view, view.replace(/\s*\|\| prevAction\.current === 'schedule'\)/, ')'),
-      /prevAction\.current === 'schedule'/],
+    ['console in the refetch set',
+      view, view.replace(/\s*\|\| prevAction\.current === 'console'\)/, ')'),
+      /prevAction\.current === 'console'/],
     ['showRequest on the Request header',
       view, view.replace('{showRequest && <th>Request</th>}', '<th>Request</th>'),
       /\{showRequest && <th>Request<\/th>\}/],

@@ -25,7 +25,7 @@ import {
 import { transitionAllowed, STAGES } from '@/lib/job-stages';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { UnconfirmedSections } from '@/components/job/UnconfirmedSections';
-import { PendingToStartView } from '@/components/job/PendingToStartView';
+import { PendingToStartView, PTS_TAB_PARAM } from '@/components/job/PendingToStartView';
 import { AssignTechnicianModal, type AssignMode } from '@/components/job/AssignTechnicianModal';
 import { ScheduleAssignModal } from '@/components/job/ScheduleAssignModal';
 import { OfferHoverCard } from '@/components/job/OfferHoverCard';
@@ -352,9 +352,6 @@ export default function MyOrdersPage() {
    * without it the strip keeps last minute's numbers over a fresh table.
    */
   const [countsReload, setCountsReload] = useState(0);
-  /* Same idea for the Pending to Start view's own table + tab counts, bumped
-     when the job console changes a job. */
-  const [ptsReload, setPtsReload] = useState(0);
 
   async function load(reset = false, force = false, silent = false) {
     const seq = ++loadSeqRef.current;
@@ -550,6 +547,9 @@ export default function MyOrdersPage() {
     // own ps* filters go with it.
     const p = new URLSearchParams(searchParams);
     p.delete('tab');
+    // …and the Pending to Start sub-tab, or "Show All Orders" would leave a
+    // ptsTab behind that reopens the bucket's tab on the next visit.
+    p.delete(PTS_TAB_PARAM);
     writePsFilterParams(p, EMPTY_PS_FILTERS);
     const next = p.toString();
     router.replace(next ? `${pathname}?${next}` : pathname, { scroll: false });
@@ -797,7 +797,7 @@ export default function MyOrdersPage() {
           clamped={scopeIsClamped}
           onShowAll={clearTabScope}
         />
-      ) : (
+      ) : isPendingStart ? null : (
         <JobScopeBar tab={tab} clamped={scopeIsClamped} onClear={clearTabScope} noun="Orders" />
       )}
 
@@ -848,6 +848,11 @@ export default function MyOrdersPage() {
           openView={openView}
           openReassign={openReassign}
           onShowLocation={(row) => setLocationJob(row)}
+          /* The six-tab strip carries this page's "Show All Orders" (and the
+             stage-access clamp), so the scope bar above is suppressed for it. */
+          onShowAll={clearTabScope}
+          scopeClamped={scopeIsClamped}
+          onOpenConsole={openConsole}
         />
       ) : (
       <Card>
@@ -1369,9 +1374,10 @@ export default function MyOrdersPage() {
         jobId={consoleModal.jobId}
         onClose={() => closeJobAction()}
         /* A decision here can move the job to another tab (an approved
-           cancellation leaves the page entirely), so the list behind it
-           re-reads and recounts. */
-        onChanged={() => { cacheRef.current.clear(); load(false, true); setCountsReload((n) => n + 1); setPtsReload((n) => n + 1); }}
+           cancellation leaves the page entirely). The page's own list re-reads
+           now; the Pending to Start view refetches and recounts itself when
+           ?action=console clears on close. */
+        onChanged={() => { cacheRef.current.clear(); load(false, true); }}
       />
 
       <ScheduleAssignModal
