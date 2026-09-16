@@ -43,7 +43,7 @@ import { transitionAllowed } from '@/lib/job-stages';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import {
   PendingSchedulingFilters, psFiltersFromParams, writePsFilterParams,
-  psFilterKey, psQueryParams, type PsFilters,
+  psFilterKey, psQueryParams, EMPTY_PS_FILTERS, type PsFilters,
 } from '@/components/job/PendingSchedulingFilters';
 import { TransferJobOwnershipDialog } from '@/components/job/TransferJobOwnershipDialog';
 import { UnconfirmedJobsTable } from '@/components/job/UnconfirmedJobsTable';
@@ -942,6 +942,49 @@ export default function JobsPage() {
     }
   }, [me?.allowedStages, tab]);
 
+  /*
+   * VIEW SCOPE (2026-09-16) — Manage Jobs has no tab bar, so a `?tab=` in the
+   * URL narrowed the whole list with nothing on screen saying so. Reported
+   * after an Admin landed on `?tab=pending-scheduling` from an old bookmark,
+   * saw a "Pending For Scheduling Filters" panel no colleague had, and read it
+   * as the UI differing per user.
+   *
+   * The param is NOT the problem and must keep working: five live deep links
+   * use it — AttentionSummary's four cards (running-late, estimate-approved,
+   * estimate-rejected, call-later) and jobs/upload's Unconfirmed link. Its
+   * INVISIBILITY was the problem. So the scope is now stated, with a way out.
+   *
+   * `scopeIsClamped` is why the way out is conditional: the clamp effect above
+   * snaps a stage-restricted user back to their first allowed tab, so offering
+   * "Show All Jobs" to someone who may not sit on 'all' would appear to do
+   * nothing. They see the label alone, which is the honest version.
+   */
+  const allowedStages = me?.allowedStages;
+  const scopeIsClamped = !!allowedStages && allowedStages.mode !== 'all'
+    && !filterTabsForStages(TABS, allowedStages).some((t) => t.value === 'all');
+  const scopeLabel = TABS.find((t) => t.value === tab)?.label ?? tab;
+
+  /*
+   * Back to every job. The tab is the one piece of view state the persistence
+   * effect below does NOT write (it is put there by whoever navigated), so it
+   * is deleted here explicitly — otherwise a refresh restores the scope the
+   * operator just cleared. The bucket's own filters go with it: leaving
+   * ps* params behind would keep narrowing a list that no longer says it is
+   * narrowed, which is the defect this whole block exists to remove.
+   */
+  function clearTabScope() {
+    setTab('all');
+    setPage(0);
+    setPsFilters(EMPTY_PS_FILTERS);
+    setUnmappedWebsite(false);
+    const p = new URLSearchParams(searchParams);
+    p.delete('tab');
+    p.delete('unmappedWebsite');
+    writePsFilterParams(p, EMPTY_PS_FILTERS);
+    const next = p.toString();
+    router.replace(next ? `${pathname}?${next}` : pathname, { scroll: false });
+  }
+
   // Transient sibling family for the Unconfirmed grouped view — set when a
   // grouped (multi-category) row is opened so JobModal can render a tab per
   // category. Not URL-backed (arrays don't belong in the query string); a fresh
@@ -1272,6 +1315,23 @@ export default function JobsPage() {
         <div className="flex items-start justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
           <span>{errorMsg}</span>
           <button type="button" onClick={() => setErrorMsg(null)} className="text-xs hover:underline">Dismiss</button>
+        </div>
+      )}
+
+      {/* The scope this list is narrowed to — see VIEW SCOPE above. */}
+      {tab !== 'all' && (
+        <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/40 px-3 py-2 text-sm">
+          <span>
+            Showing <span className="font-medium">{scopeLabel}</span> Only
+            {scopeIsClamped && (
+              <span className="text-muted-foreground"> · Limited By Your Job Stage Access</span>
+            )}
+          </span>
+          {!scopeIsClamped && (
+            <button type="button" onClick={clearTabScope} className="whitespace-nowrap text-xs hover:underline">
+              Show All Jobs
+            </button>
+          )}
         </div>
       )}
       <div className="flex items-end justify-between">

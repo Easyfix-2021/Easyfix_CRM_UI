@@ -11,17 +11,25 @@
  *
  * My Orders sub-menus — legacy `dashboardChecking?enumDesc=<value>` URLs.
  * The canonical enumDesc values come from `HomeAction.getJobUIStatus()` in
- * the legacy CRM; each maps to a tab slug in /jobs (and the tab carries the
- * correct status/statuses/assigned filter payload):
+ * the legacy CRM; each maps to a tab slug on /my-orders — NOT /jobs — and the
+ * tab carries the correct status/statuses/assigned filter payload:
  *
- *   UnConfirmed               → /jobs?tab=unconfirmed          (status 9)
- *   PendingForScheduling      → /jobs?tab=pending-scheduling   (status 0, unassigned)
- *   PendingForAcknowledgement → /jobs?tab=pending-app-ack      (status 0, assigned)
- *   NotStarted                → /jobs?tab=pending-start        (status 1)
- *   NotCompleted              → /jobs?tab=pending-close        (statuses 2 OR 20)
- *   PendingFeedback           → /jobs?tab=pending-feedback     (status 3)
- *   PendingForApproval        → /jobs?tab=estimate-pending     (statuses 15 OR 21)
- *   PendingForCheckout        → /jobs?tab=audit-complete       (status 10)
+ *   UnConfirmed               → /my-orders?tab=unconfirmed          (status 9)
+ *   PendingForScheduling      → /my-orders?tab=pending-scheduling   (status 0, unassigned)
+ *   PendingForAcknowledgement → /my-orders?tab=pending-app-ack      (status 0, assigned)
+ *   NotStarted                → /my-orders?tab=pending-start        (status 1)
+ *   NotCompleted              → /my-orders?tab=pending-close        (statuses 2 OR 20)
+ *   PendingFeedback           → /my-orders?tab=pending-feedback     (status 3)
+ *   PendingForApproval        → /my-orders?tab=estimate-pending     (statuses 15 OR 21)
+ *   PendingForCheckout        → /my-orders?tab=audit-complete       (status 10)
+ *
+ * THESE SAID /jobs UNTIL 2026-09-16 — for long enough that the bookmarks made
+ * while it was true outlived it. /jobs still HONOURS ?tab= (AttentionSummary
+ * and jobs/upload deep-link into it), and until this was corrected it narrowed
+ * that list with nothing on screen saying so; it now shows a "Showing X Only"
+ * bar. When you repoint a mapping, repoint the prose in the same commit: the
+ * table below is the only thing the code reads, so a stale comment here is
+ * invisible to every test.
  *
  * Two legacy concepts currently fold onto existing buckets in our status
  * model: (a) "Audit & Complete" has no distinct legacy enumDesc — it's a
