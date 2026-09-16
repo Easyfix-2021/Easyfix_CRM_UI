@@ -89,9 +89,28 @@ type JobsQuery = Record<string, string | number | undefined>;
 export function UnconfirmedSections({
   query,
   pageTotal,
+  reloadSignal,
+  pageBusy,
   onMagicLinkSent,
   ...tableProps
-}: Omit<TableProps, 'rows' | 'loading'> & { query: JobsQuery; pageTotal: number | null }) {
+}: Omit<TableProps, 'rows' | 'loading'> & {
+  query: JobsQuery;
+  pageTotal: number | null;
+  /*
+   * Bumped by the page after a mutation made OUTSIDE these sections — the
+   * JobModal it hosts (Confirm & Schedule's Book Call, Save Draft, Unreachable,
+   * Enquiry, and the view-mode actions). Each bump refreshes every section's
+   * rows and count, exactly as an in-section mutation does.
+   */
+  reloadSignal?: number;
+  /*
+   * True while the page's own "N matching orders" query is in flight. Feeds the
+   * reconciliation gate below — that total is one half of the sum being checked,
+   * so a warning raised while it is mid-refresh is comparing two different
+   * moments.
+   */
+  pageBusy?: boolean;
+}) {
   /*
    * The section LIST comes from the server so a sixth section is a backend
    * change, not a frontend deploy. Sent without `ids`, which the endpoint
@@ -123,19 +142,52 @@ export function UnconfirmedSections({
    * PendingToStartView solves it exactly this way; see its bumpReload().
    */
   const [reloadKey, setReloadKey] = useState(0);
-  function handleMutation() {
+  function reloadSections() {
     invalidateFetch((k) => k.startsWith('/admin/jobs'));
     setReloadKey((k) => k + 1);
+  }
+  function handleMutation() {
+    reloadSections();
     // Still tell the page: its own query feeds the "N matching orders" header,
     // and a mutation can change that count.
     onMagicLinkSent?.();
   }
+
+  /*
+   * The page-driven twin of handleMutation. The page reloads its own header
+   * query itself, so this does not call back. Skips the initial render, which
+   * the sections' key-driven fetches already cover.
+   */
+  const firstSignal = useRef(true);
+  useEffect(() => {
+    if (firstSignal.current) { firstSignal.current = false; return; }
+    reloadSections();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reloadSignal]);
 
   // Reported by each section as its count arrives. Guarded so a repeat of the
   // same number is not a state write, which would re-render on every refetch.
   function reportTotal(key: string, total: number) {
     setTotals((prev) => (prev[key] === total ? prev : { ...prev, [key]: total }));
   }
+
+  /*
+   * Which sections are mid-request. Same guard shape as reportTotal.
+   *
+   * THE SUM IS ONLY MEANINGFUL WHEN NOTHING IS IN FLIGHT. useFetch keeps the
+   * previous `data` while it refetches (so the table never blanks), and the
+   * page's header total and the five section queries are separate requests that
+   * land at separate moments. So after a mutation — every Book Call, say — there
+   * is a window where a fresh total is being compared against stale counts, or
+   * the reverse, and the sum genuinely does not match. Raising "these groupings
+   * are not trustworthy" in that window is a false alarm on a page whose whole
+   * point is that a count you cannot trust is worse than no count.
+   */
+  const [busy, setBusy] = useState<Record<string, boolean>>({});
+  function reportBusy(key: string, isBusy: boolean) {
+    setBusy((prev) => (prev[key] === isBusy ? prev : { ...prev, [key]: isBusy }));
+  }
+  const anyBusy = pageBusy === true || Object.values(busy).some(Boolean);
 
   /*
    * THE ARITHMETIC THAT CATCHES WHAT NO SINGLE SECTION CAN. Both times this
@@ -165,7 +217,7 @@ export function UnconfirmedSections({
         * sections have been wrong the screen looked entirely reasonable — the
         * only tell was that the headings did not sum to the tab total.
         */}
-      {reconciliation.status === 'mismatch' && (
+      {reconciliation.status === 'mismatch' && !anyBusy && (
         <div
           role="status"
           className="mx-3 mt-3 rounded-lg border border-warning bg-warning-tint px-3 py-2 text-xs text-warning-strong"
@@ -190,6 +242,7 @@ export function UnconfirmedSections({
             controls={controls}
             query={query}
             onTotal={(t) => reportTotal(s.key, t)}
+            onBusy={(b) => reportBusy(s.key, b)}
             reloadKey={reloadKey}
             onMagicLinkSent={handleMutation}
             tableProps={tableProps}
@@ -209,12 +262,15 @@ export function UnconfirmedSections({
  * Same reason PendingToStartView has a per-bucket component.
  */
 function SectionCard({
-  section, controls, query, onTotal, reloadKey, onMagicLinkSent, tableProps,
+  section, controls, query, onTotal, onBusy, reloadKey, onMagicLinkSent, tableProps,
 }: {
   section: Section;
   controls: SectionControls;
   query: JobsQuery;
   onTotal: (total: number) => void;
+  /* Reported on every transition so the parent can hold the reconciliation
+     warning while this section's count is in flight. */
+  onBusy: (busy: boolean) => void;
   reloadKey: number;
   onMagicLinkSent?: TableProps['onMagicLinkSent'];
   tableProps: Omit<TableProps, 'rows' | 'loading' | 'onMagicLinkSent'>;
@@ -241,7 +297,12 @@ function SectionCard({
     limit: countOnly ? 1 : limit,
     offset: countOnly ? 0 : page * limit,
   });
-  const { data, loading, refetch } = useFetch<Resp>(key);
+  /*
+   * `refreshing` is the SWR case — a refetch while the previous rows are still
+   * on screen, which is exactly what a post-mutation reload is. It has to count
+   * as busy: during it `data.total` is the PRE-mutation count.
+   */
+  const { data, loading, refreshing, refetch } = useFetch<Resp>(key);
 
   /*
    * A filter or search change makes the current page number meaningless — page
@@ -273,6 +334,12 @@ function SectionCard({
     if (data) onTotal(data.total);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data]);
+
+  // …and whether that number is currently being replaced.
+  useEffect(() => {
+    onBusy(loading || refreshing);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, refreshing]);
 
   /*
    * AUTO: open when it has jobs, shut when it does not — an operator scanning
