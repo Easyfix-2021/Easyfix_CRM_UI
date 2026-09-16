@@ -10,6 +10,11 @@
  *   · reschedule   → Approve fires the reschedule API, Reject clears the flag.
  *   · "there should be a 'Cancel' (Red) button in Reassign Technician modal."
  *
+ * AND, after the first cut shipped (owner, same day):
+ *   · "Button says cancel job here in this modal but its just Cancel in other
+ *      modals. Please use the shared component only to maintain consistency."
+ *   · "Show the ask inside JobModal."
+ *
  * Source-scanned, like pending-to-start-sections.test.js and
  * resend-pin-action.test.js: every rule below lives in a .tsx that test:build
  * does not compile, and every regression is a plain deletion that type-checks.
@@ -35,12 +40,16 @@ const ACTIONS_PATH = 'src/components/job/TechRequestActions.tsx';
 const VIEW_PATH = 'src/components/job/PendingToStartView.tsx';
 const ASSIGN_PATH = 'src/components/job/AssignTechnicianModal.tsx';
 const PAGE_PATH = 'src/app/(authed)/my-orders/page.tsx';
+const CANCEL_PATH = 'src/components/job/CancelJob.tsx';
+const MODAL_PATH = 'src/components/job/JobModal.tsx';
 
 const ACTIONS_RAW = read(ACTIONS_PATH);
 const ACTIONS = strip(ACTIONS_RAW);
 const VIEW = strip(read(VIEW_PATH));
 const ASSIGN = strip(read(ASSIGN_PATH));
 const PAGE = strip(read(PAGE_PATH));
+const CANCEL = strip(read(CANCEL_PATH));
+const MODAL = strip(read(MODAL_PATH));
 
 test('the stripper bites — prose that NAMES a call cannot satisfy a check for it', () => {
   // The file header explains the reject endpoint in words. If the stripper ever
@@ -99,14 +108,30 @@ test('the Approve / Reject pair renders from the SAME ask the Request column pai
 
 // ─── Approve: the existing endpoints, never a third cancel path ─────────
 
-test('approving a CANCELLATION goes through the shared cancel dialog, not a bespoke PATCH', () => {
-  assert.match(ACTIONS, /<CancelWithReasonDialog/);
-  assert.match(ACTIONS, /api\.patch\(`\/admin\/jobs\/\$\{jobId\}\/status`, \{ status: ST\.CANCELLED, reasonId, comment \}\)/);
-  // Seeded to Technician because that is who asked — but still a radio ops can change.
-  assert.match(ACTIONS, /defaultDueTo="Technician"/);
+test('approving a CANCELLATION goes through the ONE shared cancel control', () => {
+  // No dialog, no PATCH, no toast of its own — all of that is useCancelJob's.
+  assert.match(ACTIONS, /const cancel = useCancelJob\(\{/);
+  assert.match(ACTIONS, /defaultDueTo: 'Technician'/,
+    'seeded to Technician because that is who asked — still a radio ops can change');
+  assert.match(ACTIONS, /const onApprove = \(\) => \(isCancel \? cancel\.open\(\) : setRescheduleOpen\(true\)\);/);
+  assert.match(ACTIONS, /\{cancel\.dialog\}/);
+  assert.doesNotMatch(ACTIONS, /<CancelWithReasonDialog|ST\.CANCELLED/,
+    'a bespoke cancel here is the fourth copy the shared control exists to prevent');
   assert.match(strip(read('src/components/job/CancelWithReasonDialog.tsx')),
     /defaultDueTo = 'Customer'/,
-    'every OTHER cancel mount must keep defaulting to Customer');
+    'every OTHER cancel surface must keep defaulting to Customer');
+});
+
+test('the shared control owns the label, and it is the one the other modals use', () => {
+  // The drift the owner caught: three surfaces said "Cancel", the fourth
+  // "Cancel Job". One constant now, and no surface may spell its own.
+  assert.match(CANCEL, /export const CANCEL_JOB_LABEL = 'Cancel';/);
+  assert.match(CANCEL, /\{CANCEL_JOB_LABEL\}/, 'the button must render the constant, not a literal');
+  for (const [name, src] of [['Reassign', ASSIGN], ['JobModal', MODAL],
+    ['Schedule & Assign', strip(read('src/components/job/ScheduleAssignModal.tsx'))]]) {
+    assert.doesNotMatch(src, />\s*Cancel Job\s*</, `${name}: the footer label belongs to the shared control`);
+    assert.match(src, /\bcancel\.button\b/, `${name}: must render the shared button`);
+  }
 });
 
 test('approving a RESCHEDULE pre-fills the technician\'s slot and reason', () => {
@@ -216,8 +241,11 @@ test('the backend seeds that exact key', () => {
 
 // ─── Cancel Job inside the Reassign modal ───────────────────────────────
 
-test('Reassign carries a red Cancel Job button in its footer', () => {
-  assert.match(ASSIGN, /\{canCancel && \(\s*<Button\s*variant="destructive"[\s\S]*?Cancel Job\s*<\/Button>/,
+test('Reassign carries a red cancel in its footer', () => {
+  assert.match(ASSIGN, /\{canCancel && cancel\.button\}/);
+  // The red lives in the shared control now — assert it there, or "red" is
+  // a claim about markup this file can no longer see.
+  assert.match(CANCEL, /<Button\s*variant="destructive"/,
     'the owner asked for a RED cancel — variant="destructive" is that red');
 });
 
@@ -226,8 +254,8 @@ test('Cancel Job sits before Close in the right cluster, per the footer conventi
   const footAt = ASSIGN.indexOf('<DialogFooter className="px-6 sm:justify-between">');
   assert.ok(footAt > -1, 'positive control: the footer must be locatable');
   const foot = ASSIGN.slice(footAt, ASSIGN.indexOf('</DialogFooter>', footAt));
-  assert.ok(foot.indexOf('Add Remarks') < foot.indexOf('Cancel Job'), 'Add Remarks stays left');
-  assert.ok(foot.indexOf('Cancel Job') < foot.indexOf('>Close<'), 'Cancel comes before Close');
+  assert.ok(foot.indexOf('Add Remarks') < foot.indexOf('cancel.button'), 'Add Remarks stays left');
+  assert.ok(foot.indexOf('cancel.button') < foot.indexOf('>Close<'), 'Cancel comes before Close');
 });
 
 test('Cancel Job is fenced on a status this modal was meant to be open at', () => {
@@ -239,16 +267,22 @@ test('Cancel Job is fenced on a status this modal was meant to be open at', () =
     /const canCancel = hasAction\(me, 'isJobCancel'\)\s*&& probe\?\.job_status != null && !wrongStatusForMode;/);
 });
 
-test('Cancel Job refreshes the caller BEFORE closing, and evicts the comment thread', () => {
-  const mountAt = ASSIGN.indexOf('<CancelWithReasonDialog');
-  assert.ok(mountAt > -1, 'positive control: the cancel mount must be locatable');
-  const mount = ASSIGN.slice(mountAt, ASSIGN.indexOf('/>', mountAt));
-  const patchAt = mount.indexOf('await api.patch(');
-  const evictAt = mount.indexOf('invalidateFetch(');
-  const changedAt = mount.indexOf('onChanged?.();');
-  const closeAt = mount.indexOf('onClose();');
-  assert.ok(patchAt > -1 && evictAt > patchAt, 'evict only once the cancel has committed');
-  assert.ok(changedAt > patchAt && closeAt > changedAt,
+test('the shared cancel evicts after the PATCH, then hands control back', () => {
+  const patchAt = CANCEL.indexOf('await api.patch(');
+  const evictAt = CANCEL.indexOf('invalidateFetch(');
+  const doneAt = CANCEL.indexOf('await onCancelled();');
+  assert.ok(patchAt > -1, 'positive control: the PATCH must be locatable');
+  assert.ok(evictAt > patchAt, 'evict only once the cancel has committed');
+  assert.ok(doneAt > evictAt, 'the caller runs last, on a cache that is already clean');
+  // Awaited, so a caller that refetches before closing keeps that order.
+  assert.match(CANCEL, /onCancelled: \(\) => void \| Promise<void>;/);
+});
+
+test('Reassign refreshes the caller BEFORE closing', () => {
+  const hookAt = ASSIGN.indexOf('useCancelJob({');
+  assert.ok(hookAt > -1, 'positive control: the hook call must be locatable');
+  const call = ASSIGN.slice(hookAt, ASSIGN.indexOf('});', hookAt));
+  assert.match(call, /onCancelled: \(\) => \{ onChanged\?\.\(\); onClose\(\); \}/,
     'refresh the list before closing, or the cancelled row flashes back');
 });
 
@@ -264,15 +298,90 @@ test('both AssignTechnicianModal mounts pass onChanged', () => {
   }
 });
 
+// ─── The ask inside JobModal ────────────────────────────────────────────
+
+test('JobModal renders the technician\'s ask, above its customer twin', () => {
+  assert.match(MODAL, /<JobTechnicianRequest job=\{job\} onJobChanged=\{onRefresh\} \/>/);
+  assert.ok(MODAL.indexOf('<JobTechnicianRequest') < MODAL.indexOf('<JobCustomerRequests'),
+    "the technician's ask is the one that stops work today — it goes first");
+});
+
+test('the banner costs NO new fetch — the detail payload already carries the ask', () => {
+  // GET /admin/jobs/:id resolves it server-side as `appRequest` (backend
+  // getByIdCore → buildAppRequest) for the technician app's own banner. The CRM
+  // was ignoring a key it was already being sent; a second endpoint would be
+  // a round trip for data in hand.
+  assert.match(MODAL, /const req = appRequestFromDetail\(job\?\.appRequest\);/);
+  const at = MODAL.indexOf('function JobTechnicianRequest');
+  assert.ok(at > -1, 'positive control: the component must be locatable');
+  const fn = MODAL.slice(at, MODAL.indexOf('\n}\n', at));
+  assert.doesNotMatch(fn, /useFetch|api\.get/, 'the banner must not fetch anything of its own');
+});
+
+test('the banner and the queue chip cannot disagree — one vocabulary table', () => {
+  const LIB = strip(read('src/lib/job-app-request.ts'));
+  // Both builders spread the same KIND entry rather than typing the strings.
+  assert.match(LIB, /const KIND: Readonly<Record<AppRequestKind, \{ label: string; tone: AppRequest\['tone'\] \}>> = \{/);
+  assert.equal((LIB.match(/\.\.\.KIND(\.cancel|\.reschedule|\[kind\])/g) || []).length, 3,
+    'every AppRequest built in this module must take its label/tone from KIND');
+  assert.equal((LIB.match(/'Cancellation Requested'/g) || []).length, 1,
+    'the label is spelt once — a second copy is the drift this table prevents');
+});
+
+test('the detail mapper is NOT status-gated, unlike the list predicate', () => {
+  /*
+   * Deliberate asymmetry, and it mirrors the server. The queue pins
+   * job_status = 1 because that is what empties it. The detail object keeps
+   * describing an open ask after ops moves the job, because the technician's
+   * app hides its own Cancel/Reschedule buttons while it is non-null — so the
+   * banner answers "what can the technician see right now".
+   */
+  const R = require('../.test-build/job-app-request');
+  const onClosedJob = R.appRequestFromDetail({ type: 'cancel', reason: 'Customer away', requestedAt: '2026-09-14 10:00' });
+  assert.equal(onClosedJob.kind, 'cancel');
+  assert.equal(onClosedJob.label, 'Cancellation Requested');
+  // Positive control on the other half: the LIST predicate does gate on status.
+  assert.equal(R.appRequestOf({ job_status: 6, is_cancelled_by_app: 1 }), null);
+  assert.ok(R.appRequestOf({ job_status: 1, is_cancelled_by_app: 1 }));
+});
+
+test('the mapper refuses an absent or unknown ask rather than half-labelling it', () => {
+  const R = require('../.test-build/job-app-request');
+  for (const input of [null, undefined, {}, { type: null }, { type: '' }, { type: 'refund' }]) {
+    assert.equal(R.appRequestFromDetail(input), null, `${JSON.stringify(input)} must yield no banner`);
+  }
+  // A CANCELLATION proposes no new time: a stray value must not render a
+  // "Requested:" line the ask never made.
+  const stray = R.appRequestFromDetail({ type: 'cancel', requestedDateTime: '2026-09-20 10:00' });
+  assert.equal(stray.requestedFor, null);
+  assert.equal(R.appRequestFromDetail({ type: 'reschedule', requestedDateTime: '2026-09-20 10:00' }).requestedFor,
+    '2026-09-20 10:00', 'a reschedule DOES carry it — or the control above proves nothing');
+});
+
+test('the banner reuses the row\'s decision flow, only the trigger differs', () => {
+  assert.match(MODAL, /<TechRequestActions[\s\S]*?variant="button"/);
+  assert.match(ACTIONS, /variant\?: 'icon' \| 'button';/);
+  assert.match(ACTIONS, /const triggers = variant === 'button' \? \(/);
+  // One flow: everything after the triggers is shared, so the two surfaces
+  // cannot decide differently.
+  assert.equal((ACTIONS.match(/const onApprove =/g) || []).length, 1);
+  assert.equal((ACTIONS.match(/async function onReject\(\)/g) || []).length, 1);
+  // Same permission on both surfaces.
+  assert.match(MODAL, /actionFlags\(me, \[APP_REQUEST_ACTION\]\)/);
+  assert.match(MODAL, /can\[APP_REQUEST_ACTION\] && \(/);
+});
+
 // ─── Vocabulary ─────────────────────────────────────────────────────────
 
 test('every user-facing label is Title Case', () => {
   const labels = [
-    'Cancel Job', 'Reject Request', 'Request Rejected', 'Job Cancelled',
+    'Cancel', 'Approve', 'Reject', 'Reject Request', 'Request Rejected', 'Job Cancelled',
     'Reject Cancellation Request?', 'Reject Reschedule Request?',
+    'Technician Requested',
   ];
   for (const label of labels) {
-    assert.ok(ACTIONS.includes(label) || ASSIGN.includes(label), `missing label: ${label}`);
+    assert.ok(ACTIONS.includes(label) || CANCEL.includes(label) || MODAL.includes(label),
+      `missing label: ${label}`);
     for (const word of label.replace('?', '').split(' ')) {
       assert.match(word, /^[A-Z]/, `"${label}" must be Title Case (check:brand / label-casing rule)`);
     }
@@ -284,6 +393,8 @@ test('both buttons carry a title AND an aria-label', () => {
   // icon-only DESTRUCTIVE control must not repeat that.
   // Whole elements, not `<button…>`: a non-greedy match to the first `>` stops
   // inside `onClick={() =>` and sees no attributes at all.
+  // The ICON variant only — <button> lowercase. The banner variant renders
+  // <Button> with visible text, which is its own accessible name.
   const buttons = [...ACTIONS.matchAll(/<button\b[\s\S]*?<\/button>/g)].map((m) => m[0]);
   assert.equal(buttons.length, 2, `expected Approve + Reject, found ${buttons.length}`);
   for (const b of buttons) {

@@ -151,14 +151,22 @@ test('a refused upload shows the server\'s sentence and does not stop the rest',
 test('a close refused for want of a photo surfaces the server\'s sentence, not a generic one', () => {
   /*
    * 409 AFTER_PHOTO_REQUIRED arrives as { success:false, error:<sentence>, code }
-   * and lib/api.ts throws ApiError(status, json.error). JobModal's own status
+   * and lib/api.ts throws ApiError(status, json.error). The client's status
    * PATCHes are cancel (6) and Confirm & Schedule's outcomes (0/7/9) — none a
    * close — and both already show ApiError.message. Pinned so a new status
    * error path cannot swap in a canned string without this going red.
+   *
+   * The POPULATION IS TWO FILES since 2026-09-15: cancel moved out of JobModal
+   * into the shared control (components/job/CancelJob.tsx), which four surfaces
+   * now share. Counting JobModal alone would have quietly dropped the cancel
+   * path out of this check while still passing at a smaller number — so the
+   * count spans both and the total is unchanged at 2.
    */
   const api = fs.readFileSync(path.join(__dirname, '..', 'src/lib/api.ts'), 'utf8');
   assert.match(api, /throw new ApiError\(res\.status, json\.error \|\| `HTTP \$\{res\.status\}`/);
-  const patches = [...CODE.matchAll(/api\.patch\(`\/admin\/jobs\/\$\{[\w.]+\}\/status`/g)];
-  assert.equal(patches.length, 2, `JobModal status PATCHes changed (found ${patches.length}) — re-check their error paths`);
-  assert.doesNotMatch(CODE, /AFTER_PHOTO_REQUIRED/, 'no second copy of the backend\'s sentence in the client');
+  const SHARED_CANCEL = fs.readFileSync(path.join(__dirname, '..', 'src/components/job/CancelJob.tsx'), 'utf8');
+  const population = CODE + SHARED_CANCEL;
+  const patches = [...population.matchAll(/api\.patch\(`\/admin\/jobs\/\$\{[\w.]+\}\/status`/g)];
+  assert.equal(patches.length, 2, `client status PATCHes changed (found ${patches.length}) — re-check their error paths`);
+  assert.doesNotMatch(population, /AFTER_PHOTO_REQUIRED/, 'no second copy of the backend\'s sentence in the client');
 });

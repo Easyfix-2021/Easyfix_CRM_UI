@@ -170,6 +170,21 @@ export function toIstClockTime(d: string | Date | null | undefined): string {
 }
 
 /*
+ * tbl_job.job_status, by name. Lived in components/job/JobModal.tsx until
+ * 2026-09-15 and moved here — unchanged — to break an import cycle: the shared
+ * cancel control (components/job/CancelJob.tsx) needs CANCELLED, JobModal
+ * needs the cancel control, and a component importing a constant out of a
+ * 12k-line module that imports it back is a module-init hazard waiting for a
+ * refactor to trip it.
+ *
+ * JobModal still RE-EXPORTS it, so every existing `import { ST } from
+ * './JobModal'` is untouched; this is the definition those now resolve to.
+ * It belongs beside statusLabel / statusTone below, which are the other half
+ * of the same vocabulary.
+ */
+export const ST = { BOOKED: 0, SCHEDULED: 1, IN_PROGRESS: 2, COMPLETED: 3, COMPLETED_ALT: 5, CANCELLED: 6, ENQUIRY: 7, CALL_LATER: 9, REVISIT: 10 } as const;
+
+/*
  * Canonical job_status labels — sourced from the DB truth documented in
  * EasyFix_Backend/services/job.service.js (updated 2026-04-20) and matching
  * the legacy `HomeAction.getJobUIStatus()` classifier 1:1.

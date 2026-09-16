@@ -20,7 +20,9 @@ import { AddressEditDialog, type EditableAddress } from './AddressEditDialog';
 import { SkillImageLightbox, type SkillImageLightboxValue } from '@/components/easyfixer/SkillImageLightbox';
 import { CustomerSubmissionPanel } from './CustomerSubmissionPanel';
 import { AddRemarksDialog } from './AddRemarksDialog';
-import { CancelWithReasonDialog } from './CancelWithReasonDialog';
+import { useCancelJob } from './CancelJob';
+import { TechRequestActions, APP_REQUEST_ACTION } from './TechRequestActions';
+import { appRequestFromDetail, type AppRequestDetail } from '@/lib/job-app-request';
 import { BillingChargesTab } from './BillingChargesTab';
 // Audited reschedule dialog (PATCH /admin/jobs/:id/reschedule → job.reschedule:
 // offer-expiry + scheduling_history). Kept aliased for a descriptive name;
@@ -41,7 +43,7 @@ import { resolveParentAddressId, buildJobAddressPayload } from '@/lib/job-addres
 // (src/lib/job-slots.ts); never re-declare a slot array at a call site.
 import { BOOKING_BANDS, slotChoicesFor, inferSlotFromTime, bandForTime, isKnownBand, canonicalSlot, displaySlot, AFTER_HOURS_SLOT } from '@/lib/job-slots';
 import { useLookup } from '@/lib/use-lookup';
-import { formatDate, formatEasyfixerName, statusLabel, statusTone, toIstClockTime } from '@/lib/utils';
+import { formatDate, formatEasyfixerName, ST, statusLabel, statusTone, toIstClockTime } from '@/lib/utils';
 import { maskMobile, formatServiceAddress, INDIAN_MOBILE_REGEX, INDIAN_MOBILE_ERROR, isValidIndianMobile, normalizeMobileDigits } from '@/lib/format';
 import { formatJobAge, jobAgeTitle } from '@/lib/job-age';
 
@@ -88,7 +90,8 @@ import { parseIstDateTime } from '@/lib/format';
  * behaviour is identical whether the user enters via direct URL or the modal.
  */
 
-export const ST = { BOOKED: 0, SCHEDULED: 1, IN_PROGRESS: 2, COMPLETED: 3, COMPLETED_ALT: 5, CANCELLED: 6, ENQUIRY: 7, CALL_LATER: 9, REVISIT: 10 } as const;
+/* ST moved to @/lib/utils (see its note) to break the JobModal → CancelJob →
+   JobModal cycle; JobModal now imports it like everyone else. */
 
 /*
  * PII masking helper — show only the first 4 digits of any mobile
@@ -333,7 +336,6 @@ export function JobModal({
    * State + the dialogs themselves live here so both the footer's Cancel
    * button and ViewBody's pencil can drive them.
    */
-  const [cancelOpen, setCancelOpen] = useState(false);
   const [descOpen, setDescOpen] = useState(false);
   // isJobCancel gates the destructive Cancel button (same permission key
   // ActionBar used before Cancel was lifted here).
@@ -386,6 +388,17 @@ export function JobModal({
    * fetch/refresh/PATCH addresses the same job.
    */
   const resolvedJobId = jobId ?? (job?.job_id != null ? Number(job.job_id) : undefined);
+  /*
+   * The shared cancel control (./CancelJob) — one label and one write across
+   * JobModal, Schedule & Assign, Reassign and the Approve on a technician's
+   * cancellation request. Placed here rather than with the other dialog state
+   * above because it needs resolvedJobId; `refresh` is a hoisted function
+   * declaration, so the closure below resolves it fine.
+   */
+  const cancel = useCancelJob({
+    jobId: resolvedJobId ?? null,
+    onCancelled: () => { refresh(); onSaved?.(); },
+  });
   useEffect(() => {
     if (!open) return;
     /*
@@ -759,9 +772,8 @@ export function JobModal({
                 />
               )}
               {!loading && job && canCancel(Number(job.job_status)) && footerCan.isJobCancel
-                && transitionAllowed(currentMe?.allowedStages, Number(job.job_status), ST.CANCELLED) && (
-                <Button variant="destructive" onClick={() => setCancelOpen(true)}>Cancel</Button>
-              )}
+                && transitionAllowed(currentMe?.allowedStages, Number(job.job_status), ST.CANCELLED)
+                && cancel.button}
               {!loading && job && (
                 <ActionBar
                   job={job}
@@ -816,18 +828,7 @@ export function JobModal({
           description pencil can both drive them. Wiring is unchanged from the
           ActionBar versions: Cancel PATCHes status → CANCELLED with a reason,
           Change Description PATCHes job_desc; both refresh + bubble onSaved. */}
-      <CancelWithReasonDialog
-        open={cancelOpen} onClose={() => setCancelOpen(false)}
-        onSubmit={async (reasonId, comment) => {
-          await api.patch(`/admin/jobs/${resolvedJobId}/status`, {
-            status: ST.CANCELLED, reasonId, comment,
-          });
-          showToast({ variant: 'success', message: 'Job Cancelled' });
-          // The cancel remark is a tbl_job_comment row; refresh() re-reads the
-          // comment thread along with the job (see there).
-          setCancelOpen(false); refresh(); onSaved?.();
-        }}
-      />
+      {cancel.dialog}
       <ChangeDescriptionDialog
         open={descOpen} onClose={() => setDescOpen(false)}
         initialDesc={String(job?.job_desc ?? '')}
@@ -1220,6 +1221,10 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
     <>
 
       <Panel value="summary" label="Summary" layout={layout}>
+        {/* TECHNICIAN cancel/reschedule ask, above its customer twin because a
+            technician's is the one that stops work happening today. Renders
+            nothing when there is none. */}
+        <JobTechnicianRequest job={job} onJobChanged={onRefresh} />
         {/* Customer Cancel/Reschedule requests — attention banner pinned
             to the top of the Summary tab so ops action pending asks
             before anything else. Renders nothing when there are none. */}
@@ -1795,6 +1800,92 @@ export function JobAddressEditDialog({ job, onClose, onSaved }: {
  * trail (the legacy CRM wrote one row per reschedule). Falls back to
  * empty list when no rows or the endpoint isn't reachable.
  */
+/*
+ * JobTechnicianRequest — the technician's own pending Cancel / Reschedule ask,
+ * on the Summary tab beside the customer one.
+ *
+ * ─── WHY THIS EXISTS ──────────────────────────────────────────────────────
+ *
+ * Pending to Start's "Technician Requests" section listed these asks and the
+ * modal it opens knew nothing about them: `@/lib/job-app-request` had exactly
+ * ONE importer. So an operator who clicked View on a request row landed in a
+ * workspace with no sign that anyone had asked for anything — and the one
+ * place with the full job context was the one place that could not tell them.
+ *
+ * ─── NO FETCH ─────────────────────────────────────────────────────────────
+ *
+ * Unlike its customer twin, which reads its own endpoint, this needs nothing:
+ * GET /admin/jobs/:id already resolves the ask and attaches it as
+ * `appRequest` (EasyFix_Backend services/job.service.js getByIdCore →
+ * buildAppRequest), for the technician app's banner. The CRM was simply
+ * ignoring a key it was already being sent.
+ *
+ * ─── IT IS NOT STATUS-GATED, UNLIKE THE QUEUE ─────────────────────────────
+ *
+ * The queue's predicate pins job_status = 1, because that is what empties it.
+ * This does not, because the server's object does not: the technician's app
+ * keeps showing "waiting for ops" — and keeps its own Cancel / Reschedule
+ * buttons hidden — while the ask is open, whatever ops did to the job. So this
+ * banner answers "what can the technician see right now", which is exactly
+ * what an operator needs before ringing them. appRequestFromDetail is the
+ * shared mapper; the chip and wording come from the same table the queue's
+ * chip does, so the two cannot drift.
+ *
+ * Actions are the SAME TechRequestActions the row renders — one Approve /
+ * Reject flow, two trigger styles — gated on the same isJobAppRequestResolve.
+ */
+function JobTechnicianRequest({ job, onJobChanged }: {
+  job: { job_id?: number | string | null; appRequest?: AppRequestDetail | null };
+  onJobChanged?: () => void;
+}) {
+  const { me } = useMe();
+  const can = actionFlags(me, [APP_REQUEST_ACTION]);
+  const req = appRequestFromDetail(job?.appRequest);
+  const jobId = job?.job_id != null ? Number(job.job_id) : null;
+  if (!req || jobId == null) return null;
+
+  const isCancel = req.kind === 'cancel';
+  /* Same band + chip vocabulary as the customer banner directly below, so the
+     two read as one family rather than two features. */
+  const band = isCancel ? 'border-urgent bg-urgent-tint' : 'border-warning bg-warning-tint';
+  return (
+    <div className={`rounded-lg border px-4 py-3 ${band}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <StatusChip tone={isCancel ? 'rose' : 'amber'} size="sm">
+              {isCancel ? 'Cancellation' : 'Reschedule'}
+            </StatusChip>
+            <span className="text-sm font-semibold">
+              Technician Requested {isCancel ? 'Cancellation' : 'Reschedule'}
+            </span>
+          </div>
+          <div className="mt-1.5 space-y-0.5 text-xs text-ink-700">
+            <div><span className="font-medium">Reason:</span> {req.reason ?? 'No reason given'}</div>
+            {req.requestedFor ? (
+              <div><span className="font-medium">Requested:</span> {formatDate(req.requestedFor)}</div>
+            ) : null}
+            {req.raisedAt ? (
+              <div className="text-ink-500">Raised {formatDate(req.raisedAt)}</div>
+            ) : null}
+          </div>
+        </div>
+        {can[APP_REQUEST_ACTION] && (
+          <div className="flex shrink-0 items-center gap-2">
+            <TechRequestActions
+              jobId={jobId}
+              request={req}
+              allowed
+              variant="button"
+              onActioned={() => onJobChanged?.()}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /*
  * JobCustomerRequests — attention banner for customer-initiated Cancel /
  * Reschedule requests on this job. The customer (via the public/client

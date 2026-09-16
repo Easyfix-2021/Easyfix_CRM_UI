@@ -114,9 +114,24 @@ function text(v: string | null | undefined): string | null {
 }
 
 /*
- * The ONE predicate. Returns the request to render, or null when the row is an
- * ordinary pending order — so a caller both FILTERS and RENDERS through this,
- * and the set on screen can never disagree with the set that was counted.
+ * THE VOCABULARY, in one table.
+ *
+ * Two surfaces build an AppRequest from two different payloads — the LIST
+ * columns (appRequestOf) and the DETAIL object (appRequestFromDetail) — and
+ * they must name the same ask identically. A chip reading "Cancellation
+ * Requested" in the queue and something else in the workspace the operator
+ * opened FROM that queue is the drift this map exists to make impossible.
+ */
+const KIND: Readonly<Record<AppRequestKind, { label: string; tone: AppRequest['tone'] }>> = {
+  cancel: { label: 'Cancellation Requested', tone: 'urgent' },
+  reschedule: { label: 'Reschedule Requested', tone: 'warning' },
+};
+
+/*
+ * The ONE predicate for a LIST row. Returns the request to render, or null when
+ * the row is an ordinary pending order — so a caller both FILTERS and RENDERS
+ * through this, and the set on screen can never disagree with the set that was
+ * counted.
  */
 export function appRequestOf(row: AppRequestFields | null | undefined): AppRequest | null {
   if (!row) return null;
@@ -125,8 +140,7 @@ export function appRequestOf(row: AppRequestFields | null | undefined): AppReque
   if (flagOn(row.is_cancelled_by_app)) {
     return {
       kind: 'cancel',
-      label: 'Cancellation Requested',
-      tone: 'urgent',
+      ...KIND.cancel,
       reason: text(row.app_request_reason),
       raisedAt: text(row.cancel_date_time),
       requestedFor: null,
@@ -136,8 +150,7 @@ export function appRequestOf(row: AppRequestFields | null | undefined): AppReque
   if (flagOn(row.is_rescheduled_by_app)) {
     return {
       kind: 'reschedule',
-      label: 'Reschedule Requested',
-      tone: 'warning',
+      ...KIND.reschedule,
       reason: text(row.app_request_reason),
       raisedAt: text(row.reschedule_at_app),
       requestedFor: text(row.reschedule_date_time_app),
@@ -145,4 +158,51 @@ export function appRequestOf(row: AppRequestFields | null | undefined): AppReque
   }
 
   return null;
+}
+
+/*
+ * ─── THE DETAIL PAYLOAD ───────────────────────────────────────────────────
+ *
+ * GET /admin/jobs/:id already resolves the ask server-side and attaches it as
+ * `appRequest` (EasyFix_Backend services/job.service.js getByIdCore →
+ * buildAppRequest). Different field names from the LIST columns, and already
+ * disambiguated — the SQL picked the winner, so there is nothing to decide here
+ * and no flags to re-read.
+ *
+ * ⚠ IT IS NOT STATUS-GATED, AND THAT IS DELIBERATE — on the server's side too.
+ * The list predicate above pins job_status = 1 because THAT is the ops queue,
+ * and the status test is what empties it. The detail object keeps describing an
+ * open ask after ops has moved the job, because the technician's app renders
+ * its "waiting for ops" banner from the same object and hides its own
+ * Cancel / Reschedule buttons while it is non-null. So a modal built on this
+ * shows the ask on a job the queue has already released, which is correct: it
+ * is telling the operator what the TECHNICIAN can currently see.
+ */
+export type AppRequestDetail = {
+  type?: string | null;
+  /* The appointment being ASKED for. Reschedules only; an IST wall-clock
+   * 'YYYY-MM-DD HH:mm' string, never a parsed instant. */
+  requestedDateTime?: string | null;
+  reason?: string | null;
+  requestedAt?: string | null;
+};
+
+/*
+ * Detail payload → the SAME AppRequest the list rows carry, so one renderer
+ * serves both. Returns null for absent/unknown kinds: a CRM deploy that meets
+ * an older backend (no `appRequest` key) or a future ask type it has never
+ * heard of must render nothing rather than a half-labelled banner.
+ */
+export function appRequestFromDetail(detail: AppRequestDetail | null | undefined): AppRequest | null {
+  const kind = text(detail?.type) as AppRequestKind | null;
+  if (!kind || !(kind in KIND)) return null;
+  return {
+    kind,
+    ...KIND[kind],
+    reason: text(detail?.reason),
+    raisedAt: text(detail?.requestedAt),
+    /* A cancellation proposes no new time; the server sends null, and a stray
+     * value on one must not render a "Requested:" line the ask never made. */
+    requestedFor: kind === 'reschedule' ? text(detail?.requestedDateTime) : null,
+  };
 }
