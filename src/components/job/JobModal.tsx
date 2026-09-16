@@ -90,10 +90,8 @@ import { parseIstDateTime } from '@/lib/format';
  * behaviour is identical whether the user enters via direct URL or the modal.
  */
 
-/* Moved to @/lib/utils (see its note) to break the JobModal → CancelJob →
-   JobModal cycle. Re-exported so every existing `from './JobModal'` still
-   resolves — there is still exactly one definition. */
-export { ST };
+/* ST moved to @/lib/utils (see its note) to break the JobModal → CancelJob →
+   JobModal cycle; JobModal now imports it like everyone else. */
 
 /*
  * PII masking helper — show only the first 4 digits of any mobile

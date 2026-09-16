@@ -58,7 +58,7 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
-import { formatDate, relativeTime, appointmentIsPast } from '@/lib/utils';
+import { formatDate, relativeTime, appointmentIsPast, ST } from '@/lib/utils';
 import { displaySlot } from '@/lib/job-slots';
 import { InfoTooltip } from '@/components/ui/tooltip';
 import { TablePagination, type TablePageSize } from '@/components/ui/table-pagination';
@@ -72,7 +72,7 @@ import { CallableMobile } from '@/components/calls/CallButton';
 import { AddRemarksDialog } from './AddRemarksDialog';
 import { useCancelJob } from './CancelJob';
 import { RescheduleDialog } from './RescheduleDialog';
-import { ST, ServicesTabBody } from './JobModal';
+import { ServicesTabBody } from './JobModal';
 import { JobContextPanel, type JobServiceRow } from './JobContextPanel';
 import {
   CandidateTable, PincodeListModal, type ScheduleCandidate,
