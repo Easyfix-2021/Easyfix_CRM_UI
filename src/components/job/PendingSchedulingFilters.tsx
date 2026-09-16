@@ -234,11 +234,20 @@ function PsField({ label, children }: { label: string; children: ReactNode }) {
  * which bucket is on screen.
  */
 export function PendingSchedulingFilters({
-  value, onChange, title,
+  value, onChange, title, hideOfferState,
 }: {
   value: PsFilters;
   onChange: (next: PsFilters) => void;
   title?: string;
+  /*
+   * Drop the Scheduling Status control. /my-orders promoted that one filter to
+   * a tab strip above the search card (All / Not offered / Offered-waiting /
+   * No takers), so leaving the select here would be a second, silently
+   * disagreeing copy of the same state. /jobs has no such strip and keeps it.
+   * The FILTER VALUE is untouched either way — psQueryParams still ships
+   * `offerState`, whichever surface set it.
+   */
+  hideOfferState?: boolean;
 }) {
   /*
    * Lookup-backed options. Shared `useLookup()` hook — session-cached +
@@ -274,8 +283,11 @@ export function PendingSchedulingFilters({
         <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{title}</div>
       )}
       {/* 5 controls: 2-up on small, 3-up on lg (the /jobs card is narrower than
-          the viewport), 5-up on xl so the bar stays one row on a wide screen. */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+          the viewport), 5-up on xl so the bar stays one row on a wide screen.
+          With the Scheduling Status select hoisted into a tab strip (/my-orders)
+          the remaining 4 go 4-up on xl instead of leaving a hole. */}
+      <div className={`grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 ${hideOfferState ? 'xl:grid-cols-4' : 'xl:grid-cols-5'}`}>
+        {!hideOfferState && (
         <PsField label="Scheduling Status">
           {/* Sub-state WITHIN the bucket, not a replacement for it: every row
               here is job_status = 0 by definition, so the only thing worth
@@ -288,6 +300,7 @@ export function PendingSchedulingFilters({
             placeholder="All Scheduling Statuses"
           />
         </PsField>
+        )}
         <PsField label="Service Category">
           {/* Single-select: the BE query validator types `categoryId` as a lone
               positive integer (unlike cityId / clientId, which accept a CSV),
