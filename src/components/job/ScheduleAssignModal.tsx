@@ -59,6 +59,7 @@ import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
 import { formatDate, relativeTime, appointmentIsPast, ST } from '@/lib/utils';
+import { formatJobAge, jobAgeTitle } from '@/lib/job-age';
 import { displaySlot } from '@/lib/job-slots';
 import { InfoTooltip } from '@/components/ui/tooltip';
 import { TablePagination, type TablePageSize } from '@/components/ui/table-pagination';
@@ -75,6 +76,7 @@ import { RescheduleDialog } from './RescheduleDialog';
 import { ServicesTabBody } from './JobModal';
 import { JobContextPanel, type JobServiceRow } from './JobContextPanel';
 import { ScheduleAssignUplifted } from './ScheduleAssignUplifted';
+import { JobRemarksView } from './JobRemarksView';
 
 /** Per-browser memory of the Current/Uplifted choice — see `view` below. */
 const SA_VIEW_KEY = 'crm_schedule_assign_view';
@@ -625,6 +627,18 @@ export function ScheduleAssignModal({
     if (topData?.job) setRetainedJob(topData.job);
   }, [topData]);
   const job = topData?.job ?? retainedJob;
+  /*
+   * Has the visit moved off the date the customer was first promised? Compared
+   * on the rendered DAY, not the raw timestamps: the two columns are stamped by
+   * different code paths, and it is the day that decides SDA. Drives the
+   * header's "Original …" line (Uplifted) and nothing else here.
+   */
+  const apptMovedInHeader = (() => {
+    const orig = probe?.original_appointment_date_time;
+    const now = job?.requested_date_time;
+    if (!orig || !now) return false;
+    return formatDate(orig).split(',')[0] !== formatDate(now).split(',')[0];
+  })();
 
   // Effective commit mode from the BE (mirrors its own assign-vs-offer gate).
   //   ON  → offer pool: multi-select, "Offer to N Technicians" → POST /offer.
@@ -930,10 +944,35 @@ export function ScheduleAssignModal({
             {probe?.job_reference_id && (
               <span className="text-sm font-normal text-ink-300">· {probe.job_reference_id}</span>
             )}
+            {/* The two numbers the console is judged on, in the header where
+                they are read before anything else: WHEN the visit is (with the
+                original date whenever it has moved) and HOW OLD the ticket is.
+                Uplifted only — Current's header is unchanged. */}
+            {view === 'uplifted' && (
+              <span className="ml-auto flex flex-wrap items-center gap-2">
+                <span className="rounded-md border px-2.5 py-1 text-left">
+                  <span className="block text-xs font-medium uppercase tracking-wide text-ink-300">Appointment</span>
+                  <strong className="block text-sm font-semibold">
+                    {job?.requested_date_time ? formatDate(job.requested_date_time) : 'Not set'}
+                  </strong>
+                  <span className="block text-xs font-normal text-ink-300">
+                    {apptMovedInHeader
+                      ? <>Original <span className="font-semibold text-warning-strong">{formatDate(probe?.original_appointment_date_time)}</span></>
+                      : 'Original · not changed'}
+                  </span>
+                </span>
+                <span className="rounded-md border px-2.5 py-1 text-left">
+                  <span className="block text-xs font-medium uppercase tracking-wide text-ink-300">Job age</span>
+                  <strong className="block text-sm font-semibold tabular-nums" title={job ? jobAgeTitle(job) : undefined}>
+                    {job ? formatJobAge(job) : '—'}
+                  </strong>
+                </span>
+              </span>
+            )}
             {/* Layout switch, not a mode switch: both tabs act on the same job
                 with the same footer. Sits in the title row so it is the first
                 thing seen and costs no vertical space of its own. */}
-            <span className="ml-auto mr-8 inline-flex items-center gap-1 rounded-md border bg-muted/50 p-0.5">
+            <span className={`${view === 'uplifted' ? '' : 'ml-auto'} mr-8 inline-flex items-center gap-1 rounded-md border bg-muted/50 p-0.5`}>
               {(['current', 'uplifted'] as const).map((v) => (
                 <button
                   key={v}
@@ -974,6 +1013,7 @@ export function ScheduleAssignModal({
               implementation of every edit. */}
           {view === 'uplifted' && (
             <ScheduleAssignUplifted
+              jobId={jobId}
               job={job}
               probe={probe}
               offers={offers.data?.items ?? null}
@@ -981,6 +1021,20 @@ export function ScheduleAssignModal({
               offerable={offerable}
               onReschedule={() => setRescheduleOpen(true)}
               onPickTechnicians={() => techRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+              /*
+               * The SAME three handlers JobContextPanel gets in the Current tab
+               * — the editors move, the code path behind them does not. Each is
+               * withheld on a read-only open by the identical `offerable` gate.
+               */
+              onSaveDetails={jobId != null && offerable ? async (patch) => {
+                await api.patch(`/admin/jobs/${jobId}`, patch);
+                reRank();
+              } : undefined}
+              onAddressSaved={jobId != null && offerable ? reRank : undefined}
+              onEditServices={jobId != null && offerable ? () => {
+                invalidateFetch((k) => k === `/admin/jobs/${jobId}`);
+                setServicesOpen(true);
+              } : undefined}
               apiBase={SA_API_BASE}
             />
           )}
@@ -991,17 +1045,15 @@ export function ScheduleAssignModal({
               veil are Schedule-&-Assign-only, wired via the flags below. The
               collapsible Job Details starts expanded and Remarks starts collapsed —
               byte-for-byte the same as before the extraction. */}
+          {/* Current tab only. Uplifted carries customer, client, address,
+              services and notes in its own cards — with the same editors wired
+              to the same handlers — and puts the remarks thread at the BOTTOM
+              of the page, below the technician table (see after section (c)). */}
+          {view === 'current' && (
           <JobContextPanel
             job={job}
             jobId={jobId}
             remarksReloadKey={remarksReloadKey}
-            /*
-             * Uplifted already states customer, client, address and the
-             * appointment in its cards, so the panel opens COLLAPSED there and
-             * serves as the editor drawer (services / notes / address) plus the
-             * remarks thread. Current is unchanged: details expanded.
-             */
-            defaultDetailsOpen={view === 'current'}
             showReschedule
             onReschedule={() => setRescheduleOpen(true)}
             rescheduling={rescheduling}
@@ -1046,6 +1098,7 @@ export function ScheduleAssignModal({
               setServicesOpen(true);
             } : undefined}
           />
+          )}
 
           {/* ───────── Offer history — live + rejected + expired — offer mode only ─────────
               Current tab only: Uplifted carries the same rows, compacted, in its
@@ -1187,6 +1240,14 @@ export function ScheduleAssignModal({
             <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
               <h3 className="text-sm font-semibold flex items-center gap-1.5">
                 {showingSearch ? 'Search Results' : 'Top 10 Technicians'}
+                {/* Uplifted marks the section the job is waiting on, so an
+                    operator scrolling a long console can see where the work is.
+                    Only while an offer can actually be made. */}
+                {view === 'uplifted' && offerable && (
+                  <span className="rounded-full bg-primary px-2 py-0.5 text-xs font-semibold uppercase tracking-wide text-primary-foreground">
+                    Needed now
+                  </span>
+                )}
                 {showingSearch && (
                   <InfoTooltip label="What you can search by">
                     <div className="space-y-2">
@@ -1393,6 +1454,15 @@ export function ScheduleAssignModal({
               </>
             )}
           </section>
+
+          {/* ───────── Comments and remarks — Uplifted, last on the page ─────────
+              Deliberately BELOW the technician table: on this screen the thread
+              is reference material for the decision above it, not the first
+              thing to read. Current keeps it inside JobContextPanel, where it
+              has always been. Same component, same fetch, same reload key. */}
+          {view === 'uplifted' && (
+            <JobRemarksView key={remarksReloadKey} jobId={jobId} />
+          )}
 
         </div>
 
