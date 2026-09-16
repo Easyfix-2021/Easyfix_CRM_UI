@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Send, Clock, AlertTriangle, CalendarClock, User, Building2, Wrench, MapPin,
-  Image as ImageIcon, Video, Box, FileText, Pencil, ChevronLeft, ChevronRight,
+  Image as ImageIcon, Video, Box, FileText, Pencil, ChevronLeft, ChevronRight, Plus,
 } from 'lucide-react';
 import type { JobOffer } from '@/lib/api';
 import { formatDate, relativeTime, appointmentIsPast } from '@/lib/utils';
@@ -194,6 +194,9 @@ export function ScheduleAssignUplifted({
   /* Past appointment = the job is already late, which moves Reschedule up into
      the action strip. Same predicate the offer button is disabled by. */
   const apptPast = appointmentIsPast(appointment);
+  /* Services drive the Top-10 ranking and one is mandatory — see the strip. */
+  const noService = !!job && (job.services ?? []).length === 0;
+  const blocked = noService || apptPast;
 
   /*
    * TAT left = the client's window minus the job's age. Uses the SAME ageSecs
@@ -261,31 +264,47 @@ export function ScheduleAssignUplifted({
         * Reschedule first; offering comes back the moment there is a future
         * time to offer.
         */}
-      <div className={`flex flex-wrap items-center gap-3 rounded-md border px-3 py-2 ${apptPast ? 'border-urgent bg-urgent-tint text-urgent-strong' : tone.wrap}`}>
-        <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-md ${apptPast ? 'bg-destructive text-destructive-foreground' : tone.icon}`}>
-          {apptPast ? <AlertTriangle className="h-4 w-4" /> : <tone.Icon className="h-4 w-4" />}
+      {/*
+        * BLOCKERS OUTRANK THE BUCKET, in the order they have to be fixed:
+        *   1. no service — a job with nothing to do cannot be ranked (the Top-10
+        *      matches technicians on the job's services) or offered, and one
+        *      service is mandatory, so this is the first thing to put right;
+        *   2. a past appointment — the server refuses to offer it.
+        * Only when neither applies does the strip describe the offer bucket.
+        */}
+      <div className={`flex flex-wrap items-center gap-3 rounded-md border px-3 py-2 ${blocked ? 'border-urgent bg-urgent-tint text-urgent-strong' : tone.wrap}`}>
+        <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-md ${blocked ? 'bg-destructive text-destructive-foreground' : tone.icon}`}>
+          {blocked ? <AlertTriangle className="h-4 w-4" /> : <tone.Icon className="h-4 w-4" />}
         </span>
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold">
-            {apptPast ? 'Reschedule first — this appointment has passed' : tone.title}
+            {noService ? 'Add a service first — this job has none'
+              : apptPast ? 'Reschedule first — this appointment has passed'
+                : tone.title}
           </p>
           <p className="text-xs opacity-90">
-            {apptPast
-              ? <>The appointment was {appointment ? formatDate(appointment) : 'not set'}. Technicians can’t be offered a job whose time has gone — set a new date and time, then offer.</>
-              : <>
-                {bucket === 'unallocated' && <>Appointment {appointment ? formatDate(appointment) : 'not set'} · first technician to accept gets the job</>}
-                {bucket === 'offered' && <>{live.length} of {items.length} still to reply · {closed.length} expired or rejected</>}
-                {bucket === 'no_takers' && <>Expired and rejected: {closed.length} · widen the search or reschedule with the customer</>}
-              </>}
+            {noService
+              ? <>Every job needs at least one service. Technicians are matched on it, so it can’t be offered until one is added.</>
+              : apptPast
+                ? <>The appointment was {appointment ? formatDate(appointment) : 'not set'}. Technicians can’t be offered a job whose time has gone — set a new date and time, then offer.</>
+                : <>
+                  {bucket === 'unallocated' && <>Appointment {appointment ? formatDate(appointment) : 'not set'} · first technician to accept gets the job</>}
+                  {bucket === 'offered' && <>{live.length} of {items.length} still to reply · {closed.length} expired or rejected</>}
+                  {bucket === 'no_takers' && <>Expired and rejected: {closed.length} · widen the search or reschedule with the customer</>}
+                </>}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {/* Reschedule lives in ONE place at a time (2026-09-16): up here while
-              the appointment is in the past — a missed visit is the action, so
-              it belongs beside the alert — and otherwise under the Appointment
-              tile, beside the date it changes. Two copies invited the question
-              of whether they did the same thing. */}
-          {apptPast ? (
+          {/* One primary action, matching the blocker being named. Reschedule
+              appears here only while the appointment is past; otherwise it
+              lives under the Appointment tile. */}
+          {noService ? (
+            canEditServices && (
+              <button type="button" onClick={onEditServices} className="rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground hover:opacity-90">
+                <Plus className="mr-1 inline h-3.5 w-3.5" />Add service
+              </button>
+            )
+          ) : apptPast ? (
             <button type="button" onClick={onReschedule} className="rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground hover:opacity-90">
               <CalendarClock className="mr-1 inline h-3.5 w-3.5" />Reschedule now
             </button>
@@ -390,12 +409,29 @@ export function ScheduleAssignUplifted({
           </div>
         </div>
 
-        {/* The five-fact strip that used to sit here is gone (2026-09-16). It
-            was a grey row of unrelated facts under the tiles, and every one of
-            them has a home that answers a question someone is already asking
-            there: Booked by is the timeline's Booked step, Payment belongs with
-            the customer who pays, Job type with the services, and the two
-            managers with the client and city they come from. */}
+        {/*
+          * The job's flat facts, one line under the tiles. Removed once on the
+          * theory that each fact belonged in a card, and restored at ops'
+          * request: this is the line they scan to place a job at a glance, and
+          * scattering it across three cards made that a search. The cards no
+          * longer repeat these, so every fact is stated exactly once.
+          */}
+        <div className="flex flex-wrap gap-x-6 gap-y-1 border-t bg-muted/40 px-3 py-2 text-xs">
+          <span><span className="text-muted-foreground">Job type </span>{job?.job_type || '—'}</span>
+          <span><span className="text-muted-foreground">Booked by </span>{job?.created_by_name || '—'}</span>
+          {/* tbl_job.collected_by through the SAME helper the Current tab's Job
+              Details grid uses — NOT the BE's `payment_mode`, derived from
+              paid_by alone and "Not Set" on ~96% of jobs. The two tabs must
+              never disagree about who pays. */}
+          <span><span className="text-muted-foreground">Payment </span>{collectedByText(job?.collected_by) ?? 'Not set'}</span>
+          <span><span className="text-muted-foreground">Project manager </span>{job?.project_manager_name || '—'}</span>
+          {/* Inherited from the address city's owner (tbl_city.state_user). A
+              blank means that city has no owner set, not that the console failed. */}
+          <span>
+            <span className="text-muted-foreground">Zonal manager </span>
+            {job?.zonal_manager_name || <span className="text-muted-foreground" title="tbl_city.state_user is not set for this job's city">Not set for this city</span>}
+          </span>
+        </div>
       </div>
 
       {/* ── Who it is for, and who has it ── */}
@@ -408,11 +444,6 @@ export function ScheduleAssignUplifted({
               ? <CallableMobile jobId={job?.job_id} mobile={job.customer_mob_no} />
               : '—'}
           />
-          {/* tbl_job.collected_by through the SAME helper the Current tab's Job
-              Details grid uses. NOT the BE's `payment_mode`, which is derived
-              from paid_by alone and reads "Not Set" on ~96% of jobs — the two
-              tabs must never disagree about who pays. */}
-          <Row label="Payment" value={collectedByText(job?.collected_by) ?? 'Not set'} />
           <div className="mt-2 rounded-md border bg-muted/40 px-2.5 py-2 text-xs">
             <div className="flex items-start gap-1.5">
               <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -446,16 +477,6 @@ export function ScheduleAssignUplifted({
               : '—'}
           />
           <Row label="Job ref" value={probe?.job_reference_id || '—'} />
-          {/* Both names are INHERITED, not job columns: the PM from the client's
-              vertical mapping, the ZM from the address city's owner — so they
-              belong beside the client, not in a strip of loose facts. A blank ZM
-              means that city has no owner set, not that the console failed. */}
-          <Row label="Project manager" value={job?.project_manager_name || '—'} />
-          <Row
-            label="Zonal manager"
-            value={job?.zonal_manager_name
-              || <span className="font-normal text-muted-foreground" title="tbl_city.state_user is not set for this job's city">Not set for this city</span>}
-          />
         </Card>
 
         <Card icon={<Wrench className="h-3.5 w-3.5" />} title="Technician">
@@ -534,7 +555,15 @@ export function ScheduleAssignUplifted({
           ) : undefined}
         >
           {!job?.services?.length ? (
-            <p className="text-xs text-muted-foreground">No services on this job.</p>
+            <div className="rounded-md border border-urgent bg-urgent-tint px-3 py-2 text-xs text-urgent-strong">
+              <p className="font-medium">No service on this job.</p>
+              <p>At least one service is required before it can be offered.</p>
+              {canEditServices && (
+                <button type="button" onClick={onEditServices} className="mt-1.5 rounded-md bg-primary px-2.5 py-1 font-medium text-primary-foreground hover:opacity-90">
+                  <Plus className="mr-1 inline h-3.5 w-3.5" />Add service
+                </button>
+              )}
+            </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
@@ -555,7 +584,7 @@ export function ScheduleAssignUplifted({
                       </td>
                       <td className="py-1 pr-3">{s.service_type || '—'}</td>
                       <td className="py-1 pr-3 text-right tabular-nums">{s.quantity ?? '—'}</td>
-                      <td className="py-1 text-right tabular-nums">{s.total_charge == null ? '—' : `₹${Number(s.total_charge).toLocaleString('en-IN')}`}</td>
+                      <td className="py-1 text-right tabular-nums">{lineTotal(s) == null ? '—' : `₹${Number(lineTotal(s)).toLocaleString('en-IN')}`}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -563,7 +592,7 @@ export function ScheduleAssignUplifted({
                   <tr className="border-t font-semibold">
                     <td className="py-1 pr-3" colSpan={3}>Total</td>
                     <td className="py-1 text-right tabular-nums">
-                      ₹{job.services.reduce((n, s) => n + Number(s.total_charge ?? 0), 0).toLocaleString('en-IN')}
+                      ₹{job.services.reduce((n, s) => n + Number(lineTotal(s) ?? 0), 0).toLocaleString('en-IN')}
                     </td>
                   </tr>
                 </tfoot>
@@ -646,6 +675,20 @@ function MediaCard({ media }: {
       <p className="mt-1.5 text-xs text-muted-foreground">Attached at booking · technicians see these in the app.</p>
     </Card>
   );
+}
+
+/*
+ * A service line's amount = price × quantity. tbl_job_services.total_charge is
+ * the ONE-UNIT price by design (every writer stores it that way; total_cost is
+ * the line total), so showing it as the line amount made a qty-2 line read
+ * ₹1,000 here and ₹2,000 in Edit Services. Prefer the server's `line_total`;
+ * fall back to unit × qty for a payload that predates it.
+ */
+function lineTotal(s: JobServiceRow & { line_total?: number | null; unit_price?: number | null }): number | null {
+  if (s.line_total != null) return Number(s.line_total);
+  const unit = s.unit_price ?? s.total_charge;
+  if (unit == null) return null;
+  return Number(unit) * Number(s.quantity ?? 1);
 }
 
 /* Seconds → "93h 07m" / "2d 3h" in the same compact units as the Age column. */
