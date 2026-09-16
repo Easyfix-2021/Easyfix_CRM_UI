@@ -206,8 +206,10 @@ EXPOSE 5180
 ARG GIT_COMMIT=unknown
 ENV GIT_COMMIT=${GIT_COMMIT}
 
+# /healthcheck, not /login: a static JSON route (no React render) every 30s.
+# Deployed hosts override this with the compose healthcheck — keep them in step.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
-    CMD wget -qO- http://127.0.0.1:5180/login -O /dev/null || exit 1
+    CMD wget -qO- http://127.0.0.1:5180/healthcheck -O /dev/null || exit 1
 
 ENTRYPOINT ["/sbin/tini", "--"]
 # server.js comes from the standalone output. It's the production server

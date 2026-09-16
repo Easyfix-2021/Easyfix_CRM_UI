@@ -58,9 +58,9 @@ jobs:
       # against THIS repo's history. In a depth-1 clone the only commit is HEAD,
       # so every constant's history is exactly its current value and the check
       # cannot fire — a clean 0 that means nothing. 408 commits, so it is free.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with: { node-version: 20, cache: 'npm' }
       - run: npm ci
 
