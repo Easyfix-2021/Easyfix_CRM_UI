@@ -668,6 +668,8 @@ function JobNotesCard({ job, canEdit, onSave }: {
   const [desc, setDesc] = useState('');
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
+  const descRef = useRef<HTMLTextAreaElement | null>(null);
+  const notesRef = useRef<HTMLTextAreaElement | null>(null);
   // Re-seed when the job payload changes (open, re-rank, reschedule) — but
   // never mid-edit: the key is the SERVER's value pair, so a re-render with the
   // same values leaves a half-typed note alone.
@@ -685,6 +687,14 @@ function JobNotesCard({ job, canEdit, onSave }: {
     setSaving(true);
     try {
       await onSave({ job_desc: desc, efr_special_notes: notes });
+      /*
+       * Back to the START of both boxes once saved. They are fixed-height and
+       * scroll, so after editing the end of a long description the box was left
+       * showing its last lines — and the operator re-reading "what did I just
+       * save" landed mid-paragraph. The top is where a description is read from.
+       */
+      if (descRef.current) descRef.current.scrollTop = 0;
+      if (notesRef.current) notesRef.current.scrollTop = 0;
       showToast({ variant: 'success', message: 'Job Notes Saved.' });
     } catch (e) {
       showToast({ variant: 'error', message: formatApiError(e, { fallback: 'Failed to save job notes' }) });
@@ -713,6 +723,7 @@ function JobNotesCard({ job, canEdit, onSave }: {
           <label htmlFor="up-jd" className="text-xs font-medium">Job description</label>
           <textarea
             id="up-jd"
+            ref={descRef}
             value={desc}
             maxLength={5000}
             disabled={!canEdit || saving}
@@ -727,6 +738,7 @@ function JobNotesCard({ job, canEdit, onSave }: {
           <label htmlFor="up-si" className="text-xs font-medium">Special instructions for technician</label>
           <textarea
             id="up-si"
+            ref={notesRef}
             value={notes}
             maxLength={2000}
             disabled={!canEdit || saving}
