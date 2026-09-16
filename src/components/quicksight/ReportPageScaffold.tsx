@@ -78,6 +78,13 @@ export type ReportPageScaffoldProps = {
   onDownload?: () => void;
   downloading?: boolean;
   /*
+   * Optional extra header buttons (e.g. Supply Gap's "New Supply Request"),
+   * rendered to the left of the DownloadButton. Unlike Download they are NOT
+   * disabled on empty / error states — creating something is still valid when
+   * the current report has no rows.
+   */
+  headerActions?: ReactNode;
+  /*
    * The successful report body (table, grid, KPI cards…). Rendered only
    * when not loading / empty / error / denied.
    */
@@ -95,6 +102,7 @@ export function ReportPageScaffold({
   isEmpty,
   onDownload,
   downloading = false,
+  headerActions,
   children,
 }: ReportPageScaffoldProps) {
   // Export only makes sense when there's real data on screen.
@@ -126,14 +134,19 @@ export function ReportPageScaffold({
             <p className="text-sm text-muted-foreground">{subtitle}</p>
           )}
         </div>
-        {onDownload && (
-          <DownloadButton
-            onClick={onDownload}
-            disabled={!canDownload}
-            downloading={downloading}
-            label="Download XLSX"
-            title={canDownload ? undefined : 'Nothing to export yet'}
-          />
+        {(headerActions || onDownload) && (
+          <div className="flex flex-wrap items-center gap-2">
+            {headerActions}
+            {onDownload && (
+              <DownloadButton
+                onClick={onDownload}
+                disabled={!canDownload}
+                downloading={downloading}
+                label="Download XLSX"
+                title={canDownload ? undefined : 'Nothing to export yet'}
+              />
+            )}
+          </div>
         )}
       </div>
 
