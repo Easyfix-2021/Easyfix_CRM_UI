@@ -22,7 +22,8 @@ import { CustomerSubmissionPanel } from './CustomerSubmissionPanel';
 import { AddRemarksDialog } from './AddRemarksDialog';
 import { useCancelJob } from './CancelJob';
 import { TechRequestActions, APP_REQUEST_ACTION } from './TechRequestActions';
-import { appRequestFromDetail, pendingRescheduleRequest, type AppRequest, type AppRequestDetail } from '@/lib/job-app-request';
+import { appRequestFromDetail, pendingRescheduleRequest, rescheduleRequestPrefill, type AppRequestDetail } from '@/lib/job-app-request';
+import { RescheduleRequestedText } from './RescheduleRequestedText';
 import { BillingChargesTab } from './BillingChargesTab';
 // Audited reschedule dialog (PATCH /admin/jobs/:id/reschedule → job.reschedule:
 // offer-expiry + scheduling_history). Kept aliased for a descriptive name;
@@ -43,7 +44,7 @@ import { resolveParentAddressId, buildJobAddressPayload } from '@/lib/job-addres
 // (src/lib/job-slots.ts); never re-declare a slot array at a call site.
 import { BOOKING_BANDS, slotChoicesFor, inferSlotFromTime, bandForTime, isKnownBand, canonicalSlot, displaySlot, AFTER_HOURS_SLOT } from '@/lib/job-slots';
 import { useLookup } from '@/lib/use-lookup';
-import { formatDate, formatEasyfixerName, ST, statusLabel, statusTone, toIstClockTime } from '@/lib/utils';
+import { formatDate, formatEasyfixerName, istNowWallClock, ST, statusLabel, statusTone, toIstClockTime } from '@/lib/utils';
 import { maskMobile, formatServiceAddress, INDIAN_MOBILE_REGEX, INDIAN_MOBILE_ERROR, isValidIndianMobile, normalizeMobileDigits } from '@/lib/format';
 import { formatJobAge, jobAgeTitle } from '@/lib/job-age';
 
@@ -999,6 +1000,12 @@ function ActionBar({ job, jobId, onChanged }: {
       <ApptRescheduleDialog
         open={rescheduleOpen}
         jobId={jobId}
+        // An open technician reschedule ask pre-fills its (future) time + a
+        // remarks line; the reason stays for ops to pick.
+        {...rescheduleRequestPrefill(pendingRescheduleRequest({
+          job_status: job.job_status,
+          appRequest: job.appRequest as AppRequestDetail | null | undefined,
+        }), istNowWallClock())}
         onClose={() => setRescheduleOpen(false)}
         onDone={() => { setRescheduleOpen(false); onChanged(); }}
       />
@@ -1817,25 +1824,6 @@ export function JobAddressEditDialog({ job, onClose, onSaved }: {
  * trail (the legacy CRM wrote one row per reschedule). Falls back to
  * empty list when no rows or the endpoint isn't reachable.
  */
-/*
- * "08 Jul 2026, 10:30 am · 9AM to 12PM · Reason: Customer Busy" — the
- * technician's reschedule ask as BOTH schedule blocks print it (this modal's
- * Timeline, and JobContextPanel's row in Reassign Technician). displaySlot with
- * no stored slot derives the band from the asked-for hour; formatDate reads the
- * zone-less value as IST, so there is no conversion to double up.
- */
-export function RescheduleRequestedText({ request }: { request: AppRequest }) {
-  const at = request.requestedFor ?? '';
-  const slot = displaySlot(at, null);
-  return (
-    <>
-      {formatDate(at)}
-      {slot && <> · {slot}</>}
-      {request.reason && <> · Reason: {request.reason}</>}
-    </>
-  );
-}
-
 /*
  * JobTechnicianRequest — the technician's own pending Cancel / Reschedule ask,
  * on the Summary tab beside the customer one.
