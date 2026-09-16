@@ -38,7 +38,7 @@
 
 import { useEffect, useState } from 'react';
 import {
-  MapPin, Calendar, Loader2, Clock, ChevronDown, Pencil, AlertTriangle,
+  MapPin, Calendar, CalendarClock, Loader2, Clock, ChevronDown, Pencil, AlertTriangle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { showToast } from '@/components/ui/toast';
@@ -54,7 +54,8 @@ import { JobRemarksView } from './JobRemarksView';
 /* The SAME dialog the job detail modal and the Unconfirmed transaction view
    open, so Edit Address behaves identically wherever ops reach it. Importing
    it here does NOT create a cycle: JobModal has no import of this panel. */
-import { JobAddressEditDialog } from './JobModal';
+import { JobAddressEditDialog, RescheduleRequestedText } from './JobModal';
+import type { AppRequest } from '@/lib/job-app-request';
 
 export type JobServiceRow = {
   service_name: string | null;
@@ -174,6 +175,7 @@ export function JobContextPanel({
   showReschedule = false,
   onReschedule,
   rescheduling = false,
+  rescheduleRequest = null,
   pastBlocksAction = false,
   onSaveDetails,
   onAddressSaved,
@@ -192,6 +194,9 @@ export function JobContextPanel({
   onReschedule?: () => void;
   /** Schedule & Assign only — veils the schedule row while a reschedule refetch runs. */
   rescheduling?: boolean;
+  /** The technician's open reschedule ask on this Pending to Start job (from
+      lib/job-app-request pendingRescheduleRequest). null ⇒ no row renders. */
+  rescheduleRequest?: AppRequest | null;
   /*
    * Opt-in EDITING of Job Description + Additional Comments. Absent (the
    * default) ⇒ both render read-only exactly as before — the panel is shared
@@ -529,6 +534,17 @@ export function JobContextPanel({
                   </Button>
                 )}
               </div>
+              {/* The technician's reschedule ASK (time, slot, reason), directly
+                  under the live appointment so ops can compare the two. */}
+              {!rescheduling && rescheduleRequest && (
+                <div className="mt-2 flex items-start gap-2 rounded-md border border-warning/30 bg-warning-tint p-2 text-xs text-warning-strong">
+                  <CalendarClock className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span>
+                    <b>Reschedule Requested:</b>{' '}
+                    <RescheduleRequestedText request={rescheduleRequest} />
+                  </span>
+                </div>
+              )}
               {/*
                 * Past-appointment notice — WORDED BY WHAT THE HOST MODAL CAN DO.
                 *

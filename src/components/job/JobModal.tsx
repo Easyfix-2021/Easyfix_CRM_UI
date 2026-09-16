@@ -22,7 +22,7 @@ import { CustomerSubmissionPanel } from './CustomerSubmissionPanel';
 import { AddRemarksDialog } from './AddRemarksDialog';
 import { useCancelJob } from './CancelJob';
 import { TechRequestActions, APP_REQUEST_ACTION } from './TechRequestActions';
-import { appRequestFromDetail, type AppRequestDetail } from '@/lib/job-app-request';
+import { appRequestFromDetail, pendingRescheduleRequest, type AppRequest, type AppRequestDetail } from '@/lib/job-app-request';
 import { BillingChargesTab } from './BillingChargesTab';
 // Audited reschedule dialog (PATCH /admin/jobs/:id/reschedule → job.reschedule:
 // offer-expiry + scheduling_history). Kept aliased for a descriptive name;
@@ -1171,6 +1171,10 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
   // Gates the inline Description pencil (Summary tab) — same isJobEdit key
   // the old ActionBar "Edit Description" button used.
   const canEditJob = actionFlags(me, ['isJobEdit']).isJobEdit;
+  const rescheduleAsk = pendingRescheduleRequest({
+    job_status: job.job_status,
+    appRequest: job.appRequest as AppRequestDetail | null | undefined,
+  });
   /*
    * Whitelist of recognised tab values so a malformed `?tab=` URL can't
    * leave the Tabs widget in an unrenderable state (no panel matches).
@@ -1493,6 +1497,13 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
              * contradict itself — "Requested: 5:30 AM" over "Time slot: 3pm to 7pm".
              */
             ['Time slot', displaySlot(job.requested_date_time, job.time_slot) || null],
+            // The technician's open reschedule ask (Pending to Start only),
+            // highlighted directly under the live Requested / Time slot pair.
+            ...(rescheduleAsk ? [['Reschedule Requested', (
+              <span key="reschedule-ask" className="inline-block break-normal rounded-md border border-warning/30 bg-warning-tint px-2 py-0.5 text-warning-strong">
+                <RescheduleRequestedText request={rescheduleAsk} />
+              </span>
+            )] as [string, unknown]] : []),
             ['Check-in',  formatDate(job.checkin_date_time  as string)],
             ['Check-out', formatDate(job.checkout_date_time as string)],
             ['Cancelled', formatDate(job.cancel_date_time   as string)],
@@ -1806,6 +1817,25 @@ export function JobAddressEditDialog({ job, onClose, onSaved }: {
  * trail (the legacy CRM wrote one row per reschedule). Falls back to
  * empty list when no rows or the endpoint isn't reachable.
  */
+/*
+ * "08 Jul 2026, 10:30 am · 9AM to 12PM · Reason: Customer Busy" — the
+ * technician's reschedule ask as BOTH schedule blocks print it (this modal's
+ * Timeline, and JobContextPanel's row in Reassign Technician). displaySlot with
+ * no stored slot derives the band from the asked-for hour; formatDate reads the
+ * zone-less value as IST, so there is no conversion to double up.
+ */
+export function RescheduleRequestedText({ request }: { request: AppRequest }) {
+  const at = request.requestedFor ?? '';
+  const slot = displaySlot(at, null);
+  return (
+    <>
+      {formatDate(at)}
+      {slot && <> · {slot}</>}
+      {request.reason && <> · Reason: {request.reason}</>}
+    </>
+  );
+}
+
 /*
  * JobTechnicianRequest — the technician's own pending Cancel / Reschedule ask,
  * on the Summary tab beside the customer one.
