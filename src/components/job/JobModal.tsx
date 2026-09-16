@@ -1934,6 +1934,7 @@ type CustomerRequest = {
   reason?: string | null;
   remarks?: string | null;
   preferred_datetime?: string | null;
+  preferred_slot?: string | null;     // booking band the customer picked; NULL on older rows
   request_status: 'pending' | 'actioned' | 'dismissed';
   created_at?: string | null;
 };
@@ -1951,6 +1952,24 @@ function JobCustomerRequests({ jobId, jobStatus, onJobChanged }: { jobId: number
   // The reschedule request the operator chose to APPLY — opens the audited
   // reschedule dialog pre-filled from the request. null = dialog closed.
   const [applyReq, setApplyReq] = useState<CustomerRequest | null>(null);
+  /*
+   * The requested time, seeded only while still in the FUTURE — the same rule
+   * as the technician-ask prefill (rescheduleRequestPrefill). A customer slot
+   * start that has already gone today (9AM to 12PM applied at 10:30) cannot be
+   * submitted, and the hour-frame picker hides past hours, so it would sit there
+   * invisible yet enabling Reschedule. The dialog's slot hint still tells ops
+   * which band to pick within.
+   *
+   * Memoised on the REQUEST, not recomputed per render: the dialog resets every
+   * field when initialDateTime changes, so a value that flipped to '' as the
+   * clock passed the slot start would wipe the reason + remarks mid-edit.
+   */
+  const applyAt = useMemo(() => {
+    const at = applyReq?.preferred_datetime
+      ? String(applyReq.preferred_datetime).slice(0, 16).replace(' ', 'T')
+      : '';
+    return at && at >= istNowWallClock() ? at : '';
+  }, [applyReq]);
 
   const rows: CustomerRequest[] = useMemo(
     () => (Array.isArray(data) ? data : (data?.items ?? [])),
@@ -2001,7 +2020,7 @@ function JobCustomerRequests({ jobId, jobStatus, onJobChanged }: { jobId: number
                   {r.reason ? <div><span className="font-medium">Reason:</span> {r.reason}</div> : null}
                   {r.remarks ? <div><span className="font-medium">Remarks:</span> {r.remarks}</div> : null}
                   {!isCancel && r.preferred_datetime ? (
-                    <div><span className="font-medium">Preferred:</span> {formatDate(r.preferred_datetime)}</div>
+                    <div><span className="font-medium">Preferred:</span> {formatDate(r.preferred_datetime)}{r.preferred_slot ? ` (${r.preferred_slot})` : ''}</div>
                   ) : null}
                   {r.created_at ? (
                     <div className="text-ink-500">Requested {formatDate(r.created_at)}</div>
@@ -2062,11 +2081,8 @@ function JobCustomerRequests({ jobId, jobStatus, onJobChanged }: { jobId: number
       <ApptRescheduleDialog
         open={!!applyReq}
         jobId={applyReq ? jobId : null}
-        initialDateTime={
-          applyReq?.preferred_datetime
-            ? String(applyReq.preferred_datetime).slice(0, 16).replace(' ', 'T')
-            : ''
-        }
+        initialDateTime={applyAt}
+        requestedSlot={applyReq?.preferred_slot ?? undefined}
         initialRemarks={
           applyReq
             ? `Customer requested reschedule${applyReq.reason ? `: ${applyReq.reason}` : ''}${applyReq.remarks ? ` — ${applyReq.remarks}` : ''}`

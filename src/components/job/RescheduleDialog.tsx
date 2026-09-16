@@ -41,7 +41,7 @@ function istNowLocalInput(): string {
  * The reason list comes from GET /admin/jobs/reschedule-reasons — query-agnostic
  * here; whatever rows that endpoint returns are what the dropdown shows.
  */
-export function RescheduleDialog({ open, jobId, onClose, onDone, initialDateTime, initialRemarks }: {
+export function RescheduleDialog({ open, jobId, onClose, onDone, initialDateTime, initialRemarks, requestedSlot }: {
   open: boolean;
   jobId: number | null;
   onClose: () => void;
@@ -53,6 +53,10 @@ export function RescheduleDialog({ open, jobId, onClose, onDone, initialDateTime
   // chosen so the audit trail is correct).
   initialDateTime?: string;
   initialRemarks?: string;
+  // The booking band the customer picked on the magic-link form
+  // ('12PM to 3PM'). Shown under the picker so ops read the customer's WINDOW,
+  // not just the band-start hour pre-filled above. Absent on older requests.
+  requestedSlot?: string;
 }) {
   const reasons = useFetch<RescheduleReason[]>(
     open ? '/admin/jobs/reschedule-reasons' : null,
@@ -134,6 +138,11 @@ export function RescheduleDialog({ open, jobId, onClose, onDone, initialDateTime
                 the only off-grid times left are historical ones, which the
                 dropdown still surfaces as a "(stored)" row. */}
             <DateTimeSlotPicker min={minLocal} value={dateTime} onChange={setDateTime} granularity="hour-frame" />
+            {requestedSlot && (
+              <p className="text-xs text-muted-foreground">
+                Customer Requested Slot: <span className="font-medium text-foreground">{requestedSlot}</span>
+              </p>
+            )}
             <SlotAdvisory
               best={rec.best}
               attendanceKnown={rec.attendanceKnown}

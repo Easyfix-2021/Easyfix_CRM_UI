@@ -11,10 +11,10 @@
  *                "Custom Time…" row pinned at the BOTTOM that reveals a free
  *                `type="time"` input for any-minute entry (per ops: "30-min
  *                options only + custom input from the bottom"). Used where the
- *                surface only REQUESTS a time that someone else will commit —
- *                today that is the customer's preferred-time field on the public
- *                magic-link form, which POSTs `preferred_datetime` to
- *                /reschedule-request and writes no job column.
+ *                surface only REQUESTS a time that someone else will commit.
+ *                (The public magic-link Reschedule form USED to be one; it now
+ *                offers daytime booking-band chips instead, because customers
+ *                picked 8 AM / after-7 PM times ops could not commit to.)
  *                ⚠ The CRM's own RescheduleDialog is NOT one of these: it writes
  *                requested_date_time / requested_time / time_slot directly, so
  *                it uses 'hour-frame'.
