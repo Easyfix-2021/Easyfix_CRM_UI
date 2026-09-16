@@ -424,8 +424,14 @@ function TransactionsTab({ clientId }: { clientId: string }) {
 /*
  * CreateTransactionDialog — minimal form mapped to POST /admin/finance/transactions.
  * Joi schema requires { clientId, transactionType, amount }; description + jobId
- * optional. transactionType is a legacy code (1=Debit, 2=Credit, etc.); we expose
- * the most common 2 codes + leave others passable via the raw number input.
+ * optional.
+ *
+ * transactionType carries the SIGN and the amount is always positive: 1 = Debit
+ * lowers the client's balance, 2 = Credit raises it. Those are the only two the
+ * ledger defines — across 330,844 rows on QA there is not one row of any other
+ * type, and the backend now rejects anything else — so the "3 — Adjustment"
+ * option this select used to offer has gone. Type a positive amount and pick the
+ * direction; never type a negative amount.
  */
 function CreateTransactionDialog({ open, defaultClientId, onClose, onSaved }: {
   open: boolean; defaultClientId: string; onClose: () => void; onSaved: () => void;
@@ -470,10 +476,12 @@ function CreateTransactionDialog({ open, defaultClientId, onClose, onSaved }: {
             <select value={transactionType} onChange={(e) => setTransactionType(e.target.value)} className="border rounded h-9 px-2 text-sm bg-background w-full">
               <option value="1">1 — Debit</option>
               <option value="2">2 — Credit</option>
-              <option value="3">3 — Adjustment</option>
             </select>
           </div>
-          <div><Label>Amount ₹ *</Label><Input value={amount} onChange={(e) => setAmount(e.target.value)} className="font-mono" /></div>
+          {/* Digits and one decimal point only: the sign lives in Type, and a
+              typed "-500" is now a 400 from the backend rather than a balance
+              that moves the wrong way. */}
+          <div><Label>Amount ₹ *</Label><Input value={amount} inputMode="decimal" onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} className="font-mono" /></div>
           <div><Label>Description</Label>
             <textarea value={description} onChange={(e) => setDescription(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" rows={2} />
           </div>
