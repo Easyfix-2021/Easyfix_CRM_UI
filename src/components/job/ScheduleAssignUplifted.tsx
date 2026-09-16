@@ -1,12 +1,12 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Send, Clock, AlertTriangle, CalendarClock, User, Building2, Wrench, MapPin,
-  Image as ImageIcon, Video, Box, FileText, Pencil,
+  Image as ImageIcon, Video, Box, FileText, Pencil, ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import type { JobOffer } from '@/lib/api';
-import { formatDate, relativeTime } from '@/lib/utils';
+import { formatDate, relativeTime, appointmentIsPast } from '@/lib/utils';
 import { formatJobAge, jobAgeTitle } from '@/lib/job-age';
 import { displaySlot } from '@/lib/job-slots';
 import { formatServiceAddress } from '@/lib/format';
@@ -163,6 +163,9 @@ export function ScheduleAssignUplifted({
   const apptDay = appointment ? formatDate(appointment).split(',')[0] : null;
   const origDay = originalAppt ? formatDate(originalAppt).split(',')[0] : null;
   const apptMoved = !!origDay && !!apptDay && origDay !== apptDay;
+  /* Past appointment = the job is already late, which moves Reschedule up into
+     the action strip. Same predicate the offer button is disabled by. */
+  const apptPast = appointmentIsPast(appointment);
 
   /*
    * TAT left = the client's window minus the job's age. Uses the SAME ageSecs
@@ -230,9 +233,16 @@ export function ScheduleAssignUplifted({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={onReschedule} className="rounded-md border border-current/30 bg-background/70 px-2.5 py-1 text-xs font-medium hover:bg-background">
-            <CalendarClock className="mr-1 inline h-3.5 w-3.5" />Reschedule
-          </button>
+          {/* Reschedule lives in ONE place at a time (2026-09-16): up here while
+              the appointment is in the past — a missed visit is the action, so
+              it belongs beside the alert — and otherwise under the Appointment
+              tile, beside the date it changes. Two copies invited the question
+              of whether they did the same thing. */}
+          {apptPast && (
+            <button type="button" onClick={onReschedule} className="rounded-md border border-current/30 bg-background/70 px-2.5 py-1 text-xs font-medium hover:bg-background">
+              <CalendarClock className="mr-1 inline h-3.5 w-3.5" />Reschedule
+            </button>
+          )}
           {offerable && (
             <button type="button" onClick={onPickTechnicians} className="rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground hover:opacity-90">
               {bucket === 'unallocated' ? 'Choose technicians' : 'Offer to more'}
@@ -291,9 +301,11 @@ export function ScheduleAssignUplifted({
             <p className={`text-xs ${apptMoved ? 'font-medium text-warning-strong' : 'text-muted-foreground'}`}>
               {apptMoved ? `Original ${formatDate(originalAppt)}` : (displaySlot(job?.requested_date_time, job?.time_slot) || 'Fixed at booking')}
             </p>
-            <button type="button" onClick={onReschedule} className="mt-1.5 inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium hover:bg-muted">
-              <CalendarClock className="h-3.5 w-3.5" />Reschedule
-            </button>
+            {!apptPast && (
+              <button type="button" onClick={onReschedule} className="mt-1.5 inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium hover:bg-muted">
+                <CalendarClock className="h-3.5 w-3.5" />Reschedule
+              </button>
+            )}
           </div>
           <div className="bg-card px-3 py-2">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">TAT left</p>
@@ -477,36 +489,7 @@ export function ScheduleAssignUplifted({
 
         <JobNotesCard job={job} canEdit={canEditDetails} onSave={onSaveDetails} />
 
-        <Card icon={<ImageIcon className="h-3.5 w-3.5" />} title={`Photos and videos ${media.length}`}>
-          {media.length === 0 ? (
-            <p className="rounded-md border border-dashed px-3 py-2 text-center text-xs text-muted-foreground">
-              Nothing was attached to this order.
-            </p>
-          ) : (
-            <div className="grid grid-cols-2 gap-2">
-              {media.map((m) => (
-                <a
-                  key={`${m.kind}-${m.id}`}
-                  href={m.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="group overflow-hidden rounded-md border bg-muted/40 hover:border-foreground/30"
-                  title={m.label}
-                >
-                  <span className="grid h-16 w-full place-items-center bg-background">
-                    {m.kind === 'video'
-                      ? <Video className="h-5 w-5 text-warning-strong" />
-                      : /* eslint-disable-next-line @next/next/no-img-element */
-                        <img src={m.url} alt={m.label} className="h-16 w-full object-cover" loading="lazy" />}
-                  </span>
-                  <span className="block truncate px-1.5 pt-1 text-xs font-medium">{m.label}</span>
-                  <span className="block truncate px-1.5 pb-1 text-xs text-muted-foreground">{m.meta}</span>
-                </a>
-              ))}
-            </div>
-          )}
-          <p className="mt-2 text-xs text-muted-foreground">Attached when the job was created. Technicians see these in the app.</p>
-        </Card>
+        <MediaCard media={media} />
       </div>
 
       {addressOpen && job && (
@@ -517,6 +500,66 @@ export function ScheduleAssignUplifted({
         />
       )}
     </div>
+  );
+}
+
+/*
+ * Attachments as a one-row strip of small tiles — the grid of big thumbnails it
+ * replaced took a third of the card for four files and pushed the technician
+ * table off screen. Past three files the row scrolls, with arrows for the
+ * trackpad-less: a wrapping grid grows the card without limit, which is the
+ * problem, and a plain scrollbar is easy to miss on a card this narrow.
+ */
+function MediaCard({ media }: {
+  media: Array<{ id: string; kind: 'image' | 'video'; label: string; meta: string; url: string }>;
+}) {
+  const stripRef = useRef<HTMLDivElement | null>(null);
+  const scrollable = media.length > 3;
+  const nudge = (dir: -1 | 1) => stripRef.current?.scrollBy({ left: dir * 180, behavior: 'smooth' });
+
+  return (
+    <Card
+      icon={<ImageIcon className="h-3.5 w-3.5" />}
+      title={`Photos and videos ${media.length}`}
+      action={scrollable ? (
+        <span className="flex items-center gap-1">
+          <button type="button" aria-label="Scroll attachments left" onClick={() => nudge(-1)} className="rounded-md border px-1.5 py-1 hover:bg-muted">
+            <ChevronLeft className="h-3.5 w-3.5" />
+          </button>
+          <button type="button" aria-label="Scroll attachments right" onClick={() => nudge(1)} className="rounded-md border px-1.5 py-1 hover:bg-muted">
+            <ChevronRight className="h-3.5 w-3.5" />
+          </button>
+        </span>
+      ) : undefined}
+    >
+      {media.length === 0 ? (
+        <p className="rounded-md border border-dashed px-3 py-2 text-center text-xs text-muted-foreground">
+          Nothing was attached to this order.
+        </p>
+      ) : (
+        <div ref={stripRef} className="flex gap-2 overflow-x-auto pb-1">
+          {media.map((m) => (
+            <a
+              key={`${m.kind}-${m.id}`}
+              href={m.url}
+              target="_blank"
+              rel="noreferrer"
+              className="group w-16 shrink-0"
+              title={`${m.label} · ${m.meta}`}
+            >
+              <span className="grid h-12 w-16 place-items-center overflow-hidden rounded-md border bg-muted/40 group-hover:border-foreground/30">
+                {m.kind === 'video'
+                  ? <Video className="h-4 w-4 text-warning-strong" />
+                  : /* eslint-disable-next-line @next/next/no-img-element */
+                    <img src={m.url} alt={m.label} className="h-12 w-16 object-cover" loading="lazy" />}
+              </span>
+              <span className="mt-0.5 block truncate text-xs text-muted-foreground group-hover:text-foreground">{m.label}</span>
+            </a>
+          ))}
+        </div>
+      )}
+      <p className="mt-1.5 text-xs text-muted-foreground">Attached at booking · technicians see these in the app.</p>
+    </Card>
   );
 }
 
@@ -589,7 +632,7 @@ function JobNotesCard({ job, canEdit, onSave }: {
             maxLength={5000}
             disabled={!canEdit || saving}
             onChange={(e) => setDesc(e.target.value)}
-            className="mt-1 min-h-[64px] w-full resize-y rounded-md border bg-background px-2 py-1.5 text-xs"
+            className="mt-1 h-16 max-h-40 w-full resize-y overflow-auto rounded-md border bg-background px-2 py-1.5 text-xs"
           />
           <div className="flex justify-between text-xs text-muted-foreground">
             <span>Technician and client see this</span><span className="tabular-nums">{desc.length} / 5000</span>
@@ -603,7 +646,7 @@ function JobNotesCard({ job, canEdit, onSave }: {
             maxLength={2000}
             disabled={!canEdit || saving}
             onChange={(e) => setNotes(e.target.value)}
-            className="mt-1 min-h-[64px] w-full resize-y rounded-md border bg-background px-2 py-1.5 text-xs"
+            className="mt-1 h-16 max-h-40 w-full resize-y overflow-auto rounded-md border bg-background px-2 py-1.5 text-xs"
           />
           <div className="flex justify-between text-xs text-muted-foreground">
             <span>Technician app only</span><span className="tabular-nums">{notes.length} / 2000</span>
