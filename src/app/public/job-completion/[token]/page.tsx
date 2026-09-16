@@ -37,12 +37,9 @@ import * as React from 'react';
 import type { PrefillResponse, SubmitPayload } from '@/lib/magic-link-types';
 // Searchable city/long-list select — shared, no auth dependency → safe public.
 import { SearchSelect } from '@/components/ui/search-select';
-// Shared 30-min searchable time-slot picker (same one the Job Modal uses) —
-// built on SearchSelect + Input, no auth dependency → safe public.
-import { DateTimeSlotPicker } from '@/components/ui/date-time-slot-picker';
 // The FOUR booking bands — the single source of truth for tbl_job.time_slot.
 // Plain constants, no auth dependency → safe public.
-import { BOOKING_BANDS, inferSlotFromTime, canonicalSlot } from '@/lib/job-slots';
+import { BOOKING_BANDS, AFTER_HOURS_SLOT, inferSlotFromTime, canonicalSlot } from '@/lib/job-slots';
 // Shared masked from→to preview (also used by the CRM operator click-to-call).
 import { CallLegsPreview } from '@/components/ui/CallLegsPreview';
 // Shared presentational Button (cva-based, no auth dependency → safe on the
@@ -1450,8 +1447,8 @@ function OrderHeader({ clientName }: { clientName: string }) {
 
 /*
  * Reschedule dialog — reason (required, from reschedule_reasons), an optional
- * Preferred Date & Time picker (datetime-local → "YYYY-MM-DD HH:mm"), and an
- * optional Remarks textarea.
+ * Preferred Date + daytime slot (slot required once a date is picked; sent as
+ * the band's start → "YYYY-MM-DD HH:mm"), and an optional Remarks textarea.
  */
 function RescheduleDialog({
   reasons, busy, minDateTime, token, jobId, onClose, onSubmit,
@@ -1467,17 +1464,31 @@ function RescheduleDialog({
   onSubmit: (reason: string, preferred: string, remarks: string) => void;
 }) {
   const [reason, setReason] = React.useState('');
-  const [preferred, setPreferred] = React.useState('');
+  const [date, setDate] = React.useState('');
+  const [slot, setSlot] = React.useState('');
   const [remarks, setRemarks] = React.useState('');
   const [touched, setTouched] = React.useState(false);
-  // Best-slot advice for the picked date. Reruns whenever the preferred DAY
-  // changes (the hook slices to YYYY-MM-DD); changing only the time within a
-  // day is a no-op, which is correct — the advice is per-date. Uses the public
-  // magic-link surface via `publicToken`.
-  const rec = useSlotRecommendations(jobId, preferred, { publicToken: token });
-  // Only surface the advisory once a date has actually been picked, so its
-  // "no eligible technician" copy never flashes before the customer chooses one.
-  const hasPickedDate = /^\d{4}-\d{2}-\d{2}/.test(preferred);
+  /*
+   * SLOT, not a free time. The picker used to offer every half-hour of the day,
+   * and customers picked 8 AM or after 7 PM — windows ops cannot commit to, so
+   * the reschedule failed downstream. Only the three daytime bands are offered
+   * (After Hours deliberately excluded); the band's START hour is sent as
+   * preferred_datetime, the same stamp the Appointment card's chips use.
+   *
+   * On the floor day (today) a band that has already started is hidden — same
+   * rule the old time list applied to past half-hours.
+   */
+  const minDate = minDateTime.slice(0, 10);
+  const minTime = date === minDate ? minDateTime.slice(11, 16) : '';
+  const bands = BOOKING_BANDS.filter((b) => b.fromH >= 0 && b.start >= minTime);
+  const picked = bands.find((b) => b.value === slot);
+  const preferred = date && picked ? `${date}T${picked.start}` : '';
+  // A date without a slot would silently fall back (BE-side) to the CURRENT
+  // appointment, so once a date is picked the slot is required.
+  const slotMissing = !!date && !picked;
+  // Best-slot advice is per-DAY, so it runs off the date alone and is visible
+  // while the customer is still choosing the slot. Public magic-link surface.
+  const rec = useSlotRecommendations(jobId, date, { publicToken: token });
   return (
     <OverlayShell title="Reschedule Order" onClose={onClose} busy={busy}>
       <Field label="Reason" required>
@@ -1487,22 +1498,40 @@ function RescheduleDialog({
         </select>
         {touched && !reason && <p className="text-xs text-urgent mt-1">Please Select A Reason.</p>}
       </Field>
-      <Field label="Preferred Date & Time">
-        {/* 30-min searchable time dropdown (with a "Custom Time…" escape) — the
-            same shared component the Job Modal uses, for consistency. Emits the
-            same 'YYYY-MM-DDTHH:mm' string the native input did, so the submit
-            payload (toBackendDateTime → preferred_datetime) is unchanged. */}
+      <Field label="Preferred Date & Slot">
         {/* min was `now`, which let a customer pull an appointment EARLIER than
             the one they already have. It is now the later of the current
             appointment's day-start and now, so the calendar blocks every date
             before the existing appointment. Ops keep full freedom (including
             back-dating) from the CRM — a different surface. */}
-        <DateTimeSlotPicker
-          value={preferred}
-          onChange={setPreferred}
-          min={minDateTime}
-        />
-        {hasPickedDate && (
+        <input type="date" min={minDate} value={date}
+          onChange={(e) => setDate(e.target.value)} className={inputClass} />
+        {date && (
+          <div className="flex flex-wrap gap-2 mt-2">
+            {bands.map((b) => (
+              <button
+                key={b.value}
+                type="button"
+                onClick={() => setSlot(b.value)}
+                className={
+                  'rounded-full border px-3 py-1.5 text-sm transition-colors '
+                  + (picked?.value === b.value
+                    ? 'border-success bg-success text-white'
+                    : 'border-ink-300 bg-card text-ink-700 hover:bg-ink-50')
+                }
+              >
+                {b.label}
+              </button>
+            ))}
+            {!bands.length && (
+              <p className="text-xs text-warning-strong">No Slots Left For This Date. Please Pick Another Date.</p>
+            )}
+          </div>
+        )}
+        {touched && slotMissing && <p className="text-xs text-urgent mt-1">Please Select A Time Slot.</p>}
+        {/* The advisory can rank After Hours best — hide it then, since that
+            band is not offered here. */}
+        {date && canonicalSlot(rec.best?.slot) !== AFTER_HOURS_SLOT && (
           <SlotAdvisory
             best={rec.best}
             attendanceKnown={rec.attendanceKnown}
@@ -1525,7 +1554,7 @@ function RescheduleDialog({
           Close
         </Button>
         <Button type="button" size="lg" disabled={busy}
-          onClick={() => { setTouched(true); if (reason) onSubmit(reason, preferred, remarks); }}
+          onClick={() => { setTouched(true); if (reason && !slotMissing) onSubmit(reason, preferred, remarks); }}
           className="w-full sm:w-auto bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white">
           {busy ? 'Submitting…' : 'Request Reschedule'}
         </Button>
