@@ -208,24 +208,26 @@ export function appRequestFromDetail(detail: AppRequestDetail | null | undefined
 }
 
 /*
- * The appointment a technician has ASKED to move a Pending to Start job to, or
- * null. Feeds the "Reschedule Requested" row under Job Date & Time in the
- * Reassign Technician modal, off the GET /admin/jobs/:id read that modal
- * already makes.
+ * The technician's open RESCHEDULE ask on a Pending to Start job, or null.
+ * Feeds the highlighted "Reschedule Requested" row under the schedule in the
+ * Reassign Technician modal and in JobModal's Timeline, off the GET
+ * /admin/jobs/:id detail both already read.
  *
  * Unlike appRequestFromDetail this IS status-gated (owner, 2026-09-16: "If
  * Pending to Start job is Reschedule Requested"): the row sits beside the live
  * appointment as a proposal to compare against, and outside status 1 there is
  * no schedule left for ops to move. A job carrying a cancel ask as well yields
- * null — cancel wins server-side, so there is no reschedule to show.
+ * null — cancel wins server-side, so there is no reschedule to show — and so
+ * does an ask with no requested time, which would render an empty row.
  *
- * Returned VERBATIM ('YYYY-MM-DD HH:mm', IST wall-clock). The caller renders it
- * through formatDate / displaySlot, which read a zone-less value as IST.
+ * `requestedFor` stays VERBATIM ('YYYY-MM-DD HH:mm', IST wall-clock). The
+ * caller renders it through formatDate / displaySlot, which read a zone-less
+ * value as IST.
  */
-export function pendingRescheduleRequestFor(
+export function pendingRescheduleRequest(
   detail: { job_status?: number | string | null; appRequest?: AppRequestDetail | null } | null | undefined,
-): string | null {
+): AppRequest | null {
   if (!detail || Number(detail.job_status) !== PENDING_TO_START_STATUS) return null;
   const req = appRequestFromDetail(detail.appRequest);
-  return req?.kind === 'reschedule' ? req.requestedFor : null;
+  return req?.kind === 'reschedule' && req.requestedFor ? req : null;
 }

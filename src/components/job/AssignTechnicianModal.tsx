@@ -60,7 +60,7 @@ import { CandidateTable, PincodeListModal, type ScheduleCandidate } from './Cand
 import { AddRemarksDialog } from './AddRemarksDialog';
 import { RescheduleDialog } from './RescheduleDialog';
 import { useCancelJob } from './CancelJob';
-import { pendingRescheduleRequestFor, type AppRequestDetail } from '@/lib/job-app-request';
+import { pendingRescheduleRequest, type AppRequestDetail } from '@/lib/job-app-request';
 
 /* Job context carried on the candidates response — the SAME enriched job object
    Schedule & Assign reads, rendered by the shared <JobContextPanel>. Typed as
@@ -458,7 +458,7 @@ export function AssignTechnicianModal({
             showReschedule
             onReschedule={() => setRescheduleOpen(true)}
             rescheduling={rescheduling}
-            rescheduleRequestedFor={pendingRescheduleRequestFor(probe)}
+            rescheduleRequest={pendingRescheduleRequest(probe)}
           />
 
           {/* Note banners. */}
