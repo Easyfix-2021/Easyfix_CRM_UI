@@ -54,7 +54,8 @@ import { JobRemarksView } from './JobRemarksView';
 /* The SAME dialog the job detail modal and the Unconfirmed transaction view
    open, so Edit Address behaves identically wherever ops reach it. Importing
    it here does NOT create a cycle: JobModal has no import of this panel. */
-import { JobAddressEditDialog, RescheduleRequestedText } from './JobModal';
+import { JobAddressEditDialog } from './JobModal';
+import { RescheduleRequestedText } from './RescheduleRequestedText';
 import type { AppRequest } from '@/lib/job-app-request';
 
 export type JobServiceRow = {

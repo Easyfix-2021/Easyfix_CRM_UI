@@ -62,7 +62,8 @@ import { showToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { RescheduleDialog } from './RescheduleDialog';
 import { useCancelJob } from './CancelJob';
-import type { AppRequest } from '@/lib/job-app-request';
+import { rescheduleRequestPrefill, type AppRequest } from '@/lib/job-app-request';
+import { istNowWallClock } from '@/lib/utils';
 
 /*
  * The action key the backend seeds into `menu_action` and grants via
@@ -81,16 +82,6 @@ export const APP_REQUEST_ACTION = 'isJobAppRequestResolve';
 
 const REJECT_PATH = (jobId: number) => `/admin/jobs/${jobId}/app-request/reject`;
 
-/*
- * 'YYYY-MM-DD HH:mm' (tbl_job.reschedule_date_time_app, a VARCHAR the app wrote
- * as IST wall-clock) → the 'YYYY-MM-DDTHH:mm' DateTimeSlotPicker wants. Slice
- * then swap, exactly as JobModal's customer-request pre-fill does: NEVER
- * new Date() it, which re-reads an IST literal in the browser's zone and can
- * shift the day across the +05:30 boundary.
- */
-function toPickerValue(raw: string | null): string {
-  return raw ? String(raw).slice(0, 16).replace(' ', 'T') : '';
-}
 
 export type TechRequestActionsProps = {
   jobId: number;
@@ -235,13 +226,14 @@ export function TechRequestActions({ jobId, request, allowed, onActioned, varian
           for and the reason they gave, so ops only has to pick a CRM reschedule
           reason and confirm. The reason is left empty on purpose: the audit
           trail wants an action_type=8 CRM reason, not the technician's.
-          If the requested slot has already passed the picker refuses it and the
-          server would too (blockPastAppointment) — ops picks a real one. */}
+          The shared pre-fill (the same one Reassign's and JobModal's Reschedule
+          use) seeds the slot only while it is still in the future: a passed slot
+          is one the picker and the server (blockPastAppointment) both refuse,
+          so ops picks a real one and keeps the remarks line. */}
       <RescheduleDialog
         open={rescheduleOpen}
         jobId={rescheduleOpen ? jobId : null}
-        initialDateTime={toPickerValue(request.requestedFor)}
-        initialRemarks={`Technician requested reschedule${request.reason ? `: ${request.reason}` : ''}`}
+        {...rescheduleRequestPrefill(request, istNowWallClock())}
         onClose={() => setRescheduleOpen(false)}
         onDone={onActioned}
       />

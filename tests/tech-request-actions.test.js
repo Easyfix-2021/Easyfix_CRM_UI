@@ -141,8 +141,10 @@ test('the shared control owns the label, and it is the one the other modals use'
 
 test('approving a RESCHEDULE pre-fills the technician\'s slot and reason', () => {
   assert.match(ACTIONS, /<RescheduleDialog/);
-  assert.match(ACTIONS, /initialDateTime=\{toPickerValue\(request\.requestedFor\)\}/);
-  assert.match(ACTIONS, /initialRemarks=\{`Technician requested reschedule/);
+  // Through the SHARED pre-fill, so Approve, Reassign and JobModal seed the same
+  // slot + remarks and none of them seeds a passed slot (behaviour is tested in
+  // job-app-request.test.js).
+  assert.match(ACTIONS, /\{\.\.\.rescheduleRequestPrefill\(request, istNowWallClock\(\)\)\}/);
   // The dialog owns the PATCH /:id/reschedule itself — re-implementing it here
   // would skip its reason + remarks validation.
   assert.doesNotMatch(ACTIONS, /\/reschedule`/,
@@ -153,9 +155,11 @@ test('the requested slot is string-sliced, never parsed as a date', () => {
   // reschedule_date_time_app is an IST wall-clock VARCHAR. new Date() re-reads
   // it in the browser's zone and can shift the day across the +05:30 boundary —
   // the trap project_easyfix_ist_date_rendering exists for.
-  assert.match(ACTIONS, /String\(raw\)\.slice\(0, 16\)\.replace\(' ', 'T'\)/);
-  assert.doesNotMatch(ACTIONS, /new Date\(/,
-    'never construct a Date from an IST wall-clock literal');
+  const LIB = strip(read('src/lib/job-app-request.ts'));
+  assert.match(LIB, /req\.requestedFor\.slice\(0, 16\)\.replace\(' ', 'T'\)/);
+  for (const [name, src] of [['TechRequestActions', ACTIONS], ['job-app-request', LIB]]) {
+    assert.doesNotMatch(src, /new Date\(/, `${name}: never construct a Date from an IST wall-clock literal`);
+  }
 });
 
 // ─── Reject: one flag, one endpoint, one confirmation ───────────────────

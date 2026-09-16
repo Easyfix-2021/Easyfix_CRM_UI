@@ -354,8 +354,11 @@ test('reschedule row: gated to Pending to Start, to reschedule asks, and to a re
 
 test('Reassign modal feeds the panel from its detail probe, and re-reads it after a reschedule', () => {
   const modal = strip(read('src/components/job/AssignTechnicianModal.tsx'));
-  assert.match(modal, /rescheduleRequest=\{pendingRescheduleRequest\(probe\)\}/,
+  assert.match(modal, /const rescheduleAsk = pendingRescheduleRequest\(probe\);/,
     'the identity-guarded probe, never raw statusGate.data (a previous job\'s ask would show)');
+  assert.match(modal, /rescheduleRequest=\{rescheduleAsk\}/);
+  assert.match(modal, /<RescheduleDialog[\s\S]*?\{\.\.\.rescheduleRequestPrefill\(rescheduleAsk, istNowWallClock\(\)\)\}[\s\S]*?\/>/,
+    'Reschedule opens pre-filled from the same ask the row shows');
   assert.match(modal, /onDone=\{\(\) => \{[\s\S]*?statusGate\.refetch\(\);[\s\S]*?\}\}/,
     'a reschedule clears the ask server-side; without the re-read the row outlives it');
 
@@ -376,7 +379,39 @@ test('JobModal Timeline shows the ask right under Time slot, through the SAME re
   assert.ok(slot > 0 && asked > slot && checkin > asked, 'the row sits between Time slot and Check-in');
   assert.match(modal, /const rescheduleAsk = pendingRescheduleRequest\(\{/, 'gated by the shared status-aware helper');
   assert.match(modal, /<RescheduleRequestedText request=\{rescheduleAsk\} \/>/);
-  assert.match(modal, /\{request\.reason && <> · Reason: \{request\.reason\}<\/>\}/, 'the reason renders next to the time');
+  assert.match(modal, /import \{ RescheduleRequestedText \} from '\.\/RescheduleRequestedText';/);
+  assert.match(modal, /<ApptRescheduleDialog\s+open=\{rescheduleOpen\}[\s\S]*?\{\.\.\.rescheduleRequestPrefill\(pendingRescheduleRequest\(\{/,
+    'the footer Reschedule pre-fills from the technician\'s ask too');
+
+  const text = strip(read('src/components/job/RescheduleRequestedText.tsx'));
+  assert.match(text, /export function RescheduleRequestedText/);
+  assert.match(text, /\{request\.reason && <> · Reason: \{request\.reason\}<\/>\}/, 'the reason renders next to the time');
+});
+
+const NOW = '2026-07-06T20:30';
+const ask = (over = {}) => ({ ...R.pendingRescheduleRequest(reschDetail()), ...over });
+
+test('Reschedule pre-fill: a FUTURE ask seeds the picker value and a remarks line', () => {
+  assert.deepEqual(R.rescheduleRequestPrefill(ask(), NOW), {
+    initialDateTime: '2026-07-08T10:30',
+    initialRemarks: 'Technician requested reschedule: Customer Busy',
+  });
+  assert.equal(R.rescheduleRequestPrefill(ask({ requestedFor: '2026-07-08 10:30:00' }), NOW).initialDateTime,
+    '2026-07-08T10:30', 'a seconds-bearing value (as QA stores) is cut to the picker\'s minute shape');
+  assert.equal(R.rescheduleRequestPrefill(ask({ reason: null }), NOW).initialRemarks, 'Technician requested reschedule');
+});
+
+test('Reschedule pre-fill: a PAST ask keeps the remarks but never seeds an unsubmittable time', () => {
+  assert.deepEqual(R.rescheduleRequestPrefill(ask({ requestedFor: '2026-07-06 20:00' }), NOW),
+    { initialRemarks: 'Technician requested reschedule: Customer Busy' },
+    'the picker min is IST now and the server refuses the past');
+  assert.equal(R.rescheduleRequestPrefill(ask({ requestedFor: '2026-07-06 20:30' }), NOW).initialDateTime,
+    '2026-07-06T20:30', 'the current minute is not past — same boundary as appointmentIsPast');
+});
+
+test('Reschedule pre-fill: no ask, or a cancel ask, pre-fills nothing', () => {
+  assert.deepEqual(R.rescheduleRequestPrefill(null, NOW), {});
+  assert.deepEqual(R.rescheduleRequestPrefill({ ...ask(), kind: 'cancel' }, NOW), {});
 });
 
 // ─── Control ────────────────────────────────────────────────────────────

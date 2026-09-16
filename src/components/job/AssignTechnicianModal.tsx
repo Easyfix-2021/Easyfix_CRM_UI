@@ -60,7 +60,8 @@ import { CandidateTable, PincodeListModal, type ScheduleCandidate } from './Cand
 import { AddRemarksDialog } from './AddRemarksDialog';
 import { RescheduleDialog } from './RescheduleDialog';
 import { useCancelJob } from './CancelJob';
-import { pendingRescheduleRequest, type AppRequestDetail } from '@/lib/job-app-request';
+import { pendingRescheduleRequest, rescheduleRequestPrefill, type AppRequestDetail } from '@/lib/job-app-request';
+import { istNowWallClock } from '@/lib/utils';
 
 /* Job context carried on the candidates response — the SAME enriched job object
    Schedule & Assign reads, rendered by the shared <JobContextPanel>. Typed as
@@ -153,6 +154,9 @@ export function AssignTechnicianModal({
    * asked for, so the narrowing stays; what it must not do is stand in for the
    * server's own refusal, which is what `assignable` below supplies.
    */
+  // The technician's open reschedule ask, if any — the panel's highlighted row
+  // and the Reschedule dialog's pre-fill both read this one value.
+  const rescheduleAsk = pendingRescheduleRequest(probe);
   const allowedStatus = mode === 'reassign' ? 1 : 0;
   const wrongStatusForMode = probe?.job_status != null && Number(probe.job_status) !== allowedStatus;
   const confirmAction = useConfirm();
@@ -458,7 +462,7 @@ export function AssignTechnicianModal({
             showReschedule
             onReschedule={() => setRescheduleOpen(true)}
             rescheduling={rescheduling}
-            rescheduleRequest={pendingRescheduleRequest(probe)}
+            rescheduleRequest={rescheduleAsk}
           />
 
           {/* Note banners. */}
@@ -755,6 +759,8 @@ export function AssignTechnicianModal({
         <RescheduleDialog
           open={rescheduleOpen}
           jobId={jobId}
+          // Pre-fill from the technician's open ask (future time + remarks).
+          {...rescheduleRequestPrefill(rescheduleAsk, istNowWallClock())}
           onClose={() => setRescheduleOpen(false)}
           onDone={() => {
             // Veil the stale date / list until the refetch settles.
