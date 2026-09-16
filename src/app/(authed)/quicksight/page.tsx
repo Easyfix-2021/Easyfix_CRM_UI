@@ -31,7 +31,7 @@ import {
   LayoutDashboard, Lock,
   ClipboardList, Gauge, Layers, Flame, Package,
   Building2, Wrench, MapPinned, Users, BarChart3,
-  ArrowRight, Handshake, UserPen, ShieldAlert, PhoneCall, TrendingUp, type LucideIcon,
+  ArrowRight, Handshake, UserPen, ShieldAlert, PhoneCall, type LucideIcon,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { useMe } from '@/lib/auth-context';
@@ -82,9 +82,10 @@ const REPORTS: ReportCardDef[] = [
     Icon: ClipboardList,
   },
   {
-    // Bundles the five performance scorecards behind gliding tabs. The three
+    // Bundles the six performance scorecards behind gliding tabs. The three
     // standalone cards below stay — this is an additional entry point, not a
-    // replacement, so nobody's bookmark or grant changes.
+    // replacement, so nobody's bookmark or grant changes. Employee Performance
+    // has NO card of its own: it lives only as the Employee tab.
     urlBase: 'performance',
     label: 'Performance',
     newOrder: 1,
@@ -95,8 +96,9 @@ const REPORTS: ReportCardDef[] = [
       'isQuickSightTechnicianPerformanceView',
       'isQuickSightStatePerformanceView',
       'isQuickSightUserPerformanceView',
+      'isQuickSightEmployeePerformanceView',
     ],
-    description: 'Client, City, Technician, State and User scorecards in one place.',
+    description: 'Client, City, Technician, State, User and Employee scorecards in one place.',
     Icon: Gauge,
   },
   {
@@ -193,14 +195,6 @@ const REPORTS: ReportCardDef[] = [
     actionKey: 'isQuickSightCallTrackingView',
     description: 'Calls placed from the CRM — by job (who called, at which step, to whom) and by user per day.',
     Icon: PhoneCall,
-  },
-  {
-    urlBase: 'employee-performance',
-    label: 'Employee Performance',
-    newOrder: 6,
-    actionKey: 'isQuickSightEmployeePerformanceView',
-    description: 'MIS dashboard — revenue vs target, open jobs, TAT / SDA and productivity by SPOC and team.',
-    Icon: TrendingUp,
   },
 ];
 
