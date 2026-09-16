@@ -31,11 +31,18 @@ export type PsOfferState = PsFilters['offerState'];
 
 type Counts = { all: number; pending: number; offered: number; expired: number };
 
-const TABS: { value: PsOfferState; label: string; key: keyof Counts }[] = [
-  { value: '',        label: 'All',             key: 'all' },
-  { value: 'pending', label: 'Not offered',     key: 'pending' },
-  { value: 'offered', label: 'Offered-waiting', key: 'offered' },
-  { value: 'expired', label: 'No takers',       key: 'expired' },
+/*
+ * The vocabulary, fixed 2026-09-16 and shared with the Schedule & Assign
+ * console so the tab an operator clicked and the state the console reports are
+ * the same words. `title` is what "No takers" MEANS — the two offer outcomes it
+ * gathers — kept as a tooltip rather than a longer label, so the strip stays
+ * one line on a laptop.
+ */
+const TABS: { value: PsOfferState; label: string; key: keyof Counts; title: string }[] = [
+  { value: '',        label: 'All',             key: 'all',     title: 'Every job waiting to be scheduled' },
+  { value: 'pending', label: 'Unallocated',     key: 'pending', title: 'Not offered to anyone yet' },
+  { value: 'offered', label: 'Offered-waiting', key: 'offered', title: 'An offer is open and unanswered' },
+  { value: 'expired', label: 'No takers',       key: 'expired', title: 'Expired and rejected — offered, and no offer is still open' },
 ];
 
 export function PendingSchedulingTabs({
@@ -94,6 +101,7 @@ export function PendingSchedulingTabs({
               type="button"
               role="tab"
               aria-selected={active}
+              title={t.title}
               onClick={() => onChange(t.value)}
               className={[
                 'rounded-md px-3 py-1.5 text-sm transition-colors',

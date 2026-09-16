@@ -282,11 +282,17 @@ export function PendingSchedulingFilters({
       {title && (
         <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{title}</div>
       )}
+      {/* Controls and Clear Filters share ONE row (2026-09-16). The button used
+          to sit on a line of its own below the bar, which cost a whole row of
+          height to hold one button and pushed the table down every time a
+          filter was set — the moment the operator most wants to see rows.
+          items-end keeps it on the fields' baseline, not their labels'. */}
+      <div className="flex flex-wrap items-end gap-3">
       {/* 5 controls: 2-up on small, 3-up on lg (the /jobs card is narrower than
           the viewport), 5-up on xl so the bar stays one row on a wide screen.
           With the Scheduling Status select hoisted into a tab strip (/my-orders)
           the remaining 4 go 4-up on xl instead of leaving a hole. */}
-      <div className={`grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 ${hideOfferState ? 'xl:grid-cols-4' : 'xl:grid-cols-5'}`}>
+      <div className={`grid min-w-0 flex-1 grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 ${hideOfferState ? 'xl:grid-cols-4' : 'xl:grid-cols-5'}`}>
         {!hideOfferState && (
         <PsField label="Scheduling Status">
           {/* Sub-state WITHIN the bucket, not a replacement for it: every row
@@ -344,12 +350,11 @@ export function PendingSchedulingFilters({
         </PsField>
       </div>
       {anySet && (
-        <div className="flex items-center justify-end">
-          <Button type="button" variant="outline" size="sm" onClick={() => onChange(EMPTY_PS_FILTERS)}>
-            Clear Filters
-          </Button>
-        </div>
+        <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={() => onChange(EMPTY_PS_FILTERS)}>
+          Clear Filters
+        </Button>
       )}
+      </div>
     </div>
   );
 }
