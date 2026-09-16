@@ -1355,7 +1355,20 @@ export default function JobsPage() {
         *     because the clamp would snap them straight back.
         */}
       {(scopeIsClamped || !tabExpressed) && (
-        <JobScopeBar tab={tab} clamped={scopeIsClamped} onClear={clearTabScope} noun="Jobs" />
+        /*
+         * nameScope={!tabExpressed}: when the two dropdowns state the bucket,
+         * this bar must NOT name it. The dropdowns can be changed without
+         * changing `tab`, so a named bar went stale the moment a restricted
+         * user picked another granted stage — it kept saying "Showing Pending
+         * for Scheduling Only" over a table of Pending to Start.
+         */
+        <JobScopeBar
+          tab={tab}
+          clamped={scopeIsClamped}
+          onClear={clearTabScope}
+          noun="Jobs"
+          nameScope={!tabExpressed}
+        />
       )}
       <div className="flex items-end justify-between">
         <div>

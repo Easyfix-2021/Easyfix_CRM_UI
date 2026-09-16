@@ -132,8 +132,17 @@ test('BOTH surfaces render the shared bar — neither has a tab bar of its own',
      * and a prose mention is not a tab bar.
      */
     assert.equal((src.match(/<TabsTrigger/g) || []).length, 0, `${name} must still have no tab bar`);
-    assert.match(src, new RegExp(`<JobScopeBar tab=\\{tab\\} clamped=\\{scopeIsClamped\\} onClear=\\{clearTabScope\\} noun="${noun}" \\/>`),
-      `${name} must render the shared bar with noun="${noun}"`);
+    /*
+     * Props asserted INDIVIDUALLY, not as one formatted line: pinning the exact
+     * one-liner broke the moment a fifth prop wrapped it across lines, which
+     * says nothing about behaviour.
+     */
+    const at = src.indexOf('<JobScopeBar');
+    assert.ok(at > -1, `${name} must render the shared bar`);
+    const el = src.slice(at, src.indexOf('/>', at) + 2);
+    for (const prop of ['tab={tab}', 'clamped={scopeIsClamped}', 'onClear={clearTabScope}', `noun="${noun}"`]) {
+      assert.ok(el.includes(prop), `${name}: the bar must receive ${prop} — got ${el}`);
+    }
     assert.match(src, /scopeIsClamped = scopeIsClampedFor\(me\?\.allowedStages\)/,
       `${name} must use the shared clamp predicate, not its own copy`);
   }
@@ -235,4 +244,34 @@ test('a tab pre-selects the dropdowns, keyed on the selection so a no-op costs n
 test('the scope bar is now the exception: only when the dropdowns cannot state the view', () => {
   assert.match(PAGE, /\{\(scopeIsClamped \|\| !tabExpressed\) && \(/,
     'expressible tabs are stated by the dropdowns, so the bar would duplicate them');
+});
+
+test('the bar does not NAME a scope the dropdowns own — it would go stale', () => {
+  /*
+   * Found by reading the shipped page against a screenshot: the label comes from
+   * `tab`, and nothing writes `tab` when Job Status changes. A restricted user
+   * switching to another granted stage therefore saw "Showing Pending for
+   * Scheduling Only" above a table of Pending to Start.
+   */
+  assert.match(BAR, /nameScope\?: boolean;/, 'the component must take the mode');
+  assert.match(BAR, /if \(!nameScope && !clamped\) return null;/,
+    'with the scope stated elsewhere and nothing limiting it, there is nothing to say');
+  assert.match(BAR, /\{nameScope \? \(/, 'the name is rendered only in naming mode');
+  // The limitation-only branch must NOT carry the bucket label.
+  const elseBranch = BAR.slice(BAR.indexOf(') : ('), BAR.indexOf('</span>', BAR.indexOf(') : (')));
+  assert.match(elseBranch, /Limited By Your Job Stage Access/);
+  assert.ok(!/\{label\}/.test(elseBranch), 'the stale half must not appear in the limitation-only branch');
+
+  /*
+   * Element-scoped, not a whole-file match: the comment above the element also
+   * contains the literal `nameScope={!tabExpressed}`, so a file-wide regex would
+   * pass on the prose alone if someone changed only the prop.
+   */
+  const barAt = PAGE.indexOf('<JobScopeBar');
+  assert.ok(barAt > -1, 'Manage Jobs must render the bar');
+  const barEl = PAGE.slice(barAt, PAGE.indexOf('/>', barAt) + 2);
+  assert.match(barEl, /nameScope=\{!tabExpressed\}/,
+    `the element must pass the mode, got ${barEl}`);
+  // …and My Orders keeps naming it, because it has no such dropdowns.
+  assert.ok(!/nameScope/.test(ORDERS), 'My Orders must keep the default naming mode');
 });
