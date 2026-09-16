@@ -63,19 +63,24 @@ test('the stripper bites — prose that NAMES a call cannot satisfy a check for 
 
 // ─── Which icons survive on a request row ───────────────────────────────
 
-test('Location and Resend PIN are OFF a Technician Requests row', () => {
+test('Location and Resend PIN are OFF a row carrying a request', () => {
   // Both are day-to-day chasing tools for a job that is proceeding; a request
-  // row is a decision. Each must be fenced behind !appRequests, and the fence
-  // has to be on the control itself, not on some enclosing branch.
-  assert.match(VIEW, /\{!appRequests && j\.fk_easyfixter_id != null && \(/,
-    'the live-location button must be fenced off the requests section');
-  assert.match(VIEW, /\{!appRequests && \(\s*<ResendPinButton/,
-    'ResendPinButton must be fenced off the requests section');
+  // row is a decision. Each must be fenced behind !req, and the fence has to be
+  // on the control itself, not on some enclosing branch.
+  //
+  // Fenced on the ROW's ask since the tabs replaced the sections (2026-09-16):
+  // the owner's rule was about the Technician Requests section, whose rows now
+  // live on the two request tabs AND on All. Fencing on the tab instead would
+  // put Location / Resend PIN back on every request row shown under All.
+  assert.match(VIEW, /\{!req && j\.fk_easyfixter_id != null && \(/,
+    'the live-location button must be fenced off request rows');
+  assert.match(VIEW, /\{!req && \(\s*<ResendPinButton/,
+    'ResendPinButton must be fenced off request rows');
 });
 
-test('View Job and Reassign are NOT fenced — they are on every section', () => {
+test('View Job and Reassign are NOT fenced — they are on every row', () => {
   // The owner said both "will always be there". Read the action cell and assert
-  // neither control acquired an appRequests condition.
+  // neither control acquired a request (or retired section) condition.
   const cellAt = VIEW.indexOf('stick-col stick-right text-right whitespace-nowrap');
   assert.ok(cellAt > -1, 'positive control: the action cell must be locatable');
   const cell = VIEW.slice(cellAt, VIEW.indexOf('</td>', cellAt));
@@ -89,9 +94,16 @@ test('View Job and Reassign are NOT fenced — they are on every section', () =>
   // (canJob.isJobReassign) and View keeps none — but neither may be section-gated.
   for (const [name, at] of [['View Job', viewAt], ['Reassign', reassignAt]]) {
     const preceding = cell.slice(Math.max(0, at - 220), at);
-    assert.doesNotMatch(preceding, /appRequests/,
-      `${name} must not be fenced on the section — the owner said it is always there`);
+    assert.doesNotMatch(preceding, /appRequests|!?req &&|showRequest|ptsState/,
+      `${name} must not be fenced on a request or a tab — the owner said it is always there`);
   }
+  // Differential control: the same window DOES see a fence when one is added.
+  const fenced = cell.replace(/<button(\s+type="button"\s+onClick=\{\(\) => onView\(j\.job_id\)\})/,
+    '{!req && <button$1');
+  assert.notEqual(fenced, cell, 'control: the View mutation must land');
+  const fencedAt = fenced.indexOf('onClick={() => onView(j.job_id)}');
+  assert.match(fenced.slice(Math.max(0, fencedAt - 220), fencedAt), /!?req &&/,
+    'control: a fenced View must be visible to the scan above');
   assert.match(cell, /\{canJob\.isJobReassign && \(/, 'Reassign keeps its own permission gate');
 });
 
@@ -99,7 +111,7 @@ test('the Approve / Reject pair renders from the SAME ask the Request column pai
   // Re-deriving it would let the buttons act on the reschedule flag while the
   // chip says "Cancellation Requested" (cancel outranks reschedule when a job
   // carries both).
-  assert.match(VIEW, /const req = appRequests \? appRequestOf\(j\) : null;/);
+  assert.match(VIEW, /const req = appRequestOf\(j\);/);
   assert.match(VIEW, /\{req && \(\s*<TechRequestActions[\s\S]*?request=\{req\}/);
   /*
    * ONCE since 2026-09-16 — the filtering and counting moved into SQL, so the
@@ -189,12 +201,17 @@ test('reject surfaces the server\'s own sentence — a 409 is information', () =
   assert.match(ACTIONS.slice(catchAt), /onActioned\(\);/);
 });
 
-test('every decision triggers the PAGE-wide reload, not the section\'s own refetch', () => {
-  // An approved cancellation leaves this tab entirely and every bucket's count
-  // moves with it; a section refetch would leave the other three stale.
-  assert.match(VIEW, /onRequestActioned: bumpReload,/);
+test('every decision triggers the VIEW-wide reload, not the table\'s own refetch', () => {
+  // An approved cancellation leaves the queue entirely and a rejected ask moves
+  // the job from a request tab to a date tab, so the tab COUNTS move with it; a
+  // table-only refetch would leave the strip's numbers stale. (Was "page-wide,
+  // not the section's" before the tabs replaced the sections, 2026-09-16.)
+  assert.match(VIEW, /onRequestActioned=\{bumpReload\}/);
   assert.match(VIEW, /onActioned=\{onRequestActioned\}/);
   assert.match(VIEW, /const bumpReload = \(\) => \{[\s\S]*?invalidateFetch\(\(k\) => k\.startsWith\('\/admin\/jobs'\)\);/);
+  // …and the reload signal reaches the strip as well as the table.
+  assert.match(VIEW, /<PendingStartTabs[\s\S]*?reloadKey=\{reloadKey\}[\s\S]*?\/>/);
+  assert.match(VIEW, /<PendingStartTable[\s\S]*?reloadKey=\{reloadKey\}[\s\S]*?\/>/);
 });
 
 // ─── Permission ─────────────────────────────────────────────────────────
