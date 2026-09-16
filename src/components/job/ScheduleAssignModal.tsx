@@ -1589,7 +1589,21 @@ export function ScheduleAssignModal({
       {servicesOpen && jobId != null && (
         <EditServicesDialog
           jobId={jobId}
-          onClose={() => setServicesOpen(false)}
+          /*
+           * Re-read on CLOSE as well as on each write. Each write already
+           * re-ranks, but a quantity saves on blur — and clicking Close is what
+           * blurs it, so that PATCH is still in flight when the dialog goes
+           * away and the only refresh it triggers can race the close. Ops saw
+           * the Services card keep the old quantity. One more read the moment
+           * the editor is gone, plus a second once a blur-save can have landed,
+           * makes "what I just edited is what the console shows" hold no
+           * matter how the dialog was left.
+           */
+          onClose={() => {
+            setServicesOpen(false);
+            reRank();
+            window.setTimeout(reRank, 1500);
+          }}
           onMutated={reRank}
         />
       )}
@@ -1644,6 +1658,9 @@ function EditServicesDialog({ jobId, onClose, onMutated }: {
               job={job}
               onMutated={() => { detail.refetch(); onMutated(); }}
               onDirtyChange={(dirty) => { invalidQtyRef.current = dirty; }}
+              /* Schedule & Assign adds services WITHIN the job's category only,
+                 as the legacy Edit Service did — see ServicesTabBody. */
+              lockCategory
             />
           ) : detail.error ? (
             <div className="text-sm text-urgent-strong">Could Not Load Services: {detail.error}</div>
