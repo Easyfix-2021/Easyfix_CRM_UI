@@ -69,7 +69,14 @@ export type UpliftedJob = {
      scores OTA and SDA on. Acceptance has no column of its own: it lives on
      the accepted OFFER row, which this console already receives. */
   checkin_date_time?: string | null;
-  efr_name?: string | null;
+  checkin_by_name?: string | null;
+  /* Acceptance is stamped on the accepted OFFER row, which GET /offers
+     deliberately excludes — the header resolves it instead. */
+  accepted_date_time?: string | null;
+  accepted_efr_name?: string | null;
+  /* The EFFECTIVE payment answer (customerPays: paid_by = 2 OR collected_by = 1),
+     computed server-side so the panel cannot contradict the COD gate. */
+  payment_label?: string | null;
   /** Who collects payment — the backend's own mapping, not a raw code. */
   collected_by_label?: string | null;
   collected_by?: number | string | null;
@@ -239,8 +246,8 @@ export function ScheduleAssignUplifted({
     { name: 'Created', when: job?.ticket_created_date_time ?? null, who: job?.client_spoc_name || job?.client_spoc || null },
     { name: 'Booked', when: job?.created_date_time ?? null, who: job?.created_by_name ?? null },
     { name: 'Offered', when: job?.original_scheduling_date_time ?? null, who: job?.first_scheduled_by_name ?? null },
-    { name: 'Accepted', when: accepted?.responded_at ?? null, who: accepted?.efr_name ?? null },
-    { name: 'Check-In', when: job?.checkin_date_time ?? null, who: accepted?.efr_name || job?.efr_name || null },
+    { name: 'Accepted', when: job?.accepted_date_time ?? accepted?.responded_at ?? null, who: job?.accepted_efr_name ?? accepted?.efr_name ?? null },
+    { name: 'Check-In', when: job?.checkin_date_time ?? null, who: job?.checkin_by_name ?? null },
   ];
   const firstPending = steps.findIndex((s) => !s.when);
 
@@ -376,7 +383,7 @@ export function ScheduleAssignUplifted({
               tab's Job Details grid uses — NOT the BE's `payment_mode`, which
               this console showed and which is unset on almost every job. Who
               collects is a per-JOB fact, so it belongs in this row. */}
-          <span><span className="text-muted-foreground">Payment </span>{collectedByText(job?.collected_by) ?? 'Not set'}</span>
+          <span><span className="text-muted-foreground">Payment </span>{job?.payment_label || collectedByText(job?.collected_by) || 'Not set'}</span>
           <span><span className="text-muted-foreground">Project manager </span>{job?.project_manager_name || '—'}</span>
           <span><span className="text-muted-foreground">Zonal manager </span>{job?.zonal_manager_name || '—'}</span>
         </div>
