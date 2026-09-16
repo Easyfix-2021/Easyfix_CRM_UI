@@ -21,6 +21,7 @@ type CustomerRequest = {
   reason?: string | null;
   remarks?: string | null;
   preferred_datetime?: string | null;
+  preferred_slot?: string | null;     // booking band the customer picked; NULL on older rows
   request_status: string;             // 'pending' | 'actioned' | 'dismissed'
 };
 
@@ -99,7 +100,7 @@ export function JobRemarksView({
           >
             <span className="font-semibold capitalize">Customer {r.request_type} request</span>
             {r.reason ? <> · {r.reason}</> : null}
-            {r.preferred_datetime ? <> · New: {formatDate(r.preferred_datetime)}</> : null}
+            {r.preferred_datetime ? <> · New: {formatDate(r.preferred_datetime)}{r.preferred_slot ? ` (${r.preferred_slot})` : ''}</> : null}
             {r.remarks ? <div className="mt-0.5">Remarks: {r.remarks}</div> : null}
           </div>
         ))}
