@@ -24,8 +24,8 @@
  * isQuickSightEmployeePerformanceUpload additionally shows "Upload Data".
  */
 
-import { useRef, useState, type ChangeEvent } from 'react';
-import { TrendingUp, Upload, Inbox } from 'lucide-react';
+import { useEffect, useRef, useState, type ChangeEvent } from 'react';
+import { TrendingUp, Upload, Inbox, Loader2 } from 'lucide-react';
 import { ReportPageScaffold } from '@/components/quicksight/ReportPageScaffold';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -89,6 +89,33 @@ export default function EmployeePerformancePage() {
 
   const fileInput = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
+  /*
+   * The frame holds a ~6.5 MB page, which the browser takes a few seconds to
+   * parse and paint. Without this the operator stares at a blank white box and
+   * reasonably concludes the report is broken — so the frame stays hidden
+   * behind a "preparing" panel until it is actually drawn. Keyed by uploadedAt:
+   * a new upload swaps the html, so the wait has to start again.
+   *
+   * The signal is a postMessage the BE injects into the page (READY_MESSAGE
+   * there), sent two animation frames after its load — the iframe's OWN load
+   * event fires well before the paint, which is exactly the blank box this
+   * replaces. REVEAL_FALLBACK_MS then covers the case where that script never
+   * runs: a frame nobody reveals is worse than one revealed a moment early.
+   */
+  const READY_MESSAGE = 'ef-employee-performance-ready';
+  const REVEAL_FALLBACK_MS = 10_000;
+  const [framedAt, setFramedAt] = useState<string | null>(null);
+  const frameReady = !!snapshot && framedAt === snapshot.uploadedAt;
+  const uploadedAt = snapshot?.uploadedAt;
+
+  useEffect(() => {
+    if (!uploadedAt) return;
+    const reveal = () => setFramedAt(uploadedAt);
+    const onMessage = (e: MessageEvent) => { if (e.data === READY_MESSAGE) reveal(); };
+    window.addEventListener('message', onMessage);
+    const timer = window.setTimeout(reveal, REVEAL_FALLBACK_MS);
+    return () => { window.removeEventListener('message', onMessage); window.clearTimeout(timer); };
+  }, [uploadedAt]);
 
   const onFilePicked = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -128,8 +155,9 @@ export default function EmployeePerformancePage() {
       {canUpload && (
         <>
           <input ref={fileInput} type="file" accept=".js,.json" className="hidden" onChange={onFilePicked} />
-          <Button size="sm" onClick={() => fileInput.current?.click()} disabled={uploading}>
-            <Upload className="size-4" /> {uploading ? 'Uploading…' : 'Upload Data'}
+          {/* gap-1.5 like DownloadButton — the Button base class sets no gap itself. */}
+          <Button size="sm" className="gap-1.5" onClick={() => fileInput.current?.click()} disabled={uploading}>
+            <Upload className="size-4" />{uploading ? 'Uploading…' : 'Upload Data'}
           </Button>
         </>
       )}
@@ -149,12 +177,27 @@ export default function EmployeePerformancePage() {
       isEmpty={false}
     >
       {snapshot && dashboard.data ? (
-        <iframe
-          title="Employee Performance Dashboard"
-          srcDoc={dashboard.data.html}
-          sandbox="allow-scripts"
-          className="block h-[calc(100vh-11rem)] min-h-[600px] w-full rounded-lg border border-border bg-white"
-        />
+        /* The frame is mounted but transparent until it paints; the panel below
+           occupies the same cell of the grid so nothing jumps when they swap. */
+        <div className="grid">
+          <iframe
+            key={snapshot.uploadedAt}
+            title="Employee Performance Dashboard"
+            srcDoc={dashboard.data.html}
+            sandbox="allow-scripts"
+            className={`col-start-1 row-start-1 block h-[calc(100vh-11rem)] min-h-[600px] w-full rounded-lg border border-border bg-white ${frameReady ? '' : 'invisible'}`}
+          />
+          {!frameReady && (
+            <Card className="col-start-1 row-start-1 h-[calc(100vh-11rem)] min-h-[600px]">
+              <CardContent className="flex h-full flex-col items-center justify-center gap-3 p-10 text-center">
+                <Loader2 className="size-8 animate-spin text-muted-foreground" />
+                <div className="text-sm text-muted-foreground">
+                  Preparing the dashboard for {snapshot.employeeCount} employees — this takes a few seconds.
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </div>
       ) : (
         <Card>
           <CardContent className="flex flex-col items-center gap-3 p-10 text-center">
