@@ -265,9 +265,9 @@ export function PendingToStartView({
 
   /*
    * Every row action here opens a page-owned modal: ?action=reassign,
-   * ?action=view (the read-only Eye) or ?action=schedule (the job console —
-   * the host opens onOpenConsole through it, and it can reschedule, cancel or
-   * reassign). When one of those closes the row may have changed tab — a
+   * ?action=view (the read-only Eye) or ?action=console (the accepted-job
+   * console — the host opens onOpenConsole through it, and it can approve or
+   * reject a technician request, or reschedule). When one of those closes the row may have changed tab — a
    * reassign committed, or the technician checked in from the app meanwhile —
    * so refetch and recount as the action param clears. ?action=checkin has had
    * no row icon since 2026-09-11 (the technician checks in from the app only);
@@ -280,7 +280,7 @@ export function PendingToStartView({
     if (
       (prevAction.current === 'reassign' || prevAction.current === 'assign'
         || prevAction.current === 'checkin' || prevAction.current === 'view'
-        || prevAction.current === 'schedule') &&
+        || prevAction.current === 'console') &&
       action !== prevAction.current
     ) {
       bumpReload();

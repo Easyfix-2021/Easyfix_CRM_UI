@@ -77,6 +77,8 @@ function runClear(initialQuery, src = PAGE, extras = {}) {
     router: { replace: (url) => calls.replaced.push(url) },
     writePsFilterParams: (p, f) => { calls.wrote.push(f); ['psStatus', 'psCategory', 'psCity', 'psClient', 'psZonalManager'].forEach((k) => p.delete(k)); },
     EMPTY_PS_FILTERS,
+    // /my-orders' clear also drops the Pending to Start sub-tab param.
+    PTS_TAB_PARAM: 'ptsTab',
     ...extras,
   });
   fn();
@@ -163,6 +165,14 @@ test('clearing on my-orders drops the tab and the bucket filters too', () => {
   assert.deepEqual(c.tab, ['all']);
   assert.deepEqual(c.page, [0]);
   assert.deepEqual(c.ps, [EMPTY_PS_FILTERS]);
+});
+
+test('clearing on my-orders also drops the Pending to Start sub-tab', () => {
+  // Without this a "Show All Orders" from the Pending to Start strip left
+  // ?ptsTab=missed behind, and the next visit reopened that tab unasked.
+  const c = runClear('tab=pending-start&ptsTab=missed&q=goa', ORDERS);
+  assert.ok(!/ptsTab=/.test(c.replaced[0]), `ptsTab must be gone, got ${c.replaced[0]}`);
+  assert.match(c.replaced[0], /q=goa/, 'an unrelated search survives');
 });
 
 test("the legacy map's own prose points where the map actually points", () => {
