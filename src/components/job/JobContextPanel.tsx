@@ -38,7 +38,7 @@
 
 import { useEffect, useState } from 'react';
 import {
-  MapPin, Calendar, Loader2, Clock, ChevronDown, Pencil, AlertTriangle,
+  MapPin, Calendar, CalendarClock, Loader2, Clock, ChevronDown, Pencil, AlertTriangle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { showToast } from '@/components/ui/toast';
@@ -174,6 +174,7 @@ export function JobContextPanel({
   showReschedule = false,
   onReschedule,
   rescheduling = false,
+  rescheduleRequestedFor = null,
   pastBlocksAction = false,
   onSaveDetails,
   onAddressSaved,
@@ -192,6 +193,10 @@ export function JobContextPanel({
   onReschedule?: () => void;
   /** Schedule & Assign only — veils the schedule row while a reschedule refetch runs. */
   rescheduling?: boolean;
+  /** The appointment a technician asked to move this Pending to Start job to
+      ('YYYY-MM-DD HH:mm' IST, from lib/job-app-request pendingRescheduleRequestFor).
+      null ⇒ no open reschedule ask, and no row renders. */
+  rescheduleRequestedFor?: string | null;
   /*
    * Opt-in EDITING of Job Description + Additional Comments. Absent (the
    * default) ⇒ both render read-only exactly as before — the panel is shared
@@ -529,6 +534,20 @@ export function JobContextPanel({
                   </Button>
                 )}
               </div>
+              {/* The technician's reschedule ASK, directly under the live
+                  appointment so ops can compare the two. displaySlot with no
+                  stored slot derives the band from the asked-for hour; both
+                  helpers read the zone-less value as IST, so no conversion. */}
+              {!rescheduling && rescheduleRequestedFor && (
+                <div className="mt-2 flex items-start gap-2 rounded-md border border-warning/30 bg-warning-tint p-2 text-xs text-warning-strong">
+                  <CalendarClock className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span>
+                    <b>Reschedule Requested:</b>{' '}
+                    {formatDate(rescheduleRequestedFor)}
+                    {displaySlot(rescheduleRequestedFor, null) && <> · {displaySlot(rescheduleRequestedFor, null)}</>}
+                  </span>
+                </div>
+              )}
               {/*
                 * Past-appointment notice — WORDED BY WHAT THE HOST MODAL CAN DO.
                 *

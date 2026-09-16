@@ -206,3 +206,26 @@ export function appRequestFromDetail(detail: AppRequestDetail | null | undefined
     requestedFor: kind === 'reschedule' ? text(detail?.requestedDateTime) : null,
   };
 }
+
+/*
+ * The appointment a technician has ASKED to move a Pending to Start job to, or
+ * null. Feeds the "Reschedule Requested" row under Job Date & Time in the
+ * Reassign Technician modal, off the GET /admin/jobs/:id read that modal
+ * already makes.
+ *
+ * Unlike appRequestFromDetail this IS status-gated (owner, 2026-09-16: "If
+ * Pending to Start job is Reschedule Requested"): the row sits beside the live
+ * appointment as a proposal to compare against, and outside status 1 there is
+ * no schedule left for ops to move. A job carrying a cancel ask as well yields
+ * null — cancel wins server-side, so there is no reschedule to show.
+ *
+ * Returned VERBATIM ('YYYY-MM-DD HH:mm', IST wall-clock). The caller renders it
+ * through formatDate / displaySlot, which read a zone-less value as IST.
+ */
+export function pendingRescheduleRequestFor(
+  detail: { job_status?: number | string | null; appRequest?: AppRequestDetail | null } | null | undefined,
+): string | null {
+  if (!detail || Number(detail.job_status) !== PENDING_TO_START_STATUS) return null;
+  const req = appRequestFromDetail(detail.appRequest);
+  return req?.kind === 'reschedule' ? req.requestedFor : null;
+}
