@@ -83,7 +83,7 @@ const TONE: Record<Bucket, { wrap: string; icon: string; Icon: typeof Send; titl
     title: 'Waiting for a technician to accept',
   },
   no_takers: {
-    wrap: 'border-danger bg-danger-tint text-danger-strong', icon: 'bg-danger text-white', Icon: AlertTriangle,
+    wrap: 'border-urgent bg-urgent-tint text-urgent-strong', icon: 'bg-urgent text-white', Icon: AlertTriangle,
     title: 'Nobody accepted — offer to more technicians',
   },
 };
@@ -173,7 +173,7 @@ export function ScheduleAssignUplifted({
       {/* ── Timeline: horizontal, so the history costs one row, not a column ── */}
       <div className="rounded-md border">
         <div className="flex items-center justify-between px-3 pt-2">
-          <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Timeline</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Timeline</h3>
           {originalAppt && (
             <span className="text-xs text-muted-foreground">
               Original appointment <strong className="text-foreground">{formatDate(originalAppt)}</strong>
@@ -194,10 +194,10 @@ export function ScheduleAssignUplifted({
                     : s.state === 'now' ? 'border-primary bg-background ring-4 ring-primary/20'
                       : 'border-border bg-background',
                 ].join(' ')} />
-                <span className={`text-[11px] leading-tight ${s.state === 'now' ? 'font-semibold text-primary' : s.state === 'next' ? 'text-muted-foreground' : 'font-medium'}`}>
+                <span className={`text-xs leading-tight ${s.state === 'now' ? 'font-semibold text-primary' : s.state === 'next' ? 'text-muted-foreground' : 'font-medium'}`}>
                   {s.name}
                 </span>
-                <span className="text-[10px] leading-tight text-muted-foreground">{s.when}</span>
+                <span className="text-xs leading-tight text-muted-foreground">{s.when}</span>
               </div>
             ))}
           </div>
@@ -274,16 +274,16 @@ export function ScheduleAssignUplifted({
                 <li key={o.efr_id} className="flex items-center justify-between gap-2 py-1.5 text-xs">
                   <span className="min-w-0">
                     <span className="block truncate font-medium">{o.efr_name}</span>
-                    <span className="block text-[11px] text-muted-foreground">
+                    <span className="block text-xs text-muted-foreground">
                       {relativeTime(o.offered_at)}
                       {(o.offer_count ?? 0) > 1 ? ` · offered ×${o.offer_count}` : ''}
                       {o.reject_reason ? ` · ${o.reject_reason}` : ''}
                     </span>
                   </span>
                   <span className={[
-                    'shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium',
+                    'shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium',
                     (o.offer_status ?? 0) === 0 ? 'border-warning bg-warning-tint text-warning-strong'
-                      : o.offer_status === 2 ? 'border-danger bg-danger-tint text-danger-strong'
+                      : o.offer_status === 2 ? 'border-urgent bg-urgent-tint text-urgent-strong'
                         : 'border-border bg-muted text-muted-foreground',
                   ].join(' ')}>
                     {o.offer_status_label || ((o.offer_status ?? 0) === 0 ? 'Waiting' : 'Closed')}
@@ -297,9 +297,9 @@ export function ScheduleAssignUplifted({
 
       {/* ── Photos and videos attached when the job was created ── */}
       <div className="rounded-md border p-3">
-        <h3 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           <ImageIcon className="h-3.5 w-3.5" />Photos and videos
-          <span className="font-mono text-[11px] normal-case tracking-normal">{media.length}</span>
+          <span className="font-mono text-xs normal-case tracking-normal">{media.length}</span>
         </h3>
         {media.length === 0 ? (
           <p className="rounded-md border border-dashed px-3 py-2 text-center text-xs text-muted-foreground">
@@ -322,7 +322,7 @@ export function ScheduleAssignUplifted({
                     : /* eslint-disable-next-line @next/next/no-img-element */
                       <img src={m.url} alt={m.label} className="h-16 w-full object-cover" loading="lazy" />}
                 </span>
-                <span className="block truncate px-1.5 py-1 text-[11px] text-muted-foreground group-hover:text-foreground">{m.label}</span>
+                <span className="block truncate px-1.5 py-1 text-xs text-muted-foreground group-hover:text-foreground">{m.label}</span>
               </a>
             ))}
           </div>
@@ -337,9 +337,9 @@ function Tile({ label, value, sub, title, subStrong }: {
 }) {
   return (
     <div className="bg-background px-3 py-2" title={title}>
-      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
       <p className="text-sm font-semibold tabular-nums">{value}</p>
-      {sub && <p className={`text-[11px] ${subStrong ? 'font-medium text-warning-strong' : 'text-muted-foreground'}`}>{sub}</p>}
+      {sub && <p className={`text-xs ${subStrong ? 'font-medium text-warning-strong' : 'text-muted-foreground'}`}>{sub}</p>}
     </div>
   );
 }
@@ -347,7 +347,7 @@ function Tile({ label, value, sub, title, subStrong }: {
 function Card({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
   return (
     <section className="rounded-md border p-3">
-      <h3 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+      <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
         {icon}{title}
       </h3>
       {children}
