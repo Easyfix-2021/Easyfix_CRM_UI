@@ -1567,15 +1567,7 @@ export function ScheduleAssignModal({
           open={rescheduleOpen}
           jobId={jobId}
           onClose={() => setRescheduleOpen(false)}
-          onDone={() => {
-            // invalidateFetch only DROPS the cache — it does not re-run a hook
-            // that's still mounted, which is why the reschedule used to need a
-            // manual page reload. Actually refetch the two mounted queries so the
-            // new Job Date + re-ranked candidates + expired offers show at once,
-            // and remount JobRemarksView (key bump) so the reschedule comment and
-            // any pending-request change appear too.
-            onRescheduled();
-          }}
+          onDone={onRescheduled}
         />
       )}
 
