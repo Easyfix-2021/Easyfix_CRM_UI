@@ -7,8 +7,10 @@
  * does not get a shared npm package for this: it is 120 dependency-free lines
  * using only node:child_process, and the repos already mirror each other the
  * crude way (each workflow git-clones the sibling into "$RUNNER_TEMP" for the
- * cross-repo tests). Only the comment text and the failure message differ
- * between the copies — the logic is identical, and should stay identical.
+ * cross-repo tests). Only the comment text, the failure message, MIN_TESTS and
+ * the backend's close-pool `--require` (it owns a DB pool; this repo's tests own
+ * no handles) differ between the copies — the logic is identical, and should
+ * stay identical.
  *
  * ─── WHY THIS EXISTS ───────────────────────────────────────────────────────
  *
@@ -46,9 +48,9 @@
  * runner's own exit code, so a genuinely FAILING suite would go green.
  *
  * Rejected: a custom reporter setting process.exitCode. It runs inside the
- * runner's process, and `--test-force-exit` calls process.exit() on a timer, so
- * whether the reporter's final flush lands first is a race. Clever, and someone
- * decodes it at 3am.
+ * runner's process, so its final flush raced `--test-force-exit`'s timed
+ * process.exit(). That flag is gone now (see below), but the objection stands
+ * on its own: clever, and someone decodes it at 3am.
  *
  * ─── THE PARSE, AND WHY IT MATCHES TWO FORMATS ─────────────────────────────
  *
@@ -68,13 +70,49 @@
  * anything must not report clean.
  *
  * Usage (from package.json):  node scripts/test-no-skips.js tests/*.test.js
- * The wrapper supplies --test and --test-force-exit; pass only the files.
+ * The wrapper supplies --test; pass only the files.
  */
+/*
+ * ─── THE FLOOR, AND THE RUNS THAT MADE IT NECESSARY ────────────────────────
+ *
+ * 2026-09-16: QA deploy 27c5e57 failed this wrapper with "could not find the
+ * summary lines" on a tree IDENTICAL to 9306afb, which had passed. The Actions
+ * log stopped mid-TAP at `ok 663`, no `# tests`, runner exit 0.
+ *
+ * The cause was the `--test-force-exit` this wrapper used to pass — the same
+ * flag EasyFix_Backend removed on 2026-09-04 (3d1275d); this copy was ported on
+ * 09-02 and never caught up. Reproduced locally on Node 20.20.2, the exact CI
+ * version, piped stdout, CI=1, 15 runs each:
+ *
+ *   with    --test-force-exit   `# tests` 604..693, never 709, exit 0 every time
+ *   without --test-force-exit   `# tests` 709, 15/15, byte-stable output
+ *
+ * And locally the loss took the WORSE shape: the summary arrived, internally
+ * consistent — `tests 604 · pass 604 · fail 0 · skipped 0` — with the tail tests
+ * of ~13 files simply absent. That run passes every other check in this file.
+ * On the runner the truncation happened to land on the summary instead, which
+ * is the only reason anyone saw it.
+ *
+ * Unlike the backend, nothing here needed the flag: no test in this repo owns a
+ * pool or timer, and all 15 unforced runs exited on their own in the same time.
+ *
+ * So the wrapper is told what the total should be. MIN_TESTS is a RATCHET: adding
+ * tests never touches it, because the total only rises. Lower it by hand, in the
+ * same commit, when tests are deliberately deleted — a suite that shrinks should
+ * say so out loud.
+ */
+const MIN_TESTS = 709;
+
 const { spawn } = require('node:child_process');
 
 const child = spawn(
   process.execPath,
-  ['--test', '--test-force-exit', ...process.argv.slice(2)],
+  // `--test-force-exit` USED TO BE HERE and is deliberately gone. It exited the
+  // runner once the tests it knew about had finished, so the last results never
+  // landed: either a missing summary, or a short run reporting `fail 0, skipped 0`
+  // that nobody would question. Putting it back reintroduces exactly that, and
+  // MIN_TESTS below is the only thing that would notice.
+  ['--test', ...process.argv.slice(2)],
   // stdout piped so it can be parsed, stderr inherited. Output is written
   // through as it arrives rather than buffered, so an 18-second 240-test run
   // still scrolls live in the Actions log.
@@ -85,6 +123,7 @@ const skippedTests = [];
 const todoTests = [];
 let skippedCount = null;
 let todoCount = null;
+let testCount = null;
 let partial = '';
 
 // The whole stream is scanned line by line rather than a trailing buffer: the
@@ -104,6 +143,10 @@ function scan(line) {
   if (m) skippedCount = Number(m[1]);
   const t = /^(?:#|ℹ) todo (\d+)\s*$/.exec(line);
   if (t) todoCount = Number(t[1]);
+  // tap: `# tests 709`  ·  spec: `ℹ tests 709`. Same column-0 anchor as the
+  // others, so a nested subtest summary cannot overwrite the real total.
+  const n = /^(?:#|ℹ) tests (\d+)\s*$/.exec(line);
+  if (n) testCount = Number(n[1]);
 }
 
 child.stdout.on('data', (buf) => {
@@ -124,8 +167,8 @@ child.on('close', (code, signal) => {
   // A real test failure is reported by the runner and passed straight through —
   // this wrapper never masks it, and never adds noise on top of it.
   if (code !== 0) process.exit(code);
-  if (skippedCount === null || todoCount === null) {
-    console.error('\ncould not find the "skipped"/"todo" summary lines in the test output.'
+  if (skippedCount === null || todoCount === null || testCount === null) {
+    console.error('\ncould not find the "tests"/"skipped"/"todo" summary lines in the test output.'
       + '\nThe runner exited 0, but this wrapper cannot confirm zero skips, so it fails'
       + '\nrather than reporting a clean it did not verify. Has the reporter format changed?');
     process.exit(1);
@@ -153,6 +196,26 @@ child.on('close', (code, signal) => {
    * an unmet precondition, a todo means unwritten work.
    */
   const problems = [];
+  if (testCount < MIN_TESTS) {
+    problems.push([`only ${testCount} test(s) ran; this suite has at least ${MIN_TESTS}.`,
+      'Nothing failed and nothing was skipped, which is exactly what a TRUNCATED run looks',
+      'like: the counters only count what the runner saw finish.',
+      '',
+      'DO NOT JUST RE-RUN. --test-force-exit used to make this intermittent; that flag is',
+      `gone (2026-09-16) and 15 consecutive runs gave ${MIN_TESTS} every time, so a short`,
+      'count here is REPRODUCIBLE and means something real.',
+      '',
+      'Three causes, in the order worth checking —',
+      '  · tests were deliberately deleted. Then lower MIN_TESTS in this file, in the same',
+      '    commit that removes them, so the suite never quietly shrinks again.',
+      '  · a test file no longer exits on its own, so the runner never collected its',
+      '    results. Find it with: for f in tests/*.test.js; do node --test "$f"; done',
+      '    and watch for one that does not return.',
+      '  · something re-introduced --test-force-exit, or another flag that exits early.',
+      '',
+      'Note this wrapper is meant for the whole suite; a deliberate subset run will trip it.',
+    ].join('\n'));
+  }
   if (skippedCount > 0 || skippedTests.length > 0) {
     problems.push([`${Math.max(skippedCount, skippedTests.length)} test(s) or suite(s) SKIPPED.`,
       'A skipped test is a guard that is not running, so this is a failure. Either make',
