@@ -54,10 +54,13 @@ import { useCallback, useMemo } from 'react';
  * effectiveMode fold + guardedClose read-only skip, and each list page's `modal`
  * memo. tests/my-orders-checkin-audit.test.js pins every one of them.
  */
-export type JobAction = 'create' | 'view' | 'checkin' | 'audit' | 'edit' | 'confirm' | 'assign' | 'reassign' | 'schedule';
+export type JobAction = 'create' | 'view' | 'checkin' | 'audit' | 'edit' | 'confirm' | 'assign' | 'reassign' | 'schedule' | 'console';
 
 const KNOWN_ACTIONS: ReadonlySet<JobAction> = new Set<JobAction>([
   'create', 'view', 'checkin', 'audit', 'edit', 'confirm', 'assign', 'reassign', 'schedule',
+  // The accepted-job console (My Orders → Pending to Start). Its own dialog —
+  // deliberately NOT in JOBMODAL_ACTIONS below, so JobModal never renders it.
+  'console',
 ]);
 
 /*

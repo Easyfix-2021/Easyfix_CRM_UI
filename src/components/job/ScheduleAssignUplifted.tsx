@@ -149,6 +149,7 @@ const TONE: Record<Bucket, {
 export function ScheduleAssignUplifted({
   jobId, job, probe, offers, offersLoading, offerable,
   onReschedule, onPickTechnicians, onSaveDetails, onEditServices, onAddressSaved, apiBase,
+  actionOverride, technicianOverride, stateOverride,
 }: {
   jobId: number | null;
   job: UpliftedJob;
@@ -163,6 +164,18 @@ export function ScheduleAssignUplifted({
   onEditServices?: () => void;
   onAddressSaved?: () => void;
   apiBase: string;
+  /*
+   * ACCEPTED-JOB SLOTS. The Pending to Start console renders this same layout
+   * for a job a technician has already taken; only three things differ from an
+   * unallocated job, and they are swapped in rather than forked so the two
+   * consoles cannot drift in look: the "what to do now" strip (technician
+   * requests / missed slot / today / future instead of the offer bucket), the
+   * Technician card (the assigned technician instead of offer replies), and
+   * the Current state tile. Omit all three and this is Schedule & Assign.
+   */
+  actionOverride?: React.ReactNode;
+  technicianOverride?: React.ReactNode;
+  stateOverride?: { label: string; sub: string; chipClass: string };
 }) {
   const { me } = useMe();
   const bucket = offerBucket(offers);
@@ -264,6 +277,8 @@ export function ScheduleAssignUplifted({
         * Reschedule first; offering comes back the moment there is a future
         * time to offer.
         */}
+      {actionOverride ?? (
+      <>
       {/*
         * BLOCKERS OUTRANK THE BUCKET, in the order they have to be fixed:
         *   1. no service — a job with nothing to do cannot be ranked (the Top-10
@@ -316,6 +331,9 @@ export function ScheduleAssignUplifted({
         </div>
       </div>
 
+      </>
+      )}
+
       {/* ── Timeline + the five status tiles + the job's flat facts ── */}
       <div className="rounded-md border bg-card">
         <div className="px-3 pt-2">
@@ -361,11 +379,12 @@ export function ScheduleAssignUplifted({
           </div>
           <div className="bg-card px-3 py-2">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Current state</p>
-            <p><span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${tone.chip}`}>{tone.state}</span></p>
+            <p><span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${stateOverride?.chipClass ?? tone.chip}`}>{stateOverride?.label ?? tone.state}</span></p>
             <p className="text-xs text-muted-foreground">
-              {offersLoading ? 'Loading offers…'
-                : bucket === 'unallocated' ? 'Waiting on you'
-                  : bucket === 'offered' ? 'Waiting on technicians' : 'Expired and rejected'}
+              {stateOverride ? stateOverride.sub
+                : offersLoading ? 'Loading offers…'
+                  : bucket === 'unallocated' ? 'Waiting on you'
+                    : bucket === 'offered' ? 'Waiting on technicians' : 'Expired and rejected'}
             </p>
           </div>
           <div className="bg-card px-3 py-2">
@@ -480,6 +499,8 @@ export function ScheduleAssignUplifted({
         </Card>
 
         <Card icon={<Wrench className="h-3.5 w-3.5" />} title="Technician">
+          {technicianOverride ?? (
+          <>
           {/* No technician exists on an unallocated job — the box says so and
               then spends its space on the offer replies, the only technician
               information this bucket has. */}
@@ -539,6 +560,8 @@ export function ScheduleAssignUplifted({
                 </li>
               ))}
             </ul>
+          )}
+          </>
           )}
         </Card>
       </div>

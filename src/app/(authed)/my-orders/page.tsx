@@ -35,6 +35,7 @@ import {
 } from '@/components/job/PendingSchedulingFilters';
 import { JobScopeBar, scopeIsClampedFor } from '@/components/job/JobScopeBar';
 import { PendingSchedulingTabs } from '@/components/job/PendingSchedulingTabs';
+import { PendingStartConsole } from '@/components/job/PendingStartConsole';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
 import { ResendPinButton, RESEND_PIN_ACTION } from '@/components/job/ResendPinButton';
@@ -351,6 +352,9 @@ export default function MyOrdersPage() {
    * without it the strip keeps last minute's numbers over a fresh table.
    */
   const [countsReload, setCountsReload] = useState(0);
+  /* Same idea for the Pending to Start view's own table + tab counts, bumped
+     when the job console changes a job. */
+  const [ptsReload, setPtsReload] = useState(0);
 
   async function load(reset = false, force = false, silent = false) {
     const seq = ++loadSeqRef.current;
@@ -599,6 +603,13 @@ export default function MyOrdersPage() {
     return { open: false, jobId: null };
   }, [urlAction, urlJobId]);
 
+  // PendingStartConsole state — derived from `?action=console`: the job console
+  // for an ACCEPTED job, opened from the Pending to Start row icon.
+  const consoleModal = useMemo<{ open: boolean; jobId: number | null }>(() => {
+    if (urlAction === 'console' && urlJobId != null) return { open: true, jobId: urlJobId };
+    return { open: false, jobId: null };
+  }, [urlAction, urlJobId]);
+
   // Transient sibling family for the Unconfirmed grouped view — see jobs/page.
   const [familySiblings, setFamilySiblings] = useState<Array<{ job_id: number; service_category: string | null }> | null>(null);
   function closeModal()                { closeJobAction(); }
@@ -619,6 +630,7 @@ export default function MyOrdersPage() {
   function openConfirm(id: number, siblings?: Array<{ job_id: number; service_category: string | null }>)     { setFamilySiblings(siblings ?? null); openJobAction('confirm',  id); }
   function openAssign(id: number)      { openJobAction('assign',   id); }
   function openReassign(id: number)    { openJobAction('reassign', id); }
+  function openConsole(id: number)     { openJobAction('console',  id); }
   // Pending-for-Scheduling rows → combined Schedule & Assign modal.
   function openSchedule(id: number)    { openJobAction('schedule', id); }
 
@@ -1352,6 +1364,16 @@ export default function MyOrdersPage() {
         * the Job Date/Slot and assigns a technician in one atomic step,
         * then refreshes the list so the row moves to "Pending App Ack".
         */}
+      <PendingStartConsole
+        open={consoleModal.open}
+        jobId={consoleModal.jobId}
+        onClose={() => closeJobAction()}
+        /* A decision here can move the job to another tab (an approved
+           cancellation leaves the page entirely), so the list behind it
+           re-reads and recounts. */
+        onChanged={() => { cacheRef.current.clear(); load(false, true); setCountsReload((n) => n + 1); setPtsReload((n) => n + 1); }}
+      />
+
       <ScheduleAssignModal
         open={scheduleModal.open}
         jobId={scheduleModal.jobId}
