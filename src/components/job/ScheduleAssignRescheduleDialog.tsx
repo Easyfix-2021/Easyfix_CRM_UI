@@ -65,9 +65,27 @@ export function ScheduleAssignRescheduleDialog({
    * belong to the party chosen in step 1. Keyed on the party, so switching it
    * re-reads (module-cached) rather than filtering a stale list client-side.
    */
-  const reasons = useFetch<Reason[]>(
+  const byParty = useFetch<Reason[]>(
     open && dueTo ? `/admin/jobs/action-reasons?type=reschedule&dueTo=${DUE_TO_PARAM[dueTo]}` : null,
   );
+  /*
+   * FALLBACK, and it is a temporary one. The six seeded reschedule reasons
+   * carry the party numbering this repo disproved on 2026-07-14, so the
+   * customer-worded reasons sit under EasyFix and `dueTo=customer` legitimately
+   * returns nothing. Correcting those six rows is the business's call and has
+   * been deferred, so rather than present an empty dropdown the dialog falls
+   * back to the unfiltered list AND SAYS SO — a filter that silently shows
+   * everything is worse than no filter. Delete this branch, and `dueTo=any`
+   * with it, once the catalogue is fixed.
+   */
+  const partyEmpty = !!dueTo && !byParty.loading && (byParty.data ?? []).length === 0;
+  const unfiltered = useFetch<Reason[]>(
+    open && partyEmpty ? '/admin/jobs/action-reasons?type=reschedule&dueTo=any' : null,
+  );
+  const reasons = {
+    loading: byParty.loading || (partyEmpty && unfiltered.loading),
+    data: partyEmpty ? unfiltered.data : byParty.data,
+  };
 
   // Every field resets on each open — a previous attempt must never leak into
   // the next job's reschedule.
@@ -187,9 +205,14 @@ export function ScheduleAssignRescheduleDialog({
               </option>
               {options.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
             </select>
+            {partyEmpty && !reasons.loading && options.length > 0 && (
+              <p className="mt-1 text-xs text-warning-strong">
+                No reasons are tagged to {dueTo} yet, so every reschedule reason is listed.
+              </p>
+            )}
             {dueTo && !reasons.loading && options.length === 0 && (
               <p className="mt-1 text-sm text-warning-strong">
-                No reschedule reasons are configured for {dueTo}. Pick another party or add the reason in settings.
+                No reschedule reasons are configured. Add them in settings before rescheduling from here.
               </p>
             )}
           </Step>
