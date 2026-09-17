@@ -152,7 +152,7 @@ export function ScheduleAssignRescheduleDialog({
             <li>• {liveOffers} technician{liveOffers === 1 ? '' : 's'} waiting to reply will lose the offer.</li>
             <li>• They will see it as <b>Expired · Appointment rescheduled</b>.</li>
             <li>• The job becomes <b>Unallocated</b> again.</li>
-            <li>• You will have to offer it again for the new time.</li>
+            <li>• <b>Next step:</b> choose technicians and offer it again for the new time — before you close the console.</li>
           </ul>
         ),
         confirmLabel: 'Reschedule and expire offers',
@@ -229,7 +229,7 @@ export function ScheduleAssignRescheduleDialog({
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
               <span>
                 <b>{liveOffers} offer{liveOffers === 1 ? '' : 's'} open.</b> Rescheduling expires {liveOffers === 1 ? 'it' : 'them'} —
-                the job returns to Unallocated and must be offered again.
+                the job returns to Unallocated. After saving, offer it again for the new time before closing the console.
               </span>
             </p>
           )}

@@ -337,6 +337,16 @@ export function ScheduleAssignModal({
    */
   const [oneListOpen, setOneListOpen] = useState(false);
   /*
+   * RE-OFFER AFTER RESCHEDULE. Rescheduling expires every offer still waiting
+   * for a reply (the backend closes them as "Appointment rescheduled"), so a
+   * job that WAS offered is suddenly offered to nobody. Set when a reschedule
+   * expired live offers; while set, the Uplifted strip says "offer this job
+   * again", and closing the console asks first. Cleared by a new offer (live
+   * offers exist again), by the offer commit itself (which closes the modal),
+   * and on job switch.
+   */
+  const [reofferNeeded, setReofferNeeded] = useState(false);
+  /*
    * FAST SERVICES REFRESH after the one-list editor saves. The console's job
    * (services, totals) comes from /candidates, which re-ranks every technician
    * — seconds, during which the card still showed the old lines. The save now
@@ -359,6 +369,16 @@ export function ScheduleAssignModal({
    * reschedule comment and any pending-request change appear too.
    */
   function onRescheduled() {
+    // Read BEFORE the refetch below replaces the list: these are the offers the
+    // reschedule just expired.
+    const expired = (offerItems ?? []).filter((o) => (o.offer_status ?? 0) === 0).length;
+    if (expired > 0) {
+      setReofferNeeded(true);
+      showToast({
+        variant: 'warning',
+        message: `Rescheduled. ${expired} offer${expired === 1 ? '' : 's'} expired — offer this job again for the new time before closing.`,
+      });
+    }
     rescheduleRefetchStarted.current = false;
     setRescheduling(true); // veil the stale date/list until the refetch settles
     top.refetch();
@@ -509,6 +529,7 @@ export function ScheduleAssignModal({
     // otherwise show job A's comments while job B's load.
     setRemarksReloadKey((n) => n + 1);
     setJobPatch(null);
+    setReofferNeeded(false);
   }, [open, jobId]);
 
   // Toggle a technician's membership in the selection. OFFER mode = multi-select
@@ -738,6 +759,8 @@ export function ScheduleAssignModal({
   const offersReady = !offersKey || offers.dataKey === offersKey
     || (!!offers.error && !offers.loading && !offers.refreshing);
   const offerItems = offersReady ? (offers.data?.items ?? null) : null;
+  const hasLiveOffers = (offerItems ?? []).some((o) => (o.offer_status ?? 0) === 0);
+  useEffect(() => { if (hasLiveOffers) setReofferNeeded(false); }, [hasLiveOffers]);
   const upliftedJob = job && jobPatch && Number(jobPatch.jobId) === Number(jobId)
     ? ({ ...job, services: jobPatch.services } as typeof job)
     : job;
@@ -996,7 +1019,35 @@ export function ScheduleAssignModal({
   // through the Reschedule dialog (which persists immediately), so there is
   // nothing to guard on close. Kept wired (not removed) so the Dialog's
   // onOpenChange plumbing is unchanged.
-  const guardedOpenChange = useFormDirtyGuard(onClose, {
+  /*
+   * Closing right after a reschedule expired this job's offers leaves it
+   * offered to nobody for the new time — the step ops kept forgetting. Ask
+   * once; "Stay and offer" keeps the console open on the technician list.
+   */
+  async function requestClose() {
+    if (reofferNeeded && !hasLiveOffers) {
+      const ok = await confirmAction({
+        title: 'Close without offering this job again?',
+        icon: <AlertTriangle className="h-5 w-5" />,
+        iconAccent: 'amber',
+        description: (
+          <ul className="space-y-1.5 text-sm">
+            <li>• The reschedule expired the offers this job had.</li>
+            <li>• Nobody has it now for the new appointment{job?.requested_date_time ? <> (<b>{formatDate(job.requested_date_time)}</b>)</> : null}.</li>
+            <li>• Choose technicians and offer it, or it stays <b>Unallocated</b>.</li>
+          </ul>
+        ),
+        confirmLabel: 'Close anyway',
+        cancelLabel: 'Stay and offer',
+      });
+      if (!ok) {
+        techRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+      }
+    }
+    onClose();
+  }
+  const guardedOpenChange = useFormDirtyGuard(() => { void requestClose(); }, {
     isDirty: () => false,
     when: () => !committing,
   });
@@ -1079,6 +1130,7 @@ export function ScheduleAssignModal({
               offersLoading={offers.loading}
               pinnedNotes={pinnedNotes}
               onShowNotes={() => notesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+              reofferNeeded={reofferNeeded}
               offerable={offerable}
               onReschedule={() => setRescheduleOpen(true)}
               onPickTechnicians={() => techRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
@@ -1525,9 +1577,14 @@ export function ScheduleAssignModal({
                bury the second under the first, so remarks take two thirds and
                the notes hold the right third, in view while the thread is read. */
             <div className="grid gap-3 lg:grid-cols-[2fr_1fr]">
-              <JobRemarksView key={remarksReloadKey} jobId={jobId} />
-              <div ref={notesRef} className="scroll-mt-4">
-                <JobInternalNotes key={jobId ?? 'none'} jobId={jobId} canAdd={offerable} onPinnedChange={setPinnedNotes} />
+              {/* ONE FIXED HEIGHT for both tiles (ops, 2026-09-17): a long
+                  thread or a stack of notes scrolls inside its tile instead of
+                  stretching the row and pushing the page down. */}
+              <div className="h-96 min-h-0">
+                <JobRemarksView key={remarksReloadKey} jobId={jobId} fill />
+              </div>
+              <div ref={notesRef} className="h-96 min-h-0 scroll-mt-4">
+                <JobInternalNotes key={jobId ?? 'none'} jobId={jobId} canAdd={offerable} onPinnedChange={setPinnedNotes} fill />
               </div>
             </div>
           )}
@@ -1571,7 +1628,7 @@ export function ScheduleAssignModal({
               least one is ticked. */}
           <div className="flex items-center gap-2">
             {canCancel && cancel.button}
-            <Button variant="outline" onClick={onClose} disabled={committing}>Close</Button>
+            <Button variant="outline" onClick={() => { void requestClose(); }} disabled={committing}>Close</Button>
             {canCommit && (
               <Button
                 onClick={offerMode ? offer : assignSingle}

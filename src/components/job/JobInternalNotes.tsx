@@ -49,8 +49,10 @@ export type JobNote = {
 
 const MAX = 1000;
 
-export function JobInternalNotes({ jobId, canAdd = true, onPinnedChange }: {
+export function JobInternalNotes({ jobId, canAdd = true, onPinnedChange, fill = false }: {
   jobId: number | null;
+  /** Fill the host's height and scroll the notes inside it (the consoles' fixed tile). */
+  fill?: boolean;
   /** The host withholds adding (and pinning) on a read-only open, same gate as its editors. */
   canAdd?: boolean;
   /** Reports the pinned notes up, so the host can flag them elsewhere on the page. */
@@ -125,7 +127,7 @@ export function JobInternalNotes({ jobId, canAdd = true, onPinnedChange }: {
   }
 
   return (
-    <section className="rounded-md border bg-card p-3">
+    <section className={`rounded-md border bg-card p-3 ${fill ? 'flex h-full min-h-0 flex-col' : ''}`}>
       <div className="mb-2 flex items-center justify-between gap-2">
         <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           <StickyNote className="h-3.5 w-3.5" />Internal notes
@@ -180,7 +182,7 @@ export function JobInternalNotes({ jobId, canAdd = true, onPinnedChange }: {
            created DESC, id DESC). The stack is capped and scrolls rather than
            growing without limit: a job with 20 notes must not push the rest of
            the console off screen. */
-        <ul className="grid max-h-72 gap-2 overflow-y-auto pr-0.5">
+        <ul className={`grid content-start gap-2 overflow-y-auto pr-0.5 ${fill ? 'min-h-0 flex-1' : 'max-h-72'}`}>
           {notes.map((n) => {
             const isPinned = Number(n.is_pinned) === 1;
             return (

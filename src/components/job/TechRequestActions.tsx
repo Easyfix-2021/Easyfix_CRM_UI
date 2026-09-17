@@ -104,6 +104,10 @@ export type TechRequestActionsProps = {
    * queue and an approved cancellation leaves the tab entirely, so the refresh
    * has to be the page-wide one, not this section's own refetch. */
   onActioned: () => void;
+  /* Called INSTEAD of onActioned when an approved cancellation has cancelled
+   * the job — a host that shows the job (the job console) closes itself, since
+   * there is nothing left to act on. Absent → onActioned, as before. */
+  onCancelled?: () => void;
   /* How the two triggers are drawn. 'icon' (default) for a table action cell;
    * 'button' for the JobModal banner, where labelled buttons match the
    * customer-request banner sitting directly above it. The DECISION is
@@ -111,7 +115,7 @@ export type TechRequestActionsProps = {
   variant?: 'icon' | 'button';
 };
 
-export function TechRequestActions({ jobId, request, allowed, onActioned, variant = 'icon' }: TechRequestActionsProps) {
+export function TechRequestActions({ jobId, request, allowed, onActioned, onCancelled, variant = 'icon' }: TechRequestActionsProps) {
   const confirm = useConfirm();
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -127,7 +131,7 @@ export function TechRequestActions({ jobId, request, allowed, onActioned, varian
     jobId,
     defaultDueTo: 'Technician',
     disabled: busy,
-    onCancelled: onActioned,
+    onCancelled: onCancelled ?? onActioned,
   });
 
   if (!allowed) return null;

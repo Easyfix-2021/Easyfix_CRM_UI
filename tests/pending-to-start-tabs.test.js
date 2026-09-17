@@ -181,8 +181,14 @@ test('the table asks the server for the selected state: status=1, ptsState omitt
     /const scope = \{\s*status: 1,\s*ptsState: ptsState \|\| undefined,\s*\.\.\.filterParams,\s*q: q \|\| undefined,\s*ownerId,\s*\};/,
     'status pin, state, filters, search and owner — nothing else decides which rows exist');
   assert.match(table,
-    /const key = buildJobsKey\(\{\s*\.\.\.scope,\s*sortBy: 'requested_date_time',\s*sortDir: 'asc',\s*limit,\s*offset,\s*\}\);/,
-    'the rows are that scope, sorted soonest-appointment first, one server page at a time');
+    /const \[apptDir, setApptDir\] = useState<SortDir>\('asc'\);/,
+    'soonest appointment first by default');
+  assert.match(table,
+    /const key = buildJobsKey\(\{\s*\.\.\.scope,\s*sortBy: 'requested_date_time',\s*sortDir: apptDir,\s*limit,\s*offset,\s*\}\);/,
+    'the rows are that scope, in appointment order, one server page at a time');
+  assert.match(table,
+    /<SortHeader<string>\s*col="requested_date_time"\s*sortBy="requested_date_time"\s*sortDir=\{apptDir\}\s*onSort=\{\(\) => setApptDir\(\(d\) => \(d === 'asc' \? 'desc' : 'asc'\)\)\}\s*>/,
+    'the appointment header flips the order — the only sort this view offers');
   assert.doesNotMatch(view, /appRequest:/, 'the tabs replaced the appRequest filter — sending both would AND them');
 });
 
@@ -257,16 +263,14 @@ test('the selected tab is mirrored into the URL as ptsTab, hydrated on first ren
   assert.doesNotMatch(effect[1], /'q'/, 'the page owns ?q= — a second writer would clobber it');
 });
 
-test('search leads the filters\' row, with Clear Filters on it, and everything wraps', () => {
-  const row = view.indexOf('<div className="flex flex-wrap items-end gap-3">');
-  assert.ok(row > -1, 'the search + filters row must be one flex-wrap container');
-  const searchAt = view.indexOf('<Search ', row);
-  const inputAt = view.indexOf('value={search}', row);
-  const barAt = view.indexOf('<PendingSchedulingFilters', row);
-  assert.ok(searchAt > row && inputAt > searchAt && barAt > inputAt, 'the search box comes first on that line');
-  assert.match(view, /<div className="relative w-full xl:w-64 xl:shrink-0">/,
-    'full width when narrow, a fixed slot on the shared line when wide');
-  assert.match(view, /<div className="min-w-0 flex-1">\s*<PendingSchedulingFilters/);
+test('search sits on its own line above the filter bar, as on Pending for Scheduling', () => {
+  const card = view.indexOf('<CardContent className="p-3 space-y-3">');
+  assert.ok(card > -1, 'search and filters share one card, stacked');
+  const searchAt = view.indexOf('<Search ', card);
+  const inputAt = view.indexOf('value={search}', card);
+  const barAt = view.indexOf('<PendingSchedulingFilters', card);
+  assert.ok(searchAt > card && inputAt > searchAt && barAt > inputAt, 'the search box comes first, the bar below it');
+  assert.doesNotMatch(view, /xl:w-64/, 'no longer squeezed into the filters\' row');
   // Clear Filters rides on the bar's own controls row — the bar's, not a copy.
   assert.match(psFilters, /<div className="flex flex-wrap items-end gap-3">[\s\S]*?Clear Filters/,
     'control: the shared bar keeps Clear Filters on its controls\' row');

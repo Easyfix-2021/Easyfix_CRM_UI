@@ -96,6 +96,8 @@ export type UpliftedJob = {
   customer_email?: string | null;
   additional_name?: string | null;
   additional_number?: string | null;
+  /* The resolved category name (header's service_category). */
+  service_category?: string | null;
   /* Client card: client facts, SPOC contact and the EasyFix people on it. */
   client_spoc_email?: string | null;
   vertical_name?: string | null;
@@ -175,7 +177,7 @@ const TONE: Record<Bucket, {
 export function ScheduleAssignUplifted({
   jobId, job, probe, offers, offersLoading, offerable,
   onReschedule, onPickTechnicians, onSaveDetails, onEditServices, onAddressSaved, apiBase,
-  actionOverride, technicianOverride, stateOverride, pinnedNotes, onShowNotes,
+  actionOverride, technicianOverride, stateOverride, pinnedNotes, onShowNotes, reofferNeeded,
 }: {
   jobId: number | null;
   job: UpliftedJob;
@@ -208,6 +210,13 @@ export function ScheduleAssignUplifted({
      the Job notes card with a jump to them. */
   pinnedNotes?: JobNote[];
   onShowNotes?: () => void;
+  /*
+   * Set by the modal right after a reschedule that expired live offers: the
+   * job is unallocated again and has to be offered for the new time before the
+   * console is closed. Outranked only by the two blockers (no service, past
+   * appointment), which still have to be fixed first.
+   */
+  reofferNeeded?: boolean;
 }) {
   const { me } = useMe();
   const bucket = offerBucket(offers);
@@ -321,7 +330,7 @@ export function ScheduleAssignUplifted({
         *   2. a past appointment — the server refuses to offer it.
         * Only when neither applies does the strip describe the offer bucket.
         */}
-      <div className={`flex flex-wrap items-center gap-3 rounded-md border px-3 py-2 ${blocked ? 'border-urgent bg-urgent-tint text-urgent-strong' : tone.wrap}`}>
+      <div className={`flex flex-wrap items-center gap-3 rounded-md border px-3 py-2 ${blocked ? 'border-urgent bg-urgent-tint text-urgent-strong' : reofferNeeded ? TONE.offered.wrap : tone.wrap}`}>
         <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-md ${blocked ? 'bg-destructive text-destructive-foreground' : tone.icon}`}>
           {blocked ? <AlertTriangle className="h-4 w-4" /> : <tone.Icon className="h-4 w-4" />}
         </span>
@@ -329,14 +338,17 @@ export function ScheduleAssignUplifted({
           <p className="text-sm font-semibold">
             {noService ? 'Add a service first — this job has none'
               : apptPast ? 'Reschedule first — this appointment has passed'
-                : tone.title}
+                : reofferNeeded ? 'Offer this job again — the reschedule expired its offers'
+                  : tone.title}
           </p>
           <p className="text-xs opacity-90">
             {noService
               ? <>Every job needs at least one service. Technicians are matched on it, so it can’t be offered until one is added.</>
               : apptPast
                 ? <>The appointment was {appointment ? formatDate(appointment) : 'not set'}. Technicians can’t be offered a job whose time has gone — set a new date and time, then offer.</>
-                : <>
+                : reofferNeeded
+                  ? <>New appointment {appointment ? formatDate(appointment) : 'not set'} · nobody has this job now. Choose technicians below and offer it before you close this window.</>
+                  : <>
                   {bucket === 'unallocated' && <>Appointment {appointment ? formatDate(appointment) : 'not set'} · first technician to accept gets the job</>}
                   {bucket === 'offered' && <>{live.length} of {items.length} still to reply · {closed.length} expired or rejected</>}
                   {bucket === 'no_takers' && <>Expired and rejected: {closed.length} · widen the search or reschedule with the customer</>}
@@ -359,7 +371,7 @@ export function ScheduleAssignUplifted({
             </button>
           ) : offerable && (
             <button type="button" onClick={onPickTechnicians} className="rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground hover:opacity-90">
-              {bucket === 'unallocated' ? 'Choose technicians' : 'Offer to more'}
+              {reofferNeeded || bucket === 'unallocated' ? 'Choose technicians' : 'Offer to more'}
             </button>
           )}
         </div>
@@ -425,6 +437,12 @@ export function ScheduleAssignUplifted({
               {escalated
                 ? [job?.escalated_time ? formatDate(job.escalated_time) : null, job?.escalated_by_name ? `by ${job.escalated_by_name}` : null].filter(Boolean).join(' · ') || 'Escalated'
                 : 'Since ticket created'}
+            </p>
+            {/* Who is working the job now (tbl_job.job_owner) — the person to
+                ask about its age. */}
+            <p className="mt-0.5 truncate text-xs" title={job?.owner_name || undefined}>
+              <span className="text-muted-foreground">Owner </span>
+              {job?.owner_name ? <span className="font-medium">{job.owner_name}</span> : <span className="text-muted-foreground">Not added</span>}
             </p>
           </div>
           <div className="bg-card px-3 py-2">
@@ -535,6 +553,13 @@ export function ScheduleAssignUplifted({
                 {/* The zonal manager is decided by the address city
                     (tbl_city.state_user), so it sits with the address. A blank
                     means that city has no owner set. */}
+                {/* The client's own code for the branch/store this job is for
+                    (tbl_job.branch_details) — shown with the address because it
+                    names the place, not the client. */}
+                <p className="mt-0.5" title="The client's code for the branch or store this job is at">
+                  <span className="text-muted-foreground">Client branch ID </span>
+                  {job?.branch_details ? <span className="font-medium">{job.branch_details}</span> : <span className="text-muted-foreground">Not added</span>}
+                </p>
                 <p className="mt-0.5">
                   <span className="text-muted-foreground">Zonal manager </span>
                   {job?.zonal_manager_name
@@ -563,8 +588,8 @@ export function ScheduleAssignUplifted({
           */}
         <div className="relative">
         {technicianOverride ? (
-          <Card icon={<Wrench className="h-3.5 w-3.5" />} title="Technician" className="lg:absolute lg:inset-0 lg:overflow-y-auto">
-            {technicianOverride}
+          <Card icon={<Wrench className="h-3.5 w-3.5" />} title="Technician" className="flex flex-col lg:absolute lg:inset-0">
+            <div className="flex min-h-0 flex-1 flex-col">{technicianOverride}</div>
           </Card>
         ) : (
           <Card
@@ -574,49 +599,7 @@ export function ScheduleAssignUplifted({
             action={<span className="text-xs text-muted-foreground">{live.length} waiting · {closed.length} closed</span>}
             className="flex flex-col lg:absolute lg:inset-0"
           >
-            {items.length === 0 ? (
-              <p className="rounded-md border border-dashed px-2.5 py-3 text-center text-xs text-muted-foreground">
-                No offers sent yet. The first technician to accept is assigned.
-              </p>
-            ) : (
-              /* Fills the card's remaining height and scrolls. Waiting replies
-                 first — they are the ones that can still change. */
-              <ul className="max-h-80 min-h-0 flex-1 divide-y overflow-y-auto pr-1 lg:max-h-none">
-                {[...live, ...closed].map((o) => (
-                  <li key={o.efr_id} className="flex items-center justify-between gap-2 py-1.5 text-xs">
-                    <span className="min-w-0">
-                      <span className="block truncate font-medium">{o.efr_name}</span>
-                      <span className="block text-xs text-muted-foreground">
-                        Efr #{o.efr_id} · {relativeTime(o.offered_at)}
-                        {(o.offer_count ?? 0) > 1 ? ` · offered ×${o.offer_count}` : ''}
-                        {o.reject_reason ? ` · ${o.reject_reason}` : ''}
-                      </span>
-                    </span>
-                    <span className="flex shrink-0 items-start gap-1.5">
-                      <span className="flex flex-col items-end gap-0.5">
-                        <span className={[
-                          'rounded-full border px-2 py-0.5 text-xs font-medium',
-                          (o.offer_status ?? 0) === 0 ? 'border-warning bg-warning-tint text-warning-strong'
-                            : o.offer_status === 2 ? 'border-urgent bg-urgent-tint text-urgent-strong'
-                              : 'border-border bg-muted text-muted-foreground',
-                        ].join(' ')}>
-                          {o.offer_status_label || ((o.offer_status ?? 0) === 0 ? 'Waiting' : 'Closed')}
-                        </span>
-                        {/* WHY it closed, under the chip. "Expired" alone reads as
-                            "nobody answered" — but an offer also expires the moment
-                            the job is rescheduled, reoffered or taken by someone
-                            else. */}
-                        {(o.offer_status ?? 0) !== 0 && o.closed_reason_label && (
-                          <span className="text-xs text-muted-foreground">{o.closed_reason_label}</span>
-                        )}
-                      </span>
-                      {/* Click-to-call the technician, without leaving the console. */}
-                      <CallableMobile efrId={o.efr_id} jobContextId={jobId ?? undefined} mobile={o.mobile} iconOnly />
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
+            <OfferRepliesList offers={items} jobId={jobId} emptyText="No offers sent yet. The first technician to accept is assigned." />
           </Card>
         )}
         </div>
@@ -626,7 +609,7 @@ export function ScheduleAssignUplifted({
       <div className="grid gap-3 lg:grid-cols-[3fr_2fr]">
         <Card
           icon={<Box className="h-3.5 w-3.5" />}
-          title={job?.job_type || 'Services'}
+          title="Services"
           count={job?.services?.length ?? 0}
           action={canEditServices ? (
             <button type="button" onClick={onEditServices} className="rounded-md border px-2 py-1 text-xs font-medium hover:bg-muted">
@@ -634,6 +617,17 @@ export function ScheduleAssignUplifted({
             </button>
           ) : undefined}
         >
+          {/* What kind of job it is, above what is on it: job type, category
+              and whether the technician needs a helper — the facts that decide
+              who can do these services. */}
+          <p className="mb-2 flex flex-wrap gap-x-5 gap-y-1 border-b pb-2 text-xs">
+            <span><span className="text-muted-foreground">Job type </span><span className="font-medium">{job?.job_type || 'Not added'}</span></span>
+            <span><span className="text-muted-foreground">Category </span><span className="font-medium">{job?.service_category || 'Not added'}</span></span>
+            <span>
+              <span className="text-muted-foreground">Helper needed </span>
+              <span className="font-medium">{job?.helper_req == null ? 'Not added' : Number(job.helper_req) === 1 ? 'Yes' : 'No'}</span>
+            </span>
+          </p>
           {!job?.services?.length ? (
             <div className="rounded-md border border-urgent bg-urgent-tint px-3 py-2 text-xs text-urgent-strong">
               <p className="font-medium">No service on this job.</p>
@@ -695,6 +689,66 @@ export function ScheduleAssignUplifted({
         />
       )}
     </div>
+  );
+}
+
+/*
+ * The technicians a job was offered to, newest state first — waiting replies
+ * lead because they can still change. Shared by Schedule & Assign's Offer
+ * replies card and Pending to Start's Technician card (under the assigned
+ * technician), so both read the offer history the same way. It fills whatever
+ * height its card gives it and scrolls inside that; stacked on a narrow screen
+ * it caps itself instead.
+ */
+export function OfferRepliesList({ offers, jobId, emptyText }: {
+  offers: JobOffer[];
+  jobId: number | null;
+  emptyText: string;
+}) {
+  const live = offers.filter((o) => (o.offer_status ?? 0) === 0);
+  const closed = offers.filter((o) => (o.offer_status ?? 0) !== 0);
+  if (offers.length === 0) {
+    return (
+      <p className="rounded-md border border-dashed px-2.5 py-3 text-center text-xs text-muted-foreground">
+        {emptyText}
+      </p>
+    );
+  }
+  return (
+    <ul className="max-h-80 min-h-0 flex-1 divide-y overflow-y-auto pr-1 lg:max-h-none">
+      {[...live, ...closed].map((o) => (
+        <li key={o.efr_id} className="flex items-center justify-between gap-2 py-1.5 text-xs">
+          <span className="min-w-0">
+            <span className="block truncate font-medium">{o.efr_name}</span>
+            <span className="block text-xs text-muted-foreground">
+              Efr #{o.efr_id} · {relativeTime(o.offered_at)}
+              {(o.offer_count ?? 0) > 1 ? ` · offered ×${o.offer_count}` : ''}
+              {o.reject_reason ? ` · ${o.reject_reason}` : ''}
+            </span>
+          </span>
+          <span className="flex shrink-0 items-start gap-1.5">
+            <span className="flex flex-col items-end gap-0.5">
+              <span className={[
+                'rounded-full border px-2 py-0.5 text-xs font-medium',
+                (o.offer_status ?? 0) === 0 ? 'border-warning bg-warning-tint text-warning-strong'
+                  : o.offer_status === 2 ? 'border-urgent bg-urgent-tint text-urgent-strong'
+                    : 'border-border bg-muted text-muted-foreground',
+              ].join(' ')}>
+                {o.offer_status_label || ((o.offer_status ?? 0) === 0 ? 'Waiting' : 'Closed')}
+              </span>
+              {/* WHY it closed, under the chip. "Expired" alone reads as
+                  "nobody answered" — but an offer also expires the moment the
+                  job is rescheduled, reoffered or taken by someone else. */}
+              {(o.offer_status ?? 0) !== 0 && o.closed_reason_label && (
+                <span className="text-xs text-muted-foreground">{o.closed_reason_label}</span>
+              )}
+            </span>
+            {/* Click-to-call the technician, without leaving the console. */}
+            <CallableMobile efrId={o.efr_id} jobContextId={jobId ?? undefined} mobile={o.mobile} iconOnly />
+          </span>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -885,7 +939,7 @@ function JobNotesCard({ job, canEdit, onSave, pinnedNotes, onShowNotes }: {
             className="mt-1 h-16 max-h-40 w-full resize-y overflow-auto rounded-md border bg-background px-2 py-1.5 text-xs"
           />
           <div className="flex justify-between text-xs text-muted-foreground">
-            <span>Technician and client see this</span><span className="tabular-nums">{desc.length} / 5000</span>
+            <span className="ml-auto tabular-nums">{desc.length} / 5000</span>
           </div>
         </div>
         <div>
@@ -900,7 +954,7 @@ function JobNotesCard({ job, canEdit, onSave, pinnedNotes, onShowNotes }: {
             className="mt-1 h-16 max-h-40 w-full resize-y overflow-auto rounded-md border bg-background px-2 py-1.5 text-xs"
           />
           <div className="flex justify-between text-xs text-muted-foreground">
-            <span>Technician app only</span><span className="tabular-nums">{notes.length} / 2000</span>
+            <span className="ml-auto tabular-nums">{notes.length} / 2000</span>
           </div>
         </div>
       </div>
@@ -909,15 +963,12 @@ function JobNotesCard({ job, canEdit, onSave, pinnedNotes, onShowNotes }: {
 }
 
 /*
- * The Client card — plain label/value rows like the Customer card beside it,
- * in three runs separated by a small heading:
- *   (client)          what the client sent — name, vertical, source, reference,
- *                     branch, helper — and who at the client to call (SPOC)
- *   EASYFIX           who at EasyFix owns it: the job's current owner
- *                     (tbl_job.job_owner) and the client's Primary / Secondary
- *                     SPOC (tbl_vertical_mapping user_type 1 / 2)
- *   CUSTOM PROPERTIES only the ones this job carries; the run is omitted when
- *                     there are none, since their number varies by client
+ * The Client card — plain label/value rows like the Customer card beside it:
+ * who the client is (name, vertical, source, reference) and who at the client
+ * to call (SPOC), then the job's custom properties when it carries any. The
+ * EasyFix people moved out on review (2026-09-17): the job owner sits in the
+ * Job age tile, branch ID with the address, helper with the services, and the
+ * client's Primary / Secondary SPOC are no longer shown on the console.
  *
  * LOGO: nothing in this CRM stores a readable client logo (tbl_client.logo_id
  * has no upload or file route), so the mark is the client's initials until one
@@ -934,7 +985,6 @@ function ClientCard({ job, jobReference }: { job: UpliftedJob; jobReference: str
       p.value == null || String(p.value).trim() === '' ? null : String(p.value),
     ])),
   ].filter((e): e is [string, string] => !!e[1]);
-  const helper = job?.helper_req == null ? <NotAdded /> : Number(job.helper_req) === 1 ? 'Yes' : 'No';
 
   return (
     <Card icon={<Building2 className="h-3.5 w-3.5" />} title="Client">
@@ -959,8 +1009,6 @@ function ClientCard({ job, jobReference }: { job: UpliftedJob; jobReference: str
       <Row label="Source" value={job?.source_type || <NotAdded />} />
       <Row label="Client ref ID" value={job?.client_ref_id || <NotAdded />} />
       <Row label="Job ref" value={jobReference || <NotAdded />} />
-      <Row label="Branch ID" value={job?.branch_details || <NotAdded />} />
-      <Row label="Helper needed" value={helper} />
       <Row label="SPOC" value={job?.client_spoc_name || <NotAdded />} />
       <Row
         label="SPOC phone"
@@ -969,11 +1017,6 @@ function ClientCard({ job, jobReference }: { job: UpliftedJob; jobReference: str
           : <NotAdded />}
       />
       <Row label="SPOC email" value={job?.client_spoc_email || <NotAdded />} />
-
-      <SubHeading>EasyFix</SubHeading>
-      <Row label="Job owner" value={job?.owner_name || <NotAdded />} />
-      <Row label="Primary SPOC" value={job?.client_primary_spoc_name || <NotAdded />} />
-      <Row label="Secondary SPOC" value={job?.client_secondary_spoc_name || <NotAdded />} />
 
       {props.length > 0 && (
         <>

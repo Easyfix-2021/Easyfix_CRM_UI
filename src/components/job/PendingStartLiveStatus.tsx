@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { Clock } from 'lucide-react';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { formatDate } from '@/lib/utils';
 import {
@@ -23,22 +24,37 @@ export function useMinuteClock(): number {
   return now;
 }
 
+/*
+ * TIMING IS NOT A PILL. The status above it is ("Slot missed"), and when both
+ * were red pills a missed slot read as two copies of one label. Timing is a
+ * reading, not a state, so it renders as a clock and coloured text — the same
+ * colour meaning (red late, amber close loop, green on track), a different
+ * shape, so the two can never be mistaken for each other.
+ */
+const TIMING_TEXT = {
+  urgent: 'text-urgent-strong',
+  warning: 'text-warning-strong',
+  success: 'text-success-strong',
+  info: 'text-info-strong',
+  neutral: 'text-muted-foreground',
+} as const;
+
 export function PtsTimingChip({ requestedDateTime, now }: {
   requestedDateTime: string | null | undefined;
   now: number;
 }) {
   const timing = appointmentTiming(requestedDateTime, now);
-  if (!timing) {
-    return <StatusChip tone="neutral" size="sm">No appointment time</StatusChip>;
-  }
+  const tone = timing?.tone ?? 'neutral';
   return (
-    <StatusChip
-      tone={timing.tone}
-      size="sm"
-      title={`Appointment ${formatDate(String(requestedDateTime))} · Close loop starts 2 hours before, Running late at the appointment time`}
+    <span
+      className={`inline-flex items-center gap-1 whitespace-nowrap text-xs font-medium ${TIMING_TEXT[tone]}`}
+      title={timing
+        ? `Appointment ${formatDate(String(requestedDateTime))} · Close loop starts 2 hours before, Running late at the appointment time`
+        : 'This job has no appointment time'}
     >
-      {timing.label}
-    </StatusChip>
+      <Clock className="h-3.5 w-3.5 shrink-0" aria-hidden />
+      {timing ? timing.label : 'No appointment time'}
+    </span>
   );
 }
 
