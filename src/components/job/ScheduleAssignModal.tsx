@@ -77,7 +77,7 @@ import { JobContextPanel, type JobServiceRow } from './JobContextPanel';
 import { ScheduleAssignUplifted } from './ScheduleAssignUplifted';
 import { JobRemarksView } from './JobRemarksView';
 import { ScheduleAssignRescheduleDialog } from './ScheduleAssignRescheduleDialog';
-import { JobInternalNotes } from './JobInternalNotes';
+import { JobInternalNotes, type JobNote } from './JobInternalNotes';
 import { ServicesOneListDialog } from './ServicesOneListDialog';
 
 /** Per-browser memory of the Current/Uplifted choice — see `view` below. */
@@ -336,6 +336,19 @@ export function ScheduleAssignModal({
    * each tab can only ever open its own, and the comparison stays honest.
    */
   const [oneListOpen, setOneListOpen] = useState(false);
+  /*
+   * FAST SERVICES REFRESH after the one-list editor saves. The console's job
+   * (services, totals) comes from /candidates, which re-ranks every technician
+   * — seconds, during which the card still showed the old lines. The save now
+   * also reads GET /:id/header (the same header, no ranking) and lays its
+   * services over the card at once; the re-rank still runs behind it and
+   * replaces the patch when it lands. Scoped to one job, cleared on switch.
+   */
+  const [jobPatch, setJobPatch] = useState<{ jobId: number; services: unknown } | null>(null);
+  /* Pinned internal notes, reported up by <JobInternalNotes> so the Job notes
+     card can say one is pinned and jump to it. */
+  const [pinnedNotes, setPinnedNotes] = useState<JobNote[]>([]);
+  const notesRef = useRef<HTMLDivElement | null>(null);
 
   /*
    * What has to happen after ANY successful reschedule, from either tab's
@@ -492,6 +505,10 @@ export function ScheduleAssignModal({
     setRetainedJob(null); setSelected(new Map());
     setSearchPage(0); setSearchPageSize(10);
     setServicesOpen(false);
+    // Remount the remarks thread per job: it is a mounted useFetch that would
+    // otherwise show job A's comments while job B's load.
+    setRemarksReloadKey((n) => n + 1);
+    setJobPatch(null);
   }, [open, jobId]);
 
   // Toggle a technician's membership in the selection. OFFER mode = multi-select
@@ -712,6 +729,44 @@ export function ScheduleAssignModal({
   // BE's tbl_job_offer table is absent → endpoint returns { items: [] }).
   const offersKey = open && jobId ? `/admin/jobs/${jobId}/offers` : null;
   const offers = useFetch<JobOffersResponse>(offersKey, { enabled: !!offersKey });
+  /*
+   * The offers list carries no job id to guard on like topData/probe, so trust
+   * it only when it was fetched for THIS key (useFetch keeps job A's list on
+   * screen while job B's loads). An error for this key also counts as settled,
+   * so a failed offers read cannot hold the console on its loader forever.
+   */
+  const offersReady = !offersKey || offers.dataKey === offersKey
+    || (!!offers.error && !offers.loading && !offers.refreshing);
+  const offerItems = offersReady ? (offers.data?.items ?? null) : null;
+  const upliftedJob = job && jobPatch && Number(jobPatch.jobId) === Number(jobId)
+    ? ({ ...job, services: jobPatch.services } as typeof job)
+    : job;
+  // The re-rank has landed with the saved services — the patch has done its job.
+  useEffect(() => { setJobPatch(null); }, [topData]);
+  async function onServicesSaved() {
+    const id = jobId;
+    reRank();
+    if (id == null) return;
+    try {
+      const fresh = await api.get<{ job: { job_id?: number; services?: unknown } }>(`/admin/jobs/${id}/header`);
+      if (fresh?.job && Number(fresh.job.job_id) === Number(id)) {
+        setJobPatch({ jobId: id, services: fresh.job.services ?? [] });
+      }
+    } catch { /* the re-rank still refreshes the card, just later */ }
+  }
+  /*
+   * OPEN = A BLANK MODAL WITH A LOADER until this job's own data is in — the
+   * header/services (candidates), the detail probe (reference, original
+   * appointment, attachments) and the offers. Every one of them used to paint
+   * the PREVIOUS job's values for a second on a job switch, because the modal
+   * never unmounts and useFetch keeps the last payload. A failed read counts
+   * as settled (its own error shows) so the loader cannot hang.
+   */
+  const consoleLoading = open && jobId != null && (
+    (!job && !top.error)
+    || (!probe && !statusGate.error)
+    || !offersReady
+  );
 
   // Live-time tick — bump a counter every 45s so the "offered N min ago"
   // labels re-render without re-fetching. Cleared on unmount / close.
@@ -986,6 +1041,16 @@ export function ScheduleAssignModal({
         </DialogHeader>
 
         <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-4 space-y-5">
+          {consoleLoading ? (
+            <div className="grid h-full min-h-[240px] place-items-center">
+              <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />Loading job…
+              </p>
+            </div>
+          ) : !job && top.error ? (
+            <p className="text-sm text-urgent-strong">Could not load this job: {top.error}</p>
+          ) : (
+          <>
           {!offerable && (
             <div className="rounded-md border border-warning bg-warning-tint px-4 py-2 text-sm text-warning-strong">
               {/* Driven by the server's reason code. The previous copy said this
@@ -1008,10 +1073,12 @@ export function ScheduleAssignModal({
           {view === 'uplifted' && (
             <ScheduleAssignUplifted
               jobId={jobId}
-              job={job}
+              job={upliftedJob}
               probe={probe}
-              offers={offers.data?.items ?? null}
+              offers={offerItems}
               offersLoading={offers.loading}
+              pinnedNotes={pinnedNotes}
+              onShowNotes={() => notesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
               offerable={offerable}
               onReschedule={() => setRescheduleOpen(true)}
               onPickTechnicians={() => techRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
@@ -1095,12 +1162,12 @@ export function ScheduleAssignModal({
               Current tab only: Uplifted carries the same rows, compacted, in its
               Technician card, and two copies of one list on one screen is how
               they start disagreeing. */}
-          {view === 'current' && offerMode && (offers.data?.items?.length ?? 0) > 0 && (
+          {view === 'current' && offerMode && (offerItems?.length ?? 0) > 0 && (
             <section>
               <h3 className="text-sm font-semibold mb-2 flex items-center gap-1.5">
                 Offered To
                 <span className="inline-flex items-center rounded-full bg-ink-100 px-2 py-0.5 text-xs font-medium text-ink-700 border border-ink-100">
-                  {offers.data!.items.length}
+                  {offerItems!.length}
                 </span>
               </h3>
               {/*
@@ -1155,7 +1222,7 @@ export function ScheduleAssignModal({
                     </tr>
                   </thead>
                   <tbody>
-                    {offers.data!.items.map((o) => {
+                    {offerItems!.map((o) => {
                       /* Colour as TEXT, not a chip: inside a table the chip
                          competed with the row's own status pills and made the
                          column read as an action. REJECTED=rose, EXPIRED=slate,
@@ -1459,8 +1526,12 @@ export function ScheduleAssignModal({
                the notes hold the right third, in view while the thread is read. */
             <div className="grid gap-3 lg:grid-cols-[2fr_1fr]">
               <JobRemarksView key={remarksReloadKey} jobId={jobId} />
-              <JobInternalNotes jobId={jobId} canAdd={offerable} />
+              <div ref={notesRef} className="scroll-mt-4">
+                <JobInternalNotes key={jobId ?? 'none'} jobId={jobId} canAdd={offerable} onPinnedChange={setPinnedNotes} />
+              </div>
             </div>
+          )}
+          </>
           )}
 
         </div>
@@ -1573,7 +1644,7 @@ export function ScheduleAssignModal({
           originalAppointment={probe?.original_appointment_date_time ?? null}
           /* Offers still waiting for a reply — the reschedule expires every one
              of them, so the dialog warns before and confirms at the end. */
-          liveOffers={(offers.data?.items ?? []).filter((o) => (o.offer_status ?? 0) === 0).length}
+          liveOffers={(offerItems ?? []).filter((o) => (o.offer_status ?? 0) === 0).length}
           onClose={() => setRescheduleOpen(false)}
           onDone={onRescheduled}
         />
@@ -1595,7 +1666,7 @@ export function ScheduleAssignModal({
           open={oneListOpen}
           jobId={jobId}
           onClose={() => setOneListOpen(false)}
-          onSaved={reRank}
+          onSaved={onServicesSaved}
         />
       )}
 

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Send, Clock, AlertTriangle, CalendarClock, User, Building2, Wrench, MapPin,
-  Image as ImageIcon, Video, Box, FileText, Pencil, ChevronLeft, ChevronRight, Plus,
+  Image as ImageIcon, Video, Box, FileText, Pencil, ChevronLeft, ChevronRight, Plus, Pin, Flame,
 } from 'lucide-react';
 import type { JobOffer } from '@/lib/api';
 import { formatDate, relativeTime, appointmentIsPast } from '@/lib/utils';
@@ -18,6 +18,7 @@ import { formatApiError } from '@/lib/api-errors';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { JobAddressEditDialog } from './JobModal';
 import type { JobServiceRow } from './JobContextPanel';
+import type { JobNote } from './JobInternalNotes';
 
 /*
  * ScheduleAssignUplifted — the "Uplifted" tab of Schedule & Assign.
@@ -89,6 +90,15 @@ export type UpliftedJob = {
   ageSecs?: number | null;
   project_manager_name?: string | null;
   zonal_manager_name?: string | null;
+  /* tbl_job.job_client_owner's name — the list's "Easyfix SPOC" column. */
+  easyfix_spoc_name?: string | null;
+  /* The latest tbl_easyfixer_rating_by_customer row, as the Escalated view
+     reads it. is_escalated is always 0/1 from the header. */
+  is_escalated?: number | null;
+  no_of_escalations?: number | null;
+  escalated_time?: string | null;
+  escalated_by_name?: string | null;
+  escalated_comments?: string | null;
 } | null;
 
 export type UpliftedProbe = {
@@ -149,7 +159,7 @@ const TONE: Record<Bucket, {
 export function ScheduleAssignUplifted({
   jobId, job, probe, offers, offersLoading, offerable,
   onReschedule, onPickTechnicians, onSaveDetails, onEditServices, onAddressSaved, apiBase,
-  actionOverride, technicianOverride, stateOverride,
+  actionOverride, technicianOverride, stateOverride, pinnedNotes, onShowNotes,
 }: {
   jobId: number | null;
   job: UpliftedJob;
@@ -176,6 +186,10 @@ export function ScheduleAssignUplifted({
   actionOverride?: React.ReactNode;
   technicianOverride?: React.ReactNode;
   stateOverride?: { label: string; sub: string; chipClass: string };
+  /* Pinned internal notes (from the notes thread below the console), flagged on
+     the Job notes card with a jump to them. */
+  pinnedNotes?: JobNote[];
+  onShowNotes?: () => void;
 }) {
   const { me } = useMe();
   const bucket = offerBucket(offers);
@@ -266,6 +280,8 @@ export function ScheduleAssignUplifted({
     { name: 'Check-In', when: job?.checkin_date_time ?? null, who: job?.checkin_by_name ?? null },
   ];
   const firstPending = steps.findIndex((s) => !s.when);
+  const escalated = Number(job?.is_escalated ?? 0) === 1;
+  const escalations = Number(job?.no_of_escalations ?? 0);
 
   return (
     <div className="space-y-3">
@@ -374,8 +390,24 @@ export function ScheduleAssignUplifted({
         <div className="grid grid-cols-2 gap-px border-t bg-border lg:grid-cols-5">
           <div className="bg-card px-3 py-2">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Job age</p>
-            <p className="text-sm font-semibold tabular-nums" title={job ? jobAgeTitle(job) : undefined}>{job ? formatJobAge(job) : '—'}</p>
-            <p className="text-xs text-muted-foreground">Since ticket created</p>
+            <p className="flex flex-wrap items-center gap-1.5">
+              <span className="text-sm font-semibold tabular-nums" title={job ? jobAgeTitle(job) : undefined}>{job ? formatJobAge(job) : '—'}</span>
+              {/* An escalated job says so where its age is read — the two facts
+                  that decide how urgently it is worked sit together. */}
+              {escalated && (
+                <span
+                  className="inline-flex items-center gap-0.5 rounded-full border border-urgent bg-urgent-tint px-2 py-0.5 text-xs font-medium text-urgent-strong"
+                  title={job?.escalated_comments || undefined}
+                >
+                  <Flame className="h-3 w-3" />Escalated{escalations > 1 ? ` ×${escalations}` : ''}
+                </span>
+              )}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {escalated
+                ? [job?.escalated_time ? formatDate(job.escalated_time) : null, job?.escalated_by_name ? `by ${job.escalated_by_name}` : null].filter(Boolean).join(' · ') || 'Escalated'
+                : 'Since ticket created'}
+            </p>
           </div>
           <div className="bg-card px-3 py-2">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Current state</p>
@@ -428,149 +460,151 @@ export function ScheduleAssignUplifted({
           </div>
         </div>
 
-        {/*
-          * The job's flat facts, one line under the tiles. Removed once on the
-          * theory that each fact belonged in a card, and restored at ops'
-          * request: this is the line they scan to place a job at a glance, and
-          * scattering it across three cards made that a search. The cards no
-          * longer repeat these, so every fact is stated exactly once.
-          */}
-        <div className="flex flex-wrap gap-x-6 gap-y-1 border-t bg-muted/40 px-3 py-2 text-xs">
-          <span><span className="text-muted-foreground">Job type </span>{job?.job_type || '—'}</span>
-          <span><span className="text-muted-foreground">Booked by </span>{job?.created_by_name || '—'}</span>
-          {/* tbl_job.collected_by through the SAME helper the Current tab's Job
-              Details grid uses — NOT the BE's `payment_mode`, derived from
-              paid_by alone and "Not Set" on ~96% of jobs. The two tabs must
-              never disagree about who pays. */}
-          <span><span className="text-muted-foreground">Payment </span>{collectedByText(job?.collected_by) ?? 'Not set'}</span>
-          <span><span className="text-muted-foreground">Project manager </span>{job?.project_manager_name || '—'}</span>
-          {/* Inherited from the address city's owner (tbl_city.state_user). A
-              blank means that city has no owner set, not that the console failed. */}
-          <span>
-            <span className="text-muted-foreground">Zonal manager </span>
-            {job?.zonal_manager_name || <span className="text-muted-foreground" title="tbl_city.state_user is not set for this job's city">Not set for this city</span>}
-          </span>
-        </div>
       </div>
 
-      {/* ── Who it is for, and who has it ── */}
-      <div className="grid gap-3 lg:grid-cols-3">
-        <Card icon={<User className="h-3.5 w-3.5" />} title="Customer">
-          <Row label="Name" value={job?.customer_name || '—'} />
-          <Row
-            label="Mobile"
-            value={job?.customer_mob_no
-              ? <CallableMobile jobId={job?.job_id} mobile={job.customer_mob_no} />
-              : '—'}
-          />
-          <div className="mt-2 rounded-md border bg-muted/40 px-2.5 py-2 text-xs">
-            <div className="flex items-start gap-1.5">
-              <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              <div className="min-w-0 flex-1">
-                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Service address</p>
-                <p className="break-words">{job ? formatServiceAddress(job) : '—'}</p>
-                {/* City + pin on their own line, larger: the two fields ops read
-                    first to judge distance were buried at the end of the address. */}
-                <p className="mt-1 text-sm font-semibold">
-                  {job?.city_name || '—'}{' '}
-                  <span className="font-medium text-muted-foreground">{job?.pin_code || ''}</span>
-                </p>
+      {/* ── Who it is for, and who has it ──
+          Customer and Client stack in the wide left column; the Technician card
+          holds the narrow right one. On an unallocated job there is never a
+          technician, so that column is the offer replies — the list that grows
+          (10+ technicians on a hard job) — and it scrolls inside itself with
+          about seven rows in view instead of stretching the page. */}
+      <div className="grid gap-3 lg:grid-cols-[2fr_1fr]">
+        <div className="grid content-start gap-3">
+          <Card icon={<User className="h-3.5 w-3.5" />} title="Customer">
+            <div className="grid gap-x-6 gap-y-2 md:grid-cols-2">
+              <div>
+                <Row label="Name" value={job?.customer_name || '—'} />
+                <Row
+                  label="Mobile"
+                  value={job?.customer_mob_no
+                    ? <CallableMobile jobId={job?.job_id} mobile={job.customer_mob_no} />
+                    : '—'}
+                />
+                {/* tbl_job.collected_by through the SAME helper the Current tab's
+                    Job Details grid uses — NOT the BE's `payment_mode`, derived
+                    from paid_by alone and "Not Set" on ~96% of jobs. The two tabs
+                    must never disagree about who pays. */}
+                <Row label="Payment" value={collectedByText(job?.collected_by) ?? 'Not set'} />
               </div>
-              {canEditAddress && (
-                <button type="button" onClick={() => setAddressOpen(true)} className="shrink-0 rounded-md border px-2 py-1 text-xs font-medium hover:bg-background">
-                  <Pencil className="mr-1 inline h-3 w-3" />Edit
-                </button>
-              )}
+              <div className="rounded-md border bg-muted/40 px-2.5 py-2 text-xs">
+                <div className="flex items-start gap-1.5">
+                  <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Service address</p>
+                    <p className="break-words">{job ? formatServiceAddress(job) : '—'}</p>
+                    {/* City + pin on their own line, larger: the two fields ops
+                        read first to judge distance. */}
+                    <p className="mt-1 text-sm font-semibold">
+                      {job?.city_name || '—'}{' '}
+                      <span className="font-medium text-muted-foreground">{job?.pin_code || ''}</span>
+                    </p>
+                    {/* The zonal manager is decided by the address city
+                        (tbl_city.state_user), so it sits with the address. A
+                        blank means that city has no owner set. */}
+                    <p className="mt-0.5">
+                      <span className="text-muted-foreground">Zonal manager </span>
+                      {job?.zonal_manager_name
+                        ? <span className="font-medium">{job.zonal_manager_name}</span>
+                        : <span className="text-muted-foreground" title="tbl_city.state_user is not set for this job's city">Not set for this city</span>}
+                    </p>
+                  </div>
+                  {canEditAddress && (
+                    <button type="button" onClick={() => setAddressOpen(true)} className="shrink-0 rounded-md border px-2 py-1 text-xs font-medium hover:bg-background">
+                      <Pencil className="mr-1 inline h-3 w-3" />Edit
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
-          </div>
-        </Card>
+          </Card>
 
-        <Card icon={<Building2 className="h-3.5 w-3.5" />} title="Client">
-          <Row label="Client" value={job?.client_name || '—'} />
-          <Row label="Client ref ID" value={job?.client_ref_id || '—'} />
-          <Row label="SPOC" value={job?.client_spoc_name || '—'} />
-          <Row
-            label="SPOC phone"
-            value={job?.client_spoc
-              ? <CallableMobile spocJobId={job?.job_id} mobile={job.client_spoc} />
-              : '—'}
-          />
-          <Row label="Job ref" value={probe?.job_reference_id || '—'} />
-        </Card>
-
-        <Card icon={<Wrench className="h-3.5 w-3.5" />} title="Technician">
-          {technicianOverride ?? (
-          <>
-          {/* No technician exists on an unallocated job — the box says so and
-              then spends its space on the offer replies, the only technician
-              information this bucket has. */}
-          <div className="mb-2 flex items-center gap-2 rounded-md border border-dashed bg-muted/30 px-2.5 py-2">
-            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-dashed text-muted-foreground">
-              <User className="h-4 w-4" />
-            </span>
-            <div className="min-w-0">
-              <p className="text-sm font-semibold">Not assigned</p>
-              <p className="text-xs text-muted-foreground">The first technician to accept shows here with photo, Efr ID, phone and live location.</p>
+          <Card icon={<Building2 className="h-3.5 w-3.5" />} title="Client">
+            <div className="grid gap-x-6 md:grid-cols-2">
+              <div>
+                <Row label="Client" value={job?.client_name || '—'} />
+                <Row label="Client ref ID" value={job?.client_ref_id || '—'} />
+                <Row label="Job ref" value={probe?.job_reference_id || '—'} />
+              </div>
+              <div className="border-t md:border-t-0">
+                <Row label="SPOC" value={job?.client_spoc_name || '—'} />
+                <Row
+                  label="SPOC phone"
+                  value={job?.client_spoc
+                    ? <CallableMobile spocJobId={job?.job_id} mobile={job.client_spoc} />
+                    : '—'}
+                />
+                {/* The EasyFix person who owns this client relationship
+                    (tbl_job.job_client_owner) — the list's "Easyfix SPOC". */}
+                <Row label="EasyFix SPOC" value={job?.easyfix_spoc_name || '—'} />
+              </div>
             </div>
-          </div>
-          <div className="flex items-center justify-between gap-2 border-t pt-2">
-            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Offer replies</span>
-            <span className="text-xs text-muted-foreground">{live.length} waiting · {closed.length} closed</span>
-          </div>
-          {items.length === 0 ? (
-            <p className="mt-1 rounded-md border border-dashed px-2.5 py-2 text-center text-xs text-muted-foreground">
-              No offers sent yet.
-            </p>
-          ) : (
-            <ul className="divide-y">
-              {[...live, ...closed].map((o) => (
-                <li key={o.efr_id} className="flex items-center justify-between gap-2 py-1.5 text-xs">
-                  <span className="min-w-0">
-                    <span className="block truncate font-medium">{o.efr_name}</span>
-                    <span className="block text-xs text-muted-foreground">
-                      Efr #{o.efr_id} · {relativeTime(o.offered_at)}
-                      {(o.offer_count ?? 0) > 1 ? ` · offered ×${o.offer_count}` : ''}
-                      {o.reject_reason ? ` · ${o.reject_reason}` : ''}
-                    </span>
-                  </span>
-                  <span className="flex shrink-0 items-start gap-1.5">
-                    <span className="flex flex-col items-end gap-0.5">
-                      <span className={[
-                        'rounded-full border px-2 py-0.5 text-xs font-medium',
-                        (o.offer_status ?? 0) === 0 ? 'border-warning bg-warning-tint text-warning-strong'
-                          : o.offer_status === 2 ? 'border-urgent bg-urgent-tint text-urgent-strong'
-                            : 'border-border bg-muted text-muted-foreground',
-                      ].join(' ')}>
-                        {o.offer_status_label || ((o.offer_status ?? 0) === 0 ? 'Waiting' : 'Closed')}
+          </Card>
+        </div>
+
+        {technicianOverride ? (
+          <Card icon={<Wrench className="h-3.5 w-3.5" />} title="Technician">
+            {technicianOverride}
+          </Card>
+        ) : (
+          <Card
+            icon={<Send className="h-3.5 w-3.5" />}
+            title="Offer replies"
+            count={items.length}
+            action={<span className="text-xs text-muted-foreground">{live.length} waiting · {closed.length} closed</span>}
+          >
+            {items.length === 0 ? (
+              <p className="rounded-md border border-dashed px-2.5 py-3 text-center text-xs text-muted-foreground">
+                No offers sent yet. The first technician to accept is assigned.
+              </p>
+            ) : (
+              /* ~7 rows in view (each ≈ 2.75rem), then the list scrolls. Waiting
+                 replies first — they are the ones that can still change. */
+              <ul className="max-h-[19.5rem] divide-y overflow-y-auto pr-1">
+                {[...live, ...closed].map((o) => (
+                  <li key={o.efr_id} className="flex items-center justify-between gap-2 py-1.5 text-xs">
+                    <span className="min-w-0">
+                      <span className="block truncate font-medium">{o.efr_name}</span>
+                      <span className="block text-xs text-muted-foreground">
+                        Efr #{o.efr_id} · {relativeTime(o.offered_at)}
+                        {(o.offer_count ?? 0) > 1 ? ` · offered ×${o.offer_count}` : ''}
+                        {o.reject_reason ? ` · ${o.reject_reason}` : ''}
                       </span>
-                      {/* WHY it closed, under the chip. "Expired" alone reads as
-                          "nobody answered" — but an offer also expires the moment
-                          the job is rescheduled, reoffered or taken by someone
-                          else, and an operator deciding whether to chase this
-                          technician needs to know which it was. */}
-                      {(o.offer_status ?? 0) !== 0 && o.closed_reason_label && (
-                        <span className="text-xs text-muted-foreground">{o.closed_reason_label}</span>
-                      )}
                     </span>
-                    {/* Click-to-call the technician we are waiting on, without
-                        leaving the console — the same control the Current tab's
-                        Offered To table carries. */}
-                    <CallableMobile efrId={o.efr_id} jobContextId={jobId ?? undefined} mobile={o.mobile} iconOnly />
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-          </>
-          )}
-        </Card>
+                    <span className="flex shrink-0 items-start gap-1.5">
+                      <span className="flex flex-col items-end gap-0.5">
+                        <span className={[
+                          'rounded-full border px-2 py-0.5 text-xs font-medium',
+                          (o.offer_status ?? 0) === 0 ? 'border-warning bg-warning-tint text-warning-strong'
+                            : o.offer_status === 2 ? 'border-urgent bg-urgent-tint text-urgent-strong'
+                              : 'border-border bg-muted text-muted-foreground',
+                        ].join(' ')}>
+                          {o.offer_status_label || ((o.offer_status ?? 0) === 0 ? 'Waiting' : 'Closed')}
+                        </span>
+                        {/* WHY it closed, under the chip. "Expired" alone reads as
+                            "nobody answered" — but an offer also expires the moment
+                            the job is rescheduled, reoffered or taken by someone
+                            else. */}
+                        {(o.offer_status ?? 0) !== 0 && o.closed_reason_label && (
+                          <span className="text-xs text-muted-foreground">{o.closed_reason_label}</span>
+                        )}
+                      </span>
+                      {/* Click-to-call the technician, without leaving the console. */}
+                      <CallableMobile efrId={o.efr_id} jobContextId={jobId ?? undefined} mobile={o.mobile} iconOnly />
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+        )}
       </div>
 
-      {/* ── What the job is: services, notes, and what was attached ── */}
-      <div className="grid gap-3 lg:grid-cols-[1.3fr_1fr_1fr]">
+      {/* ── What the job is: services and notes, side by side ── */}
+      <div className="grid gap-3 lg:grid-cols-[3fr_2fr]">
         <Card
           icon={<Box className="h-3.5 w-3.5" />}
-          title={`${job?.job_type || 'Services'} · ${job?.services?.length ?? 0}`}
+          title={job?.job_type || 'Services'}
+          count={job?.services?.length ?? 0}
           action={canEditServices ? (
             <button type="button" onClick={onEditServices} className="rounded-md border px-2 py-1 text-xs font-medium hover:bg-muted">
               <Pencil className="mr-1 inline h-3 w-3" />Edit
@@ -624,10 +658,11 @@ export function ScheduleAssignUplifted({
           )}
         </Card>
 
-        <JobNotesCard job={job} canEdit={canEditDetails} onSave={onSaveDetails} />
-
-        <MediaCard media={media} />
+        <JobNotesCard job={job} canEdit={canEditDetails} onSave={onSaveDetails} pinnedNotes={pinnedNotes} onShowNotes={onShowNotes} />
       </div>
+
+      {/* ── What was attached — one full-width row ── */}
+      <MediaCard media={media} />
 
       {addressOpen && job && (
         <JobAddressEditDialog
@@ -641,24 +676,33 @@ export function ScheduleAssignUplifted({
 }
 
 /*
- * Attachments as a one-row strip of small tiles — the grid of big thumbnails it
- * replaced took a third of the card for four files and pushed the technician
- * table off screen. Past three files the row scrolls, with arrows for the
- * trackpad-less: a wrapping grid grows the card without limit, which is the
- * problem, and a plain scrollbar is easy to miss on a card this narrow.
+ * Attachments as ONE full-width row of small tiles, at the bottom of the
+ * console: they are looked at once, not worked from, so they no longer take a
+ * column beside services and notes. When the row overflows it scrolls, with
+ * arrows for the trackpad-less — shown only when there is somewhere to scroll.
  */
 function MediaCard({ media }: {
   media: Array<{ id: string; kind: 'image' | 'video'; label: string; meta: string; url: string }>;
 }) {
   const stripRef = useRef<HTMLDivElement | null>(null);
-  const scrollable = media.length > 3;
-  const nudge = (dir: -1 | 1) => stripRef.current?.scrollBy({ left: dir * 180, behavior: 'smooth' });
+  const [overflows, setOverflows] = useState(false);
+  useEffect(() => {
+    const el = stripRef.current;
+    if (!el) { setOverflows(false); return; }
+    const measure = () => setOverflows(el.scrollWidth > el.clientWidth + 1);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [media.length]);
+  const nudge = (dir: -1 | 1) => stripRef.current?.scrollBy({ left: dir * 320, behavior: 'smooth' });
 
   return (
     <Card
       icon={<ImageIcon className="h-3.5 w-3.5" />}
-      title={`Photos and videos ${media.length}`}
-      action={scrollable ? (
+      title="Photos and videos"
+      count={media.length}
+      action={overflows ? (
         <span className="flex items-center gap-1">
           <button type="button" aria-label="Scroll attachments left" onClick={() => nudge(-1)} className="rounded-md border px-1.5 py-1 hover:bg-muted">
             <ChevronLeft className="h-3.5 w-3.5" />
@@ -670,9 +714,7 @@ function MediaCard({ media }: {
       ) : undefined}
     >
       {media.length === 0 ? (
-        <p className="rounded-md border border-dashed px-3 py-2 text-center text-xs text-muted-foreground">
-          Nothing was attached to this order.
-        </p>
+        <p className="text-xs text-muted-foreground">No image attached.</p>
       ) : (
         <div ref={stripRef} className="flex gap-2 overflow-x-auto pb-1">
           {media.map((m) => (
@@ -681,21 +723,20 @@ function MediaCard({ media }: {
               href={m.url}
               target="_blank"
               rel="noreferrer"
-              className="group w-16 shrink-0"
+              className="group w-20 shrink-0"
               title={`${m.label} · ${m.meta}`}
             >
-              <span className="grid h-12 w-16 place-items-center overflow-hidden rounded-md border bg-muted/40 group-hover:border-foreground/30">
+              <span className="grid h-14 w-20 place-items-center overflow-hidden rounded-md border bg-muted/40 group-hover:border-foreground/30">
                 {m.kind === 'video'
                   ? <Video className="h-4 w-4 text-warning-strong" />
                   : /* eslint-disable-next-line @next/next/no-img-element */
-                    <img src={m.url} alt={m.label} className="h-12 w-16 object-cover" loading="lazy" />}
+                    <img src={m.url} alt={m.label} className="h-14 w-20 object-cover" loading="lazy" />}
               </span>
               <span className="mt-0.5 block truncate text-xs text-muted-foreground group-hover:text-foreground">{m.label}</span>
             </a>
           ))}
         </div>
       )}
-      <p className="mt-1.5 text-xs text-muted-foreground">Attached at booking · technicians see these in the app.</p>
     </Card>
   );
 }
@@ -726,11 +767,14 @@ function hm(secs: number): string {
  * onSaveDetails the Current tab's panel calls (PATCH /admin/jobs/:id, then a
  * re-rank), so a note saved here and a note saved there are one code path.
  */
-function JobNotesCard({ job, canEdit, onSave }: {
+function JobNotesCard({ job, canEdit, onSave, pinnedNotes, onShowNotes }: {
   job: UpliftedJob;
   canEdit: boolean;
   onSave?: (patch: { job_desc?: string; efr_special_notes?: string }) => Promise<void>;
+  pinnedNotes?: JobNote[];
+  onShowNotes?: () => void;
 }) {
+  const pinned = pinnedNotes ?? [];
   const [desc, setDesc] = useState('');
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
@@ -773,18 +817,39 @@ function JobNotesCard({ job, canEdit, onSave }: {
     <Card
       icon={<FileText className="h-3.5 w-3.5" />}
       title="Job notes"
-      action={canEdit ? (
-        <button
-          type="button"
-          onClick={save}
-          disabled={!dirty || saving}
-          className="rounded-md border px-2 py-1 text-xs font-medium hover:bg-muted disabled:opacity-50"
-        >
-          {saving ? 'Saving…' : 'Save'}
-        </button>
+      action={(pinned.length > 0 || canEdit) ? (
+        <span className="flex items-center gap-1.5">
+          {/* A pinned internal note is something the next person must not
+              miss — flag it here, where the job is read, and jump to it. */}
+          {pinned.length > 0 && (
+            <button
+              type="button"
+              onClick={onShowNotes}
+              title={pinned[0]?.notes}
+              className="inline-flex items-center gap-1 rounded-full border border-gold bg-gold-tint px-2 py-0.5 text-xs font-medium text-gold-strong hover:bg-gold-tint/70"
+            >
+              <Pin className="h-3 w-3" />{pinned.length} pinned {pinned.length === 1 ? 'note' : 'notes'}
+            </button>
+          )}
+          {canEdit && (
+            <button
+              type="button"
+              onClick={save}
+              disabled={!dirty || saving}
+              className="rounded-md border px-2 py-1 text-xs font-medium hover:bg-muted disabled:opacity-50"
+            >
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          )}
+        </span>
       ) : undefined}
     >
       <div className="space-y-2">
+        {pinned[0] && (
+          <p className="line-clamp-2 rounded-md border border-gold bg-gold-tint px-2 py-1.5 text-xs text-ink-900" title={pinned[0].notes}>
+            <Pin className="mr-1 inline h-3 w-3 text-gold-strong" />{pinned[0].notes}
+          </p>
+        )}
         <div>
           <label htmlFor="up-jd" className="text-xs font-medium">Job description</label>
           <textarea
@@ -820,14 +885,20 @@ function JobNotesCard({ job, canEdit, onSave }: {
   );
 }
 
-function Card({ icon, title, action, children }: {
-  icon: React.ReactNode; title: string; action?: React.ReactNode; children: React.ReactNode;
+function Card({ icon, title, count, action, children }: {
+  icon: React.ReactNode; title: string; count?: number; action?: React.ReactNode; children: React.ReactNode;
 }) {
   return (
     <section className="rounded-md border bg-card p-3">
       <div className="mb-2 flex items-center justify-between gap-2">
         <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {icon}{title}
+          {/* A count is a chip, never part of the title text. */}
+          {count != null && (
+            <span className="inline-flex min-w-[1.5rem] justify-center rounded-full border bg-muted px-1.5 py-0.5 text-xs font-medium normal-case tracking-normal tabular-nums">
+              {count}
+            </span>
+          )}
         </h3>
         {action}
       </div>

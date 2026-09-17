@@ -110,10 +110,17 @@ type FetchState<T> = { data: T | null; loading: boolean; error: string | null };
 export function useFetch<T>(
   key: string | null,
   options: { enabled?: boolean; refetchInterval?: number } = {},
-): FetchState<T> & { refreshing: boolean; refetch: () => void } {
+): FetchState<T> & { refreshing: boolean; refetch: () => void; dataKey: string | null } {
   const enabled = options.enabled !== false && key != null;
-  const [state, setState] = useState<FetchState<T> & { refreshing: boolean }>({
-    data: null, loading: enabled, refreshing: false, error: null,
+  /*
+   * `dataKey` — the key the CURRENT `data` was fetched for. The flicker fix
+   * below keeps the previous payload on screen while a new key loads, which is
+   * right for "same list, new page" but wrong for "a different job": a caller
+   * that swaps entities compares `dataKey === key` to tell a stale payload
+   * from its own. Additive; nothing else reads it.
+   */
+  const [state, setState] = useState<FetchState<T> & { refreshing: boolean; dataKey: string | null }>({
+    data: null, loading: enabled, refreshing: false, error: null, dataKey: null,
   });
   // Bump this counter to force a refetch — used by the returned `refetch`
   // callback and the optional poll below.
@@ -131,7 +138,7 @@ export function useFetch<T>(
       ? { ...s, loading: true, refreshing: false, error: null }
       : { ...s, loading: false, refreshing: true, error: null });
     dedupedGet<T>(key, () => api.get<T>(key))
-      .then((data) => { if (!cancelled) setState({ data, loading: false, refreshing: false, error: null }); })
+      .then((data) => { if (!cancelled) setState({ data, loading: false, refreshing: false, error: null, dataKey: key }); })
       .catch((e) => {
         // Keep the previous data on error so a transient poll/refetch failure
         // never blanks a populated table (SWR). First-load errors still show
@@ -139,6 +146,7 @@ export function useFetch<T>(
         if (!cancelled) setState((s) => ({
           data: s.data, loading: false, refreshing: false,
           error: e instanceof ApiError ? e.message : 'Failed to load',
+          dataKey: s.dataKey,
         }));
       });
     return () => { cancelled = true; };
@@ -164,6 +172,7 @@ export function useFetch<T>(
     loading: state.loading,
     refreshing: state.refreshing,
     error: state.error,
+    dataKey: state.dataKey,
     refetch: () => {
       // Drop cached entry for this key, then bump the tick — the next effect
       // run fires a real request (and swaps silently, since data is present).
