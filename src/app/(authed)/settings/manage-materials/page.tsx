@@ -54,8 +54,14 @@ function priceRangeLabel(min: number | null, max: number | null): string {
   return `₹${min} – ₹${max}`;
 }
 
-function brandsCell(names: string[]): string {
-  if (names.length === 0) return '—';
+function brandsCell(m: MaterialListItem) {
+  const names = m.brand_names;
+  if (names.length === 0) {
+    // Decision A: "Not Applicable" is gone — a FIXED material with an
+    // empty brand list is the No Brand mode. DYNAMIC materials have no
+    // brand concept at all, so they keep the plain dash.
+    return m.pricing_type === 'FIXED' ? <span className="text-muted-foreground">No Brand</span> : '—';
+  }
   if (names.length <= 2) return names.join(', ');
   return `${names.slice(0, 2).join(', ')} +${names.length - 2}`;
 }
@@ -142,7 +148,6 @@ export default function ManageMaterialsPage() {
   const { data: brandOptions } = useFetch<BrandOption[]>(can.isMaterialView ? '/admin/materials/brand-options' : null);
   const brandFilterOptions: SearchOption[] = (brandOptions ?? []).map((b) => ({ value: b.brand_id, label: b.brand_name }));
 
-  function refreshMaterials() { refetchMaterials(); }
   function refreshBrands() { refetchBrands(); }
   function refreshBoth() { refetchMaterials(); refetchBrands(); }
 
@@ -183,7 +188,7 @@ export default function ManageMaterialsPage() {
     setBusyId(m.material_id);
     try {
       await api.patch(`/admin/materials/${m.material_id}/status`, { is_active: false });
-      refreshMaterials();
+      refreshBoth();
     } catch (e) {
       showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Deactivate failed' });
     } finally { setBusyId(null); }
@@ -192,7 +197,7 @@ export default function ManageMaterialsPage() {
     setBusyId(m.material_id);
     try {
       await api.patch(`/admin/materials/${m.material_id}/status`, { is_active: true });
-      refreshMaterials();
+      refreshBoth();
     } catch (e) {
       showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Reactivate failed' });
     } finally { setBusyId(null); }
@@ -326,7 +331,7 @@ export default function ManageMaterialsPage() {
                     <td className="!text-left truncate" title={m.service_catg_name}>{m.service_catg_name}</td>
                     <td className="!text-left truncate">{m.uom_name ?? <span className="text-muted-foreground">—</span>}</td>
                     <td className="!text-center whitespace-nowrap">{m.pricing_type === 'FIXED' ? 'Fixed' : 'Dynamic'}</td>
-                    <td className="!text-left truncate" title={m.brand_names.join(', ')}>{brandsCell(m.brand_names)}</td>
+                    <td className="!text-left truncate" title={m.brand_names.length ? m.brand_names.join(', ') : 'No Brand'}>{brandsCell(m)}</td>
                     <td className="!text-right whitespace-nowrap tabular-nums">{priceRangeLabel(m.price_min, m.price_max)}</td>
                     <td className="!text-center whitespace-nowrap">
                       {m.status !== 1
@@ -477,7 +482,7 @@ export default function ManageMaterialsPage() {
         onClose={() => setMaterialDialogOpen(false)}
         editing={editingMaterial}
         canSeeBrands={can.isBrandView}
-        onSaved={() => { setMaterialDialogOpen(false); refreshMaterials(); }}
+        onSaved={() => { setMaterialDialogOpen(false); refreshBoth(); }}
       />
 
       <BrandDialog
@@ -494,7 +499,7 @@ export default function ManageMaterialsPage() {
         id={deleteTarget?.id ?? null}
         name={deleteTarget?.name ?? ''}
         replacementOptions={deleteTarget?.entity === 'brand' ? brandReplaceOptions : materialReplaceOptions}
-        onDone={deleteTarget?.entity === 'brand' ? refreshBoth : refreshMaterials}
+        onDone={refreshBoth}
       />
 
       <ImportDialog<MaterialImportSummary>
