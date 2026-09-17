@@ -32,6 +32,7 @@ import { showToast } from '@/components/ui/toast';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useFetchOnce } from '@/lib/hooks';
 import { CallingModeToggle } from './CallingModeToggle';
+import { PlivoAccountCard } from './PlivoAccountCard';
 import { OtpChannelToggle } from './OtpChannelToggle';
 import { DeleteEntityDialog } from './DeleteEntityDialog';
 import { DeletedRecordsDialog } from './DeletedRecordsDialog';
@@ -202,6 +203,7 @@ export default function AdminActionsPage() {
 
       {/* Click-to-call mode switch (Web ⇄ Mobile) — Admin only; self-hides otherwise. */}
       {canSwitchCallMode && <CallingModeToggle />}
+      {canSwitchCallMode && <PlivoAccountCard />}
       {canSwitchOtpChannel && <OtpChannelToggle />}
 
       {visible.length === 0 && (
