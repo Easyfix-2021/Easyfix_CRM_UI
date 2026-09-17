@@ -181,6 +181,13 @@ export const URL_MAP: Record<string, string> = {
   'vertical':              '/settings/verticals',
   'clientratecard':        '/settings/rate-cards-b2b',
   'retailratecard':        '/settings/rate-cards-b2c',
+  // Manage Materials (Settings): Material master (Fixed/Dynamic pricing,
+  // per-brand + per-state overrides) + Brand master. tbl_menu row seeded
+  // with legacy-style slug url='managematerials' by
+  // EasyFix_Backend 2026-09-17-manage-materials.sql; page lives at
+  // /settings/manage-materials. Without this entry the sidebar link falls
+  // through to /coming-soon whatever the SQL says.
+  'managematerials':       '/settings/manage-materials',
   // Call Analytics (Settings): call-history table + Transcribe metrics + LLM
   // coaching. tbl_menu row seeded with url='callAnalytics' by
   // 2026-07-06-add-call-analysis.sql; page lives at /settings/call-analytics.
