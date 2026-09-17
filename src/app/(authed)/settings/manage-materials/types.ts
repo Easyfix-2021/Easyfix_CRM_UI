@@ -60,7 +60,8 @@ export type UomOption = { uom_id: number; uom_name: string };
 
 export type ReferencesResponse = {
   total: number;
-  by_type: Array<{ type: string; label: string; count: number }>;
+  /* active/inactive present when the reference type can tell them apart (brand ← materials). */
+  by_type: Array<{ type: string; label: string; count: number; active?: number; inactive?: number }>;
 };
 
 export type ReplaceConflict = { material_id: number; material_name: string };
