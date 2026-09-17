@@ -35,7 +35,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Search, X, Loader2 } from 'lucide-react';
+import { AlertTriangle, Search, X, Loader2, CalendarClock } from 'lucide-react';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog';
@@ -61,7 +61,7 @@ import { AddRemarksDialog } from './AddRemarksDialog';
 import { RescheduleDialog } from './RescheduleDialog';
 import { useCancelJob } from './CancelJob';
 import { pendingRescheduleRequest, rescheduleRequestPrefill, type AppRequestDetail } from '@/lib/job-app-request';
-import { istNowWallClock } from '@/lib/utils';
+import { istNowWallClock, appointmentIsPast, formatDate } from '@/lib/utils';
 import { PendingStartConsoleBody } from './PendingStartConsole';
 import { JobRemarksView } from './JobRemarksView';
 import { JobInternalNotes, type JobNote } from './JobInternalNotes';
@@ -209,7 +209,37 @@ export function AssignTechnicianModal({
   const techRef = useRef<HTMLElement | null>(null);
   const notesRef = useRef<HTMLDivElement | null>(null);
   const [pinnedNotes, setPinnedNotes] = useState<JobNote[]>([]);
+  /*
+   * REASSIGN ON A PASSED APPOINTMENT → RESCHEDULE FIRST (ops, 2026-09-17).
+   * A reassign offers the job to the new technician, and an offer for a time
+   * that has gone is refused (the backend's /assign gate says so too). So the
+   * Reassign / Change / "Reassign technician" buttons first ask to reschedule;
+   * once the reschedule has landed and the list is re-ranked, a popup says the
+   * new time and "Proceed to reassign" jumps to the technician list.
+   *   reassignIntentRef   the operator asked to reassign and agreed to reschedule
+   *   rescheduleSignal    opens the Uplifted body's Reschedule popup
+   *   promptReassign      show the "Order rescheduled" popup once re-ranked
+   */
+  const reassignIntentRef = useRef(false);
+  const [rescheduleSignal, setRescheduleSignal] = useState(0);
+  const [promptReassign, setPromptReassign] = useState(false);
+  /* When the prompt was armed — a prompt still waiting for a readable future
+     time after this long is dropped, so a much later, unrelated change can
+     never surface "Order rescheduled" out of nowhere. */
+  const promptSetAtRef = useRef(0);
+  /* The Uplifted body's read of the appointment (undefined until it reports). */
+  const [bodyAppointment, setBodyAppointment] = useState<string | null | undefined>(undefined);
   useEffect(() => { setView(initialView); }, [open, jobId, initialView]);
+  /* Switching tabs: the Uplifted body will re-read and re-report the
+     appointment, and a reassign intent from the other tab must not survive
+     into it. Done in the click, not an effect, so the remounting body's report
+     (a child effect, which runs first) is not wiped straight after. */
+  function switchView(next: AssignView) {
+    if (next === view) return;
+    setBodyAppointment(undefined);
+    reassignIntentRef.current = false;
+    setView(next);
+  }
 
   // Reset transient state whenever the modal closes / the job changes.
   useEffect(() => {
@@ -217,6 +247,7 @@ export function AssignTechnicianModal({
     setPincodeModalFor(null); setSearchPage(0); setSearchPageSize(10);
     setRemarksOpen(false); setRescheduleOpen(false);
     setRemarksReloadKey(0); setRescheduling(false);
+    reassignIntentRef.current = false; setPromptReassign(false); setBodyAppointment(undefined);
     rescheduleRefetchStarted.current = false;
   }, [open, jobId]);
 
@@ -372,6 +403,75 @@ export function AssignTechnicianModal({
   }, [rows, showingSearch, searchPage, searchPageSize]);
 
   const job = topData?.job ?? null;
+  /*
+   * The appointment the "reschedule first" check reads. On Uplifted, the body's
+   * /header read — it arrives long before the ranked /candidates payload and is
+   * re-read after every action there — so the check is right from first paint
+   * and after a request approval. Current falls back to the ranked job.
+   */
+  const appointmentForGate = uplifted && bodyAppointment !== undefined
+    ? bodyAppointment
+    : (job?.requested_date_time ?? null);
+  /* Both modes: /assign refuses a passed appointment for assign AND reassign. */
+  const apptPast = appointmentIsPast(appointmentForGate);
+  const scrollToTechnicians = () => techRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  async function startReassign() {
+    if (!apptPast) { scrollToTechnicians(); return; }
+    const ok = await confirmAction({
+      title: 'Reschedule first',
+      icon: <AlertTriangle className="h-5 w-5" />,
+      iconAccent: 'amber',
+      description: (
+        <ul className="space-y-1.5 text-sm">
+          <li>• The appointment{appointmentForGate ? <> (<b>{formatDate(appointmentForGate)}</b>)</> : null} has already passed.</li>
+          <li>• A technician can’t be given a job for a time that has gone.</li>
+          <li>• Set a new date and time, then choose the technician.</li>
+        </ul>
+      ),
+      confirmLabel: 'Reschedule now',
+      cancelLabel: 'Not now',
+    });
+    if (!ok) return;
+    reassignIntentRef.current = true;
+    if (uplifted) setRescheduleSignal((n) => n + 1);
+    else setRescheduleOpen(true);
+  }
+
+  /*
+   * The reschedule has landed and the list re-ranked (the veil is down): say
+   * the new time and hand over to the technician list — but only once the
+   * appointment we can read is actually in the FUTURE. A refetch that has not
+   * caught up yet keeps waiting; on Current (whose only source is /candidates)
+   * a failed refetch says so instead of announcing the old, passed time.
+   */
+  useEffect(() => {
+    if (!promptReassign || rescheduling) return;
+    if (Date.now() - promptSetAtRef.current > 30_000) { setPromptReassign(false); return; }
+    const when = appointmentForGate;
+    if (!when || appointmentIsPast(when)) {
+      if (!uplifted && top.error) {
+        setPromptReassign(false);
+        showToast({ variant: 'error', message: 'Rescheduled, but the technician list could not refresh — reopen the popup to reassign.' });
+      }
+      return;
+    }
+    setPromptReassign(false);
+    void confirmAction({
+      title: 'Order rescheduled',
+      icon: <CalendarClock className="h-5 w-5" />,
+      iconAccent: 'sky',
+      description: (
+        <div className="space-y-1.5 text-sm">
+          <p>Order rescheduled for <b>{formatDate(when)}</b>.</p>
+          <p>Now choose the technician to {mode === 'reassign' ? 'reassign it to' : 'assign'}.</p>
+        </div>
+      ),
+      confirmLabel: mode === 'reassign' ? 'Proceed to reassign' : 'Proceed to assign',
+      cancelLabel: 'Later',
+    }).then((go) => { if (go) scrollToTechnicians(); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [promptReassign, rescheduling, appointmentForGate, top.error, uplifted]);
   const note = topData?.note ?? null;
   const verb = mode === 'reassign' ? 'Reassign' : 'Assign';
 
@@ -437,16 +537,30 @@ export function AssignTechnicianModal({
    * thread so the reschedule comment appears.
    */
   function afterReschedule() {
+    reRank();
+    reloadRemarks();
+    // Only a reschedule the operator started FROM a reassign asks to proceed.
+    if (reassignIntentRef.current) {
+      reassignIntentRef.current = false;
+      promptSetAtRef.current = Date.now();
+      setPromptReassign(true);
+    }
+  }
+  /* Veil the stale list and re-rank against the job as it is now. */
+  function reRank() {
     rescheduleRefetchStarted.current = false;
     setRescheduling(true);
     // Drop the cached candidate lists (Top-10 + any active search) so the
     // next fetch re-ranks against the new schedule, then actually re-run
     // the mounted Top-10 query — invalidateFetch only DROPS the cache, it
-    // can't re-run a still-mounted hook.
-    invalidateFetch((k) => k.startsWith(`/admin/jobs/${jobId}/candidates`));
+    // can't re-run a still-mounted hook. The job's /header and detail reads
+    // are dropped too: the Uplifted body (mounted now or after a tab switch)
+    // must not be served the pre-reschedule appointment from the 30s cache.
+    invalidateFetch((k) => k.startsWith(`/admin/jobs/${jobId}/candidates`)
+      || k === `/admin/jobs/${jobId}/header` || k === `/admin/jobs/${jobId}`);
     top.refetch();
     if (searchKey) searchRes.refetch();
-    reloadRemarks();
+    setBodyAppointment(undefined);
   }
   function reloadRemarks() {
     invalidateFetch((k) =>
@@ -481,7 +595,7 @@ export function AssignTechnicianModal({
                   <button
                     key={v}
                     type="button"
-                    onClick={() => setView(v)}
+                    onClick={() => switchView(v)}
                     aria-pressed={view === v}
                     className={[
                       'rounded px-2.5 py-1 text-xs font-medium capitalize transition-colors',
@@ -526,7 +640,13 @@ export function AssignTechnicianModal({
               onChanged={() => { reloadRemarks(); onChanged?.(); }}
               onJobCancelled={() => { onChanged?.(); onClose(); }}
               onRescheduled={() => { statusGate.refetch(); afterReschedule(); }}
-              onPickTechnicians={() => techRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+              onChangeTechnician={() => { void startReassign(); }}
+              openRescheduleSignal={rescheduleSignal}
+              onRescheduleClosed={() => { reassignIntentRef.current = false; }}
+              /* An approved/rejected technician request can clear the
+                 "Reschedule Requested" ask server-side — re-read the probe too. */
+              onJobMoved={() => { statusGate.refetch(); reRank(); reloadRemarks(); }}
+              onAppointment={setBodyAppointment}
               pinnedNotes={pinnedNotes}
               onShowNotes={() => notesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
             />
@@ -539,6 +659,9 @@ export function AssignTechnicianModal({
             onReschedule={() => setRescheduleOpen(true)}
             rescheduling={rescheduling}
             rescheduleRequest={rescheduleAsk}
+            /* /assign refuses a passed appointment (2026-09-17): the notice is
+               the blocking strip, not the old "you can still reassign" hint. */
+            pastBlocksAction
           />
           )}
 
@@ -803,11 +926,17 @@ export function AssignTechnicianModal({
             <Button variant="outline" onClick={onClose} disabled={committing}>Close</Button>
             {canCommit && (
               <Button
-                onClick={commitAssign}
-                disabled={!jobId || committing || selected.size !== 1 || blockedSelectedCandidate != null}
-                title={blockedSelectedCandidate
-                  ? candidateJobOfferEligibility(blockedSelectedCandidate).explanation
-                  : undefined}
+                /* On a passed appointment Reassign asks to reschedule first
+                   instead of committing — clickable even with nobody picked,
+                   so the operator is told what to do rather than stuck. */
+                onClick={apptPast ? () => { void startReassign(); } : commitAssign}
+                disabled={!jobId || committing
+                  || (!apptPast && (selected.size !== 1 || blockedSelectedCandidate != null))}
+                title={apptPast
+                  ? 'The appointment has passed — reschedule first, then reassign'
+                  : blockedSelectedCandidate
+                    ? candidateJobOfferEligibility(blockedSelectedCandidate).explanation
+                    : undefined}
               >
                 {committing ? <Loader2 className="h-4 w-4 animate-spin" /> : verb}
               </Button>
@@ -853,7 +982,9 @@ export function AssignTechnicianModal({
           jobId={jobId}
           // Pre-fill from the technician's open ask (future time + remarks).
           {...rescheduleRequestPrefill(rescheduleAsk, istNowWallClock())}
-          onClose={() => setRescheduleOpen(false)}
+          /* RescheduleDialog calls onDone BEFORE onClose, so a save consumes the
+             reassign intent first and a plain close (no save) drops it. */
+          onClose={() => { setRescheduleOpen(false); reassignIntentRef.current = false; }}
           onDone={() => {
             // A reschedule clears the technician's reschedule ask server-side
             // (resolveAppRequests), so re-read the detail probe or the

@@ -90,6 +90,7 @@ import {
   type PsFilters,
 } from '@/components/job/PendingSchedulingFilters';
 import { PendingStartTabs, toPtsState, type PtsState } from '@/components/job/PendingStartTabs';
+import { BucketHowItWorks } from '@/components/job/BucketHowItWorks';
 import { PendingStartLiveStatus, useMinuteClock } from '@/components/job/PendingStartLiveStatus';
 import { useFetch, invalidateFetch, useDebouncedValue } from '@/lib/hooks';
 import { formatJobAge, jobAgeTitle, type JobAgeFields } from '@/lib/job-age';
@@ -202,14 +203,7 @@ export type PendingToStartViewProps = {
   // The popover only polls (every 15s) WHILE OPEN, so this stays on-demand —
   // there's no eager per-row location fetch on this unified backend.
   onShowLocation: (row: { job_id: number; easyfixer_name: string | null }) => void;
-  /*
-   * The strip's way back to every order, exactly as on Pending for Scheduling.
-   * Optional: without it the strip simply offers no way out rather than a
-   * button that does nothing.
-   */
-  onShowAll?: () => void;
-  /* Job Stage Access keeps this user inside the bucket — the strip then says so
-   * instead of offering "Show All Orders". */
+  /* Job Stage Access keeps this user inside the bucket — the strip then says so. */
   scopeClamped?: boolean;
   /* Opens the job console for a row. The row icon renders only when provided. */
   onOpenConsole?: (jobId: number) => void;
@@ -222,7 +216,6 @@ export function PendingToStartView({
   openView,
   openReassign,
   onShowLocation,
-  onShowAll,
   scopeClamped = false,
   onOpenConsole,
 }: PendingToStartViewProps) {
@@ -332,13 +325,13 @@ export function PendingToStartView({
 
   return (
     <div className="space-y-5">
+      <BucketHowItWorks bucket="pending-start" />
       <PendingStartTabs
         value={ptsTab}
         onChange={setPtsTab}
         params={countParams}
         reloadKey={reloadKey}
         clamped={scopeClamped}
-        onShowAll={onShowAll}
       />
 
       <Card>

@@ -63,7 +63,7 @@ export function toPtsState(raw: string | null): PtsState {
 }
 
 export function PendingStartTabs({
-  value, onChange, params, reloadKey, clamped, onShowAll,
+  value, onChange, params, reloadKey, clamped,
 }: {
   value: PtsState;
   onChange: (next: PtsState) => void;
@@ -77,11 +77,6 @@ export function PendingStartTabs({
   reloadKey?: number;
   /** Job Stage Access keeps this user inside the bucket — hide the way out. */
   clamped: boolean;
-  /*
-   * Optional, unlike on PendingSchedulingTabs: the host wires it separately,
-   * and a button that does nothing is worse than no button.
-   */
-  onShowAll?: () => void;
 }) {
   /*
    * The filters ARE the cache key: useFetch dedupes and caches module-side, so
@@ -115,7 +110,7 @@ export function PendingStartTabs({
   }, [reloadKey]);
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-muted/40 px-2 py-1.5">
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted px-2 py-2">
       <div className="flex flex-wrap items-center gap-1" role="tablist" aria-label="Pending to start states">
         {TABS.map((t) => {
           const active = t.value === value;
@@ -129,15 +124,22 @@ export function PendingStartTabs({
               title={t.title}
               onClick={() => onChange(t.value)}
               className={[
-                'rounded-md px-3 py-1.5 text-sm transition-colors',
+                /* Bigger and bold, the active bucket on the theme's dark
+                   surface (ops, 2026-09-17) — the strip is the first thing
+                   read on the page, so it should look like the page's tabs,
+                   not a row of filters. */
+                'rounded-md px-4 py-2 text-base font-semibold transition-colors',
                 active
-                  ? 'bg-background font-medium text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:bg-background/60 hover:text-foreground',
+                  ? 'bg-sidebar text-sidebar-foreground shadow-sm'
+                  /* hover:bg-card, not bg-background: in dark mode --background
+                     IS --sidebar, so hovering an idle tab painted it exactly
+                     like the selected one. */
+                  : 'text-foreground/75 hover:bg-card hover:text-foreground',
               ].join(' ')}
             >
               {t.label}
               {n != null && (
-                <span className={`ml-1.5 text-xs tabular-nums ${active ? 'text-muted-foreground' : 'text-muted-foreground/80'}`}>
+                <span className={`ml-2 text-sm tabular-nums ${active ? 'text-sidebar-foreground/75' : 'text-muted-foreground'}`}>
                   {n.toLocaleString()}
                 </span>
               )}
@@ -145,13 +147,11 @@ export function PendingStartTabs({
           );
         })}
       </div>
-      {clamped ? (
+      {/* No "Show All Orders" (ops, 2026-09-17) — same strip as Pending for
+          Scheduling. The clamp note stays. */}
+      {clamped && (
         <span className="px-2 text-xs text-muted-foreground">Limited By Your Job Stage Access</span>
-      ) : onShowAll ? (
-        <button type="button" onClick={onShowAll} className="px-2 text-xs hover:underline">
-          Show All Orders
-        </button>
-      ) : null}
+      )}
     </div>
   );
 }

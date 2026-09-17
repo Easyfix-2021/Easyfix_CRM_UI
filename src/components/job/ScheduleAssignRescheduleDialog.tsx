@@ -163,7 +163,7 @@ export function ScheduleAssignRescheduleDialog({
           <ul className="space-y-1.5 text-sm">
             <li>• {liveOffers} technician{liveOffers === 1 ? '' : 's'} waiting to reply will lose the offer.</li>
             <li>• They will see it as <b>Expired · Appointment rescheduled</b>.</li>
-            <li>• The job becomes <b>Unallocated</b> again.</li>
+            <li>• The job moves to <b>No takers</b> until you offer it again.</li>
             <li>• <b>Next step:</b> choose technicians and offer it again for the new time — before you close the console.</li>
           </ul>
         ),
@@ -307,12 +307,15 @@ export function ScheduleAssignRescheduleDialog({
             </div>
           </Step>
 
-          {/* NOT a choice — a statement, on one line. Reschedule notifies both
-              parties on its own, so ticked-and-disabled says who gets told
-              without offering a switch that controls nothing. */}
+          {/* NOT a choice — a statement of what the save sends, checked against
+              the backend (2026-09-17): reschedule fires RescheduleTech, whose
+              notification sends the CUSTOMER an SMS with the new time and the
+              CLIENT's system the webhook. Nothing is pushed to the technician,
+              so the line says so rather than promising it. */}
           <p className="border-t pt-2 text-xs text-muted-foreground">
-            <span className="font-medium text-foreground">Notify</span> · the customer gets an SMS and the technician is
-            notified automatically. Open offers are expired and must be sent again for the new time.
+            <span className="font-medium text-foreground">Notify</span> · the customer gets an SMS with the new time and the
+            client’s system is updated. The technician is <b>not</b> notified — call them. Open offers are expired and must
+            be sent again for the new time.
           </p>
 
           {err && <p className="text-sm text-urgent-strong" role="alert">{err}</p>}

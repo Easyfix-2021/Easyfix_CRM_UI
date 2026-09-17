@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { AlertTriangle, CalendarClock, CalendarCheck, CalendarDays, Ban, Loader2, MapPin, UserCog } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { AlertTriangle, CalendarClock, CalendarCheck, CalendarDays, Ban, Loader2, MapPin, UserCog, Star, Repeat } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useFetch, invalidateFetch } from '@/lib/hooks';
 import { useMe } from '@/lib/auth-context';
@@ -54,6 +54,10 @@ type HeaderJob = NonNullable<UpliftedJob> & AppRequestFields & {
   efr_mobile?: string | null;
   checkin_date_time?: string | null;
   accepted_date_time?: string | null;
+  /* The assigned technician's track record, from the header. */
+  efr_completed_7d?: number | null;
+  efr_open_jobs?: number | null;
+  efr_avg_rating?: number | null;
 };
 
 type Probe = NonNullable<UpliftedProbe> & { job_id?: number };
@@ -64,7 +68,8 @@ const SA_API_BASE = process.env.NEXT_PUBLIC_API_URL || '/api';
    lib/pending-start-status.ts — so the row and its console always agree. */
 
 export function PendingStartConsoleBody({
-  active, jobId, onChanged, onJobCancelled, onRescheduled, onPickTechnicians, pinnedNotes, onShowNotes,
+  active, jobId, onChanged, onJobCancelled, onRescheduled, onRescheduleClosed, onJobMoved, onAppointment,
+  onChangeTechnician, openRescheduleSignal, pinnedNotes, onShowNotes,
 }: {
   /** The popup is open on this tab — reads only run while it is. */
   active: boolean;
@@ -73,10 +78,25 @@ export function PendingStartConsoleBody({
   onChanged: () => void;
   /** An approved cancellation cancelled the job — the host closes. */
   onJobCancelled: () => void;
-  /** The appointment moved — the host re-ranks its technician list. */
+  /** THIS body's Reschedule popup saved a new time — the host re-ranks and may prompt to reassign. */
   onRescheduled: () => void;
-  /** Scroll to the host's technician list. */
-  onPickTechnicians: () => void;
+  /** THIS body's Reschedule popup closed (saved or not) — the host drops a pending reassign intent. */
+  onRescheduleClosed: () => void;
+  /**
+   * Something that feeds the ranking changed WITHOUT this body's Reschedule
+   * popup (a technician request approved/rejected, services saved) — the host
+   * re-ranks, but must not treat it as the reschedule a reassign was waiting on.
+   */
+  onJobMoved: () => void;
+  /** The job's current appointment as this body last read it (the fast /header). */
+  onAppointment: (requestedDateTime: string | null) => void;
+  /**
+   * Start a reassign: the host asks to reschedule first when the appointment
+   * has passed, otherwise it scrolls to its technician list.
+   */
+  onChangeTechnician: () => void;
+  /** The host bumps this to open this body's Reschedule popup (reassign → reschedule first). */
+  openRescheduleSignal: number;
   pinnedNotes: JobNote[];
   onShowNotes: () => void;
 }) {
@@ -86,6 +106,15 @@ export function PendingStartConsoleBody({
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [servicesOpen, setServicesOpen] = useState(false);
   const [locationOpen, setLocationOpen] = useState(false);
+  /* Open the Reschedule popup when the host asks (a reassign on a passed
+     appointment). Keyed on the signal CHANGING, so a remount does not reopen it. */
+  const lastSignal = useRef(openRescheduleSignal);
+  useEffect(() => {
+    if (openRescheduleSignal !== lastSignal.current) {
+      lastSignal.current = openRescheduleSignal;
+      setRescheduleOpen(true);
+    }
+  }, [openRescheduleSignal]);
   /* Who else this job was offered to before it was accepted — shown under the
      assigned technician. Trusted only for this job's key (useFetch keeps the
      previous job's list while the next loads). */
@@ -98,6 +127,15 @@ export function PendingStartConsoleBody({
      job's data while the next loads (same guard as Schedule & Assign). */
   const job = header.data?.job && Number(header.data.job.job_id) === Number(jobId) ? header.data.job : null;
   const probe = detail.data && Number(detail.data.job_id) === Number(jobId) ? detail.data : null;
+  /* Report the appointment up whenever this body's read of it changes: the
+     host's own copy comes from /candidates (the slow ranking pass), and the
+     "reschedule first" check must not wait for it — nor trust it after a
+     request approval moved the time. */
+  const appointmentNow = job ? (job.requested_date_time ?? null) : undefined;
+  useEffect(() => {
+    if (appointmentNow !== undefined) onAppointment(appointmentNow);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appointmentNow]);
 
   const now = useMinuteClock();
   const state = ptsStateOf(job);
@@ -154,12 +192,21 @@ export function PendingStartConsoleBody({
   };
 
   const requestActions = req && jobId != null ? (
-    <TechRequestActions jobId={jobId} request={req} allowed={canResolve} onActioned={refresh} onCancelled={onJobCancelled} variant="button" />
+    <TechRequestActions
+      jobId={jobId}
+      request={req}
+      allowed={canResolve}
+      /* An approved reschedule moves the appointment: re-read here AND have the
+         host re-rank, or its "reschedule first" check keeps the old time. */
+      onActioned={() => { refresh(); onJobMoved(); }}
+      onCancelled={onJobCancelled}
+      variant="button"
+    />
   ) : null;
-  /* Every state can hand the job to someone else: the button scrolls to the
-     technician list below, where Reassign commits. */
+  /* Every state can hand the job to someone else — through the host's reassign
+     flow (reschedule first when the time has passed, then the list). */
   const reassignButton = canReassign ? (
-    <Button size="sm" variant="outline" onClick={onPickTechnicians}>
+    <Button size="sm" variant="outline" onClick={onChangeTechnician}>
       <UserCog className="mr-1.5 h-3.5 w-3.5" />Reassign technician
     </Button>
   ) : null;
@@ -221,36 +268,52 @@ export function PendingStartConsoleBody({
   };
 
   /*
-   * The assigned technician, then everyone else the job was offered to. The
-   * card is exactly as tall as Customer and Client beside it; the offer list
-   * takes whatever height is left and scrolls inside it.
+   * THE TECHNICIAN TILE (ops mockup, 2026-09-17): who has the job and how they
+   * are doing, the two actions that matter on an accepted job, then everyone
+   * else the job was offered to. The tile is exactly as tall as Customer and
+   * Client beside it; the offer list takes the height that is left and scrolls
+   * inside it. No Cancel here (it lives in the popup footer) and no Notify yet.
+   *
+   *   Efr # · accepted <time>  — only when the technician actually accepted an
+   *                              offer; jobs assigned the old way show no time
+   *   No check-in              — every job in this bucket, until check-in
+   *   ★ rating                 — AVG customer rating, as on Manage Easyfixers
+   *   Track record             — completed in the last 7 days (status 3/5) and
+   *                              open jobs now (status 1, 2, 20)
+   *   Change                   — the reassign flow (reschedule first if late)
    *
    * No photo: the backend serves no technician profile image yet, so the
    * avatar is the technician's initials.
    */
   const efrName = job?.efr_name ? formatEasyfixerName(job.efr_name) : '';
   const efrInitials = efrName.replace(/^Trainee · /, '').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join('');
+  const live = offerItems.filter((o) => (o.offer_status ?? 0) === 0).length;
+  const closed = offerItems.length - live;
+  const completed7d = job?.efr_completed_7d;
+  const openJobs = job?.efr_open_jobs;
   const technician = job ? (
     <div className="flex min-h-0 flex-1 flex-col gap-2 text-xs">
-      <div className="flex items-center gap-2.5">
-        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-info bg-info-tint text-sm font-semibold text-info-strong" aria-hidden>
+      <div className="flex items-start gap-3">
+        <span className="grid h-12 w-12 shrink-0 place-items-center rounded-full border border-info bg-info-tint text-base font-semibold text-info-strong" aria-hidden>
           {efrInitials || '—'}
         </span>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-semibold">{efrName || 'Technician'}</p>
-          <p className="text-muted-foreground">{job.efr_id ? `Efr #${job.efr_id}` : 'Efr ID not available'}</p>
+          <p className="text-muted-foreground">
+            {job.efr_id ? `Efr #${job.efr_id}` : 'Efr ID not available'}
+            {job.accepted_date_time ? ` · accepted ${formatDate(job.accepted_date_time)}` : ''}
+          </p>
+          <p className="mt-1 flex flex-wrap gap-1">
+            {!job.checkin_date_time && (
+              <span className="inline-flex rounded-full border border-urgent bg-urgent-tint px-2 py-0.5 text-xs font-medium text-urgent-strong">No check-in</span>
+            )}
+            {job.efr_avg_rating != null && (
+              <span className="inline-flex items-center gap-0.5 rounded-full border bg-muted px-2 py-0.5 text-xs font-medium text-foreground" title="Average customer rating, as on Manage Easyfixers">
+                <Star className="h-3 w-3" aria-hidden />{Number(job.efr_avg_rating).toFixed(1)} rating
+              </span>
+            )}
+          </p>
         </div>
-        {/* Latest GPS fix from the technician app — the same popup Manage
-            Easyfixers uses. */}
-        {job.efr_id && (
-          <button
-            type="button"
-            onClick={() => setLocationOpen(true)}
-            className="inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium hover:bg-muted"
-          >
-            <MapPin className="h-3.5 w-3.5" />Live location
-          </button>
-        )}
       </div>
       <div>
         <div className="flex items-start justify-between gap-3 border-t py-1.5">
@@ -262,19 +325,31 @@ export function PendingStartConsoleBody({
           </span>
         </div>
         <div className="flex items-start justify-between gap-3 border-t py-1.5">
-          <span className="text-muted-foreground">Accepted</span>
-          <span className="font-medium">{job.accepted_date_time ? formatDate(job.accepted_date_time) : '—'}</span>
-        </div>
-        <div className="flex items-start justify-between gap-3 border-t py-1.5">
-          <span className="text-muted-foreground">Checked in</span>
-          <span className="font-medium">{job.checkin_date_time ? formatDate(job.checkin_date_time) : 'Not yet'}</span>
+          <span className="shrink-0 text-muted-foreground">Track record</span>
+          <span className="text-right font-medium">
+            {completed7d == null && openJobs == null
+              ? '—'
+              : <>{completed7d ?? 0} completed (7 days) · {openJobs ?? 0} open job{openJobs === 1 ? '' : 's'}</>}
+          </span>
         </div>
       </div>
+      <div className="flex flex-wrap gap-2 border-t pt-2">
+        {/* Latest GPS fix from the technician app — the same popup Manage
+            Easyfixers uses. */}
+        {job.efr_id && (
+          <Button size="sm" variant="outline" onClick={() => setLocationOpen(true)}>
+            <MapPin className="mr-1.5 h-3.5 w-3.5" />Live location
+          </Button>
+        )}
+        {canReassign && (
+          <Button size="sm" variant="outline" onClick={onChangeTechnician}>
+            <Repeat className="mr-1.5 h-3.5 w-3.5" />Change
+          </Button>
+        )}
+      </div>
       <div className="flex items-center justify-between gap-2 border-t pt-2">
-        <span className="font-semibold uppercase tracking-wide text-muted-foreground">Offered to</span>
-        <span className="inline-flex min-w-[1.5rem] justify-center rounded-full border bg-muted px-1.5 py-0.5 font-medium tabular-nums text-muted-foreground">
-          {offerItems.length}
-        </span>
+        <span className="font-semibold uppercase tracking-wide text-muted-foreground">Offer replies</span>
+        <span className="text-muted-foreground">{live} waiting · {closed} closed</span>
       </div>
       <OfferRepliesList
         offers={offerItems}
@@ -287,10 +362,45 @@ export function PendingStartConsoleBody({
   /* Blank with a loader until BOTH of this job's reads are in — the detail
      read carries the reference and the attachments, and rendering before it
      painted "No image attached" for a moment. */
+  /*
+   * The Reschedule and Services popups render whether or not the job has
+   * loaded: the host can ask for Reschedule (a reassign on a passed
+   * appointment) before this body's /header read lands — or after it failed —
+   * and a popup that is not mounted would swallow that request and leave the
+   * host's reassign intent armed.
+   */
+  const dialogs = (
+    <>
+      {jobId != null && (
+        <ScheduleAssignRescheduleDialog
+          open={rescheduleOpen}
+          jobId={jobId}
+          currentAppointment={job?.requested_date_time ?? null}
+          originalAppointment={probe?.original_appointment_date_time ?? null}
+          onClose={() => { setRescheduleOpen(false); onRescheduleClosed(); }}
+          onDone={() => afterReschedule()}
+        />
+      )}
+      {jobId != null && (
+        <ServicesOneListDialog
+          open={servicesOpen}
+          jobId={jobId}
+          onClose={() => setServicesOpen(false)}
+          onSaved={() => { header.refetch(); onChanged(); onJobMoved(); }}
+        />
+      )}
+    </>
+  );
+
   if (!job || (!probe && !detail.error)) {
-    return header.error
-      ? <p className="text-sm text-urgent-strong">Could not load this job: {header.error}</p>
-      : <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Loading job…</p>;
+    return (
+      <>
+        {header.error
+          ? <p className="text-sm text-urgent-strong">Could not load this job: {header.error}</p>
+          : <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Loading job…</p>}
+        {dialogs}
+      </>
+    );
   }
 
   return (
@@ -302,7 +412,7 @@ export function PendingStartConsoleBody({
         offers={null}
         offerable={false}
         onReschedule={() => setRescheduleOpen(true)}
-        onPickTechnicians={onPickTechnicians}
+        onPickTechnicians={onChangeTechnician}
         apiBase={SA_API_BASE}
         actionOverride={action}
         technicianOverride={technician}
@@ -319,24 +429,7 @@ export function PendingStartConsoleBody({
         } : undefined}
       />
 
-      {jobId != null && (
-        <ScheduleAssignRescheduleDialog
-          open={rescheduleOpen}
-          jobId={jobId}
-          currentAppointment={job.requested_date_time ?? null}
-          originalAppointment={probe?.original_appointment_date_time ?? null}
-          onClose={() => setRescheduleOpen(false)}
-          onDone={afterReschedule}
-        />
-      )}
-      {jobId != null && (
-        <ServicesOneListDialog
-          open={servicesOpen}
-          jobId={jobId}
-          onClose={() => setServicesOpen(false)}
-          onSaved={() => { header.refetch(); onChanged(); onRescheduled(); }}
-        />
-      )}
+      {dialogs}
       <LiveLocationPopover
         open={locationOpen}
         onClose={() => setLocationOpen(false)}

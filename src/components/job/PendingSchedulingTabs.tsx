@@ -46,7 +46,7 @@ const TABS: { value: PsOfferState; label: string; key: keyof Counts; title: stri
 ];
 
 export function PendingSchedulingTabs({
-  value, onChange, params, reloadKey, clamped, onShowAll,
+  value, onChange, params, reloadKey, clamped,
 }: {
   value: PsOfferState;
   onChange: (next: PsOfferState) => void;
@@ -60,7 +60,6 @@ export function PendingSchedulingTabs({
   reloadKey?: number;
   /** Job Stage Access keeps this user inside the bucket — hide the way out. */
   clamped: boolean;
-  onShowAll: () => void;
 }) {
   /*
    * The filters ARE the cache key: useFetch dedupes and caches module-side, so
@@ -90,7 +89,7 @@ export function PendingSchedulingTabs({
   }, [reloadKey]);
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-muted/40 px-2 py-1.5">
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted px-2 py-2">
       <div className="flex flex-wrap items-center gap-1" role="tablist" aria-label="Scheduling buckets">
         {TABS.map((t) => {
           const active = t.value === value;
@@ -104,15 +103,22 @@ export function PendingSchedulingTabs({
               title={t.title}
               onClick={() => onChange(t.value)}
               className={[
-                'rounded-md px-3 py-1.5 text-sm transition-colors',
+                /* Bigger and bold, the active bucket on the theme's dark
+                   surface (ops, 2026-09-17) — the strip is the first thing
+                   read on the page, so it should look like the page's tabs,
+                   not a row of filters. */
+                'rounded-md px-4 py-2 text-base font-semibold transition-colors',
                 active
-                  ? 'bg-background font-medium text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:bg-background/60 hover:text-foreground',
+                  ? 'bg-sidebar text-sidebar-foreground shadow-sm'
+                  /* hover:bg-card, not bg-background: in dark mode --background
+                     IS --sidebar, so hovering an idle tab painted it exactly
+                     like the selected one. */
+                  : 'text-foreground/75 hover:bg-card hover:text-foreground',
               ].join(' ')}
             >
               {t.label}
               {n !== undefined && (
-                <span className={`ml-1.5 text-xs tabular-nums ${active ? 'text-muted-foreground' : 'text-muted-foreground/80'}`}>
+                <span className={`ml-2 text-sm tabular-nums ${active ? 'text-sidebar-foreground/75' : 'text-muted-foreground'}`}>
                   {n.toLocaleString()}
                 </span>
               )}
@@ -120,12 +126,11 @@ export function PendingSchedulingTabs({
           );
         })}
       </div>
-      {clamped ? (
+      {/* No "Show All Orders" here any more (ops, 2026-09-17) — the page's
+          own bucket menu is the way out. The clamp note stays: it explains
+          why the numbers are smaller than expected. */}
+      {clamped && (
         <span className="px-2 text-xs text-muted-foreground">Limited By Your Job Stage Access</span>
-      ) : (
-        <button type="button" onClick={onShowAll} className="px-2 text-xs hover:underline">
-          Show All Orders
-        </button>
       )}
     </div>
   );
