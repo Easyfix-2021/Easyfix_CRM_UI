@@ -45,6 +45,8 @@ export const MAX_PAGE_SIZE = 200;
 
 export const META_KEY = `${API_BASE}/meta`;
 export const UPLOAD_URL = `${API_BASE}/upload`;
+/* The Excel template for update_dashboard.bat (upload key; streamed .xlsx). */
+export const TEMPLATE_URL = `${API_BASE}/template`;
 
 export const EMPTY_FILTERS: Filters = {
   verticals: [],
