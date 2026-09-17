@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import {
-  Brain, Building, Hash, Tag, Package, UserCog, FileText, ClipboardList,
+  Brain, Building, Hash, Tag, Package, Boxes, UserCog, FileText, ClipboardList,
   Sparkles, Wrench, ShieldCheck, Zap, PhoneCall, type LucideIcon, Palette } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { useMe } from '@/lib/auth-context';
@@ -57,6 +57,9 @@ const AREAS: Tile[] = [
   { href: '/settings/rate-cards-b2c', icon: FileText, title: 'Manage B2C Rate Cards',
     blurb: 'Retail service catalog with fixed catalog prices (not per-customer).',
     shipped: true, actionKey: 'isRetailServiceEdit' },
+  { href: '/settings/manage-materials', icon: Boxes, title: 'Manage Materials',
+    blurb: 'Material master (Fixed / Dynamic pricing, per-brand + per-state overrides) and the shared Brand master.',
+    shipped: true, actionKey: 'isMaterialView' },
   { href: '/settings/manage-users', icon: UserCog, title: 'Manage Users',
     blurb: 'Internal CRM staff. Identity + role + city; OTP-only login (no passwords).',
     shipped: true, actionKey: 'isUserEdit' },
