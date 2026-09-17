@@ -2,20 +2,23 @@
 
 import { useRef, useState } from 'react';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
-import { AlertTriangle, CalendarClock, CalendarCheck, CalendarDays, Ban, User, Loader2 } from 'lucide-react';
+import { AlertTriangle, CalendarClock, CalendarCheck, CalendarDays, Ban, Loader2, MapPin } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { useFetch, invalidateFetch } from '@/lib/hooks';
 import { showToast } from '@/components/ui/toast';
 import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
-import { formatDate, relativeTime } from '@/lib/utils';
+import { formatDate, relativeTime, formatEasyfixerName } from '@/lib/utils';
+import { api, type JobOffersResponse } from '@/lib/api';
+import { LiveLocationPopover } from '@/components/location/LiveLocationPopover';
 import { displaySlot } from '@/lib/job-slots';
 import { PTS_STATUS, ptsStateOf, appointmentTiming } from '@/lib/pending-start-status';
 import { PtsTimingChip, useMinuteClock } from './PendingStartLiveStatus';
 import { appRequestOf, type AppRequestFields } from '@/lib/job-app-request';
 import { CallableMobile } from '@/components/calls/CallButton';
-import { ScheduleAssignUplifted, type UpliftedJob, type UpliftedProbe } from './ScheduleAssignUplifted';
+import { ScheduleAssignUplifted, OfferRepliesList, type UpliftedJob, type UpliftedProbe } from './ScheduleAssignUplifted';
+import { ServicesOneListDialog } from './ServicesOneListDialog';
 import { ScheduleAssignRescheduleDialog } from './ScheduleAssignRescheduleDialog';
 import { TechRequestActions, APP_REQUEST_ACTION } from './TechRequestActions';
 import { JobRemarksView } from './JobRemarksView';
@@ -76,6 +79,14 @@ export function PendingStartConsole({ open, jobId, onClose, onChanged }: {
   const [remarksKey, setRemarksKey] = useState(0);
   const [pinnedNotes, setPinnedNotes] = useState<JobNote[]>([]);
   const notesRef = useRef<HTMLDivElement | null>(null);
+  const [servicesOpen, setServicesOpen] = useState(false);
+  const [locationOpen, setLocationOpen] = useState(false);
+  /* Who else this job was offered to before it was accepted — shown under the
+     assigned technician. Trusted only for this job's key (useFetch keeps the
+     previous job's list while the next loads). */
+  const offersKey = open && jobId ? `/admin/jobs/${jobId}/offers` : null;
+  const offers = useFetch<JobOffersResponse>(offersKey);
+  const offerItems = offers.dataKey === offersKey ? (offers.data?.items ?? []) : [];
 
   /* Trust a payload only when it IS this job — useFetch keeps the previous
      job's data while the next loads (same guard as Schedule & Assign). */
@@ -108,8 +119,19 @@ export function PendingStartConsole({ open, jobId, onClose, onChanged }: {
   function refresh() {
     header.refetch();
     detail.refetch();
+    offers.refetch();
     reloadRemarks();
     onChanged?.();
+  }
+  /*
+   * An approved cancellation has cancelled the job: nothing is left to act on
+   * here. The shared Cancel Job control has already shown "Job Cancelled", so
+   * close the console and refresh the list behind it — the job leaves Pending
+   * to Start.
+   */
+  function onJobCancelled() {
+    onChanged?.();
+    onClose();
   }
 
   const slot = displaySlot(job?.requested_date_time, job?.time_slot);
@@ -139,7 +161,7 @@ export function PendingStartConsole({ open, jobId, onClose, onChanged }: {
   };
 
   const requestActions = req && jobId != null ? (
-    <TechRequestActions jobId={jobId} request={req} allowed={canResolve} onActioned={refresh} variant="button" />
+    <TechRequestActions jobId={jobId} request={req} allowed={canResolve} onActioned={refresh} onCancelled={onJobCancelled} variant="button" />
   ) : null;
 
   /*
@@ -195,33 +217,63 @@ export function PendingStartConsole({ open, jobId, onClose, onChanged }: {
     extra: timingChip,
   };
 
+  /*
+   * The assigned technician, then everyone else the job was offered to. The
+   * card is exactly as tall as Customer and Client beside it; the offer list
+   * takes whatever height is left and scrolls inside it.
+   *
+   * No photo: the backend serves no technician profile image yet, so the
+   * avatar is the technician's initials.
+   */
+  const efrName = job?.efr_name ? formatEasyfixerName(job.efr_name) : '';
+  const efrInitials = efrName.replace(/^Trainee · /, '').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join('');
   const technician = job ? (
-    <div className="space-y-2 text-xs">
+    <div className="flex min-h-0 flex-1 flex-col gap-2 text-xs">
       <div className="flex items-center gap-2.5">
-        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-info-tint text-info-strong">
-          <User className="h-5 w-5" />
+        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-info bg-info-tint text-sm font-semibold text-info-strong" aria-hidden>
+          {efrInitials || '—'}
         </span>
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold">{job.efr_name || 'Technician'}</p>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-semibold">{efrName || 'Technician'}</p>
           <p className="text-muted-foreground">{job.efr_id ? `Efr #${job.efr_id}` : 'Efr ID not available'}</p>
         </div>
+        {/* Latest GPS fix from the technician app — the same popup Manage
+            Easyfixers uses. */}
+        {job.efr_id && (
+          <button
+            type="button"
+            onClick={() => setLocationOpen(true)}
+            className="inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium hover:bg-muted"
+          >
+            <MapPin className="h-3.5 w-3.5" />Live location
+          </button>
+        )}
       </div>
-      <div className="flex items-start justify-between gap-3 border-t pt-1.5">
-        <span className="text-muted-foreground">Mobile</span>
-        <span className="font-medium">
-          {job.efr_mobile && job.efr_id
-            ? <CallableMobile efrId={job.efr_id} jobContextId={jobId ?? undefined} mobile={job.efr_mobile} />
-            : '—'}
+      <div>
+        <div className="flex items-start justify-between gap-3 border-t py-1.5">
+          <span className="text-muted-foreground">Mobile</span>
+          <span className="font-medium">
+            {job.efr_mobile && job.efr_id
+              ? <CallableMobile efrId={job.efr_id} jobContextId={jobId ?? undefined} mobile={job.efr_mobile} />
+              : '—'}
+          </span>
+        </div>
+        <div className="flex items-start justify-between gap-3 border-t py-1.5">
+          <span className="text-muted-foreground">Accepted</span>
+          <span className="font-medium">{job.accepted_date_time ? formatDate(job.accepted_date_time) : '—'}</span>
+        </div>
+        <div className="flex items-start justify-between gap-3 border-t py-1.5">
+          <span className="text-muted-foreground">Checked in</span>
+          <span className="font-medium">{job.checkin_date_time ? formatDate(job.checkin_date_time) : 'Not yet'}</span>
+        </div>
+      </div>
+      <div className="flex items-center justify-between gap-2 border-t pt-2">
+        <span className="font-semibold uppercase tracking-wide text-muted-foreground">Offered to</span>
+        <span className="inline-flex min-w-[1.5rem] justify-center rounded-full border bg-muted px-1.5 py-0.5 font-medium tabular-nums text-muted-foreground">
+          {offerItems.length}
         </span>
       </div>
-      <div className="flex items-start justify-between gap-3 border-t pt-1.5">
-        <span className="text-muted-foreground">Accepted</span>
-        <span className="font-medium">{job.accepted_date_time ? formatDate(job.accepted_date_time) : '—'}</span>
-      </div>
-      <div className="flex items-start justify-between gap-3 border-t pt-1.5">
-        <span className="text-muted-foreground">Checked in</span>
-        <span className="font-medium">{job.checkin_date_time ? formatDate(job.checkin_date_time) : 'Not yet'}</span>
-      </div>
+      <OfferRepliesList offers={offerItems} jobId={jobId} emptyText="No other offers on this job." />
     </div>
   ) : null;
 
@@ -260,14 +312,24 @@ export function PendingStartConsole({ open, jobId, onClose, onChanged }: {
                 stateOverride={stateOverride}
                 pinnedNotes={pinnedNotes}
                 onShowNotes={() => notesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                /* Editable on an accepted job too (ops, 2026-09-17): the same
+                   one-list services editor and the same PATCH for the job
+                   notes as Schedule & Assign, then a re-read of the header. */
+                onEditServices={jobId != null ? () => setServicesOpen(true) : undefined}
+                onSaveDetails={jobId != null ? async (patch) => {
+                  await api.patch(`/admin/jobs/${jobId}`, patch);
+                  header.refetch();
+                } : undefined}
               />
               {/* Remarks two thirds, internal notes one third — the same bottom
-                  row as Schedule & Assign. Notes can be added on an accepted job;
-                  its editors above stay read-only here. */}
+                  row as Schedule & Assign, at the same fixed height, each
+                  scrolling inside its own tile. */}
               <div className="grid gap-3 lg:grid-cols-[2fr_1fr]">
-                <JobRemarksView key={`${jobId}-${remarksKey}`} jobId={jobId} />
-                <div ref={notesRef} className="scroll-mt-4">
-                  <JobInternalNotes key={jobId ?? 'none'} jobId={jobId} canAdd onPinnedChange={setPinnedNotes} />
+                <div className="h-96 min-h-0">
+                  <JobRemarksView key={`${jobId}-${remarksKey}`} jobId={jobId} fill />
+                </div>
+                <div ref={notesRef} className="h-96 min-h-0 scroll-mt-4">
+                  <JobInternalNotes key={jobId ?? 'none'} jobId={jobId} canAdd onPinnedChange={setPinnedNotes} fill />
                 </div>
               </div>
             </>
@@ -303,6 +365,21 @@ export function PendingStartConsole({ open, jobId, onClose, onChanged }: {
             }}
           />
         )}
+        {jobId != null && (
+          <ServicesOneListDialog
+            open={servicesOpen}
+            jobId={jobId}
+            onClose={() => setServicesOpen(false)}
+            onSaved={() => { header.refetch(); onChanged?.(); }}
+          />
+        )}
+        <LiveLocationPopover
+          open={locationOpen}
+          onClose={() => setLocationOpen(false)}
+          source="easyfixer"
+          id={locationOpen && job?.efr_id ? Number(job.efr_id) : null}
+          title={efrName ? `${efrName}${job?.efr_id ? ` · Efr #${job.efr_id}` : ''}` : undefined}
+        />
       </DialogContent>
     </Dialog>
   );

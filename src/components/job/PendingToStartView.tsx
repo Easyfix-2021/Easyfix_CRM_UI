@@ -96,6 +96,7 @@ import { formatJobAge, jobAgeTitle, type JobAgeFields } from '@/lib/job-age';
 import { appRequestOf, type AppRequestFields } from '@/lib/job-app-request';
 import type { JobShare } from '@/lib/job-share';
 import { buildJobsKey } from '@/lib/jobs-query';
+import { SortHeader, type SortDir } from '@/lib/use-sort';
 import { useJobActionParams } from '@/lib/job-action-url';
 import {
   formatDate,
@@ -341,36 +342,30 @@ export function PendingToStartView({
       />
 
       <Card>
-        <CardContent className="p-3">
+        <CardContent className="p-3 space-y-3">
           {/*
-            * Search, the four filters and Clear Filters on ONE line on a wide
-            * screen: the search box leads, the shared bar (whose own row already
-            * ends in Clear Filters) takes the rest. Below xl the search takes a
-            * line of its own and the bar wraps under it — at lg the bar is
-            * 3-up, and squeezing a search box in beside that splits the filters
-            * across two ragged lines. items-end keeps the box on the fields'
-            * baseline, not their labels'.
+            * The SAME arrangement as Pending for Scheduling (my-orders page):
+            * search on its own full-width line, the shared filter bar — which
+            * ends in its own Clear Filters — on the line below. Squeezing the
+            * search in beside the four filters made the two buckets look like
+            * different screens (ops, 2026-09-17).
             */}
-          <div className="flex flex-wrap items-end gap-3">
-            <div className="relative w-full xl:w-64 xl:shrink-0">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search Job #, Customer, Mobile…"
-                title="Searches Job #, Customer, Mobile, Client, City, Technician, Owner and SPOC"
-                aria-label="Search pending to start orders"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="pl-9"
-              />
-            </div>
-            <div className="min-w-0 flex-1">
-              <PendingSchedulingFilters
-                value={filters}
-                onChange={(next) => setFilters(withoutOfferState(next))}
-                hideOfferState
-              />
-            </div>
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search by Job #, Customer, Mobile, Client, City, Technician, SPOC…"
+              title="Searches Job #, Customer, Mobile, Client, City, Technician, Owner and SPOC"
+              aria-label="Search pending to start orders"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-9"
+            />
           </div>
+          <PendingSchedulingFilters
+            value={filters}
+            onChange={(next) => setFilters(withoutOfferState(next))}
+            hideOfferState
+          />
         </CardContent>
       </Card>
 
@@ -461,12 +456,17 @@ function PendingStartTable({
   const limit = pageSizeToLimit(pageSize, JOBS_MAX_LIMIT);
   const offset = page * limit;
 
+  /*
+   * Appointment order, the one sort this view offers. Soonest first by default
+   * — the order ops triage in (on All that puts the longest-missed slots on
+   * top); the column header flips it. Kept out of `scope`, so flipping the
+   * order keeps the page the operator is on.
+   */
+  const [apptDir, setApptDir] = useState<SortDir>('asc');
   const key = buildJobsKey({
     ...scope,
-    // Soonest appointment first — the order ops triage in. On All that puts
-    // the longest-missed slots on top, which is the point.
     sortBy: 'requested_date_time',
-    sortDir: 'asc',
+    sortDir: apptDir,
     limit,
     offset,
   });
@@ -511,10 +511,9 @@ function PendingStartTable({
               {/* Request — why this row is on a request tab, so it reads
                   immediately after the Job ID rather than at the far right. */}
               {showRequest && <th>Request</th>}
-              {/* Age — read-only here. This view has NO sort state: the table
-                  pins sortBy=requested_date_time asc ("soonest appointment
-                  first" is the order ops triage in), so a clickable Age header
-                  would have nothing to drive. */}
+              {/* Age — read-only here. The only sort is the appointment
+                  column's (soonest first by default, click to flip), so a
+                  clickable Age header would have nothing to drive. */}
               <th className="w-16">Age</th>
               <th>Job Ref</th>
               <th>Technician</th>
@@ -522,7 +521,14 @@ function PendingStartTable({
               <th>Client</th>
               <th>Location</th>
               <th>Date &amp; Time of Booking</th>
-              <th>Date &amp; Time of Appointment</th>
+              <SortHeader<string>
+                col="requested_date_time"
+                sortBy="requested_date_time"
+                sortDir={apptDir}
+                onSort={() => setApptDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
+              >
+                Date &amp; Time of Appointment
+              </SortHeader>
               <th>Current Status of Job</th>
               <th>Client SPOC</th>
               <th className="stick-col-head stick-right text-right">Action</th>
