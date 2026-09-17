@@ -120,7 +120,7 @@ export function BrandDialog({
             {/* In-flow (not a floating popover) so the Dialog's overflow can never clip it. */}
             {showList && (
               <ul id="brand-suggestions" role="listbox" className="mt-1 border rounded-md bg-card shadow-sm max-h-48 overflow-y-auto py-1">
-                <li className="px-3 pt-1 pb-1.5 text-[11px] font-medium text-muted-foreground">Existing Brands — Select To Use</li>
+                <li className="px-3 pt-1 pb-1.5 text-xs font-medium text-muted-foreground">Existing Brands — Select To Use</li>
                 {similar.map((b, i) => (
                   <li
                     key={b.brand_id}
