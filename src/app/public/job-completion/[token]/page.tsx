@@ -39,7 +39,7 @@ import type { PrefillResponse, SubmitPayload } from '@/lib/magic-link-types';
 import { SearchSelect } from '@/components/ui/search-select';
 // The FOUR booking bands — the single source of truth for tbl_job.time_slot.
 // Plain constants, no auth dependency → safe public.
-import { BOOKING_BANDS, AFTER_HOURS_SLOT, inferSlotFromTime, canonicalSlot } from '@/lib/job-slots';
+import { BOOKING_BANDS, inferSlotFromTime, canonicalSlot } from '@/lib/job-slots';
 // Shared masked from→to preview (also used by the CRM operator click-to-call).
 import { CallLegsPreview } from '@/components/ui/CallLegsPreview';
 // Shared presentational Button (cva-based, no auth dependency → safe on the
@@ -52,10 +52,6 @@ import { publicFetch } from '@/lib/public-fetch';
 import { InfoCard } from '@/components/public/InfoCard';
 import { OverlayShell } from '@/components/public/OverlayShell';
 import { FullPageMessage } from '@/components/public/FullPageMessage';
-// Best-slot advisory — reruns on date change in the Reschedule dialog. The hook
-// is parameterised with { publicToken } so it hits the token-gated /public
-// slot-recommendations endpoint instead of the admin (JWT) route.
-import { useSlotRecommendations, SlotAdvisory } from '@/components/job/SlotRecommendations';
 
 
 type PageState =
@@ -445,36 +441,29 @@ export default function JobCompletionMagicLinkPage() {
   }, [dialog, token]);
 
   /*
-   * Earliest date/time the CUSTOMER may reschedule to.
+   * Earliest DATE the CUSTOMER may reschedule to: the day AFTER the later of
+   * the current appointment's day and today. A reschedule moves the visit to
+   * another day — never earlier, never the same day. Mirrored server-side in
+   * routes/public/job-completion.js (EasyFix_Backend).
    *
    * ⚠ MUST STAY ABOVE THE EARLY RETURNS BELOW. This component returns early for
    * the loading / expired / invalid / error / submitted / no-form states, so a
    * hook placed after them runs on some renders and not others — React counts
-   * hooks positionally and throws #310 ("rendered more hooks than during the
-   * previous render"). That is exactly what happened when this was first written
-   * further down the file. `form` is therefore optional-chained: it is legitimately
-   * null on the first render, before the fetch resolves.
-   *
-   * Two floors, whichever is later:
-   *   - the START OF THE CURRENT APPOINTMENT'S DAY — a customer may push an
-   *     appointment out, never pull it earlier. Day start, not the appointment
-   *     instant, so an earlier SLOT on the same day is still allowed.
-   *   - NOW — so an appointment already today/past can't be "moved" to a moment
-   *     that has already gone.
+   * hooks positionally and throws #310. `form` is therefore optional-chained.
    *
    * Ops are deliberately NOT subject to this: they reschedule from the CRM, a
    * different surface, where back-dating is a legitimate correction.
    *
-   * Both values are naive IST "YYYY-MM-DDTHH:mm" strings, which sort
-   * lexicographically in chronological order — so the comparison needs no date
-   * math and no timezone conversion.
+   * YYYY-MM-DD strings sort chronologically, so max() is a string compare; the
+   * +1 day runs in UTC on a date-only value, so no timezone can shift it.
    */
-  const rescheduleMin = React.useMemo(() => {
-    const nowLocal = toDatetimeLocal(new Date().toISOString());
-    const day = (form?.requested_date_time || '').slice(0, 10);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return nowLocal; // unscheduled → today
-    const apptDayStart = `${day}T00:00`;
-    return apptDayStart > nowLocal ? apptDayStart : nowLocal;
+  const rescheduleMinDate = React.useMemo(() => {
+    const today = toDatetimeLocal(new Date().toISOString()).slice(0, 10);
+    const appt = (form?.requested_date_time || '').slice(0, 10);
+    const base = /^\d{4}-\d{2}-\d{2}$/.test(appt) && appt > today ? appt : today;
+    const next = new Date(`${base}T00:00:00Z`);
+    next.setUTCDate(next.getUTCDate() + 1);
+    return next.toISOString().slice(0, 10);
   }, [form?.requested_date_time]);
 
   if (state.kind === 'loading') return <div className="text-center text-ink-500 py-12">Loading…</div>;
@@ -1274,9 +1263,7 @@ export default function JobCompletionMagicLinkPage() {
         <RescheduleDialog
           reasons={rescheduleReasons}
           busy={actionBusy === 'reschedule'}
-          minDateTime={rescheduleMin}
-          token={token}
-          jobId={jobId}
+          minDate={rescheduleMinDate}
           onClose={() => { if (actionBusy !== 'reschedule') setDialog(null); }}
           onSubmit={handleRescheduleSubmit}
         />
@@ -1451,15 +1438,12 @@ function OrderHeader({ clientName }: { clientName: string }) {
  * the band's start → "YYYY-MM-DD HH:mm"), and an optional Remarks textarea.
  */
 function RescheduleDialog({
-  reasons, busy, minDateTime, token, jobId, onClose, onSubmit,
+  reasons, busy, minDate, onClose, onSubmit,
 }: {
   reasons: string[];
   busy: boolean;
-  /* Earliest selectable slot — see `rescheduleMin` at the call site. */
-  minDateTime: string;
-  /* Magic-link token + job id — drive the token-gated best-slot advisory. */
-  token: string;
-  jobId: number | null | undefined;
+  /* Earliest selectable date — see `rescheduleMinDate` at the call site. */
+  minDate: string;
   onClose: () => void;
   onSubmit: (reason: string, preferred: string, remarks: string) => void;
 }) {
@@ -1474,21 +1458,17 @@ function RescheduleDialog({
    * the reschedule failed downstream. Only the three daytime bands are offered
    * (After Hours deliberately excluded); the band's START hour is sent as
    * preferred_datetime, the same stamp the Appointment card's chips use.
-   *
-   * On the floor day (today) a band that has already started is hidden — same
-   * rule the old time list applied to past half-hours.
    */
-  const minDate = minDateTime.slice(0, 10);
-  const minTime = date === minDate ? minDateTime.slice(11, 16) : '';
-  const bands = BOOKING_BANDS.filter((b) => b.fromH >= 0 && b.start >= minTime);
+  const bands = BOOKING_BANDS.filter((b) => b.fromH >= 0);
   const picked = bands.find((b) => b.value === slot);
-  const preferred = date && picked ? `${date}T${picked.start}` : '';
+  // `date < minDate` is a string compare on YYYY-MM-DD. Checked here, not just
+  // via <input min>: iOS Safari's calendar ignores `min` and lets any day
+  // through, so the attribute alone is decoration.
+  const tooEarly = !!date && date < minDate;
+  const preferred = date && picked && !tooEarly ? `${date}T${picked.start}` : '';
   // A date without a slot would silently fall back (BE-side) to the CURRENT
   // appointment, so once a date is picked the slot is required.
-  const slotMissing = !!date && !picked;
-  // Best-slot advice is per-DAY, so it runs off the date alone and is visible
-  // while the customer is still choosing the slot. Public magic-link surface.
-  const rec = useSlotRecommendations(jobId, date, { publicToken: token });
+  const slotMissing = !!date && !tooEarly && !picked;
   return (
     <OverlayShell title="Reschedule Order" onClose={onClose} busy={busy}>
       <Field label="Reason" required>
@@ -1499,14 +1479,12 @@ function RescheduleDialog({
         {touched && !reason && <p className="text-xs text-urgent mt-1">Please Select A Reason.</p>}
       </Field>
       <Field label="Preferred Date & Slot">
-        {/* min was `now`, which let a customer pull an appointment EARLIER than
-            the one they already have. It is now the later of the current
-            appointment's day-start and now, so the calendar blocks every date
-            before the existing appointment. Ops keep full freedom (including
-            back-dating) from the CRM — a different surface. */}
         <input type="date" min={minDate} value={date}
           onChange={(e) => setDate(e.target.value)} className={inputClass} />
-        {date && (
+        {tooEarly && (
+          <p className="text-xs text-urgent mt-1">Please Choose A Date On Or After {minDate.split('-').reverse().join('/')}.</p>
+        )}
+        {date && !tooEarly && (
           <div className="flex flex-wrap gap-2 mt-2">
             {bands.map((b) => (
               <button
@@ -1523,23 +1501,9 @@ function RescheduleDialog({
                 {b.label}
               </button>
             ))}
-            {!bands.length && (
-              <p className="text-xs text-warning-strong">No Slots Left For This Date. Please Pick Another Date.</p>
-            )}
           </div>
         )}
         {touched && slotMissing && <p className="text-xs text-urgent mt-1">Please Select A Time Slot.</p>}
-        {/* The advisory can rank After Hours best — hide it then, since that
-            band is not offered here. */}
-        {date && canonicalSlot(rec.best?.slot) !== AFTER_HOURS_SLOT && (
-          <SlotAdvisory
-            best={rec.best}
-            attendanceKnown={rec.attendanceKnown}
-            candidatePool={rec.candidatePool}
-            loading={rec.loading}
-            failed={rec.failed}
-          />
-        )}
       </Field>
       <Field label="Remarks">
         <textarea value={remarks} onChange={(e) => setRemarks(e.target.value)}
@@ -1554,7 +1518,7 @@ function RescheduleDialog({
           Close
         </Button>
         <Button type="button" size="lg" disabled={busy}
-          onClick={() => { setTouched(true); if (reason && !slotMissing) onSubmit(reason, preferred, remarks); }}
+          onClick={() => { setTouched(true); if (reason && !slotMissing && !tooEarly) onSubmit(reason, preferred, remarks); }}
           className="w-full sm:w-auto bg-success hover:bg-success-strong dark:hover:bg-success-tint text-white">
           {busy ? 'Submitting…' : 'Request Reschedule'}
         </Button>
