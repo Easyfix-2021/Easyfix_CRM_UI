@@ -62,6 +62,9 @@ import { RescheduleDialog } from './RescheduleDialog';
 import { useCancelJob } from './CancelJob';
 import { pendingRescheduleRequest, rescheduleRequestPrefill, type AppRequestDetail } from '@/lib/job-app-request';
 import { istNowWallClock } from '@/lib/utils';
+import { PendingStartConsoleBody } from './PendingStartConsole';
+import { JobRemarksView } from './JobRemarksView';
+import { JobInternalNotes, type JobNote } from './JobInternalNotes';
 
 /* Job context carried on the candidates response — the SAME enriched job object
    Schedule & Assign reads, rendered by the shared <JobContextPanel>. Typed as
@@ -104,10 +107,20 @@ type SearchResponse = {
 };
 
 export type AssignMode = 'assign' | 'reassign';
+/*
+ * CURRENT vs UPLIFTED — Reassign only (2026-09-17), the same arrangement as
+ * Schedule & Assign. Current is this popup as it has always been. Uplifted
+ * swaps the Job Details panel for the Pending to Start job console
+ * (PendingStartConsoleBody) and puts remarks + internal notes under the
+ * technician list. Everything that ASSIGNS — the ranked list, search, the
+ * single selection, the Reassign commit, Cancel, Add Remarks — is shared, so
+ * the two tabs can differ in layout but never in what Reassign does.
+ */
+export type AssignView = 'current' | 'uplifted';
 
 export function AssignTechnicianModal({
   open, onClose, onAssigned, onChanged,
-  jobId, mode,
+  jobId, mode, initialView = 'current',
 }: {
   open: boolean;
   onClose: () => void;
@@ -119,6 +132,8 @@ export function AssignTechnicianModal({
   onChanged?: () => void;
   jobId: number | null;
   mode: AssignMode;
+  /** Which tab a Reassign opens on: the row's reassign icon → Current, its console icon → Uplifted. */
+  initialView?: AssignView;
 }) {
   // Modal-internal permission gate. Each per-row select maps to the same legacy
   // action key as the entry icon on my-orders, so a user who can open this modal
@@ -188,6 +203,13 @@ export function AssignTechnicianModal({
   // Guards the veil clear: only fire once the refetch has actually STARTED
   // (top went refreshing) and then SETTLED — not on the render before it kicks in.
   const rescheduleRefetchStarted = useRef(false);
+
+  const [view, setView] = useState<AssignView>(initialView);
+  const uplifted = mode === 'reassign' && view === 'uplifted';
+  const techRef = useRef<HTMLElement | null>(null);
+  const notesRef = useRef<HTMLDivElement | null>(null);
+  const [pinnedNotes, setPinnedNotes] = useState<JobNote[]>([]);
+  useEffect(() => { setView(initialView); }, [open, jobId, initialView]);
 
   // Reset transient state whenever the modal closes / the job changes.
   useEffect(() => {
@@ -409,6 +431,30 @@ export function AssignTechnicianModal({
     }
   }
 
+  /*
+   * After a reschedule from EITHER tab: veil the stale date / list until the
+   * refetch settles, re-rank against the new schedule, and remount the remarks
+   * thread so the reschedule comment appears.
+   */
+  function afterReschedule() {
+    rescheduleRefetchStarted.current = false;
+    setRescheduling(true);
+    // Drop the cached candidate lists (Top-10 + any active search) so the
+    // next fetch re-ranks against the new schedule, then actually re-run
+    // the mounted Top-10 query — invalidateFetch only DROPS the cache, it
+    // can't re-run a still-mounted hook.
+    invalidateFetch((k) => k.startsWith(`/admin/jobs/${jobId}/candidates`));
+    top.refetch();
+    if (searchKey) searchRes.refetch();
+    reloadRemarks();
+  }
+  function reloadRemarks() {
+    invalidateFetch((k) =>
+      k.startsWith(`/admin/jobs/${jobId}/comments`)
+      || k.startsWith(`/admin/jobs/${jobId}/customer-requests`));
+    setRemarksReloadKey((n) => n + 1);
+  }
+
   // No inline-editable fields — selecting a technician is not "dirty form data"
   // to guard, so the discard prompt is skipped; the guard only blocks close
   // while a commit is in flight.
@@ -426,9 +472,27 @@ export function AssignTechnicianModal({
         className="!max-w-none w-[calc(100vw-48px)] h-[calc(100vh-48px)] overflow-hidden flex flex-col"
       >
         <DialogHeader className="px-6 py-4">
-          <DialogTitle className="flex items-center gap-2">
+          <DialogTitle className="flex flex-wrap items-center gap-2">
             {mode === 'reassign' ? 'Reassign Technician' : 'Assign Technician'}
             {jobId && <span className="text-sm font-normal text-ink-300">· Job #{jobId}</span>}
+            {mode === 'reassign' && (
+              <span className="ml-auto mr-8 inline-flex items-center gap-1 rounded-md border bg-muted/50 p-0.5">
+                {(['current', 'uplifted'] as const).map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => setView(v)}
+                    aria-pressed={view === v}
+                    className={[
+                      'rounded px-2.5 py-1 text-xs font-medium capitalize transition-colors',
+                      view === v ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+                    ].join(' ')}
+                  >
+                    {v}
+                  </button>
+                ))}
+              </span>
+            )}
           </DialogTitle>
         </DialogHeader>
 
@@ -455,6 +519,18 @@ export function AssignTechnicianModal({
               stay Schedule-&-Assign-only. The currently-assigned technician is
               highlighted by the CandidateTable's amber `is_current` row below,
               not here. */}
+          {uplifted ? (
+            <PendingStartConsoleBody
+              active={open}
+              jobId={jobId}
+              onChanged={() => { reloadRemarks(); onChanged?.(); }}
+              onJobCancelled={() => { onChanged?.(); onClose(); }}
+              onRescheduled={() => { statusGate.refetch(); afterReschedule(); }}
+              onPickTechnicians={() => techRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+              pinnedNotes={pinnedNotes}
+              onShowNotes={() => notesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+            />
+          ) : (
           <JobContextPanel
             job={job}
             jobId={jobId}
@@ -464,6 +540,7 @@ export function AssignTechnicianModal({
             rescheduling={rescheduling}
             rescheduleRequest={rescheduleAsk}
           />
+          )}
 
           {/* Note banners. */}
           {note === 'no_deep_skill_match' && (
@@ -488,8 +565,9 @@ export function AssignTechnicianModal({
             </div>
           )}
 
-          {/* ───────── Technician list + search ───────── */}
-          <section>
+          {/* ───────── Technician list + search ─────────
+              The ref is the scroll target for Uplifted's "Reassign technician". */}
+          <section ref={techRef} className="scroll-mt-4">
             <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
               <h3 className="text-sm font-semibold flex items-center gap-1.5">
                 {showingSearch ? 'Search Results' : 'Top 10 Technicians'}
@@ -664,6 +742,20 @@ export function AssignTechnicianModal({
               </>
             )}
           </section>
+
+          {/* Uplifted: remarks two thirds, internal notes one third, under the
+              technician list at one fixed height — the same bottom row as
+              Schedule & Assign. Current keeps remarks inside its Job Details. */}
+          {uplifted && (
+            <div className="grid gap-3 lg:grid-cols-[2fr_1fr]">
+              <div className="h-96 min-h-0">
+                <JobRemarksView key={`${jobId}-${remarksReloadKey}`} jobId={jobId} fill />
+              </div>
+              <div ref={notesRef} className="h-96 min-h-0 scroll-mt-4">
+                <JobInternalNotes key={jobId ?? 'none'} jobId={jobId} canAdd onPinnedChange={setPinnedNotes} fill />
+              </div>
+            </div>
+          )}
         </div>
 
         <DialogFooter className="px-6 sm:justify-between">
@@ -755,7 +847,7 @@ export function AssignTechnicianModal({
           the Top-10 against the job's now-updated PERSISTED schedule. This
           modal's candidate key carries no jobDate/timeSlot params, so a plain
           refetch re-ranks correctly — no proposed-schedule preview needed. */}
-      {jobId && (
+      {jobId && !uplifted && (
         <RescheduleDialog
           open={rescheduleOpen}
           jobId={jobId}
@@ -763,25 +855,11 @@ export function AssignTechnicianModal({
           {...rescheduleRequestPrefill(rescheduleAsk, istNowWallClock())}
           onClose={() => setRescheduleOpen(false)}
           onDone={() => {
-            // Veil the stale date / list until the refetch settles.
-            rescheduleRefetchStarted.current = false;
-            setRescheduling(true);
-            // Drop the cached candidate lists (Top-10 + any active search) so the
-            // next fetch re-ranks against the new schedule, then actually re-run
-            // the mounted Top-10 query — invalidateFetch only DROPS the cache, it
-            // can't re-run a still-mounted hook.
-            invalidateFetch((k) => k.startsWith(`/admin/jobs/${jobId}/candidates`));
-            top.refetch();
             // A reschedule clears the technician's reschedule ask server-side
             // (resolveAppRequests), so re-read the detail probe or the
             // "Reschedule Requested" row outlives the ask it answered.
             statusGate.refetch();
-            // Remount the remarks thread so the reschedule comment + any actioned
-            // customer request appear.
-            invalidateFetch((k) =>
-              k.startsWith(`/admin/jobs/${jobId}/comments`)
-              || k.startsWith(`/admin/jobs/${jobId}/customer-requests`));
-            setRemarksReloadKey((n) => n + 1);
+            afterReschedule();
           }}
         />
       )}

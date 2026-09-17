@@ -26,7 +26,7 @@ import { transitionAllowed, STAGES } from '@/lib/job-stages';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { UnconfirmedSections } from '@/components/job/UnconfirmedSections';
 import { PendingToStartView, PTS_TAB_PARAM } from '@/components/job/PendingToStartView';
-import { AssignTechnicianModal, type AssignMode } from '@/components/job/AssignTechnicianModal';
+import { AssignTechnicianModal, type AssignMode, type AssignView } from '@/components/job/AssignTechnicianModal';
 import { ScheduleAssignModal } from '@/components/job/ScheduleAssignModal';
 import { OfferHoverCard } from '@/components/job/OfferHoverCard';
 import {
@@ -35,7 +35,6 @@ import {
 } from '@/components/job/PendingSchedulingFilters';
 import { JobScopeBar, scopeIsClampedFor } from '@/components/job/JobScopeBar';
 import { PendingSchedulingTabs } from '@/components/job/PendingSchedulingTabs';
-import { PendingStartConsole } from '@/components/job/PendingStartConsole';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
 import { ResendPinButton, RESEND_PIN_ACTION } from '@/components/job/ResendPinButton';
@@ -585,12 +584,20 @@ export default function MyOrdersPage() {
     return { open: true, mode: urlAction, id: urlJobId };
   }, [urlAction, urlJobId]);
 
-  // AssignTechDialog state — derived from `?action=assign|reassign`.
-  const assignModal = useMemo<{ open: boolean; jobId: number | null; mode: AssignMode }>(() => {
-    if ((urlAction === 'assign' || urlAction === 'reassign') && urlJobId != null) {
-      return { open: true, jobId: urlJobId, mode: urlAction === 'reassign' ? 'reassign' : 'assign' };
+  // AssignTechDialog state — derived from `?action=assign|reassign|console`.
+  // `console` is the Pending to Start row's console icon: the SAME Reassign
+  // Technician popup, opened on its Uplifted tab (the job console); the row's
+  // reassign icon opens it on Current.
+  const assignModal = useMemo<{ open: boolean; jobId: number | null; mode: AssignMode; view: AssignView }>(() => {
+    if ((urlAction === 'assign' || urlAction === 'reassign' || urlAction === 'console') && urlJobId != null) {
+      return {
+        open: true,
+        jobId: urlJobId,
+        mode: urlAction === 'assign' ? 'assign' : 'reassign',
+        view: urlAction === 'console' ? 'uplifted' : 'current',
+      };
     }
-    return { open: false, jobId: null, mode: 'assign' };
+    return { open: false, jobId: null, mode: 'assign', view: 'current' };
   }, [urlAction, urlJobId]);
 
   // ScheduleAssignModal state — derived from `?action=schedule`. This is
@@ -600,13 +607,6 @@ export default function MyOrdersPage() {
     if (urlAction === 'schedule' && urlJobId != null) {
       return { open: true, jobId: urlJobId };
     }
-    return { open: false, jobId: null };
-  }, [urlAction, urlJobId]);
-
-  // PendingStartConsole state — derived from `?action=console`: the job console
-  // for an ACCEPTED job, opened from the Pending to Start row icon.
-  const consoleModal = useMemo<{ open: boolean; jobId: number | null }>(() => {
-    if (urlAction === 'console' && urlJobId != null) return { open: true, jobId: urlJobId };
     return { open: false, jobId: null };
   }, [urlAction, urlJobId]);
 
@@ -1356,6 +1356,7 @@ export default function MyOrdersPage() {
         open={assignModal.open}
         jobId={assignModal.jobId}
         mode={assignModal.mode}
+        initialView={assignModal.view}
         onClose={() => closeJobAction()}
         onAssigned={() => { cacheRef.current.clear(); load(false, true); }}
         // Cancel Job from inside Reassign also mutates the list — same in-place
@@ -1369,17 +1370,6 @@ export default function MyOrdersPage() {
         * the Job Date/Slot and assigns a technician in one atomic step,
         * then refreshes the list so the row moves to "Pending App Ack".
         */}
-      <PendingStartConsole
-        open={consoleModal.open}
-        jobId={consoleModal.jobId}
-        onClose={() => closeJobAction()}
-        /* A decision here can move the job to another tab (an approved
-           cancellation leaves the page entirely). The page's own list re-reads
-           now; the Pending to Start view refetches and recounts itself when
-           ?action=console clears on close. */
-        onChanged={() => { cacheRef.current.clear(); load(false, true); }}
-      />
-
       <ScheduleAssignModal
         open={scheduleModal.open}
         jobId={scheduleModal.jobId}

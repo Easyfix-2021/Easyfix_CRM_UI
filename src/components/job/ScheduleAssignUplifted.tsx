@@ -433,11 +433,11 @@ export function ScheduleAssignUplifted({
                 </span>
               )}
             </p>
-            <p className="text-xs text-muted-foreground">
-              {escalated
-                ? [job?.escalated_time ? formatDate(job.escalated_time) : null, job?.escalated_by_name ? `by ${job.escalated_by_name}` : null].filter(Boolean).join(' · ') || 'Escalated'
-                : 'Since ticket created'}
-            </p>
+            {escalated && (
+              <p className="text-xs text-muted-foreground">
+                {[job?.escalated_time ? formatDate(job.escalated_time) : null, job?.escalated_by_name ? `by ${job.escalated_by_name}` : null].filter(Boolean).join(' · ') || 'Escalated'}
+              </p>
+            )}
             {/* Who is working the job now (tbl_job.job_owner) — the person to
                 ask about its age. */}
             <p className="mt-0.5 truncate text-xs" title={job?.owner_name || undefined}>
@@ -544,28 +544,35 @@ export function ScheduleAssignUplifted({
               <div className="min-w-0 flex-1">
                 <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Service address</p>
                 <p className="break-words">{job ? formatServiceAddress(job) : '—'}</p>
-                {/* City + pin on their own line, larger: the two fields ops read
-                    first to judge distance. */}
-                <p className="mt-1 text-sm font-semibold">
-                  {job?.city_name || '—'}{' '}
-                  <span className="font-medium text-muted-foreground">{job?.pin_code || ''}</span>
-                </p>
-                {/* The zonal manager is decided by the address city
-                    (tbl_city.state_user), so it sits with the address. A blank
-                    means that city has no owner set. */}
-                {/* The client's own code for the branch/store this job is for
-                    (tbl_job.branch_details) — shown with the address because it
-                    names the place, not the client. */}
-                <p className="mt-0.5" title="The client's code for the branch or store this job is at">
-                  <span className="text-muted-foreground">Client branch ID </span>
-                  {job?.branch_details ? <span className="font-medium">{job.branch_details}</span> : <span className="text-muted-foreground">Not added</span>}
-                </p>
+                {/* City + pin on their own line (same weight as the address). */}
                 <p className="mt-0.5">
-                  <span className="text-muted-foreground">Zonal manager </span>
-                  {job?.zonal_manager_name
-                    ? <span className="font-medium">{job.zonal_manager_name}</span>
-                    : <span className="text-muted-foreground" title="tbl_city.state_user is not set for this job's city">Not set for this city</span>}
+                  {job?.city_name || '—'}{' '}
+                  <span className="text-muted-foreground">{job?.pin_code || ''}</span>
                 </p>
+                {/*
+                  * Branch ID and Zonal manager each under a HEADING of their own,
+                  * like "Service address" above — as plain lines they read as more
+                  * of the address. Branch ID is the client's code for the branch or
+                  * store (tbl_job.branch_details); the zonal manager is decided by
+                  * the address city (tbl_city.state_user), which is why both sit
+                  * with the address. A blank zonal manager means that city has no
+                  * owner set.
+                  */}
+                <div className="mt-2 grid grid-cols-2 gap-3 border-t pt-2">
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Branch ID</p>
+                    <p className="break-words" title="The client's code for the branch or store this job is at">
+                      {job?.branch_details || <span className="text-muted-foreground">Not added</span>}
+                    </p>
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Zonal manager</p>
+                    <p className="break-words">
+                      {job?.zonal_manager_name
+                        || <span className="text-muted-foreground" title="tbl_city.state_user is not set for this job's city">Not set for this city</span>}
+                    </p>
+                  </div>
+                </div>
               </div>
               {canEditAddress && (
                 <button type="button" onClick={() => setAddressOpen(true)} className="shrink-0 rounded-md border px-2 py-1 text-xs font-medium hover:bg-background">
@@ -576,7 +583,7 @@ export function ScheduleAssignUplifted({
           </div>
         </Card>
 
-        <ClientCard job={job} jobReference={probe?.job_reference_id ?? null} />
+        <ClientCard job={job} />
 
         {/*
           * EXACTLY AS TALL AS CUSTOMER AND CLIENT on a wide screen. The wrapper
@@ -970,13 +977,11 @@ function JobNotesCard({ job, canEdit, onSave, pinnedNotes, onShowNotes }: {
  * Job age tile, branch ID with the address, helper with the services, and the
  * client's Primary / Secondary SPOC are no longer shown on the console.
  *
- * LOGO: nothing in this CRM stores a readable client logo (tbl_client.logo_id
- * has no upload or file route), so the mark is the client's initials until one
- * exists — a stable placeholder, not a fake image.
+ * No logo (removed on review) and no Job ref — the reference is already in the
+ * console's title.
  */
-function ClientCard({ job, jobReference }: { job: UpliftedJob; jobReference: string | null }) {
+function ClientCard({ job }: { job: UpliftedJob }) {
   const name = job?.client_name || '';
-  const initials = name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join('');
   const props = [
     ['Property / Building', job?.building_name ?? null] as [string, string | null],
     ['Product code', job?.product_code ?? null] as [string, string | null],
@@ -988,27 +993,10 @@ function ClientCard({ job, jobReference }: { job: UpliftedJob; jobReference: str
 
   return (
     <Card icon={<Building2 className="h-3.5 w-3.5" />} title="Client">
-      <Row
-        label="Client"
-        value={name ? (
-          <span className="inline-flex items-center gap-1.5">
-            {initials && (
-              <span
-                className="grid h-6 w-6 shrink-0 place-items-center rounded border border-info bg-info-tint text-xs font-semibold text-info-strong"
-                title="Client logo is not stored in this CRM yet"
-                aria-hidden
-              >
-                {initials}
-              </span>
-            )}
-            {name}
-          </span>
-        ) : <NotAdded />}
-      />
+      <Row label="Client" value={name || <NotAdded />} />
       <Row label="Vertical" value={job?.vertical_name || <NotAdded />} />
       <Row label="Source" value={job?.source_type || <NotAdded />} />
       <Row label="Client ref ID" value={job?.client_ref_id || <NotAdded />} />
-      <Row label="Job ref" value={jobReference || <NotAdded />} />
       <Row label="SPOC" value={job?.client_spoc_name || <NotAdded />} />
       <Row
         label="SPOC phone"

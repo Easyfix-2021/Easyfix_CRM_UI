@@ -367,6 +367,10 @@ export function ServicesOneListDialog({ open, jobId, onClose, onSaved }: {
                   type="button"
                   aria-pressed={view === v}
                   onClick={() => setView(v)}
+                  title={v === 'all'
+                    ? 'Every product in this category for this client'
+                    : v === 'on' ? 'Only the products ticked on this job'
+                      : 'Only what you have added, removed or changed quantity on — not saved yet'}
                   className={`rounded-full border px-2.5 py-1 text-xs ${view === v ? 'border-foreground bg-foreground text-background' : 'text-muted-foreground hover:text-foreground'}`}
                 >
                   {v === 'all' ? 'All' : v === 'on' ? 'On this job' : 'Changed'}
@@ -430,8 +434,20 @@ export function ServicesOneListDialog({ open, jobId, onClose, onSaved }: {
                 </p>
               </div>
               <div className="ml-auto flex gap-2">
-                <Button variant="outline" onClick={() => setLines(initial)} disabled={!dirty || saving}>Discard changes</Button>
-                <Button onClick={save} disabled={!!blocker || saving}>{saving ? 'Saving…' : 'Save changes'}</Button>
+                {/* Cancel leaves the editor (asking first if there are unsaved
+                    changes). Save stands out once there is something to save:
+                    a count on the label and a ring, so an edit made further up
+                    the list is not left behind by a faded button. */}
+                <Button variant="outline" onClick={() => { void requestClose(); }} disabled={saving}>Cancel</Button>
+                <Button
+                  onClick={save}
+                  disabled={!!blocker || saving}
+                  className={dirty && !blocker ? 'ring-2 ring-primary/40 ring-offset-2 ring-offset-background' : undefined}
+                >
+                  {saving ? 'Saving…' : dirty && !blocker
+                    ? `Save changes (${diff.added + diff.changed + diff.removed})`
+                    : 'Save changes'}
+                </Button>
               </div>
             </div>
           </>

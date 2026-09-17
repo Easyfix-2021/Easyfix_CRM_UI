@@ -45,7 +45,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AlertTriangle, Search, X, Loader2, Clock,
+  AlertTriangle, Search, X, Loader2, Clock, CalendarClock,
 } from 'lucide-react';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -368,15 +368,32 @@ export function ScheduleAssignModal({
    * candidates, newly-expired offers) and remount JobRemarksView so the
    * reschedule comment and any pending-request change appear too.
    */
-  function onRescheduled() {
+  function onRescheduled(newAppointment?: string) {
     // Read BEFORE the refetch below replaces the list: these are the offers the
     // reschedule just expired.
     const expired = (offerItems ?? []).filter((o) => (o.offer_status ?? 0) === 0).length;
     if (expired > 0) {
       setReofferNeeded(true);
-      showToast({
-        variant: 'warning',
-        message: `Rescheduled. ${expired} offer${expired === 1 ? '' : 's'} expired — offer this job again for the new time before closing.`,
+      /*
+       * Say what happened and hand over the next step in one place (ops,
+       * 2026-09-17): the order's new time, and a button that goes straight to
+       * the available technicians. "Later" keeps the console where it is — the
+       * strip and the close check still remind them.
+       */
+      void confirmAction({
+        title: 'Order rescheduled',
+        icon: <CalendarClock className="h-5 w-5" />,
+        iconAccent: 'sky',
+        description: (
+          <div className="space-y-1.5 text-sm">
+            <p>Order rescheduled for <b>{newAppointment ? formatDate(newAppointment) : 'the new time'}</b>.</p>
+            <p>{expired} offer{expired === 1 ? '' : 's'} expired — offer it again for the new time.</p>
+          </div>
+        ),
+        confirmLabel: 'Proceed to re-offer',
+        cancelLabel: 'Later',
+      }).then((go) => {
+        if (go) techRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
     }
     rescheduleRefetchStarted.current = false;
