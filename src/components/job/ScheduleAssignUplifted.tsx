@@ -92,6 +92,22 @@ export type UpliftedJob = {
   zonal_manager_name?: string | null;
   /* tbl_job.job_client_owner's name — the list's "Easyfix SPOC" column. */
   easyfix_spoc_name?: string | null;
+  /* Customer contact beyond name + mobile (View Details' Customer card). */
+  customer_email?: string | null;
+  additional_name?: string | null;
+  additional_number?: string | null;
+  /* Client card: client facts, SPOC contact and the EasyFix people on it. */
+  client_spoc_email?: string | null;
+  vertical_name?: string | null;
+  source_type?: string | null;
+  helper_req?: number | null;
+  branch_details?: string | null;
+  building_name?: string | null;
+  product_code?: string | null;
+  custom_properties?: Array<{ label?: string | null; name?: string | null; value?: unknown }> | null;
+  owner_name?: string | null;
+  client_primary_spoc_name?: string | null;
+  client_secondary_spoc_name?: string | null;
   /* The latest tbl_easyfixer_rating_by_customer row, as the Escalated view
      reads it. is_escalated is always 0/1 from the header. */
   is_escalated?: number | null;
@@ -463,86 +479,86 @@ export function ScheduleAssignUplifted({
       </div>
 
       {/* ── Who it is for, and who has it ──
-          Customer and Client stack in the wide left column; the Technician card
-          holds the narrow right one. On an unallocated job there is never a
-          technician, so that column is the offer replies — the list that grows
-          (10+ technicians on a hard job) — and it scrolls inside itself with
-          about seven rows in view instead of stretching the page. */}
-      <div className="grid gap-3 lg:grid-cols-[2fr_1fr]">
-        <div className="grid content-start gap-3">
-          <Card icon={<User className="h-3.5 w-3.5" />} title="Customer">
-            <div className="grid gap-x-6 gap-y-2 md:grid-cols-2">
-              <div>
-                <Row label="Name" value={job?.customer_name || '—'} />
-                <Row
-                  label="Mobile"
-                  value={job?.customer_mob_no
-                    ? <CallableMobile jobId={job?.job_id} mobile={job.customer_mob_no} />
-                    : '—'}
-                />
-                {/* tbl_job.collected_by through the SAME helper the Current tab's
-                    Job Details grid uses — NOT the BE's `payment_mode`, derived
-                    from paid_by alone and "Not Set" on ~96% of jobs. The two tabs
-                    must never disagree about who pays. */}
-                <Row label="Payment" value={collectedByText(job?.collected_by) ?? 'Not set'} />
+          Three cards in one row, in the plain label/value style ops preferred:
+          Customer, Client, and the Technician card — which is exactly as tall
+          as the other two (see its wrapper). On an unallocated job there is
+          never a technician, so that card is the offer replies — the list that
+          grows (10+ technicians on a hard job) — and it scrolls inside itself. */}
+      <div className="grid gap-3 lg:grid-cols-3">
+        <Card icon={<User className="h-3.5 w-3.5" />} title="Customer">
+          {/* Name = tbl_job.job_customer_name when the booking typed one, else
+              tbl_customer.customer_name (via tbl_job.fk_customer_id) — the
+              list's own expression, so row and console agree. */}
+          <Row label="Name" value={job?.customer_name || <NotAdded />} />
+          <Row
+            label="Mobile"
+            value={job?.customer_mob_no
+              ? <CallableMobile jobId={job?.job_id} mobile={job.customer_mob_no} />
+              : <NotAdded />}
+          />
+          {/* The ALTERNATE contact the booking captured (tbl_job
+              additional_number / additional_name). Dialled through the useAlt
+              route, which resolves the number from the job row. */}
+          <Row
+            label="Alt number"
+            value={job?.additional_number
+              ? (
+                <span className="inline-flex flex-wrap items-center justify-end gap-x-1.5">
+                  {job.additional_name && <span className="text-muted-foreground">{job.additional_name}</span>}
+                  <CallableMobile jobId={job?.job_id} useAlt mobile={job.additional_number} hideWhenUnauthorized />
+                </span>
+              )
+              : <NotAdded />}
+          />
+          <Row label="Email" value={job?.customer_email || <NotAdded />} />
+          {/* tbl_job.collected_by through the SAME helper the Current tab's Job
+              Details grid uses — NOT the BE's `payment_mode`, derived from
+              paid_by alone and "Not Set" on ~96% of jobs. */}
+          <Row label="Payment" value={collectedByText(job?.collected_by) ?? <NotAdded />} />
+          <div className="mt-2 rounded-md border bg-muted/40 px-2.5 py-2 text-xs">
+            <div className="flex items-start gap-1.5">
+              <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Service address</p>
+                <p className="break-words">{job ? formatServiceAddress(job) : '—'}</p>
+                {/* City + pin on their own line, larger: the two fields ops read
+                    first to judge distance. */}
+                <p className="mt-1 text-sm font-semibold">
+                  {job?.city_name || '—'}{' '}
+                  <span className="font-medium text-muted-foreground">{job?.pin_code || ''}</span>
+                </p>
+                {/* The zonal manager is decided by the address city
+                    (tbl_city.state_user), so it sits with the address. A blank
+                    means that city has no owner set. */}
+                <p className="mt-0.5">
+                  <span className="text-muted-foreground">Zonal manager </span>
+                  {job?.zonal_manager_name
+                    ? <span className="font-medium">{job.zonal_manager_name}</span>
+                    : <span className="text-muted-foreground" title="tbl_city.state_user is not set for this job's city">Not set for this city</span>}
+                </p>
               </div>
-              <div className="rounded-md border bg-muted/40 px-2.5 py-2 text-xs">
-                <div className="flex items-start gap-1.5">
-                  <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Service address</p>
-                    <p className="break-words">{job ? formatServiceAddress(job) : '—'}</p>
-                    {/* City + pin on their own line, larger: the two fields ops
-                        read first to judge distance. */}
-                    <p className="mt-1 text-sm font-semibold">
-                      {job?.city_name || '—'}{' '}
-                      <span className="font-medium text-muted-foreground">{job?.pin_code || ''}</span>
-                    </p>
-                    {/* The zonal manager is decided by the address city
-                        (tbl_city.state_user), so it sits with the address. A
-                        blank means that city has no owner set. */}
-                    <p className="mt-0.5">
-                      <span className="text-muted-foreground">Zonal manager </span>
-                      {job?.zonal_manager_name
-                        ? <span className="font-medium">{job.zonal_manager_name}</span>
-                        : <span className="text-muted-foreground" title="tbl_city.state_user is not set for this job's city">Not set for this city</span>}
-                    </p>
-                  </div>
-                  {canEditAddress && (
-                    <button type="button" onClick={() => setAddressOpen(true)} className="shrink-0 rounded-md border px-2 py-1 text-xs font-medium hover:bg-background">
-                      <Pencil className="mr-1 inline h-3 w-3" />Edit
-                    </button>
-                  )}
-                </div>
-              </div>
+              {canEditAddress && (
+                <button type="button" onClick={() => setAddressOpen(true)} className="shrink-0 rounded-md border px-2 py-1 text-xs font-medium hover:bg-background">
+                  <Pencil className="mr-1 inline h-3 w-3" />Edit
+                </button>
+              )}
             </div>
-          </Card>
+          </div>
+        </Card>
 
-          <Card icon={<Building2 className="h-3.5 w-3.5" />} title="Client">
-            <div className="grid gap-x-6 md:grid-cols-2">
-              <div>
-                <Row label="Client" value={job?.client_name || '—'} />
-                <Row label="Client ref ID" value={job?.client_ref_id || '—'} />
-                <Row label="Job ref" value={probe?.job_reference_id || '—'} />
-              </div>
-              <div className="border-t md:border-t-0">
-                <Row label="SPOC" value={job?.client_spoc_name || '—'} />
-                <Row
-                  label="SPOC phone"
-                  value={job?.client_spoc
-                    ? <CallableMobile spocJobId={job?.job_id} mobile={job.client_spoc} />
-                    : '—'}
-                />
-                {/* The EasyFix person who owns this client relationship
-                    (tbl_job.job_client_owner) — the list's "Easyfix SPOC". */}
-                <Row label="EasyFix SPOC" value={job?.easyfix_spoc_name || '—'} />
-              </div>
-            </div>
-          </Card>
-        </div>
+        <ClientCard job={job} jobReference={probe?.job_reference_id ?? null} />
 
+        {/*
+          * EXACTLY AS TALL AS CUSTOMER AND CLIENT on a wide screen. The wrapper
+          * is a grid item, so it stretches to the row — whose height those two
+          * cards alone set, because the card inside is taken out of flow
+          * (absolute, inset-0). The card fills it and its list scrolls in
+          * whatever height is left, so 3 offers or 30 never change the page.
+          * Stacked (narrow) it is an ordinary card with a capped list.
+          */}
+        <div className="relative">
         {technicianOverride ? (
-          <Card icon={<Wrench className="h-3.5 w-3.5" />} title="Technician">
+          <Card icon={<Wrench className="h-3.5 w-3.5" />} title="Technician" className="lg:absolute lg:inset-0 lg:overflow-y-auto">
             {technicianOverride}
           </Card>
         ) : (
@@ -551,15 +567,16 @@ export function ScheduleAssignUplifted({
             title="Offer replies"
             count={items.length}
             action={<span className="text-xs text-muted-foreground">{live.length} waiting · {closed.length} closed</span>}
+            className="flex flex-col lg:absolute lg:inset-0"
           >
             {items.length === 0 ? (
               <p className="rounded-md border border-dashed px-2.5 py-3 text-center text-xs text-muted-foreground">
                 No offers sent yet. The first technician to accept is assigned.
               </p>
             ) : (
-              /* ~7 rows in view (each ≈ 2.75rem), then the list scrolls. Waiting
-                 replies first — they are the ones that can still change. */
-              <ul className="max-h-[19.5rem] divide-y overflow-y-auto pr-1">
+              /* Fills the card's remaining height and scrolls. Waiting replies
+                 first — they are the ones that can still change. */
+              <ul className="max-h-80 min-h-0 flex-1 divide-y overflow-y-auto pr-1 lg:max-h-none">
                 {[...live, ...closed].map((o) => (
                   <li key={o.efr_id} className="flex items-center justify-between gap-2 py-1.5 text-xs">
                     <span className="min-w-0">
@@ -597,6 +614,7 @@ export function ScheduleAssignUplifted({
             )}
           </Card>
         )}
+        </div>
       </div>
 
       {/* ── What the job is: services and notes, side by side ── */}
@@ -885,11 +903,103 @@ function JobNotesCard({ job, canEdit, onSave, pinnedNotes, onShowNotes }: {
   );
 }
 
-function Card({ icon, title, count, action, children }: {
-  icon: React.ReactNode; title: string; count?: number; action?: React.ReactNode; children: React.ReactNode;
+/*
+ * The Client card — plain label/value rows like the Customer card beside it,
+ * in three runs separated by a small heading:
+ *   (client)          what the client sent — name, vertical, source, reference,
+ *                     branch, helper — and who at the client to call (SPOC)
+ *   EASYFIX           who at EasyFix owns it: the job's current owner
+ *                     (tbl_job.job_owner) and the client's Primary / Secondary
+ *                     SPOC (tbl_vertical_mapping user_type 1 / 2)
+ *   CUSTOM PROPERTIES only the ones this job carries; the run is omitted when
+ *                     there are none, since their number varies by client
+ *
+ * LOGO: nothing in this CRM stores a readable client logo (tbl_client.logo_id
+ * has no upload or file route), so the mark is the client's initials until one
+ * exists — a stable placeholder, not a fake image.
+ */
+function ClientCard({ job, jobReference }: { job: UpliftedJob; jobReference: string | null }) {
+  const name = job?.client_name || '';
+  const initials = name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join('');
+  const props = [
+    ['Property / Building', job?.building_name ?? null] as [string, string | null],
+    ['Product code', job?.product_code ?? null] as [string, string | null],
+    ...((job?.custom_properties ?? []).map((p): [string, string | null] => [
+      String(p.label || p.name || 'Property'),
+      p.value == null || String(p.value).trim() === '' ? null : String(p.value),
+    ])),
+  ].filter((e): e is [string, string] => !!e[1]);
+  const helper = job?.helper_req == null ? <NotAdded /> : Number(job.helper_req) === 1 ? 'Yes' : 'No';
+
+  return (
+    <Card icon={<Building2 className="h-3.5 w-3.5" />} title="Client">
+      <Row
+        label="Client"
+        value={name ? (
+          <span className="inline-flex items-center gap-1.5">
+            {initials && (
+              <span
+                className="grid h-6 w-6 shrink-0 place-items-center rounded border border-info bg-info-tint text-xs font-semibold text-info-strong"
+                title="Client logo is not stored in this CRM yet"
+                aria-hidden
+              >
+                {initials}
+              </span>
+            )}
+            {name}
+          </span>
+        ) : <NotAdded />}
+      />
+      <Row label="Vertical" value={job?.vertical_name || <NotAdded />} />
+      <Row label="Source" value={job?.source_type || <NotAdded />} />
+      <Row label="Client ref ID" value={job?.client_ref_id || <NotAdded />} />
+      <Row label="Job ref" value={jobReference || <NotAdded />} />
+      <Row label="Branch ID" value={job?.branch_details || <NotAdded />} />
+      <Row label="Helper needed" value={helper} />
+      <Row label="SPOC" value={job?.client_spoc_name || <NotAdded />} />
+      <Row
+        label="SPOC phone"
+        value={job?.client_spoc
+          ? <CallableMobile spocJobId={job?.job_id} mobile={job.client_spoc} />
+          : <NotAdded />}
+      />
+      <Row label="SPOC email" value={job?.client_spoc_email || <NotAdded />} />
+
+      <SubHeading>EasyFix</SubHeading>
+      <Row label="Job owner" value={job?.owner_name || <NotAdded />} />
+      <Row label="Primary SPOC" value={job?.client_primary_spoc_name || <NotAdded />} />
+      <Row label="Secondary SPOC" value={job?.client_secondary_spoc_name || <NotAdded />} />
+
+      {props.length > 0 && (
+        <>
+          <SubHeading>Custom properties</SubHeading>
+          {props.map(([label, value]) => <Row key={label} label={label} value={value} />)}
+        </>
+      )}
+    </Card>
+  );
+}
+
+/* A run heading inside a card. No rule of its own: the next Row's top rule
+   already separates the heading from its first value. */
+function SubHeading({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="mt-3 pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+      {children}
+    </p>
+  );
+}
+
+/* The empty value, said the same way on every row. */
+function NotAdded() {
+  return <span className="font-normal text-muted-foreground">Not added</span>;
+}
+
+function Card({ icon, title, count, action, className, children }: {
+  icon: React.ReactNode; title: string; count?: number; action?: React.ReactNode; className?: string; children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-md border bg-card p-3">
+    <section className={`rounded-md border bg-card p-3 ${className ?? ''}`}>
       <div className="mb-2 flex items-center justify-between gap-2">
         <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {icon}{title}
