@@ -201,7 +201,9 @@ export function ScheduleAssignUplifted({
    */
   actionOverride?: React.ReactNode;
   technicianOverride?: React.ReactNode;
-  stateOverride?: { label: string; sub: string; chipClass: string };
+  /* `extra` sits beside the state chip — Pending to Start's appointment-timing
+     chip (On-track / Close loop / Running late). */
+  stateOverride?: { label: string; sub: string; chipClass: string; extra?: React.ReactNode };
   /* Pinned internal notes (from the notes thread below the console), flagged on
      the Job notes card with a jump to them. */
   pinnedNotes?: JobNote[];
@@ -427,7 +429,10 @@ export function ScheduleAssignUplifted({
           </div>
           <div className="bg-card px-3 py-2">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Current state</p>
-            <p><span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${stateOverride?.chipClass ?? tone.chip}`}>{stateOverride?.label ?? tone.state}</span></p>
+            <p className="flex flex-wrap items-center gap-1">
+              <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${stateOverride?.chipClass ?? tone.chip}`}>{stateOverride?.label ?? tone.state}</span>
+              {stateOverride?.extra}
+            </p>
             <p className="text-xs text-muted-foreground">
               {stateOverride ? stateOverride.sub
                 : offersLoading ? 'Loading offers…'
