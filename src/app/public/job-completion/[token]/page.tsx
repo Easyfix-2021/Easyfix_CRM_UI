@@ -52,6 +52,7 @@ import { publicFetch } from '@/lib/public-fetch';
 import { InfoCard } from '@/components/public/InfoCard';
 import { OverlayShell } from '@/components/public/OverlayShell';
 import { FullPageMessage } from '@/components/public/FullPageMessage';
+import { MinDateCalendar } from '@/components/public/MinDateCalendar';
 
 
 type PageState =
@@ -1461,9 +1462,9 @@ function RescheduleDialog({
    */
   const bands = BOOKING_BANDS.filter((b) => b.fromH >= 0);
   const picked = bands.find((b) => b.value === slot);
-  // `date < minDate` is a string compare on YYYY-MM-DD. Checked here, not just
-  // via <input min>: iOS Safari's calendar ignores `min` and lets any day
-  // through, so the attribute alone is decoration.
+  // `date < minDate` is a string compare on YYYY-MM-DD. The calendar already
+  // greys those days out; this guard only catches a floor that moved while the
+  // dialog sat open past midnight.
   const tooEarly = !!date && date < minDate;
   const preferred = date && picked && !tooEarly ? `${date}T${picked.start}` : '';
   // A date without a slot would silently fall back (BE-side) to the CURRENT
@@ -1479,8 +1480,9 @@ function RescheduleDialog({
         {touched && !reason && <p className="text-xs text-urgent mt-1">Please Select A Reason.</p>}
       </Field>
       <Field label="Preferred Date & Slot">
-        <input type="date" min={minDate} value={date}
-          onChange={(e) => setDate(e.target.value)} className={inputClass} />
+        {/* Our own calendar, not <input type="date" min>: iOS Safari's native
+            picker ignores `min` and leaves every past day tappable. */}
+        <MinDateCalendar value={date} minDate={minDate} onChange={setDate} />
         {tooEarly && (
           <p className="text-xs text-urgent mt-1">Please Choose A Date On Or After {minDate.split('-').reverse().join('/')}.</p>
         )}
