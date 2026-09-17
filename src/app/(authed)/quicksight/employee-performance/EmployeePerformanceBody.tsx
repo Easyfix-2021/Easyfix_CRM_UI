@@ -38,12 +38,13 @@
  *   - Any filter change closes the member dialog.
  *
  * Gating: ef-QuickSight + isQuickSightEmployeePerformanceView (the tab itself);
- * isQuickSightEmployeePerformanceUpload additionally shows "Upload Data".
+ * isQuickSightEmployeePerformanceUpload additionally shows "Download Template"
+ * (the Excel for update_dashboard.bat) and "Upload Data".
  */
 
 import { useCallback, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import {
-  Briefcase, CalendarX, CheckCircle2, Clock, Inbox, IndianRupee, Loader2, Percent,
+  Briefcase, CalendarX, CheckCircle2, Clock, FileSpreadsheet, Inbox, IndianRupee, Loader2, Percent,
   RotateCcw, Target, TrendingUp, Upload, Users,
 } from 'lucide-react';
 import { ReportPageScaffold } from '@/components/quicksight/ReportPageScaffold';
@@ -56,10 +57,11 @@ import { DateRangePopover } from '@/components/ui/date-range-popover';
 import { showToast, dismissToast } from '@/components/ui/toast';
 import { useFetch, invalidateFetch } from '@/lib/hooks';
 import { api, ApiError } from '@/lib/api';
+import { downloadXlsx } from '@/lib/download-xlsx';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
 import {
-  ACTION_KEY, ALL, API_BASE, EMPTY_FILTERS, META_KEY, UPLOAD_KEY, UPLOAD_URL,
+  ACTION_KEY, ALL, API_BASE, EMPTY_FILTERS, META_KEY, TEMPLATE_URL, UPLOAD_KEY, UPLOAD_URL,
   filtersQuery, optionsKey, summaryKey,
 } from './api';
 import { fmtDay, fmtStamp, money, num, pct1 } from './format';
@@ -191,6 +193,18 @@ export function EmployeePerformanceBody() {
     }
   };
 
+  const [downloadingTemplate, setDownloadingTemplate] = useState(false);
+  const onDownloadTemplate = async () => {
+    setDownloadingTemplate(true);
+    try {
+      await downloadXlsx({ url: TEMPLATE_URL, filename: 'employee-performance-template.xlsx' });
+    } catch (err) {
+      showToast({ variant: 'error', message: err instanceof Error ? err.message : 'Download failed' });
+    } finally {
+      setDownloadingTemplate(false);
+    }
+  };
+
   /* ── page state ─────────────────────────────────────────────────────────── */
 
   const fetchError = meta.error ?? options.error ?? summary.error;
@@ -221,13 +235,17 @@ export function EmployeePerformanceBody() {
         )}
       </div>
       {canUpload && (
-        <>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* The Excel MIS fills before running update_dashboard.bat. */}
+          <Button size="sm" variant="outline" className="gap-1.5" onClick={onDownloadTemplate} disabled={downloadingTemplate}>
+            <FileSpreadsheet className="size-4" />{downloadingTemplate ? 'Downloading…' : 'Download Template'}
+          </Button>
           <input ref={fileInput} type="file" accept=".js,.json" className="hidden" onChange={onFilePicked} />
           {/* gap-1.5 like DownloadButton — the Button base class sets no gap itself. */}
           <Button size="sm" className="gap-1.5" onClick={() => fileInput.current?.click()} disabled={uploading}>
             <Upload className="size-4" />{uploading ? 'Uploading…' : 'Upload Data'}
           </Button>
-        </>
+        </div>
       )}
     </div>
   );
