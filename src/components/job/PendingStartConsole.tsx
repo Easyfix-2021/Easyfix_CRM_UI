@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { AlertTriangle, CalendarClock, CalendarCheck, CalendarDays, Ban, User, Loader2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
@@ -18,7 +18,7 @@ import { ScheduleAssignUplifted, type UpliftedJob, type UpliftedProbe } from './
 import { ScheduleAssignRescheduleDialog } from './ScheduleAssignRescheduleDialog';
 import { TechRequestActions, APP_REQUEST_ACTION } from './TechRequestActions';
 import { JobRemarksView } from './JobRemarksView';
-import { JobInternalNotes } from './JobInternalNotes';
+import { JobInternalNotes, type JobNote } from './JobInternalNotes';
 import { AddRemarksDialog } from './AddRemarksDialog';
 
 /*
@@ -84,6 +84,8 @@ export function PendingStartConsole({ open, jobId, onClose, onChanged }: {
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [remarksOpen, setRemarksOpen] = useState(false);
   const [remarksKey, setRemarksKey] = useState(0);
+  const [pinnedNotes, setPinnedNotes] = useState<JobNote[]>([]);
+  const notesRef = useRef<HTMLDivElement | null>(null);
 
   /* Trust a payload only when it IS this job — useFetch keeps the previous
      job's data while the next loads (same guard as Schedule & Assign). */
@@ -212,7 +214,10 @@ export function PendingStartConsole({ open, jobId, onClose, onChanged }: {
         </DialogHeader>
 
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 pb-4">
-          {!job ? (
+          {/* Blank with a loader until BOTH of this job's reads are in — the
+              detail read carries the reference and the attachments, and
+              rendering before it painted "No image attached" for a moment. */}
+          {!job || (!probe && !detail.error) ? (
             header.error
               ? <p className="text-sm text-urgent-strong">Could not load this job: {header.error}</p>
               : <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Loading job…</p>
@@ -230,13 +235,17 @@ export function PendingStartConsole({ open, jobId, onClose, onChanged }: {
                 actionOverride={action}
                 technicianOverride={technician}
                 stateOverride={stateOverride}
+                pinnedNotes={pinnedNotes}
+                onShowNotes={() => notesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
               />
               {/* Remarks two thirds, internal notes one third — the same bottom
                   row as Schedule & Assign. Notes can be added on an accepted job;
                   its editors above stay read-only here. */}
               <div className="grid gap-3 lg:grid-cols-[2fr_1fr]">
-                <JobRemarksView key={remarksKey} jobId={jobId} />
-                <JobInternalNotes jobId={jobId} canAdd />
+                <JobRemarksView key={`${jobId}-${remarksKey}`} jobId={jobId} />
+                <div ref={notesRef} className="scroll-mt-4">
+                  <JobInternalNotes key={jobId ?? 'none'} jobId={jobId} canAdd onPinnedChange={setPinnedNotes} />
+                </div>
               </div>
             </>
           )}
