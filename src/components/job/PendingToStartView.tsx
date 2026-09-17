@@ -58,7 +58,7 @@
  *
  * Reuses (never re-implements): the parent's openView / openReassign handlers +
  * canJob permission flags, useFetch, PendingSchedulingFilters and its ps* URL
- * helpers, StatusChip + statusLabel/statusTone, CallableMobile (Client SPOC
+ * helpers, StatusChip + PendingStartLiveStatus, CallableMobile (Client SPOC
  * spocJobId pattern), TechRequestActions, ResendPinButton, TablePagination,
  * formatDate, formatEasyfixerName.
  */
@@ -90,6 +90,7 @@ import {
   type PsFilters,
 } from '@/components/job/PendingSchedulingFilters';
 import { PendingStartTabs, toPtsState, type PtsState } from '@/components/job/PendingStartTabs';
+import { PendingStartLiveStatus, useMinuteClock } from '@/components/job/PendingStartLiveStatus';
 import { useFetch, invalidateFetch, useDebouncedValue } from '@/lib/hooks';
 import { formatJobAge, jobAgeTitle, type JobAgeFields } from '@/lib/job-age';
 import { appRequestOf, type AppRequestFields } from '@/lib/job-app-request';
@@ -99,8 +100,6 @@ import { useJobActionParams } from '@/lib/job-action-url';
 import {
   formatDate,
   formatEasyfixerName,
-  statusLabel,
-  statusTone,
 } from '@/lib/utils';
 import type { Me } from '@/lib/auth-context';
 
@@ -492,6 +491,8 @@ function PendingStartTable({
    * the row arrived under.
    */
   const rows = data?.items ?? [];
+  /* One clock for the whole page, so every timing chip moves together. */
+  const now = useMinuteClock();
   const total = data?.total ?? 0;
 
   const showRequest = REQUEST_COLUMN_TABS.has(ptsState);
@@ -653,9 +654,12 @@ function PendingStartTable({
                     )}
                   </td>
                   <td>
-                    <StatusChip tone={statusTone(j.job_status)}>
-                      {statusLabel(j.job_status, { assigned: j.fk_easyfixter_id != null })}
-                    </StatusChip>
+                    {/* Live status, not the raw job_status: every row in this
+                        bucket is status 1, so "Scheduled" said nothing. The
+                        status is the tab rule (what is waiting), the chip under
+                        it is the appointment timing — see
+                        lib/pending-start-status.ts. */}
+                    <PendingStartLiveStatus job={j} now={now} />
                     {/* Delegation pill — same component, same placement as
                         /my-orders, /jobs and JobModal. Renders nothing unless a
                         share is LIVE, so no surrounding guard. */}

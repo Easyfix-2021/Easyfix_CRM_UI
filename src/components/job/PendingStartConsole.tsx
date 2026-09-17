@@ -11,7 +11,8 @@ import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
 import { formatDate, relativeTime } from '@/lib/utils';
 import { displaySlot } from '@/lib/job-slots';
-import { istToday } from '@/lib/due-date';
+import { PTS_STATUS, ptsStateOf, appointmentTiming } from '@/lib/pending-start-status';
+import { PtsTimingChip, useMinuteClock } from './PendingStartLiveStatus';
 import { appRequestOf, type AppRequestFields } from '@/lib/job-app-request';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { ScheduleAssignUplifted, type UpliftedJob, type UpliftedProbe } from './ScheduleAssignUplifted';
@@ -55,21 +56,10 @@ type HeaderJob = NonNullable<UpliftedJob> & AppRequestFields & {
 
 type Probe = NonNullable<UpliftedProbe> & { job_id?: number };
 
-type State = 'cancel' | 'reschedule' | 'missed' | 'today' | 'future';
-
 const SA_API_BASE = process.env.NEXT_PUBLIC_API_URL || '/api';
 
-/* The tab-priority classifier, for ONE job. Kept beside the component that
-   renders it; the server applies the same order to the list. */
-function stateOf(job: HeaderJob | null): State {
-  const req = job ? appRequestOf(job) : null;
-  if (req?.kind === 'cancel') return 'cancel';
-  if (req?.kind === 'reschedule') return 'reschedule';
-  const day = String(job?.requested_date_time ?? '').slice(0, 10);
-  const today = istToday();
-  if (!day || day < today) return 'missed';
-  return day === today ? 'today' : 'future';
-}
+/* The status + timing rule is shared with the My Orders row — see
+   lib/pending-start-status.ts — so the row and its console always agree. */
 
 export function PendingStartConsole({ open, jobId, onClose, onChanged }: {
   open: boolean;
@@ -92,7 +82,10 @@ export function PendingStartConsole({ open, jobId, onClose, onChanged }: {
   const job = header.data?.job && Number(header.data.job.job_id) === Number(jobId) ? header.data.job : null;
   const probe = detail.data && Number(detail.data.job_id) === Number(jobId) ? detail.data : null;
 
-  const state = stateOf(job);
+  const now = useMinuteClock();
+  const state = ptsStateOf(job);
+  const timing = appointmentTiming(job?.requested_date_time, now);
+  const timingChip = job ? <PtsTimingChip requestedDateTime={job.requested_date_time} now={now} /> : null;
   const req = job ? appRequestOf(job) : null;
   const canResolve = hasAction(me, APP_REQUEST_ACTION);
   /* Nothing on the console itself is a form — every write happens in a child
@@ -149,28 +142,58 @@ export function PendingStartConsole({ open, jobId, onClose, onChanged }: {
     <TechRequestActions jobId={jobId} request={req} allowed={canResolve} onActioned={refresh} variant="button" />
   ) : null;
 
+  /*
+   * The line under each title leads with the timing chip, so "what is waiting"
+   * (the title) and "how close the visit is" (the chip) read together. Today's
+   * title itself follows the timing: that is the one state where the right
+   * action changes through the day.
+   */
+  const sub = (text: React.ReactNode) => (
+    <span className="inline-flex flex-wrap items-center gap-1.5">{timingChip}<span>{text}</span></span>
+  );
   const action = !job ? null
     : state === 'cancel' ? strip('urgent', Ban, 'Technician asked to cancel this job',
-      <>{req?.reason || 'No reason given'}{req?.raisedAt ? ` · raised ${formatDate(req.raisedAt)} (${relativeTime(req.raisedAt)})` : ''} · confirm with the customer before approving</>,
+      sub(<>{req?.reason || 'No reason given'}{req?.raisedAt ? ` · raised ${formatDate(req.raisedAt)} (${relativeTime(req.raisedAt)})` : ''} · confirm with the customer before approving</>),
       requestActions)
       : state === 'reschedule' ? strip('warning', CalendarClock, 'Technician asked to reschedule',
-        <>{req?.reason || 'No reason given'}{req?.requestedFor ? ` · wants ${formatDate(req.requestedFor)}` : ''}{req?.raisedAt ? ` · raised ${relativeTime(req.raisedAt)}` : ''}</>,
+        sub(<>{req?.reason || 'No reason given'}{req?.requestedFor ? ` · wants ${formatDate(req.requestedFor)}` : ''}{req?.raisedAt ? ` · raised ${relativeTime(req.raisedAt)}` : ''}</>),
         requestActions)
-        : state === 'missed' ? strip('urgent', AlertTriangle, 'Appointment passed — not checked in',
-          <>The appointment was {job.requested_date_time ? formatDate(job.requested_date_time) : 'not set'}. Call the technician, or reschedule with a reason.</>,
+        : state === 'missed' ? strip('urgent', AlertTriangle, 'Slot missed — not checked in',
+          sub(<>The appointment was {job.requested_date_time ? formatDate(job.requested_date_time) : 'not set'}. Call the technician, or reschedule with a reason.</>),
           <Button size="sm" onClick={() => setRescheduleOpen(true)}><CalendarClock className="mr-1.5 h-3.5 w-3.5" />Reschedule</Button>)
-          : state === 'today' ? strip('info', CalendarCheck, 'Visit today',
-            <>{slot || 'Time not set'} · {job.efr_name || 'Technician'} is scheduled — nothing to do unless the slot slips</>)
-            : strip('neutral', CalendarDays, 'Scheduled',
-              <>{job.requested_date_time ? formatDate(job.requested_date_time) : 'Date not set'}{slot ? ` · ${slot}` : ''} · waiting for the visit</>);
+          : state === 'today'
+            ? (timing?.kind === 'late'
+              ? strip('urgent', AlertTriangle, 'Running late — not checked in',
+                sub(<>{slot || 'Time not set'} · call {job.efr_name || 'the technician'} for an ETA, or reschedule with a reason</>),
+                <Button size="sm" variant="outline" onClick={() => setRescheduleOpen(true)}><CalendarClock className="mr-1.5 h-3.5 w-3.5" />Reschedule</Button>)
+              : timing?.kind === 'close_loop'
+                ? strip('warning', CalendarCheck, 'Close loop — visit within 2 hours',
+                  sub(<>{slot || 'Time not set'} · confirm {job.efr_name || 'the technician'} is on the way</>))
+                : strip('info', CalendarCheck, 'Due today',
+                  sub(<>{slot || 'Time not set'} · {job.efr_name || 'Technician'} is scheduled — nothing to do unless the slot slips</>)))
+            : strip('neutral', CalendarDays, 'Upcoming',
+              sub(<>{job.requested_date_time ? formatDate(job.requested_date_time) : 'Date not set'}{slot ? ` · ${slot}` : ''} · waiting for the visit</>));
 
+  /* Current state tile: the same status label as the row, the timing chip
+     beside it, and who the job is waiting on underneath. */
   const stateOverride = !job ? undefined : {
-    cancel: { label: 'Cancel request', sub: 'Waiting on you', chipClass: 'border-urgent bg-urgent-tint text-urgent-strong' },
-    reschedule: { label: 'Reschedule request', sub: 'Waiting on you', chipClass: 'border-warning bg-warning-tint text-warning-strong' },
-    missed: { label: 'Slot missed', sub: 'Appointment has passed', chipClass: 'border-urgent bg-urgent-tint text-urgent-strong' },
-    today: { label: 'Today', sub: 'Visit due today', chipClass: 'border-info bg-info-tint text-info-strong' },
-    future: { label: 'Future', sub: 'Pending to start', chipClass: 'border-border bg-muted text-muted-foreground' },
-  }[state];
+    label: PTS_STATUS[state].label,
+    sub: {
+      cancel: 'Waiting on you',
+      reschedule: 'Waiting on you',
+      missed: 'Appointment day has passed',
+      today: 'Visit due today',
+      future: 'Pending to start',
+    }[state],
+    chipClass: {
+      cancel: 'border-urgent bg-urgent-tint text-urgent-strong',
+      reschedule: 'border-warning bg-warning-tint text-warning-strong',
+      missed: 'border-urgent bg-urgent-tint text-urgent-strong',
+      today: 'border-info bg-info-tint text-info-strong',
+      future: 'border-border bg-muted text-muted-foreground',
+    }[state],
+    extra: timingChip,
+  };
 
   const technician = job ? (
     <div className="space-y-2 text-xs">
