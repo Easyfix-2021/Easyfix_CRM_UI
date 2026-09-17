@@ -9,7 +9,7 @@ import { showToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { api, ApiError } from '@/lib/api';
 import { useFetch } from '@/lib/hooks';
-import { formatDate } from '@/lib/utils';
+import { formatDate, istNowWallClock } from '@/lib/utils';
 import { DateTimeSlotPicker } from '@/components/ui/date-time-slot-picker';
 
 /*
@@ -58,7 +58,8 @@ export function ScheduleAssignRescheduleDialog({
   /** What the customer was first promised; SDA is scored against this. */
   originalAppointment: string | null;
   onClose: () => void;
-  onDone: () => void;
+  /** Called with the NEW appointment (IST wall clock 'YYYY-MM-DDTHH:mm'). */
+  onDone: (newAppointment: string) => void;
 }) {
   const [dueTo, setDueTo] = useState<DueTo | ''>('');
   const [dateTime, setDateTime] = useState('');
@@ -107,6 +108,13 @@ export function ScheduleAssignRescheduleDialog({
   useEffect(() => { setReasonId(''); }, [dueTo]);
 
   const options = useMemo(() => (reasons.data ?? []), [reasons.data]);
+  /*
+   * NO PAST DATE OR TIME. The picker greys out earlier days and, on today,
+   * hides slots that have already started; taken fresh on every open so a
+   * dialog left open does not keep offering a slot that has since passed.
+   * The submit re-checks, for the minutes between opening and saving.
+   */
+  const minLocal = useMemo(() => istNowWallClock(), [open]);
 
   /*
    * What is still missing, in the order the form asks for it — ONE source for
@@ -114,7 +122,7 @@ export function ScheduleAssignRescheduleDialog({
    * disagree about why it cannot be submitted.
    */
   const blocker =
-    !dateTime ? 'Pick the new date and time'
+    !dateTime ? 'date'
       : !dueTo ? 'Step 1: choose who this is due to'
         : !reasonId ? 'Step 2: select a reason'
           : remarks.trim().length < MIN_REMARKS
@@ -124,6 +132,10 @@ export function ScheduleAssignRescheduleDialog({
   async function submit() {
     if (!jobId) return;
     if (!dateTime) { setErr('Pick the new date and time'); return; }
+    if (dateTime.slice(0, 16) <= istNowWallClock()) {
+      setErr('That time has already passed — pick a later date and time');
+      return;
+    }
     if (!dueTo) { setErr('Step 1: choose who this reschedule is due to'); return; }
     if (!reasonId) { setErr('Step 2: select a reason'); return; }
     if (remarks.trim().length < MIN_REMARKS) {
@@ -155,7 +167,7 @@ export function ScheduleAssignRescheduleDialog({
             <li>• <b>Next step:</b> choose technicians and offer it again for the new time — before you close the console.</li>
           </ul>
         ),
-        confirmLabel: 'Reschedule and expire offers',
+        confirmLabel: 'Reschedule and re-offer',
       });
       if (!ok) return;
     }
@@ -172,7 +184,7 @@ export function ScheduleAssignRescheduleDialog({
         remarks: remarks.trim(),
       });
       showToast({ variant: 'success', message: 'Job Rescheduled.' });
-      onDone();
+      onDone(dateTime);
       onClose();
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : 'Reschedule failed');
@@ -216,6 +228,7 @@ export function ScheduleAssignRescheduleDialog({
                   COMMITS a booking, and a half-hour value is not a frame start
                   the model defines. */}
               <DateTimeSlotPicker
+                min={minLocal}
                 value={dateTime}
                 onChange={setDateTime}
                 granularity="hour-frame"
@@ -228,19 +241,19 @@ export function ScheduleAssignRescheduleDialog({
             <p className="flex items-start gap-2 rounded-md border border-warning bg-warning-tint px-3 py-2 text-sm text-warning-strong">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
               <span>
-                <b>{liveOffers} offer{liveOffers === 1 ? '' : 's'} open.</b> Rescheduling expires {liveOffers === 1 ? 'it' : 'them'} —
-                the job returns to Unallocated. After saving, offer it again for the new time before closing the console.
+                <b>{liveOffers} offer{liveOffers === 1 ? '' : 's'} open.</b> Rescheduling expires {liveOffers === 1 ? 'it' : 'them'} — offer it again for the new time before closing the console.
               </span>
             </p>
           )}
 
-          <div className="grid gap-3 sm:grid-cols-2">
+          {/* Due to → Reason → Remarks, one under the other, with the four
+              parties on ONE line — read top to bottom with no scrolling. */}
           <Step n={1} label="Reschedule due to" required>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2 sm:flex-nowrap">
               {DUE_TO.map((d) => (
                 <label
                   key={d}
-                  className={`inline-flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1.5 text-sm ${dueTo === d ? 'border-primary bg-primary/5 font-medium' : 'hover:bg-muted'}`}
+                  className={`inline-flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-full border px-3 py-1 text-sm ${dueTo === d ? 'border-primary bg-primary/5 font-medium' : 'hover:bg-muted'}`}
                 >
                   <input
                     type="radio"
@@ -279,11 +292,10 @@ export function ScheduleAssignRescheduleDialog({
               </p>
             )}
           </Step>
-          </div>
 
           <Step n={3} label="Remarks" required>
             <textarea
-              className="min-h-[72px] w-full rounded-md border bg-background px-2 py-1.5 text-sm"
+              className="h-16 w-full resize-none rounded-md border bg-background px-2 py-1.5 text-sm"
               placeholder="Called the technician twice at 12:15 pm, no answer. Customer agreed to a new time."
               value={remarks}
               disabled={saving}
@@ -311,7 +323,9 @@ export function ScheduleAssignRescheduleDialog({
             and erroring) both left the operator asking "where is the button" —
             the honest answer is "here, and this is what it still needs". */}
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-muted/30 px-4 py-2.5">
-          {blocker && <span className="mr-auto text-xs text-muted-foreground">{blocker}</span>}
+          {/* The step hints stay; the date one is dropped (ops, 2026-09-17) —
+              the empty picker at the top already says what is missing. */}
+          {blocker && blocker !== 'date' && <span className="mr-auto text-xs text-muted-foreground">{blocker}</span>}
           <Button type="button" variant="outline" onClick={onClose} disabled={saving}>Close</Button>
           <Button type="button" onClick={submit} disabled={saving || !!blocker}>
             {saving ? 'Submitting…' : 'Submit reschedule'}

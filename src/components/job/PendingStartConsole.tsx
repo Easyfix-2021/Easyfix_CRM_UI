@@ -1,12 +1,9 @@
 'use client';
 
-import { useRef, useState } from 'react';
-import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
-import { AlertTriangle, CalendarClock, CalendarCheck, CalendarDays, Ban, Loader2, MapPin } from 'lucide-react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { useState } from 'react';
+import { AlertTriangle, CalendarClock, CalendarCheck, CalendarDays, Ban, Loader2, MapPin, UserCog } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useFetch, invalidateFetch } from '@/lib/hooks';
-import { showToast } from '@/components/ui/toast';
 import { useMe } from '@/lib/auth-context';
 import { hasAction } from '@/lib/permissions';
 import { formatDate, relativeTime, formatEasyfixerName } from '@/lib/utils';
@@ -21,13 +18,15 @@ import { ScheduleAssignUplifted, OfferRepliesList, type UpliftedJob, type Uplift
 import { ServicesOneListDialog } from './ServicesOneListDialog';
 import { ScheduleAssignRescheduleDialog } from './ScheduleAssignRescheduleDialog';
 import { TechRequestActions, APP_REQUEST_ACTION } from './TechRequestActions';
-import { JobRemarksView } from './JobRemarksView';
-import { JobInternalNotes, type JobNote } from './JobInternalNotes';
-import { AddRemarksDialog } from './AddRemarksDialog';
+import type { JobNote } from './JobInternalNotes';
 
 /*
- * PendingStartConsole — the job console for an ACCEPTED job (My Orders →
- * Pending to Start), opened from the row's "Open job console" icon.
+ * PendingStartConsoleBody — the job console for an ACCEPTED job (My Orders →
+ * Pending to Start). It is the UPLIFTED tab of the Reassign Technician popup
+ * (AssignTechnicianModal, mode 'reassign'): that popup owns the technician
+ * list, the Reassign commit, Add Remarks, Cancel and the remarks / notes row;
+ * this body is everything above the technician list. Opened on Uplifted from
+ * the row's console icon, on Current from the row's reassign icon.
  *
  * SAME LAYOUT AS SCHEDULE & ASSIGN'S UPLIFTED TAB, deliberately: it renders
  * <ScheduleAssignUplifted> and swaps in only what differs for a job a technician
@@ -64,29 +63,36 @@ const SA_API_BASE = process.env.NEXT_PUBLIC_API_URL || '/api';
 /* The status + timing rule is shared with the My Orders row — see
    lib/pending-start-status.ts — so the row and its console always agree. */
 
-export function PendingStartConsole({ open, jobId, onClose, onChanged }: {
-  open: boolean;
+export function PendingStartConsoleBody({
+  active, jobId, onChanged, onJobCancelled, onRescheduled, onPickTechnicians, pinnedNotes, onShowNotes,
+}: {
+  /** The popup is open on this tab — reads only run while it is. */
+  active: boolean;
   jobId: number | null;
-  onClose: () => void;
-  /** Tell the list behind the console that this job may have changed tab. */
-  onChanged?: () => void;
+  /** Something on the job changed: refresh the list behind and the remarks thread. */
+  onChanged: () => void;
+  /** An approved cancellation cancelled the job — the host closes. */
+  onJobCancelled: () => void;
+  /** The appointment moved — the host re-ranks its technician list. */
+  onRescheduled: () => void;
+  /** Scroll to the host's technician list. */
+  onPickTechnicians: () => void;
+  pinnedNotes: JobNote[];
+  onShowNotes: () => void;
 }) {
   const { me } = useMe();
-  const header = useFetch<{ job: HeaderJob }>(open && jobId ? `/admin/jobs/${jobId}/header` : null);
-  const detail = useFetch<Probe>(open && jobId ? `/admin/jobs/${jobId}` : null);
+  const header = useFetch<{ job: HeaderJob }>(active && jobId ? `/admin/jobs/${jobId}/header` : null);
+  const detail = useFetch<Probe>(active && jobId ? `/admin/jobs/${jobId}` : null);
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
-  const [remarksOpen, setRemarksOpen] = useState(false);
-  const [remarksKey, setRemarksKey] = useState(0);
-  const [pinnedNotes, setPinnedNotes] = useState<JobNote[]>([]);
-  const notesRef = useRef<HTMLDivElement | null>(null);
   const [servicesOpen, setServicesOpen] = useState(false);
   const [locationOpen, setLocationOpen] = useState(false);
   /* Who else this job was offered to before it was accepted — shown under the
      assigned technician. Trusted only for this job's key (useFetch keeps the
      previous job's list while the next loads). */
-  const offersKey = open && jobId ? `/admin/jobs/${jobId}/offers` : null;
+  const offersKey = active && jobId ? `/admin/jobs/${jobId}/offers` : null;
   const offers = useFetch<JobOffersResponse>(offersKey);
   const offerItems = offers.dataKey === offersKey ? (offers.data?.items ?? []) : [];
+  const offersLoaded = offers.dataKey === offersKey;
 
   /* Trust a payload only when it IS this job — useFetch keeps the previous
      job's data while the next loads (same guard as Schedule & Assign). */
@@ -99,39 +105,26 @@ export function PendingStartConsole({ open, jobId, onClose, onChanged }: {
   const timingChip = job ? <PtsTimingChip requestedDateTime={job.requested_date_time} now={now} /> : null;
   const req = job ? appRequestOf(job) : null;
   const canResolve = hasAction(me, APP_REQUEST_ACTION);
-  /* Nothing on the console itself is a form — every write happens in a child
-     dialog with its own guard — so this never blocks a close. It exists so the
-     Dialog's close goes through the estate's shared handler. */
-  const guardedOpenChange = useFormDirtyGuard(onClose, { isDirty: () => false });
+  const canReassign = hasAction(me, 'isJobReassign');
 
   /*
-   * After any decision: re-read the job, and REMOUNT the remarks thread with
-   * its cache dropped first — the thread is a mounted useFetch with a 30s TTL,
-   * so a remount alone re-serves the comment list from before the decision.
+   * After any decision: re-read the job and its offers here, and let the host
+   * refresh the list behind and remount the remarks thread (its cache dropped
+   * first — a remount alone re-serves the 30s-cached comment list).
    */
-  function reloadRemarks() {
+  function refresh() {
     if (jobId != null) {
       invalidateFetch((k) => k.startsWith(`/admin/jobs/${jobId}/comments`)
         || k.startsWith(`/admin/jobs/${jobId}/customer-requests`));
     }
-    setRemarksKey((n) => n + 1);
-  }
-  function refresh() {
     header.refetch();
     detail.refetch();
     offers.refetch();
-    reloadRemarks();
-    onChanged?.();
+    onChanged();
   }
-  /*
-   * An approved cancellation has cancelled the job: nothing is left to act on
-   * here. The shared Cancel Job control has already shown "Job Cancelled", so
-   * close the console and refresh the list behind it — the job leaves Pending
-   * to Start.
-   */
-  function onJobCancelled() {
-    onChanged?.();
-    onClose();
+  function afterReschedule() {
+    refresh();
+    onRescheduled();
   }
 
   const slot = displaySlot(job?.requested_date_time, job?.time_slot);
@@ -163,6 +156,16 @@ export function PendingStartConsole({ open, jobId, onClose, onChanged }: {
   const requestActions = req && jobId != null ? (
     <TechRequestActions jobId={jobId} request={req} allowed={canResolve} onActioned={refresh} onCancelled={onJobCancelled} variant="button" />
   ) : null;
+  /* Every state can hand the job to someone else: the button scrolls to the
+     technician list below, where Reassign commits. */
+  const reassignButton = canReassign ? (
+    <Button size="sm" variant="outline" onClick={onPickTechnicians}>
+      <UserCog className="mr-1.5 h-3.5 w-3.5" />Reassign technician
+    </Button>
+  ) : null;
+  const withReassign = (node: React.ReactNode) => (
+    <>{node}{reassignButton}</>
+  );
 
   /*
    * The line under each title leads with the timing chip, so "what is waiting"
@@ -176,25 +179,25 @@ export function PendingStartConsole({ open, jobId, onClose, onChanged }: {
   const action = !job ? null
     : state === 'cancel' ? strip('urgent', Ban, 'Technician asked to cancel this job',
       sub(<>{req?.reason || 'No reason given'}{req?.raisedAt ? ` · raised ${formatDate(req.raisedAt)} (${relativeTime(req.raisedAt)})` : ''} · confirm with the customer before approving</>),
-      requestActions)
+      withReassign(requestActions))
       : state === 'reschedule' ? strip('warning', CalendarClock, 'Technician asked to reschedule',
         sub(<>{req?.reason || 'No reason given'}{req?.requestedFor ? ` · wants ${formatDate(req.requestedFor)}` : ''}{req?.raisedAt ? ` · raised ${relativeTime(req.raisedAt)}` : ''}</>),
-        requestActions)
+        withReassign(requestActions))
         : state === 'missed' ? strip('urgent', AlertTriangle, 'Slot missed — not checked in',
           sub(<>The appointment was {job.requested_date_time ? formatDate(job.requested_date_time) : 'not set'}. Call the technician, or reschedule with a reason.</>),
-          <Button size="sm" onClick={() => setRescheduleOpen(true)}><CalendarClock className="mr-1.5 h-3.5 w-3.5" />Reschedule</Button>)
+          withReassign(<Button size="sm" onClick={() => setRescheduleOpen(true)}><CalendarClock className="mr-1.5 h-3.5 w-3.5" />Reschedule</Button>))
           : state === 'today'
             ? (timing?.kind === 'late'
               ? strip('urgent', AlertTriangle, 'Running late — not checked in',
                 sub(<>{slot || 'Time not set'} · call {job.efr_name || 'the technician'} for an ETA, or reschedule with a reason</>),
-                <Button size="sm" variant="outline" onClick={() => setRescheduleOpen(true)}><CalendarClock className="mr-1.5 h-3.5 w-3.5" />Reschedule</Button>)
+                withReassign(<Button size="sm" variant="outline" onClick={() => setRescheduleOpen(true)}><CalendarClock className="mr-1.5 h-3.5 w-3.5" />Reschedule</Button>))
               : timing?.kind === 'close_loop'
                 ? strip('warning', CalendarCheck, 'Close loop — visit within 2 hours',
-                  sub(<>{slot || 'Time not set'} · confirm {job.efr_name || 'the technician'} is on the way</>))
+                  sub(<>{slot || 'Time not set'} · confirm {job.efr_name || 'the technician'} is on the way</>), reassignButton)
                 : strip('info', CalendarCheck, 'Due today',
-                  sub(<>{slot || 'Time not set'} · {job.efr_name || 'Technician'} is scheduled — nothing to do unless the slot slips</>)))
+                  sub(<>{slot || 'Time not set'} · {job.efr_name || 'Technician'} is scheduled — nothing to do unless the slot slips</>), reassignButton))
             : strip('neutral', CalendarDays, 'Upcoming',
-              sub(<>{job.requested_date_time ? formatDate(job.requested_date_time) : 'Date not set'}{slot ? ` · ${slot}` : ''} · waiting for the visit</>));
+              sub(<>{job.requested_date_time ? formatDate(job.requested_date_time) : 'Date not set'}{slot ? ` · ${slot}` : ''} · waiting for the visit</>), reassignButton);
 
   /* Current state tile: the same status label as the row, the timing chip
      beside it, and who the job is waiting on underneath. */
@@ -273,114 +276,74 @@ export function PendingStartConsole({ open, jobId, onClose, onChanged }: {
           {offerItems.length}
         </span>
       </div>
-      <OfferRepliesList offers={offerItems} jobId={jobId} emptyText="No other offers on this job." />
+      <OfferRepliesList
+        offers={offerItems}
+        jobId={jobId}
+        emptyText={offersLoaded ? 'Assigned directly — this job was never offered to other technicians.' : 'Loading offers…'}
+      />
     </div>
   ) : null;
 
+  /* Blank with a loader until BOTH of this job's reads are in — the detail
+     read carries the reference and the attachments, and rendering before it
+     painted "No image attached" for a moment. */
+  if (!job || (!probe && !detail.error)) {
+    return header.error
+      ? <p className="text-sm text-urgent-strong">Could not load this job: {header.error}</p>
+      : <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Loading job…</p>;
+  }
+
   return (
-    <Dialog open={open} onOpenChange={guardedOpenChange}>
-      <DialogContent noPadding className="!max-w-none w-[calc(100vw-48px)] h-[calc(100vh-48px)] overflow-hidden flex flex-col">
-        <DialogHeader className="px-6 py-4">
-          <DialogTitle className="flex flex-wrap items-center gap-2">
-            Job Console
-            {jobId && <span className="text-sm font-normal text-ink-300">· Job #{jobId}</span>}
-            {probe?.job_reference_id && <span className="text-sm font-normal text-ink-300">· {probe.job_reference_id}</span>}
-          </DialogTitle>
-        </DialogHeader>
+    <>
+      <ScheduleAssignUplifted
+        jobId={jobId}
+        job={job}
+        probe={probe}
+        offers={null}
+        offerable={false}
+        onReschedule={() => setRescheduleOpen(true)}
+        onPickTechnicians={onPickTechnicians}
+        apiBase={SA_API_BASE}
+        actionOverride={action}
+        technicianOverride={technician}
+        stateOverride={stateOverride}
+        pinnedNotes={pinnedNotes}
+        onShowNotes={onShowNotes}
+        /* Editable on an accepted job too (ops, 2026-09-17): the same one-list
+           services editor and the same PATCH for the job notes as Schedule &
+           Assign, then a re-read of the header. */
+        onEditServices={jobId != null ? () => setServicesOpen(true) : undefined}
+        onSaveDetails={jobId != null ? async (patch) => {
+          await api.patch(`/admin/jobs/${jobId}`, patch);
+          header.refetch();
+        } : undefined}
+      />
 
-        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 pb-4">
-          {/* Blank with a loader until BOTH of this job's reads are in — the
-              detail read carries the reference and the attachments, and
-              rendering before it painted "No image attached" for a moment. */}
-          {!job || (!probe && !detail.error) ? (
-            header.error
-              ? <p className="text-sm text-urgent-strong">Could not load this job: {header.error}</p>
-              : <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Loading job…</p>
-          ) : (
-            <>
-              <ScheduleAssignUplifted
-                jobId={jobId}
-                job={job}
-                probe={probe}
-                offers={null}
-                offerable={false}
-                onReschedule={() => setRescheduleOpen(true)}
-                onPickTechnicians={() => { /* an accepted job is not offered */ }}
-                apiBase={SA_API_BASE}
-                actionOverride={action}
-                technicianOverride={technician}
-                stateOverride={stateOverride}
-                pinnedNotes={pinnedNotes}
-                onShowNotes={() => notesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-                /* Editable on an accepted job too (ops, 2026-09-17): the same
-                   one-list services editor and the same PATCH for the job
-                   notes as Schedule & Assign, then a re-read of the header. */
-                onEditServices={jobId != null ? () => setServicesOpen(true) : undefined}
-                onSaveDetails={jobId != null ? async (patch) => {
-                  await api.patch(`/admin/jobs/${jobId}`, patch);
-                  header.refetch();
-                } : undefined}
-              />
-              {/* Remarks two thirds, internal notes one third — the same bottom
-                  row as Schedule & Assign, at the same fixed height, each
-                  scrolling inside its own tile. */}
-              <div className="grid gap-3 lg:grid-cols-[2fr_1fr]">
-                <div className="h-96 min-h-0">
-                  <JobRemarksView key={`${jobId}-${remarksKey}`} jobId={jobId} fill />
-                </div>
-                <div ref={notesRef} className="h-96 min-h-0 scroll-mt-4">
-                  <JobInternalNotes key={jobId ?? 'none'} jobId={jobId} canAdd onPinnedChange={setPinnedNotes} fill />
-                </div>
-              </div>
-            </>
-          )}
-        </div>
-
-        <DialogFooter className="px-6 sm:justify-between">
-          <Button variant="outline" className="border-success text-success-strong" onClick={() => setRemarksOpen(true)} disabled={!job}>
-            Add Remarks
-          </Button>
-          <Button variant="outline" onClick={onClose}>Close</Button>
-        </DialogFooter>
-
-        {jobId != null && (
-          <ScheduleAssignRescheduleDialog
-            open={rescheduleOpen}
-            jobId={jobId}
-            currentAppointment={job?.requested_date_time ?? null}
-            originalAppointment={probe?.original_appointment_date_time ?? null}
-            onClose={() => setRescheduleOpen(false)}
-            onDone={refresh}
-          />
-        )}
-        {jobId != null && (
-          <AddRemarksDialog
-            open={remarksOpen}
-            jobId={jobId}
-            onClose={() => setRemarksOpen(false)}
-            onSaved={() => {
-              showToast({ variant: 'success', message: 'Remark Added' });
-              setRemarksOpen(false);
-              reloadRemarks();
-            }}
-          />
-        )}
-        {jobId != null && (
-          <ServicesOneListDialog
-            open={servicesOpen}
-            jobId={jobId}
-            onClose={() => setServicesOpen(false)}
-            onSaved={() => { header.refetch(); onChanged?.(); }}
-          />
-        )}
-        <LiveLocationPopover
-          open={locationOpen}
-          onClose={() => setLocationOpen(false)}
-          source="easyfixer"
-          id={locationOpen && job?.efr_id ? Number(job.efr_id) : null}
-          title={efrName ? `${efrName}${job?.efr_id ? ` · Efr #${job.efr_id}` : ''}` : undefined}
+      {jobId != null && (
+        <ScheduleAssignRescheduleDialog
+          open={rescheduleOpen}
+          jobId={jobId}
+          currentAppointment={job.requested_date_time ?? null}
+          originalAppointment={probe?.original_appointment_date_time ?? null}
+          onClose={() => setRescheduleOpen(false)}
+          onDone={afterReschedule}
         />
-      </DialogContent>
-    </Dialog>
+      )}
+      {jobId != null && (
+        <ServicesOneListDialog
+          open={servicesOpen}
+          jobId={jobId}
+          onClose={() => setServicesOpen(false)}
+          onSaved={() => { header.refetch(); onChanged(); onRescheduled(); }}
+        />
+      )}
+      <LiveLocationPopover
+        open={locationOpen}
+        onClose={() => setLocationOpen(false)}
+        source="easyfixer"
+        id={locationOpen && job.efr_id ? Number(job.efr_id) : null}
+        title={efrName ? `${efrName}${job.efr_id ? ` · Efr #${job.efr_id}` : ''}` : undefined}
+      />
+    </>
   );
 }

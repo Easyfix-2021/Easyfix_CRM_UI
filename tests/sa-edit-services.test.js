@@ -218,7 +218,8 @@ test('(iii) + item 3: every edit made IN Schedule & Assign re-ranks', () => {
   };
   assert.match(onDoneOf('RescheduleDialog'), /onDone=\{onRescheduled\}/, 'Current\'s dialog runs the shared refresh');
   assert.match(onDoneOf('ScheduleAssignRescheduleDialog'), /onDone=\{onRescheduled\}/, 'Uplifted\'s dialog runs the same one');
-  const h = SA_CODE.slice(SA_CODE.indexOf('function onRescheduled()'));
+  // Takes the new appointment (for the "Order rescheduled" popup) since 2026-09-17.
+  const h = SA_CODE.slice(SA_CODE.indexOf('function onRescheduled('));
   const body = h.slice(0, h.indexOf('\n  }'));
   assert.match(body, /top\.refetch\(\);/, 'a reschedule must re-run the Top-10');
   assert.match(body, /offers\.refetch\(\);/, 'and refresh the offers the reschedule just expired');
