@@ -54,6 +54,25 @@ export function BrandDialog({
   const exactMatch = suggestions.find((b) => normalizeBrandName(b.brand_name) === normalized);
   const similar = suggestions.filter((b) => b !== exactMatch);
 
+  // Picking fills the input with the brand's exact existing spelling; the list
+  // stays hidden until the user types again (the debounced match catches up).
+  const [pickedName, setPickedName] = useState<string | null>(null);
+  const [active, setActive] = useState(0);
+  const showList = !exactMatch && similar.length > 0 && name !== pickedName && normalizeBrandName(name).length >= 2;
+
+  function pick(b: BrandListItem) {
+    setName(b.brand_name);
+    setPickedName(b.brand_name);
+    setActive(0);
+  }
+
+  function onNameKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (!showList) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActive((a) => Math.min(a + 1, similar.length - 1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
+    else if (e.key === 'Enter') { e.preventDefault(); pick(similar[active] ?? similar[0]); }
+  }
+
   async function handleSubmit() {
     setError(null);
     if (!name.trim()) { setError('Brand Name is required'); return; }
@@ -87,26 +106,42 @@ export function BrandDialog({
         <div className="space-y-3">
           <div>
             <Label className="block mb-1" required>Brand Name</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder='e.g. "Philips"' autoFocus />
+            <Input
+              value={name}
+              onChange={(e) => { setName(e.target.value); setActive(0); }}
+              onKeyDown={onNameKeyDown}
+              placeholder='e.g. "Philips"'
+              autoFocus
+              role="combobox"
+              aria-expanded={showList}
+              aria-controls="brand-suggestions"
+              aria-autocomplete="list"
+            />
+            {/* In-flow (not a floating popover) so the Dialog's overflow can never clip it. */}
+            {showList && (
+              <ul id="brand-suggestions" role="listbox" className="mt-1 border rounded-md bg-card shadow-sm max-h-48 overflow-y-auto py-1">
+                <li className="px-3 pt-1 pb-1.5 text-[11px] font-medium text-muted-foreground">Existing Brands — Select To Use</li>
+                {similar.map((b, i) => (
+                  <li
+                    key={b.brand_id}
+                    role="option"
+                    aria-selected={i === active}
+                    onMouseDown={(e) => { e.preventDefault(); pick(b); }}
+                    onMouseEnter={() => setActive(i)}
+                    className={`px-3 py-1.5 text-sm cursor-pointer flex items-center justify-between gap-2 ${i === active ? 'bg-muted' : ''}`}
+                  >
+                    <span>{b.brand_name}</span>
+                    {b.status !== 1 && <StatusChip tone="neutral" size="sm">Inactive</StatusChip>}
+                  </li>
+                ))}
+              </ul>
+            )}
             {exactMatch && (
               <div className="mt-1 text-xs text-urgent flex items-center gap-1">
-                <AlertTriangle className="size-3.5" /> Already exists
-                {exactMatch.status !== 1 && <StatusChip tone="neutral" size="sm">Inactive</StatusChip>}
-              </div>
-            )}
-            {!exactMatch && similar.length > 0 && (
-              <div className="mt-1 text-xs text-warning-strong flex flex-wrap items-center gap-1">
                 <AlertTriangle className="size-3.5 shrink-0" />
-                <span>
-                  Similar existing brands:{' '}
-                  {similar.map((b, i) => (
-                    <span key={b.brand_id} className="inline-flex items-center gap-1">
-                      {b.brand_name}
-                      {b.status !== 1 && <StatusChip tone="neutral" size="sm">Inactive</StatusChip>}
-                      {i < similar.length - 1 ? ',' : ''}
-                    </span>
-                  ))}
-                </span>
+                {exactMatch.status === 1
+                  ? <span>&ldquo;{exactMatch.brand_name}&rdquo; already exists — use it as is.</span>
+                  : <span>&ldquo;{exactMatch.brand_name}&rdquo; already exists but is Inactive — reactivate it from the Brands list instead of adding it again.</span>}
               </div>
             )}
           </div>
