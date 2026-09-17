@@ -41,7 +41,7 @@ import { APP_REQUEST_ACTION } from '@/components/job/TechRequestActions';
 import { cycleSort, SortHeader, type SortDir } from '@/lib/use-sort';
 import { RefreshBar } from '@/components/ui/refresh-bar';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
-import { useDebouncedValue } from '@/lib/hooks';
+import { useDebouncedValue, invalidateFetch } from '@/lib/hooks';
 import { LiveLocationPopover } from '@/components/location/LiveLocationPopover';
 
 // `/admin/jobs` Joi caps limit at 500 — pass to pageSizeToLimit so
@@ -337,6 +337,12 @@ export default function MyOrdersPage() {
    */
   const inflightRef = useRef<Map<string, Promise<Resp>>>(new Map());
   const TAB_CACHE_TTL = 30_000;
+  /*
+   * Refresh signal for the Unconfirmed sections. They fetch their own rows and
+   * counts, so clearing this page's cache and calling load() refreshes only the
+   * "N matching orders" header — bumped wherever a JobModal save lands.
+   */
+  const [sectionsReload, setSectionsReload] = useState(0);
 
   async function load(reset = false, force = false, silent = false) {
     const seq = ++loadSeqRef.current;
@@ -809,6 +815,8 @@ export default function MyOrdersPage() {
                */
               /* The independent total the sections are checked against. */
               pageTotal={data?.total ?? null}
+              reloadSignal={sectionsReload}
+              pageBusy={loading || refreshing}
               query={{
                 status: TABS.find((t) => t.value === 'unconfirmed')?.status,
                 ownerId: scopedOwnerId,
@@ -1263,6 +1271,17 @@ export default function MyOrdersPage() {
         onSaved={(job) => {
           cacheRef.current.clear();
           load(false, true);
+          // e.g. Confirm & Schedule → Book Call: the job leaves Unconfirmed, so
+          // every section's rows and count must refetch, not just the header.
+          setSectionsReload((n) => n + 1);
+          /*
+           * …and evict the shared fetch cache, which the signal above cannot
+           * reach: the sections are only MOUNTED on the Unconfirmed tab, while
+           * a status-9 row can be confirmed from other tabs too. Without this,
+           * booking from All and switching to Unconfirmed inside useFetch's
+           * 30s dedupe window re-serves the pre-booking rows and counts.
+           */
+          invalidateFetch((k) => k.startsWith('/admin/jobs'));
           // Book New Call (create) → jump straight into the NEW Schedule &
           // Assign modal for the freshly-booked job, replacing the legacy
           // view-mode step with its Auto-assign / Manual-pick buttons.

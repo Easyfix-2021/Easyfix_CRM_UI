@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { buildStatusParams, jobStageOptionsFor } from '@/lib/job-buckets';
+import { buildStatusParams, jobStageOptionsFor, bucketOptionsFor, tabSelectionFor } from '@/lib/job-buckets';
 import Link from 'next/link';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { useJobActionParams, useJobActionNav, isJobModalAction } from '@/lib/job-action-url';
@@ -41,11 +41,8 @@ import {
 } from '@/lib/job-tabs';
 import { transitionAllowed } from '@/lib/job-stages';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
-import {
-  PendingSchedulingFilters, psFiltersFromParams, writePsFilterParams,
-  psFilterKey, psQueryParams, EMPTY_PS_FILTERS, type PsFilters,
-} from '@/components/job/PendingSchedulingFilters';
 import { JobScopeBar, scopeIsClampedFor } from '@/components/job/JobScopeBar';
+import { PS_OFFER_STATE_OPTIONS } from '@/components/job/PendingSchedulingFilters';
 import { TransferJobOwnershipDialog } from '@/components/job/TransferJobOwnershipDialog';
 import { UnconfirmedJobsTable } from '@/components/job/UnconfirmedJobsTable';
 import { CallableMobile } from '@/components/calls/CallButton';
@@ -360,6 +357,14 @@ export default function JobsPage() {
      * it could only ever hold '' — dead state rather than a deep-link.
      */
     stages: [] as string[],
+    /*
+     * Scheduling Status (offer sub-state of an unscheduled job). The only
+     * control the retired Pending-for-Scheduling card carried that the main
+     * panel did not already have — its other four (Category / City / Client /
+     * Zonal Manager) sent the SAME wire params this panel sends, so they were
+     * pure duplication and went with the card.
+     */
+    offerState: '',
     // Bucket Status — the LEGACY 3-way categorical (Open / Closed /
     // Cancelled). Distinct from Job Status:
     //   open      → job_status IN (0,1,2,9,10,15,20,21)
@@ -373,27 +378,55 @@ export default function JobsPage() {
     rating: '', reopen: '', dueTo: '', zonalId: '', zonalManagerId: '',
   });
   /*
-   * ── Pending-for-Scheduling filter bar (2026-07-31) ────────────────────────
+   * ── ONE FILTER PANEL FOR EVERYONE (2026-09-16) ────────────────────────────
    *
-   * The SAME bar /my-orders hosts (components/job/PendingSchedulingFilters) —
-   * both pages share the bucket definition via lib/job-tabs.ts, so the triage
-   * capability has to be shared too rather than living on one surface only.
+   * This page used to host the Pending-for-Scheduling card above the Filter Job
+   * panel, and HIDE the panel's own Bucket / Job Status dropdowns while it was
+   * up. A bucket-scoped user therefore saw a visibly different page from
+   * everyone else — which is what got reported.
    *
-   * Scoped to the `pending-scheduling` tab: `psActive` gates BOTH the render and
-   * the request params, so every other tab's request shape is byte-for-byte
-   * unchanged. Hydrated from the URL on first render (useSearchParams() is
-   * stable at first render in the App Router) using the SAME `ps*` param names
-   * /my-orders writes, so a filtered link is portable between the two pages.
+   * There were two status mechanisms: the tab's unconditional pins and the
+   * dropdowns. Now there is one. A tab PRE-SELECTS the dropdowns via
+   * `tabSelectionFor` (derived from the same stage definitions the dropdown
+   * offers), so the scope is visible IN the filters and the request is built
+   * from a single source. `psActive` is gone with the card; four of that card's
+   * five controls sent the very params this panel already sends, and the fifth
+   * (Scheduling Status) now lives in Show More Filters as `filters.offerState`.
+   *
+   * `tabExpressed` is false for the tabs a status selection cannot state —
+   * `running-late` is statuses 0+1 AND requested-before-now; `completed` pins
+   * status 5 while the Completed stage spans 3 and 5. Those keep their own pins
+   * and are the only cases still needing the scope bar to explain the view.
    */
-  const [psFilters, setPsFilters] = useState<PsFilters>(() => psFiltersFromParams(searchParams));
-  const psKey = psFilterKey(psFilters);
-  const psActive = tab === 'pending-scheduling';
+  const tabSelection = tabSelectionFor(TABS.find((t) => t.value === tab));
+  const tabExpressed = tabSelection.stages.length > 0;
+  const tabSelKey = `${tabSelection.bucketStatus}|${tabSelection.stages.join(',')}`;
+  /*
+   * Arriving on a bucket tab SETS the two dropdowns to that bucket, which is
+   * what makes them the single status mechanism: the request is then built from
+   * the selection the operator can see, for every user, restricted or not.
+   *
+   * Keyed on the SELECTION, not on `tab`, so the five deep links whose tabs are
+   * not expressible as a status pick (running-late, estimate-*, completed,
+   * pending-feedback) leave the dropdowns alone and keep their own pins. The
+   * identity check returns the same object when nothing changes — a redundant
+   * setState here would cost an extra list request on every tab render.
+   */
+  useEffect(() => {
+    if (!tabExpressed) return;
+    setFilters((f) => (
+      f.bucketStatus === tabSelection.bucketStatus && f.stages.join(',') === tabSelection.stages.join(',')
+        ? f
+        : { ...f, bucketStatus: tabSelection.bucketStatus, stages: [...tabSelection.stages] }
+    ));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabSelKey]);
   /*
    * "Unmapped Website Bookings" quick-filter (see the preset block up top).
    * Scoped to the Unconfirmed tab — that tab supplies the `job_status = 9` half
    * of the definition — so `uwActive` gates BOTH the render and the request
-   * params and every other tab's request shape stays byte-for-byte unchanged
-   * (same discipline as `psActive` above). Hydrated from the URL on first
+   * params and every other tab's request shape stays byte-for-byte unchanged.
+   * Hydrated from the URL on first
    * render so the filtered view is shareable and survives a refresh;
    * useSearchParams() is stable at first render in the App Router.
    */
@@ -486,6 +519,7 @@ export default function JobsPage() {
       filters.categoryId, filters.verticalId, filters.bucketStatus,
       filters.stages.join(','),
       filters.rating, filters.reopen, filters.dueTo, filters.zonalId, filters.zonalManagerId,
+      filters.offerState,
     filters.stages, filters.zonalManagerId,
       filters.stages,
       serverQ,
@@ -502,7 +536,7 @@ export default function JobsPage() {
     // `uw=` keeps the preset's two extra pins out of the un-presetted entry —
     // without it, toggling the chip would serve the unfiltered Unconfirmed page
     // straight from cache.
-    const key = `${tab}|${off}|${limit}|${sortKey || ''}|${sortDir}|${filterKey()}|f=${psActive ? psKey : ''}|uw=${uwActive ? 1 : 0}`;
+    const key = `${tab}|${off}|${limit}|${sortKey || ''}|${sortDir}|${filterKey()}|f=${filters.offerState}|uw=${uwActive ? 1 : 0}`;
 
     // First paint (no data yet) raises the skeleton; every later reload —
     // pagination, sort, post-mutation — is silent so the table body never
@@ -585,11 +619,10 @@ export default function JobsPage() {
       // UNCONDITIONAL and no filter may widen or replace them (the exact
       // inversion fixed on /my-orders — picking a status there listed jobs
       // outside the bucket entirely). So the two status overrides are
-      // neutralised while `psActive`, which drops `status`/`statuses`/`assigned`
-      // straight through to the tab definition. Both dropdowns are hidden on
-      // that tab too, so this is unreachable in normal use — it is the
-      // structural guarantee behind the UI, and it also disarms a stale
-      // selection left over from another tab.
+      // ...and since 2026-09-16 the tab PRE-SELECTS those dropdowns instead of
+      // being neutralised against them, so the bucket is stated by the same
+      // controls that narrow it. buildStatusParams still applies the
+      // precedence below; it simply is not handed a psActive flag any more.
       /*
        * Stage selection OUTRANKS Bucket Status — legacy's own precedence.
        * resolveJobStatus() returns the Open/Closed/Cancelled group ONLY when no
@@ -599,7 +632,6 @@ export default function JobsPage() {
        * one coherent set.
        */
       const statusParams = buildStatusParams({
-        psActive,
         stages: filters.stages,
         bucketStatus: filters.bucketStatus,
         tab: tabDef,
@@ -696,7 +728,7 @@ export default function JobsPage() {
          * Sent only while the tab is active; every other tab's request shape is
          * unchanged.
          */
-        ...(psActive ? psQueryParams(psFilters) : {}),
+        ...(filters.offerState ? { offerState: filters.offerState } : {}),
         /*
          * "Unmapped Website Bookings" preset — spread LAST so its two pins WIN
          * over the Filter Job card's Client dropdown above. That precedence is
@@ -771,21 +803,21 @@ export default function JobsPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- `load` is recreated every render; see the note above the refetch effect.
   useEffect(() => { setPage(0); load(true); }, [focusParam]);
   /*
-   * Pending-for-Scheduling filter change → page-0 refetch. Skips the initial
+   * Scheduling Status change → page-0 refetch. Skips the initial
    * mount (the tab effect above already fired the first load, including any
-   * URL-hydrated filters). `psKey` is a string, so this fires on real value
-   * changes only — not on every setState object identity.
+   * URL-hydrated filters). `filters.offerState` is a string, so this fires on
+   * real value changes only — not on every setState object identity.
    */
-  const psMountRef = useRef(true);
+  const offerStateMountRef = useRef(true);
   useEffect(() => {
-    if (psMountRef.current) { psMountRef.current = false; return; }
+    if (offerStateMountRef.current) { offerStateMountRef.current = false; return; }
     setPage(0);
     load(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [psKey]);
+  }, [filters.offerState]);
 
   /*
-   * "Unmapped Website Bookings" toggle → page-0 refetch. Mirrors the psKey
+   * "Unmapped Website Bookings" toggle → page-0 refetch. Mirrors the offerState
    * effect exactly, including the initial-mount skip: the tab effect above
    * already fires the first load, and it does so with `uwActive` derived from
    * the URL-hydrated state, so a shared link lands pre-filtered without this
@@ -973,12 +1005,14 @@ export default function JobsPage() {
   function clearTabScope() {
     setTab('all');
     setPage(0);
-    setPsFilters(EMPTY_PS_FILTERS);
+    // The tab PRE-SELECTED these (see the tab→selection effect), so clearing
+    // the scope has to clear them too or the list stays narrowed by dropdowns
+    // the operator never touched.
+    setFilters((f) => ({ ...f, bucketStatus: '', stages: [], offerState: '' }));
     setUnmappedWebsite(false);
     const p = new URLSearchParams(searchParams);
     p.delete('tab');
     p.delete('unmappedWebsite');
-    writePsFilterParams(p, EMPTY_PS_FILTERS);
     const next = p.toString();
     router.replace(next ? `${pathname}?${next}` : pathname, { scroll: false });
   }
@@ -1087,7 +1121,6 @@ export default function JobsPage() {
       // job-status > tab, with both overrides neutralised on Pending for
       // Scheduling so the exported rows are the same bucket the table shows.
       Object.entries(buildStatusParams({
-        psActive,
         stages: filters.stages,
         bucketStatus: filters.bucketStatus,
         tab: tabDef,
@@ -1120,9 +1153,7 @@ export default function JobsPage() {
       // Pending-for-Scheduling bar last, mirroring load()'s spread order so a
       // set control wins over the Filter Job card's equivalent. The export route
       // validates with the SAME listQuery schema, so `offerState` is accepted.
-      if (psActive) {
-        Object.entries(psQueryParams(psFilters)).forEach(([k, v]) => qs.set(k, v));
-      }
+      if (filters.offerState) qs.set('offerState', filters.offerState);
       /*
        * "Unmapped Website Bookings" pins last — same precedence as load(), so
        * the exported file is a true mirror of what's on screen. `qs.set`
@@ -1292,9 +1323,6 @@ export default function JobsPage() {
     const p = new URLSearchParams(searchParams);
     if (serverQ) p.set('q', serverQ); else p.delete('q');
     if (sortKey) p.set('sort', `${sortKey}:${sortDir}`); else p.delete('sort');
-    // Shared serialiser — same `ps*` names /my-orders writes, so a filtered
-    // link is portable between the two surfaces.
-    writePsFilterParams(p, psFilters);
     // "Unmapped Website Bookings" preset. Persisted from the RAW flag, not
     // `uwActive`: the operator's choice should survive a hop to another tab and
     // back, exactly like `q` and `sort` do. Combined with `?tab=unconfirmed`
@@ -1305,7 +1333,7 @@ export default function JobsPage() {
       router.replace(nextStr ? `${pathname}?${nextStr}` : pathname, { scroll: false });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverQ, sortKey, sortDir, psKey, unmappedWebsite]);
+  }, [serverQ, sortKey, sortDir, unmappedWebsite]);
 
   return (
     <div className="space-y-5">
@@ -1316,8 +1344,32 @@ export default function JobsPage() {
         </div>
       )}
 
-      {/* The scope this list is narrowed to — see VIEW SCOPE above. */}
-      <JobScopeBar tab={tab} clamped={scopeIsClamped} onClear={clearTabScope} noun="Jobs" />
+      {/*
+        * The scope bar is now the EXCEPTION, not the rule: when a tab is
+        * expressible the two dropdowns already state it, and repeating it in a
+        * bar above them is the duplication this change set out to remove. It
+        * survives for the two cases the dropdowns cannot state —
+        *   - a tab that is not a status pick (running-late, estimate-*,
+        *     completed, pending-feedback), where nothing else names the view;
+        *   - a stage-restricted user, who is told WHY and given no exit,
+        *     because the clamp would snap them straight back.
+        */}
+      {(scopeIsClamped || !tabExpressed) && (
+        /*
+         * nameScope={!tabExpressed}: when the two dropdowns state the bucket,
+         * this bar must NOT name it. The dropdowns can be changed without
+         * changing `tab`, so a named bar went stale the moment a restricted
+         * user picked another granted stage — it kept saying "Showing Pending
+         * for Scheduling Only" over a table of Pending to Start.
+         */
+        <JobScopeBar
+          tab={tab}
+          clamped={scopeIsClamped}
+          onClear={clearTabScope}
+          noun="Jobs"
+          nameScope={!tabExpressed}
+        />
+      )}
       <div className="flex items-end justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Jobs</h1>
@@ -1352,17 +1404,6 @@ export default function JobsPage() {
         * carries its own Client / City / Category fields, and interleaving two
         * sets of same-named pickers in one card would read as duplicates.
         */}
-      {psActive && (
-        <Card>
-          <CardContent className="p-3">
-            <PendingSchedulingFilters
-              value={psFilters}
-              onChange={setPsFilters}
-              title="Pending For Scheduling Filters"
-            />
-          </CardContent>
-        </Card>
-      )}
 
       {/*
         * "Unmapped Website Bookings" quick-filter — Unconfirmed tab only.
@@ -1452,16 +1493,15 @@ export default function JobsPage() {
                 <SearchSelect placeholder="All" value={filters.clientId} onChange={(v) => setFilters({ ...filters, clientId: v })} options={lk.toOpts.clients.map((o) => ({ value: o.value, label: String(o.label) }))} />
               </div>
               {/*
-                * Bucket Status + Job Status are HIDDEN on Pending for
-                * Scheduling. Every row in that bucket is job_status = 0 by
-                * definition, so both controls are meaningless there — and
-                * load() neutralises them anyway to keep the bucket pin
-                * unconditional. Rendering dead controls that silently do
-                * nothing is worse than not rendering them; the Scheduling
-                * Status picker in the bar above is the real axis on that tab.
+                * Bucket Status + Job Status are shown to EVERYONE now. They
+                * used to be hidden whenever a bucket tab was active, because
+                * the tab's pins were unconditional and the two mechanisms
+                * could contradict each other. The tab now pre-selects these
+                * two controls instead, so they state the bucket rather than
+                * fighting it — and a user with limited Job Stage Access gets
+                * the same two controls, offering only the values their grant
+                * covers (jobStageOptionsFor / bucketOptionsFor).
                 */}
-              {!psActive && (
-              <>
               <div>
                 <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Bucket Status</label>
                 {/* Bucket Status — legacy categorical view over job_status
@@ -1483,11 +1523,10 @@ export default function JobsPage() {
                    * usually outside the new one, which ANDs to zero rows.
                    */
                   onChange={(v) => setFilters({ ...filters, bucketStatus: v, stages: [] })}
-                  options={[
-                    { value: 'open',      label: 'Open' },
-                    { value: 'closed',    label: 'Closed / Completed' },
-                    { value: 'cancelled', label: 'Cancelled' },
-                  ]}
+                  /* Buckets the user's Job Stage Access covers — picking one
+                     with no reachable status would produce an empty Job Status
+                     list and an empty table with nothing saying why. */
+                  options={bucketOptionsFor(me?.allowedStages)}
                 />
               </div>
               <div>
@@ -1499,13 +1538,13 @@ export default function JobsPage() {
                   placeholder="-- All --"
                   value={filters.stages}
                   onChange={(next) => setFilters({ ...filters, stages: next.map(String) })}
-                  /* Scoped to the selected bucket — see jobStageOptionsFor. */
-                  options={jobStageOptionsFor(filters.bucketStatus)}
+                  /* Scoped to the selected bucket AND to this user's Job Stage
+                     Access — see jobStageOptionsFor. A restricted user sees the
+                     same control, with only the stages their grant covers. */
+                  options={jobStageOptionsFor(filters.bucketStatus, me?.allowedStages)}
                   selectedLabel="stages"
                 />
               </div>
-              </>
-              )}
             </div>
             {/* Row 2 — Client Ref / EFR ID / Job Owner / Date Type / Date Range. */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">
@@ -1597,6 +1636,18 @@ export default function JobsPage() {
                       dueTo   → LIKE on j.remarks structured prefix
                       zonalId → JOIN tbl_zone_city_mapping */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">
+                  <div>
+                    <label
+                      className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide"
+                      title="Offer sub-state of an unscheduled job — the one control the retired Pending-for-Scheduling card carried that this panel did not"
+                    >Scheduling Status</label>
+                    <SearchSelect
+                      placeholder="-- All --"
+                      value={filters.offerState}
+                      onChange={(v) => setFilters({ ...filters, offerState: v })}
+                      options={PS_OFFER_STATE_OPTIONS}
+                    />
+                  </div>
                   <div>
                     <label className="text-xs font-medium text-muted-foreground block mb-1 uppercase tracking-wide">Rating</label>
                     <SearchSelect
@@ -1690,6 +1741,7 @@ export default function JobsPage() {
                       categoryId: '', verticalId: '',
                       bucketStatus: '',
                       rating: '', reopen: '', dueTo: '', zonalId: '', zonalManagerId: '', stages: [],
+                      offerState: '',
                     });
                   }}
                 >
@@ -2360,7 +2412,6 @@ export default function JobsPage() {
              * numbers are already in a client's inbox.
              */
             ...buildStatusParams({
-              psActive,
               stages: filters.stages,
               bucketStatus: filters.bucketStatus,
               tab: TABS.find((t) => t.value === tab),

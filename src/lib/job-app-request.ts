@@ -206,3 +206,54 @@ export function appRequestFromDetail(detail: AppRequestDetail | null | undefined
     requestedFor: kind === 'reschedule' ? text(detail?.requestedDateTime) : null,
   };
 }
+
+/*
+ * The technician's open RESCHEDULE ask on a Pending to Start job, or null.
+ * Feeds the highlighted "Reschedule Requested" row under the schedule in the
+ * Reassign Technician modal and in JobModal's Timeline, off the GET
+ * /admin/jobs/:id detail both already read.
+ *
+ * Unlike appRequestFromDetail this IS status-gated (owner, 2026-09-16: "If
+ * Pending to Start job is Reschedule Requested"): the row sits beside the live
+ * appointment as a proposal to compare against, and outside status 1 there is
+ * no schedule left for ops to move. A job carrying a cancel ask as well yields
+ * null — cancel wins server-side, so there is no reschedule to show — and so
+ * does an ask with no requested time, which would render an empty row.
+ *
+ * `requestedFor` stays VERBATIM ('YYYY-MM-DD HH:mm', IST wall-clock). The
+ * caller renders it through formatDate / displaySlot, which read a zone-less
+ * value as IST.
+ */
+export function pendingRescheduleRequest(
+  detail: { job_status?: number | string | null; appRequest?: AppRequestDetail | null } | null | undefined,
+): AppRequest | null {
+  if (!detail || Number(detail.job_status) !== PENDING_TO_START_STATUS) return null;
+  const req = appRequestFromDetail(detail.appRequest);
+  return req?.kind === 'reschedule' && req.requestedFor ? req : null;
+}
+
+/*
+ * RescheduleDialog pre-fill for an open technician reschedule ask: the asked-for
+ * time in the picker's 'YYYY-MM-DDTHH:mm' shape, plus a remarks line naming the
+ * ask. The reason select stays EMPTY on purpose — the operator picks a CRM
+ * reschedule reason, as on every other pre-filled reschedule.
+ *
+ * The time is seeded only while it is still in the FUTURE: the picker's `min` is
+ * IST now and the server refuses a reschedule into the past, so a stale ask would
+ * pre-fill a value the operator cannot submit. `nowWallClock` is istNowWallClock()
+ * (lib/utils — not imported: `test:build` compiles src/lib/* with no path
+ * aliases). Both sides are fixed-width wall-clock strings, so lexicographic IS
+ * chronological; slice-and-swap, never new Date(), which would re-read the IST
+ * literal in the browser's zone.
+ */
+export function rescheduleRequestPrefill(
+  req: AppRequest | null | undefined,
+  nowWallClock: string,
+): { initialDateTime?: string; initialRemarks?: string } {
+  if (!req || req.kind !== 'reschedule') return {};
+  const initialRemarks = `Technician requested reschedule${req.reason ? `: ${req.reason}` : ''}`;
+  const at = req.requestedFor ? req.requestedFor.slice(0, 16).replace(' ', 'T') : '';
+  return at.length === 16 && at >= nowWallClock.slice(0, 16)
+    ? { initialDateTime: at, initialRemarks }
+    : { initialRemarks };
+}

@@ -51,8 +51,18 @@ test('Easyfix_client_UI ships a byte-identical prod-frontend compose', () => {
   const theirs = path.join(dir, COMPOSE);
   assert.ok(fs.existsSync(theirs), `${theirs} not found, so the mirror was NOT checked. `
     + 'Clone https://github.com/Easyfix-2021/Easyfix_client_UI beside this repo, or point EASYFIX_CLIENT_UI_DIR at a checkout.');
-  assert.ok(fs.readFileSync(theirs).equals(fs.readFileSync(path.join(ROOT, COMPOSE))),
-    `${theirs} differs from this repo's ${COMPOSE} — copy it byte for byte; the last UI deploy writes its copy to the prod UI host`);
+  if (fs.readFileSync(theirs).equals(fs.readFileSync(path.join(ROOT, COMPOSE)))) return;
+  // The branch compared against, read from the checkout itself: CI clones it
+  // `--branch "$BRANCH"`, so its HEAD is exactly the branch that is behind.
+  // Measured 2026-09-16: a CRM QA deploy went red here because Easyfix_client_UI
+  // HotFix and Production held the new compose but its QA did not.
+  let branch = null;
+  try { branch = execFileSync('git', ['-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch {}
+  const b = branch && branch !== 'HEAD' ? branch : '<the branch this run deploys>';
+  assert.fail(`${theirs} differs from this repo's ${COMPOSE}, compared against Easyfix_client_UI branch "${b}".\n`
+    + `The last UI deploy writes its copy to the prod UI host, so the two must be byte-identical. Fix in this order:\n`
+    + `  · this repo's copy is the new one → land it in Easyfix_client_UI HotFix, promote Easyfix_client_UI to "${b}" FIRST, then re-run this deploy.\n`
+    + `  · theirs is the new one → copy it here byte for byte.`);
 });
 
 test('every workflow step that runs npm test clones Easyfix_client_UI for the mirror check', () => {

@@ -60,6 +60,8 @@ import { CandidateTable, PincodeListModal, type ScheduleCandidate } from './Cand
 import { AddRemarksDialog } from './AddRemarksDialog';
 import { RescheduleDialog } from './RescheduleDialog';
 import { useCancelJob } from './CancelJob';
+import { pendingRescheduleRequest, rescheduleRequestPrefill, type AppRequestDetail } from '@/lib/job-app-request';
+import { istNowWallClock } from '@/lib/utils';
 
 /* Job context carried on the candidates response — the SAME enriched job object
    Schedule & Assign reads, rendered by the shared <JobContextPanel>. Typed as
@@ -128,7 +130,9 @@ export function AssignTechnicianModal({
   // for a SCHEDULED (1) job — a tampered link to any other status (e.g. a
   // completed job) must NOT let the operator (re)assign. Probe the real status;
   // while it loads (status unknown) we don't block — the modal shows its loader.
-  const statusGate = useFetch<{ job_id?: number; job_status?: number }>(open && jobId ? `/admin/jobs/${jobId}` : null);
+  // The same full read also carries `appRequest`, which feeds the
+  // "Reschedule Requested" row under Job Date & Time — no second fetch.
+  const statusGate = useFetch<{ job_id?: number; job_status?: number; appRequest?: AppRequestDetail | null }>(open && jobId ? `/admin/jobs/${jobId}` : null);
   /*
    * ⚠ IDENTITY-GUARDED, like `topData` below. useFetch RETAINS the previous
    * key's payload (a key change sets `refreshing`, not `loading`; `key = null`
@@ -150,6 +154,9 @@ export function AssignTechnicianModal({
    * asked for, so the narrowing stays; what it must not do is stand in for the
    * server's own refusal, which is what `assignable` below supplies.
    */
+  // The technician's open reschedule ask, if any — the panel's highlighted row
+  // and the Reschedule dialog's pre-fill both read this one value.
+  const rescheduleAsk = pendingRescheduleRequest(probe);
   const allowedStatus = mode === 'reassign' ? 1 : 0;
   const wrongStatusForMode = probe?.job_status != null && Number(probe.job_status) !== allowedStatus;
   const confirmAction = useConfirm();
@@ -455,6 +462,7 @@ export function AssignTechnicianModal({
             showReschedule
             onReschedule={() => setRescheduleOpen(true)}
             rescheduling={rescheduling}
+            rescheduleRequest={rescheduleAsk}
           />
 
           {/* Note banners. */}
@@ -751,6 +759,8 @@ export function AssignTechnicianModal({
         <RescheduleDialog
           open={rescheduleOpen}
           jobId={jobId}
+          // Pre-fill from the technician's open ask (future time + remarks).
+          {...rescheduleRequestPrefill(rescheduleAsk, istNowWallClock())}
           onClose={() => setRescheduleOpen(false)}
           onDone={() => {
             // Veil the stale date / list until the refetch settles.
@@ -762,6 +772,10 @@ export function AssignTechnicianModal({
             // can't re-run a still-mounted hook.
             invalidateFetch((k) => k.startsWith(`/admin/jobs/${jobId}/candidates`));
             top.refetch();
+            // A reschedule clears the technician's reschedule ask server-side
+            // (resolveAppRequests), so re-read the detail probe or the
+            // "Reschedule Requested" row outlives the ask it answered.
+            statusGate.refetch();
             // Remount the remarks thread so the reschedule comment + any actioned
             // customer request appear.
             invalidateFetch((k) =>

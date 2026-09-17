@@ -60,10 +60,16 @@ test('the empty-filter constant was really extracted, not defaulted to {}', () =
 });
 
 function runClear(initialQuery, src = PAGE, extras = {}) {
-  const calls = { tab: [], page: [], ps: [], uw: [], replaced: [], wrote: [] };
+  const calls = { tab: [], page: [], ps: [], uw: [], replaced: [], wrote: [], filters: [] };
   const fn = evaluate(src, '  function clearTabScope() {', '\n  }', {
     setTab: (v) => calls.tab.push(v),
     setPage: (v) => calls.page.push(v),
+    // /jobs resets the single filter state; /my-orders still owns a ps panel.
+    setFilters: (fnOrVal) => calls.filters.push(
+      typeof fnOrVal === 'function'
+        ? fnOrVal({ bucketStatus: 'open', stages: ['scheduling'], offerState: 'offered', clientId: '7' })
+        : fnOrVal,
+    ),
     setPsFilters: (v) => calls.ps.push(v),
     setUnmappedWebsite: (v) => calls.uw.push(v),
     searchParams: new URLSearchParams(initialQuery),
@@ -78,24 +84,28 @@ function runClear(initialQuery, src = PAGE, extras = {}) {
 }
 
 test('clearing the scope removes the tab from the URL — otherwise a refresh restores it', () => {
-  const c = runClear('tab=pending-scheduling&psCity=12&q=lenskart&sort=age:desc');
+  const c = runClear('tab=pending-scheduling&q=lenskart&sort=age:desc&unmappedWebsite=true');
   assert.equal(c.replaced.length, 1, 'the URL must be rewritten exactly once');
   const url = c.replaced[0];
   assert.ok(!/(\?|&)tab=/.test(url), `tab must be gone, got ${url}`);
-  assert.ok(!/psCity/.test(url), `the bucket's own filters must go with it, got ${url}`);
+  assert.ok(!/unmappedWebsite/.test(url), 'the preset goes with the scope');
   // Unrelated view state the operator chose is PRESERVED: clearing a scope is
   // not the same as clearing a search.
   assert.match(url, /q=lenskart/);
   assert.match(url, /sort=age%3Adesc|sort=age:desc/);
 });
 
-test('clearing resets the bucket state it was showing, not just the URL', () => {
-  const c = runClear('tab=pending-scheduling&unmappedWebsite=true');
+test('clearing resets the dropdowns the TAB pre-selected, not just the URL', () => {
+  const c = runClear('tab=pending-scheduling');
   assert.deepEqual(c.tab, ['all']);
   assert.deepEqual(c.page, [0], 'page 3 of a narrowed list is not page 3 of all jobs');
-  assert.deepEqual(c.ps, [EMPTY_PS_FILTERS]);
   assert.deepEqual(c.uw, [false]);
-  assert.deepEqual(c.wrote, [EMPTY_PS_FILTERS], 'the URL writer must be handed the EMPTY filters');
+  assert.equal(c.filters.length, 1, 'the filter state must be reset exactly once');
+  const f = c.filters[0];
+  assert.equal(f.bucketStatus, '', 'the bucket the tab selected must go');
+  assert.deepEqual(f.stages, [], 'and the stage it selected');
+  assert.equal(f.offerState, '', 'and the Scheduling Status narrowing');
+  assert.equal(f.clientId, '7', 'but an unrelated filter the operator set survives');
 });
 
 test('with no query left, it replaces to the bare path rather than a dangling ?', () => {
@@ -122,8 +132,17 @@ test('BOTH surfaces render the shared bar — neither has a tab bar of its own',
      * and a prose mention is not a tab bar.
      */
     assert.equal((src.match(/<TabsTrigger/g) || []).length, 0, `${name} must still have no tab bar`);
-    assert.match(src, new RegExp(`<JobScopeBar tab=\\{tab\\} clamped=\\{scopeIsClamped\\} onClear=\\{clearTabScope\\} noun="${noun}" \\/>`),
-      `${name} must render the shared bar with noun="${noun}"`);
+    /*
+     * Props asserted INDIVIDUALLY, not as one formatted line: pinning the exact
+     * one-liner broke the moment a fifth prop wrapped it across lines, which
+     * says nothing about behaviour.
+     */
+    const at = src.indexOf('<JobScopeBar');
+    assert.ok(at > -1, `${name} must render the shared bar`);
+    const el = src.slice(at, src.indexOf('/>', at) + 2);
+    for (const prop of ['tab={tab}', 'clamped={scopeIsClamped}', 'onClear={clearTabScope}', `noun="${noun}"`]) {
+      assert.ok(el.includes(prop), `${name}: the bar must receive ${prop} — got ${el}`);
+    }
     assert.match(src, /scopeIsClamped = scopeIsClampedFor\(me\?\.allowedStages\)/,
       `${name} must use the shared clamp predicate, not its own copy`);
   }
@@ -167,4 +186,92 @@ test("the legacy map's own prose points where the map actually points", () => {
   }
   assert.equal(compared, documented.length);
   console.log(`legacy map prose: ${compared}/${documented.length} documented routes match the map`);
+});
+
+/* ─────────────────────────────────────────────────────────────────────
+ * ONE PANEL FOR EVERYONE (2026-09-16). The reported symptom was a separate
+ * "Pending For Scheduling Filters" card that only some users ever saw, above a
+ * Filter Job panel whose own two status dropdowns were HIDDEN while it showed.
+ * ───────────────────────────────────────────────────────────────────── */
+
+test('Manage Jobs no longer hosts the separate bucket card', () => {
+  // Positive control: the page must still be the one that filters jobs, or
+  // these absence checks are asserting about the wrong file.
+  assert.match(PAGE, /Filter Job|JOB ID \/ REF ID|bucketStatus/, 'this must be the Manage Jobs page');
+  assert.ok(!/<PendingSchedulingFilters/.test(PAGE), 'the card must be gone from Manage Jobs');
+  assert.ok(!/psActive &&|!psActive &&/.test(PAGE), 'and with it the gate that hid the panel controls');
+  // /my-orders keeps its card — that page IS the per-bucket surface.
+  assert.match(ORDERS, /<PendingSchedulingFilters/, 'My Orders still hosts it');
+});
+
+test('the two status dropdowns are rendered unconditionally, and offer only permitted values', () => {
+  assert.match(PAGE, /options=\{bucketOptionsFor\(me\?\.allowedStages\)\}/,
+    'the bucket list must be narrowed by the caller\'s stage grant');
+  assert.match(PAGE, /options=\{jobStageOptionsFor\(filters\.bucketStatus, me\?\.allowedStages\)\}/,
+    'and so must the Job Status list');
+  // No conditional may wrap them any more — that was the whole defect.
+  const bucketAt = PAGE.indexOf('>Bucket Status<');
+  assert.ok(bucketAt > -1, 'the Bucket Status control must exist');
+  /*
+   * No conditional may stand between the comment above and the control — the
+   * first version of this check was END-ANCHORED and a `{false && (` inserted
+   * just before the <div> slipped straight past it (mutation M5 survived).
+   * Positive control first: prove the window really is the control's own.
+   */
+  const before = PAGE.slice(Math.max(0, bucketAt - 260), bucketAt);
+  assert.match(before, /<div>\s*\n\s*<label/, 'the window must cover the control markup');
+  assert.ok(!/&&\s*\(/.test(before),
+    `a conditional gates the Bucket Status control: …${before.slice(-140)}`);
+});
+
+test('the one control the card contributed survived, from the shared vocabulary', () => {
+  assert.match(PAGE, />Scheduling Status<\/label>/, 'Scheduling Status moved into the panel');
+  assert.match(PAGE, /options=\{PS_OFFER_STATE_OPTIONS\}/,
+    'reusing the panel\'s own option list rather than a second copy of three values');
+  assert.match(PAGE, /offerState \? \{ offerState: filters\.offerState \} : \{\}/,
+    'and it must reach the list request');
+  assert.match(PAGE, /qs\.set\('offerState', filters\.offerState\)/,
+    'and the export, which has silently drifted from the table before');
+});
+
+test('a tab pre-selects the dropdowns, keyed on the selection so a no-op costs no request', () => {
+  assert.match(PAGE, /const tabSelection = tabSelectionFor\(TABS\.find\(\(t\) => t\.value === tab\)\)/);
+  assert.match(PAGE, /if \(!tabExpressed\) return;/, 'a tab that cannot be expressed leaves the dropdowns alone');
+  assert.match(PAGE, /\}, \[tabSelKey\]\);/, 'keyed on the SELECTION, not on the tab');
+  assert.match(PAGE, /\? f\s*\n?\s*:/, 'returns the same state object when nothing changed');
+});
+
+test('the scope bar is now the exception: only when the dropdowns cannot state the view', () => {
+  assert.match(PAGE, /\{\(scopeIsClamped \|\| !tabExpressed\) && \(/,
+    'expressible tabs are stated by the dropdowns, so the bar would duplicate them');
+});
+
+test('the bar does not NAME a scope the dropdowns own — it would go stale', () => {
+  /*
+   * Found by reading the shipped page against a screenshot: the label comes from
+   * `tab`, and nothing writes `tab` when Job Status changes. A restricted user
+   * switching to another granted stage therefore saw "Showing Pending for
+   * Scheduling Only" above a table of Pending to Start.
+   */
+  assert.match(BAR, /nameScope\?: boolean;/, 'the component must take the mode');
+  assert.match(BAR, /if \(!nameScope && !clamped\) return null;/,
+    'with the scope stated elsewhere and nothing limiting it, there is nothing to say');
+  assert.match(BAR, /\{nameScope \? \(/, 'the name is rendered only in naming mode');
+  // The limitation-only branch must NOT carry the bucket label.
+  const elseBranch = BAR.slice(BAR.indexOf(') : ('), BAR.indexOf('</span>', BAR.indexOf(') : (')));
+  assert.match(elseBranch, /Limited By Your Job Stage Access/);
+  assert.ok(!/\{label\}/.test(elseBranch), 'the stale half must not appear in the limitation-only branch');
+
+  /*
+   * Element-scoped, not a whole-file match: the comment above the element also
+   * contains the literal `nameScope={!tabExpressed}`, so a file-wide regex would
+   * pass on the prose alone if someone changed only the prop.
+   */
+  const barAt = PAGE.indexOf('<JobScopeBar');
+  assert.ok(barAt > -1, 'Manage Jobs must render the bar');
+  const barEl = PAGE.slice(barAt, PAGE.indexOf('/>', barAt) + 2);
+  assert.match(barEl, /nameScope=\{!tabExpressed\}/,
+    `the element must pass the mode, got ${barEl}`);
+  // …and My Orders keeps naming it, because it has no such dropdowns.
+  assert.ok(!/nameScope/.test(ORDERS), 'My Orders must keep the default naming mode');
 });

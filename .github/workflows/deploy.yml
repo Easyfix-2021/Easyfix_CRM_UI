@@ -89,9 +89,9 @@ jobs:
       # FULL history — see ci.yml for why: the message-literal audit's RETIRED
       # half reads `git log -L` over this repo, and a depth-1 checkout makes it
       # silently unable to find anything.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with: { node-version: 20, cache: 'npm' }
       - run: npm ci
       - name: Typecheck
@@ -157,7 +157,7 @@ jobs:
       image_tag: ${{ steps.meta.outputs.image_tag }}
       env_name:  ${{ steps.target.outputs.env_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Resolve env name
         id: target
@@ -326,6 +326,7 @@ jobs:
           build-args: |
             NEXT_PUBLIC_API_URL=${{ steps.api.outputs.url }}
             MIRROR_APP_VERSION=${{ steps.mirror.outputs.version }}
+            GIT_COMMIT=${{ github.sha }}
           tags: |
             ${{ steps.meta.outputs.image_uri }}
             ${{ steps.meta.outputs.moving_uri }}
@@ -380,7 +381,7 @@ jobs:
       # prod — no need to clone the repo just to pull an image on QA.
       - name: Checkout (prod only — to read prod-frontend compose)
         if: needs.build-and-push.outputs.env_name == 'production'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Encode prod-frontend docker-compose.yml
         id: compose

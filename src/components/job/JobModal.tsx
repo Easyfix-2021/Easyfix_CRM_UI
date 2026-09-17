@@ -22,7 +22,8 @@ import { CustomerSubmissionPanel } from './CustomerSubmissionPanel';
 import { AddRemarksDialog } from './AddRemarksDialog';
 import { useCancelJob } from './CancelJob';
 import { TechRequestActions, APP_REQUEST_ACTION } from './TechRequestActions';
-import { appRequestFromDetail, type AppRequestDetail } from '@/lib/job-app-request';
+import { appRequestFromDetail, pendingRescheduleRequest, rescheduleRequestPrefill, type AppRequestDetail } from '@/lib/job-app-request';
+import { RescheduleRequestedText } from './RescheduleRequestedText';
 import { BillingChargesTab } from './BillingChargesTab';
 // Audited reschedule dialog (PATCH /admin/jobs/:id/reschedule → job.reschedule:
 // offer-expiry + scheduling_history). Kept aliased for a descriptive name;
@@ -43,7 +44,7 @@ import { resolveParentAddressId, buildJobAddressPayload } from '@/lib/job-addres
 // (src/lib/job-slots.ts); never re-declare a slot array at a call site.
 import { BOOKING_BANDS, slotChoicesFor, inferSlotFromTime, bandForTime, isKnownBand, canonicalSlot, displaySlot, AFTER_HOURS_SLOT } from '@/lib/job-slots';
 import { useLookup } from '@/lib/use-lookup';
-import { formatDate, formatEasyfixerName, ST, statusLabel, statusTone, toIstClockTime } from '@/lib/utils';
+import { formatDate, formatEasyfixerName, istNowWallClock, ST, statusLabel, statusTone, toIstClockTime } from '@/lib/utils';
 import { maskMobile, formatServiceAddress, INDIAN_MOBILE_REGEX, INDIAN_MOBILE_ERROR, isValidIndianMobile, normalizeMobileDigits } from '@/lib/format';
 import { formatJobAge, jobAgeTitle } from '@/lib/job-age';
 
@@ -673,17 +674,23 @@ export function JobModal({
                 else onClose();
               }}
               onSaved={(saved, opts) => {
-                // Outcome-only path (Unreachable / Enquiry): close the
-                // modal immediately and notify the parent to refresh
-                // its list. Skips the setMode('view') + refetch cycle
-                // that previously caused a ~2-3s blank-modal flash.
+                // Close-after path (Unreachable / Enquiry / Save Draft /
+                // Confirm's Book Call): close the modal immediately and
+                // notify the parent to refresh its list. Skips the
+                // setMode('view') + refetch cycle that previously caused a
+                // ~2-3s blank-modal flash.
                 if (opts?.closeAfter) {
+                  // The reset guardedClose does. This close bypasses it, and the
+                  // modal stays mounted, so a flag left set here would raise a
+                  // false "Discard Unsaved Changes?" on the next open.
+                  hasUnsavedQtyRef.current = false;
+                  hasUnsavedFormRef.current = false;
                   onSaved?.();
                   onClose();
                   return;
                 }
-                // Book / Confirm path: stay open, switch to view mode,
-                // notify parent. The mode-dep useEffect still fires a
+                // Edit path: stay open, switch to view mode, notify
+                // parent. The mode-dep useEffect still fires a
                 // refetch — that's intentional here so the view-mode
                 // payload comes through the masking middleware.
                 setJob(saved); setMode('view'); onSaved?.();
@@ -993,6 +1000,12 @@ function ActionBar({ job, jobId, onChanged }: {
       <ApptRescheduleDialog
         open={rescheduleOpen}
         jobId={jobId}
+        // An open technician reschedule ask pre-fills its (future) time + a
+        // remarks line; the reason stays for ops to pick.
+        {...rescheduleRequestPrefill(pendingRescheduleRequest({
+          job_status: job.job_status,
+          appRequest: job.appRequest as AppRequestDetail | null | undefined,
+        }), istNowWallClock())}
         onClose={() => setRescheduleOpen(false)}
         onDone={() => { setRescheduleOpen(false); onChanged(); }}
       />
@@ -1165,6 +1178,10 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
   // Gates the inline Description pencil (Summary tab) — same isJobEdit key
   // the old ActionBar "Edit Description" button used.
   const canEditJob = actionFlags(me, ['isJobEdit']).isJobEdit;
+  const rescheduleAsk = pendingRescheduleRequest({
+    job_status: job.job_status,
+    appRequest: job.appRequest as AppRequestDetail | null | undefined,
+  });
   /*
    * Whitelist of recognised tab values so a malformed `?tab=` URL can't
    * leave the Tabs widget in an unrenderable state (no panel matches).
@@ -1487,6 +1504,13 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
              * contradict itself — "Requested: 5:30 AM" over "Time slot: 3pm to 7pm".
              */
             ['Time slot', displaySlot(job.requested_date_time, job.time_slot) || null],
+            // The technician's open reschedule ask (Pending to Start only),
+            // highlighted directly under the live Requested / Time slot pair.
+            ...(rescheduleAsk ? [['Reschedule Requested', (
+              <span key="reschedule-ask" className="inline-block break-normal rounded-md border border-warning/30 bg-warning-tint px-2 py-0.5 text-warning-strong">
+                <RescheduleRequestedText request={rescheduleAsk} />
+              </span>
+            )] as [string, unknown]] : []),
             ['Check-in',  formatDate(job.checkin_date_time  as string)],
             ['Check-out', formatDate(job.checkout_date_time as string)],
             ['Cancelled', formatDate(job.cancel_date_time   as string)],
@@ -1910,6 +1934,7 @@ type CustomerRequest = {
   reason?: string | null;
   remarks?: string | null;
   preferred_datetime?: string | null;
+  preferred_slot?: string | null;     // booking band the customer picked; NULL on older rows
   request_status: 'pending' | 'actioned' | 'dismissed';
   created_at?: string | null;
 };
@@ -1927,6 +1952,24 @@ function JobCustomerRequests({ jobId, jobStatus, onJobChanged }: { jobId: number
   // The reschedule request the operator chose to APPLY — opens the audited
   // reschedule dialog pre-filled from the request. null = dialog closed.
   const [applyReq, setApplyReq] = useState<CustomerRequest | null>(null);
+  /*
+   * The requested time, seeded only while still in the FUTURE — the same rule
+   * as the technician-ask prefill (rescheduleRequestPrefill). A customer slot
+   * start that has already gone today (9AM to 12PM applied at 10:30) cannot be
+   * submitted, and the hour-frame picker hides past hours, so it would sit there
+   * invisible yet enabling Reschedule. The dialog's slot hint still tells ops
+   * which band to pick within.
+   *
+   * Memoised on the REQUEST, not recomputed per render: the dialog resets every
+   * field when initialDateTime changes, so a value that flipped to '' as the
+   * clock passed the slot start would wipe the reason + remarks mid-edit.
+   */
+  const applyAt = useMemo(() => {
+    const at = applyReq?.preferred_datetime
+      ? String(applyReq.preferred_datetime).slice(0, 16).replace(' ', 'T')
+      : '';
+    return at && at >= istNowWallClock() ? at : '';
+  }, [applyReq]);
 
   const rows: CustomerRequest[] = useMemo(
     () => (Array.isArray(data) ? data : (data?.items ?? [])),
@@ -1977,7 +2020,7 @@ function JobCustomerRequests({ jobId, jobStatus, onJobChanged }: { jobId: number
                   {r.reason ? <div><span className="font-medium">Reason:</span> {r.reason}</div> : null}
                   {r.remarks ? <div><span className="font-medium">Remarks:</span> {r.remarks}</div> : null}
                   {!isCancel && r.preferred_datetime ? (
-                    <div><span className="font-medium">Preferred:</span> {formatDate(r.preferred_datetime)}</div>
+                    <div><span className="font-medium">Preferred:</span> {formatDate(r.preferred_datetime)}{r.preferred_slot ? ` (${r.preferred_slot})` : ''}</div>
                   ) : null}
                   {r.created_at ? (
                     <div className="text-ink-500">Requested {formatDate(r.created_at)}</div>
@@ -2038,11 +2081,8 @@ function JobCustomerRequests({ jobId, jobStatus, onJobChanged }: { jobId: number
       <ApptRescheduleDialog
         open={!!applyReq}
         jobId={applyReq ? jobId : null}
-        initialDateTime={
-          applyReq?.preferred_datetime
-            ? String(applyReq.preferred_datetime).slice(0, 16).replace(' ', 'T')
-            : ''
-        }
+        initialDateTime={applyAt}
+        requestedSlot={applyReq?.preferred_slot ?? undefined}
         initialRemarks={
           applyReq
             ? `Customer requested reschedule${applyReq.reason ? `: ${applyReq.reason}` : ''}${applyReq.remarks ? ` — ${applyReq.remarks}` : ''}`
@@ -4949,8 +4989,10 @@ function CreateJobMobileGate({
  * JobModal can decide whether to close the modal immediately or refresh
  * in-place. For outcome-only submits (Unreachable / Enquiry) the
  * operator's intent is "log and move on" — the modal should close right
- * away rather than flicker through a refetch. For Book / Confirm the
- * operator typically wants to see the updated view so we stay open.
+ * away rather than flicker through a refetch. Save Draft and Confirm &
+ * Schedule's Book Call close too — a booked job has left the Unconfirmed
+ * list, so the parent refreshes that instead. Only an Edit-mode save stays
+ * open so the operator can see the updated view.
  *
  * Without `closeAfter`, the previous flow was: setJob(saved) →
  * setMode('view') → mode-dep useEffect re-fires → setJob(null) +
@@ -6191,13 +6233,22 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
      *     Modal stays open so the operator can retry without losing
      *     their dialog inputs.
      *
-     * Book / Confirm flows keep their existing inline feedback (the
-     * modal stays open and refreshes); no toast spam there.
+     * Book / Confirm flows show no loading toast. An Edit save keeps its
+     * inline feedback (the modal stays open and refreshes); Confirm's Book
+     * Call closes the modal and shows one success toast after the save.
      */
     const isOutcomeSubmit = isEditShape
       && (submitVariant === 'unreachable' || submitVariant === 'enquiry');
     const outcomeLabel = submitVariant === 'unreachable' ? 'Unreachable' : 'Enquiry';
     let loadingToastId: number | null = null;
+    /*
+     * Set once a successful save has handed the modal off to close
+     * (`closeAfter`). `submitting` then stays true until the modal unmounts:
+     * the close is a URL navigation that commits a round trip later, and
+     * re-enabling Book Call / Save Draft in that gap let a second click submit
+     * the same form again (re-running the multi-category fan-out).
+     */
+    let handedOffToClose = false;
     if (isOutcomeSubmit) {
       loadingToastId = showToast({
         variant: 'loading',
@@ -6928,12 +6979,28 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             message: 'Draft Saved',
           });
         }
+        /*
+         * Confirm & Schedule → Book Call (2026-09-15, per ops). The booked job
+         * leaves Unconfirmed (status 9 → 0), so the modal now CLOSES and the
+         * list behind it refreshes, instead of switching into a view of a row
+         * that is no longer in the list the operator is working through. The
+         * toast is the confirmation the in-place view used to give.
+         */
+        const closesAfterBook = isConfirm && submitVariant === 'book';
+        if (closesAfterBook) {
+          showToast({
+            variant: 'success',
+            message: `Job #${initial.job_id} booked successfully`,
+          });
+        }
         // Tell the parent how to behave after this save. Outcome-only
-        // flows (Unreachable / Enquiry) AND Save Draft want the modal
-        // closed immediately — no flash of "loading…" while the modal
-        // refetches into view mode. Book stays open so the operator can
-        // see the updated booking.
-        onSaved(saved, { closeAfter: isOutcomeOnly || submitVariant === 'draft', variant: submitVariant });
+        // flows (Unreachable / Enquiry), Save Draft AND Confirm's Book Call
+        // want the modal closed immediately — no flash of "loading…" while
+        // the modal refetches into view mode. Only an Edit-mode save stays
+        // open so the operator can see the updated job.
+        const closeAfter = isOutcomeOnly || submitVariant === 'draft' || closesAfterBook;
+        onSaved(saved, { closeAfter, variant: submitVariant });
+        handedOffToClose = closeAfter;
       } else {
         // Create flow — full payload including customer + address + services.
         const servicesPayload = buildServicesPayload();
@@ -7330,7 +7397,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
           message: `Failed to mark as ${outcomeLabel}: ${msg}`,
         });
       }
-    } finally { setSubmitting(false); }
+    } finally { if (!handedOffToClose) setSubmitting(false); }
   }
 
   /*
@@ -8851,6 +8918,10 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
               type="button"
               variant="outline"
               onClick={() => setOutcomeDialog({ mode: 'unreachable' })}
+              // Locked while ANY variant is in flight, like Save Draft. A save
+              // already under way owns this form; a second outcome submitted on
+              // top of it would race the first one's status PATCH.
+              disabled={submitting}
               title="Customer couldn't be reached — keep status Unconfirmed with reason"
             >
               Unreachable
@@ -8861,6 +8932,8 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
               type="button"
               variant="outline"
               onClick={() => setOutcomeDialog({ mode: 'enquiry' })}
+              // Same lock as Unreachable above.
+              disabled={submitting}
               title="Information request only — move status to Enquiry"
             >
               Enquiry
@@ -8914,9 +8987,12 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             // ID / Reporting Contact / customer name / address / city /
             // PIN / date-time / time-slot missing — the BE would reject
             // with a Joi 400 per-field, but the FE should refuse to
-            // submit upfront. Unreachable + Enquiry remain enabled (they
-            // skip the full payload — see the outcome-only submit path).
-            disabled={!confirmBookReady}
+            // submit upfront. Unreachable + Enquiry skip that completeness
+            // rule (they skip the full payload — see the outcome-only submit
+            // path), but every button here is locked while a save is in
+            // flight: `loading` only covers a book, so `submitting` is what
+            // stops a book landing on top of a draft or an outcome.
+            disabled={!confirmBookReady || submitting}
             title={
               !confirmSection2Complete
                 ? 'Fill all mandatory fields (Client Ref ID, Reporting Contact, Customer Name, Address, City, PIN, Date & Time) before booking.'
