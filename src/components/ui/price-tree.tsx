@@ -151,7 +151,6 @@ export function PriceTree({
                     options={rowOptions}
                     disabled={!canEdit || readOnlyOptions}
                     placeholder="Select…"
-                    selectedLabel="selected"
                   />
                   {row.optionIds.length > 0 && (
                     <div className="flex flex-wrap gap-1">
