@@ -160,11 +160,19 @@ export function DeleteReferencesDialog({
         </DialogHeader>
         <div className="space-y-3">
           <p className="text-sm text-muted-foreground">This {entityLabel.toLowerCase()} is referenced by:</p>
+          {refs.by_type.some((t) => t.inactive) && (
+            <p className="text-xs text-muted-foreground">Inactive materials still hold this brand, so it can&apos;t be deleted even when Used By shows fewer.</p>
+          )}
           <ul className="text-sm border rounded divide-y">
             {refs.by_type.map((t) => (
               <li key={t.type} className="flex items-center justify-between px-3 py-1.5">
                 <span>{t.label}</span>
-                <span className="font-medium">{t.count}</span>
+                <span className="text-right">
+                  <span className="font-medium">{t.count}</span>
+                  {t.active != null && t.inactive != null && (
+                    <span className="block text-xs text-muted-foreground">{t.active} Active · {t.inactive} Inactive</span>
+                  )}
+                </span>
               </li>
             ))}
           </ul>
