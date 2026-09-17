@@ -25,7 +25,7 @@ import {
 import { transitionAllowed, STAGES } from '@/lib/job-stages';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
 import { UnconfirmedSections } from '@/components/job/UnconfirmedSections';
-import { PendingToStartView } from '@/components/job/PendingToStartView';
+import { PendingToStartView, PTS_TAB_PARAM } from '@/components/job/PendingToStartView';
 import { AssignTechnicianModal, type AssignMode } from '@/components/job/AssignTechnicianModal';
 import { ScheduleAssignModal } from '@/components/job/ScheduleAssignModal';
 import { OfferHoverCard } from '@/components/job/OfferHoverCard';
@@ -34,6 +34,8 @@ import {
   psFilterKey, psAnyFilterSet, psQueryParams, type PsFilters,
 } from '@/components/job/PendingSchedulingFilters';
 import { JobScopeBar, scopeIsClampedFor } from '@/components/job/JobScopeBar';
+import { PendingSchedulingTabs } from '@/components/job/PendingSchedulingTabs';
+import { PendingStartConsole } from '@/components/job/PendingStartConsole';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
 import { ResendPinButton, RESEND_PIN_ACTION } from '@/components/job/ResendPinButton';
@@ -343,6 +345,13 @@ export default function MyOrdersPage() {
    * "N matching orders" header — bumped wherever a JobModal save lands.
    */
   const [sectionsReload, setSectionsReload] = useState(0);
+  /*
+   * Bumped after any action that can move a job between scheduling buckets
+   * (offering one sends it Not offered → Offered-waiting). The tab counts are a
+   * separate request from the rows, so they need their own recount signal —
+   * without it the strip keeps last minute's numbers over a fresh table.
+   */
+  const [countsReload, setCountsReload] = useState(0);
 
   async function load(reset = false, force = false, silent = false) {
     const seq = ++loadSeqRef.current;
@@ -538,6 +547,9 @@ export default function MyOrdersPage() {
     // own ps* filters go with it.
     const p = new URLSearchParams(searchParams);
     p.delete('tab');
+    // …and the Pending to Start sub-tab, or "Show All Orders" would leave a
+    // ptsTab behind that reopens the bucket's tab on the next visit.
+    p.delete(PTS_TAB_PARAM);
     writePsFilterParams(p, EMPTY_PS_FILTERS);
     const next = p.toString();
     router.replace(next ? `${pathname}?${next}` : pathname, { scroll: false });
@@ -591,6 +603,13 @@ export default function MyOrdersPage() {
     return { open: false, jobId: null };
   }, [urlAction, urlJobId]);
 
+  // PendingStartConsole state — derived from `?action=console`: the job console
+  // for an ACCEPTED job, opened from the Pending to Start row icon.
+  const consoleModal = useMemo<{ open: boolean; jobId: number | null }>(() => {
+    if (urlAction === 'console' && urlJobId != null) return { open: true, jobId: urlJobId };
+    return { open: false, jobId: null };
+  }, [urlAction, urlJobId]);
+
   // Transient sibling family for the Unconfirmed grouped view — see jobs/page.
   const [familySiblings, setFamilySiblings] = useState<Array<{ job_id: number; service_category: string | null }> | null>(null);
   function closeModal()                { closeJobAction(); }
@@ -611,6 +630,7 @@ export default function MyOrdersPage() {
   function openConfirm(id: number, siblings?: Array<{ job_id: number; service_category: string | null }>)     { setFamilySiblings(siblings ?? null); openJobAction('confirm',  id); }
   function openAssign(id: number)      { openJobAction('assign',   id); }
   function openReassign(id: number)    { openJobAction('reassign', id); }
+  function openConsole(id: number)     { openJobAction('console',  id); }
   // Pending-for-Scheduling rows → combined Schedule & Assign modal.
   function openSchedule(id: number)    { openJobAction('schedule', id); }
 
@@ -714,6 +734,21 @@ export default function MyOrdersPage() {
    * session-cached + request-deduped, so hosting the bar costs nothing extra.
    */
 
+  /*
+   * The bucket counts request — every param the list sends EXCEPT offerState
+   * (the tabs ARE the offer state, so the counts endpoint returns one total per
+   * state) and except paging/sort, which cannot change a count. Same filters as
+   * the table, so the numbers on the tabs and the rows below always agree.
+   */
+  const psCountParams = useMemo(() => {
+    const p: Record<string, string | number | undefined> = { ...psQueryParams(psFilters) };
+    delete p.offerState;
+    p.ownerId = scopedOwnerId;
+    p.q = serverQ || undefined;
+    return p;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [psKey, scopedOwnerId, serverQ]);
+
   return (
     <div className="space-y-5">
       <div className="flex items-end justify-between">
@@ -746,7 +781,25 @@ export default function MyOrdersPage() {
         * nothing on the page said which bucket was showing or offered a way
         * back to all of them.
         */}
-      <JobScopeBar tab={tab} clamped={scopeIsClamped} onClear={clearTabScope} noun="Orders" />
+      {/*
+        * Pending-for-Scheduling gets the four-bucket tab strip INSTEAD of the
+        * scope bar (2026-09-16). The bar stated the bucket and offered the way
+        * out; the strip does both — it names the bucket by which tab is lit,
+        * keeps "Show All Orders" on the right, and adds the three sub-buckets
+        * ops actually triage by, with counts. Every other tab keeps the bar.
+        */}
+      {isPendingScheduling ? (
+        <PendingSchedulingTabs
+          value={psFilters.offerState}
+          onChange={(offerState) => setPsFilters({ ...psFilters, offerState })}
+          params={psCountParams}
+          reloadKey={countsReload}
+          clamped={scopeIsClamped}
+          onShowAll={clearTabScope}
+        />
+      ) : isPendingStart ? null : (
+        <JobScopeBar tab={tab} clamped={scopeIsClamped} onClear={clearTabScope} noun="Orders" />
+      )}
 
       {/* Search bar — hidden on the retired Pending App Ack page and on
           Pending to Start (which renders its own filter bar). */}
@@ -779,7 +832,7 @@ export default function MyOrdersPage() {
             * selection is mirrored into the URL so the view is shareable.
             */}
           {isPendingScheduling && (
-            <PendingSchedulingFilters value={psFilters} onChange={setPsFilters} />
+            <PendingSchedulingFilters value={psFilters} onChange={setPsFilters} hideOfferState />
           )}
         </CardContent>
       </Card>
@@ -795,6 +848,11 @@ export default function MyOrdersPage() {
           openView={openView}
           openReassign={openReassign}
           onShowLocation={(row) => setLocationJob(row)}
+          /* The six-tab strip carries this page's "Show All Orders" (and the
+             stage-access clamp), so the scope bar above is suppressed for it. */
+          onShowAll={clearTabScope}
+          scopeClamped={scopeIsClamped}
+          onOpenConsole={openConsole}
         />
       ) : (
       <Card>
@@ -1311,14 +1369,25 @@ export default function MyOrdersPage() {
         * the Job Date/Slot and assigns a technician in one atomic step,
         * then refreshes the list so the row moves to "Pending App Ack".
         */}
+      <PendingStartConsole
+        open={consoleModal.open}
+        jobId={consoleModal.jobId}
+        onClose={() => closeJobAction()}
+        /* A decision here can move the job to another tab (an approved
+           cancellation leaves the page entirely). The page's own list re-reads
+           now; the Pending to Start view refetches and recounts itself when
+           ?action=console clears on close. */
+        onChanged={() => { cacheRef.current.clear(); load(false, true); }}
+      />
+
       <ScheduleAssignModal
         open={scheduleModal.open}
         jobId={scheduleModal.jobId}
         onClose={() => closeJobAction()}
-        onAssigned={() => { cacheRef.current.clear(); load(false, true); }}
+        onAssigned={() => { cacheRef.current.clear(); load(false, true); setCountsReload((n) => n + 1); }}
         // Cancel Job (non-assign) also mutates the list — same in-place refresh
         // as onAssigned so the cancelled row drops out without a skeleton flash.
-        onChanged={() => { cacheRef.current.clear(); load(false, true); }}
+        onChanged={() => { cacheRef.current.clear(); load(false, true); setCountsReload((n) => n + 1); }}
       />
 
       {/*

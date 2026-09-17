@@ -20,7 +20,7 @@ import { StatusChip } from '@/components/ui/StatusChip';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
 import { SortHeader, cycleSort, type SortDir } from '@/lib/use-sort';
 import { api, ApiError } from '@/lib/api';
-import { useFetch, useDebouncedValue } from '@/lib/hooks';
+import { useFetch, useDebouncedValue, invalidateFetch } from '@/lib/hooks';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { showToast } from '@/components/ui/toast';
 import { useLookup } from '@/lib/use-lookup';
@@ -148,8 +148,14 @@ export default function ManageMaterialsPage() {
   const { data: brandOptions } = useFetch<BrandOption[]>(can.isMaterialView ? '/admin/materials/brand-options' : null);
   const brandFilterOptions: SearchOption[] = (brandOptions ?? []).map((b) => ({ value: b.brand_id, label: b.brand_name }));
 
-  function refreshBrands() { refetchBrands(); }
-  function refreshBoth() { refetchMaterials(); refetchBrands(); }
+  // Brand lookups are cached 30s by URL (lib/hooks). After any brand/material
+  // change, evict them too — otherwise Add Brand suggestions and the Add
+  // Material brand picker can show a list from before the change.
+  function bustBrandLookups() {
+    invalidateFetch((k) => k.startsWith('/admin/brands?search=') || k.startsWith('/admin/materials/brand-options'));
+  }
+  function refreshBrands() { refetchBrands(); bustBrandLookups(); }
+  function refreshBoth() { refetchMaterials(); refetchBrands(); bustBrandLookups(); }
 
   // ── Dialog state ──────────────────────────────────────────────────────
   const [materialDialogOpen, setMaterialDialogOpen] = useState(false);
@@ -489,6 +495,7 @@ export default function ManageMaterialsPage() {
         open={brandDialogOpen}
         onClose={() => setBrandDialogOpen(false)}
         editing={editingBrand}
+        canReactivate={can.isBrandDeactivate}
         onSaved={() => { setBrandDialogOpen(false); refreshBoth(); }}
       />
 

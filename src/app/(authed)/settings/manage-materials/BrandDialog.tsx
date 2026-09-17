@@ -22,12 +22,14 @@ function normalizeBrandName(s: string): string {
 }
 
 export function BrandDialog({
-  open, onClose, editing, onSaved,
+  open, onClose, editing, onSaved, canReactivate = false,
 }: {
   open: boolean;
   onClose: () => void;
   editing: BrandListItem | null;
   onSaved: () => void;
+  /* isBrandDeactivate — the same key gates Reactivate in the Brands list. */
+  canReactivate?: boolean;
 }) {
   const isEdit = !!editing;
   const [name, setName] = useState('');
@@ -71,6 +73,22 @@ export function BrandDialog({
     if (e.key === 'ArrowDown') { e.preventDefault(); setActive((a) => Math.min(a + 1, similar.length - 1)); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
     else if (e.key === 'Enter') { e.preventDefault(); pick(similar[active] ?? similar[0]); }
+  }
+
+  async function reactivate(b: BrandListItem) {
+    setError(null);
+    setSubmitting(true);
+    try {
+      await api.patch(`/admin/brands/${b.brand_id}/status`, { is_active: true });
+      showToast({ variant: 'success', message: `"${b.brand_name}" reactivated.` });
+      onSaved();
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : 'Reactivate failed';
+      setError(msg);
+      showToast({ variant: 'error', message: msg });
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   async function handleSubmit() {
@@ -120,7 +138,7 @@ export function BrandDialog({
             {/* In-flow (not a floating popover) so the Dialog's overflow can never clip it. */}
             {showList && (
               <ul id="brand-suggestions" role="listbox" className="mt-1 border rounded-md bg-card shadow-sm max-h-48 overflow-y-auto py-1">
-                <li className="px-3 pt-1 pb-1.5 text-[11px] font-medium text-muted-foreground">Existing Brands — Select To Use</li>
+                <li className="px-3 pt-1 pb-1.5 text-xs font-medium text-muted-foreground">Existing Brands — Select To Use</li>
                 {similar.map((b, i) => (
                   <li
                     key={b.brand_id}
@@ -136,12 +154,26 @@ export function BrandDialog({
                 ))}
               </ul>
             )}
-            {exactMatch && (
+            {exactMatch && exactMatch.status === 1 && (
               <div className="mt-1 text-xs text-urgent flex items-center gap-1">
                 <AlertTriangle className="size-3.5 shrink-0" />
-                {exactMatch.status === 1
-                  ? <span>&ldquo;{exactMatch.brand_name}&rdquo; already exists — use it as is.</span>
-                  : <span>&ldquo;{exactMatch.brand_name}&rdquo; already exists but is Inactive — reactivate it from the Brands list instead of adding it again.</span>}
+                <span>&ldquo;{exactMatch.brand_name}&rdquo; already exists — use it as is.</span>
+              </div>
+            )}
+            {exactMatch && exactMatch.status !== 1 && (
+              <div className="mt-1 text-xs text-urgent flex items-center justify-between gap-2">
+                <span className="flex items-center gap-1">
+                  <AlertTriangle className="size-3.5 shrink-0" />
+                  <span>
+                    &ldquo;{exactMatch.brand_name}&rdquo; already exists but is Inactive
+                    {canReactivate ? '.' : ' — ask someone with brand permissions to reactivate it.'}
+                  </span>
+                </span>
+                {canReactivate && (
+                  <Button size="sm" variant="outline" onClick={() => reactivate(exactMatch)} disabled={submitting}>
+                    {submitting ? 'Reactivating…' : 'Reactivate'}
+                  </Button>
+                )}
               </div>
             )}
           </div>
