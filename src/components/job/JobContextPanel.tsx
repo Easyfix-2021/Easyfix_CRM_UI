@@ -222,10 +222,10 @@ export function JobContextPanel({
   onEditServices?: () => void;
   /*
    * Does a PAST appointment actually block this host modal's primary action?
-   * true  → offering (the server 400s), so the notice is red + imperative.
-   * false → assign / reassign, which the server permits on purpose, so the
-   *         notice is an amber advisory instead of an instruction the operator
-   *         does not have to follow.
+   * true  → the server 400s it, so the notice is red + imperative. Since
+   *         2026-09-17 that is offer AND assign / reassign — every current host
+   *         passes true.
+   * false → an amber advisory, kept for a host whose action is not gated.
    * Defaults to false: an advisory shown where a block applies is a smaller
    * error than a block claimed where none exists (which is what produced the
    * "message says stop, button says go" report).
@@ -532,19 +532,11 @@ export function JobContextPanel({
               {/*
                 * Past-appointment notice — WORDED BY WHAT THE HOST MODAL CAN DO.
                 *
-                * The server refuses to OFFER a job whose slot has gone
-                * (routes/admin/jobs.js) but deliberately still permits a direct
-                * ASSIGN / REASSIGN: swapping the technician on a job that is
-                * already running late is a legitimate recovery, and the assign
-                * route is exempt from the gate on purpose.
-                *
-                * So a single blocking sentence was wrong half the time. In
-                * Reassign it told the operator to reschedule "before offering
-                * the job to technicians" while the Reassign button — correctly —
-                * stayed enabled, which read as a contradiction. Blocking copy
-                * now renders only where the action is actually blocked; the
-                * assign/reassign surfaces get the same FACT as a non-blocking
-                * advisory.
+                * The server refuses to OFFER, ASSIGN or REASSIGN a job whose
+                * slot has gone (routes/admin/jobs.js — /assign joined /offer on
+                * 2026-09-17, ops: reschedule first). Blocking copy renders where
+                * the host says its action is blocked (pastBlocksAction); the
+                * amber advisory remains for a host that is not.
                 */}
               {!rescheduling && appointmentIsPast(job.requested_date_time) && (
                 pastBlocksAction ? (
@@ -555,13 +547,13 @@ export function JobContextPanel({
                     <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
                     <span>
                       This appointment time has already passed. Reschedule it to a future
-                      slot before offering the job to technicians.
+                      slot before offering, assigning or reassigning a technician.
                     </span>
                   </div>
                 ) : (
                   <p className="mt-2 text-xs font-medium text-warning-strong">
-                    This appointment time has already passed. You can still reassign,
-                    or use Reschedule to move it to a future slot.
+                    This appointment time has already passed. Use Reschedule to move it
+                    to a future slot before assigning a technician.
                   </p>
                 )
               )}

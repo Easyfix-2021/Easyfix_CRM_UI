@@ -114,12 +114,12 @@ test('reloadKey recounts, exactly as on the scheduling strip', () => {
   assert.match(psTabs, effect, 'control: and that is the scheduling strip\'s own effect');
 });
 
-test('the strip looks like the scheduling strip, and carries its way out on the right', () => {
+test('the strip looks exactly like the scheduling strip — bigger, bold, dark active tab', () => {
   for (const cls of [
-    'flex flex-wrap items-center justify-between gap-2 rounded-md border bg-muted/40 px-2 py-1.5',
-    'rounded-md px-3 py-1.5 text-sm transition-colors',
-    'bg-background font-medium text-foreground shadow-sm',
-    'text-muted-foreground hover:bg-background/60 hover:text-foreground',
+    'flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted px-2 py-2',
+    'rounded-md px-4 py-2 text-base font-semibold transition-colors',
+    'bg-sidebar text-sidebar-foreground shadow-sm',
+    'text-foreground/75 hover:bg-card hover:text-foreground',
   ]) {
     assert.ok(psTabs.includes(cls), `control: the scheduling strip must carry "${cls}"`);
     assert.ok(tabs.includes(cls), `the pending-start strip drifted from the scheduling strip: "${cls}"`);
@@ -127,10 +127,11 @@ test('the strip looks like the scheduling strip, and carries its way out on the 
   assert.match(tabs, /role="tablist"/);
   assert.match(tabs, /role="tab"\s+aria-selected=\{active\}/);
 
-  // Clamped → the explanation; otherwise Show All Orders, only when wired.
+  // Clamped → the explanation. No "Show All Orders" on either strip (2026-09-17).
   assert.match(tabs,
-    /\{clamped \? \(\s*<span className="px-2 text-xs text-muted-foreground">Limited By Your Job Stage Access<\/span>\s*\) : onShowAll \? \(\s*<button type="button" onClick=\{onShowAll\} className="px-2 text-xs hover:underline">\s*Show All Orders\s*<\/button>\s*\) : null\}/);
-  assert.match(tabs, /onShowAll\?: \(\) => void;/);
+    /\{clamped && \(\s*<span className="px-2 text-xs text-muted-foreground">Limited By Your Job Stage Access<\/span>\s*\)\}/);
+  assert.doesNotMatch(tabs, /Show All Orders|onShowAll/);
+  assert.doesNotMatch(psTabs, /Show All Orders|onShowAll/);
 });
 
 // ─── 2. The view wires the strip ─────────────────────────────────────────
@@ -140,7 +141,7 @@ test('the view hands the strip its state, counts params, recount signal and the 
   assert.ok(mount, 'positive control: the strip mount must be found');
   for (const prop of [
     /value=\{ptsTab\}/, /onChange=\{setPtsTab\}/, /params=\{countParams\}/,
-    /reloadKey=\{reloadKey\}/, /clamped=\{scopeClamped\}/, /onShowAll=\{onShowAll\}/,
+    /reloadKey=\{reloadKey\}/, /clamped=\{scopeClamped\}/,
   ]) {
     assert.match(mount[0], prop, `the strip mount lost ${prop}`);
   }
@@ -164,7 +165,6 @@ test('the new props are optional and the existing ones keep their shape', () => 
     /\bopenView: \(jobId: number\) => void;/,
     /\bopenReassign: \(jobId: number\) => void;/,
     /\bonShowLocation: \(row: \{ job_id: number; easyfixer_name: string \| null \}\) => void;/,
-    /\bonShowAll\?: \(\) => void;/,
     /\bscopeClamped\?: boolean;/,
     /\bonOpenConsole\?: \(jobId: number\) => void;/,
   ]) {

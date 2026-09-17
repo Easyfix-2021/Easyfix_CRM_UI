@@ -734,8 +734,8 @@ export function ScheduleAssignModal({
    * PRESENT `false` always wins. Same shape as offerMode's `?? true` and as the
    * per-technician contract in lib/easyfixer-lifecycle.ts.
    *
-   * Deliberately NOT the whole story: the past-appointment gate (offer-only,
-   * mirrored at the commit button) and the job-stage transition check (mirrored
+   * Deliberately NOT the whole story: the past-appointment gate (/offer and
+   * /assign, mirrored at the commit button) and the job-stage transition check (mirrored
    * only by the row icons) are separate server rules. Hence a reason code
    * rather than a bare boolean — "unavailable" has more than one cause.
    */
@@ -1051,7 +1051,7 @@ export function ScheduleAssignModal({
           <ul className="space-y-1.5 text-sm">
             <li>• The reschedule expired the offers this job had.</li>
             <li>• Nobody has it now for the new appointment{job?.requested_date_time ? <> (<b>{formatDate(job.requested_date_time)}</b>)</> : null}.</li>
-            <li>• Choose technicians and offer it, or it stays <b>Unallocated</b>.</li>
+            <li>• Choose technicians and offer it, or it stays under <b>No takers</b>.</li>
           </ul>
         ),
         confirmLabel: 'Close anyway',
@@ -1184,13 +1184,10 @@ export function ScheduleAssignModal({
             showReschedule
             onReschedule={() => setRescheduleOpen(true)}
             rescheduling={rescheduling}
-            /*
-             * Only the OFFER path is gated server-side, and the footer button is
-             * disabled to match. In assign/reassign mode the action stays
-             * available by design, so the notice must not tell the operator to
-             * reschedule first — same condition as the button's own `disabled`.
-             */
-            pastBlocksAction={offerMode}
+            /* /offer AND /assign both refuse a passed appointment (since
+               2026-09-17), so the notice blocks in either mode — the same
+               condition as the footer button's own `disabled`. */
+            pastBlocksAction
             /*
              * Job Description + Additional Comments are EDITABLE here (opt-in;
              * the panel stays read-only for Assign / Reassign, which don't pass
@@ -1650,20 +1647,19 @@ export function ScheduleAssignModal({
               <Button
                 onClick={offerMode ? offer : assignSingle}
                 /*
-                 * A stale appointment blocks OFFERING only — the server refuses
-                 * it, so disabling here turns a 400 into an explained control.
-                 * Direct Assign stays enabled on purpose: swapping the tech on a
-                 * job that is already running late is a legitimate recovery, and
-                 * the server does not gate it either.
+                 * A stale appointment blocks BOTH commits — the server refuses
+                 * /offer and, since 2026-09-17, /assign too (ops: reschedule
+                 * first) — so disabling here turns a 400 into an explained
+                 * control in either mode.
                  */
                 disabled={!jobId || committing
                   || (offerMode ? selected.size === 0 : selected.size !== 1)
                   || blockedSelectedCandidate != null
-                  || (offerMode && appointmentIsPast(job?.requested_date_time))}
+                  || appointmentIsPast(job?.requested_date_time)}
                 title={blockedSelectedCandidate
                   ? candidateJobOfferEligibility(blockedSelectedCandidate).explanation
-                  : offerMode && appointmentIsPast(job?.requested_date_time)
-                    ? 'The appointment time has passed — reschedule the job before offering it.'
+                  : appointmentIsPast(job?.requested_date_time)
+                    ? `The appointment time has passed — reschedule the job before ${offerMode ? 'offering' : 'assigning'} it.`
                     : undefined}
               >
                 {committing

@@ -35,6 +35,7 @@ import {
 } from '@/components/job/PendingSchedulingFilters';
 import { JobScopeBar, scopeIsClampedFor } from '@/components/job/JobScopeBar';
 import { PendingSchedulingTabs } from '@/components/job/PendingSchedulingTabs';
+import { BucketHowItWorks } from '@/components/job/BucketHowItWorks';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
 import { ResendPinButton, RESEND_PIN_ACTION } from '@/components/job/ResendPinButton';
@@ -788,6 +789,7 @@ export default function MyOrdersPage() {
         * keeps "Show All Orders" on the right, and adds the three sub-buckets
         * ops actually triage by, with counts. Every other tab keeps the bar.
         */}
+      {isPendingScheduling && <BucketHowItWorks bucket="pending-scheduling" />}
       {isPendingScheduling ? (
         <PendingSchedulingTabs
           value={psFilters.offerState}
@@ -795,7 +797,6 @@ export default function MyOrdersPage() {
           params={psCountParams}
           reloadKey={countsReload}
           clamped={scopeIsClamped}
-          onShowAll={clearTabScope}
         />
       ) : isPendingStart ? null : (
         <JobScopeBar tab={tab} clamped={scopeIsClamped} onClear={clearTabScope} noun="Orders" />
@@ -848,9 +849,8 @@ export default function MyOrdersPage() {
           openView={openView}
           openReassign={openReassign}
           onShowLocation={(row) => setLocationJob(row)}
-          /* The six-tab strip carries this page's "Show All Orders" (and the
-             stage-access clamp), so the scope bar above is suppressed for it. */
-          onShowAll={clearTabScope}
+          /* The six-tab strip carries the stage-access clamp, so the scope bar
+             above is suppressed for it. */
           scopeClamped={scopeIsClamped}
           onOpenConsole={openConsole}
         />
