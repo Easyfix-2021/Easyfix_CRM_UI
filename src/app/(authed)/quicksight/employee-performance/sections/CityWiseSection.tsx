@@ -8,7 +8,7 @@
 
 import type { CityRow } from '../types';
 import { days1, num } from '../format';
-import { LocalTable, SectionCard, type Column, type SummaryProps } from './shared';
+import { LocalTable, SectionCard, emptyTableText, type Column, type SummaryProps } from './shared';
 
 const CITY_COLUMNS: ReadonlyArray<Column<CityRow>> = [
   { key: 'city', label: 'City' },
@@ -27,7 +27,7 @@ export function CityWiseSection({ summary }: SummaryProps) {
         rows={summary.cityWise}
         columns={CITY_COLUMNS}
         rowKey={(r) => r.city}
-        emptyText="No Data For The Selected Filters"
+        emptyText={emptyTableText(summary, 'No Data For The Selected Filters')}
         pageSize={10}
       />
     </SectionCard>

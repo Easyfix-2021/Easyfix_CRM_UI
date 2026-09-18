@@ -22,7 +22,7 @@ import {
   pct1,
   productivityTone,
 } from '../format';
-import { LocalTable, SectionCard, type Column, type SummaryProps } from './shared';
+import { LocalTable, SectionCard, emptyTableText, type Column, type SummaryProps } from './shared';
 
 const TONE_CHIP: Record<ProductivityTone, StatusChipTone> = {
   good: 'success',
@@ -69,7 +69,7 @@ export function ProductivitySection({ summary }: SummaryProps) {
         rows={summary.productivity}
         columns={PRODUCTIVITY_COLUMNS}
         rowKey={(r) => r.date}
-        emptyText="No Data For The Selected Filters"
+        emptyText={emptyTableText(summary, 'No Data For The Selected Filters')}
         scroll
       />
     </SectionCard>

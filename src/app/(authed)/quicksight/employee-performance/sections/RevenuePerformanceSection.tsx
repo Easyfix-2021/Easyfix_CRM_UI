@@ -9,7 +9,7 @@
 
 import type { DailyRevenueRow, ProductivityRow } from '../types';
 import { fmtDay, hours2, money, num, pct1 } from '../format';
-import { LocalTable, SectionCard, SubHeading, type Column, type SummaryProps } from './shared';
+import { LocalTable, SectionCard, SubHeading, emptyTableText, type Column, type SummaryProps } from './shared';
 
 const REVENUE_COLUMNS: ReadonlyArray<Column<DailyRevenueRow>> = [
   { key: 'date', label: 'Date', render: (r) => fmtDay(r.date) },
@@ -37,7 +37,7 @@ export function RevenuePerformanceSection({ summary }: SummaryProps) {
             rows={summary.daily}
             columns={REVENUE_COLUMNS}
             rowKey={(r) => r.date}
-            emptyText="No Data For The Selected Filters"
+            emptyText={emptyTableText(summary, 'No Data For The Selected Filters')}
             scroll
           />
         </div>
@@ -47,7 +47,7 @@ export function RevenuePerformanceSection({ summary }: SummaryProps) {
             rows={summary.productivity}
             columns={PRODUCTIVITY_COLUMNS}
             rowKey={(r) => r.date}
-            emptyText="No Data For The Selected Filters"
+            emptyText={emptyTableText(summary, 'No Data For The Selected Filters')}
             scroll
           />
         </div>

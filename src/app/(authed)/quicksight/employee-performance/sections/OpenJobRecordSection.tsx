@@ -19,6 +19,7 @@ import { num } from '../format';
 import {
   SectionCard,
   ServerPagedTable,
+  emptyTableText,
   useServerTable,
   type Column,
   type PagedSectionProps,
@@ -56,7 +57,7 @@ export function OpenJobRecordSection({ summary, v, filters }: PagedSectionProps)
         table={table}
         res={res}
         rowKey={(r, i) => `${r.jobId}-${i}`}
-        emptyText="No Open Jobs For The Selected Filters"
+        emptyText={emptyTableText(summary, 'No Open Jobs For The Selected Filters')}
       />
     </SectionCard>
   );

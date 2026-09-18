@@ -74,7 +74,48 @@ export function fmtMonth(ym: string | null | undefined): string {
   return `${MONTHS[Number(m) - 1] ?? m} ${y}`;
 }
 
-/** An ISO instant (meta.uploadedAt) → '16 Sept 2026, 03:30 pm' in IST. */
+const MONTHS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September',
+  'October', 'November', 'December'];
+
+/** 'YYYY-MM' → 'September 2026' (the Month select's labels, as the dashboard's). '—' when empty. */
+export function fmtMonthLong(ym: string | null | undefined): string {
+  if (!ym) return '—';
+  const [y, m] = ym.split('-');
+  return `${MONTHS_LONG[Number(m) - 1] ?? m} ${y}`;
+}
+
+/**
+ * Ascending 'YYYY-MM' list → 'Aug 2026, Sep 2026'; more than three become
+ * 'Jun 2026 – Sep 2026 (4 months)'. 'none' when empty.
+ */
+export function fmtMonthList(months: readonly string[]): string {
+  if (months.length === 0) return 'none';
+  if (months.length <= 3) return months.map(fmtMonth).join(', ');
+  return `${fmtMonth(months[0])} – ${fmtMonth(months[months.length - 1])} (${months.length} months)`;
+}
+
+/**
+ * The same list for running text, in the Month select's long style:
+ * 'September 2026', 'August 2026 and September 2026'; more than three collapse
+ * to 'June 2026 – September 2026 (4 months)'. 'none' when empty.
+ */
+export function fmtMonthLongList(months: readonly string[]): string {
+  if (months.length === 0) return 'none';
+  if (months.length > 3) {
+    return `${fmtMonthLong(months[0])} – ${fmtMonthLong(months[months.length - 1])} (${months.length} months)`;
+  }
+  const long = months.map(fmtMonthLong);
+  if (long.length === 1) return long[0];
+  return `${long.slice(0, -1).join(', ')} and ${long[long.length - 1]}`;
+}
+
+/** 'YYYY-MM-DD' pair → '01 Aug 2026 – 13 Sep 2026' (one date when equal). 'none' when either is empty. */
+export function fmtDayRange(from: string | null | undefined, to: string | null | undefined): string {
+  if (!from || !to) return 'none';
+  return from === to ? fmtDay(from) : `${fmtDay(from)} – ${fmtDay(to)}`;
+}
+
+/** An ISO instant (meta.jobsAsOf, an upload's uploadedAt) → '16 Sept 2026, 03:30 pm' in IST. */
 export function fmtStamp(iso: string | null | undefined): string {
   return formatDate(iso);
 }

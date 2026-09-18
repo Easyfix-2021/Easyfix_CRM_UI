@@ -21,6 +21,7 @@ import {
   ServerPagedTable,
   SubHeading,
   dash,
+  emptyTableText,
   useServerTable,
   type Column,
   type PagedSectionProps,
@@ -64,7 +65,7 @@ export function ZonalSection({ summary, v, filters }: PagedSectionProps) {
             rows={summary.zonal.rows}
             columns={ZONAL_COLUMNS}
             rowKey={(r) => r.zonalManager}
-            emptyText="No Data For The Selected Vertical"
+            emptyText={emptyTableText(summary, 'No Data For The Selected Vertical')}
           />
         </div>
 
@@ -75,7 +76,7 @@ export function ZonalSection({ summary, v, filters }: PagedSectionProps) {
             table={table}
             res={res}
             rowKey={(r, i) => `${r.spoc}|${r.txName}|${r.txId}|${i}`}
-            emptyText="No TX Data For The Selected Filters"
+            emptyText={emptyTableText(summary, 'No TX Data For The Selected Filters')}
           />
           <div className="flex items-start gap-2 rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
             <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />

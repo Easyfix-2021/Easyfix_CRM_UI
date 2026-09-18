@@ -1,43 +1,37 @@
 /*
  * QuickSight — Employee Performance: response types for the native Employee tab.
  *
- * Every type below mirrors, field for field, what the backend's pure
- * aggregation returns — EasyFix_Backend
- * services/quicksight/employee-performance/aggregate.js:
+ * Every type below mirrors, field for field, what the backend returns.
  *
- *   buildOptions(D)                 → FilterOptions     GET …/options
- *   buildSummary(D, filters)        → SummaryResponse   GET …/summary
- *   pageOpenJobs(D, filters, paging)→ OpenJobsPage      GET …/open-jobs
- *   pageTechnicians(D, filters, p)  → TechniciansPage   GET …/technicians
- *   memberDetail(D, filters, name)  → MemberDetail      GET …/member (null → 404)
+ * Reads — aggregate.js over the LIVE dashboard object (live.service.js
+ * buildLiveD: jobs and CRM counts from the database, the other sheets from the
+ * Excel uploads):
  *
- * Derived by reading that file and by running it on the synthetic fixture and
- * on the stored snapshot. Numbers are raw (unrounded); format them with
- * ./format.ts. Where the snapshot passes a value through untouched (open-job
- * rows, member productivity/revenue rows) the type is as loose as the data.
+ *   buildOptions(D) + meta          → LiveOptionsResponse  GET …/live/options
+ *   buildSummary(D, filters) + meta → LiveSummaryResponse  GET …/live/summary
+ *   pageOpenJobs(D, filters, paging)→ OpenJobsPage         GET …/live/open-jobs
+ *   pageTechnicians(D, filters, p)  → TechniciansPage      GET …/live/technicians
+ *   memberDetail(D, filters, name)  → MemberDetail         GET …/live/member (null → 404)
+ *
+ * Upload — uploads.service.js:
+ *
+ *   previewUpload(buffer)           → UploadPreview        POST …/live/upload?dryRun=true
+ *   commitUpload(buffer, …)         → UploadCommitResult   POST …/live/upload?dryRun=false
+ *
+ * Numbers are raw (unrounded); format them with ./format.ts. Where the backend
+ * passes a value through untouched (open-job rows, member productivity/revenue
+ * rows) the type is as loose as the data.
  *
  * `null` from buildOptions / summary.dates means "no date in range".
  */
-
-/* ── /meta ────────────────────────────────────────────────────────────────── */
-
-export type SnapshotMeta = {
-  dateFrom: string;
-  dateTo: string;
-  employeeCount: number;
-  spocCount: number;
-  /** ISO instant. Also the cache-buster `v` in every data key. */
-  uploadedAt: string;
-  uploadedBy: { userId: number | null; name: string | null };
-  originalName: string | null;
-  sizeBytes: number;
-};
 
 /* ── filter state (the body's; serialised by api.ts filtersQuery) ─────────── */
 
 /*
  * Empty list = Select All. zm / month: '' or 'ALL' = All. from / to:
- * 'YYYY-MM-DD' or '' for the snapshot bound.
+ * 'YYYY-MM-DD', or '' for the default bound — the chosen month's first / last
+ * day, else the current IST month's 1st / today. api.ts resolveWindow turns
+ * '' into the explicit dates every request carries.
  */
 export type Filters = {
   verticals: string[];
@@ -259,6 +253,163 @@ export type SummaryResponse = {
   suggestions: Suggestion[];
 };
 
+/* ── live meta — live.service.js composeLive (on /live/options and /live/summary) ── */
+
+/** A daily upload source (TimeChamp, IVR): what is stored across ALL uploads. */
+export type LiveDailyCoverage = {
+  from: string | null;
+  to: string | null;
+  days: number;
+  rows: number;
+};
+
+/** A monthly upload source (emp detail, target lists): stored months, ascending. */
+export type LiveMonthlyCoverage = {
+  /** 'YYYY-MM' */
+  months: string[];
+  rows: number;
+};
+
+export type LiveUploadCoverage = {
+  timechamp: LiveDailyCoverage;
+  ivr: LiveDailyCoverage;
+  empDetail: LiveMonthlyCoverage;
+  primaryTargets: LiveMonthlyCoverage;
+  secondaryTargets: LiveMonthlyCoverage;
+};
+
+export type LiveUploader = { userId: number | null; name: string | null };
+
+export type LiveUploadBatch = {
+  batchId: number;
+  fileName: string;
+  sheets: string[];
+  dateFrom: string | null;
+  dateTo: string | null;
+  monthFrom: string | null;
+  monthTo: string | null;
+  /** ISO instant. */
+  uploadedAt: string | null;
+  uploadedBy: LiveUploader;
+};
+
+/** Stored upload rows nobody on that month's emp detail takes (hidden on the dashboard). */
+export type LiveHiddenRows = { rows: number; names: string[] };
+
+/**
+ * sources.service.js resolvePeople reasons, in the order it tests them:
+ * no-user, outside-window, roster-not-uploaded, unknown-user, not-internal,
+ * not-on-roster, not-on-every-roster (the multi-month intersection — the
+ * commonest of the seven, since it fires for everybody the moment the window
+ * spans months). EmployeePerformanceBody reasonLabel() spells each one out and
+ * degrades an unlisted one to words rather than printing the slug.
+ */
+export type UnattributedReason = string;
+
+export type UnattributedUser = {
+  userId: number | null;
+  name: string | null;
+  reasons: UnattributedReason[];
+  /** 'YYYY-MM' */
+  months: string[];
+  closedJobs: number;
+  revenue: number;
+  openJobs: number;
+  acoJobs: number;
+  acoRevenue: number;
+  crmRows: number;
+};
+
+/** Jobs / A&CO / CRM rows whose user matches no employee — reported, never dropped. */
+export type LiveUnattributed = {
+  label: string;
+  closedJobs: number;
+  revenue: number;
+  openJobs: number;
+  acoJobs: number;
+  acoRevenue: number;
+  crm: { rows: number; booked: number; scheduled: number; audit: number; closed: number; cancelled: number };
+  users: UnattributedUser[];
+};
+
+export type LiveMonth = {
+  /** 'YYYY-MM' */
+  month: string;
+  /** An emp detail sheet exists for this month. false = NO name is shown for it at all. */
+  rosterUploaded: boolean;
+  /** Names visible for this month — 0 when no emp detail was uploaded. */
+  employees: number;
+  /**
+   * Names this month's emp detail actually LISTS (0 when none was uploaded), so
+   * rosterSize − employees is what the window's own rules hide. Optional for
+   * the same reason as `visibility` below — a backend build from before these
+   * rules sends neither — and ./visibility.ts reads it as 0 when absent.
+   */
+  rosterSize?: number;
+};
+
+/**
+ * Who the selected window can name at all, i.e. the owner's rules as the
+ * backend applied them:
+ *
+ *   - a person appears for a month ONLY if that month's uploaded emp detail
+ *     lists them (a month without one shows no names, not invented ones);
+ *   - a window over several months lists only the people on EVERY one of those
+ *     months' sheets — mode 'intersection';
+ *   - everyone else's jobs, revenue and CRM rows are never dropped: they are
+ *     reported under meta.unattributed, and the Total Revenue, Jobs Completed,
+ *     Jobs Open and Total Jobs KPIs count that bucket too (Target Achieved and
+ *     Team Members cannot — the uploaded target and team behind them belong to
+ *     the listed people; ./visibility.ts COUNTING_TILES says so on screen).
+ *
+ * Optional on purpose: a backend build from before these rules sends meta
+ * without it, and ./visibility.ts derives the same answer from meta.months.
+ */
+export type LiveVisibility = {
+  /** 'intersection' when the window spans more than one month. */
+  mode: 'single' | 'intersection';
+  /** People dropped because they were not on EVERY month's emp detail. */
+  hidden: number;
+  /** The 'YYYY-MM' months of the window with no emp detail uploaded. */
+  missingMonths: string[];
+};
+
+export type LiveMeta = {
+  /** The EFFECTIVE window the numbers cover ('YYYY-MM-DD'). */
+  from: string;
+  to: string;
+  /** ISO instants. jobsAsOf = when jobs and CRM counts were read. */
+  generatedAt: string;
+  jobsAsOf: string;
+  /** Every calendar month of the window, ascending. */
+  months: LiveMonth[];
+  /** Read it through ./visibility.ts rosterGap(), never directly: it can be absent. */
+  visibility?: LiveVisibility;
+  uploads: {
+    /** 'missing' until the backend migration has run. */
+    storage: 'ready' | 'missing';
+    lastBatch: LiveUploadBatch | null;
+    uploadedBy: LiveUploader | null;
+    uploadedAt: string | null;
+    /** null when storage is missing. */
+    coverage: LiveUploadCoverage | null;
+    rosterMonthsInWindow: string[];
+    hidden: {
+      timechamp: LiveHiddenRows;
+      ivr: LiveHiddenRows;
+      primaryTargets: LiveHiddenRows;
+      secondaryTargets: LiveHiddenRows;
+    };
+  };
+  totals: { closedJobs: number; revenue: number; openJobs: number; crmRows: number };
+  attributed: { closedJobs: number; revenue: number; openJobs: number };
+  reconciled: boolean;
+  unattributed: LiveUnattributed;
+};
+
+export type LiveOptionsResponse = FilterOptions & { meta: LiveMeta };
+export type LiveSummaryResponse = SummaryResponse & { meta: LiveMeta };
+
 /* ── server-paged tables — pageOpenJobs / pageTechnicians ─────────────────── */
 
 export type SortDir = 'asc' | 'desc';
@@ -374,6 +525,65 @@ export type MemberDetail = {
     rows: MemberRevenueRow[];
     totals: MemberRevenueTotals;
   };
+};
+
+/* ── /live/upload — uploads.service.js previewUpload / commitUpload ───────── */
+
+/** row / column are null for a sheet-level issue. At most 1000 listed per sheet per kind. */
+export type UploadIssue = {
+  row: number | null;
+  column: string | null;
+  message: string;
+};
+
+export type UploadSheetReport = {
+  /** The MIS sheet name, e.g. 'emp detail'. */
+  name: string;
+  present: boolean;
+  /** Non-blank data rows read. */
+  rows: number;
+  /** Exact counts; the lists below may be capped. */
+  errorCount: number;
+  warningCount: number;
+  errors: UploadIssue[];
+  warnings: UploadIssue[];
+};
+
+/** A stored TimeChamp / IVR date this file replaces. */
+export type UploadOverwrite = {
+  source: 'timechamp' | 'ivr';
+  date: string;
+  storedRows: number;
+  fileRows: number;
+};
+
+export type UploadMonthSummary = {
+  /** 'YYYY-MM' */
+  month: string;
+  empDetail: { stored: number; inFile: number; added: number; updated: number; after: number };
+  primaryTargets: { inFile: number; updated: number; replaced: number };
+  secondaryTargets: { inFile: number; updated: number; replaced: number };
+  /** Rows (stored + file) nobody on that month's emp detail takes once saved. */
+  hiddenAfterUpload: { timechamp: number; ivr: number; primaryTargets: number; secondaryTargets: number };
+};
+
+export type UploadPreview = {
+  fileSha256: string;
+  /** true = at least one error: the save is refused. */
+  blocking: boolean;
+  /** File-level (not tied to a sheet). */
+  errors: string[];
+  warnings: string[];
+  sheets: UploadSheetReport[];
+  overwrites: UploadOverwrite[];
+  months: UploadMonthSummary[];
+};
+
+export type UploadCommitResult = {
+  batchId: number;
+  saved: { empDetail: number; primaryTargets: number; secondaryTargets: number; timechamp: number; ivr: number };
+  sheets: string[];
+  preview: UploadPreview;
 };
 
 /* ── format.ts ────────────────────────────────────────────────────────────── */
