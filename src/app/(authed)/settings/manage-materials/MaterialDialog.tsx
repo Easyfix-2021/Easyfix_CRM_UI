@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Info } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -15,7 +15,7 @@ import { api, ApiError } from '@/lib/api';
 import { useFetch } from '@/lib/hooks';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
 import { useLookup } from '@/lib/use-lookup';
-import type { BrandOption, MaterialDetail, MaterialListItem, PricingType, UomOption } from './types';
+import type { BrandOption, MaterialDetail, MaterialListItem, MaterialSaveBody, PricingType, UomOption } from './types';
 
 type PricingMode = 'NO_BRAND' | 'PER_BRAND';
 
@@ -40,6 +40,7 @@ function freshNoBrandGroup(): PriceTreeRow {
 
 export function MaterialDialog({
   open, onClose, editing, canSeeBrands, onSaved,
+  prefill, overrideSubmit, titleOverride, submitLabelOverride, savedMessage, bannerNode,
 }: {
   open: boolean;
   onClose: () => void;
@@ -47,6 +48,35 @@ export function MaterialDialog({
   /* Whether this user has isBrandView — steers the empty-brands hint. */
   canSeeBrands: boolean;
   onSaved: () => void;
+  /*
+   * Material Add Requests (approve flow) — seeds a brand-new material's
+   * form from a request instead of a blank form or an existing material's
+   * detail fetch. Only consulted when `editing` is null; `editing` (true
+   * edit-existing-material) always wins. `groupSeed` is optional: omit it
+   * to fall back to the normal blank-No-Brand default.
+   */
+  prefill?: {
+    material_name: string;
+    description?: string | null;
+    service_catg_id: number;
+    groupSeed?: { optionIds: number[]; price: number | null };
+  } | null;
+  /*
+   * When set, Save calls this instead of POST /admin/materials or
+   * PUT /admin/materials/:id — used by the request-approve flow, which
+   * POSTs /admin/material-requests/:id/approve with the same body shape.
+   * Errors thrown here are handled by the same catch block as the default
+   * path (shown in the banner + toast), so a caller that wants to recover
+   * from a specific error (e.g. a 409 duplicate) must catch-and-retry
+   * internally and only rethrow what should surface to the operator.
+   */
+  overrideSubmit?: (body: MaterialSaveBody) => Promise<void>;
+  titleOverride?: string;
+  submitLabelOverride?: string;
+  savedMessage?: string;
+  /* Optional banner rendered at the top of the form body (e.g. "technician
+     typed brand 'X' — no match found, pick one or leave No Brand"). */
+  bannerNode?: ReactNode;
 }) {
   const isEdit = !!editing;
   const confirm = useConfirm();
@@ -72,22 +102,25 @@ export function MaterialDialog({
 
   useEffect(() => {
     if (!open) return;
-    setName(editing?.material_name ?? '');
-    setDescription(editing?.description ?? '');
-    setCatgId(editing?.service_catg_id ?? '');
+    setName(editing?.material_name ?? prefill?.material_name ?? '');
+    setDescription(editing?.description ?? prefill?.description ?? '');
+    setCatgId(editing?.service_catg_id ?? prefill?.service_catg_id ?? '');
     setUomId(editing?.uom_id ?? '');
     setPricingType(editing?.pricing_type ?? 'FIXED');
     setError(null);
     if (!isEdit) {
       // Decision A: a brand-new Fixed material defaults to No Brand — one
-      // optional-price group, no brand picker.
-      const g = freshNoBrandGroup();
+      // optional-price group, no brand picker. The approve-request flow
+      // (`prefill`) seeds that same group from the request instead.
+      const seed = prefill?.groupSeed;
+      const g = seed ? { id: newPriceTreeRowId(), optionIds: seed.optionIds, price: seed.price } : freshNoBrandGroup();
       setGroups([g]);
       setStatesByGroupId({});
-      setPricingMode('NO_BRAND');
+      setPricingMode(seed && seed.optionIds.length > 0 ? 'PER_BRAND' : 'NO_BRAND');
     }
     seededForRef.current = null;
-  }, [open, editing, isEdit]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, editing, isEdit, prefill]);
 
   // Seed the price tree from the detail fetch exactly once per open (mirrors
   // the pincodes zone-seed pattern) — a cache-driven re-resolve mid-edit
@@ -206,7 +239,7 @@ export function MaterialDialog({
     }
     setSubmitting(true);
     try {
-      const body = {
+      const body: MaterialSaveBody = {
         material_name: name.trim(),
         description: description.trim() || null,
         service_catg_id: Number(catgId),
@@ -218,9 +251,10 @@ export function MaterialDialog({
           states: (statesByGroupId[g.id] ?? []).map((s) => ({ price: s.price, state_ids: s.optionIds })),
         })),
       };
-      if (isEdit) await api.put(`/admin/materials/${editing!.material_id}`, body);
+      if (overrideSubmit) await overrideSubmit(body);
+      else if (isEdit) await api.put(`/admin/materials/${editing!.material_id}`, body);
       else await api.post('/admin/materials', body);
-      showToast({ variant: 'success', message: `Material ${isEdit ? 'updated' : 'added'}.` });
+      showToast({ variant: 'success', message: savedMessage ?? `Material ${isEdit ? 'updated' : 'added'}.` });
       onSaved();
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : 'Save failed';
@@ -240,10 +274,11 @@ export function MaterialDialog({
     <Dialog open={open} onOpenChange={guardedOpenChange}>
       <DialogContent className="sm:max-w-3xl p-0 overflow-hidden flex flex-col max-h-[85vh]">
         <DialogHeader className="!mx-0 !mt-0 px-6 py-4 mb-0">
-          <DialogTitle>{isEdit ? `Edit "${editing!.material_name}"` : 'Add Material'}</DialogTitle>
+          <DialogTitle>{titleOverride ?? (isEdit ? `Edit "${editing!.material_name}"` : 'Add Material')}</DialogTitle>
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+          {bannerNode}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label className="block mb-1" required>Material Name</Label>
@@ -394,7 +429,7 @@ export function MaterialDialog({
             onClick={handleSubmit}
             disabled={submitting || (pricingType === 'FIXED' && (!pricingValid || !statesValid))}
           >
-            {submitting ? 'Saving…' : isEdit ? 'Save Changes' : 'Add Material'}
+            {submitting ? 'Saving…' : submitLabelOverride ?? (isEdit ? 'Save Changes' : 'Add Material')}
           </Button>
         </div>
       </DialogContent>
