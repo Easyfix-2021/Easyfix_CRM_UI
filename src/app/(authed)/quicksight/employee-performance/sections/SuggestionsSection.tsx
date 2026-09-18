@@ -9,7 +9,7 @@
 
 import { CircleAlert, CircleCheck, TriangleAlert, type LucideIcon } from 'lucide-react';
 import type { SuggestionTone } from '../types';
-import { SectionCard, type SummaryProps } from './shared';
+import { SectionCard, emptyTableText, type SummaryProps } from './shared';
 
 const TONE: Record<SuggestionTone, { stripe: string; icon: LucideIcon; iconClass: string; label: string }> = {
   crit: { stripe: 'border-l-urgent', icon: TriangleAlert, iconClass: 'text-urgent-strong', label: 'Critical' },
@@ -22,7 +22,9 @@ export function SuggestionsSection({ summary }: SummaryProps) {
   return (
     <SectionCard title="10. Suggestions / Action Points">
       {items.length === 0 ? (
-        <p className="py-4 text-center text-sm text-muted-foreground">No Suggestions For The Selected Filters</p>
+        <p className="py-4 text-center text-sm text-muted-foreground">
+          {emptyTableText(summary, 'No Suggestions For The Selected Filters')}
+        </p>
       ) : (
         <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
           {items.map((s) => {

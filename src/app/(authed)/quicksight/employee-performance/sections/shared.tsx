@@ -23,14 +23,35 @@ import { SortHeader, cycleSort, useSort, type SortDir } from '@/lib/use-sort';
 import { computePageView } from '@/lib/pagination';
 import { cn } from '@/lib/utils';
 import { MAX_PAGE_SIZE, filtersQuery } from '../api';
-import type { Filters, PagedRows, Paging, SummaryResponse } from '../types';
+import { rosterEmptyText, rosterGap } from '../visibility';
+import type { Filters, LiveSummaryResponse, PagedRows, Paging } from '../types';
 
 /* ── props every section takes ────────────────────────────────────────────── */
 
-export type Summary = SummaryResponse;
+/* The live response, meta included: every section's empty text depends on it. */
+export type Summary = LiveSummaryResponse;
 export type SummaryProps = { summary: Summary };
 /** Sections with a server-paged table also need the snapshot version and the filters. */
 export type PagedSectionProps = SummaryProps & { v: string; filters: Filters };
+
+/*
+ * What an empty section should say. A section that belongs to a PERSON — their
+ * revenue against their target, their productivity — has nothing to show when
+ * the window can name nobody (no emp detail uploaded for one of the months, or
+ * nobody on ALL of the selected months' sheets), and there "No Data For The
+ * Selected Filters" reads as a bug rather than as "nothing uploaded yet". The
+ * roster explanation replaces the section's own wording in that case; otherwise
+ * the table is genuinely empty for these filters and `fallback` stands.
+ *
+ * The job tables (clients, city, TAT / SDA, open jobs, zonal) usually still
+ * have rows then: the work of everyone the window cannot name is on the
+ * Unattributed buckets, which are ordinary SPOC entries to the backend. Such a
+ * table never reaches this helper, so the two stay consistent without either
+ * knowing about the other. See ../visibility.ts.
+ */
+export function emptyTableText(summary: Summary, fallback: string): string {
+  return rosterEmptyText(rosterGap(summary.meta, summary.team.members.length), fallback);
+}
 
 /* ── layout ───────────────────────────────────────────────────────────────── */
 

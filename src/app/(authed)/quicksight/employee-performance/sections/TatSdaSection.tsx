@@ -8,7 +8,7 @@
 
 import type { TatSdaRow } from '../types';
 import { pct1 } from '../format';
-import { LocalTable, SectionCard, type Column, type SummaryProps } from './shared';
+import { LocalTable, SectionCard, emptyTableText, type Column, type SummaryProps } from './shared';
 
 const TAT_SDA_COLUMNS: ReadonlyArray<Column<TatSdaRow>> = [
   { key: 'client', label: 'Client Name' },
@@ -23,7 +23,7 @@ export function TatSdaSection({ summary }: SummaryProps) {
         rows={summary.tatSda}
         columns={TAT_SDA_COLUMNS}
         rowKey={(r) => r.client}
-        emptyText="No Data For The Selected Filters"
+        emptyText={emptyTableText(summary, 'No Data For The Selected Filters')}
         pageSize={10}
       />
     </SectionCard>
