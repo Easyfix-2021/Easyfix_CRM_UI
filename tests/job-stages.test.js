@@ -52,16 +52,22 @@ const only = (...stages) => ({ mode: 'list', stages });
  * src/lib/job-stages.ts and the backend already agree on all ten stages: this
  * pin was the only stale copy, which is exactly the cross-repo break it exists
  * to catch. Labels are UI text and come from the frontend.
+ *
+ * REPINNED 2026-09-18: 'pending-material' [16] added in BOTH repos in one
+ * change (see the note in src/lib/job-stages.ts — a stage-restricted PM could
+ * otherwise never see the jobs they review), and 'pending-close' gained 16 as
+ * a target because that is where a 16 job comes FROM.
  */
 const EXPECTED = {
   'unconfirmed':        { visible: [9],     targets: [0, 6],           label: 'Unconfirmed Orders' },
   'pending-scheduling': { visible: [0],     targets: [1, 6, 9],        label: 'Pending for Scheduling' },
   'pending-start':      { visible: [1],     targets: [2, 20, 21, 6],   label: 'Pending to Start' },
-  'pending-close':      { visible: [2, 20], targets: [10, 21, 6],      label: 'Pending to Close' },
+  'pending-close':      { visible: [2, 20], targets: [10, 21, 6, 16], label: 'Pending to Close' },
   'audit-complete':     { visible: [10],    targets: [3, 5, 6],        label: 'Under Audit' },
   'pending-feedback':   { visible: [3],     targets: [5, 6],           label: 'Pending for Feedback' },
   'completed':          { visible: [5],     targets: [],               label: 'Completed' },
   'onhold':             { visible: [21],    targets: [1, 6],           label: 'Orders in Followup' },
+  'pending-material':   { visible: [16],    targets: [15, 2, 6],       label: 'Pending for Material' },
   'estimate-pending':   { visible: [15],    targets: [0, 1, 6],        label: 'Estimate Pending' },
   'cancelled':          { visible: [6],     targets: [],               label: 'Cancelled' },
 };
