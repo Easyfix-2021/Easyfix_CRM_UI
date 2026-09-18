@@ -90,7 +90,6 @@ import {
   type PsFilters,
 } from '@/components/job/PendingSchedulingFilters';
 import { PendingStartTabs, toPtsState, type PtsState } from '@/components/job/PendingStartTabs';
-import { BucketHowItWorks } from '@/components/job/BucketHowItWorks';
 import { PendingStartLiveStatus, useMinuteClock } from '@/components/job/PendingStartLiveStatus';
 import { useFetch, invalidateFetch, useDebouncedValue } from '@/lib/hooks';
 import { formatJobAge, jobAgeTitle, type JobAgeFields } from '@/lib/job-age';
@@ -165,6 +164,7 @@ type PendingJobRow = JobAgeFields & AppRequestFields & {
   // already on the shared /admin/jobs LIST projection; surfaced so ops can spot
   // linked orders. Optional so older API responses don't break the type narrow.
   job_reference_id?: string | null;
+  pin_code?: string | null;
   fk_easyfixter_id: number | null;
   easyfixer_name: string | null;
   // Assigned technician's mobile (ef.efr_no AS easyfixer_mobile) — masked in
@@ -325,7 +325,6 @@ export function PendingToStartView({
 
   return (
     <div className="space-y-5">
-      <BucketHowItWorks bucket="pending-start" />
       <PendingStartTabs
         value={ptsTab}
         onChange={setPtsTab}
@@ -508,7 +507,6 @@ function PendingStartTable({
                   column's (soonest first by default, click to flip), so a
                   clickable Age header would have nothing to drive. */}
               <th className="w-16">Age</th>
-              <th>Job Ref</th>
               <th>Technician</th>
               <th>City</th>
               <th>Client</th>
@@ -560,11 +558,14 @@ function PendingStartTable({
               const req = appRequestOf(j);
               return (
                 <tr key={j.job_id} className="hover:bg-muted/40">
-                  <td className="stick-col stick-left font-medium">
+                  <td className="stick-col stick-left font-medium align-top">
                     <span className="inline-flex items-center gap-1">
                       #{j.job_id}
                       <CallHistoryButton jobId={j.job_id} />
                     </span>
+                    {/* Job Ref under the Job ID (ops, 2026-09-18), as on Manage
+                        Jobs — it had a column of its own here. */}
+                    <div className="text-xs font-normal text-muted-foreground">{j.job_reference_id ?? '—'}</div>
                   </td>
                   {/*
                    * The request itself: WHAT was asked (chip), WHY (the
@@ -591,7 +592,6 @@ function PendingStartTable({
                   <td className="text-xs whitespace-nowrap tabular-nums align-top" title={jobAgeTitle(j)}>
                     {formatJobAge(j)}
                   </td>
-                  <td className="text-xs whitespace-nowrap align-top">{j.job_reference_id ?? '—'}</td>
                   {/*
                     * Technician — name on top (may wrap to multiple lines) and,
                     * below it, the masked mobile as a single-line click-to-call.
@@ -619,7 +619,11 @@ function PendingStartTable({
                       <span className="text-muted-foreground">unassigned</span>
                     )}
                   </td>
-                  <td>{j.city_name ?? '—'}</td>
+                  {/* City with its PIN underneath — already on the payload. */}
+                  <td className="whitespace-nowrap align-top">
+                    <div>{j.city_name ?? '—'}</div>
+                    {j.pin_code && <div className="text-xs text-muted-foreground tabular-nums">{j.pin_code}</div>}
+                  </td>
                   <td className="min-w-[16rem] max-w-[24rem] break-words">
                     {j.client_name ?? '—'}
                   </td>

@@ -242,7 +242,7 @@ export function PendingSchedulingFilters({
   /*
    * Drop the Scheduling Status control. /my-orders promoted that one filter to
    * a tab strip above the search card (All / Not offered / Offered-waiting /
-   * No takers), so leaving the select here would be a second, silently
+   * Offer Rejected/Expired), so leaving the select here would be a second, silently
    * disagreeing copy of the same state. /jobs has no such strip and keeps it.
    * The FILTER VALUE is untouched either way — psQueryParams still ships
    * `offerState`, whichever surface set it.

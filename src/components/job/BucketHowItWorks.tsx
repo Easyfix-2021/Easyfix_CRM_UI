@@ -5,6 +5,11 @@ import { ChevronDown, Info } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 
 /*
+ * ⚠ NOT MOUNTED RIGHT NOW (ops, 2026-09-18): the card took too much room at the
+ * top of the bucket, so both mounts were removed until we decide where it
+ * belongs (a drawer, the page header, or a help link). The copy below is
+ * current — keep it in step with the flows if they change before it returns.
+ *
  * "How It Works?" for the two scheduling buckets on My Orders — the same
  * collapsible card Manage Auto Allocations and the TAT Calculator carry, so a
  * new team member finds the explanation where every other page keeps it.
@@ -69,7 +74,7 @@ function PendingSchedulingGuide() {
         <li>Booked jobs that <b>no technician has yet</b>.</li>
         <li><b>Unallocated</b> — not offered to anyone yet.</li>
         <li><b>Offered-waiting</b> — offered, waiting for a technician to accept.</li>
-        <li><b>No takers</b> — every offer was declined or expired.</li>
+        <li><b>Offer Rejected/Expired</b> — every offer was declined or expired.</li>
       </Block>
       <Block title="How to get a technician">
         <li>Open the job with the action icon (<b>Schedule &amp; Assign</b>).</li>
@@ -81,7 +86,7 @@ function PendingSchedulingGuide() {
         <li><b>Appointment time already passed?</b> You can’t offer. <b>Reschedule</b> first: new date and time, reason and remarks (the Uplifted view also asks who it is due to).</li>
       </Block>
       <Block title="When you reschedule">
-        <li>Waiting offers <b>expire</b> — those technicians lose the offer, and the job shows under <b>No takers</b> until you offer it again.</li>
+        <li>Waiting offers <b>expire</b> — those technicians lose the offer, and the job shows under <b>Offer Rejected/Expired</b> until you offer it again.</li>
         <li>Click <b>Proceed to re-offer</b> and offer the job again <b>before you close</b> the window.</li>
         <li>The <b>customer gets an SMS</b> with the new time and the <b>client’s system is updated</b>.</li>
       </Block>

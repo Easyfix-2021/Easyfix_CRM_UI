@@ -9,7 +9,7 @@ import type { PsFilters } from './PendingSchedulingFilters';
  * from a dropdown to a tab strip.
  *
  * WHY A STRIP AND NOT THE OLD SELECT (2026-09-16): the scheduling queue is
- * triaged by bucket, not filtered by it. "How big is my No takers pile" was
+ * triaged by bucket, not filtered by it. "How big is my Offer Rejected/Expired pile" was
  * three clicks into a Scheduling Status dropdown that showed no counts, so
  * nobody looked — jobs nobody accepted sat in the same undifferentiated list as
  * jobs nobody had offered yet. The strip states all four totals at once.
@@ -34,7 +34,7 @@ type Counts = { all: number; pending: number; offered: number; expired: number }
 /*
  * The vocabulary, fixed 2026-09-16 and shared with the Schedule & Assign
  * console so the tab an operator clicked and the state the console reports are
- * the same words. `title` is what "No takers" MEANS — the two offer outcomes it
+ * the same words. `title` spells out what the label MEANS — the two offer outcomes it
  * gathers — kept as a tooltip rather than a longer label, so the strip stays
  * one line on a laptop.
  */
@@ -42,7 +42,7 @@ const TABS: { value: PsOfferState; label: string; key: keyof Counts; title: stri
   { value: '',        label: 'All',             key: 'all',     title: 'Every job waiting to be scheduled' },
   { value: 'pending', label: 'Unallocated',     key: 'pending', title: 'Not offered to anyone yet' },
   { value: 'offered', label: 'Offered-waiting', key: 'offered', title: 'An offer is open and unanswered' },
-  { value: 'expired', label: 'No takers',       key: 'expired', title: 'Expired and rejected — offered, and no offer is still open' },
+  { value: 'expired', label: 'Offer Rejected/Expired', key: 'expired', title: 'Offered, and no offer is still open — every one was rejected or expired' },
 ];
 
 export function PendingSchedulingTabs({

@@ -35,7 +35,6 @@ import {
 } from '@/components/job/PendingSchedulingFilters';
 import { JobScopeBar, scopeIsClampedFor } from '@/components/job/JobScopeBar';
 import { PendingSchedulingTabs } from '@/components/job/PendingSchedulingTabs';
-import { BucketHowItWorks } from '@/components/job/BucketHowItWorks';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
 import { ResendPinButton, RESEND_PIN_ACTION } from '@/components/job/ResendPinButton';
@@ -94,7 +93,7 @@ type JobRow = JobAgeFields & {
   fk_client_id: number; client_name: string | null;
   fk_easyfixter_id: number | null; easyfixer_name: string | null;
   job_owner: number | null; owner_name: string | null;
-  fk_address_id: number; city_name: string | null;
+  fk_address_id: number; city_name: string | null; pin_code?: string | null;
   // service_category surfaced on the LIST projection for the
   // Pending-for-Scheduling custom column set (BE list now returns it).
   service_category?: string | null;
@@ -789,7 +788,6 @@ export default function MyOrdersPage() {
         * keeps "Show All Orders" on the right, and adds the three sub-buckets
         * ops actually triage by, with counts. Every other tab keeps the bar.
         */}
-      {isPendingScheduling && <BucketHowItWorks bucket="pending-scheduling" />}
       {isPendingScheduling ? (
         <PendingSchedulingTabs
           value={psFilters.offerState}
@@ -932,7 +930,8 @@ export default function MyOrdersPage() {
                     accruing at the terminal event while the created timestamp
                     never moves. JOB_AGE_SORT_KEY orders by precise seconds. */}
                 <SortHeader<string> col={JOB_AGE_SORT_KEY} sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="w-16">Age</SortHeader>
-                <SortHeader<string> col="job_reference_id" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Job Ref</SortHeader>
+                {/* Job Ref rides UNDER the Job ID (ops, 2026-09-18) — the same
+                    shape Manage Jobs uses — so the table is one column shorter. */}
                 <SortHeader<string> col="created_date_time" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Ticket Created Date</SortHeader>
                 <SortHeader<string> col="client_name" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Client</SortHeader>
                 {/* client_spoc_name is already on the LIST projection (LIST_COLUMNS
@@ -971,9 +970,9 @@ export default function MyOrdersPage() {
                       #{j.job_id}
                       <CallHistoryButton jobId={j.job_id} />
                     </span>
+                    <div className="text-xs font-normal text-muted-foreground">{j.job_reference_id ?? '—'}</div>
                   </td>
                   <td className="text-xs whitespace-nowrap tabular-nums" title={jobAgeTitle(j)}>{formatJobAge(j)}</td>
-                  <td className="text-xs whitespace-nowrap">{j.job_reference_id ?? '—'}</td>
                   <td className="whitespace-nowrap">
                     <div className="text-xs">{formatDate(j.ticket_created_date_time)}</div>
                   </td>
@@ -991,7 +990,12 @@ export default function MyOrdersPage() {
                       </div>
                     )}
                   </td>
-                  <td>{j.city_name ?? '—'}</td>
+                  {/* City with its PIN underneath — the pair ops reads to judge
+                      distance, and already on the list payload (ad.pin_code). */}
+                  <td className="whitespace-nowrap">
+                    <div>{j.city_name ?? '—'}</div>
+                    {j.pin_code && <div className="text-xs text-muted-foreground tabular-nums">{j.pin_code}</div>}
+                  </td>
                   <td>{j.service_category ?? '—'}</td>
                   {/* Appointment. The sub-line stays a BAND — ops quotes the
                       window, not the minute — but it is the band derived from
