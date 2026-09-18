@@ -44,10 +44,18 @@ export function JobRemarksView({
   jobId,
   collapsible = false,
   defaultOpen = true,
+  fill = false,
 }: {
   jobId: number | null;
   collapsible?: boolean;
   defaultOpen?: boolean;
+  /*
+   * FILL the height the host gives it and scroll inside, instead of the default
+   * 12rem cap. The job consoles set a fixed tile height for remarks and
+   * internal notes side by side, so a long thread scrolls rather than
+   * stretching the row. Opt-in: every other host keeps the cap.
+   */
+  fill?: boolean;
 }) {
   const { data, loading } = useFetch<JobComment[]>(
     jobId ? `/admin/jobs/${jobId}/comments` : null,
@@ -70,7 +78,7 @@ export function JobRemarksView({
   const count = rows.length + pendingRequests.length;
 
   return (
-    <div className="rounded-md border bg-muted/30">
+    <div className={`rounded-md border bg-muted/30 ${fill ? 'flex h-full min-h-0 flex-col' : ''}`}>
       {collapsible ? (
         <button
           type="button"
@@ -92,7 +100,7 @@ export function JobRemarksView({
           Remarks / Comments
         </div>
       )}
-      <div className={`max-h-48 overflow-y-auto ${open ? '' : 'hidden'}`}>
+      <div className={`${fill ? 'min-h-0 flex-1' : 'max-h-48'} overflow-y-auto ${open ? '' : 'hidden'}`}>
         {pendingRequests.map((r) => (
           <div
             key={`req-${r.request_id}`}
