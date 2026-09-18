@@ -26,7 +26,7 @@ const values = (opts) => opts.map((o) => o.value);
 
 test('no bucket → every status, exactly as before', () => {
   assert.deepEqual(values(B.jobStatusOptionsFor('')), values(B.JOB_STATUS_OPTIONS));
-  assert.equal(B.jobStatusOptionsFor('').length, 11);
+  assert.equal(B.jobStatusOptionsFor('').length, 12);
 });
 
 test('a bucket narrows the list to its own statuses', () => {
@@ -34,7 +34,7 @@ test('a bucket narrows the list to its own statuses', () => {
   assert.deepEqual(values(B.jobStatusOptionsFor('cancelled')), ['6', '7']);
   assert.deepEqual(
     values(B.jobStatusOptionsFor('open')),
-    ['0', '1', '2', '9', '10', '15', '20', '21'],
+    ['0', '1', '2', '9', '10', '15', '16', '20', '21'],
   );
 });
 

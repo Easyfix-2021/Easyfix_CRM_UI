@@ -61,6 +61,20 @@ export type StageDef = {
  *   onhold               [21]              [1,6]               Orders in Followup
  *   estimate-pending     [15]              [0,1,6]             Estimate Pending
  *   cancelled            [6]               []                  Cancelled
+ *
+ * Status 16 (Pending for Material, 2026-09-18 design doc) deliberately has NO
+ * stage here, same as status 7 (ENQUIRY) already has none: this map is a
+ * PINNED, byte-for-byte mirror of the backend's lib/job-stages.js (enforced
+ * by tests/job-stages-parity.test.js, which requires the actual backend
+ * module from disk and cross-checks every (grant, source, target) triple —
+ * not a hand-transcribed copy). The backend has not added a 'pending-material'
+ * stage — the 2/20 -> 16 move is technician-app-only
+ * (POST /mobile/jobs/:id/material-required) and the PM's approve/reject on 16
+ * is gated purely by the isJobMaterialReview action permission (see
+ * JobModal's MaterialReviewPanel), not by this stage-access model, mirroring
+ * how JobQuotationsTab's isQuotationApprove needs no stage entry either. Add
+ * a stage here ONLY alongside the matching backend change, or this test goes
+ * red across ~346k comparison triples.
  */
 export const STAGES: Record<StageKey, StageDef> = {
   'unconfirmed':        { key: 'unconfirmed',        label: 'Unconfirmed Orders',     visibleStatuses: [9],      transitionTargets: [0, 6] },

@@ -24,7 +24,7 @@ import { Input } from '@/components/ui/input';
 import { SearchSelect } from '@/components/ui/search-select';
 import { api, ApiError } from '@/lib/api';
 import { downloadXlsx as sharedDownloadXlsx } from '@/lib/download-xlsx';
-import { statusLabel, statusTone } from '@/lib/utils';
+import { statusLabel, statusTone, materialSubStatusLabel } from '@/lib/utils';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { useSort, SortHeader } from '@/lib/use-sort';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
@@ -129,6 +129,9 @@ type Row = {
   table_id: number;
   job_id: number;
   job_status: number | null;
+  // Pending for Material (status 16) sub-state — 1 Quotation Pending, 2
+  // Review Pending. See materialSubStatusLabel in lib/utils.ts.
+  material_sub_status?: number | boolean | null;
   fk_easyfixter_id: number | null;
   escalated_time: string | null;
   resolved_time: string | null;
@@ -473,6 +476,11 @@ export function EscalatedJobsModal({
                       <StatusChip tone={statusTone(Number(r.job_status))} size="sm">
                         {statusLabel(Number(r.job_status), { assigned: r.fk_easyfixter_id != null })}
                       </StatusChip>
+                      {Number(r.job_status) === 16 && materialSubStatusLabel(r.material_sub_status) && (
+                        <StatusChip tone="neutral" size="sm" className="ml-1">
+                          {materialSubStatusLabel(r.material_sub_status)}
+                        </StatusChip>
+                      )}
                     </td>
                     <td className="!text-center font-mono text-xs">
                       {r.no_of_escalations ?? 0}

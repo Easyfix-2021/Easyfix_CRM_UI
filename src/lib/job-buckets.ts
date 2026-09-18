@@ -19,12 +19,12 @@ import { isUnrestricted, stageVisibleStatuses, type AllowedStages } from './job-
  * The mapping (rule verified 2026-05-19):
  *   closed    → 3 (COMPLETED), 5 (COMPLETED_ALT)
  *   cancelled → 6 (CANCELLED), 7 (ENQUIRY)
- *   open      → everything else valid (0,1,2,9,10,15,20,21)
+ *   open      → everything else valid (0,1,2,9,10,15,16,20,21)
  * `open` is the complement, so adding a new active status only requires
  * adding it here.
  */
 export const BUCKET_STATUS_MAP: Record<string, number[]> = {
-  open:      [0, 1, 2, 9, 10, 15, 20, 21],
+  open:      [0, 1, 2, 9, 10, 15, 16, 20, 21],
   closed:    [3, 5],
   cancelled: [6, 7],
 };
@@ -42,6 +42,7 @@ export const JOB_STATUS_OPTIONS: StatusOption[] = [
   { value: '9',  label: 'Unconfirmed' },
   { value: '10', label: 'Revisit' },
   { value: '15', label: 'Estimate Pending' },
+  { value: '16', label: 'Pending for Material' },
   { value: '20', label: 'Pending to Close' },
   { value: '21', label: 'Followup' },
 ];
