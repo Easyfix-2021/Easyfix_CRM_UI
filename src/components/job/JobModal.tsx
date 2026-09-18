@@ -45,7 +45,7 @@ import { resolveParentAddressId, buildJobAddressPayload } from '@/lib/job-addres
 // (src/lib/job-slots.ts); never re-declare a slot array at a call site.
 import { BOOKING_BANDS, slotChoicesFor, inferSlotFromTime, bandForTime, isKnownBand, canonicalSlot, displaySlot, AFTER_HOURS_SLOT } from '@/lib/job-slots';
 import { useLookup } from '@/lib/use-lookup';
-import { formatDate, formatEasyfixerName, istNowWallClock, materialSubStatusLabel, ST, statusLabel, statusTone, toIstClockTime } from '@/lib/utils';
+import { cn, formatDate, formatEasyfixerName, istNowWallClock, materialSubStatusLabel, ST, statusLabel, statusTone, toIstClockTime } from '@/lib/utils';
 import { maskMobile, formatServiceAddress, INDIAN_MOBILE_REGEX, INDIAN_MOBILE_ERROR, isValidIndianMobile, normalizeMobileDigits } from '@/lib/format';
 import { formatJobAge, jobAgeTitle } from '@/lib/job-age';
 
@@ -1665,6 +1665,15 @@ type QuotationRow = Record<string, unknown> & {
   total_price?: number | string | null;
   status?: string | null | number;
   insert_date?: string | null;
+  // Real /admin/quotations columns (VERIFIED against
+  // routes/admin/quotations.js SELECT — see MaterialReviewPanel). `unit` is
+  // the quantity, not a unit-of-measure label; `type` is 'product'|'material'.
+  type?: string | null;
+  name?: string | null;
+  /* NULL until an operator approves or rejects — the real pending flag. */
+  action_on?: string | null;
+  unit?: number | string | null;
+  approved_charge?: number | string | null;
 };
 
 /*
@@ -2400,7 +2409,15 @@ function JobQuotationsTab({ jobId }: { jobId: number }) {
     );
   }
 
-  const total = rows.reduce((sum, r) => sum + (Number(r.total_price) || 0), 0);
+  /*
+   * The API returns type / name / unit / unit_price (VERIFIED against
+   * routes/admin/quotations.js). The older field names this tab used —
+   * quotation_type, product_name, quantity, total_price — are not in that
+   * SELECT at all, so Type, Item, Qty and Total rendered "—" and this total
+   * was always ₹0. `unit` IS the quantity; there is no stored line total.
+   */
+  const lineTotal = (r: QuotationRow) => (Number(r.unit_price) || 0) * (Number(r.unit ?? r.quantity) || 0);
+  const total = rows.reduce((sum, r) => sum + lineTotal(r), 0);
 
   return (
     <div className="space-y-3">
@@ -2423,15 +2440,29 @@ function JobQuotationsTab({ jobId }: { jobId: number }) {
           </thead>
           <tbody>
             {rows.map((r, i) => {
-              const type = String(r.quotation_type ?? '—');
-              const name = String(r.product_name ?? r.material_name ?? '—');
+              const type = String(r.type ?? r.quotation_type ?? '—');
+              const name = String(r.name ?? r.product_name ?? r.material_name ?? '—');
               // BE status code map (legacy):
               //   0 = Pending Approval, 1 = Approved, 2 = Rejected.
               // Buttons only show on pending rows.
+              /*
+               * REAL status scheme, verified 2026-09-18 against the writers and
+               * readers, NOT the 0/1/2 legend this file used to carry:
+               *   inserted by the app  → status 1, action_on NULL  = PENDING
+               *   approved             → status 1, action_on set   = APPROVED
+               *   rejected             → status 0, action_on set   = REJECTED
+               * (services/mobile-job-estimate.service.js INSERT;
+               *  routes/admin/quotations.js approve/reject; and the EXISTS
+               *  filters in job.service.js / job-export.service.js, which all
+               *  pair the status with action_on IS NOT NULL.)
+               * Reading status alone showed every freshly quoted line as
+               * "Approved" — action_on is what separates reviewed from not.
+               */
               const status = Number(r.status ?? 0);
-              const isPending = status === 0;
-              const isApproved = status === 1;
-              const isRejected = status === 2;
+              const reviewed = r.action_on != null;
+              const isPending = !reviewed;
+              const isApproved = reviewed && status === 1;
+              const isRejected = reviewed && status === 0;
               const busy = busyId === Number(r.id);
               return (
                 <tr key={r.id}>
@@ -2440,9 +2471,9 @@ function JobQuotationsTab({ jobId }: { jobId: number }) {
                     <span className="inline-block bg-info-tint text-info-strong rounded px-1.5 py-0.5">{type}</span>
                   </td>
                   <td className="!text-left">{name}</td>
-                  <td className="!text-right font-mono text-xs">{String(r.quantity ?? '')}</td>
+                  <td className="!text-right font-mono text-xs">{String(r.unit ?? r.quantity ?? '')}</td>
                   <td className="!text-right font-mono text-xs">{r.unit_price != null ? Number(r.unit_price).toFixed(2) : '—'}</td>
-                  <td className="!text-right font-mono">{r.total_price != null ? Number(r.total_price).toFixed(2) : '—'}</td>
+                  <td className="!text-right font-mono">{r.unit_price != null ? lineTotal(r).toFixed(2) : '—'}</td>
                   <td className="!text-center text-xs">
                     {isApproved && <span className="inline-block bg-success-tint text-success-strong rounded px-1.5 py-0.5">Approved</span>}
                     {isRejected && <span className="inline-block bg-urgent-tint text-urgent-strong rounded px-1.5 py-0.5">Rejected</span>}
@@ -2542,11 +2573,26 @@ function QuotationApproveDialog({ row, onClose, onSubmit }: {
  * disagree on what was quoted. "Price source" is quotation_type
  * (Product/Material), the same field the Quotations tab labels "Type".
  *
- * POST /admin/jobs/:id/material-review {decision, reason?, permission_required}
- *   approve → 15 Client Approval Pending, permission_required stored.
- *   reject  → back to 16 sub-status 1 (Quotation Pending), reason to the tech.
- * See EasyFix_Backend docs/superpowers/specs/2026-09-18-pending-for-material-status-16-design.md.
+ * POST /admin/jobs/:id/material-review {decision, reason?, permission_required, lines?}
+ *   approve → 15 Client Approval Pending, permission_required stored, per-line
+ *             decisions applied (approved lines get approved_charge + status 1,
+ *             rejected lines get status 2) in the same transaction.
+ *   reject  → back to 16 sub-status 1 (Quotation Pending), reason to the tech;
+ *             a whole-review reject sends no `lines` — every line stays at 0.
+ * See EasyFix_Backend docs/superpowers/specs/2026-09-18-ops-material-approval-design.md
+ * (sub-project E; follows the D design at *-pending-for-material-status-16-design.md).
+ *
+ * Real /admin/quotations columns are `type`, `name`, `unit` (= quantity),
+ * `unit_price`, `status`, `approved_charge` — VERIFIED against
+ * routes/admin/quotations.js. Only `type === 'material'` rows still at
+ * lines still awaiting review (action_on NULL) belong in the review table.
  */
+type MaterialLineState = { rejected: boolean; amount: string };
+
+function quotedLineAmount(r: QuotationRow): number {
+  return (Number(r.unit) || 0) * (Number(r.unit_price) || 0);
+}
+
 function MaterialReviewPanel({ job, onJobChanged }: { job: Job; onJobChanged?: () => void }) {
   const jobId = Number(job.job_id);
   const { me } = useMe();
@@ -2560,18 +2606,66 @@ function MaterialReviewPanel({ job, onJobChanged }: { job: Job; onJobChanged?: (
     isReviewPending && can.isJobMaterialReview ? `/admin/quotations?jobId=${jobId}` : null,
   );
   const rows: QuotationRow[] = Array.isArray(data) ? data : [];
+  // Pending material lines only — status/type are TINYINT/varchar and may
+  // arrive as strings, so normalise both with Number()/String() before compare.
+  const materialRows = useMemo(
+    // Pending = not yet actioned (action_on NULL). A line the app just wrote
+    // carries status 1 already — see the status-scheme note in the Quotations
+    // tab — so filtering on status here would show an empty review table.
+    () => rows.filter((r) => String(r.type) === 'material' && r.action_on == null),
+    [rows],
+  );
 
   const confirm = useConfirm();
   const [permissionRequired, setPermissionRequired] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
+  // Per-line approve/reject + editable amount, keyed by quotation_details id
+  // (the `line_id` the backend contract wants). Prefilled with the quoted
+  // amount; seeded once per line so an operator's edits survive re-renders.
+  const [lineState, setLineState] = useState<Record<number, MaterialLineState>>({});
+  useEffect(() => {
+    setLineState((prev) => {
+      const missing = materialRows.filter((r) => !(Number(r.id) in prev));
+      if (missing.length === 0) return prev;
+      const next = { ...prev };
+      for (const r of missing) {
+        next[Number(r.id)] = { rejected: false, amount: quotedLineAmount(r).toFixed(2) };
+      }
+      return next;
+    });
+  }, [materialRows]);
 
   if (!isReviewPending || !can.isJobMaterialReview) return null;
+
+  const quotedTotal = materialRows.reduce((sum, r) => sum + quotedLineAmount(r), 0);
+  const approvedTotal = materialRows.reduce((sum, r) => {
+    const st = lineState[Number(r.id)];
+    if (!st || st.rejected) return sum;
+    const n = Number(st.amount);
+    return sum + (Number.isFinite(n) ? n : 0);
+  }, 0);
+  // Approve is blocked while any non-rejected row has a blank, non-numeric
+  // or negative amount — half-filled table can't go out.
+  const hasInvalidLine = materialRows.some((r) => {
+    const st = lineState[Number(r.id)];
+    if (!st || st.rejected) return false;
+    const n = Number(st.amount);
+    return st.amount.trim() === '' || !Number.isFinite(n) || n < 0;
+  });
+
+  function setLine(id: number, patch: Partial<MaterialLineState>) {
+    setLineState((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
+  }
 
   async function submit(decision: 'approve' | 'reject') {
     if (decision === 'reject' && !reason.trim()) {
       showToast({ variant: 'error', message: 'A Reject Reason Is Required' });
+      return;
+    }
+    if (decision === 'approve' && hasInvalidLine) {
+      showToast({ variant: 'error', message: 'Enter A Valid Approved Amount For Every Line' });
       return;
     }
     if (decision === 'approve') {
@@ -2584,10 +2678,20 @@ function MaterialReviewPanel({ job, onJobChanged }: { job: Job; onJobChanged?: (
     }
     setBusy(true);
     try {
+      const lines = decision === 'approve'
+        ? materialRows.map((r) => {
+            const id = Number(r.id);
+            const st = lineState[id];
+            return st?.rejected
+              ? { line_id: id, decision: 'reject' as const }
+              : { line_id: id, decision: 'approve' as const, approved_amount: Number(st?.amount) };
+          })
+        : undefined;
       await api.post(`/admin/jobs/${jobId}/material-review`, {
         decision,
         ...(decision === 'reject' ? { reason: reason.trim() } : {}),
         permission_required: permissionRequired,
+        ...(lines ? { lines } : {}),
       });
       showToast({
         variant: 'success',
@@ -2595,6 +2699,7 @@ function MaterialReviewPanel({ job, onJobChanged }: { job: Job; onJobChanged?: (
       });
       setRejecting(false);
       setReason('');
+      setLineState({});
       await refetch();
       // Any surface listing this job (Manage Jobs, My Orders, dashboard
       // counts) reads a status/sub-status that just changed.
@@ -2613,31 +2718,62 @@ function MaterialReviewPanel({ job, onJobChanged }: { job: Job; onJobChanged?: (
         <div className="font-medium text-sm text-warning-strong">Material Review</div>
         <StatusChip tone="gold" size="sm">Review Pending</StatusChip>
       </div>
-      {rows.length === 0 ? (
-        <div className="text-sm text-muted-foreground">No quoted lines yet.</div>
+      {materialRows.length === 0 ? (
+        <div className="text-sm text-muted-foreground">No Material Lines Pending Review.</div>
       ) : (
         <div className="rounded-lg border bg-card overflow-hidden">
           <table className="data-table">
             <thead>
               <tr>
                 <th className="!text-left">Item</th>
-                <th className="!text-left">Price Source</th>
                 <th className="!text-right">Qty</th>
-                <th className="!text-right">Unit ₹</th>
-                <th className="!text-right">Total ₹</th>
+                <th className="!text-right">Quoted Amount (₹)</th>
+                <th className="!text-right">Approved Amount (₹)</th>
+                <th className="!text-center">Reject</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
-                <tr key={r.id}>
-                  <td className="!text-left">{String(r.product_name ?? r.material_name ?? '—')}</td>
-                  <td className="!text-left text-xs">{String(r.quotation_type ?? '—')}</td>
-                  <td className="!text-right font-mono text-xs">{String(r.quantity ?? '')}</td>
-                  <td className="!text-right font-mono text-xs">{r.unit_price != null ? Number(r.unit_price).toFixed(2) : '—'}</td>
-                  <td className="!text-right font-mono">{r.total_price != null ? Number(r.total_price).toFixed(2) : '—'}</td>
-                </tr>
-              ))}
+              {materialRows.map((r) => {
+                const id = Number(r.id);
+                const st = lineState[id] ?? { rejected: false, amount: quotedLineAmount(r).toFixed(2) };
+                const amountInvalid = !st.rejected
+                  && (st.amount.trim() === '' || !Number.isFinite(Number(st.amount)) || Number(st.amount) < 0);
+                return (
+                  <tr key={id}>
+                    <td className="!text-left">{String(r.name ?? '—')}</td>
+                    <td className="!text-right font-mono text-xs">{String(r.unit ?? '')}</td>
+                    <td className="!text-right font-mono text-xs">{quotedLineAmount(r).toFixed(2)}</td>
+                    <td className="!text-right">
+                      <Input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={st.amount}
+                        onChange={(e) => setLine(id, { amount: e.target.value })}
+                        disabled={st.rejected}
+                        aria-invalid={amountInvalid}
+                        className={cn('font-mono text-xs h-8 w-28 ml-auto', amountInvalid && 'border-urgent')}
+                      />
+                    </td>
+                    <td className="!text-center">
+                      <Checkbox
+                        checked={st.rejected}
+                        onChange={(rejected) => setLine(id, { rejected })}
+                        label={`Reject ${String(r.name ?? 'line')}`}
+                      />
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
+            <tfoot>
+              <tr className="font-medium">
+                <td className="!text-left" colSpan={2}>Total</td>
+                <td className="!text-right font-mono text-xs">{quotedTotal.toFixed(2)}</td>
+                <td className="!text-right font-mono text-xs">{approvedTotal.toFixed(2)}</td>
+                <td />
+              </tr>
+            </tfoot>
           </table>
         </div>
       )}
@@ -2675,7 +2811,7 @@ function MaterialReviewPanel({ job, onJobChanged }: { job: Job; onJobChanged?: (
           >
             Reject
           </Button>
-          <Button onClick={() => submit('approve')} disabled={busy}>
+          <Button onClick={() => submit('approve')} disabled={busy || hasInvalidLine}>
             {busy ? '…' : 'Approve'}
           </Button>
         </div>
