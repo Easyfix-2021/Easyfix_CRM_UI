@@ -15,6 +15,7 @@ import { SearchSelect } from '@/components/ui/search-select';
 import { DateTimeSlotPicker, TimeSelect } from '@/components/ui/date-time-slot-picker';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
 import { Switch } from '@/components/ui/switch';
+import { Checkbox } from '@/components/ui/checkbox';
 import { AddressPickerWithMap, type AddressValue } from '@/components/ui/address-picker-with-map';
 import { AddressEditDialog, type EditableAddress } from './AddressEditDialog';
 import { SkillImageLightbox, type SkillImageLightboxValue } from '@/components/easyfixer/SkillImageLightbox';
@@ -44,7 +45,7 @@ import { resolveParentAddressId, buildJobAddressPayload } from '@/lib/job-addres
 // (src/lib/job-slots.ts); never re-declare a slot array at a call site.
 import { BOOKING_BANDS, slotChoicesFor, inferSlotFromTime, bandForTime, isKnownBand, canonicalSlot, displaySlot, AFTER_HOURS_SLOT } from '@/lib/job-slots';
 import { useLookup } from '@/lib/use-lookup';
-import { formatDate, formatEasyfixerName, istNowWallClock, ST, statusLabel, statusTone, toIstClockTime } from '@/lib/utils';
+import { formatDate, formatEasyfixerName, istNowWallClock, materialSubStatusLabel, ST, statusLabel, statusTone, toIstClockTime } from '@/lib/utils';
 import { maskMobile, formatServiceAddress, INDIAN_MOBILE_REGEX, INDIAN_MOBILE_ERROR, isValidIndianMobile, normalizeMobileDigits } from '@/lib/format';
 import { formatJobAge, jobAgeTitle } from '@/lib/job-age';
 
@@ -162,6 +163,11 @@ export type JobModalMode = JobModalAction;
 
 type Job = Record<string, unknown> & {
   job_id: number; job_status: number;
+  // Pending for Material (status 16) sub-state — 1 Quotation Pending, 2
+  // Review Pending; null/absent at any other status. See
+  // MaterialReviewPanel + materialSubStatusLabel (lib/utils.ts). May arrive
+  // as a boolean for a TINYINT(1) column — normalise with Number().
+  material_sub_status?: number | boolean | null;
   services?: unknown[]; images?: unknown[];
   /*
    * Live delegation, when there is one — see @/lib/job-share. Optional: a BE
@@ -1246,6 +1252,10 @@ function ViewBody({ job, onRefresh, initialTab, onDirtyChange, commentsRefreshKe
             to the top of the Summary tab so ops action pending asks
             before anything else. Renders nothing when there are none. */}
         <JobCustomerRequests jobId={Number(job.job_id)} jobStatus={Number(job.job_status)} onJobChanged={onRefresh} />
+        {/* Material Review — PM approve/reject step for status 16 sub-state
+            2 (Review Pending). Self-gates on status/sub-status/permission;
+            renders nothing otherwise. */}
+        <MaterialReviewPanel job={job} onJobChanged={onRefresh} />
         {/* 3-column layout (2026-05-26 per ops): packs the four short
             DlCards (Customer / Client / Job meta / Audit & History) into
             a denser grid so the page doesn't read as half-empty. Address
@@ -2516,6 +2526,161 @@ function QuotationApproveDialog({ row, onClose, onSubmit }: {
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/*
+ * MaterialReviewPanel — the PM's review step for job_status 16 "Pending for
+ * Material" once the technician has sent the quote in
+ * (material_sub_status 2, "Review Pending"). Renders nothing outside that
+ * exact state, or without the isJobMaterialReview grant, so it is inert on
+ * every other job — same self-gating shape as JobQuotationsTab's
+ * isQuotationApprove check just above.
+ *
+ * Reuses the SAME /admin/quotations rows the Quotations tab shows — one
+ * source for the quoted lines, so this panel and that tab can never
+ * disagree on what was quoted. "Price source" is quotation_type
+ * (Product/Material), the same field the Quotations tab labels "Type".
+ *
+ * POST /admin/jobs/:id/material-review {decision, reason?, permission_required}
+ *   approve → 15 Client Approval Pending, permission_required stored.
+ *   reject  → back to 16 sub-status 1 (Quotation Pending), reason to the tech.
+ * See EasyFix_Backend docs/superpowers/specs/2026-09-18-pending-for-material-status-16-design.md.
+ */
+function MaterialReviewPanel({ job, onJobChanged }: { job: Job; onJobChanged?: () => void }) {
+  const jobId = Number(job.job_id);
+  const { me } = useMe();
+  const can = actionFlags(me, ['isJobMaterialReview']);
+  const isReviewPending = Number(job.job_status) === ST.PENDING_FOR_MATERIAL
+    && Number(job.material_sub_status) === 2;
+
+  // Key is null (fetch disabled) unless the panel would actually render —
+  // no point round-tripping quotations for every job the operator opens.
+  const { data, refetch } = useFetch<QuotationRow[]>(
+    isReviewPending && can.isJobMaterialReview ? `/admin/quotations?jobId=${jobId}` : null,
+  );
+  const rows: QuotationRow[] = Array.isArray(data) ? data : [];
+
+  const confirm = useConfirm();
+  const [permissionRequired, setPermissionRequired] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  if (!isReviewPending || !can.isJobMaterialReview) return null;
+
+  async function submit(decision: 'approve' | 'reject') {
+    if (decision === 'reject' && !reason.trim()) {
+      showToast({ variant: 'error', message: 'A Reject Reason Is Required' });
+      return;
+    }
+    if (decision === 'approve') {
+      const ok = await confirm({
+        title: 'Approve Material Quote?',
+        description: 'The job moves to Client Approval Pending for the client to review.',
+        confirmLabel: 'Approve',
+      });
+      if (!ok) return;
+    }
+    setBusy(true);
+    try {
+      await api.post(`/admin/jobs/${jobId}/material-review`, {
+        decision,
+        ...(decision === 'reject' ? { reason: reason.trim() } : {}),
+        permission_required: permissionRequired,
+      });
+      showToast({
+        variant: 'success',
+        message: decision === 'approve' ? 'Material Quote Approved' : 'Material Quote Rejected',
+      });
+      setRejecting(false);
+      setReason('');
+      await refetch();
+      // Any surface listing this job (Manage Jobs, My Orders, dashboard
+      // counts) reads a status/sub-status that just changed.
+      invalidateFetch((k) => k.startsWith('/admin/jobs') || k.startsWith('/admin/quotations'));
+      onJobChanged?.();
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Failed To Submit Review' });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-warning bg-warning-tint/40 p-4 mb-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="font-medium text-sm text-warning-strong">Material Review</div>
+        <StatusChip tone="gold" size="sm">Review Pending</StatusChip>
+      </div>
+      {rows.length === 0 ? (
+        <div className="text-sm text-muted-foreground">No quoted lines yet.</div>
+      ) : (
+        <div className="rounded-lg border bg-card overflow-hidden">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th className="!text-left">Item</th>
+                <th className="!text-left">Price Source</th>
+                <th className="!text-right">Qty</th>
+                <th className="!text-right">Unit ₹</th>
+                <th className="!text-right">Total ₹</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id}>
+                  <td className="!text-left">{String(r.product_name ?? r.material_name ?? '—')}</td>
+                  <td className="!text-left text-xs">{String(r.quotation_type ?? '—')}</td>
+                  <td className="!text-right font-mono text-xs">{String(r.quantity ?? '')}</td>
+                  <td className="!text-right font-mono text-xs">{r.unit_price != null ? Number(r.unit_price).toFixed(2) : '—'}</td>
+                  <td className="!text-right font-mono">{r.total_price != null ? Number(r.total_price).toFixed(2) : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <Checkbox
+        checked={permissionRequired}
+        onChange={setPermissionRequired}
+        label="Appointment / Permission Required"
+      />
+      {rejecting ? (
+        <div className="space-y-2">
+          <Label htmlFor="material-reject-reason">Reject Reason</Label>
+          <Input
+            id="material-reject-reason"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Reason for the technician"
+            autoFocus
+          />
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => { setRejecting(false); setReason(''); }} disabled={busy}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={() => submit('reject')} disabled={busy || !reason.trim()}>
+              {busy ? '…' : 'Confirm Reject'}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex justify-end gap-2">
+          <Button
+            variant="outline"
+            className="border-urgent text-urgent-strong hover:bg-urgent/10"
+            onClick={() => setRejecting(true)}
+            disabled={busy}
+          >
+            Reject
+          </Button>
+          <Button onClick={() => submit('approve')} disabled={busy}>
+            {busy ? '…' : 'Approve'}
+          </Button>
+        </div>
+      )}
+    </div>
   );
 }
 

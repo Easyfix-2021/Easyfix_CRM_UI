@@ -182,7 +182,7 @@ export function toIstClockTime(d: string | Date | null | undefined): string {
  * It belongs beside statusLabel / statusTone below, which are the other half
  * of the same vocabulary.
  */
-export const ST = { BOOKED: 0, SCHEDULED: 1, IN_PROGRESS: 2, COMPLETED: 3, COMPLETED_ALT: 5, CANCELLED: 6, ENQUIRY: 7, CALL_LATER: 9, REVISIT: 10 } as const;
+export const ST = { BOOKED: 0, SCHEDULED: 1, IN_PROGRESS: 2, COMPLETED: 3, COMPLETED_ALT: 5, CANCELLED: 6, ENQUIRY: 7, CALL_LATER: 9, REVISIT: 10, PENDING_FOR_MATERIAL: 16 } as const;
 
 /*
  * Canonical job_status labels — sourced from the DB truth documented in
@@ -199,6 +199,8 @@ export const ST = { BOOKED: 0, SCHEDULED: 1, IN_PROGRESS: 2, COMPLETED: 3, COMPL
  *   9  Unconfirmed
  *   10 Closed from App (estimate approved/rejected)
  *   15 Estimate Pending Approval
+ *   16 Pending for Material (sub-state on material_sub_status: 1 Quotation
+ *      Pending, 2 Review Pending — see materialSubStatusLabel below)
  *   21 Fulfilment On Hold
  *
  * Lifecycle sub-state (matches legacy's `getJobUIStatus`):
@@ -232,10 +234,26 @@ export function statusLabel(code: number, opts?: { assigned?: boolean | null }):
     9:  'Unconfirmed',
     10: 'Closed from App',
     15: 'Estimate Pending',
+    16: 'Pending for Material',
     20: 'In Progress',
     21: 'On Hold',
   };
   return map[code] ?? `Status ${code}`;
+}
+
+/*
+ * material_sub_status — meaningful only while job_status is 16 (Pending for
+ * Material). 1 Quotation Pending (technician still building the estimate),
+ * 2 Review Pending (PM review — see JobModal's MaterialReviewPanel). Any
+ * other value (including null, the state for every job not at 16) returns
+ * null so a caller renders nothing rather than a stray chip.
+ *
+ * Callers must Number() the raw value first: the API may hand a TINYINT
+ * column back as a boolean, and `map[true]` would silently miss.
+ */
+export function materialSubStatusLabel(code: number | boolean | null | undefined): string | null {
+  const map: Record<number, string> = { 1: 'Quotation Pending', 2: 'Review Pending' };
+  return map[Number(code)] ?? null;
 }
 
 /*
@@ -323,6 +341,7 @@ export function statusTone(code: number): StatusTone {
     9:  'urgent',  // Unconfirmed — attention colour
     10: 'gold',    // Revisit
     15: 'gold',    // Estimate pending
+    16: 'gold',    // Pending for material — same "awaiting internal review" family as 15
     20: 'warning', // In progress (alt — same visual as 2)
     21: 'warning', // On hold — warm warning
   };

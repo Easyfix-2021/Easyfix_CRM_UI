@@ -28,18 +28,22 @@
  *     from the picker (no duplicate keys).
  */
 
-import { useEffect, useMemo, useState } from 'react';
-import { Plus, Trash2, Save, AlertCircle, Calculator, Download, Building2, Layers, User } from 'lucide-react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Plus, Trash2, Pencil, AlertTriangle, Save, AlertCircle, Calculator, Download, Building2, Layers, User } from 'lucide-react';
 import { downloadXlsx } from '@/lib/download-xlsx';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { IconButton } from '@/components/ui/icon-button';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
+import { SearchSelect } from '@/components/ui/search-select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { showToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { api, ApiError } from '@/lib/api';
 import { useFetch, useFetchOnce, invalidateFetch } from '@/lib/hooks';
 import { useFormDirtyGuard } from '@/lib/use-form-dirty-guard';
+import { ClientMaterialRateDialog } from './ClientMaterialRateDialog';
+import type { ClientMaterialRateGroup, ClientMaterialRateItem, ClientMaterialRateOption } from './client-material-rate-types';
 
 type RateCardRow = {
   /*
@@ -155,6 +159,105 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
   const [saving, setSaving] = useState(false);
   const [addingIds, setAddingIds] = useState(false);
   const confirm = useConfirm();
+
+  // ── Materials section (sub-project C) ──────────────────────────────────
+  const materialRatesKey = `/admin/clients/${clientId}/material-rates`;
+  const materialOptionsKey = `/admin/clients/${clientId}/material-rates/options`;
+  const {
+    data: materialRates, loading: materialsLoading, error: materialsError, refetch: refetchMaterialRates,
+  } = useFetch<ClientMaterialRateItem[]>(materialRatesKey);
+  // useFetchOnce (not useFetch) so the invalidateFetch() call after every
+  // mutation actually refreshes this picker's options — per
+  // feedback_crm_ui_fetch_hooks, invalidateFetch alone doesn't re-trigger a
+  // plain useFetch subscriber; only useFetchOnce listens for it.
+  const { data: materialOptions } = useFetchOnce<ClientMaterialRateOption[]>(materialOptionsKey);
+  const [addMaterialPick, setAddMaterialPick] = useState<string | number | ''>('');
+  const [materialDialogOpen, setMaterialDialogOpen] = useState(false);
+  const [materialDialogTarget, setMaterialDialogTarget] = useState<ClientMaterialRateOption | null>(null);
+  const [materialDialogEditing, setMaterialDialogEditing] = useState<ClientMaterialRateItem | null>(null);
+  const [materialBusyId, setMaterialBusyId] = useState<number | null>(null);
+
+  function groupLabel(g: ClientMaterialRateGroup): string {
+    return g.brands.length === 0 ? 'No Brand' : g.brands.map((b) => b.brand_name).join(', ');
+  }
+  function flaggedGroups(item: ClientMaterialRateItem): ClientMaterialRateGroup[] {
+    return item.groups.filter((g) =>
+      g.master_price_seen != null && g.master_price_today != null
+      && Number(g.master_price_seen) !== Number(g.master_price_today));
+  }
+  function afterMaterialMutation() {
+    refetchMaterialRates();
+    invalidateFetch((k) => k === materialOptionsKey);
+  }
+  function openAddMaterial(v: string) {
+    const opt = (materialOptions ?? []).find((m) => String(m.material_id) === v);
+    setAddMaterialPick('');
+    if (!opt) return;
+    setMaterialDialogTarget(opt);
+    setMaterialDialogEditing(null);
+    setMaterialDialogOpen(true);
+  }
+  function openEditMaterial(item: ClientMaterialRateItem) {
+    setMaterialDialogTarget({ material_id: item.material_id, material_name: item.material_name });
+    setMaterialDialogEditing(item);
+    setMaterialDialogOpen(true);
+  }
+  async function removeMaterial(item: ClientMaterialRateItem) {
+    const ok = await confirm({
+      title: 'Remove Client Price',
+      description: `Remove the client price for "${item.material_name}"? It will fall back to the master price.`,
+      confirmLabel: 'Remove',
+      variant: 'destructive',
+    });
+    if (!ok) return;
+    setMaterialBusyId(item.material_id);
+    try {
+      await api.delete(`/admin/clients/${clientId}/material-rates/${item.material_id}`);
+      afterMaterialMutation();
+      showToast({ variant: 'success', message: 'Client price removed.' });
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Remove failed.' });
+    } finally {
+      setMaterialBusyId(null);
+    }
+  }
+  async function acceptMaster(item: ClientMaterialRateItem) {
+    setMaterialBusyId(item.material_id);
+    try {
+      await api.post(`/admin/clients/${clientId}/material-rates/${item.material_id}/accept-master`);
+      afterMaterialMutation();
+      showToast({ variant: 'success', message: 'Master price change accepted.' });
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Accept failed.' });
+    } finally {
+      setMaterialBusyId(null);
+    }
+  }
+  async function updateToMaster(item: ClientMaterialRateItem) {
+    const flaggedIds = new Set(flaggedGroups(item).map((g) => g.group_id));
+    if (flaggedIds.size === 0) return;
+    setMaterialBusyId(item.material_id);
+    try {
+      const body = {
+        groups: item.groups.map((g) => ({
+          brand_ids: g.brands.map((b) => b.brand_id),
+          price: flaggedIds.has(g.group_id) && g.master_price_today != null ? g.master_price_today : g.price,
+          states: g.states.map((s) => ({ state_ids: s.state_ids, price: s.price })),
+        })),
+      };
+      await api.put(`/admin/clients/${clientId}/material-rates/${item.material_id}`, body);
+      afterMaterialMutation();
+      showToast({ variant: 'success', message: 'Client price updated to master.' });
+    } catch (e) {
+      showToast({ variant: 'error', message: e instanceof ApiError ? e.message : 'Update failed.' });
+    } finally {
+      setMaterialBusyId(null);
+    }
+  }
+  function onMaterialSaved() {
+    setMaterialDialogOpen(false);
+    afterMaterialMutation();
+  }
 
   // Snapshot serverRows → local draft on first load and after each save.
   useEffect(() => {
@@ -426,6 +529,138 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
             </tbody>
           </table>
         </div>
+      )}
+
+      {/* ── Materials section (sub-project C) ──────────────────────────── */}
+      <div className="pt-4 space-y-2 border-t">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <h3 className="text-sm font-semibold">Materials</h3>
+            <p className="text-xs text-muted-foreground">
+              Materials not listed here quote at the master price.
+            </p>
+          </div>
+          {canEdit && (
+            <div className="w-64">
+              <SearchSelect
+                value={addMaterialPick}
+                onChange={openAddMaterial}
+                options={(materialOptions ?? []).map((m) => ({ value: m.material_id, label: m.material_name }))}
+                placeholder="Add Material…"
+                emptyText="No materials available"
+              />
+            </div>
+          )}
+        </div>
+
+        {materialsLoading && (
+          <div className="text-xs text-muted-foreground">Loading materials…</div>
+        )}
+        {materialsError && (
+          <div className="text-xs text-urgent-strong flex items-center gap-1">
+            <AlertCircle className="size-3.5" /> {materialsError}
+          </div>
+        )}
+
+        {!materialsLoading && (materialRates ?? []).length === 0 && (
+          <div className="text-sm text-muted-foreground italic">
+            No client material prices set. {canEdit ? 'Use "Add Material" above to start.' : ''}
+          </div>
+        )}
+
+        {(materialRates ?? []).length > 0 && (
+          <div className="rounded border bg-card overflow-x-auto">
+            <table className="data-table w-full text-xs">
+              <thead>
+                <tr>
+                  <th className="!text-left">Material</th>
+                  <th className="!text-left">Brand Groups</th>
+                  <th className="!text-center">States</th>
+                  <th className="!text-center">Master</th>
+                  {canEdit && <th></th>}
+                </tr>
+              </thead>
+              <tbody>
+                {(materialRates ?? []).map((item) => {
+                  const flagged = flaggedGroups(item);
+                  const stateCount = item.groups.reduce((n, g) => n + g.states.length, 0);
+                  const busy = materialBusyId === item.material_id;
+                  return (
+                    <Fragment key={item.material_id}>
+                      <tr>
+                        <td className="!text-left font-medium">{item.material_name}</td>
+                        <td className="!text-left">
+                          <div className="space-y-0.5">
+                            {item.groups.map((g) => (
+                              <div key={g.group_id}>
+                                <span className="font-medium">{groupLabel(g)}</span>
+                                <span className="text-muted-foreground"> — &#8377;{fmt2(Number(g.price))}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="!text-center">{stateCount}</td>
+                        <td className="!text-center">
+                          {flagged.length > 0 ? (
+                            <span className="inline-flex items-center gap-1 text-warning-strong bg-warning-tint border border-warning rounded px-1.5 py-0.5">
+                              <AlertTriangle className="size-3" /> Review
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </td>
+                        {canEdit && (
+                          <td className="!text-right">
+                            <div className="flex items-center justify-end gap-1">
+                              <IconButton icon={Pencil} label="Edit Client Price" intent="primary"
+                                disabled={busy} onClick={() => openEditMaterial(item)} />
+                              <IconButton icon={Trash2} label="Remove Client Price" intent="danger"
+                                disabled={busy} onClick={() => removeMaterial(item)} />
+                            </div>
+                          </td>
+                        )}
+                      </tr>
+                      {flagged.length > 0 && (
+                        <tr key={`${item.material_id}-flag`} className="bg-warning-tint/40">
+                          <td colSpan={canEdit ? 5 : 4} className="!text-left px-3 py-2">
+                            <div className="flex items-start gap-2">
+                              <AlertTriangle className="size-3.5 mt-0.5 text-warning-strong shrink-0" />
+                              <div className="space-y-1">
+                                {flagged.map((g) => (
+                                  <div key={g.group_id} className="text-warning-strong">
+                                    {flagged.length > 1 ? `${groupLabel(g)}: ` : ''}
+                                    Master changed &#8377;{fmt2(Number(g.master_price_seen))} &rarr; &#8377;{fmt2(Number(g.master_price_today))}
+                                  </div>
+                                ))}
+                                {canEdit && (
+                                  <div className="flex gap-2 pt-1">
+                                    <Button size="sm" variant="outline" disabled={busy} onClick={() => acceptMaster(item)}>Accept</Button>
+                                    <Button size="sm" disabled={busy} onClick={() => updateToMaster(item)}>Update</Button>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {materialDialogOpen && materialDialogTarget && (
+        <ClientMaterialRateDialog
+          open={materialDialogOpen}
+          onClose={() => setMaterialDialogOpen(false)}
+          clientId={clientId}
+          material={materialDialogTarget}
+          editing={materialDialogEditing}
+          onSaved={onMaterialSaved}
+        />
       )}
 
       {addingIds && (

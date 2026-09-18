@@ -12,7 +12,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { api } from '@/lib/api';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
-import { formatDate, formatEasyfixerName, statusLabel, statusTone } from '@/lib/utils';
+import { formatDate, formatEasyfixerName, statusLabel, statusTone, materialSubStatusLabel } from '@/lib/utils';
 import { formatJobAge, jobAgeTitle, JOB_AGE_SORT_KEY, type JobAgeFields } from '@/lib/job-age';
 import { displaySlot } from '@/lib/job-slots';
 import { StatusChip } from '@/components/ui/StatusChip';
@@ -83,6 +83,11 @@ type JobRow = JobAgeFields & {
   job_id: number; job_reference_id: string | null; client_ref_id: string | null;
   job_status: number; job_type: string; source_type: string | null;
   job_desc: string | null;
+  // Pending for Material (status 16) sub-state — 1 Quotation Pending, 2
+  // Review Pending. Meaningless at any other job_status. May arrive as a
+  // boolean for a TINYINT(1) column, hence materialSubStatusLabel()'s
+  // Number() normalisation rather than a direct equality check here.
+  material_sub_status?: number | boolean | null;
   created_date_time: string; requested_date_time: string; scheduled_date_time: string | null;
   checkin_date_time: string | null; checkout_date_time: string | null;
   // Extra fields surfaced on the Unconfirmed tab — see UnconfirmedJobsTable.
@@ -1050,6 +1055,13 @@ export default function MyOrdersPage() {
                         {statusLabel(j.job_status, { assigned: j.fk_easyfixter_id != null })}
                       </StatusChip>
                     )}
+                    {/* Material sub-state — only meaningful at status 16, see
+                        materialSubStatusLabel in lib/utils.ts. */}
+                    {j.job_status === 16 && materialSubStatusLabel(j.material_sub_status) && (
+                      <StatusChip tone="neutral" size="sm" className="ml-1">
+                        {materialSubStatusLabel(j.material_sub_status)}
+                      </StatusChip>
+                    )}
                     </OfferHoverCard>
                   </td>
                   <td className="max-w-[16rem] truncate" title={j.remarks ?? undefined}>{j.remarks || '—'}</td>
@@ -1139,6 +1151,13 @@ export default function MyOrdersPage() {
                     <StatusChip tone={statusTone(j.job_status)}>
                       {statusLabel(j.job_status, { assigned: j.fk_easyfixter_id != null })}
                     </StatusChip>
+                    {/* Material sub-state — only meaningful at status 16, see
+                        materialSubStatusLabel in lib/utils.ts. */}
+                    {j.job_status === 16 && materialSubStatusLabel(j.material_sub_status) && (
+                      <StatusChip tone="neutral" size="sm" className="ml-1">
+                        {materialSubStatusLabel(j.material_sub_status)}
+                      </StatusChip>
+                    )}
                     {/* Delegation pill — same component and placement as /jobs.
                         Renders nothing unless a share is LIVE. */}
                     <ShareChip share={j.share} className="ml-1" />

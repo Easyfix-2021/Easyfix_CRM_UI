@@ -8,8 +8,10 @@
  */
 
 import { useMemo, useState } from 'react';
+import Link from 'next/link';
 import {
   Package, Search, Plus, Upload, Pencil, XCircle, CheckCircle2, Trash2, AlertTriangle, Tags,
+  ClipboardList, Info,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -17,6 +19,7 @@ import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
 import { SearchSelect, type SearchOption } from '@/components/ui/search-select';
 import { StatusChip } from '@/components/ui/StatusChip';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
 import { SortHeader, cycleSort, type SortDir } from '@/lib/use-sort';
 import { api, ApiError } from '@/lib/api';
@@ -26,20 +29,29 @@ import { showToast } from '@/components/ui/toast';
 import { useLookup } from '@/lib/use-lookup';
 import { useMe } from '@/lib/auth-context';
 import { actionFlags } from '@/lib/permissions';
+import { formatDate } from '@/lib/utils';
 import { MaterialDialog } from './MaterialDialog';
 import { BrandDialog } from './BrandDialog';
 import { DeleteReferencesDialog } from './DeleteReferencesDialog';
+import { RejectMaterialRequestDialog } from './RejectMaterialRequestDialog';
 import { ImportDialog } from './ImportDialog';
 import {
   MATERIAL_ACTIONS, BRAND_ACTIONS,
   type MaterialListItem, type MaterialListResponse,
   type BrandListItem, type BrandListResponse, type BrandOption,
   type MaterialImportSummary, type BrandImportSummary,
+  type MaterialRequestListItem, type MaterialRequestListResponse,
+  type MaterialRequestCountResponse, type MaterialSaveBody,
 } from './types';
 
 const MATERIALS_LIMIT_CAP = 1000;
 const BRANDS_LIMIT_CAP = 1000;
+// ponytail: no confirmed Joi max for this endpoint yet (backend built in the
+// same pass, contract-only) — mirrors the sibling lists' cap until the real
+// endpoint max is known.
+const MATERIAL_REQUESTS_LIMIT_CAP = 1000;
 const DEFAULT_PAGE_SIZE: TablePageSize = 20;
+type MaterialRequestStatusTab = 'pending' | 'approved' | 'rejected';
 
 type MaterialStatusFilter = 'active' | 'inactive' | 'price_pending' | 'all';
 type MaterialSortKey = 'material_name' | 'service_catg_name' | 'pricing_type' | 'price_min' | 'status';
@@ -157,6 +169,101 @@ export default function ManageMaterialsPage() {
   function refreshBrands() { refetchBrands(); bustBrandLookups(); }
   function refreshBoth() { refetchMaterials(); refetchBrands(); bustBrandLookups(); }
 
+  // ── Material Requests (sub-project A) filter/paging state ─────────────
+  const [mrStatus, setMrStatus] = useState<MaterialRequestStatusTab>('pending');
+  const [mrSearch, setMrSearch] = useState('');
+  const [mrPage, setMrPage] = useState(0);
+  const [mrPageSize, setMrPageSize] = useState<TablePageSize>(DEFAULT_PAGE_SIZE);
+  const dMrSearch = useDebouncedValue(mrSearch, 300);
+
+  const mrLimit = pageSizeToLimit(mrPageSize, MATERIAL_REQUESTS_LIMIT_CAP);
+  const requestsListUrl = useMemo(() => {
+    const p = new URLSearchParams();
+    p.set('status', mrStatus);
+    if (dMrSearch.trim()) p.set('search', dMrSearch.trim());
+    p.set('page', String(mrPage));
+    p.set('limit', String(mrLimit));
+    return `/admin/material-requests?${p.toString()}`;
+  }, [mrStatus, dMrSearch, mrPage, mrLimit]);
+
+  const { data: requestsData, loading: requestsLoading, refetch: refetchRequests } =
+    useFetch<MaterialRequestListResponse>(can.isMaterialView ? requestsListUrl : null);
+  const materialRequests = requestsData?.items ?? [];
+  const materialRequestsTotal = requestsData?.total ?? 0;
+
+  const { data: requestsCountData, refetch: refetchRequestsCount } =
+    useFetch<MaterialRequestCountResponse>(can.isMaterialView ? '/admin/material-requests/count' : null);
+  const pendingRequestsCount = requestsCountData?.count ?? 0;
+
+  // Every request mutation (approve/reject) can change what the Materials
+  // card + brand/material lookups should show, so it always refreshes both —
+  // reusing the existing helpers rather than writing new refresh plumbing.
+  function refreshAfterRequestMutation() {
+    refetchRequests();
+    refetchRequestsCount();
+    refreshBoth();
+  }
+
+  // ── Material Requests dialog state ─────────────────────────────────────
+  const [approveDialogOpen, setApproveDialogOpen] = useState(false);
+  const [approvingRequest, setApprovingRequest] = useState<MaterialRequestListItem | null>(null);
+  const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
+  const [rejectingRequest, setRejectingRequest] = useState<MaterialRequestListItem | null>(null);
+
+  // The request only carries a free-typed `brand_name` (no brand_id) — resolve
+  // it against the same active brand-options list the dialog itself uses, so
+  // Approve can seed a real Per-Brand price group when it matches. No match
+  // (typo, retired brand, brand-new name) falls back to No Brand with a banner
+  // rather than guessing or silently dropping the technician's input.
+  const approveBrandMatch = useMemo(() => {
+    const typed = approvingRequest?.brand_name?.trim().toLowerCase();
+    if (!typed) return undefined;
+    return (brandOptions ?? []).find((b) => b.brand_name.trim().toLowerCase() === typed);
+  }, [approvingRequest, brandOptions]);
+
+  const approvePrefill = useMemo(() => {
+    if (!approvingRequest) return null;
+    return {
+      material_name: approvingRequest.material_name,
+      description: null,
+      service_catg_id: approvingRequest.service_catg_id,
+      groupSeed: {
+        optionIds: approveBrandMatch ? [approveBrandMatch.brand_id] : [],
+        price: approvingRequest.expected_price ?? null,
+      },
+    };
+  }, [approvingRequest, approveBrandMatch]);
+
+  const approveBrandUnmatched = !!approvingRequest?.brand_name && !approveBrandMatch;
+
+  // Approve POSTs to the request endpoint (never the plain material-create
+  // endpoint) with the dialog's own payload. A 409 duplicate names the
+  // existing material — offer to link instead of creating a second one.
+  async function approveOverrideSubmit(body: MaterialSaveBody) {
+    if (!approvingRequest) return;
+    try {
+      await api.post(`/admin/material-requests/${approvingRequest.request_id}/approve`, body);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        const details = e.details as { existing_material_id?: number; existing_material_name?: string } | undefined;
+        if (details?.existing_material_id) {
+          const ok = await confirm({
+            title: 'Material Already Exists',
+            description: `"${details.existing_material_name ?? 'An existing material'}" already matches this name. Link this request to it instead of creating a duplicate?`,
+            confirmLabel: 'Link Existing',
+          });
+          if (ok) {
+            await api.post(`/admin/material-requests/${approvingRequest.request_id}/approve`, {
+              ...body, link_material_id: details.existing_material_id,
+            });
+            return;
+          }
+        }
+      }
+      throw e;
+    }
+  }
+
   // ── Dialog state ──────────────────────────────────────────────────────
   const [materialDialogOpen, setMaterialDialogOpen] = useState(false);
   const [editingMaterial, setEditingMaterial] = useState<MaterialListItem | null>(null);
@@ -258,6 +365,113 @@ export default function ManageMaterialsPage() {
           Material master (Fixed / Dynamic pricing) and Brand master used across quotations and rate cards.
         </p>
       </div>
+
+      {/* ── Material Requests (sub-project A) ───────────────────────── */}
+      <Card>
+        <CardContent className="p-0">
+          <div className="p-3 flex items-center justify-between gap-3 flex-wrap border-b">
+            <h2 className="text-base font-semibold flex items-center gap-2">
+              <ClipboardList className="size-4" /> Material Requests
+              {pendingRequestsCount > 0 && (
+                <StatusChip tone="warning" size="sm">{pendingRequestsCount} Pending</StatusChip>
+              )}
+            </h2>
+          </div>
+
+          <div className="p-3 flex items-center gap-2 flex-wrap border-b">
+            <Tabs value={mrStatus} onValueChange={(v) => { setMrStatus(v as MaterialRequestStatusTab); setMrPage(0); }}>
+              <TabsList>
+                <TabsTrigger value="pending">Pending</TabsTrigger>
+                <TabsTrigger value="approved">Approved</TabsTrigger>
+                <TabsTrigger value="rejected">Rejected</TabsTrigger>
+              </TabsList>
+            </Tabs>
+            <div className="relative flex-1 min-w-[220px]">
+              <Search className="size-4 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input placeholder="Search by material or brand…" value={mrSearch} onChange={(e) => { setMrSearch(e.target.value); setMrPage(0); }} className="pl-8" />
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="data-table w-full" style={{ minWidth: '1000px' }}>
+              <thead>
+                <tr>
+                  <th className="!text-left whitespace-nowrap">Material</th>
+                  <th className="!text-left whitespace-nowrap">Brand</th>
+                  <th className="!text-left whitespace-nowrap">Category</th>
+                  <th className="!text-left whitespace-nowrap">Raised By</th>
+                  <th className="!text-left whitespace-nowrap">Job</th>
+                  <th className="!text-right whitespace-nowrap">Expected Price</th>
+                  <th className="!text-left whitespace-nowrap">Raised On</th>
+                  <th className="!text-center whitespace-nowrap">Status</th>
+                  <th className="!text-right whitespace-nowrap">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {requestsLoading && materialRequests.length === 0 && (
+                  <tr><td colSpan={9} className="!text-center text-muted-foreground py-6">Loading…</td></tr>
+                )}
+                {!requestsLoading && materialRequests.length === 0 && (
+                  <tr><td colSpan={9} className="!text-center text-muted-foreground py-6">No requests match the current filters.</td></tr>
+                )}
+                {materialRequests.map((r) => {
+                  // request_status is a plain TINYINT (1/2/3), not TINYINT(1) —
+                  // still routed through Number() defensively rather than `=== 1`.
+                  const statusNum = Number(r.request_status);
+                  return (
+                    <tr key={r.request_id}>
+                      <td className="!text-left">
+                        <div className="font-medium truncate" title={r.material_name}>{r.material_name}</div>
+                      </td>
+                      <td className="!text-left truncate">{r.brand_name || <span className="text-muted-foreground">—</span>}</td>
+                      <td className="!text-left truncate" title={r.service_catg_name}>{r.service_catg_name}</td>
+                      <td className="!text-left truncate">{r.efr_name || <span className="text-muted-foreground">—</span>}</td>
+                      <td className="!text-left whitespace-nowrap">
+                        {r.job_id
+                          ? <Link href={`/jobs/${r.job_id}`} className="text-primary hover:underline font-medium">#{r.job_id}</Link>
+                          : <span className="text-muted-foreground">—</span>}
+                      </td>
+                      <td className="!text-right whitespace-nowrap tabular-nums">
+                        {r.expected_price != null ? `₹${r.expected_price}` : '—'}
+                      </td>
+                      <td className="!text-left whitespace-nowrap">{formatDate(r.created_at)}</td>
+                      <td className="!text-center whitespace-nowrap">
+                        {statusNum === 1 && <StatusChip tone="warning" size="sm">Pending</StatusChip>}
+                        {statusNum === 2 && <StatusChip tone="success" size="sm">Approved</StatusChip>}
+                        {statusNum === 3 && <StatusChip tone="urgent" size="sm">Rejected</StatusChip>}
+                      </td>
+                      <td className="!text-right whitespace-nowrap">
+                        <div className="inline-flex items-center justify-end gap-1.5">
+                          {can.isMaterialAddNew && statusNum === 1 && (
+                            <>
+                              <IconButton icon={CheckCircle2} label="Approve Request" intent="success"
+                                onClick={() => { setApprovingRequest(r); setApproveDialogOpen(true); }} />
+                              <IconButton icon={XCircle} label="Reject Request" intent="danger"
+                                onClick={() => { setRejectingRequest(r); setRejectDialogOpen(true); }} />
+                            </>
+                          )}
+                          {statusNum === 3 && r.reject_reason && (
+                            <span className="text-xs text-muted-foreground truncate max-w-[180px]" title={r.reject_reason}>
+                              {r.reject_reason}
+                            </span>
+                          )}
+                          {!can.isMaterialAddNew && statusNum === 1 && (
+                            <span className="text-xs text-muted-foreground">view-only</span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="px-3 py-2 border-t">
+            <TablePagination page={mrPage} pageSize={mrPageSize} total={materialRequestsTotal} loading={requestsLoading}
+              onPageChange={setMrPage} onPageSizeChange={(s) => { setMrPageSize(s); setMrPage(0); }} />
+          </div>
+        </CardContent>
+      </Card>
 
       {/* ── Material Master ─────────────────────────────────────────── */}
       <Card>
@@ -497,6 +711,35 @@ export default function ManageMaterialsPage() {
         editing={editingBrand}
         canReactivate={can.isBrandDeactivate}
         onSaved={() => { setBrandDialogOpen(false); refreshBoth(); }}
+      />
+
+      <MaterialDialog
+        open={approveDialogOpen}
+        onClose={() => setApproveDialogOpen(false)}
+        editing={null}
+        canSeeBrands={can.isBrandView}
+        prefill={approvePrefill}
+        overrideSubmit={approveOverrideSubmit}
+        titleOverride={approvingRequest ? `Approve "${approvingRequest.material_name}"` : 'Approve Material Request'}
+        submitLabelOverride="Approve"
+        savedMessage="Material request approved."
+        bannerNode={approveBrandUnmatched ? (
+          <div className="text-sm text-info-strong bg-info-tint border border-info/30 rounded p-2 flex items-start gap-2">
+            <Info className="size-4 mt-0.5 shrink-0" />
+            <span>
+              Technician typed brand &quot;{approvingRequest?.brand_name}&quot; — no matching brand found.
+              Pick one below under Per Brand, or leave this as No Brand.
+            </span>
+          </div>
+        ) : undefined}
+        onSaved={() => { setApproveDialogOpen(false); refreshAfterRequestMutation(); }}
+      />
+
+      <RejectMaterialRequestDialog
+        open={rejectDialogOpen}
+        onClose={() => setRejectDialogOpen(false)}
+        request={rejectingRequest}
+        onDone={refreshAfterRequestMutation}
       />
 
       <DeleteReferencesDialog
