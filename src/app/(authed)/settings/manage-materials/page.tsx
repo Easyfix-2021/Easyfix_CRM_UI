@@ -193,7 +193,7 @@ export default function ManageMaterialsPage() {
 
   const { data: requestsCountData, refetch: refetchRequestsCount } =
     useFetch<MaterialRequestCountResponse>(can.isMaterialView ? '/admin/material-requests/count' : null);
-  const pendingRequestsCount = requestsCountData?.pending ?? 0;
+  const pendingRequestsCount = requestsCountData?.count ?? 0;
 
   // Every request mutation (approve/reject) can change what the Materials
   // card + brand/material lookups should show, so it always refreshes both —

@@ -114,7 +114,8 @@ export type MaterialRequestListItem = {
   created_at: string;
 };
 export type MaterialRequestListResponse = { items: MaterialRequestListItem[]; total: number };
-export type MaterialRequestCountResponse = { pending: number };
+/* The endpoint counts whichever status is asked for; default pending. */
+export type MaterialRequestCountResponse = { count: number };
 
 /* Body shape MaterialDialog POSTs/PUTs — shared with the approve override so
    the request-approve flow can build the same payload the dialog would. */
