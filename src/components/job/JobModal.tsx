@@ -5053,150 +5053,6 @@ const BLANK_ADDRESS_FIELDS = {
   address_instruction: '',
 };
 
-/*
- * ─── CONFIRM & SCHEDULE ADDRESS RULES (2026-09-17, ops) ─────────────────────
- *
- * Confirm & Schedule used to EDIT a tbl_address row in place: picking a saved
- * address copied its fields into the form and the confirm PATCH wrote them back
- * through `patch.address` onto the job's CURRENT row. So picking address B
- * overwrote address A — a row other jobs (and this customer's history) still
- * point at — and every edit silently rewrote the past.
- *
- * The rules now:
- *   R1  a saved address is never edited from this screen;
- *   R2  picking one re-points the job at that row, as is (`fk_address_id`);
- *   R3  otherwise the operator adds a NEW address, which is always a NEW row
- *       (`new_address`);
- *   R4  the list shows only COMPLETE addresses that belong to this customer;
- *   R5  the job's current address is pinned first and checked by default, so
- *       the checked row is always what gets booked.
- *
- * Book New Call has its own picker and is deliberately NOT on these rules yet.
- *
- * One GPS regex for the Book Call gate AND the saved-address filter: a row the
- * list offers must never be one the gate then refuses.
- */
-const CONFIRM_GPS_RX = /^-?\d+(\.\d+)?,-?\d+(\.\d+)?$/;
-
-type ConfirmAddressFields = typeof BLANK_ADDRESS_FIELDS;
-type ConfirmAddressRow = ConfirmAddressFields & { address_id: number };
-
-/* Any address-bearing object (a tbl_address row, the job, the form) → the seven
-   address fields as form strings. Everything else on the object is ignored. */
-function toConfirmAddressFields(a: Record<string, unknown> | null | undefined): ConfirmAddressFields {
-  const s = (v: unknown) => (v == null ? '' : String(v));
-  return {
-    address: s(a?.address),
-    building: s(a?.building),
-    landmark: s(a?.landmark),
-    city_id: s(a?.city_id),
-    pin_code: s(a?.pin_code),
-    gps_location: s(a?.gps_location),
-    address_instruction: s(a?.address_instruction),
-  };
-}
-
-/*
- * What a COMPLETE address lacks, as operator-readable labels. Complete =
- * address, building, city, 6-digit PIN and GPS — the same predicate the backend
- * applies for `?complete=1`. (An as-is CURRENT address books under the Book
- * Call gate's older, narrower rule instead — no building needed — see
- * confirmSection2Complete.)
- */
-function confirmAddressMissing(a: ConfirmAddressFields): string[] {
-  const missing: string[] = [];
-  if (!a.address.trim()) missing.push('Service Address');
-  if (!a.building.trim()) missing.push('Building (Search Location On Map)');
-  if (!(Number(a.city_id) > 0)) missing.push('City');
-  if (!/^[0-9]{6}$/.test(a.pin_code)) missing.push('PIN (6 digits)');
-  if (!CONFIRM_GPS_RX.test(a.gps_location.trim())) missing.push('GPS Location (pick on the map)');
-  return missing;
-}
-
-/* The job's current tbl_address id, or null when it has none. */
-function confirmCurrentAddressId(job: Record<string, unknown> | null | undefined): number | null {
-  const id = Number(job?.fk_address_id);
-  return Number.isInteger(id) && id > 0 ? id : null;
-}
-
-/* Picker row label: building, address, city, PIN — the non-empty parts only.
-   Search matches this exact string, so what you can find is what you can see. */
-function confirmAddressLabel(a: ConfirmAddressFields, cityName: string): string {
-  return [a.building, a.address, cityName, a.pin_code]
-    .map((p) => String(p ?? '').trim())
-    .filter(Boolean)
-    .join(', ');
-}
-
-/*
- * The pre-fill for "Add New Address". Bulk-upload rows arrive as one address
- * blob with no structured building, so an empty Building is seeded from the
- * address text (source "Bulk Upload", or the older literal 'excel'). This only
- * ever shapes a NEW address — it used to be written onto the saved row in
- * place, which R1 forbids.
- */
-function prefillNewConfirmAddress(job: Record<string, unknown> | null | undefined, from: ConfirmAddressFields): ConfirmAddressFields {
-  const src = String(job?.source_type ?? '').trim().toLowerCase();
-  const isBulk = src === 'bulk upload' || src === 'excel';
-  if (isBulk && !from.building.trim() && from.address.trim()) {
-    return { ...from, building: from.address };
-  }
-  return { ...from };
-}
-
-/* The PATCH `new_address` body — trimmed; landmark and instruction only when set. */
-function buildConfirmNewAddress(a: ConfirmAddressFields): Record<string, unknown> {
-  const out: Record<string, unknown> = {
-    address: a.address.trim(),
-    building: a.building.trim(),
-    city_id: Number(a.city_id),
-    pin_code: a.pin_code.trim(),
-    gps_location: a.gps_location.trim(),
-  };
-  const landmark = a.landmark.trim();
-  if (landmark) out.landmark = landmark;
-  const instruction = a.address_instruction.trim();
-  if (instruction) out.address_instruction = instruction;
-  return out;
-}
-
-/* Field-by-field equality that ignores formatting noise: whitespace, a city id
-   sent as a number vs a string, and GPS precision ("28.1,77.2" = "28.100000,77.200000"). */
-function sameConfirmAddressField(key: keyof ConfirmAddressFields, a: string, b: string): boolean {
-  const norm = (v: string) => {
-    const t = v.trim();
-    if (key === 'city_id') return t === '' ? '' : String(Number(t));
-    if (key === 'gps_location') {
-      const parts = t.split(',').map((x) => Number(x.trim()));
-      if (parts.length === 2 && parts.every((n) => Number.isFinite(n))) {
-        return parts.map((n) => n.toFixed(6)).join(',');
-      }
-    }
-    return t;
-  };
-  return norm(a) === norm(b);
-}
-
-/*
- * Where the picker starts for a freshly (re)seeded form.
- *   - the job has a current address and the form still shows it  → SAVED, current row checked;
- *   - the form shows something else (a magic-link customer submission changed
- *     the address)                                                 → NEW, with those values,
- *     so accepting it creates a new row instead of editing the current one;
- *   - the job has no address row at all                            → NEW.
- */
-function confirmAddressStart(
-  job: Record<string, unknown> | null | undefined,
-  shown: ConfirmAddressFields,
-): { mode: 'saved' | 'new'; pickId: number | null; fields: ConfirmAddressFields } {
-  const currentId = confirmCurrentAddressId(job);
-  const current = toConfirmAddressFields(job);
-  const changed = (Object.keys(current) as Array<keyof ConfirmAddressFields>)
-    .some((k) => !sameConfirmAddressField(k, shown[k], current[k]));
-  if (currentId && !changed) return { mode: 'saved', pickId: currentId, fields: current };
-  return { mode: 'new', pickId: currentId, fields: prefillNewConfirmAddress(job, shown) };
-}
-
 function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer, onFormDirty }: {
   mode: 'create' | 'edit' | 'confirm';
   initial: Job | null;
@@ -5582,86 +5438,35 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
   }, [prefillCustomer?.customer?.customer_id]);
 
   /*
-   * Confirm & Schedule — the customer's saved addresses (tbl_address), fetched
-   * by the job's fk_customer_id via GET /admin/customers/:id?complete=1
-   * (returns `{ ...customer, addresses }`). See the CONFIRM & SCHEDULE ADDRESS
-   * RULES block above JobForm.
-   *
-   * `complete=1` makes the server return only rows that belong to this customer
-   * and are complete (address, building, city, 6-digit PIN, GPS) — so the blank
-   * "(No Address)" rows are gone. The same rule is applied again here, with the
-   * Book Call gate's own GPS regex: defence in depth, and it keeps the list
-   * honest against a backend that predates the parameter and ignores it.
-   *
-   * Confirm only. The list is rendered by the confirm branch alone, so the Edit
-   * form fetching it was a request whose answer nothing read. Create mode has
-   * its own prefillCustomer.addresses picker.
+   * Confirm/Edit mode — the customer's saved addresses (tbl_address), fetched
+   * by the job's fk_customer_id via the existing GET /admin/customers/:id
+   * (returns `{ ...customer, addresses }`). Bulk-uploaded jobs frequently
+   * arrive with a thin/empty address, so we surface every address the customer
+   * has on file and let the operator pick one to auto-fill the form in a click.
+   * Create mode has its own richer prefillCustomer.addresses picker, so this is
+   * gated to edit/confirm only.
    */
   type SavedCustomerAddress = {
     address_id: number;
-    customer_id?: number | null;
     address: string | null;
     building?: string | null;
     landmark?: string | null;
     city_id?: number | null;
     pin_code?: string | null;
     gps_location?: string | null;
-    address_instruction?: string | null;
   };
-  const [savedAddresses, setSavedAddresses] = useState<ConfirmAddressRow[]>([]);
+  const [savedAddresses, setSavedAddresses] = useState<SavedCustomerAddress[]>([]);
   // Client-side filter for the Confirm & Schedule saved-address picker.
   const [confirmAddrQuery, setConfirmAddrQuery] = useState('');
-  /*
-   * WHAT THE CONFIRM SAVE DOES WITH THE ADDRESS — one of exactly two modes:
-   *   'saved' → the checked row (`confirmAddrPickId`) is booked AS IS. The
-   *             current row sends nothing; any other row sends `fk_address_id`.
-   *             The address fields are read-only.
-   *   'new'   → the form's address fields become a NEW tbl_address row for this
-   *             customer (`new_address`). No row is checked.
-   * `confirmAddrPickId` is kept while in 'new' so "Use a saved address" can go
-   * back to the row the new address was pre-filled from.
-   */
-  // Seeded from the job on first render (the reseed effect below re-derives both
-  // on every reseed), so the first frame already shows the right mode instead of
-  // flipping — and remounting the map picker — a render later. Only module-level
-  // helpers and props are read here: nothing declared below (see
-  // tests/hook-lazy-initialiser-tdz.test.js).
-  const [confirmAddrMode, setConfirmAddrMode] = useState<'saved' | 'new'>(
-    () => (mode === 'confirm' ? confirmAddressStart(initial, toConfirmAddressFields(initial)).mode : 'saved'),
-  );
-  const [confirmAddrPickId, setConfirmAddrPickId] = useState<number | null>(
-    () => (mode === 'confirm' ? confirmCurrentAddressId(initial) : null),
-  );
-  /*
-   * The LIVE mode, for callbacks that outlive the render that created them. The
-   * map picker is remounted on every mode switch, but a reverse-geocode started
-   * in new mode still resolves afterwards and calls the onChange closure of the
-   * unmounted instance — whose `confirmAddrMode` is still 'new'. Reading this
-   * ref instead is what keeps that late write off a saved row's fields.
-   */
-  const confirmAddrModeRef = useRef(confirmAddrMode);
-  useEffect(() => { confirmAddrModeRef.current = confirmAddrMode; }, [confirmAddrMode]);
-  /*
-   * A new address this open modal already created, keyed by its exact payload.
-   * `new_address` always INSERTs, so a retry after a later step failed (the
-   * status PATCH, a network drop) would otherwise leave a duplicate row per
-   * attempt. Resending the same payload re-points at the row made the first time.
-   */
-  const confirmCreatedAddressRef = useRef<{ key: string; id: number } | null>(null);
-  const confirmCustomerId = isConfirm ? (Number(initial?.fk_customer_id) || undefined) : undefined;
+  const confirmCustomerId = isEditShape
+    ? ((initial as Record<string, unknown> | null)?.fk_customer_id as number | undefined)
+    : undefined;
   useEffect(() => {
     if (!confirmCustomerId) { setSavedAddresses([]); return; }
     let cancelled = false;
     setConfirmAddrQuery('');
-    api.get<{ addresses?: SavedCustomerAddress[] }>(`/admin/customers/${confirmCustomerId}?complete=1`)
-      .then((r) => {
-        if (cancelled) return;
-        const rows = Array.isArray(r?.addresses) ? r.addresses : [];
-        setSavedAddresses(rows
-          .filter((a) => Number(a.customer_id) === confirmCustomerId)
-          .map((a) => ({ address_id: Number(a.address_id), ...toConfirmAddressFields(a) }))
-          .filter((a) => a.address_id > 0 && confirmAddressMissing(a).length === 0));
-      })
+    api.get<{ addresses?: SavedCustomerAddress[] }>(`/admin/customers/${confirmCustomerId}`)
+      .then((r) => { if (!cancelled) setSavedAddresses(Array.isArray(r?.addresses) ? r.addresses : []); })
       .catch(() => { if (!cancelled) setSavedAddresses([]); });
     return () => { cancelled = true; };
   }, [confirmCustomerId]);
@@ -5827,51 +5632,38 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
       if (pickStr(payload.pin_code))           overlay.pin_code = pickStr(payload.pin_code);
       if (pickStr(payload.gps_location))       overlay.gps_location = pickStr(payload.gps_location);
       if (pickStr(payload.address_instruction))overlay.address_instruction = pickStr(payload.address_instruction);
-      const seeded = { ...base, ...(overlay as Partial<typeof base>) };
-      /*
-       * The ADDRESS is derived from the job's own row (`base`), never from the
-       * submission overlay. acceptSubmission (job-magic-link.service.js) already
-       * merged the customer's address INTO that row when they submitted, so the
-       * row is the submission. The payload itself is never cleared, though —
-       * deriving from `seeded` meant that once the operator picked a different
-       * saved address, every reopen re-read the stale submission, unchecked the
-       * current address and offered to create a new row from it. The submission
-       * stays visible in CustomerSubmissionPanel; start.fields below override the
-       * overlay's address values so the checked row and the fields always agree.
-       */
-      const start = confirmAddressStart(initial, toConfirmAddressFields(base));
-      setConfirmAddrMode(start.mode);
-      setConfirmAddrPickId(start.pickId);
-      setF({ ...seeded, ...start.fields });
-      return;
-    }
-    if (mode === 'confirm') {
-      /*
-       * Every reseed replaces the whole form, so the picker is re-derived with
-       * it: the current address checked (R5), or NEW mode when the job has no
-       * address row. Resetting the two together is what keeps the checked row
-       * and the fields on screen from ever describing different addresses.
-       */
-      const start = confirmAddressStart(initial, toConfirmAddressFields(base));
-      setConfirmAddrMode(start.mode);
-      setConfirmAddrPickId(start.pickId);
-      setF({ ...base, ...start.fields });
+      setF({ ...base, ...(overlay as Partial<typeof base>) });
       return;
     }
     setF(base);
   }, [initial, mode]);
 
   /*
-   * There is deliberately NO "preselect the newest saved address" effect here
-   * any more (removed 2026-09-17). It checked savedAddresses[0] — the newest
-   * row — while the form still showed the job's CURRENT address, so the ticked
-   * radio and what would be booked described two different places. The current
-   * address is now pinned and checked by the reseed effect above (R5).
-   *
-   * Its other half, the Bulk Upload "Complete Address → Building" mirror, wrote
-   * onto the saved row being booked, which R1 forbids. It survives only as the
-   * pre-fill of a NEW address — see prefillNewConfirmAddress.
+   * Confirm-flow saved-address conveniences, applied once per job (ref guard, so
+   * a later operator edit is never stomped) as soon as the saved addresses land.
+   * Declared AFTER the reseed effect above so its building override isn't clobbered.
+   *   (a) Auto-check the preselected saved-address radio — for ALL confirm jobs
+   *       (any source), mirroring the create-flow addresses[0] preselect rule.
+   *   (b) BULK-UPLOAD ONLY: mirror the current Complete Address into the
+   *       Building/Floor field — bulk rows arrive as one address blob with no
+   *       structured building. Gated on source: the Source column shows/stores
+   *       "Bulk Upload" (an older EasyFix path wrote the literal 'excel', per
+   *       isBulkSentinel) — accept either, case-insensitively.
    */
+  const confirmAddrAppliedRef = React.useRef<number | null>(null);
+  React.useEffect(() => {
+    if (!isConfirm || !initial) return;
+    const jobKey = Number(initial.job_id);
+    if (confirmAddrAppliedRef.current === jobKey || savedAddresses.length === 0) return;
+    confirmAddrAppliedRef.current = jobKey;
+    // (a) preselect the saved-address radio — every source.
+    setSelectedAddressId(savedAddresses[0].address_id);
+    // (b) Complete Address → Building/Floor — Bulk Upload only.
+    const src = String(initial.source_type ?? '').trim().toLowerCase();
+    if (src === 'bulk upload' || src === 'excel') {
+      setF((s) => ({ ...s, building: s.address }));
+    }
+  }, [isConfirm, initial, savedAddresses]);
 
   /*
    * Fire when the picked client changes. Loads the client's contact
@@ -6299,20 +6091,33 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
       return;
     }
     /*
-     * NO "cleared Service Address" guard any more (removed 2026-09-17).
+     * A CLEARED Service Address is DISCARDED, not saved — and silently.
+     * pickIf below drops '' before the PATCH is assembled, so no `address` key
+     * is sent and the stored value survives; the modal then reseeds the old
+     * text on reopen, so the edit appears to save and then revert. (Sending an
+     * explicit '' is not the alternative: `updateBody.address.address` is the
+     * one key in that block without `.allow('')`, so it would 400.)
      *
-     * It existed because a cleared, typeable address was silently DISCARDED:
-     * pickIf dropped the '' from `patch.address` and the stored value survived.
-     * Confirm & Schedule no longer sends `patch.address` at all, so there is no
-     * discard left to guard:
-     *   - saved mode: the fields are read-only, so nothing can be cleared, and
-     *     the save sends only which row to book;
-     *   - new mode: an incomplete new address blocks Book Call through
-     *     confirmSection2Complete (below), and Save Draft saves WITHOUT it and
-     *     says so in a toast naming the missing fields — reported, not silent.
-     * Kept, it would misfire in new mode: it blocked exactly the partial Save
-     * Draft that rule allows.
+     * Reachable only since 2026-09-10, when this field became typeable — before
+     * that the address could not be cleared at all. Book Call is covered by the
+     * mandatory-fields gate below; Save Draft deliberately bypasses that gate,
+     * which is exactly where a cleared address would report success over the
+     * unchanged value. So this runs for ALL variants, like the alt-number check
+     * above it.
+     *
+     * Blocking rather than allowing a blank: tbl_address.address is what the
+     * CRM and the technician's job card both render, so an empty one is never a
+     * valid end state — which is why the validator refuses '' in the first
+     * place. Gated on the job ALREADY having an address, so a legacy row that
+     * genuinely stores a blank one is not made unsavable.
      */
+    if (isConfirm
+        && !String(f.address || '').trim()
+        && String((initial as unknown as Record<string, unknown>)?.address || '').trim()) {
+      setError('Service Address is required — clearing it would be discarded, not saved.');
+      setSubmitting(false);
+      return;
+    }
     // Save Draft (submitVariant === 'draft') intentionally bypasses this
     // mandatory-fields gate — the whole point of draft is to persist
     // partial progress. Only the 'book' variant is gated.
@@ -6321,22 +6126,9 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
       if (!f.client_ref_id || !String(f.client_ref_id).trim()) missing.push('Client Reference ID');
       if (!f.reporting_contact_id) missing.push('Reporting Contact');
       if (!f.customer_name) missing.push('Customer Name');
-      // The address half names the fields of whichever address would be booked.
-      // A saved one can't be fixed here (R1), so its message points at the only
-      // fix there is.
-      let savedAddressIncomplete = false;
-      if (confirmAddrMode === 'new') {
-        missing.push(...confirmNewAddressMissing.map((m) => `New address: ${m}`));
-      } else {
-        const before = missing.length;
-        if (!f.address) missing.push('Address');
-        if (!String(f.city_id || '').trim()) missing.push('City');
-        if (!/^[0-9]{6}$/.test(String(f.pin_code || ''))) missing.push('PIN (6 digits)');
-        // GPS was already part of confirmSection2Complete but missing from this
-        // list, so a GPS-only gap produced "Missing required field(s): " + nothing.
-        if (!CONFIRM_GPS_RX.test(String(f.gps_location || '').trim())) missing.push('GPS Location (pick on the map)');
-        savedAddressIncomplete = missing.length > before;
-      }
+      if (!f.address) missing.push('Address');
+      if (!String(f.city_id || '').trim()) missing.push('City');
+      if (!/^[0-9]{6}$/.test(String(f.pin_code || ''))) missing.push('PIN (6 digits)');
       if (!f.requested_date_time) missing.push('Requested Date & Time');
       if (!f.time_slot) missing.push('Time Slot');
       // Collected By is mandatory. Left unset it reached tbl_job as 0 ("Any"),
@@ -6349,12 +6141,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
       // with zero services. The BE Joi schema now also rejects this so
       // a future FE bug can't repeat the silent-empty-create.
       if (!hasAtLeastOneService) missing.push('At least one Service in Products');
-      setError(
-        `Missing required field(s): ${missing.join(', ')}`
-        + (savedAddressIncomplete
-          ? '. Saved addresses can\'t be edited — use Add New Address to book a complete one.'
-          : ''),
-      );
+      setError(`Missing required field(s): ${missing.join(', ')}`);
       setSubmitting(false);
       return;
     }
@@ -6498,9 +6285,6 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
     try {
       if (isEditShape && initial) {
         const patch: Record<string, unknown> = {};
-        // Set when a Save Draft had to leave an incomplete NEW address out —
-        // the labels of what was missing, reported after the save lands.
-        let newAddressNotSaved: string[] | null = null;
 
         /*
          * Single source-of-truth for "should this field be in the patch?":
@@ -6669,51 +6453,37 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
           setIf('job_customer_name', f.customer_name);
           const customer = pickIf({ customer_email: f.customer_email });
           if (customer) patch.customer = customer;
-          /*
-           * SERVICE ADDRESS (2026-09-17). Confirm & Schedule NEVER sends
-           * `patch.address` — that key edits the job's current tbl_address row
-           * in place, and saved addresses are never edited from here (R1). It
-           * stays on the PATCH contract for other callers only.
-           *
-           *   saved mode, current row → nothing: the job already points at it.
-           *   saved mode, another row → `fk_address_id`: re-point the job at that
-           *                             row exactly as stored (R2).
-           *   new mode                → `new_address`: the server inserts a NEW
-           *                             row for this customer and re-points the
-           *                             job at it (R3).
-           *
-           * The technician note (address_instruction) is part of the address:
-           * picking a row books that row's note, and a new address carries its
-           * own. Nothing is carried across from the previously selected row.
-           *
-           * An INCOMPLETE new address never reaches Book Call (the gate above).
-           * On Save Draft the draft is saved without it and a toast after the
-           * save names what was missing — never a silent drop.
-           */
-          if (confirmAddrMode === 'saved') {
-            const currentAddressId = confirmCurrentAddressId(initial);
-            if (confirmAddrPickId && confirmAddrPickId !== currentAddressId) {
-              patch.fk_address_id = confirmAddrPickId;
-            }
-          } else {
-            const newAddress = toConfirmAddressFields(f);
-            const newAddressMissing = confirmAddressMissing(newAddress);
-            if (newAddressMissing.length === 0) {
-              const newAddressPayload = buildConfirmNewAddress(newAddress);
-              const created = confirmCreatedAddressRef.current;
-              if (created && created.key === JSON.stringify(newAddressPayload)) {
-                // Already created by an earlier attempt in this modal — reuse it.
-                patch.fk_address_id = created.id;
-              } else {
-                patch.new_address = newAddressPayload;
-              }
-            } else if (submitVariant === 'draft') {
-              newAddressNotSaved = newAddressMissing;
+          const address = pickIf({
+            address:             f.address,
+            building:            f.building,
+            landmark:            f.landmark,
+            city_id:             Number(f.city_id) || undefined,
+            pin_code:            f.pin_code,
+            gps_location:        f.gps_location,
+          });
+          // address_instruction is force-included separately so both
+          // (a) a typed-then-cleared value propagates as a blank to the BE
+          //     (pickIf drops `''` so it would otherwise be silently
+          //     omitted — which on Save Draft meant a cleared note kept
+          //     the stale value), and
+          // (b) a non-empty value sent during Save Draft can't be
+          //     silently dropped by future tweaks to pickIf's filter.
+          // The BE validator (validators/job.validator.js#address_instruction)
+          // explicitly `.allow('', null)` so an empty string round-trips
+          // correctly through Joi.
+          const ai = (f as Record<string, unknown>).address_instruction;
+          if (ai !== undefined) {
+            const aiStr = ai == null ? '' : String(ai);
+            if (address) {
+              (address as Record<string, unknown>).address_instruction = aiStr;
             } else {
-              setError(`New address is incomplete — missing: ${newAddressMissing.join(', ')}`);
-              return;
+              // No other address fields changed but the operator did
+              // touch the instruction — still send a tiny address patch
+              // so the standalone note edit persists.
+              patch.address = { address_instruction: aiStr };
             }
           }
+          if (address) patch.address = address;
           // Products-section fields from legacy addEditJob. Label/column
           // mapping (post-2026-06-04 fix):
           //   "Job Description" textarea                          → patch.job_desc         → tbl_job.job_desc
@@ -6809,29 +6579,6 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
         }
 
         const saved = await api.patch<Job>(`/admin/jobs/${initial.job_id}`, patch);
-        /*
-         * Prove the address choice LANDED before anything else runs — above all
-         * before the status PATCH books the job. The server validates with
-         * stripUnknown, so a backend that predates fk_address_id / new_address
-         * (a rollback, or the UI promoted ahead of the API) drops both keys
-         * without an error and answers 200 with the OLD address: the job would be
-         * booked, and the success toast shown, at an address the operator did not
-         * choose. Checking the returned fk_address_id turns that into a visible
-         * failure with nothing booked.
-         */
-        if (isConfirm && (patch.fk_address_id !== undefined || patch.new_address !== undefined)) {
-          const landedId = Number((saved as Record<string, unknown> | null)?.fk_address_id) || null;
-          const landed = patch.fk_address_id !== undefined
-            ? landedId === patch.fk_address_id
-            : landedId !== null && landedId !== confirmCurrentAddressId(initial);
-          if (!landed) {
-            setError('The address change was not saved, so nothing was booked. Refresh and try again — if it keeps happening, the server needs the address update.');
-            return;
-          }
-          if (patch.new_address !== undefined && landedId) {
-            confirmCreatedAddressRef.current = { key: JSON.stringify(patch.new_address), id: landedId };
-          }
-        }
         // Confirm flow → status promotion depends on which footer
         // variant the operator picked (revised 2026-05-19):
         //   'book'        → 0 (BOOKED) — the happy "Confirm & Schedule" path
@@ -7257,19 +7004,6 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
             variant: 'success',
             message: 'Draft Saved',
           });
-          /*
-           * The draft saved, but not the way the operator asked: the new address
-           * they were typing was incomplete, so it was left out (a partial row
-           * would have been refused by the server and would be unbookable
-           * anyway). `warning` is this toast system's "it worked, with a caveat"
-           * variant — there is no separate info variant.
-           */
-          if (newAddressNotSaved) {
-            showToast({
-              variant: 'warning',
-              message: `New address not saved — it is incomplete. Missing: ${newAddressNotSaved.join(', ')}. The rest of the draft was saved.`,
-            });
-          }
         }
         /*
          * Confirm & Schedule → Book Call (2026-09-15, per ops). The booked job
@@ -7890,19 +7624,8 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
    * dispatch without it (`getRoadDistance` returns blank distances).
    * Gating the "Next →" button here forces ops to use the
    * AddressPickerWithMap (or paste valid coords) before booking.
-   *
-   * CONFIRM_GPS_RX now lives at module level (2026-09-17) so the saved-address
-   * filter reads the very same regex as this gate.
-   *
-   * SAVED mode keeps exactly this rule — which is how an INCOMPLETE current
-   * address (no building, say) still books as-is, while one missing its GPS or
-   * PIN still blocks: saved addresses can't be edited here, so the fix is Add
-   * New Address. NEW mode additionally needs the full completeness rule
-   * (building included), because that is the row the server will insert.
    */
-  const confirmNewAddressMissing = confirmAddrMode === 'new'
-    ? confirmAddressMissing(toConfirmAddressFields(f))
-    : [];
+  const CONFIRM_GPS_RX = /^-?\d+(\.\d+)?,-?\d+(\.\d+)?$/;
   const confirmSection2Complete =
     confirmSection1Complete &&
     !!f.customer_name &&
@@ -7911,48 +7634,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
     !!f.address &&
     !!String(f.city_id || '').trim() &&
     /^[0-9]{6}$/.test(String(f.pin_code || '')) &&
-    CONFIRM_GPS_RX.test(String(f.gps_location || '').trim()) &&
-    confirmNewAddressMissing.length === 0;
-
-  /*
-   * Confirm & Schedule address picker — the rows and the three gestures.
-   *
-   * The CURRENT address is built from the job itself, not from the saved list:
-   * it is pinned whether or not it is complete (an incomplete one is still
-   * bookable as-is, with an "Incomplete" tag) and whether or not the server
-   * counts it as a serviced address. The saved list then drops it, so no row
-   * appears twice.
-   */
-  const confirmCurrentRow: ConfirmAddressRow | null = (() => {
-    const id = isConfirm ? confirmCurrentAddressId(initial) : null;
-    return id ? { address_id: id, ...toConfirmAddressFields(initial) } : null;
-  })();
-  const confirmOtherRows = savedAddresses.filter((a) => a.address_id !== confirmCurrentRow?.address_id);
-  const confirmPickedRow: ConfirmAddressRow | null = confirmAddrPickId == null ? null
-    : confirmCurrentRow?.address_id === confirmAddrPickId ? confirmCurrentRow
-      : confirmOtherRows.find((a) => a.address_id === confirmAddrPickId) ?? null;
-  const confirmAddressCityName = (row: ConfirmAddressRow) =>
-    cityNameById.get(row.city_id)
-    ?? (row.address_id === confirmCurrentRow?.address_id ? String(initial?.city_name ?? '') : '');
-
-  /* Book a saved row as is: copy EVERY field (the technician note included) for
-     display, and lock the fields. Counts as a change for the unsaved-changes prompt. */
-  function pickConfirmAddress(row: ConfirmAddressRow) {
-    onFormDirty?.(true);
-    setConfirmAddrMode('saved');
-    setConfirmAddrPickId(row.address_id);
-    const fields = toConfirmAddressFields(row);
-    setF((s) => ({ ...s, ...fields }));
-  }
-  /* Add New Address: unlock the fields, pre-filled from the checked row (still
-     saved as a NEW row — the checked one is never touched). */
-  function startNewConfirmAddress() {
-    onFormDirty?.(true);
-    const from = confirmPickedRow ? toConfirmAddressFields(confirmPickedRow) : toConfirmAddressFields(f);
-    const fields = prefillNewConfirmAddress(initial, from);
-    setConfirmAddrMode('new');
-    setF((s) => ({ ...s, ...fields }));
-  }
+    CONFIRM_GPS_RX.test(String(f.gps_location || '').trim());
 
   /*
    * Section 3 (Products / Services) — at least one row with both a
@@ -8407,135 +8089,84 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 </div>
               ) : null;
             })()}
-            {/* Address picker (Confirm & Schedule) — see the CONFIRM & SCHEDULE
-                ADDRESS RULES block above JobForm. The job's CURRENT address is
-                pinned first and checked by default; below it, this customer's
-                other COMPLETE saved addresses; then Add New Address. Exactly
-                one thing is ever checked — a row (booked as is) or, in new
-                mode, nothing — so what is ticked is what gets booked. Always
-                rendered: even with no saved rows, it is where the operator
-                learns that saved addresses are fixed and a new one is how an
-                address changes. */}
-            {(() => {
-              const isNewAddress = confirmAddrMode === 'new';
-              const labelOf = (row: ConfirmAddressRow) => confirmAddressLabel(row, confirmAddressCityName(row));
-              const q = confirmAddrQuery.trim().toLowerCase();
-              // Search matches the label — the text the operator can see — and
-              // nothing hidden behind it.
-              const shownRows = q
-                ? confirmOtherRows.filter((a) => labelOf(a).toLowerCase().includes(q))
-                : confirmOtherRows;
-              const currentMissing = confirmCurrentRow ? confirmAddressMissing(confirmCurrentRow) : [];
-              return (
-                <div className="col-span-1 md:col-span-3 mb-3 rounded-md border bg-muted/30 p-3 text-sm">
-                  <div className="font-medium mb-2">Saved Addresses for This Customer</div>
-                  {confirmCurrentRow && (
-                    <label className="flex items-start gap-2 cursor-pointer mb-2">
-                      <input
-                        type="radio"
-                        name="confirm-saved-address"
-                        checked={!isNewAddress && confirmAddrPickId === confirmCurrentRow.address_id}
-                        onChange={() => pickConfirmAddress(confirmCurrentRow)}
-                        className="mt-0.5"
-                      />
-                      <span className="flex-1">
-                        <span className="inline-flex items-center rounded border border-info/30 bg-info-tint px-1.5 py-0.5 text-xs font-medium text-info-strong mr-1.5">
-                          Current address
-                        </span>
-                        {currentMissing.length > 0 && (
-                          <span
-                            className="inline-flex items-center rounded border border-warning/30 bg-warning-tint px-1.5 py-0.5 text-xs font-medium text-warning-strong mr-1.5"
-                            title={`Missing: ${currentMissing.join(', ')}`}
-                          >
-                            Incomplete
-                          </span>
-                        )}
-                        {labelOf(confirmCurrentRow) || '(No address on file)'}
-                      </span>
-                    </label>
-                  )}
-                  {confirmOtherRows.length > 0 && (
-                    <Input
-                      value={confirmAddrQuery}
-                      onChange={(e) => setConfirmAddrQuery(e.target.value)}
-                      placeholder="Search saved addresses (building, address, city or PIN)…"
-                      className="mb-2 h-8"
-                    />
-                  )}
-                  <div className="space-y-1.5 max-h-52 overflow-y-auto">
-                    {confirmOtherRows.length === 0 ? (
-                      <div className="text-xs text-muted-foreground py-1">
-                        {confirmCurrentRow
-                          ? 'No other complete saved addresses for this customer.'
-                          : 'No complete saved addresses for this customer.'}
-                      </div>
-                    ) : shownRows.length === 0 ? (
-                      <div className="text-xs text-muted-foreground py-1">
-                        No saved addresses match “{confirmAddrQuery}”.
-                      </div>
-                    ) : shownRows.map((a) => (
+            {/* Saved-addresses picker (Confirm & Schedule / Edit). Bulk-
+                uploaded jobs often have a thin address; the same customer
+                usually has fuller addresses on prior jobs. Pick one to
+                auto-fill every field below in a click. Only shows when the
+                customer actually has saved addresses. */}
+            {savedAddresses.length > 0 && (
+              <div className="col-span-1 md:col-span-3 mb-3 rounded-md border bg-muted/30 p-3 text-sm">
+                <div className="font-medium mb-2">Saved Addresses for This Customer</div>
+                <Input
+                  value={confirmAddrQuery}
+                  onChange={(e) => setConfirmAddrQuery(e.target.value)}
+                  placeholder="Search saved addresses (text, city or PIN)…"
+                  className="mb-2 h-8"
+                />
+                <div className="space-y-1.5 max-h-52 overflow-y-auto">
+                  {(() => {
+                    const q = confirmAddrQuery.trim().toLowerCase();
+                    const filtered = q
+                      ? savedAddresses.filter((a) => {
+                          const city = a.city_id != null ? (cityNameById.get(String(a.city_id)) ?? '') : '';
+                          return [a.address, a.building, a.landmark, city, a.pin_code]
+                            .some((p) => p != null && String(p).toLowerCase().includes(q));
+                        })
+                      : savedAddresses;
+                    if (filtered.length === 0) {
+                      return (
+                        <div className="text-xs text-muted-foreground py-1">
+                          No saved addresses match “{confirmAddrQuery}”.
+                        </div>
+                      );
+                    }
+                    return filtered.map((a) => (
                       <label key={a.address_id} className="flex items-start gap-2 cursor-pointer">
                         <input
                           type="radio"
                           name="confirm-saved-address"
-                          checked={!isNewAddress && confirmAddrPickId === a.address_id}
-                          onChange={() => pickConfirmAddress(a)}
+                          checked={selectedAddressId === a.address_id}
+                          onChange={() => {
+                            setSelectedAddressId(a.address_id);
+                            setF((s) => ({
+                              ...s,
+                              address: a.address || '',
+                              building: a.building || '',
+                              landmark: a.landmark || '',
+                              city_id: a.city_id != null ? String(a.city_id) : '',
+                              pin_code: a.pin_code || '',
+                              gps_location: a.gps_location || '',
+                            }));
+                          }}
                           className="mt-0.5"
                         />
-                        <span className="flex-1">{labelOf(a)}</span>
-                      </label>
-                    ))}
-                  </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    {isNewAddress ? (
-                      <>
-                        <span className="text-xs font-medium text-info-strong">
-                          Adding a new address — it is saved as a new address for this customer.
+                        <span className="flex-1">
+                          {formatServiceAddress({
+                            building: a.building,
+                            address: a.address,
+                            landmark: a.landmark,
+                            city_name: a.city_id != null ? cityNameById.get(String(a.city_id)) : null,
+                            pin_code: a.pin_code,
+                          }, { fallback: '(No Address)' })}
                         </span>
-                        {confirmPickedRow && (
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => pickConfirmAddress(confirmPickedRow)}
-                          >
-                            Use a saved address
-                          </Button>
-                        )}
-                      </>
-                    ) : (
-                      <Button type="button" variant="outline" size="sm" onClick={startNewConfirmAddress}>
-                        <Plus className="h-4 w-4 mr-1" />
-                        Add New Address
-                      </Button>
-                    )}
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-2">
-                    {'Pick a saved address or add a new one. Saved addresses can\'t be edited.'}
-                  </p>
+                      </label>
+                    ));
+                  })()}
                 </div>
-              );
-            })()}
+                <p className="text-xs text-muted-foreground mt-2">
+                  Pick an address to auto-fill the form below. You can still edit it.
+                </p>
+              </div>
+            )}
             {/* The grey read-only Service Address that used to sit here is
-                GONE, replaced by the picker's own field below. Keeping both
-                would render two controls labelled "Service Address" bound to
-                the same `f.address`, one greyed out directly above the live
+                GONE, replaced by the picker's own editable field below. Keeping
+                both would render two controls labelled "Service Address" bound
+                to the same `f.address`, one greyed out directly above the live
                 one. Same reason Book New Call deleted its own preview
                 (2026-09-07): a second rendering of one column can only agree
                 with the first by accident. */}
             <div className="col-span-1 md:col-span-3">
               <AddressPickerWithMap
-                /*
-                 * REMOUNTED on every mode switch. The picker reads `editable` once
-                 * when it builds or claims the map — marker draggability and the
-                 * map-click listener are bound then — and seeds its GPS dedupe from
-                 * the coordinates it mounted with. Without a fresh mount, a picker
-                 * that mounted read-only stays undraggable in new mode, and one
-                 * that mounted editable keeps a draggable pin in saved mode; and
-                 * entering new mode after picking another row would reverse-geocode
-                 * that row's pin and overwrite the pre-filled Building and City.
-                 */
-                key={`confirm-address-${confirmAddrMode}`}
                 value={{
                   address: f.address || '',
                   building: f.building || '',
@@ -8546,10 +8177,6 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                   address_instruction: ((f as Record<string, unknown>).address_instruction as string) || '',
                 }}
                 onChange={(next: AddressValue) => {
-                  // Saved mode is read-only in the model, not just in the inputs:
-                  // a stray write (a late geocode, a pincode back-fill) must not
-                  // make the fields on screen disagree with the row being booked.
-                  if (confirmAddrModeRef.current !== 'new') return;
                   set('address', next.address);
                   set('building', next.building || '');
                   set('landmark', next.landmark || '');
@@ -8561,17 +8188,17 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
                 cities={lk.toOpts.cities.map((o) => ({ value: String(o.value), label: String(o.label) }))}
                 autoCreatePincode
                 /*
-                 * READ-ONLY for a saved address (R1): every input — Service
-                 * Address, map search, landmark, city, PIN, GPS and the address
-                 * instructions — renders disabled, and the pin can't be dragged.
-                 * Editable only while adding a NEW address, which the save sends
-                 * as `new_address`, never as an in-place `address` edit.
-                 */
-                editable={confirmAddrMode === 'new'}
-                /*
-                 * The Service Address field still RENDERS (3 of 3 call sites opt
-                 * in): in saved mode it shows the booked row's address, disabled;
-                 * in new mode it is the typeable address of the new row.
+                 * EDITABLE, as it already is in Edit Address and Book New Call
+                 * (the other two call sites — 3 of 3 now opt in). Confirming an
+                 * order is the moment the operator reads the address back to the
+                 * customer, so a typo caught there had no keyboard fix: the only
+                 * way to change it was to pick a different SAVED address, and
+                 * `Search Location On Map` deliberately never touches `address`.
+                 *
+                 * No new server capability: the confirm PATCH has always sent
+                 * `address.address` (updateBody accepts it, job.service writes
+                 * it) — picking a saved address already wrote this column. This
+                 * only makes the existing write reachable by typing.
                  */
                 serviceAddressEditable
               />
@@ -8583,10 +8210,7 @@ function JobForm({ mode, initial, onCancel, onSaved, onRefresh, prefillCustomer,
               type="button"
               onClick={() => setConfirmOpenSection(3)}
               disabled={!confirmSection2Complete}
-              title={confirmSection2Complete ? ''
-                : confirmAddrMode === 'new'
-                  ? 'Fill customer name + date/slot + the new address (address, building, city, 6-digit pincode, GPS) to proceed'
-                  : 'Fill customer name + date/slot + address + city + 6-digit pincode + GPS to proceed'}
+              title={confirmSection2Complete ? '' : 'Fill customer name + date/slot + address + city + 6-digit pincode to proceed'}
             >
               Next →
             </Button>
