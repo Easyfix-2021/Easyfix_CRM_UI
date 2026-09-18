@@ -1,31 +1,29 @@
 'use strict';
 /*
- * Pending to Start — ALL FOUR sections (Technician Requests / Over Due /
- * Action Today / Future) collapse and re-order the way My Orders ->
- * Unconfirmed's sections do, and the row carries no Check In, only a View that
- * opens the job.
+ * Pending to Start's SECTIONS are retired, and the reorderable interaction they
+ * borrowed stays ONE shared copy that Unconfirmed still renders through. Plus
+ * the row carries no Check In, only a View that opens the job.
  *
- * Technician Requests joined the set on 2026-09-14 (owner: "should also be
- * collapsable, reorderable, etc as other sections"). It had been pinned above
- * the buckets and returned null when empty; both are gone, because a section
- * that renders nothing cannot be dragged. What replaces those two guarantees
- * is asserted below: it is a member of the set, it DEFAULTS first, and the
- * order key was bumped so a pre-change saved order cannot append it last.
+ * REWRITTEN 2026-09-16. This file used to pin the four reorderable sections —
+ * Technician Requests / Over Due / Action Today / Future — as members of the
+ * shared <ReorderableSections> set, with their own localStorage keys and a
+ * Technician-Requests-first default. The owner replaced them with Pending for
+ * Scheduling's model: one tab strip (All · Slots missed · Reschedule request ·
+ * Cancel request · Today · Future) over ONE server-paged table. What each old
+ * guarantee became is asserted below; the tabs model's own contract (the
+ * strip, counts, URL, filters, Request column, console icon) is pinned in
+ * tests/pending-to-start-tabs.test.js.
+ *
+ * Why this file is not simply deleted: two of its checks were never about
+ * Pending to Start. The shared component still carries Unconfirmed's drag,
+ * keyboard, collapse and a11y string for string, and Unconfirmed must still
+ * render through it rather than re-grow a copy — tests/unconfirmed-sections.test.js
+ * points here for exactly that. They stay, unchanged.
  *
  * Source-scanned, like job-app-request.test.js and resend-pin-action.test.js:
  * every rule here lives in a .tsx component that test:build does not compile,
- * and each regression below is a plain deletion that type-checks. The drag
+ * and each regression below is a plain edit that type-checks. The drag
  * ARITHMETIC is behaviour-tested separately (tests/section-reorder.test.js).
- *
- * "Same mechanism as Unconfirmed" is pinned by SHARING it: both pages render
- * through ReorderableSections / SectionFrame, so the interaction cannot drift
- * between them. It was briefly duplicated — the component was lifted out of
- * UnconfirmedSections.tsx for this view on 2026-09-11 and Unconfirmed kept its
- * inline copy — and the check that pinned the two copies string-for-string is
- * replaced below by the one that matters now: Unconfirmed must still render
- * through the shared component and must not re-grow a copy of its own.
- * Unconfirmed's OWN contract (its keys, its fetch, its footer) is covered in
- * tests/unconfirmed-sections.test.js.
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -45,149 +43,73 @@ const strip = (text) => text
   .replace(/\/\/[^\n]*/g, '');
 
 const VIEW = 'src/components/job/PendingToStartView.tsx';
+const TABS = 'src/components/job/PendingStartTabs.tsx';
 const SHARED = 'src/components/ui/reorderable-sections.tsx';
 const UNCONFIRMED = 'src/components/job/UnconfirmedSections.tsx';
 const PAGE = 'src/app/(authed)/my-orders/page.tsx';
 
 const view = strip(read(VIEW));
+const tabs = strip(read(TABS));
 const shared = strip(read(SHARED));
 const unconfirmed = strip(read(UNCONFIRMED));
 
-/* The reorderable region of the view: everything inside <ReorderableSections>. */
-function reorderable(src) {
-  const open = src.indexOf('<ReorderableSections ');
-  const close = src.indexOf('</ReorderableSections>');
-  return open > 0 && close > open ? { open, text: src.slice(open, close) } : null;
-}
+// ─── 1. The sections are gone; one strip over one table replaced them ───
 
-// ─── 1. All four sections are the reorderable set ────────────────────────
+/* Every piece of the retired section model, as it was spelled in this view. */
+const SECTION_MACHINERY = [
+  /reorderable-sections/, /<ReorderableSections\b/, /<SectionFrame\b/, /SectionControls/,
+  /const SECTIONS = /, /\bORDER_KEY\b/, /\bCOLLAPSED_KEY\b/, /explicitCollapsed/, /\bcountOnly\b/,
+];
 
-test('all four sections, Technician Requests included, render inside the shared ReorderableSections', () => {
-  assert.match(view,
-    /import \{\s*ReorderableSections,\s*SectionFrame,\s*type SectionControls,?\s*\} from '@\/components\/ui\/reorderable-sections';/,
-    'the view must use the shared component, not a second copy of the interaction');
-
-  const region = reorderable(view);
-  assert.ok(region, 'the sections must be wrapped in <ReorderableSections>…</ReorderableSections>');
-  assert.match(region.text,
-    /<ReorderableSections sections=\{SECTIONS\} orderKey=\{ORDER_KEY\} collapsedKey=\{COLLAPSED_KEY\}>/);
-
+test('the view renders ONE tab strip over ONE table — no reorderable sections', () => {
   /*
-   * The array IS the default arrangement (reconcile() keeps its order when
-   * nothing is stored), so 'appRequests' first is the whole of requirement
-   * "default position stays FIRST" for a fresh browser.
+   * The whole of the old requirement "all four sections are the reorderable
+   * set" inverted: a second, half-migrated copy of the section machinery left
+   * beside the tabs is how the page would end up with two ways to reach the same
+   * rows and two sets of counts disagreeing about them.
    */
-  const keys = view.match(/const SECTIONS = \[([\s\S]*?)\] as const;/);
-  assert.ok(keys, 'SECTIONS must be found');
-  assert.deepEqual([...keys[1].matchAll(/key: '([^']+)'/g)].map((m) => m[1]),
-    ['appRequests', 'overDue', 'actionToday', 'future'],
-    'exactly the four sections, requests first — the array order IS the default arrangement');
-
-  // Each key renders its own section, all of them through {...shared}.
-  assert.match(region.text,
-    /if \(s\.key === 'appRequests'\) \{\s*return <PendingSection appRequests title="Technician Requests"[^>]*\{\.\.\.shared\} \/>;/,
-    'Technician Requests must render for its own key, with the shared props (controls included)');
-  for (const [key, title] of [['overDue', 'Over Due'], ['actionToday', 'Action Today']]) {
-    assert.match(region.text,
-      new RegExp(`if \\(s\\.key === '${key}'\\) \\{\\s*return <PendingSection title="${title}"[^>]*\\{\\.\\.\\.shared\\} />;`),
-      `${title} must render for its own key, with the shared props (controls included)`);
+  for (const gone of SECTION_MACHINERY) {
+    assert.doesNotMatch(view, gone, `${gone} is back in ${VIEW} — the sections were replaced by tabs`);
   }
-  assert.match(region.text, /return <PendingSection title="Future"[^>]*\{\.\.\.shared\} \/>;/);
-  assert.match(region.text, /const shared = \{[^}]*\bcontrols,\s*\};/,
-    'every section must receive its SectionControls');
 
-  // …and NOTHING renders a PendingSection outside the set any more: one
-  // rendered above it would be un-draggable and would silently win the top.
-  assert.equal((view.match(/<PendingSection\b/g) || []).length, 4,
-    'exactly four <PendingSection> mounts, all inside <ReorderableSections>');
-  assert.ok(view.indexOf('title="Technician Requests"') > region.open,
-    'Technician Requests must live INSIDE the reorderable region, not pinned above it');
+  assert.equal((view.match(/<PendingStartTabs\b/g) || []).length, 1, 'exactly one tab strip');
+  assert.equal((view.match(/<PendingStartTable\b/g) || []).length, 1,
+    'exactly one table — a second mount is a section by another name');
+  assert.ok(view.indexOf('<PendingStartTabs') < view.indexOf('<PendingStartTable'),
+    'the strip sits above the table it selects');
+  assert.match(view, /import \{ PendingStartTabs, toPtsState, type PtsState \} from '@\/components\/job\/PendingStartTabs';/);
 });
 
-test('Technician Requests keeps its identity: subtitle, no date window, its own row grammar', () => {
-  const region = reorderable(view);
-  assert.match(region.text, /subtitle="Cancellation or reschedule raised from the app"/,
-    'the subtitle is what tells an operator what the section is');
-  assert.match(region.text, /dateRange=\{NO_DATE_RANGE\}/,
-    'a request is orthogonal to the appointment date — it sends no window');
-  // Requests-only chrome survives the move into the shared frame.
-  assert.match(view, /\{appRequests && <th>Request<\/th>\}/);
-  /*
-   * The attention strip. The section header is the SHARED one now, so the tint
-   * that used to be on the old plain-Card header lives in the body — scoped to
-   * THAT div, not to "somewhere in the file": the reschedule chip three
-   * hundred lines down also carries both tokens, and a loose scan here reads
-   * green off the chip while the strip is gone.
-   */
-  assert.match(view, /\{appRequests && \(\s*<div className="[^"]*\bbg-warning-tint text-warning-strong">/,
-    'the requests body must open with the tint/strong attention strip');
-  assert.match(view, /<AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" \/>/);
+test('the ONE table keeps what each section had: its own server page, total and footer', () => {
+  const table = view.slice(view.indexOf('function PendingStartTable('));
+  assert.ok(table.length < view.length, 'positive control: the table component must be found');
+  assert.match(table, /const \{ data, loading, refreshing, error, refetch \} = useFetch<Resp>\(key\);/);
+  assert.match(table, /const total = data\?\.total \?\? 0;/, 'the footer reads the server\'s total');
+  assert.match(table, /<TablePagination\s+page=\{page\}\s+pageSize=\{pageSize\}\s+total=\{total\}/,
+    'the table keeps its own footer');
+  assert.match(table, /limit,\s+offset,\s+\}\);/, 'and pages on the server, never over a truncated array');
+  assert.match(table, /<RefreshBar active=\{refreshing\} \/>/, 'a background reload stays silent, as it was per section');
 });
 
-test('each section renders in SectionFrame under Unconfirmed\'s collapse rule, with its own pagination', () => {
-  assert.match(view, /return \(\s*<SectionFrame\b/,
-    'a section must render through the shared frame');
-  assert.doesNotMatch(view, /<Card className=\{appRequests/,
-    'the requests section must not keep a plain-Card escape hatch beside the frame');
-  assert.match(view, /controls: SectionControls;/,
-    'controls is REQUIRED — an optional one is how a section slips back out of the set');
-  // Unconfirmed's rule, with ONE deliberate difference: while the count is
-  // unknown the buckets open (they almost always have rows) but Technician
-  // Requests starts shut — most days it is empty, and a skeleton at the top of
-  // the page that then collapses drags the buckets up under the operator.
-  assert.match(view, /collapsed=\{controls\.explicitCollapsed \?\? \(data \? total === 0 : appRequests\)\}/,
-    'auto rule: shut at 0, an explicit click wins, and only Requests starts shut while unknown');
-  assert.match(unconfirmed, /explicitCollapsed \?\? \(data \? total === 0 : false\)/,
-    'and that must be the rule Unconfirmed uses');
-  assert.match(view, /count=\{data \? total : null\}/, 'the count chip reads the bucket\'s own total');
-  assert.match(view, /controls=\{controls\}/);
-
+test('an empty tab is still a tab — nothing disappears at zero', () => {
   /*
-   * An explicitly shut bucket fetches its count, not its rows — as Unconfirmed
-   * does. The requests section USED to be exempt, because its total was
-   * matched.length over a client-side filter and a limit=1 fetch would have
-   * reported 0-or-1 requests. That exemption is GONE (2026-09-16): the server
-   * filters now (`appRequest`), so its total is the server's like every other
-   * section's and a collapsed section costs one row again.
+   * The old guarantee was "an empty Technician Requests section still renders
+   * its header", because a section that vanished could not be dragged. The
+   * equivalent now: every tab renders whatever its count, so an empty request
+   * tab stays one click away and still states its 0. A `.filter()` on the
+   * counts, or an early return on a zero, is how "Cancel request" would silently
+   * drop out of the strip on a quiet day.
    */
-  assert.match(view, /const countOnly = controls\.explicitCollapsed === true;/);
-  assert.match(view, /limit: countOnly \? 1 : limit,/);
-  assert.match(view, /offset: countOnly \? 0 : offset,/);
-  assert.doesNotMatch(view, /appRequests \? JOBS_MAX_LIMIT/,
-    'the bounded-page workaround must not come back — it was the 500-row ceiling');
-  assert.match(view, /appRequest: appRequests \? 'any' : undefined,/,
-    'and the section must ask the server for the filter instead');
+  assert.match(tabs, /\{TABS\.map\(\(t\) => \{/, 'the strip must render straight from TABS');
+  assert.doesNotMatch(tabs, /TABS\.filter\(/, 'no tab may be filtered out');
+  assert.doesNotMatch(tabs, /if \([^)]*(counts|\bn\b)[^)]*\)\s*return null;/, 'no tab may return null on its count');
 
-  // Pagination stays per-bucket, and inside the frame's body.
-  const section = view.slice(view.indexOf('function PendingSection('));
-  assert.match(section, /const \[page, setPage\] = useState\(0\);/, 'page state belongs to each bucket');
-  const body = section.match(/const body = \(\s*<>([\s\S]*?)<\/>\s*\);/);
-  assert.ok(body, 'the bucket body must be found');
-  assert.match(body[1], /<TablePagination\s+page=\{page\}/, 'each bucket keeps its own footer');
-  assert.match(section, /<\/SectionFrame>/);
-  assert.match(section, /\{body\}\s*<\/SectionFrame>/, 'the frame wraps that body');
-});
-
-test('an empty Technician Requests section still renders its header', () => {
-  /*
-   * It used to `return null` at total === 0. That is the one thing that made
-   * it un-reorderable — you cannot grip a section that is not on the page — so
-   * the guard must not come back in ANY shape, not just the exact old line.
-   * The section instead takes the buckets' auto-collapse (asserted above), so
-   * an empty day costs a shut header rather than a whole card.
-   */
-  const section = view.slice(view.indexOf('function PendingSection('));
-  const earlyReturns = [...section.matchAll(/if \([^)]*appRequests[^)]*\)\s*return null;/g)];
-  assert.equal(earlyReturns.length, 0,
-    `an appRequests early return is back: ${earlyReturns.map((m) => m[0]).join(' | ')}`);
-
-  // Positive control: that matcher does fire on the line this test replaced.
-  assert.match('  if (appRequests && total === 0) return null;',
-    /if \([^)]*appRequests[^)]*\)\s*return null;/,
+  // Positive control: that matcher does fire on the shape it forbids.
+  assert.match('  if (n === 0) return null;', /if \([^)]*(counts|\bn\b)[^)]*\)\s*return null;/,
     'control: the scan must be able to see the guard it forbids');
 });
 
-// ─── 2. Same interaction as Unconfirmed ──────────────────────────────────
+// ─── 2. Same interaction as Unconfirmed (shared component, unchanged) ────
 
 /*
  * The strings that DEFINE the interaction: drag start/end on the header, the
@@ -259,47 +181,26 @@ test('Unconfirmed renders through the same shared component, and keeps no second
   }
 });
 
-// ─── 3. Persistence: Pending to Start's own keys ─────────────────────────
+// ─── 3. Persistence: the URL, not a per-browser arrangement ──────────────
 
 const storageKeys = (src) => [...src.matchAll(/'(easyfix\.crm\.[\w.]+)'/g)].map((m) => m[1]);
 
-test('order and collapse persist under Pending to Start\'s own localStorage keys, never Unconfirmed\'s', () => {
-  const mine = storageKeys(view);
-  const theirs = storageKeys(unconfirmed);
-  assert.equal(mine.length, 2, `expected ORDER_KEY and COLLAPSED_KEY in the view, found ${mine.length}`);
-  assert.ok(theirs.length >= 2, `expected Unconfirmed's keys to be found, found ${theirs.length}`);
-  assert.match(view, /const ORDER_KEY = 'easyfix\.crm\.pendingStart\.[\w.]+';/);
-  assert.match(view, /const COLLAPSED_KEY = 'easyfix\.crm\.pendingStart\.[\w.]+';/);
-
+test('Pending to Start stores no per-browser arrangement — its view state lives in the URL', () => {
   /*
-   * THE MIGRATION. reconcile() (asserted below, on the shared component)
-   * APPENDS a key it has never seen, so an order saved before Technician
-   * Requests joined the set — ['overDue','actionToday','future'] under
-   * sectionOrder.v1 — would put the new section LAST, the opposite of its
-   * default. The order key is therefore at v2: those saved arrangements are
-   * retired once and everyone starts from SECTIONS again. Reverting the key to
-   * v1 silently demotes the section for every operator who ever dragged one.
+   * The order/collapse keys (easyfix.crm.pendingStart.sectionOrder.v2 /
+   * sectionCollapsed.v1) described an arrangement that no longer exists. What
+   * an operator chooses here now — the tab and the filters — is shareable state,
+   * so it goes in the URL (asserted in tests/pending-to-start-tabs.test.js),
+   * not in one browser's storage where a pasted link cannot carry it.
    */
-  assert.match(view, /const ORDER_KEY = 'easyfix\.crm\.pendingStart\.sectionOrder\.v2';/,
-    'the order key must be at v2 or a pre-2026-09-14 saved order appends Technician Requests last');
-  assert.match(shared, /for \(const s of sections\) if \(!seen\.has\(s\.key\)\) out\.push\(s\);/,
-    'control: reconcile() really does APPEND unknown-to-storage sections — that is why v2 exists');
-  assert.notEqual(mine[0], mine[1], 'order and collapse are stored separately');
-  for (const k of mine) {
-    assert.ok(!theirs.includes(k),
-      `${k} is Unconfirmed's key — one page's arrangement would overwrite the other's`);
-  }
+  assert.deepEqual(storageKeys(view), [], 'the view must not keep a localStorage key');
+  assert.doesNotMatch(view, /localStorage/, 'nor touch localStorage at all');
+  assert.doesNotMatch(tabs, /localStorage/, 'nor may the strip');
 
-  // The shared component stores under the CALLER's keys, and guards every access.
-  assert.doesNotMatch(shared, /'easyfix\.crm\./, 'the shared component must not hard-code a page\'s key');
-  assert.match(shared, /window\.localStorage\.setItem\(orderKey, /);
-  assert.match(shared, /window\.localStorage\.setItem\(collapsedKey, /);
-  const accesses = [...shared.matchAll(/localStorage\./g)].map((m) => m.index);
-  assert.ok(accesses.length >= 4, `expected the four localStorage reads/writes, found ${accesses.length}`);
-  for (const i of accesses) {
-    assert.ok(shared.slice(Math.max(0, i - 80), i).includes('try {'),
-      'every localStorage access must sit in a try — it throws in private windows');
-  }
+  // Unconfirmed's own keys are untouched by the retirement (its contract is
+  // tests/unconfirmed-sections.test.js; this only proves the scan can see keys).
+  assert.ok(storageKeys(unconfirmed).length >= 2,
+    `control: expected Unconfirmed's keys to be found, found ${storageKeys(unconfirmed).length}`);
 });
 
 // ─── 4. No Check In; View opens the job ──────────────────────────────────
@@ -313,9 +214,11 @@ const CHECK_IN_WORDING = /check[\s-]?in\b/i;
 const wordingOf = (src) => src.replace(/'checkin'/g, '');
 
 test('the Pending to Start view has no Check In control, icon or wording', () => {
-  assert.doesNotMatch(view, /PlayCircle/, 'the PlayCircle row icon must not come back');
-  const hit = wordingOf(view).match(CHECK_IN_WORDING);
-  assert.equal(hit, null, `Check In wording is back in ${VIEW}: "${hit && hit[0]}"`);
+  for (const [name, src] of [[VIEW, view], [TABS, tabs]]) {
+    assert.doesNotMatch(src, /PlayCircle/, `the PlayCircle row icon must not come back (${name})`);
+    const hit = wordingOf(src).match(CHECK_IN_WORDING);
+    assert.equal(hit, null, `Check In wording is back in ${name}: "${hit && hit[0]}"`);
+  }
 });
 
 test('a View action still opens the job workspace', () => {
@@ -325,12 +228,11 @@ test('a View action still opens the job workspace', () => {
   assert.equal(buttons.length, 1, 'exactly one Eye "View Job" button, calling onView(j.job_id)');
   assert.match(view, /import \{[^}]*\bEye\b[^}]*\} from 'lucide-react';/);
 
-  // onView is the page's openView on every section — one `shared` object now
-  // that Technician Requests is a member too, so one assertion covers all four.
-  assert.match(view, /onView: openView,/, 'every section gets openView');
+  // onView is the page's openView on the one table, whatever the tab.
+  assert.match(view, /<PendingStartTable[\s\S]*?onView=\{openView\}[\s\S]*?\/>/, 'the table gets openView');
   // …and the page's openView is the ?action=view workspace.
   const page = strip(read(PAGE));
-  assert.match(page, /<PendingToStartView[\s\S]{0,200}?openView=\{openView\}/);
+  assert.match(page, /<PendingToStartView[\s\S]{0,400}?openView=\{openView\}/);
   assert.match(page, /function openView\([^)]*\)\s*\{[^}]*openJobAction\('view',\s*id\);\s*\}/);
 });
 
@@ -347,6 +249,13 @@ test('positive control — the stripper removes prose and keeps code', () => {
   assert.ok(!stripped.includes('Check In'), 'line comments must go');
   assert.ok(stripped.includes('const kept = 1;'), 'code must survive');
   assert.ok(view.length < read(VIEW).length, 'the view has comments the scans excluded');
+  /*
+   * The view's header describes the retired sections by name ("Technician
+   * Requests / Over Due / …") and quotes <ReorderableSections> in prose — the
+   * exact tokens section 1 forbids. The scans only mean something because that
+   * prose is stripped first.
+   */
+  assert.match(read(VIEW), /reorderable/i, 'control: the raw view still explains the retirement in prose');
 });
 
 test('differential control — the removed Check In row icon would be caught', () => {
@@ -380,4 +289,18 @@ test('differential control — the removed Check In row icon would be caught', (
   // …while the retained action id and the legitimate neighbours stay clear.
   assert.doesNotMatch(wordingOf("prevAction.current === 'checkin'"), CHECK_IN_WORDING);
   assert.doesNotMatch('checkin_date_time checks in', CHECK_IN_WORDING);
+});
+
+test('differential control — a section mount slipped back in would be caught', () => {
+  /*
+   * The pre-2026-09-16 render, re-inserted into a copy of the current source:
+   * the section-1 scan must see it, or its silence on the real file proves
+   * nothing.
+   */
+  const mutated = view.replace('<PendingStartTable',
+    '<ReorderableSections sections={SECTIONS} orderKey={ORDER_KEY} collapsedKey={COLLAPSED_KEY}>{() => null}</ReorderableSections>\n<PendingStartTable');
+  assert.notEqual(mutated, view, 'the mutation must land');
+  const caught = SECTION_MACHINERY.filter((p) => p.test(mutated));
+  assert.ok(caught.length >= 3, `the scan must see the re-grown sections, saw only: ${caught.join(' ')}`);
+  assert.equal(SECTION_MACHINERY.filter((p) => p.test(view)).length, 0, 'and nothing on the real file');
 });

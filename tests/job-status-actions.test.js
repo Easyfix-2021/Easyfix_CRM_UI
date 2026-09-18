@@ -141,7 +141,9 @@ const ACTIONS = [
     gates: [
       ['lib/job-app-request.ts', 'export const PENDING_TO_START_STATUS = 1;'],
       ['lib/job-app-request.ts', 'if (Number(row.job_status) !== PENDING_TO_START_STATUS) return null;'],
-      ['components/job/PendingToStartView.tsx', 'const req = appRequests ? appRequestOf(j) : null;'],
+      // Per row since the tabs replaced the sections (2026-09-16) — still only
+      // through appRequestOf(), so the status-1 pin above still bounds it.
+      ['components/job/PendingToStartView.tsx', 'const req = appRequestOf(j);'],
       ['components/job/TechRequestActions.tsx', "const isCancel = request.kind === 'cancel';"],
       ['components/job/TechRequestActions.tsx', "const onApprove = () => (isCancel ? cancel.open() : setRescheduleOpen(true));"],
     ],

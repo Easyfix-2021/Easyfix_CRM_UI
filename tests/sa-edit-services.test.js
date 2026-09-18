@@ -203,9 +203,27 @@ test('(iii) + item 3: every edit made IN Schedule & Assign re-ranks', () => {
   assert.match(SA_CODE, /onAddressSaved=\{jobId != null && offerable \? reRank : undefined\}/);
   const d = SA_CODE.slice(SA_CODE.indexOf('onSaveDetails={'), SA_CODE.indexOf('} : undefined}', SA_CODE.indexOf('onSaveDetails={')));
   assert.ok(d.indexOf('reRank();') > d.indexOf('await api.patch('), 'description: re-rank once the PATCH lands');
-  // Reschedule keeps its own onDone (it also veils the list, refreshes offers).
-  const r = SA_CODE.slice(SA_CODE.indexOf('<RescheduleDialog'), SA_CODE.indexOf('/>', SA_CODE.indexOf('<RescheduleDialog')));
-  assert.match(r, /onDone=\{\(\) => \{[\s\S]*top\.refetch\(\);/, 'a reschedule must re-run the Top-10');
+  /*
+   * Reschedule has its own refresh (it also veils the list and refreshes
+   * offers) and, since 2026-09-16, TWO dialogs reach it: the Current tab's
+   * RescheduleDialog and the Uplifted tab's three-question one. The assertion
+   * therefore checks the shared handler does the work AND that each dialog is
+   * wired to that same handler — a second dialog quietly given its own onDone
+   * is exactly the drift this test exists to catch.
+   */
+  const onDoneOf = (tag) => {
+    const at = SA_CODE.indexOf(`<${tag}`);
+    assert.ok(at > -1, `${tag} must be mounted`);
+    return SA_CODE.slice(at, SA_CODE.indexOf('/>', at));
+  };
+  assert.match(onDoneOf('RescheduleDialog'), /onDone=\{onRescheduled\}/, 'Current\'s dialog runs the shared refresh');
+  assert.match(onDoneOf('ScheduleAssignRescheduleDialog'), /onDone=\{onRescheduled\}/, 'Uplifted\'s dialog runs the same one');
+  // Takes the new appointment (for the "Order rescheduled" popup) since 2026-09-17.
+  const h = SA_CODE.slice(SA_CODE.indexOf('function onRescheduled('));
+  const body = h.slice(0, h.indexOf('\n  }'));
+  assert.match(body, /top\.refetch\(\);/, 'a reschedule must re-run the Top-10');
+  assert.match(body, /offers\.refetch\(\);/, 'and refresh the offers the reschedule just expired');
+  assert.match(body, /setRemarksReloadKey/, 'and remount the remarks thread for the new comment');
 });
 
 // ── (iv) the View modal's writes reach S&A's cache ───────────────────────

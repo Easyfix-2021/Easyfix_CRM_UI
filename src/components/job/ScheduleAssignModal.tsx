@@ -45,7 +45,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AlertTriangle, Search, X, Loader2, Clock,
+  AlertTriangle, Search, X, Loader2, Clock, CalendarClock,
 } from 'lucide-react';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -74,6 +74,16 @@ import { useCancelJob } from './CancelJob';
 import { RescheduleDialog } from './RescheduleDialog';
 import { ServicesTabBody } from './JobModal';
 import { JobContextPanel, type JobServiceRow } from './JobContextPanel';
+import { ScheduleAssignUplifted } from './ScheduleAssignUplifted';
+import { JobRemarksView } from './JobRemarksView';
+import { ScheduleAssignRescheduleDialog } from './ScheduleAssignRescheduleDialog';
+import { JobInternalNotes, type JobNote } from './JobInternalNotes';
+import { ServicesOneListDialog } from './ServicesOneListDialog';
+
+/** Per-browser memory of the Current/Uplifted choice — see `view` below. */
+const SA_VIEW_KEY = 'crm_schedule_assign_view';
+/** Same base lib/api.ts talks to; the media tiles link straight at the BE. */
+const SA_API_BASE = process.env.NEXT_PUBLIC_API_URL || '/api';
 import {
   CandidateTable, PincodeListModal, type ScheduleCandidate,
 } from './CandidateTable';
@@ -259,6 +269,20 @@ export function ScheduleAssignModal({
      */
     fk_easyfixter_id?: number | null;
     easyfixer_name?: string | null;
+    /*
+     * Read by the Uplifted tab only — all four already ride on this same
+     * `j.*` projection, so surfacing them costs no extra request:
+     *   original_appointment_*  the appointment as first booked (SDA is scored
+     *                           against it, so a rescheduled job must still
+     *                           show the date the customer was promised)
+     *   images / videos         whatever was attached when the order was
+     *                           created; ops were opening the View modal in a
+     *                           second tab just to look at them.
+     */
+    original_appointment_date_time?: string | null;
+    original_appointment_time?: string | null;
+    images?: Array<Record<string, unknown>> | null;
+    videos?: Array<{ media_id: number; content_type?: string | null; source?: string | null; created_at?: string | null }> | null;
   }>(open && jobId ? `/admin/jobs/${jobId}` : null);
   /*
    * ⚠ IDENTITY-GUARDED, exactly as `topData` is (see its own comment below).
@@ -279,6 +303,108 @@ export function ScheduleAssignModal({
   const probe = statusGate.data && Number(statusGate.data.job_id) === Number(jobId)
     ? statusGate.data
     : null;
+
+  /*
+   * CURRENT vs UPLIFTED (2026-09-16) — the redesigned console ships BESIDE the
+   * screen ops use all day, not in place of it. Both tabs drive the same state,
+   * the same offer commit and the same footer, so a job can be worked from
+   * either; only the arrangement above the technician table differs.
+   *
+   * Default is Current, so nobody is moved onto a new layout mid-shift. The
+   * choice is remembered per browser: an operator evaluating Uplifted should
+   * not have to re-pick it on every job. localStorage may throw (Safari private
+   * mode), hence the try/catch — a broken preference must not break the modal.
+   */
+  const [view, setView] = useState<'current' | 'uplifted'>('current');
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(SA_VIEW_KEY) === 'uplifted') setView('uplifted');
+    } catch { /* no preference available — Current stands */ }
+  }, []);
+  function pickView(next: 'current' | 'uplifted') {
+    setView(next);
+    try { localStorage.setItem(SA_VIEW_KEY, next); } catch { /* preference is a convenience, not state */ }
+  }
+  /*
+   * "Choose technicians" in the Uplifted header scrolls to the Top-10 table
+   * rather than duplicating it — one table, one selection, one commit button.
+   */
+  const techRef = useRef<HTMLElement | null>(null);
+  /*
+   * The Uplifted tab's services editor is the new one-list dialog; the Current
+   * tab keeps the basket editor (EditServicesDialog). Separate open flags so
+   * each tab can only ever open its own, and the comparison stays honest.
+   */
+  const [oneListOpen, setOneListOpen] = useState(false);
+  /*
+   * RE-OFFER AFTER RESCHEDULE. Rescheduling expires every offer still waiting
+   * for a reply (the backend closes them as "Appointment rescheduled"), so a
+   * job that WAS offered is suddenly offered to nobody. Set when a reschedule
+   * expired live offers; while set, the Uplifted strip says "offer this job
+   * again", and closing the console asks first. Cleared by a new offer (live
+   * offers exist again), by the offer commit itself (which closes the modal),
+   * and on job switch.
+   */
+  const [reofferNeeded, setReofferNeeded] = useState(false);
+  /*
+   * FAST SERVICES REFRESH after the one-list editor saves. The console's job
+   * (services, totals) comes from /candidates, which re-ranks every technician
+   * — seconds, during which the card still showed the old lines. The save now
+   * also reads GET /:id/header (the same header, no ranking) and lays its
+   * services over the card at once; the re-rank still runs behind it and
+   * replaces the patch when it lands. Scoped to one job, cleared on switch.
+   */
+  const [jobPatch, setJobPatch] = useState<{ jobId: number; services: unknown } | null>(null);
+  /* Pinned internal notes, reported up by <JobInternalNotes> so the Job notes
+     card can say one is pinned and jump to it. */
+  const [pinnedNotes, setPinnedNotes] = useState<JobNote[]>([]);
+  const notesRef = useRef<HTMLDivElement | null>(null);
+
+  /*
+   * What has to happen after ANY successful reschedule, from either tab's
+   * dialog. invalidateFetch only DROPS the cache — it does not re-run a hook
+   * that is still mounted, which is why a reschedule used to need a manual page
+   * reload. So refetch the two mounted queries (new Job Date, re-ranked
+   * candidates, newly-expired offers) and remount JobRemarksView so the
+   * reschedule comment and any pending-request change appear too.
+   */
+  function onRescheduled(newAppointment?: string) {
+    // Read BEFORE the refetch below replaces the list: these are the offers the
+    // reschedule just expired.
+    const expired = (offerItems ?? []).filter((o) => (o.offer_status ?? 0) === 0).length;
+    if (expired > 0) {
+      setReofferNeeded(true);
+      /*
+       * Say what happened and hand over the next step in one place (ops,
+       * 2026-09-17): the order's new time, and a button that goes straight to
+       * the available technicians. "Later" keeps the console where it is — the
+       * strip and the close check still remind them.
+       */
+      void confirmAction({
+        title: 'Order rescheduled',
+        icon: <CalendarClock className="h-5 w-5" />,
+        iconAccent: 'sky',
+        description: (
+          <div className="space-y-1.5 text-sm">
+            <p>Order rescheduled for <b>{newAppointment ? formatDate(newAppointment) : 'the new time'}</b>.</p>
+            <p>{expired} offer{expired === 1 ? '' : 's'} expired — offer it again for the new time.</p>
+          </div>
+        ),
+        confirmLabel: 'Proceed to re-offer',
+        cancelLabel: 'Later',
+      }).then((go) => {
+        if (go) techRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    }
+    rescheduleRefetchStarted.current = false;
+    setRescheduling(true); // veil the stale date/list until the refetch settles
+    top.refetch();
+    offers.refetch();
+    invalidateFetch((k) =>
+      k.startsWith(`/admin/jobs/${jobId}/comments`)
+      || k.startsWith(`/admin/jobs/${jobId}/customer-requests`));
+    setRemarksReloadKey((n) => n + 1);
+  }
   const staleOwnerName = probe?.fk_easyfixter_id != null
     ? (probe.easyfixer_name || `Efr #${probe.fk_easyfixter_id}`)
     : null;
@@ -416,6 +542,11 @@ export function ScheduleAssignModal({
     setRetainedJob(null); setSelected(new Map());
     setSearchPage(0); setSearchPageSize(10);
     setServicesOpen(false);
+    // Remount the remarks thread per job: it is a mounted useFetch that would
+    // otherwise show job A's comments while job B's load.
+    setRemarksReloadKey((n) => n + 1);
+    setJobPatch(null);
+    setReofferNeeded(false);
   }, [open, jobId]);
 
   // Toggle a technician's membership in the selection. OFFER mode = multi-select
@@ -603,8 +734,8 @@ export function ScheduleAssignModal({
    * PRESENT `false` always wins. Same shape as offerMode's `?? true` and as the
    * per-technician contract in lib/easyfixer-lifecycle.ts.
    *
-   * Deliberately NOT the whole story: the past-appointment gate (offer-only,
-   * mirrored at the commit button) and the job-stage transition check (mirrored
+   * Deliberately NOT the whole story: the past-appointment gate (/offer and
+   * /assign, mirrored at the commit button) and the job-stage transition check (mirrored
    * only by the row icons) are separate server rules. Hence a reason code
    * rather than a bare boolean — "unavailable" has more than one cause.
    */
@@ -636,6 +767,46 @@ export function ScheduleAssignModal({
   // BE's tbl_job_offer table is absent → endpoint returns { items: [] }).
   const offersKey = open && jobId ? `/admin/jobs/${jobId}/offers` : null;
   const offers = useFetch<JobOffersResponse>(offersKey, { enabled: !!offersKey });
+  /*
+   * The offers list carries no job id to guard on like topData/probe, so trust
+   * it only when it was fetched for THIS key (useFetch keeps job A's list on
+   * screen while job B's loads). An error for this key also counts as settled,
+   * so a failed offers read cannot hold the console on its loader forever.
+   */
+  const offersReady = !offersKey || offers.dataKey === offersKey
+    || (!!offers.error && !offers.loading && !offers.refreshing);
+  const offerItems = offersReady ? (offers.data?.items ?? null) : null;
+  const hasLiveOffers = (offerItems ?? []).some((o) => (o.offer_status ?? 0) === 0);
+  useEffect(() => { if (hasLiveOffers) setReofferNeeded(false); }, [hasLiveOffers]);
+  const upliftedJob = job && jobPatch && Number(jobPatch.jobId) === Number(jobId)
+    ? ({ ...job, services: jobPatch.services } as typeof job)
+    : job;
+  // The re-rank has landed with the saved services — the patch has done its job.
+  useEffect(() => { setJobPatch(null); }, [topData]);
+  async function onServicesSaved() {
+    const id = jobId;
+    reRank();
+    if (id == null) return;
+    try {
+      const fresh = await api.get<{ job: { job_id?: number; services?: unknown } }>(`/admin/jobs/${id}/header`);
+      if (fresh?.job && Number(fresh.job.job_id) === Number(id)) {
+        setJobPatch({ jobId: id, services: fresh.job.services ?? [] });
+      }
+    } catch { /* the re-rank still refreshes the card, just later */ }
+  }
+  /*
+   * OPEN = A BLANK MODAL WITH A LOADER until this job's own data is in — the
+   * header/services (candidates), the detail probe (reference, original
+   * appointment, attachments) and the offers. Every one of them used to paint
+   * the PREVIOUS job's values for a second on a job switch, because the modal
+   * never unmounts and useFetch keeps the last payload. A failed read counts
+   * as settled (its own error shows) so the loader cannot hang.
+   */
+  const consoleLoading = open && jobId != null && (
+    (!job && !top.error)
+    || (!probe && !statusGate.error)
+    || !offersReady
+  );
 
   // Live-time tick — bump a counter every 45s so the "offered N min ago"
   // labels re-render without re-fetching. Cleared on unmount / close.
@@ -865,7 +1036,35 @@ export function ScheduleAssignModal({
   // through the Reschedule dialog (which persists immediately), so there is
   // nothing to guard on close. Kept wired (not removed) so the Dialog's
   // onOpenChange plumbing is unchanged.
-  const guardedOpenChange = useFormDirtyGuard(onClose, {
+  /*
+   * Closing right after a reschedule expired this job's offers leaves it
+   * offered to nobody for the new time — the step ops kept forgetting. Ask
+   * once; "Stay and offer" keeps the console open on the technician list.
+   */
+  async function requestClose() {
+    if (reofferNeeded && !hasLiveOffers) {
+      const ok = await confirmAction({
+        title: 'Close without offering this job again?',
+        icon: <AlertTriangle className="h-5 w-5" />,
+        iconAccent: 'amber',
+        description: (
+          <ul className="space-y-1.5 text-sm">
+            <li>• The reschedule expired the offers this job had.</li>
+            <li>• Nobody has it now for the new appointment{job?.requested_date_time ? <> (<b>{formatDate(job.requested_date_time)}</b>)</> : null}.</li>
+            <li>• Choose technicians and offer it, or it stays under <b>Offer Rejected/Expired</b>.</li>
+          </ul>
+        ),
+        confirmLabel: 'Close anyway',
+        cancelLabel: 'Stay and offer',
+      });
+      if (!ok) {
+        techRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+      }
+    }
+    onClose();
+  }
+  const guardedOpenChange = useFormDirtyGuard(() => { void requestClose(); }, {
     isDirty: () => false,
     when: () => !committing,
   });
@@ -877,16 +1076,49 @@ export function ScheduleAssignModal({
         className="!max-w-none w-[calc(100vw-48px)] h-[calc(100vh-48px)] overflow-hidden flex flex-col"
       >
         <DialogHeader className="px-6 py-4">
-          <DialogTitle className="flex items-center gap-2">
+          <DialogTitle className="flex flex-wrap items-center gap-2">
             Schedule &amp; Assign
             {jobId && <span className="text-sm font-normal text-ink-300">· Job #{jobId}</span>}
             {probe?.job_reference_id && (
               <span className="text-sm font-normal text-ink-300">· {probe.job_reference_id}</span>
             )}
+            {/* No appointment / job-age blocks here (removed 2026-09-16 on
+                review): both already have a tile of their own a few hundred
+                pixels below, and a header that repeats the tiles reads as two
+                sources for one number. The header states identity only. */}
+            {/* Layout switch, not a mode switch: both tabs act on the same job
+                with the same footer. Sits in the title row so it is the first
+                thing seen and costs no vertical space of its own. */}
+            <span className="ml-auto mr-8 inline-flex items-center gap-1 rounded-md border bg-muted/50 p-0.5">
+              {(['current', 'uplifted'] as const).map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => pickView(v)}
+                  aria-pressed={view === v}
+                  className={[
+                    'rounded px-2.5 py-1 text-xs font-medium capitalize transition-colors',
+                    view === v ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+                  ].join(' ')}
+                >
+                  {v}
+                </button>
+              ))}
+            </span>
           </DialogTitle>
         </DialogHeader>
 
         <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-4 space-y-5">
+          {consoleLoading ? (
+            <div className="grid h-full min-h-[240px] place-items-center">
+              <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />Loading job…
+              </p>
+            </div>
+          ) : !job && top.error ? (
+            <p className="text-sm text-urgent-strong">Could not load this job: {top.error}</p>
+          ) : (
+          <>
           {!offerable && (
             <div className="rounded-md border border-warning bg-warning-tint px-4 py-2 text-sm text-warning-strong">
               {/* Driven by the server's reason code. The previous copy said this
@@ -900,12 +1132,51 @@ export function ScheduleAssignModal({
                 : <>This order can’t be scheduled or offered right now — opened read-only.</>}
             </div>
           )}
+          {/* ───────── UPLIFTED: the console layout, above the shared panels ─────────
+              Presentation only — it fetches nothing and mutates nothing. The
+              job details / services / notes / address / remarks EDITORS stay in
+              JobContextPanel below (collapsed in this tab, since the cards here
+              already carry customer + client), so both tabs share one
+              implementation of every edit. */}
+          {view === 'uplifted' && (
+            <ScheduleAssignUplifted
+              jobId={jobId}
+              job={upliftedJob}
+              probe={probe}
+              offers={offerItems}
+              offersLoading={offers.loading}
+              pinnedNotes={pinnedNotes}
+              onShowNotes={() => notesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+              reofferNeeded={reofferNeeded}
+              offerable={offerable}
+              onReschedule={() => setRescheduleOpen(true)}
+              onPickTechnicians={() => techRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+              /*
+               * The SAME three handlers JobContextPanel gets in the Current tab
+               * — the editors move, the code path behind them does not. Each is
+               * withheld on a read-only open by the identical `offerable` gate.
+               */
+              onSaveDetails={jobId != null && offerable ? async (patch) => {
+                await api.patch(`/admin/jobs/${jobId}`, patch);
+                reRank();
+              } : undefined}
+              onAddressSaved={jobId != null && offerable ? reRank : undefined}
+              onEditServices={jobId != null && offerable ? () => setOneListOpen(true) : undefined}
+              apiBase={SA_API_BASE}
+            />
+          )}
+
           {/* ───────── (a) COMPLETE JOB DETAILS + read-only schedule + remarks ─────────
               Shared with the Assign / Reassign modals via <JobContextPanel>. The
               Reschedule button + "locked" helper + the post-reschedule "Updating…"
               veil are Schedule-&-Assign-only, wired via the flags below. The
               collapsible Job Details starts expanded and Remarks starts collapsed —
               byte-for-byte the same as before the extraction. */}
+          {/* Current tab only. Uplifted carries customer, client, address,
+              services and notes in its own cards — with the same editors wired
+              to the same handlers — and puts the remarks thread at the BOTTOM
+              of the page, below the technician table (see after section (c)). */}
+          {view === 'current' && (
           <JobContextPanel
             job={job}
             jobId={jobId}
@@ -913,13 +1184,10 @@ export function ScheduleAssignModal({
             showReschedule
             onReschedule={() => setRescheduleOpen(true)}
             rescheduling={rescheduling}
-            /*
-             * Only the OFFER path is gated server-side, and the footer button is
-             * disabled to match. In assign/reassign mode the action stays
-             * available by design, so the notice must not tell the operator to
-             * reschedule first — same condition as the button's own `disabled`.
-             */
-            pastBlocksAction={offerMode}
+            /* /offer AND /assign both refuse a passed appointment (since
+               2026-09-17), so the notice blocks in either mode — the same
+               condition as the footer button's own `disabled`. */
+            pastBlocksAction
             /*
              * Job Description + Additional Comments are EDITABLE here (opt-in;
              * the panel stays read-only for Assign / Reassign, which don't pass
@@ -954,14 +1222,18 @@ export function ScheduleAssignModal({
               setServicesOpen(true);
             } : undefined}
           />
+          )}
 
-          {/* ───────── Offer history — live + rejected + expired — offer mode only ───────── */}
-          {offerMode && (offers.data?.items?.length ?? 0) > 0 && (
+          {/* ───────── Offer history — live + rejected + expired — offer mode only ─────────
+              Current tab only: Uplifted carries the same rows, compacted, in its
+              Technician card, and two copies of one list on one screen is how
+              they start disagreeing. */}
+          {view === 'current' && offerMode && (offerItems?.length ?? 0) > 0 && (
             <section>
               <h3 className="text-sm font-semibold mb-2 flex items-center gap-1.5">
                 Offered To
                 <span className="inline-flex items-center rounded-full bg-ink-100 px-2 py-0.5 text-xs font-medium text-ink-700 border border-ink-100">
-                  {offers.data!.items.length}
+                  {offerItems!.length}
                 </span>
               </h3>
               {/*
@@ -1016,7 +1288,7 @@ export function ScheduleAssignModal({
                     </tr>
                   </thead>
                   <tbody>
-                    {offers.data!.items.map((o) => {
+                    {offerItems!.map((o) => {
                       /* Colour as TEXT, not a chip: inside a table the chip
                          competed with the row's own status pills and made the
                          column read as an action. REJECTED=rose, EXPIRED=slate,
@@ -1085,11 +1357,21 @@ export function ScheduleAssignModal({
             </div>
           )}
 
-          {/* ───────── (c) SEARCH TECHNICIAN ───────── */}
-          <section>
+          {/* ───────── (c) SEARCH TECHNICIAN ─────────
+              SHARED by both tabs — one Top-10 table, one selection, one commit.
+              The ref is the scroll target for Uplifted's "Choose technicians". */}
+          <section ref={techRef}>
             <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
               <h3 className="text-sm font-semibold flex items-center gap-1.5">
                 {showingSearch ? 'Search Results' : 'Top 10 Technicians'}
+                {/* Uplifted marks the section the job is waiting on, so an
+                    operator scrolling a long console can see where the work is.
+                    Only while an offer can actually be made. */}
+                {view === 'uplifted' && offerable && (
+                  <span className="rounded-full bg-primary px-2 py-0.5 text-xs font-semibold uppercase tracking-wide text-primary-foreground">
+                    Needed now
+                  </span>
+                )}
                 {showingSearch && (
                   <InfoTooltip label="What you can search by">
                     <div className="space-y-2">
@@ -1297,6 +1579,32 @@ export function ScheduleAssignModal({
             )}
           </section>
 
+          {/* ───────── Comments and remarks — Uplifted, last on the page ─────────
+              Deliberately BELOW the technician table: on this screen the thread
+              is reference material for the decision above it, not the first
+              thing to read. Current keeps it inside JobContextPanel, where it
+              has always been. Same component, same fetch, same reload key. */}
+          {view === 'uplifted' && (
+            /* Two threads, side by side rather than stacked: remarks are the
+               job's audit trail and run long, internal notes are the handful of
+               things the next person must not miss. Sharing one scroll would
+               bury the second under the first, so remarks take two thirds and
+               the notes hold the right third, in view while the thread is read. */
+            <div className="grid gap-3 lg:grid-cols-[2fr_1fr]">
+              {/* ONE FIXED HEIGHT for both tiles (ops, 2026-09-17): a long
+                  thread or a stack of notes scrolls inside its tile instead of
+                  stretching the row and pushing the page down. */}
+              <div className="h-96 min-h-0">
+                <JobRemarksView key={remarksReloadKey} jobId={jobId} fill />
+              </div>
+              <div ref={notesRef} className="h-96 min-h-0 scroll-mt-4">
+                <JobInternalNotes key={jobId ?? 'none'} jobId={jobId} canAdd={offerable} onPinnedChange={setPinnedNotes} fill />
+              </div>
+            </div>
+          )}
+          </>
+          )}
+
         </div>
 
         <DialogFooter className="px-6 sm:justify-between">
@@ -1334,25 +1642,24 @@ export function ScheduleAssignModal({
               least one is ticked. */}
           <div className="flex items-center gap-2">
             {canCancel && cancel.button}
-            <Button variant="outline" onClick={onClose} disabled={committing}>Close</Button>
+            <Button variant="outline" onClick={() => { void requestClose(); }} disabled={committing}>Close</Button>
             {canCommit && (
               <Button
                 onClick={offerMode ? offer : assignSingle}
                 /*
-                 * A stale appointment blocks OFFERING only — the server refuses
-                 * it, so disabling here turns a 400 into an explained control.
-                 * Direct Assign stays enabled on purpose: swapping the tech on a
-                 * job that is already running late is a legitimate recovery, and
-                 * the server does not gate it either.
+                 * A stale appointment blocks BOTH commits — the server refuses
+                 * /offer and, since 2026-09-17, /assign too (ops: reschedule
+                 * first) — so disabling here turns a 400 into an explained
+                 * control in either mode.
                  */
                 disabled={!jobId || committing
                   || (offerMode ? selected.size === 0 : selected.size !== 1)
                   || blockedSelectedCandidate != null
-                  || (offerMode && appointmentIsPast(job?.requested_date_time))}
+                  || appointmentIsPast(job?.requested_date_time)}
                 title={blockedSelectedCandidate
                   ? candidateJobOfferEligibility(blockedSelectedCandidate).explanation
-                  : offerMode && appointmentIsPast(job?.requested_date_time)
-                    ? 'The appointment time has passed — reschedule the job before offering it.'
+                  : appointmentIsPast(job?.requested_date_time)
+                    ? `The appointment time has passed — reschedule the job before ${offerMode ? 'offering' : 'assigning'} it.`
                     : undefined}
               >
                 {committing
@@ -1394,28 +1701,42 @@ export function ScheduleAssignModal({
 
       {/* Reschedule — the ONLY way to change the (read-only) Job Date/Time. The
           BE persists + audits, then onDone re-ranks candidates and refreshes the
-          offer list (open offers get EXPIRED on reschedule) against the new date. */}
-      {jobId && (
+          offer list (open offers get EXPIRED on reschedule) against the new date.
+          ONE endpoint, two front doors: Uplifted asks the three questions the
+          Cancel popup asks (due to → reason → remarks) and Current keeps the
+          dialog it has always had. Both PATCH the same body, so a job's history
+          reads the same whichever tab rescheduled it. */}
+      {jobId && view === 'uplifted' && (
+        <ScheduleAssignRescheduleDialog
+          open={rescheduleOpen}
+          jobId={jobId}
+          currentAppointment={job?.requested_date_time ?? null}
+          originalAppointment={probe?.original_appointment_date_time ?? null}
+          /* Offers still waiting for a reply — the reschedule expires every one
+             of them, so the dialog warns before and confirms at the end. */
+          liveOffers={(offerItems ?? []).filter((o) => (o.offer_status ?? 0) === 0).length}
+          onClose={() => setRescheduleOpen(false)}
+          onDone={onRescheduled}
+        />
+      )}
+      {jobId && view === 'current' && (
         <RescheduleDialog
           open={rescheduleOpen}
           jobId={jobId}
           onClose={() => setRescheduleOpen(false)}
-          onDone={() => {
-            // invalidateFetch only DROPS the cache — it does not re-run a hook
-            // that's still mounted, which is why the reschedule used to need a
-            // manual page reload. Actually refetch the two mounted queries so the
-            // new Job Date + re-ranked candidates + expired offers show at once,
-            // and remount JobRemarksView (key bump) so the reschedule comment and
-            // any pending-request change appear too.
-            rescheduleRefetchStarted.current = false;
-            setRescheduling(true); // veil the stale date/list until the refetch settles
-            top.refetch();
-            offers.refetch();
-            invalidateFetch((k) =>
-              k.startsWith(`/admin/jobs/${jobId}/comments`)
-              || k.startsWith(`/admin/jobs/${jobId}/customer-requests`));
-            setRemarksReloadKey((n) => n + 1);
-          }}
+          onDone={onRescheduled}
+        />
+      )}
+
+      {/* Uplifted's one-list services editor. One save sends the complete set;
+          reRank re-reads the job header (services, amounts) and the Top-10,
+          which is ranked on the job's services. */}
+      {view === 'uplifted' && jobId != null && (
+        <ServicesOneListDialog
+          open={oneListOpen}
+          jobId={jobId}
+          onClose={() => setOneListOpen(false)}
+          onSaved={onServicesSaved}
         />
       )}
 
@@ -1425,7 +1746,21 @@ export function ScheduleAssignModal({
       {servicesOpen && jobId != null && (
         <EditServicesDialog
           jobId={jobId}
-          onClose={() => setServicesOpen(false)}
+          /*
+           * Re-read on CLOSE as well as on each write. Each write already
+           * re-ranks, but a quantity saves on blur — and clicking Close is what
+           * blurs it, so that PATCH is still in flight when the dialog goes
+           * away and the only refresh it triggers can race the close. Ops saw
+           * the Services card keep the old quantity. One more read the moment
+           * the editor is gone, plus a second once a blur-save can have landed,
+           * makes "what I just edited is what the console shows" hold no
+           * matter how the dialog was left.
+           */
+          onClose={() => {
+            setServicesOpen(false);
+            reRank();
+            window.setTimeout(reRank, 1500);
+          }}
           onMutated={reRank}
         />
       )}
@@ -1480,6 +1815,9 @@ function EditServicesDialog({ jobId, onClose, onMutated }: {
               job={job}
               onMutated={() => { detail.refetch(); onMutated(); }}
               onDirtyChange={(dirty) => { invalidQtyRef.current = dirty; }}
+              /* Schedule & Assign adds services WITHIN the job's category only,
+                 as the legacy Edit Service did — see ServicesTabBody. */
+              lockCategory
             />
           ) : detail.error ? (
             <div className="text-sm text-urgent-strong">Could Not Load Services: {detail.error}</div>
