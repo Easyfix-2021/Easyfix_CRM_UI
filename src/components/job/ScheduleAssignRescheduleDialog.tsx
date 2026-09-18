@@ -163,7 +163,7 @@ export function ScheduleAssignRescheduleDialog({
           <ul className="space-y-1.5 text-sm">
             <li>• {liveOffers} technician{liveOffers === 1 ? '' : 's'} waiting to reply will lose the offer.</li>
             <li>• They will see it as <b>Expired · Appointment rescheduled</b>.</li>
-            <li>• The job moves to <b>No takers</b> until you offer it again.</li>
+            <li>• The job moves to <b>Offer Rejected/Expired</b> until you offer it again.</li>
             <li>• <b>Next step:</b> choose technicians and offer it again for the new time — before you close the console.</li>
           </ul>
         ),

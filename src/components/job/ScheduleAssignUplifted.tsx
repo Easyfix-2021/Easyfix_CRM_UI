@@ -34,7 +34,7 @@ import type { JobNote } from './JobInternalNotes';
  * replaces <JobContextPanel> rather than sitting above it — each one calls the
  * very same handler the panel calls in the Current tab.
  *
- * PHASE 1 scope (unallocated jobs): Unallocated · Offered-waiting · No takers.
+ * PHASE 1 scope (unallocated jobs): Unallocated · Offered-waiting · Offer Rejected/Expired.
  * Accepted-job states (technician reschedule/cancel requests, missed
  * appointment, change technician, live location) are phase 2.
  */
@@ -169,7 +169,7 @@ const TONE: Record<Bucket, {
   },
   no_takers: {
     wrap: 'border-urgent bg-urgent-tint text-urgent-strong', icon: 'bg-urgent text-white', Icon: AlertTriangle,
-    title: 'No takers — offer to more technicians', state: 'No takers',
+    title: 'Every offer was rejected or expired — offer to more technicians', state: 'Offer Rejected/Expired',
     chip: 'border-urgent bg-urgent-tint text-urgent-strong',
   },
 };

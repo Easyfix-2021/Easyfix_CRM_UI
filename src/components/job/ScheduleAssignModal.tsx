@@ -1051,7 +1051,7 @@ export function ScheduleAssignModal({
           <ul className="space-y-1.5 text-sm">
             <li>• The reschedule expired the offers this job had.</li>
             <li>• Nobody has it now for the new appointment{job?.requested_date_time ? <> (<b>{formatDate(job.requested_date_time)}</b>)</> : null}.</li>
-            <li>• Choose technicians and offer it, or it stays under <b>No takers</b>.</li>
+            <li>• Choose technicians and offer it, or it stays under <b>Offer Rejected/Expired</b>.</li>
           </ul>
         ),
         confirmLabel: 'Close anyway',
