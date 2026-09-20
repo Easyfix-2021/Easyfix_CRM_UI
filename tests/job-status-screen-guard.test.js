@@ -39,11 +39,19 @@ const strip = (text) => text
   .replace(/\/\/[^\n]*/g, '');
 
 const URL_SRC = 'src/lib/job-action-url.ts';
-const PAGE_SRC = 'src/app/(authed)/my-orders/page.tsx';
 const STAGES_SRC = 'src/lib/job-stages.ts';
+/*
+ * BOTH list pages that can open a write console from the URL. Manage Jobs had
+ * the identical hole (ops, 2026-09-20) and now shares the same hook, so this
+ * list is the thing to extend when a third page grows one.
+ */
+const PAGES = [
+  'src/app/(authed)/my-orders/page.tsx',
+  'src/app/(authed)/jobs/page.tsx',
+];
 
 const url = strip(read(URL_SRC));
-const page = strip(read(PAGE_SRC));
+const guardSrc = url.slice(url.indexOf('export function useJobActionStatusGuard'));
 
 // ─── 1. The map ops stated ───────────────────────────────────────────────
 
@@ -94,8 +102,9 @@ test('the guard covers every write console and no read action', () => {
 
 // ─── 3. The page acts on it, against the RIGHT job ───────────────────────
 
-test('the page probes the job and re-routes only on THIS job’s status', () => {
-  assert.match(page, /const statusGuardKey = urlJobId != null && isGuardedJobAction\(urlAction\)/,
+test('the guard probes the job and re-routes only on THIS job’s status', () => {
+  assert.ok(guardSrc, 'positive control: useJobActionStatusGuard must be found');
+  assert.match(guardSrc, /jobId != null && isGuardedJobAction\(action\)/,
     'the probe must only run for a guarded action on a real job id');
   /*
    * The dataKey comparison is the whole safety of this: useFetch RETAINS the
@@ -103,27 +112,37 @@ test('the page probes the job and re-routes only on THIS job’s status', () => 
    * not `loading`), so reading `.data` directly would re-route the operator to a
    * screen chosen from a DIFFERENT job's status.
    */
-  assert.match(page, /statusGuard\.dataKey === statusGuardKey/,
+  assert.match(guardSrc, /probe\.dataKey === key/,
     'the status must be read only when it belongs to the job in the URL');
-  assert.match(page, /if \(isActionAllowedForStatus\(urlAction, status\)\) return;/,
+  assert.match(guardSrc, /if \(isActionAllowedForStatus\(action, code\)\) return;/,
     'an allowed action must not be touched');
-  assert.match(page, /openJobAction\(actionForJobStatus\(status\), urlJobId\)/,
+  assert.match(guardSrc, /openJobAction\(actionForJobStatus\(code\), jobId\)/,
     'a refused action must land on the screen for that status');
-  assert.match(page, /reroutedRef\.current === once/,
+  assert.match(guardSrc, /reroutedRef\.current === once/,
     'the re-route must fire once per (job, action) or two screens can ping-pong');
-  assert.match(page, /showToast\(\{[\s\S]{0,200}?statusLabel\(status\)/,
+  assert.match(guardSrc, /showToast\(\{[\s\S]{0,200}?statusLabel\(code\)/,
     'the operator must be told why the screen changed');
+});
+
+test('every page that can open a write console mounts the SHARED guard', () => {
+  for (const pg of PAGES) {
+    const pageSrc = strip(read(pg));
+    assert.match(pageSrc, /useJobActionStatusGuard\(\);/,
+      `${pg} opens a write console from the URL and must mount the guard`);
+    assert.match(pageSrc, /useJobActionStatusGuard[\s\S]{0,200}?from '@\/lib\/job-action-url'/,
+      `${pg} must import the guard from lib/job-action-url — a second copy would drift`);
+  }
 });
 
 // ─── 4. Differential controls ────────────────────────────────────────────
 
 test('differential control — the guards go red when their subject is removed', () => {
   const cases = [
-    ['the dataKey identity check', page,
-      page.replace('statusGuard.dataKey === statusGuardKey', 'true'),
-      /statusGuard\.dataKey === statusGuardKey/],
-    ['the once-per-job latch', page,
-      page.replace(/if \(reroutedRef\.current === once\) return;/, ''),
+    ['the dataKey identity check', url,
+      url.replace('probe.dataKey === key', 'true'),
+      /probe\.dataKey === key/],
+    ['the once-per-job latch', url,
+      url.replace(/if \(reroutedRef\.current === once\) return;/, ''),
       /reroutedRef\.current === once/],
     ['schedule’s status-0 pin', url,
       url.replace("{ status: 0, canonical: 'schedule'", "{ status: 4, canonical: 'schedule'"),

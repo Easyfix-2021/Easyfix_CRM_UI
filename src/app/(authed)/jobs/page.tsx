@@ -3,7 +3,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { buildStatusParams, jobStageOptionsFor, bucketOptionsFor, tabSelectionFor } from '@/lib/job-buckets';
 import Link from 'next/link';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
-import { useJobActionParams, useJobActionNav, isJobModalAction } from '@/lib/job-action-url';
+import {
+  useJobActionParams, useJobActionNav, isJobModalAction, useJobActionStatusGuard,
+} from '@/lib/job-action-url';
 import { useDebouncedValue, useFetchOnce } from '@/lib/hooks';
 import {
   Plus, Upload, ChevronDown, ChevronUp, Repeat, Globe,
@@ -924,6 +926,22 @@ export default function JobsPage() {
   // (`searchParams`/`router`/`pathname` are declared up in the state block.)
   const { jobId: urlJobId, action: urlAction } = useJobActionParams();
   const { openJobAction, closeJobAction } = useJobActionNav();
+  /*
+   * ── URL → SCREEN GUARD (ops, 2026-09-20) ────────────────────────────────
+   *
+   * Manage Jobs lists EVERY status and opens the same two write consoles as My
+   * Orders, so it had the same hole: `?jobId=<completed job>&action=schedule`
+   * opened Schedule & Assign — Edit Services included — on a job whose service
+   * lines are its billing lines.
+   *
+   * The screen now follows the job's status: 9 → Confirm & Schedule,
+   * 0 → Schedule & Assign, 1 → the assign console, anything else → read-only
+   * View. Same hook, same map (lib/job-action-url) as My Orders, so the two
+   * pages cannot drift. Only the WRITE consoles are policed — view / checkin /
+   * audit / edit / create are untouched, which matters most here: Audit &
+   * Complete opens `audit` on status 3/5 and must keep working.
+   */
+  useJobActionStatusGuard();
   /*
    * ALLOW-LIST (isJobModalAction), not an exclusion list. This memo used to
    * exclude assign / reassign by name and cast the rest with `as JobModalMode`.
