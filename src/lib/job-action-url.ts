@@ -1,7 +1,10 @@
 'use client';
 
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useFetch } from './hooks';
+import { statusLabel } from './utils';
+import { showToast } from '@/components/ui/toast';
 
 /*
  * URL-driven Job action state — shared by /jobs and /my-orders.
@@ -276,4 +279,47 @@ export function useJobActionNav() {
   }, [router, buildUrl]);
 
   return { openJobAction, closeJobAction };
+}
+
+/**
+ * Keep the open modal honest about the job it was opened for.
+ *
+ * Mount once per list page that can open a write console from the URL. It
+ * probes the job, and if the action in the URL is not one that status may open,
+ * it re-routes to the screen that status belongs on and says why.
+ *
+ * WHY A PROBE AND NOT THE ROW: a pasted link need not be for a job on this page
+ * at all, so the row may not exist. `/admin/jobs/:id` is the same key both
+ * consoles already read, so useFetch dedupes it — this costs no extra round
+ * trip. `dataKey` is what makes it safe: useFetch KEEPS the previous key's
+ * payload while the next loads (a key change sets `refreshing`, not `loading`),
+ * and re-routing on that would send the operator to a screen chosen from a
+ * different job's status.
+ *
+ * Re-routes once per (job, action). Without the latch, an action the target
+ * screen is itself not allowed to hold would ping-pong between two URLs.
+ */
+export function useJobActionStatusGuard(): void {
+  const { jobId, action } = useJobActionParams();
+  const { openJobAction } = useJobActionNav();
+
+  const key = jobId != null && isGuardedJobAction(action) ? `/admin/jobs/${jobId}` : null;
+  const probe = useFetch<{ job_id?: number; job_status?: number }>(key, { enabled: !!key });
+  const status = key && probe.dataKey === key ? probe.data?.job_status : undefined;
+
+  const reroutedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (action == null || jobId == null || status == null) return;
+    const code = Number(status);
+    if (!Number.isFinite(code)) return;
+    if (isActionAllowedForStatus(action, code)) return;
+    const once = `${jobId}:${action}`;
+    if (reroutedRef.current === once) return;
+    reroutedRef.current = once;
+    showToast({
+      variant: 'warning',
+      message: `Job #${jobId} is ${statusLabel(code)} — opening the screen for that stage instead.`,
+    });
+    openJobAction(actionForJobStatus(code), jobId);
+  }, [action, jobId, status, openJobAction]);
 }
