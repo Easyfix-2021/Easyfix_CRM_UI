@@ -92,6 +92,64 @@ export function isJobModalAction(action: JobAction | null | undefined): action i
   return action != null && JOBMODAL_ACTION_SET.has(action);
 }
 
+/*
+ * ── WHICH SCREEN BELONGS TO WHICH job_status (ops, 2026-09-20) ───────────────
+ *
+ * The action tokens above are just URL text, so anyone can paste
+ * `?jobId=<completed job>&action=schedule` and land a WRITE console on a job
+ * that has no business being written to — Edit Services being the one that
+ * actually costs money, since a job's service lines are its billing lines.
+ *
+ * The status → stage map already exists (lib/job-stages.ts, mirrored by the
+ * backend's lib/job-stages.js); this is the same contract expressed as "which
+ * modal may open". Ops stated it as:
+ *   job_status 9  → Confirm & Schedule
+ *   job_status 0  → Schedule & Assign
+ *   job_status 1  → the assign/reassign console
+ *   anything else → read-only View
+ *
+ * ONLY THE WRITE CONSOLES ARE GUARDED. view / checkin / audit / edit / create
+ * are deliberately absent: they are either read-only or owned by flows that
+ * already gate themselves (Audit & Complete opens `audit` on status 3/5), and
+ * silently re-routing them would break working links.
+ *
+ * This is DEFENCE IN DEPTH, not the defence. The server refuses the dangerous
+ * write on its own — job-services-editor.service.js re-reads job_status on the
+ * LOCKED row and 409s a completed job — which is what makes a job completed
+ * mid-edit safe too. The guard here stops the operator ever reaching a console
+ * that cannot work, instead of letting them fill a form that will be rejected.
+ */
+const STATUS_ACTIONS: ReadonlyArray<{ status: number; canonical: JobAction; allowed: readonly JobAction[] }> = [
+  { status: 9, canonical: 'confirm',  allowed: ['confirm'] },
+  { status: 0, canonical: 'schedule', allowed: ['schedule', 'assign'] },
+  { status: 1, canonical: 'console',  allowed: ['console', 'reassign'] },
+];
+
+/** The write consoles this guard polices. Everything else is left alone. */
+const GUARDED_ACTIONS: ReadonlySet<JobAction> = new Set<JobAction>(['confirm', 'schedule', 'assign', 'reassign', 'console']);
+
+/** Is this action one the status guard polices? */
+export function isGuardedJobAction(action: JobAction | null | undefined): boolean {
+  return action != null && GUARDED_ACTIONS.has(action);
+}
+
+/** The screen a job at `status` belongs on. Read-only View is the catch-all. */
+export function actionForJobStatus(status: number): JobAction {
+  return STATUS_ACTIONS.find((r) => r.status === status)?.canonical ?? 'view';
+}
+
+/**
+ * May `action` open for a job at `status`?
+ *
+ * Unguarded actions always may. An unknown status only permits the unguarded
+ * ones, so a status this CRM has not met yet degrades to View rather than
+ * opening a console for it.
+ */
+export function isActionAllowedForStatus(action: JobAction, status: number): boolean {
+  if (!GUARDED_ACTIONS.has(action)) return true;
+  return (STATUS_ACTIONS.find((r) => r.status === status)?.allowed ?? []).includes(action);
+}
+
 export interface JobActionParams {
   /** Numeric job id when present; null otherwise (create / no-modal). */
   jobId: number | null;
