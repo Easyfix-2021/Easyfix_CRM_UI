@@ -78,21 +78,32 @@ test('Location and Resend PIN are OFF a row carrying a request', () => {
     'ResendPinButton must be fenced off request rows');
 });
 
-test('View Job and Reassign are NOT fenced — they are on every row', () => {
-  // The owner said both "will always be there". Read the action cell and assert
-  // neither control acquired a request (or retired section) condition.
+test('View Job and the job console are NOT fenced — they are on every row', () => {
+  /*
+   * The owner said both "will always be there". Originally that pair was View
+   * Job + the standalone Reassign icon; the Reassign icon went on 2026-09-20
+   * (ops) because the job console reaches the same ranked list through
+   * "Change technician", and its Current tab IS the classic reassign screen.
+   * The RULE is unchanged and still what this guards: the always-available way
+   * into a job must not pick up a request-row or per-tab condition.
+   */
   const cellAt = VIEW.indexOf('stick-col stick-right text-right whitespace-nowrap');
   assert.ok(cellAt > -1, 'positive control: the action cell must be locatable');
   const cell = VIEW.slice(cellAt, VIEW.indexOf('</td>', cellAt));
 
   const viewAt = cell.indexOf('onClick={() => onView(j.job_id)}');
-  const reassignAt = cell.indexOf('onClick={() => onReassign(j.job_id)}');
+  const consoleAt = cell.indexOf('onClick={() => onOpenConsole(j.job_id)}');
   assert.ok(viewAt > -1, 'View Job must still render on this row');
-  assert.ok(reassignAt > -1, 'Reassign must still render on this row');
+  assert.ok(consoleAt > -1, 'the job console button must render on this row');
 
-  // The nearest preceding guard on each: Reassign keeps its permission gate
-  // (canJob.isJobReassign) and View keeps none — but neither may be section-gated.
-  for (const [name, at] of [['View Job', viewAt], ['Reassign', reassignAt]]) {
+  // The retired icon must be gone for real, not merely unrendered.
+  assert.doesNotMatch(VIEW, /onReassign/,
+    'the standalone Reassign icon was removed (ops, 2026-09-20) — reassign now starts from the console');
+
+  // The nearest preceding guard on each: the console keeps only its own
+  // "did the host wire it" check, View keeps none — neither may be tab- or
+  // request-gated.
+  for (const [name, at] of [['View Job', viewAt], ['Job console', consoleAt]]) {
     const preceding = cell.slice(Math.max(0, at - 220), at);
     assert.doesNotMatch(preceding, /appRequests|!?req &&|showRequest|ptsState/,
       `${name} must not be fenced on a request or a tab — the owner said it is always there`);
@@ -104,7 +115,6 @@ test('View Job and Reassign are NOT fenced — they are on every row', () => {
   const fencedAt = fenced.indexOf('onClick={() => onView(j.job_id)}');
   assert.match(fenced.slice(Math.max(0, fencedAt - 220), fencedAt), /!?req &&/,
     'control: a fenced View must be visible to the scan above');
-  assert.match(cell, /\{canJob\.isJobReassign && \(/, 'Reassign keeps its own permission gate');
 });
 
 test('the Approve / Reject pair renders from the SAME ask the Request column painted', () => {

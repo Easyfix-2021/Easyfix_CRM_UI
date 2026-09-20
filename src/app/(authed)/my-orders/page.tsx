@@ -1,7 +1,10 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
-import { useJobActionParams, useJobActionNav, isJobModalAction } from '@/lib/job-action-url';
+import {
+  useJobActionParams, useJobActionNav, isJobModalAction,
+  isGuardedJobAction, isActionAllowedForStatus, actionForJobStatus,
+} from '@/lib/job-action-url';
 import {
   Search, Eye,
   CalendarClock, CalendarCheck,
@@ -42,8 +45,9 @@ import { APP_REQUEST_ACTION } from '@/components/job/TechRequestActions';
 import { cycleSort, SortHeader, type SortDir } from '@/lib/use-sort';
 import { RefreshBar } from '@/components/ui/refresh-bar';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
-import { useDebouncedValue, invalidateFetch } from '@/lib/hooks';
+import { useDebouncedValue, invalidateFetch, useFetch } from '@/lib/hooks';
 import { LiveLocationPopover } from '@/components/location/LiveLocationPopover';
+import { showToast } from '@/components/ui/toast';
 
 // `/admin/jobs` Joi caps limit at 500 — pass to pageSizeToLimit so
 // "All" sends 500 instead of the default 1000 (which would 400).
@@ -610,6 +614,54 @@ export default function MyOrdersPage() {
     return { open: false, jobId: null };
   }, [urlAction, urlJobId]);
 
+  /*
+   * ── URL → SCREEN GUARD (ops, 2026-09-20) ──────────────────────────────────
+   *
+   * The action lives in the URL, so it can be typed. Pasting a COMPLETED job's
+   * id under `?action=schedule` used to open Schedule & Assign on it — a write
+   * console, with Edit Services inside, on a job whose service lines are its
+   * billing lines. Ops asked for the screen to follow the job's status instead:
+   * 9 → Confirm & Schedule, 0 → Schedule & Assign, 1 → the assign console,
+   * anything else → read-only View. The map is lib/job-action-url.ts.
+   *
+   * WHY A PROBE AND NOT THE ROW: a pasted link need not be for a job on this
+   * page at all, so the row may not exist. `/admin/jobs/:id` is the same key
+   * both consoles already read, so useFetch dedupes it — this costs no extra
+   * round trip. `dataKey` is what makes it safe: useFetch keeps the PREVIOUS
+   * job's payload while the next one loads, and re-routing on that would send
+   * the operator to a screen chosen from another job's status.
+   *
+   * Re-routes once per (job, action). Without the latch, an action the target
+   * screen itself is not allowed to hold would ping-pong between two URLs.
+   *
+   * This is not the security boundary — the server refuses the write on its own
+   * (job-services-editor re-reads job_status on the locked row and 409s a
+   * completed job). It is what stops an operator filling in a console that was
+   * never going to be allowed to save.
+   */
+  const statusGuardKey = urlJobId != null && isGuardedJobAction(urlAction)
+    ? `/admin/jobs/${urlJobId}`
+    : null;
+  const statusGuard = useFetch<{ job_id?: number; job_status?: number }>(statusGuardKey, { enabled: !!statusGuardKey });
+  const guardedStatus = statusGuardKey && statusGuard.dataKey === statusGuardKey
+    ? statusGuard.data?.job_status
+    : undefined;
+  const reroutedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (urlAction == null || urlJobId == null || guardedStatus == null) return;
+    const status = Number(guardedStatus);
+    if (!Number.isFinite(status)) return;
+    if (isActionAllowedForStatus(urlAction, status)) return;
+    const once = `${urlJobId}:${urlAction}`;
+    if (reroutedRef.current === once) return;
+    reroutedRef.current = once;
+    showToast({
+      variant: 'warning',
+      message: `Job #${urlJobId} is ${statusLabel(status)} — opening the screen for that stage instead.`,
+    });
+    openJobAction(actionForJobStatus(status), urlJobId);
+  }, [urlAction, urlJobId, guardedStatus, openJobAction]);
+
   // Transient sibling family for the Unconfirmed grouped view — see jobs/page.
   const [familySiblings, setFamilySiblings] = useState<Array<{ job_id: number; service_category: string | null }> | null>(null);
   function closeModal()                { closeJobAction(); }
@@ -845,7 +897,6 @@ export default function MyOrdersPage() {
           isAdmin={isAdmin}
           canJob={canJob}
           openView={openView}
-          openReassign={openReassign}
           onShowLocation={(row) => setLocationJob(row)}
           /* The six-tab strip carries the stage-access clamp, so the scope bar
              above is suppressed for it. */
