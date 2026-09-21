@@ -37,6 +37,34 @@ const nextConfig = {
     };
 
     /*
+     * Shared-job web bundle → its static entry point, same reasoning as
+     * mirrorRewrite above (Expo Router needs to be handed the export ROOT).
+     * See Dockerfile's `shared-job` stage: unpacked, UNVERSIONED, at
+     * public/public/shared-job/ — i.e. served at /public/shared-job/... so it
+     * clears the production ALB's allowlist (/public/*, /_next/*,
+     * /api/public/* pass without VPN; everything else needs it).
+     *
+     * Three rules, not one:
+     *   - the bare path and its trailing-slash form both need to resolve to
+     *     index.html (no directory-index support in `public/`);
+     *   - any DEEPER path (`/public/shared-job/order/123`) also needs to fall
+     *     back to index.html so a reload boots the SPA on a client-side
+     *     route, rather than 404ing.
+     * This still lets real exported files (`/public/shared-job/_expo/static/
+     * ...`) through untouched: Next applies an array returned from rewrites()
+     * only AFTER checking the filesystem (pages + files under `public/`), so
+     * a request that matches an actual file on disk is served directly and
+     * never reaches these rules at all — same reason mirrorRewrite above
+     * never has to special-case the mirror's own static assets.
+     */
+    const sharedJobBase = '/public/shared-job';
+    const sharedJobRewrites = [
+      { source: sharedJobBase, destination: `${sharedJobBase}/index.html` },
+      { source: `${sharedJobBase}/`, destination: `${sharedJobBase}/index.html` },
+      { source: `${sharedJobBase}/:path*`, destination: `${sharedJobBase}/index.html` },
+    ];
+
+    /*
      * /api/:path* → backend proxy.
      *
      * Skipped entirely when `NEXT_PUBLIC_API_URL` is unset OR doesn't
@@ -56,7 +84,7 @@ const nextConfig = {
     const apiUrl = process.env.NEXT_PUBLIC_API_URL;
     if (!apiUrl) {
       console.warn('[next.config] NEXT_PUBLIC_API_URL is unset — /api/* rewrite is disabled in this build.');
-      return [mirrorRewrite];
+      return [mirrorRewrite, ...sharedJobRewrites];
     }
     const trimmed = String(apiUrl).trim();
     const validDest = trimmed.startsWith('/') || /^https?:\/\//.test(trimmed);
@@ -65,10 +93,11 @@ const nextConfig = {
         `[next.config] NEXT_PUBLIC_API_URL=${JSON.stringify(trimmed)} is not a valid rewrite destination ` +
         '(must start with "/", "http://", or "https://"). /api/* rewrite disabled.',
       );
-      return [mirrorRewrite];
+      return [mirrorRewrite, ...sharedJobRewrites];
     }
     return [
       mirrorRewrite,
+      ...sharedJobRewrites,
       {
         source: '/api/:path*',
         destination: `${trimmed}/:path*`,

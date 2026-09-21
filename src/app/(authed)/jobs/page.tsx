@@ -22,7 +22,7 @@ import { SearchSelect } from '@/components/ui/search-select';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
 import { CitySelect } from '@/components/ui/city-select';
 import { StatusChip } from '@/components/ui/StatusChip';
-import { ShareChip } from '@/components/job/JobShareControls';
+import { ShareChip, RevokeShareIconButton, SHARE_RELEASE_ACTION } from '@/components/job/JobShareControls';
 import type { JobShare } from '@/lib/job-share';
 import { DownloadButton } from '@/components/ui/download-button';
 import { downloadXlsx } from '@/lib/download-xlsx';
@@ -306,6 +306,11 @@ export default function JobsPage() {
     // internally, so a row that shouldn't be actionable never even shows the
     // icon. Same key /my-orders requests.
     'isJobMaterialReview',
+    // Gates the Pending to Close row's "Revoke Share" icon (ops escape hatch
+    // for a stuck delegation) — same key JobModal's footer button requests.
+    // Declared once in JobShareControls; requested HERE too so actionFlags
+    // resolves it for this page's row actions.
+    SHARE_RELEASE_ACTION,
   ]);
   /*
    * Audit entry point gate. `canManageJobCharges` is a STANDALONE boolean on
@@ -2352,6 +2357,24 @@ export default function JobsPage() {
                         customerMobile={j.customer_mob_no}
                         allowed={!!canJob[RESEND_PIN_ACTION]}
                       />
+                      {/*
+                        * Revoke Share — Pending to Close only (statuses 2/20,
+                        * this tab's own bucket). Ops escape hatch for a
+                        * delegation stuck past the technician's own cancel
+                        * window; see JobShareControls.tsx. The component
+                        * self-gates on `allowed` AND the row actually having a
+                        * LIVE share, so it's safe to render unconditionally
+                        * inside the tab check, same convention as
+                        * ResendPinButton above.
+                        */}
+                      {tab === 'pending-close' && (
+                        <RevokeShareIconButton
+                          jobId={j.job_id}
+                          share={j.share}
+                          allowed={!!canJob[SHARE_RELEASE_ACTION]}
+                          onReleased={() => { cacheRef.current.clear(); load(false, true); refreshCounts(); }}
+                        />
+                      )}
                     </div>
                   </td>
                 </tr>

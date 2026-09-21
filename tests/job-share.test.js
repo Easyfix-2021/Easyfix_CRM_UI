@@ -215,7 +215,12 @@ test('the release refuses to render without the permission or a live share', () 
   assert.match(componentCode, /if \(!allowed[\s\S]{0,80}?\) return null;/,
     'ReleaseShareButton no longer short-circuits on `allowed` — the control '
     + 'would render for operators who cannot call the endpoint');
-  assert.match(componentCode, /!isShareLive\(share\)/,
+  // The live-share check now lives in the shared useRevokeShare hook (both
+  // ReleaseShareButton and the row-icon RevokeShareIconButton derive `live`
+  // from it, then both self-gate on `if (!allowed || !live) return null;`,
+  // matched above) — assert isShareLive(share) is still the thing that
+  // decides `live`, not that a particular component negates it inline.
+  assert.match(componentCode, /isShareLive\(share\)/,
     'the live-share self-gate is gone — Release Share would sit on every '
     + 'ordinary job in the estate');
 });
