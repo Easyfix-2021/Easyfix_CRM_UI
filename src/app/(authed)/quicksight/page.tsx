@@ -82,9 +82,10 @@ const REPORTS: ReportCardDef[] = [
     Icon: ClipboardList,
   },
   {
-    // Bundles the five performance scorecards behind gliding tabs. The three
+    // Bundles the six performance scorecards behind gliding tabs. The three
     // standalone cards below stay — this is an additional entry point, not a
-    // replacement, so nobody's bookmark or grant changes.
+    // replacement, so nobody's bookmark or grant changes. Employee Performance
+    // has NO card of its own: it lives only as the Employee tab.
     urlBase: 'performance',
     label: 'Performance',
     newOrder: 1,
@@ -95,8 +96,9 @@ const REPORTS: ReportCardDef[] = [
       'isQuickSightTechnicianPerformanceView',
       'isQuickSightStatePerformanceView',
       'isQuickSightUserPerformanceView',
+      'isQuickSightEmployeePerformanceView',
     ],
-    description: 'Client, City, Technician, State and User scorecards in one place.',
+    description: 'Client, City, Technician, State, User and Employee scorecards in one place.',
     Icon: Gauge,
   },
   {

@@ -3,19 +3,21 @@
 /*
  * QuickSight — Performance Report.
  *
- * One page, FIVE gliding tabs over the performance scorecards:
- *   Client · State · City · User · Technician (see TAB_ORDER for why this order)
+ * One page, SIX gliding tabs over the performance scorecards:
+ *   Client · State · City · User · Employee · Technician (see TAB_ORDER for why this order)
  *   Client · City · Technician — the EXISTING reports, rendered from the very
  *     same body components their standalone routes use. Not re-implementations:
  *     a fix to either surface lands on both. Those routes stay live, so existing
  *     links, bookmarks and RBAC keep working.
  *   State · User — new, built on the Manage Regions (state) scope. Same metrics
  *     as City Performance (the backend imports them from that service).
+ *   Employee — the MIS Employee Performance report (revenue vs target by SPOC
+ *     and team). Its old standalone route redirects to this tab.
  *
  * PERMISSIONS: each tab keeps its OWN per-report action key — the same key that
  * gates its standalone route. So this page grants nothing new: a user sees only
  * the tabs they already had access to, and the tab strip renders just those.
- * When a user has none of the five, we hand the first tab's body the job of
+ * When a user has none of the six, we hand the first tab's body the job of
  * rendering the standard access-denied panel rather than inventing another one.
  *
  * WHICH TAB OPENS FIRST — resolved in three tiers, no DB / no backend:
@@ -42,8 +44,9 @@ import { ClientPerformanceBody } from '../client-performance/ClientPerformanceBo
 import { CityPerformanceBody } from '../city-performance/CityPerformanceBody';
 import { TechnicianPerformanceBody } from '../technician-performance/TechnicianPerformanceBody';
 import { RegionPerformanceBody } from '@/components/quicksight/reports/RegionPerformanceBody';
+import { EmployeePerformanceBody } from '../employee-performance/EmployeePerformanceBody';
 
-type PerfTab = 'client' | 'city' | 'technician' | 'state' | 'user';
+type PerfTab = 'client' | 'city' | 'technician' | 'state' | 'user' | 'employee';
 
 // tab → the per-report action key that already gates its standalone route.
 const TAB_ACTION: Record<PerfTab, string> = {
@@ -52,17 +55,19 @@ const TAB_ACTION: Record<PerfTab, string> = {
   technician: 'isQuickSightTechnicianPerformanceView',
   state: 'isQuickSightStatePerformanceView',
   user: 'isQuickSightUserPerformanceView',
+  employee: 'isQuickSightEmployeePerformanceView',
 };
 const TAB_LABEL: Record<PerfTab, string> = {
-  client: 'Client', city: 'City', technician: 'Technician', state: 'State', user: 'User',
+  client: 'Client', city: 'City', technician: 'Technician', state: 'State', user: 'User', employee: 'Employee',
 };
 /*
  * Tab order is deliberately GEOGRAPHIC-then-PEOPLE, widest scope first:
- *   Client → State → City → User → Technician
+ *   Client → State → City → User → Employee → Technician
  * i.e. who the work is for, then where it happened (coarse → fine), then who
- * owns it (desk → field). Not the order the tabs were built in.
+ * owns it (desk → field; Employee is desk staff, so it sits before Technician).
+ * Not the order the tabs were built in.
  */
-const TAB_ORDER: PerfTab[] = ['client', 'state', 'city', 'user', 'technician'];
+const TAB_ORDER: PerfTab[] = ['client', 'state', 'city', 'user', 'employee', 'technician'];
 
 const isPerfTab = (v: string | null | undefined): v is PerfTab =>
   !!v && (TAB_ORDER as string[]).includes(v);
@@ -86,7 +91,7 @@ export default function PerformanceReportPage() {
    * and let each body's own access-denied panel decide, since the server is the
    * authority regardless. Once `me` has resolved, a user with zero grants gets
    * zero tabs: keying the fallback off "granted.length === 0" instead would have
-   * shown all five to someone entitled to none.
+   * shown all six to someone entitled to none.
    *
    * ⚠ A tab is also hidden when its key does not EXIST yet (an unseeded
    * migration is indistinguishable from a revoked grant). That is the intended
@@ -212,7 +217,7 @@ export default function PerformanceReportPage() {
 
       {/*
         * Only the ACTIVE body is mounted. Each one owns its filters, lookups and
-        * fetches, so rendering all five would fire five reports' worth of
+        * fetches, so rendering all six would fire six reports' worth of
         * queries on load — the tab switch is meant to be the thing that costs.
         * Held back until `pinChecked` so a pinned tab doesn't briefly mount the
         * fallback tab's body (and fire its queries) before swapping.
@@ -226,6 +231,7 @@ export default function PerformanceReportPage() {
           {active === 'technician' && <TechnicianPerformanceBody />}
           {active === 'state' && <RegionPerformanceBody dimension="state" />}
           {active === 'user' && <RegionPerformanceBody dimension="user" />}
+          {active === 'employee' && <EmployeePerformanceBody />}
         </>
       )}
     </div>
