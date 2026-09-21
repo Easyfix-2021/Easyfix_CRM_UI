@@ -26,6 +26,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
 import { PendingCitiesTab, type PendingListResponse } from './PendingCitiesTab';
+import { StatesTab, type StatesResponse } from './StatesTab';
 import { api, ApiError } from '@/lib/api';
 import { useFetch, useDebouncedValue, invalidateFetch } from '@/lib/hooks';
 import { useSort, SortHeader } from '@/lib/use-sort';
@@ -76,9 +77,14 @@ export default function ManageCitiesPage() {
   //                     bar at all and the page renders exactly as before.
   //                     The backend enforces the same key on approve/reject
   //                     (403), so this is a render hint, not the boundary.
+  //   - isStateEdit   : States tab writes — Add State, edit, assign / re-sync
+  //                     the zonal manager. The tab itself is visible to all.
   // Legacy also has isCityUpload for the bulk upload screen; we don't have
   // a city upload page yet — gate that one when it ships.
-  const can = actionFlags(me, ['isCityAddNew', 'isCityEdit', 'isCityApprove']);
+  const can = actionFlags(me, ['isCityAddNew', 'isCityEdit', 'isCityApprove', 'isStateEdit']);
+
+  const [tab, setTab] = useState<'all' | 'pending' | 'states'>('all');
+  const [stateAddOpen, setStateAddOpen] = useState(false);
 
   const [search, setSearch] = useState('');
   const [stateFilter, setStateFilter] = useState<number | ''>('');
@@ -155,6 +161,22 @@ export default function ManageCitiesPage() {
   const pendingTotal = pendingData?.total ?? 0;
 
   /*
+   * State master + zonal managers — GET /admin/states. Owned HERE, not inside
+   * <StatesTab>, for the same reason as the pending queue: three places read
+   * it. The States tab, the Add/Edit City dialog (which shows the manager the
+   * city will inherit) and the Pending tab (which shows the manager an
+   * approved city will get, so the approver has nothing to fill in).
+   */
+  const {
+    data: statesData, loading: statesLoading, error: statesError, refetch: refetchStates,
+  } = useFetch<StatesResponse>('/admin/states');
+  const managerByState = useMemo(() => {
+    const m = new Map<number, string | null>();
+    for (const s of statesData?.items ?? []) m.set(s.state_id, s.manager_name);
+    return m;
+  }, [statesData]);
+
+  /*
    * Invalidate the 30s module cache for ALL city list pages, then refetch.
    *
    * Both refetches are required and neither is redundant: invalidateFetch only
@@ -164,9 +186,12 @@ export default function ManageCitiesPage() {
    * both lists, so both get refetched.
    */
   function refreshList() {
-    invalidateFetch((k) => k.startsWith('/admin/cities'));
+    invalidateFetch((k) => k.startsWith('/admin/cities') || k.startsWith('/admin/states'));
     refetch();
     refetchPending();
+    // A city added / moved / approved changes a state's city and sync counts,
+    // and a manager move on the States tab changes what cities inherited.
+    refetchStates();
   }
 
   async function handleDeactivate(c: City) {
@@ -201,11 +226,17 @@ export default function ManageCitiesPage() {
           </h1>
           <p className="text-sm text-muted-foreground">
             City master with state, district, tier, and status. Zones, pincodes,
-            and technicians anchor to cities.
+            and technicians anchor to cities. Zonal managers are set per state.
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {can.isCityAddNew && (
+          {tab === 'states' ? (
+            can.isStateEdit && (
+              <Button onClick={() => setStateAddOpen(true)}>
+                <Plus className="size-4 mr-1" /> Add State
+              </Button>
+            )
+          ) : can.isCityAddNew && (
             <Button onClick={() => { setEditing(null); setModalOpen(true); }}>
               <Plus className="size-4 mr-1" /> Add City
             </Button>
@@ -275,22 +306,33 @@ export default function ManageCitiesPage() {
                   </p>
                 </section>
               )}
+              <section>
+                <h3 className="font-semibold text-foreground mb-1">6. Zonal managers are set per state</h3>
+                <p>
+                  Each state has exactly one zonal manager; one manager can hold many states.
+                  Set it on the <em>States</em> tab and every city in that state takes it. A new
+                  city, a city moved to another state, and an approved pending city all pick up
+                  their state&rsquo;s manager automatically — there is nothing to set per city.
+                  When a manager leaves, pick them in the States tab, select their states, choose
+                  the new manager and save. &ldquo;Cities in sync&rdquo; shows any city still on a
+                  different manager; <em>Re-sync</em> brings it in line.
+                </p>
+              </section>
             </div>
           )}
         </CardContent>
       </Card>
 
       {/*
-        * Two tabs, but the tab BAR only renders for an approver. Without
-        * isCityApprove there is no second tab to switch to, so a lone
-        * "All Cities" trigger would be chrome with nothing behind it — the
-        * page then looks exactly as it did before this queue existed.
-        * <Tabs> itself always mounts so defaultValue still selects the list.
+        * The tab bar always renders now — everyone gets the States tab (writes
+        * gated on isStateEdit inside it). Pending Approval stays approver-only:
+        * without isCityApprove there is no queue to show. Controlled, because
+        * the header button follows the tab (Add City ↔ Add State).
         */}
-      <Tabs defaultValue="all" className="space-y-4">
-        {can.isCityApprove && (
-          <TabsList>
-            <TabsTrigger value="all">All Cities</TabsTrigger>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)} className="space-y-4">
+        <TabsList>
+          <TabsTrigger value="all">All Cities</TabsTrigger>
+          {can.isCityApprove && (
             <TabsTrigger value="pending">
               Pending Approval
               {pendingTotal > 0 && (
@@ -299,8 +341,9 @@ export default function ManageCitiesPage() {
                 </span>
               )}
             </TabsTrigger>
-          </TabsList>
-        )}
+          )}
+          <TabsTrigger value="states">States</TabsTrigger>
+        </TabsList>
 
         <TabsContent value="all" className="space-y-4">
       {/* Filters */}
@@ -569,9 +612,22 @@ export default function ManageCitiesPage() {
               /* Refreshes the queue AND the All Cities list behind it — an
                  approved city has to appear there in the same beat. */
               onDecided={refreshList}
+              managerByState={managerByState}
             />
           </TabsContent>
         )}
+
+        <TabsContent value="states">
+          <StatesTab
+            data={statesData}
+            loading={statesLoading}
+            error={statesError}
+            canEdit={can.isStateEdit}
+            addOpen={stateAddOpen}
+            onAddOpenChange={setStateAddOpen}
+            onChanged={refreshList}
+          />
+        </TabsContent>
       </Tabs>
 
       <CityFormModal
@@ -579,6 +635,7 @@ export default function ManageCitiesPage() {
         onClose={() => setModalOpen(false)}
         editing={editing}
         states={lookup.states}
+        managerByState={managerByState}
         onSaved={() => { setModalOpen(false); refreshList(); }}
       />
     </div>
@@ -587,12 +644,14 @@ export default function ManageCitiesPage() {
 
 // ─── Add/Edit modal ─────────────────────────────────────────────────
 function CityFormModal({
-  open, onClose, editing, states, onSaved,
+  open, onClose, editing, states, managerByState, onSaved,
 }: {
   open: boolean;
   onClose: () => void;
   editing: City | null;
   states: Array<{ state_id: number; state_name: string }>;
+  /* state_id → zonal manager name (null = state has none yet). */
+  managerByState: Map<number, string | null>;
   onSaved: () => void;
 }) {
   const isEdit = !!editing;
@@ -719,6 +778,20 @@ function CityFormModal({
               })}
             </div>
           </div>
+
+          {/*
+            * Read-only on purpose: the manager is owned by the state and the
+            * backend copies it onto the city on save. There is no per-city
+            * manager to pick — change it on the States tab.
+            */}
+          {stateId !== '' && managerByState.has(Number(stateId)) && (
+            <div className="rounded border bg-muted/40 px-3 py-2 text-sm">
+              <span className="text-muted-foreground">Zonal Manager (from state): </span>
+              {managerByState.get(Number(stateId))
+                ? <span className="font-medium">{managerByState.get(Number(stateId))}</span>
+                : <span className="text-urgent font-medium">none yet — assign one on the States tab</span>}
+            </div>
+          )}
 
           <div>
             <Label className="block mb-1">District (optional)</Label>
