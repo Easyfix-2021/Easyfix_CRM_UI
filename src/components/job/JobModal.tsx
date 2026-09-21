@@ -2433,6 +2433,7 @@ function JobQuotationsTab({ jobId }: { jobId: number }) {
               <th className="!text-left">Item</th>
               <th className="!text-right">Qty</th>
               <th className="!text-right">Unit ₹</th>
+              <th className="!text-right">Rate Card ₹</th>
               <th className="!text-right">Total ₹</th>
               <th className="!text-center">Status</th>
               <th className="!text-right">Actions</th>
@@ -2473,6 +2474,9 @@ function JobQuotationsTab({ jobId }: { jobId: number }) {
                   <td className="!text-left">{name}</td>
                   <td className="!text-right font-mono text-xs">{String(r.unit ?? r.quantity ?? '')}</td>
                   <td className="!text-right font-mono text-xs">{r.unit_price != null ? Number(r.unit_price).toFixed(2) : '—'}</td>
+                  <td className="!text-right font-mono text-xs">
+                    {type === 'material' && r.client_charge != null ? Number(r.client_charge).toFixed(2) : '—'}
+                  </td>
                   <td className="!text-right font-mono">{r.unit_price != null ? lineTotal(r).toFixed(2) : '—'}</td>
                   <td className="!text-center text-xs">
                     {isApproved && <span className="inline-block bg-success-tint text-success-strong rounded px-1.5 py-0.5">Approved</span>}
@@ -2593,6 +2597,14 @@ function quotedLineAmount(r: QuotationRow): number {
   return (Number(r.unit) || 0) * (Number(r.unit_price) || 0);
 }
 
+// client_charge is the rate-card unit price snapshotted at quote time —
+// null/undefined means no rate existed and must render "—", never ₹0
+// (a genuine non-null 0 rate is distinct and does render as 0.00).
+function rateCardLineAmount(r: QuotationRow): number | null {
+  if (r.client_charge == null) return null;
+  return (Number(r.unit) || 0) * Number(r.client_charge);
+}
+
 function MaterialReviewPanel({ job, onJobChanged }: { job: Job; onJobChanged?: () => void }) {
   const jobId = Number(job.job_id);
   const { me } = useMe();
@@ -2640,6 +2652,7 @@ function MaterialReviewPanel({ job, onJobChanged }: { job: Job; onJobChanged?: (
   if (!isReviewPending || !can.isJobMaterialReview) return null;
 
   const quotedTotal = materialRows.reduce((sum, r) => sum + quotedLineAmount(r), 0);
+  const rateCardTotal = materialRows.reduce((sum, r) => sum + (rateCardLineAmount(r) ?? 0), 0);
   const approvedTotal = materialRows.reduce((sum, r) => {
     const st = lineState[Number(r.id)];
     if (!st || st.rejected) return sum;
@@ -2727,8 +2740,9 @@ function MaterialReviewPanel({ job, onJobChanged }: { job: Job; onJobChanged?: (
               <tr>
                 <th className="!text-left">Item</th>
                 <th className="!text-right">Qty</th>
-                <th className="!text-right">Quoted Amount (₹)</th>
-                <th className="!text-right">Approved Amount (₹)</th>
+                <th className="!text-right">Rate Card (₹)</th>
+                <th className="!text-right">Quoted (₹)</th>
+                <th className="!text-right">Approved (₹)</th>
                 <th className="!text-center">Reject</th>
               </tr>
             </thead>
@@ -2738,11 +2752,20 @@ function MaterialReviewPanel({ job, onJobChanged }: { job: Job; onJobChanged?: (
                 const st = lineState[id] ?? { rejected: false, amount: quotedLineAmount(r).toFixed(2) };
                 const amountInvalid = !st.rejected
                   && (st.amount.trim() === '' || !Number.isFinite(Number(st.amount)) || Number(st.amount) < 0);
+                const rateCardAmt = rateCardLineAmount(r);
+                const quotedAmt = quotedLineAmount(r);
+                // Ops sees at a glance where the technician quoted above the
+                // rate card. No highlight when there is no rate card to compare.
+                const isOverRate = rateCardAmt != null && quotedAmt > rateCardAmt;
                 return (
                   <tr key={id}>
                     <td className="!text-left">{String(r.name ?? '—')}</td>
                     <td className="!text-right font-mono text-xs">{String(r.unit ?? '')}</td>
-                    <td className="!text-right font-mono text-xs">{quotedLineAmount(r).toFixed(2)}</td>
+                    <td className="!text-right font-mono text-xs">{rateCardAmt != null ? rateCardAmt.toFixed(2) : '—'}</td>
+                    <td className={cn('!text-right font-mono text-xs', isOverRate && 'bg-urgent-tint text-urgent-strong rounded px-1')}>
+                      {quotedAmt.toFixed(2)}
+                      {isOverRate && <span className="ml-1 font-semibold">(+₹{(quotedAmt - (rateCardAmt as number)).toFixed(2)})</span>}
+                    </td>
                     <td className="!text-right">
                       <Input
                         type="number"
@@ -2769,6 +2792,7 @@ function MaterialReviewPanel({ job, onJobChanged }: { job: Job; onJobChanged?: (
             <tfoot>
               <tr className="font-medium">
                 <td className="!text-left" colSpan={2}>Total</td>
+                <td className="!text-right font-mono text-xs">{rateCardTotal.toFixed(2)}</td>
                 <td className="!text-right font-mono text-xs">{quotedTotal.toFixed(2)}</td>
                 <td className="!text-right font-mono text-xs">{approvedTotal.toFixed(2)}</td>
                 <td />
