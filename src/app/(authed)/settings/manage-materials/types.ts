@@ -67,13 +67,11 @@ export type ReferencesResponse = {
 export type ReplaceConflict = { material_id: number; material_name: string };
 
 /* Import contract — shared shape for both Materials and Brands (Brands rows
-   are a strict subset: row_number, brand_name, outcome, errors). */
-export type ImportRow = {
-  row_number: number;
-  outcome: string;
-  errors?: string[];
-  [key: string]: unknown;
-};
+   are a strict subset: row_number, brand_name, outcome, errors). Defined in
+   the shared dialog now that it also serves the client Rate Cards bulk
+   upload — re-exported here so existing imports of `./types` keep working. */
+import type { ImportRow } from '@/components/ui/import-dialog';
+export type { ImportRow };
 export type MaterialImportSummary = {
   new: number;
   update: number;

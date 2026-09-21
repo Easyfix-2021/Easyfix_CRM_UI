@@ -29,7 +29,7 @@
  */
 
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import { Plus, Trash2, Pencil, AlertTriangle, Save, AlertCircle, Calculator, Download, Building2, Layers, User, Package } from 'lucide-react';
+import { Plus, Trash2, Pencil, AlertTriangle, Save, AlertCircle, Calculator, Download, Upload, Building2, Layers, User, Package } from 'lucide-react';
 import { downloadXlsx } from '@/lib/download-xlsx';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -37,6 +37,7 @@ import { IconButton } from '@/components/ui/icon-button';
 import { SearchMultiSelect } from '@/components/ui/search-multi-select';
 import { SearchSelect } from '@/components/ui/search-select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { ImportDialog } from '@/components/ui/import-dialog';
 import { GlidingTabs } from '@/components/ui/gliding-tabs';
 import { showToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -73,6 +74,16 @@ type RateCardRow = {
 };
 
 type ServiceType = { service_type_id: number; service_type_name: string };
+
+/*
+ * Bulk-upload preview/commit summary shape, per
+ * EasyFix_Backend/docs/superpowers/specs/2026-09-21-rate-card-bulk-upload-design.md.
+ * Same shape for both Services and Materials uploads. The backend for this
+ * contract is being written in parallel, so `renderRowLabel` below hedges on
+ * the exact identifying-field key names with a fallback chain rather than
+ * assuming one casing.
+ */
+type RateCardImportSummary = { new: number; update: number; unchanged: number; blocked: number };
 
 type Props = {
   clientId: number;
@@ -160,6 +171,8 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
   const [draft, setDraft] = useState<RateCardRow[] | null>(null);
   const [saving, setSaving] = useState(false);
   const [addingIds, setAddingIds] = useState(false);
+  const [servicesImportOpen, setServicesImportOpen] = useState(false);
+  const [materialsImportOpen, setMaterialsImportOpen] = useState(false);
   const confirm = useConfirm();
 
   // Services / Materials gliding tabs — layout only, both sections still fetch
@@ -418,6 +431,9 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
             >
               <Download className="size-3.5 mr-1" /> Download
             </Button>
+            <Button size="sm" variant="outline" onClick={() => setServicesImportOpen(true)}>
+              <Upload className="size-3.5 mr-1" /> Bulk Upload
+            </Button>
             <Button size="sm" variant="secondary" onClick={() => setAddingIds(true)} disabled={!types || availableTypeOptions.length === 0}>
               <Plus className="size-3.5 mr-1" /> Add Rows
             </Button>
@@ -578,6 +594,9 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
               >
                 <Download className="size-3.5 mr-1" /> Download
               </Button>
+              <Button size="sm" variant="outline" onClick={() => setMaterialsImportOpen(true)}>
+                <Upload className="size-3.5 mr-1" /> Bulk Upload
+              </Button>
               <Button size="sm" variant="secondary" onClick={() => setAddMaterialDialogOpen(true)}>
                 <Plus className="size-3.5 mr-1" /> Add Material
               </Button>
@@ -725,6 +744,53 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
           onAdd={(ids) => { addRowsForTypes(ids); setAddingIds(false); }}
         />
       )}
+
+      <ImportDialog<RateCardImportSummary>
+        open={servicesImportOpen}
+        onClose={() => setServicesImportOpen(false)}
+        entityLabel="Service Rate"
+        templateUrl={`/admin/clients/${clientId}/rate-cards/template`}
+        templateFilename={`rate-cards-template-${clientId}.xlsx`}
+        previewUrl={`/admin/clients/${clientId}/rate-cards/upload/preview`}
+        commitUrl={`/admin/clients/${clientId}/rate-cards/upload/commit`}
+        renderRowLabel={(r) => String(r.service_type_name ?? r.serviceTypeName ?? r.service_type_id ?? r.serviceTypeId ?? '')}
+        summaryStats={(s) => [
+          { label: 'New', value: s.new, tone: 'ok' as const },
+          { label: 'Update', value: s.update },
+          { label: 'Unchanged', value: s.unchanged },
+          { label: 'Blocked', value: s.blocked, tone: 'err' as const },
+        ]}
+        sortBlockedFirst
+        blockCommitOnAnyBlocked
+        onImported={() => {
+          // Same "resync from server" sequence as onSaveAll — a bulk upload
+          // writes rows outside the local draft, so the draft must be
+          // dropped or edited cells would keep showing pre-upload values.
+          invalidateFetch((k) => k === listKey);
+          refetch();
+          setDraft(null);
+        }}
+      />
+
+      <ImportDialog<RateCardImportSummary>
+        open={materialsImportOpen}
+        onClose={() => setMaterialsImportOpen(false)}
+        entityLabel="Material Rate"
+        templateUrl={`/admin/clients/${clientId}/material-rates/template`}
+        templateFilename={`material-rates-template-${clientId}.xlsx`}
+        previewUrl={`/admin/clients/${clientId}/material-rates/upload/preview`}
+        commitUrl={`/admin/clients/${clientId}/material-rates/upload/commit`}
+        renderRowLabel={(r) => String(r.material_name ?? r.materialName ?? r.material ?? '')}
+        summaryStats={(s) => [
+          { label: 'New', value: s.new, tone: 'ok' as const },
+          { label: 'Update', value: s.update },
+          { label: 'Unchanged', value: s.unchanged },
+          { label: 'Blocked', value: s.blocked, tone: 'err' as const },
+        ]}
+        sortBlockedFirst
+        blockCommitOnAnyBlocked
+        onImported={afterMaterialMutation}
+      />
     </div>
   );
 }
