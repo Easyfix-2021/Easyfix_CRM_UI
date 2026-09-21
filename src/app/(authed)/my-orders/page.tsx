@@ -5,7 +5,7 @@ import { useJobActionParams, useJobActionNav, isJobModalAction } from '@/lib/job
 import {
   Search, Eye,
   CalendarClock, CalendarCheck,
-  RefreshCw, MapPin, ClipboardCheck,
+  RefreshCw, MapPin, ClipboardCheck, ClipboardList,
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
@@ -24,6 +24,7 @@ import {
 } from '@/lib/job-tabs';
 import { transitionAllowed, STAGES } from '@/lib/job-stages';
 import { JobModal, type JobModalMode } from '@/components/job/JobModal';
+import { MaterialReviewModal } from '@/components/job/MaterialReviewModal';
 import { UnconfirmedSections } from '@/components/job/UnconfirmedSections';
 import { PendingToStartView, PTS_TAB_PARAM } from '@/components/job/PendingToStartView';
 import { AssignTechnicianModal, type AssignMode, type AssignView } from '@/components/job/AssignTechnicianModal';
@@ -243,6 +244,11 @@ export default function MyOrdersPage() {
     // Key declared in TechRequestActions; seeded by
     // EasyFix_Backend/migrations/2026-09-15-seed-job-app-request-action.sql.
     APP_REQUEST_ACTION,
+    // Gates the Material Review row action (status 16, sub-status 2 —
+    // Review Pending) and the modal it opens. Same key MaterialReviewModal
+    // checks internally, so a row that shouldn't be actionable never even
+    // shows the icon.
+    'isJobMaterialReview',
   ]);
   /*
    * Audit entry point gate. `canManageJobCharges` is a STANDALONE boolean on
@@ -647,6 +653,10 @@ export default function MyOrdersPage() {
   // table's MapPin call site) and PendingToStartView's PendingJobRow, so both
   // call sites type-check without importing each other's row type.
   const [locationJob, setLocationJob] = useState<{ job_id: number; easyfixer_name: string | null } | null>(null);
+  // Material Review modal state — the job whose Material Review row action
+  // was clicked (null = closed). Separate from `modal`/JobModal on purpose:
+  // the Eye/View icon must keep opening the plain, unmodified job viewer.
+  const [materialReviewJobId, setMaterialReviewJobId] = useState<number | null>(null);
   // Client-side search over the currently-loaded page (shared filterJobRows
   // in lib/job-tabs.ts — see there for the column/label/date matching rationale).
   //
@@ -1229,6 +1239,25 @@ export default function MyOrdersPage() {
                         </button>
                       )}
                       {/*
+                        * Material Review (status 16, sub-status 2 — Review
+                        * Pending). Normalise with Number(): material_sub_status
+                        * is a TINYINT and can arrive as a boolean. Opens
+                        * MaterialReviewModal — a SEPARATE workspace from the
+                        * View/Eye icon, which now opens the plain job viewer
+                        * on this row like every other status.
+                        */}
+                      {j.job_status === 16 && Number(j.material_sub_status) === 2 && canJob.isJobMaterialReview && (
+                        <button
+                          type="button"
+                          onClick={() => setMaterialReviewJobId(j.job_id)}
+                          className="inline-flex items-center gap-1 text-warning-strong text-xs hover:underline"
+                          title="Material Review"
+                          aria-label="Material Review"
+                        >
+                          <ClipboardList className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                      {/*
                         * Live Technician Location (📍). Shown for the two
                         * buckets where a technician is already assigned and
                         * actively heading to / on the job:
@@ -1416,6 +1445,20 @@ export default function MyOrdersPage() {
         title={locationJob
           ? `Job #${locationJob.job_id}${locationJob.easyfixer_name ? ` · ${formatEasyfixerName(locationJob.easyfixer_name)}` : ''}`
           : undefined}
+      />
+
+      {/* Material Review — Reject/Send moves the job off status 16 (Send →
+          15 Client Approval Pending), so refresh the list AND its tab count,
+          same as ScheduleAssignModal's onAssigned above. */}
+      <MaterialReviewModal
+        open={materialReviewJobId != null}
+        jobId={materialReviewJobId}
+        onClose={() => setMaterialReviewJobId(null)}
+        onReviewed={() => {
+          cacheRef.current.clear();
+          load(false, true);
+          setCountsReload((n) => n + 1);
+        }}
       />
 
       {/* Pending to Start and Unconfirmed both render per-section pagination
