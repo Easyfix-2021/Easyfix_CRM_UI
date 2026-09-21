@@ -51,7 +51,7 @@ const PAGES = [
 ];
 
 const url = strip(read(URL_SRC));
-const guardSrc = url.slice(url.indexOf('export function useJobActionStatusGuard'));
+const guardSrc = url.slice(url.indexOf('export function useGuardedJobAction'));
 
 // ─── 1. The map ops stated ───────────────────────────────────────────────
 
@@ -100,39 +100,86 @@ test('the guard covers every write console and no read action', () => {
     'an unguarded action must short-circuit to allowed');
 });
 
-// ─── 3. The page acts on it, against the RIGHT job ───────────────────────
+// ─── 3. It decides BEFORE anything opens, against the RIGHT job ──────────
 
-test('the guard probes the job and re-routes only on THIS job’s status', () => {
-  assert.ok(guardSrc, 'positive control: useJobActionStatusGuard must be found');
-  assert.match(guardSrc, /jobId != null && isGuardedJobAction\(action\)/,
-    'the probe must only run for a guarded action on a real job id');
+test('the guard resolves the status without opening anything', () => {
+  assert.ok(guardSrc, 'positive control: useGuardedJobAction must be found');
+  assert.match(guardSrc, /const guarded = action != null && isGuardedJobAction\(action\) && jobId != null;/,
+    'only a guarded action on a real job id is policed');
   /*
-   * The dataKey comparison is the whole safety of this: useFetch RETAINS the
-   * previous key's payload while the next loads (a key change sets `refreshing`,
-   * not `loading`), so reading `.data` directly would re-route the operator to a
-   * screen chosen from a DIFFERENT job's status.
+   * A row the page already holds answers for free. Without this every click
+   * would wait on a request it does not need, which is the regression that
+   * made the first version feel slow.
+   */
+  assert.match(guardSrc, /const key = guarded && knownStatus == null \? `\/admin\/jobs\/\$\{jobId\}` : null;/,
+    'a known status must skip the probe entirely');
+  assert.match(guardSrc, /const status = knownStatus \?\? probed;/,
+    'the caller-supplied status must win over the probe');
+  /*
+   * dataKey is the whole safety of the fallback: useFetch RETAINS the previous
+   * key's payload while the next loads (a key change sets `refreshing`, not
+   * `loading`), so reading `.data` directly would decide this job's screen from
+   * another job's status.
    */
   assert.match(guardSrc, /probe\.dataKey === key/,
-    'the status must be read only when it belongs to the job in the URL');
-  assert.match(guardSrc, /if \(isActionAllowedForStatus\(action, code\)\) return;/,
-    'an allowed action must not be touched');
-  assert.match(guardSrc, /openJobAction\(actionForJobStatus\(code\), jobId\)/,
+    'the probed status must be read only when it belongs to the job in the URL');
+  assert.match(guardSrc, /return allowed \? \{ action, jobId \} : \{ action: null, jobId: null \};/,
+    'a refused OR unresolved action must come back null, so nothing mounts');
+  assert.match(guardSrc, /openJobAction\(actionForJobStatus\(Number\(status\)\), jobId\)/,
     'a refused action must land on the screen for that status');
   assert.match(guardSrc, /reroutedRef\.current === once/,
     'the re-route must fire once per (job, action) or two screens can ping-pong');
-  assert.match(guardSrc, /showToast\(\{[\s\S]{0,200}?statusLabel\(code\)/,
-    'the operator must be told why the screen changed');
 });
 
-test('every page that can open a write console mounts the SHARED guard', () => {
+test('nothing interrupts the transition', () => {
+  /*
+   * The first version toasted between closing one screen and opening the next,
+   * which is what made one navigation read as two events (ops, 2026-09-21).
+   */
+  assert.doesNotMatch(url, /showToast/,
+    'the guard must not interrupt the transition with a toast');
+});
+
+test('no page may open a modal from the RAW url action', () => {
+  /*
+   * THE REGRESSION THIS EXISTS FOR. The memos used to key off the URL, so the
+   * refused console mounted and loaded before the guard could correct it: wrong
+   * screen, spinner, close, right screen, spinner. Every modal memo must read
+   * the guard's answer instead, so the refused screen never mounts at all.
+   */
   for (const pg of PAGES) {
     const pageSrc = strip(read(pg));
-    assert.match(pageSrc, /useJobActionStatusGuard\(\);/,
+    assert.match(pageSrc, /useGuardedJobAction\(/,
       `${pg} opens a write console from the URL and must mount the guard`);
-    assert.match(pageSrc, /useJobActionStatusGuard[\s\S]{0,200}?from '@\/lib\/job-action-url'/,
+    assert.match(pageSrc, /useGuardedJobAction[\s\S]{0,200}?from '@\/lib\/job-action-url'/,
       `${pg} must import the guard from lib/job-action-url — a second copy would drift`);
+    assert.match(pageSrc, /const \{ action: openAction, jobId: openJobId \} = useGuardedJobAction\(/,
+      `${pg} must name the guarded pair`);
+
+    // Every modal memo reads openAction/openJobId; none reads urlAction.
+    assert.doesNotMatch(pageSrc, /\burlAction\b/,
+      `${pg} must not read the raw url action anywhere — that is what mounted the refused console`);
+    for (const m of [/isJobModalAction\(openAction\)/, /openAction === 'schedule'/]) {
+      assert.match(pageSrc, m, `${pg}: a modal memo must be derived from the guarded action`);
+    }
   }
 });
+
+test('the status a page already holds is handed to the guard', () => {
+  for (const pg of PAGES) {
+    const pageSrc = strip(read(pg));
+    assert.match(pageSrc, /\(data\?\.items \?\? \[\]\)\.find\(\(r\) => r\.job_id === urlJobId\)\?\.job_status/,
+      `${pg} must answer from its own loaded row before falling back to a request`);
+  }
+  // Pending to Start renders its own table, so it hands the status up instead.
+  const pts = strip(read('src/components/job/PendingToStartView.tsx'));
+  assert.match(pts, /onOpenConsole\(j\.job_id, j\.job_status\)/,
+    'the console icon must report the status it already has, or that click waits on a request');
+  const mine = strip(read(PAGES[0]));
+  assert.match(mine, /reportedStatus\.current\.set\(id, status\)/,
+    'the host must remember what a child view reported');
+});
+
 
 // ─── 4. Differential controls ────────────────────────────────────────────
 
@@ -147,6 +194,13 @@ test('differential control — the guards go red when their subject is removed',
     ['schedule’s status-0 pin', url,
       url.replace("{ status: 0, canonical: 'schedule'", "{ status: 4, canonical: 'schedule'"),
       /status: 0,\s*canonical: 'schedule'/],
+    ['the null return that keeps the refused screen shut', url,
+      url.replace('return allowed ? { action, jobId } : { action: null, jobId: null };',
+        'return { action, jobId };'),
+      /return allowed \? \{ action, jobId \}/],
+    ['the known-status shortcut', url,
+      url.replace('guarded && knownStatus == null', 'guarded'),
+      /guarded && knownStatus == null/],
     ['the unguarded short-circuit', url,
       url.replace('if (!GUARDED_ACTIONS.has(action)) return true;', ''),
       /if \(!GUARDED_ACTIONS\.has\(action\)\) return true;/],

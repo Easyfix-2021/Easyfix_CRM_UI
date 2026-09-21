@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import {
-  useJobActionParams, useJobActionNav, isJobModalAction, useJobActionStatusGuard,
+  useJobActionParams, useJobActionNav, isJobModalAction, useGuardedJobAction,
 } from '@/lib/job-action-url';
 import {
   Search, Eye,
@@ -46,6 +46,15 @@ import { RefreshBar } from '@/components/ui/refresh-bar';
 import { TablePagination, type TablePageSize, pageSizeToLimit } from '@/components/ui/table-pagination';
 import { useDebouncedValue, invalidateFetch } from '@/lib/hooks';
 import { LiveLocationPopover } from '@/components/location/LiveLocationPopover';
+
+/*
+ * Columns in the Pending-for-Scheduling table — Job ID, Age, Ticket Created
+ * Date, Client, Client SPOC, City, Service Category, Appointment, Customer,
+ * Current Status, Open Reason, Action. Named once so the loading skeleton and
+ * the empty state cannot drift from <thead> again, which is exactly what
+ * happened when the Job Ref column was folded under the Job ID.
+ */
+const PS_COLUMN_COUNT = 12;
 
 // `/admin/jobs` Joi caps limit at 500 — pass to pageSizeToLimit so
 // "All" sends 500 instead of the default 1000 (which would 400).
@@ -564,8 +573,36 @@ export default function MyOrdersPage() {
    * the canonical schema by `useJobActionParams`. Other params
    * (e.g. `?tab=scheduled`) are preserved across pushes.
    */
-  const { jobId: urlJobId, action: urlAction } = useJobActionParams();
+  const { jobId: urlJobId } = useJobActionParams();
   const { openJobAction, closeJobAction } = useJobActionNav();
+
+  /*
+   * ── URL → SCREEN GUARD (ops, 2026-09-20, reworked 2026-09-21) ─────────────
+   *
+   * The action lives in the URL, so it can be typed. Pasting a COMPLETED job's
+   * id under `?action=schedule` would open Schedule & Assign on it — a write
+   * console with Edit Services inside, on a job whose service lines are its
+   * billing lines. The screen follows the job's status instead; the map lives
+   * in lib/job-action-url so Manage Jobs shares it verbatim.
+   *
+   * EVERY MODAL MEMO BELOW READS `openAction`, NOT THE RAW URL. That is the
+   * whole point of the rework: the first version opened what the URL asked for
+   * and corrected itself afterwards, so the operator got wrong console →
+   * spinner → toast → close → right screen → spinner. Deciding first makes it
+   * one open and no close.
+   *
+   * `rowStatus` is what keeps that free. A job on this page carries its own
+   * status, so a click resolves in the same render with no request at all.
+   * `reportedStatus` covers the rows this page does NOT hold — Pending to Start
+   * renders its own table and hands the status up when it opens the console —
+   * and only a pasted link for a job on neither path falls back to the probe.
+   */
+  const reportedStatus = useRef<Map<number, number>>(new Map());
+  const rowStatus = urlJobId == null
+    ? undefined
+    : (data?.items ?? []).find((r) => r.job_id === urlJobId)?.job_status
+      ?? reportedStatus.current.get(urlJobId);
+  const { action: openAction, jobId: openJobId } = useGuardedJobAction(rowStatus);
 
   /*
    * JobModal opens for the actions in JOBMODAL_ACTIONS (create / view / checkin
@@ -580,47 +617,38 @@ export default function MyOrdersPage() {
    * of casting, so an unregistered action now opens nothing.
    */
   const modal = useMemo<{ open: boolean; mode: JobModalMode; id?: number }>(() => {
-    if (!isJobModalAction(urlAction)) return { open: false, mode: 'create' };
-    if (urlAction === 'create')       return { open: true, mode: 'create' };
-    if (urlJobId == null)             return { open: false, mode: 'create' };
-    return { open: true, mode: urlAction, id: urlJobId };
-  }, [urlAction, urlJobId]);
+    if (!isJobModalAction(openAction)) return { open: false, mode: 'create' };
+    if (openAction === 'create')       return { open: true, mode: 'create' };
+    if (openJobId == null)             return { open: false, mode: 'create' };
+    return { open: true, mode: openAction, id: openJobId };
+  }, [openAction, openJobId]);
 
   // AssignTechDialog state — derived from `?action=assign|reassign|console`.
   // `console` is the Pending to Start row's console icon: the SAME Reassign
   // Technician popup, opened on its Uplifted tab (the job console); the row's
   // reassign icon opens it on Current.
   const assignModal = useMemo<{ open: boolean; jobId: number | null; mode: AssignMode; view: AssignView }>(() => {
-    if ((urlAction === 'assign' || urlAction === 'reassign' || urlAction === 'console') && urlJobId != null) {
+    if ((openAction === 'assign' || openAction === 'reassign' || openAction === 'console') && openJobId != null) {
       return {
         open: true,
-        jobId: urlJobId,
-        mode: urlAction === 'assign' ? 'assign' : 'reassign',
-        view: urlAction === 'console' ? 'uplifted' : 'current',
+        jobId: openJobId,
+        mode: openAction === 'assign' ? 'assign' : 'reassign',
+        view: openAction === 'console' ? 'uplifted' : 'current',
       };
     }
     return { open: false, jobId: null, mode: 'assign', view: 'current' };
-  }, [urlAction, urlJobId]);
+  }, [openAction, openJobId]);
 
   // ScheduleAssignModal state — derived from `?action=schedule`. This is
   // the Pending-for-Scheduling flow (status=0, unassigned): pick a date +
   // slot AND a technician in one atomic step.
   const scheduleModal = useMemo<{ open: boolean; jobId: number | null }>(() => {
-    if (urlAction === 'schedule' && urlJobId != null) {
-      return { open: true, jobId: urlJobId };
+    if (openAction === 'schedule' && openJobId != null) {
+      return { open: true, jobId: openJobId };
     }
     return { open: false, jobId: null };
-  }, [urlAction, urlJobId]);
+  }, [openAction, openJobId]);
 
-  /*
-   * ── URL → SCREEN GUARD (ops, 2026-09-20) ──────────────────────────────────
-   * The action lives in the URL, so it can be typed. Pasting a COMPLETED job's
-   * id under `?action=schedule` used to open Schedule & Assign on it — a write
-   * console with Edit Services inside, on a job whose service lines are its
-   * billing lines. The screen now follows the job's status; the map and the
-   * re-route live in lib/job-action-url so Manage Jobs shares them verbatim.
-   */
-  useJobActionStatusGuard();
 
   // Transient sibling family for the Unconfirmed grouped view — see jobs/page.
   const [familySiblings, setFamilySiblings] = useState<Array<{ job_id: number; service_category: string | null }> | null>(null);
@@ -642,7 +670,15 @@ export default function MyOrdersPage() {
   function openConfirm(id: number, siblings?: Array<{ job_id: number; service_category: string | null }>)     { setFamilySiblings(siblings ?? null); openJobAction('confirm',  id); }
   function openAssign(id: number)      { openJobAction('assign',   id); }
   function openReassign(id: number)    { openJobAction('reassign', id); }
-  function openConsole(id: number)     { openJobAction('console',  id); }
+  /*
+   * Pending to Start renders its own table, so this page has no row for the job
+   * it is opening. The caller passes the status it already holds, which is what
+   * keeps that click instant — see the guard above.
+   */
+  function openConsole(id: number, status?: number) {
+    if (status != null) reportedStatus.current.set(id, status);
+    openJobAction('console', id);
+  }
   // Pending-for-Scheduling rows → combined Schedule & Assign modal.
   function openSchedule(id: number)    { openJobAction('schedule', id); }
 
@@ -960,15 +996,19 @@ export default function MyOrdersPage() {
               </tr>
             </thead>
             <tbody>
+              {/* 12, not 13: the Job Ref column folded under the Job ID on
+                  2026-09-18 and these two were left behind, so the table grew a
+                  phantom column while loading and snapped back when the rows
+                  landed — a visible jump on every load and filter change. */}
               {loading && Array.from({ length: 5 }).map((_, i) => (
                 <tr key={`sk-${i}`}>
-                  {Array.from({ length: 13 }).map((_, c) => (
+                  {Array.from({ length: PS_COLUMN_COUNT }).map((_, c) => (
                     <td key={c}><div className="h-3 w-24 rounded bg-muted animate-pulse" /></td>
                   ))}
                 </tr>
               ))}
               {!loading && sorted.length === 0 && (
-                <tr><td colSpan={13} className="text-center text-muted-foreground py-8">
+                <tr><td colSpan={PS_COLUMN_COUNT} className="text-center text-muted-foreground py-8">
                   {psAnySet
                     ? 'No orders match these filters.'
                     : `No orders in this bucket${!isAdmin ? ' owned by you' : ''}.`}

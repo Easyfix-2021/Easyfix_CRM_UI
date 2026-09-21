@@ -4,7 +4,7 @@ import { buildStatusParams, jobStageOptionsFor, bucketOptionsFor, tabSelectionFo
 import Link from 'next/link';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import {
-  useJobActionParams, useJobActionNav, isJobModalAction, useJobActionStatusGuard,
+  useJobActionParams, useJobActionNav, isJobModalAction, useGuardedJobAction,
 } from '@/lib/job-action-url';
 import { useDebouncedValue, useFetchOnce } from '@/lib/hooks';
 import {
@@ -924,24 +924,32 @@ export default function JobsPage() {
   // matching dialog. Legacy `?view=N` / `?new=1` URLs are auto-promoted
   // by `useJobActionParams` so old shared links keep working.
   // (`searchParams`/`router`/`pathname` are declared up in the state block.)
-  const { jobId: urlJobId, action: urlAction } = useJobActionParams();
+  const { jobId: urlJobId } = useJobActionParams();
   const { openJobAction, closeJobAction } = useJobActionNav();
   /*
-   * ── URL → SCREEN GUARD (ops, 2026-09-20) ────────────────────────────────
+   * ── URL → SCREEN GUARD (ops, 2026-09-20, reworked 2026-09-21) ───────────
    *
    * Manage Jobs lists EVERY status and opens the same two write consoles as My
    * Orders, so it had the same hole: `?jobId=<completed job>&action=schedule`
    * opened Schedule & Assign — Edit Services included — on a job whose service
    * lines are its billing lines.
    *
-   * The screen now follows the job's status: 9 → Confirm & Schedule,
+   * The screen follows the job's status: 9 → Confirm & Schedule,
    * 0 → Schedule & Assign, 1 → the assign console, anything else → read-only
    * View. Same hook, same map (lib/job-action-url) as My Orders, so the two
    * pages cannot drift. Only the WRITE consoles are policed — view / checkin /
    * audit / edit / create are untouched, which matters most here: Audit &
    * Complete opens `audit` on status 3/5 and must keep working.
+   *
+   * The memos below read `openAction`, never the raw URL, so the refused
+   * console never mounts — no flash of a screen the operator should not see,
+   * and no close-then-open. Every row on this page carries its own status, so
+   * a click costs no request; only a pasted link probes.
    */
-  useJobActionStatusGuard();
+  const rowStatus = urlJobId == null
+    ? undefined
+    : (data?.items ?? []).find((r) => r.job_id === urlJobId)?.job_status;
+  const { action: openAction, jobId: openJobId } = useGuardedJobAction(rowStatus);
   /*
    * ALLOW-LIST (isJobModalAction), not an exclusion list. This memo used to
    * exclude assign / reassign by name and cast the rest with `as JobModalMode`.
@@ -953,11 +961,11 @@ export default function JobsPage() {
    * assign / reassign.
    */
   const modal = useMemo<{ open: boolean; mode: JobModalMode; id?: number }>(() => {
-    if (!isJobModalAction(urlAction)) return { open: false, mode: 'create' };
-    if (urlAction === 'create')       return { open: true, mode: 'create' };
-    if (urlJobId == null)             return { open: false, mode: 'create' };
-    return { open: true, mode: urlAction, id: urlJobId };
-  }, [urlAction, urlJobId]);
+    if (!isJobModalAction(openAction)) return { open: false, mode: 'create' };
+    if (openAction === 'create')       return { open: true, mode: 'create' };
+    if (openJobId == null)             return { open: false, mode: 'create' };
+    return { open: true, mode: openAction, id: openJobId };
+  }, [openAction, openJobId]);
 
   /*
    * Deep-link tab support: /jobs?tab=<value> preselects that tab on mount.
@@ -1065,11 +1073,11 @@ export default function JobsPage() {
    * than rendering an empty JobModal.
    */
   const assignModal = useMemo<{ open: boolean; jobId: number | null; mode: AssignMode }>(() => {
-    if (urlAction === 'reassign' && urlJobId != null) {
-      return { open: true, jobId: urlJobId, mode: 'reassign' };
+    if (openAction === 'reassign' && openJobId != null) {
+      return { open: true, jobId: openJobId, mode: 'reassign' };
     }
     return { open: false, jobId: null, mode: 'reassign' };
-  }, [urlAction, urlJobId]);
+  }, [openAction, openJobId]);
 
   /*
    * ScheduleAssignModal state, derived from `?action=schedule` — the
@@ -1082,11 +1090,11 @@ export default function JobsPage() {
    * no dialog on this page to land on.
    */
   const scheduleModal = useMemo<{ open: boolean; jobId: number | null }>(() => {
-    if (urlAction === 'schedule' && urlJobId != null) {
-      return { open: true, jobId: urlJobId };
+    if (openAction === 'schedule' && openJobId != null) {
+      return { open: true, jobId: openJobId };
     }
     return { open: false, jobId: null };
-  }, [urlAction, urlJobId]);
+  }, [openAction, openJobId]);
 
   /*
    * Filter-respecting XLSX export. Mirrors the EscalatedJobsModal
