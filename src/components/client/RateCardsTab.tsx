@@ -29,7 +29,7 @@
  */
 
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import { Plus, Trash2, Pencil, AlertTriangle, Save, AlertCircle, Calculator, Download, Building2, Layers, User } from 'lucide-react';
+import { Plus, Trash2, Pencil, AlertTriangle, Save, AlertCircle, Calculator, Download, Building2, Layers, User, Package } from 'lucide-react';
 import { downloadXlsx } from '@/lib/download-xlsx';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -179,6 +179,7 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
   // plain useFetch subscriber; only useFetchOnce listens for it.
   const { data: materialOptions } = useFetchOnce<ClientMaterialRateOption[]>(materialOptionsKey);
   const [addMaterialPick, setAddMaterialPick] = useState<string | number | ''>('');
+  const [addMaterialDialogOpen, setAddMaterialDialogOpen] = useState(false);
   const [materialDialogOpen, setMaterialDialogOpen] = useState(false);
   const [materialDialogTarget, setMaterialDialogTarget] = useState<ClientMaterialRateOption | null>(null);
   const [materialDialogEditing, setMaterialDialogEditing] = useState<ClientMaterialRateItem | null>(null);
@@ -204,6 +205,11 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
     setMaterialDialogEditing(null);
     setMaterialDialogOpen(true);
   }
+  function pickMaterialToAdd(v: string) {
+    setAddMaterialDialogOpen(false);
+    openAddMaterial(v);
+  }
+  const guardedAddMaterialOpenChange = useFormDirtyGuard(() => setAddMaterialDialogOpen(false));
   function openEditMaterial(item: ClientMaterialRateItem) {
     setMaterialDialogTarget({ material_id: item.material_id, material_name: item.material_name });
     setMaterialDialogEditing(item);
@@ -553,24 +559,35 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
       {/* ── Materials section (sub-project C) ──────────────────────────── */}
       <div className={cn('space-y-2', section !== 'materials' && 'hidden')}>
         <div className="flex items-center justify-between flex-wrap gap-2">
-          <div>
-            <h3 className="text-sm font-semibold">Materials</h3>
-            <p className="text-xs text-muted-foreground">
-              Materials not listed here quote at the master price.
-            </p>
+          <div className="text-xs text-muted-foreground flex items-center gap-2">
+            <Package className="size-3.5" />
+            {materialsLoading ? 'Loading…' : `${(materialRates ?? []).length} material${(materialRates ?? []).length === 1 ? '' : 's'}`}
           </div>
           {canEdit && (
-            <div className="w-64">
-              <SearchSelect
-                value={addMaterialPick}
-                onChange={openAddMaterial}
-                options={(materialOptions ?? []).map((m) => ({ value: m.material_id, label: m.material_name }))}
-                placeholder="Add Material…"
-                emptyText="No materials available"
-              />
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  downloadXlsx({
+                    url: `/admin/clients/${clientId}/material-rates/download`,
+                    filename: `material-rates-${clientId}.xlsx`,
+                  }).catch((e) => showToast({ variant: 'error', message: e instanceof Error ? e.message : 'Download failed.' }));
+                }}
+                disabled={(materialRates ?? []).length === 0}
+              >
+                <Download className="size-3.5 mr-1" /> Download
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => setAddMaterialDialogOpen(true)}>
+                <Plus className="size-3.5 mr-1" /> Add Material
+              </Button>
             </div>
           )}
         </div>
+
+        <p className="text-xs text-muted-foreground">
+          Materials not listed here quote at the master price.
+        </p>
 
         {materialsLoading && (
           <div className="text-xs text-muted-foreground">Loading materials…</div>
@@ -583,7 +600,7 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
 
         {!materialsLoading && (materialRates ?? []).length === 0 && (
           <div className="text-sm text-muted-foreground italic">
-            No client material prices set. {canEdit ? 'Use "Add Material" above to start.' : ''}
+            No client material prices set. {canEdit ? 'Click "Add Material" to start.' : ''}
           </div>
         )}
 
@@ -670,6 +687,25 @@ export function RateCardsTab({ clientId, canEdit }: Props) {
           </div>
         )}
       </div>
+
+      {addMaterialDialogOpen && (
+        <Dialog open onOpenChange={guardedAddMaterialOpenChange}>
+          <DialogContent className="!max-w-md">
+            <DialogHeader>
+              <DialogTitle>Add Material</DialogTitle>
+            </DialogHeader>
+            <div className="pt-1">
+              <SearchSelect
+                value={addMaterialPick}
+                onChange={pickMaterialToAdd}
+                options={(materialOptions ?? []).map((m) => ({ value: m.material_id, label: m.material_name }))}
+                placeholder="Pick a material…"
+                emptyText="No materials available"
+              />
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
 
       {materialDialogOpen && materialDialogTarget && (
         <ClientMaterialRateDialog
