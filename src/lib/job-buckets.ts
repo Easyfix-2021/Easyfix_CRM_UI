@@ -133,14 +133,21 @@ export const JOB_STAGE_OPTIONS: StatusOption[] = [
   { value: 'unconfirmed',  label: 'Unconfirmed' },
 ];
 
-/* Stage → job_status ids. `scheduling`/`acknowledge` are handled separately. */
+/*
+ * Stage → job_status ids. `scheduling`/`acknowledge` are handled separately.
+ *
+ * `material` gained 15 alongside 16 (2026-09-21, material request flow v2 —
+ * mirrors job-stages.ts's 'pending-material' stage). `approval` KEEPS 15 on
+ * its own too, so selecting either stage alone still resolves correctly;
+ * `resolveStageFilter` dedupes when both are picked together.
+ */
 const STAGE_STATUS_IDS: Record<string, number[]> = {
   unconfirmed: [9],
   start:       [1],
   close:       [2, 20],
   audit:       [10],
   approval:    [15],
-  material:    [16],
+  material:    [16, 15],
   fulfillment: [21],
   completed:   [3, 5],
   enquiry:     [7],

@@ -31,7 +31,7 @@ import { downloadXlsx } from '@/lib/download-xlsx';
 import { api } from '@/lib/api';
 import { useLookup } from '@/lib/use-lookup';
 import {
-  formatDate, formatEasyfixerName, statusLabel, statusTone,
+  formatDate, formatEasyfixerName, statusLabel, statusTone, materialStageStatusLabel,
   isTerminalJobStatus, BULK_TRANSFER_MAX_JOBS,
 } from '@/lib/utils';
 import {
@@ -2130,7 +2130,18 @@ export default function JobsPage() {
                           ops triage. Dropping them with the column would have
                           silently removed two working signals. */}
                   <td className="text-xs">
-                    <span className="whitespace-nowrap">{j.bucket_status || '—'}</span>
+                    {/* Pending for Material stage (2026-09-21, material request
+                        flow v2) — narrow, deliberate exception to "bucket_status
+                        is server-derived, never re-derive it": while ON that
+                        tab (which now spans 16 AND 15), the two statuses read
+                        "Review Pending" / "Approval Pending" instead of the
+                        backend's bucket_status string, matching My Orders. Every
+                        other tab is unaffected — j.bucket_status renders as-is. */}
+                    {tab === 'pending-material' && materialStageStatusLabel(j.job_status, j.material_sub_status) ? (
+                      <span className="whitespace-nowrap">{materialStageStatusLabel(j.job_status, j.material_sub_status)}</span>
+                    ) : (
+                      <span className="whitespace-nowrap">{j.bucket_status || '—'}</span>
+                    )}
                     <ShareChip share={j.share} className="ml-1" />
                     {j.job_status === 0 && (j.service_count ?? 0) === 0 && (
                       <button

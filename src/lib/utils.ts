@@ -257,6 +257,30 @@ export function materialSubStatusLabel(code: number | boolean | null | undefined
 }
 
 /*
+ * materialStageStatusLabel — the Status-column override for the "Pending for
+ * Material" TAB/STAGE only (material request flow v2, 2026-09-21: the stage
+ * now spans BOTH 16 and 15 — see job-stages.ts's 'pending-material'). Callers
+ * gate on the active tab themselves (`tab === 'pending-material'`) and fall
+ * back to the ordinary statusLabel()/bucket_status when this returns null —
+ * every OTHER tab (including 'estimate-pending', which also lists 15) keeps
+ * showing "Estimate Pending" unchanged.
+ *
+ * 16 pairs with material_sub_status = 2 specifically (same predicate the
+ * Material Review row-action gates on) rather than job_status alone — the
+ * pinned label table in the design doc reads "Review Pending — 16, sub-status
+ * 2", and material_sub_status = 1 ("Quotation Pending") is a legacy value no
+ * longer written but still possible to observe on an old row.
+ */
+export function materialStageStatusLabel(
+  jobStatus: number,
+  materialSubStatus?: number | boolean | null,
+): string | null {
+  if (jobStatus === 16 && Number(materialSubStatus) === 2) return 'Review Pending';
+  if (jobStatus === 15) return 'Approval Pending';
+  return null;
+}
+
+/*
  * TERMINAL (finished) job statuses — 3/5 completed, 6 cancelled, 7 enquiry.
  *
  * Same set the backend refuses to bulk-transfer
