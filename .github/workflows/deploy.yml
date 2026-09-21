@@ -118,8 +118,16 @@ jobs:
       # config, and the audit's own file walk would scan them as if they were
       # ours. The audit reads git history from THIS repo, not that one, so a
       # depth-1 clone of the tool is all that is needed.
+      # Cloned at the branch this run deploys, like the client-UI clone below.
+      # EASYFIX_BACKEND_DIR is not only the audit tool: tests/job-stages-parity
+      # reads the backend's lib/job-stages.js through it, and must compare this
+      # environment's CRM with the SAME environment's backend. The default branch
+      # (Production) made every new job stage fail its QA deploy until the
+      # backend reached Production — the one order a stage change cannot ship in.
       - name: Fetch the shared message-literal audit
-        run: git clone --quiet --depth 1 https://github.com/Easyfix-2021/Easyfix_Backend.git "$RUNNER_TEMP/easyfix-backend-audit"
+        env:
+          BRANCH: ${{ github.event.inputs.target || github.ref_name }}
+        run: git clone --quiet --depth 1 --branch "$BRANCH" https://github.com/Easyfix-2021/Easyfix_Backend.git "$RUNNER_TEMP/easyfix-backend-audit"
       # deploy/docker-compose.prod-frontend.yml is written to the prod UI host by
       # BOTH UI repos' deploys (last one wins), so tests/dozzle-agent-compose.test.js
       # fails unless Easyfix_client_UI carries a byte-identical copy. Cloned at the
