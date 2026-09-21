@@ -88,8 +88,13 @@ jobs:
       # config, and the audit's own file walk would scan them as if they were
       # ours. The audit reads git history from THIS repo, not that one, so a
       # depth-1 clone of the tool is all that is needed.
+      # Same branch the client-UI clone below uses: a PR compares against its
+      # target branch's backend (tests/job-stages-parity reads lib/job-stages.js
+      # through EASYFIX_BACKEND_DIR), a dispatch against Production.
       - name: Fetch the shared message-literal audit
-        run: git clone --quiet --depth 1 https://github.com/Easyfix-2021/Easyfix_Backend.git "$RUNNER_TEMP/easyfix-backend-audit"
+        env:
+          BRANCH: ${{ github.base_ref || 'Production' }}
+        run: git clone --quiet --depth 1 --branch "$BRANCH" https://github.com/Easyfix-2021/Easyfix_Backend.git "$RUNNER_TEMP/easyfix-backend-audit"
       # tests/dozzle-agent-compose.test.js FAILS (never skips) unless
       # Easyfix_client_UI carries a byte-identical deploy/docker-compose.prod-frontend.yml
       # — same clone as deploy.yml precheck. A PR clones its target branch, the
