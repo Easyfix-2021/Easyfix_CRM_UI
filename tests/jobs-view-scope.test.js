@@ -125,29 +125,55 @@ test('the shared bar renders only when a tab narrows the list, and hides the way
     'admin / finance / still-loading are never clamped');
 });
 
-test('BOTH surfaces render the shared bar — neither has a tab bar of its own', () => {
-  for (const [name, src, noun] of [['jobs', PAGE, 'Jobs'], ['my-orders', ORDERS, 'Orders']]) {
-    /*
-     * Positive control: the claim "no tab bar" is what makes the bar necessary.
-     * Matched on the JSX USE (`<TabsTrigger`), not the bare word — both pages
-     * now mention the token in a comment documenting this very denominator,
-     * and a prose mention is not a tab bar.
-     */
-    assert.equal((src.match(/<TabsTrigger/g) || []).length, 0, `${name} must still have no tab bar`);
-    /*
-     * Props asserted INDIVIDUALLY, not as one formatted line: pinning the exact
-     * one-liner broke the moment a fifth prop wrapped it across lines, which
-     * says nothing about behaviour.
-     */
-    const at = src.indexOf('<JobScopeBar');
-    assert.ok(at > -1, `${name} must render the shared bar`);
-    const el = src.slice(at, src.indexOf('/>', at) + 2);
-    for (const prop of ['tab={tab}', 'clamped={scopeIsClamped}', 'onClear={clearTabScope}', `noun="${noun}"`]) {
-      assert.ok(el.includes(prop), `${name}: the bar must receive ${prop} — got ${el}`);
-    }
-    assert.match(src, /scopeIsClamped = scopeIsClampedFor\(me\?\.allowedStages\)/,
-      `${name} must use the shared clamp predicate, not its own copy`);
+test('/jobs renders the shared bar — it has no tab bar of its own', () => {
+  /*
+   * Positive control: the claim "no tab bar" is what makes the bar necessary.
+   * Matched on the JSX USE (`<TabsTrigger`), not the bare word — the page
+   * mentions the token in a comment documenting this very denominator, and a
+   * prose mention is not a tab bar.
+   */
+  assert.equal((PAGE.match(/<TabsTrigger/g) || []).length, 0, 'jobs must still have no tab bar');
+  /*
+   * Props asserted INDIVIDUALLY, not as one formatted line: pinning the exact
+   * one-liner broke the moment a fifth prop wrapped it across lines, which
+   * says nothing about behaviour.
+   */
+  const at = PAGE.indexOf('<JobScopeBar');
+  assert.ok(at > -1, 'jobs must render the shared bar');
+  const el = PAGE.slice(at, PAGE.indexOf('/>', at) + 2);
+  for (const prop of ['tab={tab}', 'clamped={scopeIsClamped}', 'onClear={clearTabScope}', 'noun="Jobs"']) {
+    assert.ok(el.includes(prop), `jobs: the bar must receive ${prop} — got ${el}`);
   }
+  assert.match(PAGE, /scopeIsClamped = scopeIsClampedFor\(me\?\.allowedStages\)/,
+    'jobs must use the shared clamp predicate, not its own copy');
+});
+
+/*
+ * my-orders RETIRED the shared "Showing X Only · Show All Orders" bar
+ * (2026-09-21): every My Orders sidebar sub-menu already lands on a
+ * dedicated single-bucket page, so naming the bucket again was telling ops
+ * what the click they just made already told them. The exit is NOT gone with
+ * it, though — no sidebar entry links to the unscoped /my-orders, so
+ * "Show All Orders" is the only way back and now lives in the page header.
+ */
+test('my-orders retired the shared banner and states "Show All Orders" in the header instead', () => {
+  assert.equal((ORDERS.match(/<TabsTrigger/g) || []).length, 0, 'my-orders must still have no tab bar');
+  assert.ok(!/<JobScopeBar/.test(ORDERS), 'the banner must be gone from my-orders');
+  assert.match(ORDERS, /scopeIsClamped = scopeIsClampedFor\(me\?\.allowedStages\)/,
+    'my-orders must still use the shared clamp predicate');
+  // Same visibility rule the retired bar's own exit used: hidden on the
+  // neutral 'all' view, and hidden under the stage clamp (a "Show All" the
+  // operator isn't permitted to sit on would fire and appear to do nothing).
+  assert.match(ORDERS, /\{tab !== 'all' && !scopeIsClamped && \(/,
+    'the exit must be gated the same way the retired bar gated its own onClear');
+  // Matched on the JSX TEXT NODE, not a bare substring — the phrase also
+  // appears in prose comments elsewhere in the file, which would let this
+  // check pass on documentation alone.
+  const linkMatch = ORDERS.match(/>\s*Show All Orders\s*</);
+  assert.ok(linkMatch, 'the exit must still read "Show All Orders" as rendered text');
+  const linkAt = linkMatch.index;
+  const before = ORDERS.slice(Math.max(0, linkAt - 400), linkAt);
+  assert.match(before, /onClick=\{clearTabScope\}/, 'the exit must call the same clearTabScope() as before');
 });
 
 test('my-orders states the bucket ONCE — the H1 suffix gave way to the bar', () => {

@@ -34,7 +34,7 @@ import {
   PendingSchedulingFilters, psFiltersFromParams, EMPTY_PS_FILTERS, writePsFilterParams,
   psFilterKey, psAnyFilterSet, psQueryParams, type PsFilters,
 } from '@/components/job/PendingSchedulingFilters';
-import { JobScopeBar, scopeIsClampedFor } from '@/components/job/JobScopeBar';
+import { scopeIsClampedFor } from '@/components/job/JobScopeBar';
 import { PendingSchedulingTabs } from '@/components/job/PendingSchedulingTabs';
 import { CallableMobile } from '@/components/calls/CallButton';
 import { CallHistoryButton } from '@/components/calls/CallHistoryButton';
@@ -536,14 +536,14 @@ export default function MyOrdersPage() {
   }, [me?.allowedStages, tab]);
 
   /*
-   * VIEW SCOPE (2026-09-16) — this page has no tab bar either (grep
-   * TabsTrigger here: 0 hits); ops arrive from a sidebar sub-menu or a shared
-   * URL, so the bucket is invisible state exactly as it was on /jobs. The
-   * shared JobScopeBar now states it, which is why the H1's "· <bucket>"
-   * suffix went: one statement per page, in the same place on both surfaces.
-   *
-   * Leaving is the part this page genuinely lacked — with no tab bar and no
-   * clear action, the only way back to every order was the sidebar.
+   * VIEW SCOPE (2026-09-16, banner retired 2026-09-21) — this page has no tab
+   * bar (grep TabsTrigger here: 0 hits); ops arrive from a sidebar sub-menu or
+   * a shared URL, so the bucket is invisible state. The "Showing X Only" bar
+   * used to say so; it's gone now (every My Orders sub-menu is already a
+   * dedicated single-bucket page, so the statement was redundant — ops,
+   * 2026-09-21), but `scopeIsClamped` still gates the header's "Show All
+   * Orders" link below, which remains the ONLY way back to every order (no
+   * sidebar entry links to the unscoped /my-orders).
    */
   const scopeIsClamped = scopeIsClampedFor(me?.allowedStages);
 
@@ -706,8 +706,8 @@ export default function MyOrdersPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverQ, sortKey, sortDir, psKey]);
 
-  // The tab's human label is rendered by JobScopeBar (shared with /jobs), not
-  // by this page's header — see VIEW SCOPE above.
+  // The tab's human label is no longer stated on this page (banner retired
+  // 2026-09-21) — see VIEW SCOPE above.
 
   // Pending-for-Scheduling tab (status=0, unassigned) gets a DISTINCT
   // column set + a stripped-down action menu (Schedule & Assign only —
@@ -769,12 +769,11 @@ export default function MyOrdersPage() {
       <div className="flex items-end justify-between">
         <div>
           {/*
-            * The title is plain "My Orders". It used to append
-            * "· <lifecycle phase>" for the active tab; JobScopeBar below now
-            * carries that, so the bucket is stated ONCE and in the same place
-            * as on /jobs, which has no header to put it in. Ops still land
-            * here from a sidebar sub-menu, so the bucket is baked into their
-            * click — what was missing was a way back out of it.
+            * The title is plain "My Orders" — it does not name the active
+            * tab (banner retired 2026-09-21; see VIEW SCOPE above). Ops land
+            * here from a sidebar sub-menu, so the bucket is already baked
+            * into their click; the "Show All Orders" link to the right is
+            * the way back out of it.
             */}
           <h1 className="text-2xl font-semibold">My Orders</h1>
           <p className="text-sm text-muted-foreground">
@@ -783,6 +782,27 @@ export default function MyOrdersPage() {
             {isAdmin && <span className="text-xs text-muted-foreground"> · viewing all (admin)</span>}
           </p>
         </div>
+        {/*
+          * Each My Orders sidebar sub-menu already lands on a dedicated,
+          * single-bucket page (Unconfirmed, Pending Scheduling, …), so
+          * stating "Showing X Only" on every tab was telling ops something
+          * the page they clicked already told them (ops, 2026-09-21) — the
+          * "Showing <Tab> Only · Show All Orders" bar below was removed.
+          *
+          * "Show All Orders" stays, here in the header, because no sidebar
+          * entry links to the unscoped /my-orders (every My Orders menu row
+          * points at one specific ?tab=) — this is the ONLY way back to the
+          * all-orders view, so it must not disappear with the banner.
+          */}
+        {tab !== 'all' && !scopeIsClamped && (
+          <button
+            type="button"
+            onClick={clearTabScope}
+            className="whitespace-nowrap text-xs text-muted-foreground hover:text-foreground hover:underline"
+          >
+            Show All Orders
+          </button>
+        )}
       </div>
 
       {/*
@@ -791,19 +811,15 @@ export default function MyOrdersPage() {
         * etc.), so an in-page tab bar would duplicate that navigation.
         * Users switch buckets via the sidebar; the URL's ?tab= param drives
         * the filter under the hood, unchanged.
-        *
-        * Which is precisely why the scope bar sits here: with no tab selector,
-        * nothing on the page said which bucket was showing or offered a way
-        * back to all of them.
         */}
       {/*
-        * Pending-for-Scheduling gets the four-bucket tab strip INSTEAD of the
-        * scope bar (2026-09-16). The bar stated the bucket and offered the way
-        * out; the strip does both — it names the bucket by which tab is lit,
-        * keeps "Show All Orders" on the right, and adds the three sub-buckets
-        * ops actually triage by, with counts. Every other tab keeps the bar.
+        * Pending-for-Scheduling gets the four-bucket tab strip — it names the
+        * bucket by which tab is lit and adds the three sub-buckets ops
+        * actually triage by, with counts. "Show All Orders" lives in the
+        * header above (shared with every other tab) rather than duplicated
+        * here.
         */}
-      {isPendingScheduling ? (
+      {isPendingScheduling && (
         <PendingSchedulingTabs
           value={psFilters.offerState}
           onChange={(offerState) => setPsFilters({ ...psFilters, offerState })}
@@ -811,8 +827,6 @@ export default function MyOrdersPage() {
           reloadKey={countsReload}
           clamped={scopeIsClamped}
         />
-      ) : isPendingStart ? null : (
-        <JobScopeBar tab={tab} clamped={scopeIsClamped} onClear={clearTabScope} noun="Orders" />
       )}
 
       {/* Search bar — hidden on the retired Pending App Ack page and on
@@ -1113,13 +1127,16 @@ export default function MyOrdersPage() {
                     Narrow + nowrap; sits beside the pinned Job # so it reads
                     without scrolling. */}
                 <SortHeader col={JOB_AGE_SORT_KEY} sortBy={sortKey} sortDir={sortDir} onSort={toggle} className="w-16">Age</SortHeader>
-                <SortHeader col="job_reference_id"   sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Job Ref</SortHeader>
+                {/* Job Ref rides UNDER the Job # (ops, 2026-09-21) — the same
+                    shape Manage Jobs uses — so the table is one column
+                    shorter; no separate Job Ref column any more. */}
                 <SortHeader col="client_name"        sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Client</SortHeader>
+                {/* Customer — the callable mobile number now rides UNDER the
+                    name (ops, 2026-09-21), same shape as Manage Jobs' "Cx
+                    Name & Number" cell; no separate Mobile column any more. */}
                 <SortHeader col="customer_name"      sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Customer</SortHeader>
-                <SortHeader col="customer_mob_no"    sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Mobile</SortHeader>
-                <SortHeader col="city_name"          sortBy={sortKey} sortDir={sortDir} onSort={toggle}>City</SortHeader>
                 <SortHeader col="easyfixer_name"     sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Technician</SortHeader>
-                <SortHeader col="requested_date_time" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Requested</SortHeader>
+                <SortHeader col="requested_date_time" sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Requested On</SortHeader>
                 <SortHeader col="job_status"         sortBy={sortKey} sortDir={sortDir} onSort={toggle}>Status</SortHeader>
                 <th className="stick-col-head stick-right text-right">Action</th>
               </tr>
@@ -1127,13 +1144,13 @@ export default function MyOrdersPage() {
             <tbody>
               {loading && Array.from({ length: 5 }).map((_, i) => (
                 <tr key={`sk-${i}`}>
-                  {Array.from({ length: 11 }).map((_, c) => (
+                  {Array.from({ length: 8 }).map((_, c) => (
                     <td key={c}><div className="h-3 w-24 rounded bg-muted animate-pulse" /></td>
                   ))}
                 </tr>
               ))}
               {!loading && sorted.length === 0 && (
-                <tr><td colSpan={11} className="text-center text-muted-foreground py-8">
+                <tr><td colSpan={8} className="text-center text-muted-foreground py-8">
                   No orders in this bucket{!isAdmin ? ' owned by you' : ''}.
                 </td></tr>
               )}
@@ -1144,17 +1161,22 @@ export default function MyOrdersPage() {
                       #{j.job_id}
                       <CallHistoryButton jobId={j.job_id} />
                     </span>
+                    {j.job_reference_id && (
+                      <div className="max-w-[10rem] truncate text-xs font-normal text-muted-foreground" title={j.job_reference_id}>
+                        {j.job_reference_id}
+                      </div>
+                    )}
                   </td>
                   <td className="text-xs whitespace-nowrap tabular-nums" title={jobAgeTitle(j)}>{formatJobAge(j)}</td>
-                  <td className="text-xs whitespace-nowrap">{j.job_reference_id ?? '—'}</td>
                   <td className="min-w-[18rem] max-w-[26rem] break-words">{j.client_name ?? '—'}</td>
-                  <td>{j.customer_name ?? '—'}</td>
-                  <td className="text-xs text-muted-foreground">
-                    {/* Click-to-call lives on the mobile cell itself.
-                        Call history moved to the Job # cell (job-scoped). */}
-                    <CallableMobile jobId={j.job_id} mobile={j.customer_mob_no} />
+                  <td className="whitespace-nowrap">
+                    {j.customer_name ?? '—'}
+                    <div className="text-muted-foreground">
+                      {/* Click-to-call lives on the mobile line itself.
+                          Call history moved to the Job # cell (job-scoped). */}
+                      <CallableMobile jobId={j.job_id} mobile={j.customer_mob_no} />
+                    </div>
                   </td>
-                  <td>{j.city_name ?? '—'}</td>
                   <td>{j.easyfixer_name ? formatEasyfixerName(j.easyfixer_name) : <span className="text-muted-foreground">unassigned</span>}</td>
                   <td className="text-xs whitespace-nowrap">{j.requested_date_time ? formatDate(j.requested_date_time) : '—'}</td>
                   <td>
@@ -1286,9 +1308,9 @@ export default function MyOrdersPage() {
                           <MapPin className="h-3.5 w-3.5" />
                         </button>
                       )}
-                      {/* Outbound call now lives on the customer mobile cell
-                          (see Mobile column above) — clicking the number
-                          dials it. */}
+                      {/* Outbound call now lives on the customer mobile line
+                          (under the name in the Customer cell) — clicking the
+                          number dials it. */}
                       {/* Unconfirmed (status=9): legacy flow was "open addEditJob
                           modal, complete details, click Book Call → status 0".
                           We mirror that: click the icon → JobModal opens; the
